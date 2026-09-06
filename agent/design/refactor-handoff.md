@@ -2535,6 +2535,20 @@ CUDA `tests/backends/cuda` 42 failed / 220 passed / 41 skipped / 1 xfailed，42 
 里前面跑过什么，不是稳定量**。本波实测：同一份源码（同一个快照）两次并发整目录跑，
 `test_no_grad` 一次 9 一次 7，`test_fuse_memopt` 一次红一次绿。**拿它做 A/B 必须串行**，
 判据用 FAILED 集合而不是断言里的数字（详见本波在 `pure-code-motion-refactor` §4 的写法）。
+### 2026-09-06 9.01 热缓存收口（`build` 分区）
+
+| 分区 | 结果 |
+| --- | --- |
+| `build` | `d23f9bba` 把核心那份构建戳的做法推广成通用的 `product_build_stamp_path()`/`product_build_is_current()`/`compile_if_stale()`，`compile_custom_ops`（公开 API，**签名未变**）与 `libcuda_extern` 都改为戳一致整步跳过。**热缓存 import CUDA 1.28 → 0.80 s（达标）**、CPU-only 0.52 → 0.38 s，热 import 的编译扇出从 60 条命令降到 **0 条**（改前改后各连测 5 次，当时 `uptime` 负载 12–15，八分区并行）。自定义算子这份戳比核心那份风险大，因为判错方向若是「误判为最新」不会报错而是**继续跑上一次的产物**：所以它记显式列出文件的 stat、调用方各 `-I` 目录（含 `extra_flags` 里手写那些）的递归扫描、以及 `core_source_signature()`；CUDA SDK 与树内目录**故意不扫**（前者由 `cache_path` 的 cuda key 分区，后者已被 core 签名覆盖，照字面扫是每个约 1400 次 stat、六个库合计 90 ms/次 import）。这条按**数值**钉住了：`test_editing_an_unnamed_header_changes_the_answer` 用两个子进程验（同进程内 `__import__` 会拿到已加载的旧模块，所以进程内断言不论戳对错都通过）。另落地 `JITTOR_NO_BUILD=1` + `python -m jittor_utils.bootstrap`（含 `--check`）：import 路径上任何要编译的动作抛 `compiler.BuildNotAllowed` 并指名 bootstrap；`setup_cub` 那个 `except Exception` 显式 re-raise，否则这个开关会变成「import 成功而 cub 悄悄不在」。bootstrap 放在 `jittor_utils` 而**不 import jittor**（起子进程），否则撞 `tests/structure/test_build_config_boundaries.py::test_utils_do_not_import_the_runtime`——第一版就是这么红的，A/B 抓到。离线只读（只读 HOME + 可写 `JITTOR_HOME` + 代理指死端口 + `JITTOR_NO_BUILD=1`）CPU-only 与 CUDA 两配置均 import 成功且算对，这次是**证明了没编译**。三套门禁逐条 A/B（基线 `803e3785`）：native `tests/compiler` 19→**18** failed（355→375 passed，唯一差异是 2.13 冻结 `jittor_path` 后一直红的 `test_source_signature_sees_same_size_edits_and_new_files` 已修，改用 `core_source_signature(root=...)` 传参而不是 patch 冻结属性）、native `tests/core` 21 failed/643 passed 逐条相同、torch shim `tests/structure` 16 failed/869 passed 逐条相同、CUDA `tests/backends/cuda` 42 failed/220 passed 逐条相同、CUDA `tests/compiler` 19→18 failed（397→417 passed）。**零新增失败。** 定向：该测试文件在 native/CUDA/torch 三套各 29 passed；`tests/distributed/test_distributed_init_failure.py` 4 passed（6.B04 显式分布式仍 fail-closed）；CUDA JIT matmul 与 cudnn/cublas 装载正常，`configure_accelerator_compiler` 未被绕过。**9.01 保持 `待领`**：缺口 2（核心编译移到显式 bootstrap 或首次算子调用）仍未完成，冷缓存与换配置下 import 照旧编译整个核心（本波实测换配置/戳失效 49.0 s / 199 TU），因为 `compiler.py` 模块体里 `build_core()` 紧接着就是 `import jittor_core`，而 `flags`/`Var`/全部算子都来自那个模块对象——要真惰性化必须推迟这一句，是整卡改动。核心编译**没有**落到首次算子调用（现首次算子调用 0.037–0.042 s，留作将来搬过去的对照基线）。方法沉淀在 `jittor-build-change-verification` §2.6（构建戳：判错两个方向代价不对称、戳里必须记什么、为什么同进程内验不出来、`custom_ops/` 里的 `.so` 会堆积孤儿不能拿来枚举）与 §2.7（`JITTOR_NO_BUILD=1` 的两个坑：`jit_utils_core` 不在闸门内、`except Exception` 会把它降级）。 |
+
+**给后面人的两条提醒。** 一、**改 `compiler.py`（哪怕只加注释）都会让核心构建戳失效**，因为
+戳记了 `compiler.py` 的 sha256（它生成 C++ 源）。症状是改完第一次 import 慢一两秒、或在
+`JITTOR_NO_BUILD=1` 下直接被拒；照做 `python -m jittor_utils.bootstrap` 一次即可，不是 bug。
+本波的离线只读验收就被这个绊过一次：15:14 跑基线 A/B 时用旧 `compiler.py` 重写了戳，恢复
+改动后 CUDA 配置就被拒了。顺手核实过**不是**环境相关的缓存键问题：normal 与离线只读两种
+环境下 `core_build_ingredients()` 逐字节相同。二、`_looks_unbuilt()`（把戳挪开）是造
+「未构建配置」的**可重复**办法；不要用换 `cc_flags` 指纹那招——它要付一次完整冷编译、留
+几百 MB、而且因为指纹固定，**只有第一次是未构建的**，之后测试静默变成空转通过。
 
 ## 7. 接手怎么开始
 

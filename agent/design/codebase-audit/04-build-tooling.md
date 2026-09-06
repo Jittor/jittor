@@ -21,7 +21,7 @@ CPU 型号、git 分支），**内容**按命令行加源码哈希判定，中�
 | "请重新运行你的命令"用退出码 0 | `compiler.py:926-928` LOG.e 后 `sys.exit(0)` | 改了 `src/utils/*.cc` 后 `python train.py` 什么都没做就成功退出，CI 看到的是成功 | 非零退出码 | 主要 |
 | 依赖缺失一律 LOGf 中止进程而非抛异常 | `compile_extern.py:263`、`:42` search_file 找不到即 LOG.f；`compiler.py:942` 用裸 assert | 用户拿到 abort 加栈而不是可捕获异常；`python -O` 下裸 assert 直接消失 | 构建期失败一律抛带上下文的 RuntimeError | 主要 |
 
-**已修（部分）：`361d59b2`、`c4b21762`、`cf3835ee`、`51d0439f`（9.01）。** 本节开头「探测编译器
+**已修（部分）：`361d59b2`、`c4b21762`、`cf3835ee`、`51d0439f`、`2bf369dc`（9.01）。** 本节开头「探测编译器
 与驱动、拉取第三方二进制、生成代码、编译整个 C++ 内核」这条链上，导入期无条件
 `import torch` 与无条件 `setup_nccl/cutt/mkl` 已经去掉；探测结果落盘（0.09）之后
 `probe.json` 单次读取不到 0.2 ms，探测已不是热路径的成本项。
@@ -40,6 +40,38 @@ size、编译要素、产物 stat、编译顺序）。戳一致就整步跳过�
 1.332 → 0.413 s，CUDA 2.457 → 1.545 s。**冷缓存与「换配置」两种情形不变，仍会编译整个
 核心**（空缓存 68 s / CUDA、切配置 40 s），也就是说 9.01「核心编译移到显式 bootstrap
 或首次算子调用」只完成了「收进显式入口」这一半。
+
+**已修：`d23f9bba`（9.01）。** 上面这条「无事可做时也不便宜」在核心之外还有第二处：
+`compile_extern` 每个自带 CUDA 后端库各走一次 `compile_custom_ops`，同样把翻译单元
+发进 Pool 做空转依赖校验（cuDNN/cuBLAS/cuRAND/cuFFT/cuSPARSE/CUB 合计约 50 条命令
+0.351 s），另有 `libcuda_extern` 2 条 0.073 s 走的是裸 `compile()`。核心那份构建戳的
+做法已推广成通用的 `product_build_stamp_path()` / `product_build_is_current()` /
+`compile_if_stale()`，`compile_custom_ops` 与 `libcuda_extern` 都改为戳一致整步跳过，
+**公开 API 的签名没有变**。热缓存 import：**CUDA 1.545 → 0.80 s（达标）**、CPU-only
+0.413 → 0.38 s；热 import 的编译扇出条数从 60 条降到 **0 条**（`tests/compiler/
+test_import_bootstrap_laziness.py::test_warm_import_does_not_rebuild_anything`
+直接断言这一点）。另 `2bf369dc` 已把 `import cupy` 惰性化（原 0.369 s）。
+
+自定义算子这份戳比核心那份多一层风险，因为 `compile_custom_ops` 是公开 API：判错方向
+若是「误判为最新」不会报错，而是**继续跑上一次的产物**，也就是静默算错。所以它记的
+是三样东西：显式列出的那些文件的 stat、**调用方各 `-I` 目录（含 `extra_flags` 里手写
+那些）的递归扫描**——`filenames` 只点名算子源与配对头文件，它们 `#include` 的兄弟头文件
+本来靠 `compile` 里的逐文件依赖扫描发现，而那正是戳要跳过的那一步——以及
+`core_source_signature()`。CUDA SDK 的 include 目录与树内目录**故意不扫**：前者由
+`cache_path` 的 cuda key 分区（与核心那份戳对外部头文件的同一条理由），后者已由
+`core_source_signature()` 覆盖；照字面扫会是每个约 1400 次 stat、六个库合计 90 ms/次
+import。`test_editing_an_unnamed_header_changes_the_answer` 用两个子进程把这条按**数值**
+钉住（同一进程内 `__import__` 会拿到已加载的旧模块，所以只能跨进程验）。
+
+**「移到显式 bootstrap 或首次算子调用」仍未完成。** 冷缓存与换配置下 import 照旧编译
+整个核心：`compiler.py` 模块体里 `build_core()` 之后紧接着就是 `import jittor_core`，
+而 `flags`、`Var`、全部算子都来自那个模块对象，所以要真正惰性化就得推迟这一句，那是
+整卡改动而非窄切片。本波落地的是这条契约的另一半：`JITTOR_NO_BUILD=1` 之下任何要编译
+的动作都抛 `compiler.BuildNotAllowed` 并指名 `python -m jittor_utils.bootstrap`，
+于是「这次 import 不许编译」第一次成为**可声明、可断言**的性质，而不是只能事后看日志。
+离线只读部署是它存在的理由：那里编译不只是多花四十秒，而是花完之后因为与真实问题
+无关的原因失败。注意 `jit_utils_core` 在 `jittor` 里任何代码之前就建好，不在这道闸门
+之内（0.11 的「重跑同一条命令」仍是它的行为）。
 
 ## 缓存键与缓存布局
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
