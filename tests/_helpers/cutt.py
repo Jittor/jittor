@@ -1,5 +1,6 @@
 """Getting hold of the cuTT ops, which are built on first use."""
 
+import os
 import unittest
 
 import jittor as jt
@@ -21,7 +22,16 @@ def require_cutt_ops():
     """
     if not jt.has_cuda:
         raise unittest.SkipTest("no CUDA on this machine, cuTT cannot be built")
+    if os.environ.get("use_cutt", "1") != "1":
+        raise unittest.SkipTest("cuTT is disabled by use_cutt=0")
     ops = get_library_ops("cutt", load=True)
     if ops is None:
-        raise unittest.SkipTest("cuTT is not available in this configuration")
+        # Only two things can get us here now: CUDA is present and cuTT is
+        # enabled, so a None means the build itself failed. Skipping on that
+        # is how a broken cuTT build stays invisible -- transposes quietly fall
+        # back to the built-in kernel and every cuTT test reports "skipped".
+        raise AssertionError(
+            "cuTT is enabled and CUDA is present, but the ops did not load: "
+            "the cuTT build failed. Re-run with log_v=1 to see the compile "
+            "command; a missing CUDA SDK include path is the usual cause.")
     return ops

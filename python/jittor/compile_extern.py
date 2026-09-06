@@ -580,7 +580,11 @@ def install_cutt(root_folder):
                 f.endswith("cutt_test.cpp"):
                 continue
             files2.append(f)
-        cutt_flags = cc_flags+opt_flags+cutt_include
+        # cutt's own .cpp sources include <cuda.h>/<cuda_runtime.h> but are built
+        # by the host compiler, so they need the SDK headers that nvcc supplies
+        # implicitly. Without them the build fails and setup_cutt() reports
+        # "cutt is unavailable", i.e. a slower built-in transpose, not an error.
+        cutt_flags = cc_flags+opt_flags+cutt_include+cuda_sdk_flags
         compile(cc_path, cutt_flags, files2, cache_path+"/libcutt"+so, cuda_flags=arch_flag)
     return dirname
 
