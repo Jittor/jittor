@@ -315,6 +315,7 @@
 | 6.C31 | **进程级 SIGCHLD 处理器让任何被信号杀死的子进程连带杀掉父进程，且不留输出。** 两个分区独立撞上同一机制：(a) CUDA 构建上任何「失败的」`import jittor` 都会在退出期 abort—— 全局 EventQueue 的 worker 线程只由**跑完**的 import 通过 `core.cleanup()` 注销；没跑完就是 `~std::thread` 落在 joinable 线程上 → `terminate called without an active exception`。再叠加 jittor 自己的 SIGCHLD 处理器（父进程 `_Exit(1)` 且不刷 stdio），后果是**子进程 import 失败 → 父进程无声消失，一行输出都不留**。要动核心的静态析构顺序。(b) 任何**崩溃类测试**的子进程会直接杀掉整个 pytest session 而不是让那条用例失败，零输出——写这类测试必须在中间隔一层 shell。合起来：**这个处理器把「子进程异常退出」变成了「父进程无声消失」，掩盖的正是最需要诊断的那类失败**。处理器本身也不是 async-signal-safe | 2.19（析构不得抛） | 2026-09-03 由 8.09 与 6.C25 的执行者独立发现，不在原审计里 | 构造一个必然失败的 import 与一个必然崩溃的子进程，两者的退出码与 stderr 都可读；父进程不消失 |
 
 | 6.C32 | **`tests/core/test_complex64_linalg.py::TestComplex64LinalgCPU::test_svdvals` 在 CPU-only 构建上 abort，并带走整个 pytest session**。单独选这一条用例也复现（不是被前面的用例污染），`Fatal Python error: Aborted` 之前**一个字的诊断都没有**——没有 `Check failed`、没有 `terminate called`、没有栈。栈里只有 `multiprocessing.Pool` 的三个管理线程，用例本体停在 `unittest/case.py` 的 `_callTestMethod`。后果比一条红严重：它让 `tests/core` 这个目录在 CPU-only 下**无法一次跑完**，于是它后面的每个文件都拿不到结论，而"拿不到结论"在日志里长得像"没问题"。与 6.C31 是同一类症状（异常退出被变成无声消失），但触发点不同，所以单列 | 6.C31 | 2026-09-04 由 2.25 的执行者在跑受影响目录时发现并在整改基线上复现，不在原审计里 | 该用例要么通过、要么以一条可读的失败结束；`tests/core` 在 CPU-only 下能一次跑到 summary |
+| 6.C33 | **0 维 bfloat16 输入让 `code` 算子的 `@for` 展开成死循环**，编译失败之后同进程内所有 fp16/bf16 用例都报同一个编译错误（单独跑全绿）。`jt.bfloat16(math.inf)` 可复现。后果是 `tests/backends/cuda` 里约 40 条红全部来自这一处级联，读起来像四十个独立缺陷 | — | 2026-09-06 由 2.19 与 3.22 的执行者各自独立撞到 | 0 维低精度输入不再让 `@for` 展开成死循环；`tests/backends/cuda` 的 fp16/bf16 组单独跑与合并跑结论一致 |
 
 ### 9.2 Python 层
 
@@ -420,6 +421,7 @@
 | 8.17 | 跨机网络与诊断：`NCCL_SOCKET_IFNAME`/`NCCL_IB_*`/`HCCL_*` 透传并进启动摘要；跨机 all-reduce/all-gather 带宽微基准；通信超时报出对端 rank 与主机名（接 8.09 的 watchdog）；一个 rank 掉线其余在超时内退出 | 8.09、8.15 | [后端](codebase-audit/06-backends.md)§分布式 | 带宽基准进 nightly；掉线用例 |
 | 8.18 | 多机 checkpoint：rank 0 保存、全 rank 加载的 `state_dict` 契约，FSDP 分片 checkpoint 的 `dcp.save/load` 真实实现（接 7.01 的报错），跨 rank 的 optimizer state 合并与重分片 | 7.13、8.15 | [兼容](codebase-audit/03-compat-shim.md)§分布式与 FSDP2 | 2 机保存、4 机加载的续训用例 |
 | 8.19 | 布局收尾：`extern/mpi`、`extern/cuda/nccl`、`extern/acl/hccl` 进 `backends/comm/`；Python 侧的启动器、process group、rendezvous 收进 `python/jittor/distributed/`；`compat` 的 `distributed.py` 只做 torch 命名的委托 | 8.08、8.15、4.15、0.19 | [布局](target-layout.md)§3 | 三个通信后端同一目录形状 |
+| 8.20 | **手写 GroupNorm CUDA 多搬一份全尺寸中间量**（3.22 口径对齐后派生）。forward 额外物化一份全尺寸 `xhat` 交给反向，PyTorch 从 `X/mean/rstd` 重算；`backends/cuda/kernels/nn/group_norm_cuda.py`。实测它占 Jittor 归约类与 PyTorch 差距的 **75%**（两种量法算出的占比一致），绝对量 1.5–1.8 ms | — | 2026-09-06 由 3.22 的执行者在口径对齐后归因 | UNet 一步的 GroupNorm 合计不慢于 PyTorch 的同口径值（当前 1533–1544 us 对 1276–1316 us）；数值与 float64 参考的相对误差不退化 |
 
 ## 12. 阶段 9 · 构建、缓存与打包
 
