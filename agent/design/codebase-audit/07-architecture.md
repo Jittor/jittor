@@ -21,6 +21,50 @@ PyTorch）、JIT 代码生成与 loop-transform pass 管线（`src/opt/` 82 文�
 | "元算子"名不副实 | `src/ops/` 30 个算子中真正的元算子只有 unary/binary/ternary/reduce/broadcast_to/reindex/reindex_reduce 七个；其余是 getitem/setitem/argsort/candidate/copy/clone/where 等具体算子，还有一个融合优化器 kernel `fused_adamw_op.h:7` 直接住在核心 | 元算子是宣传语（README:9,197）而非代码里的边界，核心因此不断长出非元算子 | 明确划出 meta 层与 composite 层 | 主要 |
 | Executor 是单函数上帝对象 | `executor.cc:200-719`，run_sync **一个函数 520 行**，含 BFS、并查集融合、两次拓扑排序、内存分配、换出磁盘、CPU/GPU 迁移、并行编译、JIT key 构造、发射、profiling、NaN 检查、异步回溯；`executor.h` 只有 8 个成员且 4 个是流水线补丁状态 | 无法缓存调度结果、无法多流、无法插入设备选择 | 拆成 Planner（图到执行计划，可按结构哈希缓存）与 Runner | 关键 |
 
+**已修（结构部分）：`8e1ad4bd`、`33c10331`、`fa2d8523`（3.01）。** 拆分本身做完了：
+`run_sync` 579 行（审计当时 520，此后还长了）→ **39 行**，`executor.cc` 945 → 295 行。
+Planner 是 `exec_plan.{h,cc}` 的 `build_exec_plan`，产出值类型 `ExecPlan`（融合划分、
+段的执行序、各段的算子序，除 `ops`/`all_vars` 外全是下标）；Runner 是
+`exec_runner.{h,cc}` 的 `run_exec_plan`（分配、迁移、发射、释放 liveness、等设备）。
+两半各自一个翻译单元，边界由编译器守。「`executor.h` 只有 8 个成员且 4 个是流水线补丁
+状态」也已消除：`last_run_ops` 与 `flush_active` 归 `runtime/submission_pipeline.h` 的
+`SubmissionPipeline`，由 `NativeRuntime` 持有，`executor.h` 只剩两个分配器、
+`last_is_cuda` 和两个方法，且都写了契约。
+
+**未修：「可按结构哈希缓存」这半，而且实测证明它不该按本行的理由做。** 见下节
+「一次量化否决」。本行「无法缓存调度结果」仍然成立（现在可以缓存了，但不值得）。
+
+### 一次量化否决：计划缓存的收益上界是每步 0.128 ms
+
+3.01 的验收写的是「UNet 每步执行器 CPU 时间由约 16 ms 降到计划命中后的发射成本」。
+在 `tests/models/_parity_networks.py` 的 diffusion UNet 上按阶段实测（CUDA，
+`batch=16 res=128`，每步 7 次 `run_sync`，15 步中位数，临时 flag 计数器）：
+
+| 阶段 | 每步 | 占比 |
+| --- | --- | --- |
+| 1 setup | 0.007 ms | — |
+| 2 收集批次（BFS 到不动点） | 0.045 ms | 0.3% |
+| 3–5 融合划分 + 两次拓扑排序 | 0.128 ms | 0.9% |
+| 编译（全命中） | 0.002 ms | — |
+| 6 发射循环 | 1.94 ms | 14% |
+| 7 等设备 | 9.78 ms | 69% |
+| 整步墙钟 | 14.21 ms | |
+
+**那 16 ms 里没有规划，主要是等 GPU 算完（9.78 ms）加发射（1.94 ms）。** 规划总共
+0.17 ms，而且**与张量大小无关**（`batch=8 res=64` 一档同样是 0.17 ms，整步 4.41 ms）
+——这正是「常数还是比例」的判据。缓存能跳过的只有 3–5 的 0.128 ms：phase 2 无论如何
+都要走一遍，否则拿不到本批新建的那批 `Op*`（训练循环每步都是全新的 Op 对象，缓存的
+计划里存的下标必须靠 BFS 的确定性顺序重新对上）。
+
+代价一侧：结构哈希必须覆盖 `count_fuse` 会分支的**每一个**字段——`_stop_fuse`、
+`_force_fuse`、`_out_hint`、`num`、`dtype`、`shape`（`_force_fuse` 的形状一致性）、
+消费者个数、边的下标次序与兄弟次序——漏掉任何一个就是静默的错误融合，而算这个哈希
+本身又是一次 O(算子+边) 的遍历，与被跳过的工作同阶。
+
+**结论：不做。** 0.9% 的收益换一条能静默改变融合结果的缓存不划算。真正值钱的是
+phase 6 那 1.94 ms 的 per-op 发射常数与 phase 7 那 9.78 ms 背后「CPU 为什么在干等」
+（后者正是 3.07 要的 GIL 释放）。量法与完整数字见 skill `jittor-core-planning-cost` §4bis。
+
 ## 分层与依赖方向
 实际依赖图中的三个**真环**：
 1. `jittor_utils` ⇄ `jittor.compiler`：`jittor_utils/__init__.py:731,807,810,869` 里 import jittor，而 compiler.py 顶部 import jittor_utils。所谓底层工具包实际依赖它服务的框架。
@@ -89,8 +133,10 @@ PyTorch）、JIT 代码生成与 loop-transform pass 管线（`src/opt/` 82 文�
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
 | --- | --- | --- | --- | --- |
 | 单函数异常 | run_sync 520 行 | 见核心抽象节 | 拆 Planner/Runner | 关键 |
+| ↑ **已修：`33c10331`、`fa2d8523`（3.01）** | run_sync 39 行；executor.cc 295、exec_plan.cc 374、exec_runner.cc 368 | | | |
 | 单文件异常（框架自身） | misc/tensor_ops.py 2874；_runtime/core_api.py 2614；installers/nn.py 2454；installers/tensor.py 2413；shim/backends/flash_attention.py 2086（大半是内嵌 CUDA 字符串）；compiler.py 1500；acl_compiler.py 1397；op_compiler.cc 1171；opt/expr.cc 1180 | 这些是域而不是文件 | 按域拆分继续下推一层 | 主要 |
 | 层厚薄失衡：接口薄实现厚 | executor.h 40 行接口对 executor.cc 744；mem/allocator.h 58 行抽象下挂 8 个实现 2173 行；compat/ 28198 行没有任何契约定义 | 抽象没有承载设计意图 | 关键接口写成显式契约 | 主要 |
+| ↑ **已修（executor.h 那一份）：`8e1ad4bd`、`fa2d8523`（3.01，同时是 11.04 的一部分）** | executor.h 79 行，写明一次批的承诺、执行序、`device_sync`/`weak_sync` 语义、不可重入、以及两个分配器与 `last_is_cuda` 各自的所有权。`allocator.h` 与 compat 仍待 11.04 | | | |
 | "后端"这个抽象不成立（规模差 18 倍） | ACL 13646 行 133 文件 39 算子；ROCm 748 行 0 算子（靠文本改写复用 CUDA 源码，含把 `run_pass<FloatAtomicFixPass>();` 替换成字面量 WTF 让该 pass 编译失败） | 两个后端没有共同形状，无法有共同契约与矩阵测试 | 注册表加分派表，删除文本改写 | 关键 |
 | 测试分布与风险倒挂 | 核心 C++ 37.5k 行对 tests/core 7355 行（0.20）；compat 28198 对 20542（0.73）；结构测试 8071 行超过 tests/core | 最难改最容易出隐性 bug 的一层测得最少 | 结构测试预算转向核心执行器与图不变量的属性测试 | 主要 |
 | 工具链覆盖极窄 | `pyproject.toml:70` ruff 仅 E4,E7,E9,F,UP006,UP007；`:80-91` mypy 只覆盖 **7 个文件**（占 820 个 Python 文件的 0.9%），其中 2 个在 agent/、2 个是结构测试 | 静态工具无法承担任何边界约束，全部压给结构测试 | 先把 import 方向做成 lint 规则 | 主要 |

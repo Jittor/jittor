@@ -2438,6 +2438,51 @@ host 编译器编、却不走那条新管线的后端源码。** 逐层实测到
 | 一个真实的假红源 | 第一次带 CUDA 跑 `tests/compat/torch` 时同时跑着 `tests/structure`，得到 64 failed；**串行重跑后 `test_torch_shim_aliases.py` 全绥**。同一个 `$JITTOR_HOME` 并发两个会编译的 session 还把缓存搞到 `import jittor` 在 `setup_cub` → `compile_custom_ops` 里 `Fatal Python error: Aborted`——删掉整个 `$JITTOR_HOME` 重建后正常（重建约 6.5 分钟）。**同一分区内不要并发两个 pytest session** |
 | 新增可复用件 | `tests/_helpers/install_lock.py`（跳线程探锁）；`agent/skills/process-global-state-and-optin` 新增 §6.5（可回滚 ledger 的四条判据）；`agent/skills/structure-rule-has-teeth` 新增「分类闭集」一节（什么时候豁免清单反而是对的） |
 | 一个工具坑 | 本波有一次编辑器改写把 `03-compat-shim.md` 的中文全部变成 `?`（UTF-8 → ASCII），提交看起来只是「rewrite (98%)」。已 `git reset` 重做，未推出。**改 CJK 文档后 `file <路径>` 应仍是 UTF-8，且看 `git diff --stat` 的行数是不是与改动量相称** |
+### 本波结果：`coreops` / 3.01 执行器拆分（结构完成，性能验收判定不做）
+
+`8e1ad4bd`（executor.h 显式契约 + run_sync 七阶段标注）、`33c10331`（抽出 Planner）、
+`fa2d8523`（抽出 Runner）、`029fa9a4`（流水线状态归 SubmissionPipeline）。
+`run_sync` 579 → **39 行**，`executor.cc` 945 → 295 行；新增 `exec_plan.{h,cc}`（图 →
+值类型 `ExecPlan`）与 `exec_runner.{h,cc}`（计划 → 发射）。验收的两条里
+**「`executor.h` 不再有流水线补丁状态」已满足**（并加了结构断言钉住）。
+
+**3.01 保持「待领」，因为性能验收未达；但这条验收的前提被实测推翻了。** 验收原文是
+「UNet 每步执行器 CPU 时间由约 16 ms 降到计划命中后的发射成本」。给 `run_sync` 每个阶段
+加临时 flag 计数器实测（diffusion UNet，CUDA，`batch=16 res=128`，每步 7 次 `run_sync`，
+15 步中位数）：整步 14.21 ms = **等设备 9.78 + 发射 1.94 + 规划 0.173**（其中真正可缓存的
+融合划分与两次拓扑排序只有 0.128 ms，phase 2 的 BFS 0.045 ms 无论如何都要走一遍——训练
+循环每步都是全新的 `Op*`，缓存里的下标要靠 BFS 的确定性顺序重新对上）。换一档规模
+（`batch=8 res=64`，整步 4.41 ms）规划仍是 0.17 ms：**是常数，不是比例**。
+
+所以计划缓存的收益上界是每步 0.128 ms（整步 0.9%），代价是一个必须覆盖 `count_fuse` 会
+分支的每一个字段的结构哈希，漏一个就是静默的错误融合，而算哈希本身又是一次 O(算子+边)
+的遍历。**判定不做**，数字与推理写进了 `codebase-audit/07-architecture.md`。
+**给后来人的方向**：值钱的是 phase 6 那 1.94 ms 的 per-op 发射常数，和 phase 7 那
+9.78 ms 里 CPU 的纯等待（正是 `3.07` 要的 GIL 释放，本波顺带量出了它的规模）。
+
+**沉淀**：新 skill `pure-code-motion-refactor`（怎么证明一次纯搬运行为不变：归一化文本
+比对、让工作树在长测试跑着时仍可编辑的快照法、「失败集合逐条相同」而不是「全绿」的判据、
+以及搬代码会静默掏空按文件名点名的结构门禁）；`jittor-core-planning-cost` 加 §4bis
+（run_sync 阶段分解与临时 flag 计数器的量法，含上面那张表）。
+
+**门禁**（与 803e37853 逐条对拍）：原生 CPU `tests/core` **串行跑四轮**（基线 2、改后 2），
+四份 FAILED 清单 md5 完全一致（21 failed / 643 passed / 113 skipped / 1 xfailed）；
+`tests/ops` 21 failed / 257 passed / 227 skipped 相同；torch shim `tests/structure`
+19 failed 清单相同、passed 866→867（多的一条是本任务新增的结构断言）；
+CUDA `tests/backends/cuda` 42 failed / 220 passed / 41 skipped / 1 xfailed，42 条逐条相同。
+
+**取 CUDA 基线的办法记一笔，能省下一小时**：本机**冷 CUDA 构建必然失败**——
+`dnnl_lnx_2.2.0`、`cub-1.11.0`、`cutt-1.2` 三个三方包要联网，报出来的是 `nan_checker.cu`
+的 nvcc `ret 256`，而同一条 nvcc 命令单独手跑是成功的，很容易被当成自己改坏了。
+能带 CUDA 构建的只有**预热过的 `$JITTOR_HOME`**。所以基线不要另建缓存目录，
+要把工作树临时切回基线提交、复用同一个 `JITTOR_HOME` 跑（还原写进 `trap`，
+脚本见本波留下的做法）。
+
+**一条给所有人的坑**：`tests/core` 里 `test_core.py::test_fuse_memopt`、`test_var_holder`
+与 `test_grad.py::test_no_grad` 断言的是「进程里还剩几个存活 Var」，**这个数取决于同一进程
+里前面跑过什么，不是稳定量**。本波实测：同一份源码（同一个快照）两次并发整目录跑，
+`test_no_grad` 一次 9 一次 7，`test_fuse_memopt` 一次红一次绿。**拿它做 A/B 必须串行**，
+判据用 FAILED 集合而不是断言里的数字（详见本波在 `pure-code-motion-refactor` §4 的写法）。
 
 ## 7. 接手怎么开始
 

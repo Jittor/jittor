@@ -40,6 +40,23 @@ C++ 头文件。第三，错误处理只有一档：ASSERT/CHECK/LOGf 全部抛 
 | 全局计数器被"按律恢复" | `parallel_compiler.cc:240,351` 编译前备份 lived_vars/lived_ops 编译后赋回；`fused_op.cc:122,140` 用 --/++ 让 FusedOp 不计入 | 这两个计数驱动 `var_holder.cc:74` 的急切执行阈值；恢复期间主线程若也在建图则计数永久错位 | 计数器改成分配器职责或删掉该启发式 | 次要 |
 | 执行器全程持有 GIL | 全仓仅两处 GIL 操作且都是为编译线程；run_sync（含 `executor.cc:705` 的 cudaDeviceSynchronize）、.item()、.numpy() 路径无 Py_BEGIN_ALLOW_THREADS | 一次 sync 期间整个解释器停摆；use_threading flag 只关掉 top_weak_sync 并不解决。对 vLLM 这类需要后台调度线程的场景是硬串行点 | 在设备等待段释放 GIL | 主要 |
 
+**本节的行号已被 3.01 的拆分作废，本节的问题一个都没修。** `8e1ad4bd`、`33c10331`、
+`fa2d8523`、`029fa9a4`（3.01）把 `run_sync` 拆成 Planner（`exec_plan.cc`）与 Runner
+（`exec_runner.cc`），`executor.cc` 从 945 行降到 295 行。上表里指向 `executor.cc` 某一行的
+证据请按下表重新定位——**这些条目本身仍待 3.02–3.07**，拆分只是把它们搬到了能单独读的地方：
+
+| 本表原引用 | 现在在哪 |
+| --- | --- |
+| `executor.cc:539` 栈上 `FusedOp`（3.03） | `executor.cc` 的 `run_sync`，仍是局部量 |
+| `executor.cc:685` 错误路径二次 do_prepare（3.04） | `exec_runner.cc` 的 `run_exec_plan` catch 块 |
+| `executor.cc:704-707`（3.19，已由 `5248870d` 删除） | 不存在 |
+| `executor.cc:705` cudaDeviceSynchronize（3.07） | `exec_runner.cc` 的 phase 7 `sync_devices` |
+| `executor.cc:721-733` CUDA 分配钩子 | `executor.cc` 末尾，未动 |
+
+给 3.07 的一条实测：那段设备等待在 UNet 每步里是 **9.78 ms**（`batch=16 res=128`，整步
+14.21 ms），是全流程最大的一块，且期间 CPU 在纯等。释放 GIL 的收益量级见
+[架构](07-architecture.md)§核心抽象末尾的阶段分解表。
+
 ## JIT 键与代码生成：用文本代替结构化数据
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
 | --- | --- | --- | --- | --- |
