@@ -1,9 +1,11 @@
 """Small compiler flag helpers shared by runtime and standalone tools."""
 
+from typing import List
+
 
 def shsplit(value):
     parts = value.split(" ")
-    output = []
+    output: List[str] = []
     quote_count = 0
     for part in parts:
         current_quotes = part.count('"') + part.count("'")

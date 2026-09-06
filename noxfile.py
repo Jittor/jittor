@@ -574,7 +574,8 @@ def _by_process_mode(targets):
     and a per-path loop stops at the first failing path, so a gate reports one
     failure per run instead of all of them.
     """
-    native, torch = [], []
+    native: list = []
+    torch: list = []
     for target in targets:
         path = str(target).split("::", 1)[0]
         (torch if path.startswith(TORCH_MODE_PATHS) else native).append(target)
@@ -1939,7 +1940,9 @@ def optional(session):
         return
     _run_pytest(session, OPTIONAL_COMPAT_TESTS, env, runner=python)
     if flash_source:
-        native_tests = OPTIONAL_NATIVE_FLASH_TESTS
+        # Grown by the += chain below, so it is a variable-length tuple rather
+        # than the fixed-width one inferred from the initial value.
+        native_tests: tuple = OPTIONAL_NATIVE_FLASH_TESTS
         dtype_spec = native_env["JITTOR_FLASH_ATTN_DTYPES"].lower()
         head_dim_spec = native_env["JITTOR_FLASH_ATTN_HEAD_DIMS"].lower()
         configured_dtypes = {

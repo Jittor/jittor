@@ -1,9 +1,10 @@
 """Runtime-provided compatibility services, without importing the runtime."""
 
 from types import ModuleType
+from typing import Callable, Dict
 
 
-_module_loaders = {}
+_module_loaders: Dict[str, Callable[[], ModuleType]] = {}
 
 
 def register_runtime_module(name, loader):

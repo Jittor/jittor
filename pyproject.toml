@@ -83,13 +83,22 @@ docstring-code-format = false
 
 [tool.mypy]
 python_version = "3.7"
+# Expanded one package at a time, each one left genuinely clean rather than
+# quieted with `# type: ignore`. `python/jittor_utils` (26 modules) is the
+# whole tools layer: it is the lowest layer in the tree and, as of the import
+# gate in tools/lint/check_import_layering.py, provably imports nothing from
+# `jittor`, so it type-checks without dragging the framework in.
+# Still uncovered: python/jittor (358 modules) and the backends overlay
+# (86 modules under backends/).
 files = [
     "noxfile.py",
     "agent/scripts/check_wheel_contents.py",
-    "python/jittor_utils/cuda_wheel.py",
+    "python/jittor_utils",
     "python/jittor/compat/shim/deploy.py",
+    "tools/lint/check_import_layering.py",
     "tools/release/pack_offline.py",
     "tests/structure/test_cleanup_structure.py",
+    "tests/structure/test_import_layering.py",
     "tests/structure/test_pytest_contract.py",
 ]
 mypy_path = "python"

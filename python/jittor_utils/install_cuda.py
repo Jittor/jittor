@@ -13,9 +13,12 @@ from jittor_utils.misc import download_url_to_local
 from jittor_utils import cuda_wheel
 from jittor_utils import manifest
 import pathlib
+from typing import Any, Dict
 
 
-_cuda_wheel_stacks = {}
+#: nvcc version string -> the resolved wheel stack, or None when the build
+#: falls back to the system CUDA. None is a cached answer, not a cache miss.
+_cuda_wheel_stacks: Dict[str, Any] = {}
 
 
 def _truthy(value):

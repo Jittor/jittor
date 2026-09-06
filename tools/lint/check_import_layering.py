@@ -115,9 +115,9 @@ def _load_pyproject(root: Path) -> dict:
         import tomllib
     except ImportError:  # pragma: no cover - Python < 3.11
         try:
-            import tomli as tomllib  # type: ignore[no-redef]
+            import tomli as tomllib
         except ImportError:
-            from setuptools._vendor import tomli as tomllib  # type: ignore[no-redef]
+            from setuptools._vendor import tomli as tomllib
     with (root / "pyproject.toml").open("rb") as stream:
         return tomllib.load(stream)
 

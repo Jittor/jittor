@@ -11,8 +11,13 @@ import socket
 import os
 import sys
 import threading
+from typing import Dict, List, Optional
 
-key_queue = {}
+key_queue: Dict[str, List[socket.socket]] = {}
+
+#: Set by wait_queue() and deliberately kept alive for the process lifetime:
+#: dropping the last reference would close the socket and give up our place.
+s: Optional[socket.socket] = None
 
 def handle_connect(req:socket.socket, c_addr, server):
     print("get connect", c_addr, req)

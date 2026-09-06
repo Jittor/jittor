@@ -6,6 +6,7 @@ import jittor_utils
 import jittor_utils as jit_utils
 from jittor_utils import LOG
 import sys
+from typing import Any
 
 with jittor_utils.import_scope(os.RTLD_GLOBAL | os.RTLD_NOW):
     jittor_utils.try_import_jit_utils_core()
@@ -76,13 +77,15 @@ def hook_rand():
     np.random.seed(0)
     if "torch" in sys.modules:
         LOG.i("Hook torch.rand")
-        torch = sys.modules["torch"]
+        # Any, not ModuleType: these lines exist to monkey-patch attributes
+        # that the module type does not declare.
+        torch: Any = sys.modules["torch"]
         torch.rand = hook_pt_rand
         torch.normal = hook_pt_normal
         torch.randn = hook_pt_randn
         torch.manual_seed(0)
     if "jittor" in sys.modules:
-        jittor = sys.modules["jittor"]
+        jittor: Any = sys.modules["jittor"]
         LOG.i("Hook jittor.random")
         from functools import partial
         jittor.random = partial(hook_jt_rand, jittor)

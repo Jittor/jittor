@@ -27,6 +27,7 @@ if platform.system() == 'Darwin':
 
 from pathlib import Path
 import json
+from typing import Any, Optional, Set
 
 from . import probe
 
@@ -248,22 +249,21 @@ class Logwrapper:
     def _log(self, level, verbose, *msg):
         if self.log_silent or verbose > self.log_v:
             return
-        ss = ""
+        text = ""
         for m in msg:
             if callable(m):
                 m = m()
-            ss += str(m)
-        msg = ss
+            text += str(m)
         f = inspect.currentframe()
         fileline = inspect.getframeinfo(f.f_back.f_back)
         fileline = f"{os.path.basename(fileline.filename)}:{fileline.lineno}"
         if cc and hasattr(cc, "log"):
-            cc.log(fileline, level, verbose, msg)
+            cc.log(fileline, level, verbose, text)
         else:
             time = datetime.datetime.now().strftime("%m%d %H:%M:%S.%f")
             tid = threading.get_ident()%100
             v = f" v{verbose}" if verbose else ""
-            print(f"[{level} {time} {tid:02}{v} {fileline}] {msg}")
+            print(f"[{level} {time} {tid:02}{v} {fileline}] {text}")
     
     def V(self, verbose, *msg): self._log('i', verbose, *msg)
     def v(self, *msg): self._log('i', 1, *msg)
@@ -293,7 +293,12 @@ class DelayProgress:
 # check is in jupyter notebook
 def in_ipynb():
     try:
-        cfg = get_ipython().config 
+        # IPython injects get_ipython() into builtins only inside IPython, so
+        # import it rather than relying on a name that may not exist. Outside
+        # IPython this raises ImportError and falls through to False, which is
+        # what the bare name did by raising NameError.
+        from IPython import get_ipython
+        cfg = get_ipython().config
         if 'IPKernelApp' in cfg:
             return True
         else:
@@ -372,6 +377,9 @@ def do_compile(args):
         return True
 
 pool_size = 0
+#: The compile process pool, created on the first run_cmds() that needs one
+#: and torn down by the atexit hook registered alongside it.
+p: Any = None
 
 def pool_cleanup():
     global p
@@ -419,7 +427,9 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
             # multiprocess spawn init_main_from_path.
             # check spawn.py:get_preparation_data
             spec_bk = sys.modules['__main__'].__spec__
-            tmp = lambda x:x
+            # A stand-in __spec__ that only has to answer .name; the object is
+            # intentionally not a ModuleSpec, hence Any.
+            tmp: Any = lambda x:x
             tmp.name = '__main__'
             sys.modules['__main__'].__spec__ = tmp
         p = Pool(pool_size, initializer=pool_initializer)
@@ -677,7 +687,7 @@ def check_cache_disk_space(path, minimum_mb=None):
 # Set by find_cache_path(). Deliberately *above* the build-configuration
 # directory: the lock also guards the third-party downloads (mkl, cutt, cub)
 # that every configuration on this toolchain shares.
-lock_path = None
+lock_path: Optional[str] = None
 
 
 def _git_head_file(path):
@@ -761,7 +771,7 @@ def cache_group_paths(group, root=None):
     """Absolute paths a ``clean_cache`` subcommand should remove."""
     root = root or cache_root()
     if group == "core":
-        owned = set()
+        owned: Set[str] = set()
         for names in _CACHE_GROUP_NAMES.values():
             owned.update(names)
         return sorted(
@@ -1071,7 +1081,7 @@ def get_py3_include_path():
         _py3_include_path = '-I"' + include_path + '"'
     else:
         config_path = get_py3_config_path()
-        _py3_include_path = probe.cached(
+        includes = probe.cached(
             "py3_includes:" + config_path, [config_path, sys.executable],
             lambda: run_cmd(config_path+" --includes"))
         
@@ -1079,12 +1089,13 @@ def get_py3_include_path():
         # check the include paths and fix them
         if platform.system() == "Darwin":
             is_real_path = False
-            for include_path in _py3_include_path.strip().split():
+            for include_path in includes.strip().split():
                 if os.path.exists(include_path[2:]):
                     is_real_path = True
             if not is_real_path:
-                _py3_include_path = f"-I/Library/Developer/CommandLineTools/Library/Frameworks/"\
-                                    f"Python3.framework/Versions/3.{sys.version_info.minor}/Headers"
+                includes = f"-I/Library/Developer/CommandLineTools/Library/Frameworks/"\
+                           f"Python3.framework/Versions/3.{sys.version_info.minor}/Headers"
+        _py3_include_path = includes
     return _py3_include_path
 
 
@@ -1145,7 +1156,10 @@ def dirty_fix_pytorch_runtime_error():
             import torch
 
 is_in_ipynb = in_ipynb()
-cc = None
+#: The compiled jit_utils_core extension, or None until it is imported.
+#: Any rather than ModuleType: callers reach for attributes that only exist
+#: on the compiled module.
+cc: Any = None
 LOG = Logwrapper()
 
 check_msvc_install = False
@@ -1165,9 +1179,9 @@ else:
 cc_type = get_cc_type(cc_path)
 cache_path = find_cache_path()
 
-_py3_config_path = None
-_py3_include_path = None
-_py3_extension_suffix = None
+_py3_config_path: Optional[str] = None
+_py3_include_path: Optional[str] = None
+_py3_extension_suffix: Optional[str] = None
 # NOTE: this used to be
 #     ssl._create_default_https_context = ssl._create_unverified_context
 # with no condition and no way to turn it off. That statement does not affect
