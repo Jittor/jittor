@@ -179,7 +179,71 @@ CPU 与 float64 差 3.7e-03、CUDA 与 float64 差 2.1e-03、两者互差 2.7e-0
   测试写成**有界不一致**（相对容差）加**整数路径逐位相等**，不要写成 `assert_array_equal`。
 - 只有一侧偏离参考，或差异远超 float32 舍入规模 → 是 bug，按 verify-then-fix 走。
 
-## 7. 收尾前必查
+## 7. 整个 installer 清空（比逐 cohort 提升更可验收）
+
+「再挑一个 cohort」这种任务形状关不掉；「某个 installer 内嵌 def/class 归零」能。
+计数就是验收口径，随手可测：
+
+```bash
+python agent/skills/torch-api-cohort-promotion/count_installer_closures.py \
+    --only nn.py tensor.py
+# CLEARED 标记 = nested 与 lambda 同时为 0
+```
+
+把这个计数**同时写进测试**，否则下一波会有人往空 installer 里塞新闭包：
+
+```python
+def test_install_module_methods_defines_nothing():
+    source = textwrap.dedent(inspect.getsource(installer_mod._install_module_methods))
+    tree = ast.parse(source)                     # 不要用 inspect.cleandoc：
+    ...                                          # 它会削掉函数体缩进，parse 必失败
+```
+
+搬闭包时会遇到两类需要手法的：
+
+- **捕获 `self` 的嵌套 dispatch**：把内层函数提到模块级并显式收 `self`，外层用
+  `functools.partial` 绑定，而不是保留一层 `def`。
+- **install 前的原始方法**（`Module.execute`、`Module.parameters` …）：install 会
+  覆盖这些属性，所以必须**在 import 时**捕获成 `_ORIG_MODULE_*`，晚查会自指递归。
+  这与 §2 的 `_orig_setitem` 是同一条理由。
+
+清空后 install 里只剩绑定，**带原生 owner 的 `if not hasattr(...)` 守卫要照抄**，
+否则会把 jittor 原生实现（例如 `Module.half`）覆盖掉。
+
+## 8. 涉及 backward 的测试：先隔离进程级 grad 路由
+
+`.grad` 是否被填充由两个**进程全局**状态决定，两个都不属于你的 installer：
+
+- `jt.flags.no_grad`——前面的文件在 `no_grad` 块里失败就会把它留成开着。
+- `jt._active_optimizers`——**只要进程里还活着任何一个 optimizer 对象**，backward
+  就把梯度路由进 optimizer，`p.grad` 保持 None；把那个 optimizer 释放掉 `.grad`
+  就回来了。真 PyTorch 2.12.1 无论有没有 optimizer 都会填 `.grad`，所以这是真实
+  差异，但它属于 optimizer/autograd 桥而不是 Module installer，**按 §1 记给那个
+  owner，不要跨域改**。
+
+所以 backward 相关的断言要先把这两样钉住，否则你的用例会因为别的文件而红，
+而红的位置和原因毫无关系：
+
+```python
+@contextlib.contextmanager
+def unbridged_grad():
+    prev_flag = bool(jt.flags.no_grad)
+    prev_active = list(getattr(jt, "_active_optimizers", []) or [])
+    jt.flags.no_grad = 0
+    jt._active_optimizers[:] = []
+    try:
+        yield
+    finally:
+        jt.flags.no_grad = 1 if prev_flag else 0
+        jt._active_optimizers[:] = prev_active
+```
+
+**写成 contextmanager 而不是只写 fixture**：`instantiate_device_type_tests` 生成的是
+unittest 类，pytest fixture 注入不进去，多写一个参数会得到
+`TypeError`（`device_types.py` 内部调用处），不是 skip。普通函数用 fixture 包一层同一个
+contextmanager 即可。
+
+## 9. 收尾前必查
 
 - `JITTOR_TORCH_SHIM=1 pytest tests/structure -q`——**注意它不是 3 秒、也不是全绿**：
   本机实测约 2 分 15 秒，HEAD 上就有 15 条红。判据是**与改前逐条同集合**，
