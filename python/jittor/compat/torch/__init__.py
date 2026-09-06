@@ -12,7 +12,7 @@ import sys
 
 from .._aliases import _torch_namespace as _torch_namespace_snapshot
 from .context import InstallContext, InstallReport, InstallStepError, ModuleRegistry
-from ..transaction import InstallTransaction
+from ..transaction import InstallTransaction, active_transaction
 from .functional import (
     _diff,
     _isin,
@@ -127,13 +127,13 @@ def _install_optional_vllm(context):
     from ..module_patcher import install_module_patches
     from ..vllm import register
 
-    register(transaction=context.state.get("_install_transaction"))
+    register(transaction=active_transaction(context))
     # Registering fills the patch table; the finder that consults it has to be
     # live before vLLM is imported. Entry points stay out of it -- scanning
     # them here would drag unrelated adapters into every import of the shim.
     install_module_patches(
         load_entry_points=False,
-        transaction=context.state.get("_install_transaction"),
+        transaction=active_transaction(context),
     )
 
 

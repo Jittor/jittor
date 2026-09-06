@@ -64,6 +64,26 @@ inline 了一份「现在有没有事务在记账」的查找（`factories.py`�
 `module_patcher.py` 的 finder undo 统一：按下标核对身份，不是自己那一项就抛
 `TransactionConflict`。
 
+已修：提交 `<7.05-commit-4>`（剩余写入口钉成分类闭集）。看板连着十一波记着
+「其余 installer 的写入口仍待」，每一波都是一次新的 grep、结论都不一样——因为
+grep 说的是「什么匹配上了」，不是「还剩什么」。现在
+`tests/structure/test_compat_write_entry_points.py` 用 AST 扫出
+`python/jittor/compat` 里对 `os.environ`、`sys.modules`、`sys.meta_path`、
+`sys.path`、`builtins.__import__`、jt.flags 的**全部** 50 个写入口，每一个都必须
+在分类表里，否则红；表里有而树里已没有的也红。五个类别中四个是**不属于这本账
+的理由**：`ledger`（14 项）、`runtime`（12 项，调用方在安装之后自己要的）、
+`pre-ledger`（12 项，事务还不存在，preflight 在 core import 之前跑）、
+`deployed-payload`（5 项，另一个进程）、`pending`（8 项）。
+`pending` 另有一份按文件记障碍的清单，做完一项在同一个 diff 里变短。
+
+**7.05 因此仍是待领**，剩余四处（`PENDING` 里逐条写着原因）：
+`external_backend.py` 的 source-root import 用整表快照恢复 `sys.path`/`sys.modules`，
+会丢弃并发写者的条目而不是报告；`vllm/__init__.py` 与 `vllm/flash_attn.py` 的
+`install()` 由 arming finder 在首次 `import vllm` 时触发，那时安装事务已关闭；
+`shim/cpp_extension/torch_utils.py:load` 发布的扩展模块寿命长于安装。
+前者需要 owner-aware 条目或子进程隔离，后三者需要一本寿命等于「已布防的 hook」
+而不是「安装」的账。
+
 ## 张量语义：视图/存储/叶子/0 维
 至少四条独立的手工标记链在维持本应由类型系统保证的语义。
 

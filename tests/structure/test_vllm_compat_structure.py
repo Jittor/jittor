@@ -20,6 +20,11 @@ _ALLOWED_JITTOR_IMPORTS = {
     "jittor",
     "jittor.compat.module_patcher",
     "jittor.compat.permissive",
+    # register(transaction=...) already takes this layer's install ledger, and
+    # its meta_path undo has to report a concurrent external replacement rather
+    # than skip it. The exception type is part of that contract, exactly as it
+    # is for the two finders above -- both of which raise it too.
+    "jittor.compat.transaction",
 }
 
 
