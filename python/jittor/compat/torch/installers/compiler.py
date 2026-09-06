@@ -22,7 +22,13 @@ def install(ctx):
         if not hasattr(g, name):
             setattr(g, name, fn)
     _alias("rsqrt", lambda x: 1.0 / jt.sqrt(x))
-    _alias("empty_like", lambda x, **k: jt.empty(x.shape, x.dtype))
+    def _empty_like(x, **kwargs):
+        if kwargs.get("dtype") is None:
+            kwargs["dtype"] = x.dtype
+        if kwargs.get("device") is None:
+            kwargs["device"] = x.device
+        return jt.empty(x.shape, **kwargs)
+    _alias("empty_like", _empty_like)
     # module-level comparison ops (torch.gt(a,b) etc.); .gt methods already exist.
     _alias("gt", lambda a, b: a > b)
     _alias("lt", lambda a, b: a < b)

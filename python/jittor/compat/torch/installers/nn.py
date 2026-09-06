@@ -22,8 +22,9 @@ from ..nested import (
 )
 from ..nn_modules import install_module_namespace
 from ..types import (
-    _device_is_cpu, _device_is_cuda, _dtype_to_str,
-    _make_cpu_resident, _make_cuda_resident, device, dtype,
+    _device_is_cpu, _device_is_cuda, _device_is_meta, _dtype_to_str,
+    _make_cpu_resident, _make_cuda_resident, _set_meta_placeholder,
+    _var_is_cpu_resident, device, dtype,
 )
 
 
@@ -1358,8 +1359,7 @@ def _install_module_methods(nn, registry=None):
     # (peft's set_peft_model_state_dict passes strict=False).
     _orig_load_state_dict = M.load_state_dict
     import collections as _collections2
-    _IncompatibleKeys = _collections2.namedtuple("IncompatibleKeys",
-                                                  ["missing_keys", "unexpected_keys"])
+    _IncompatibleKeys = _collections2.namedtuple("IncompatibleKeys", ["missing_keys", "unexpected_keys"])
     def _find_state_target(root, key):
         obj = root
         for part in str(key).split("."):
@@ -1375,7 +1375,31 @@ def _install_module_methods(nn, registry=None):
             else:
                 return None
         return obj
-
+    def _find_state_owner(root, key):
+        parts = str(key).split(".")
+        obj = root
+        for part in parts[:-1]:
+            if isinstance(obj, nn.Sequential):
+                if part in obj.layers:
+                    obj = obj.layers[part]
+                elif str(part).isdigit() and int(part) in obj.layers:
+                    obj = obj.layers[int(part)]
+                else:
+                    return None, None, None
+            elif hasattr(obj, part):
+                obj = getattr(obj, part)
+            else:
+                return None, None, None
+        leaf = parts[-1]
+        if isinstance(obj, jt.nn.ParameterList):
+            if leaf in obj.params:
+                return obj, leaf, obj.params[leaf]
+            if leaf.isdigit() and int(leaf) in obj.params:
+                return obj, int(leaf), obj.params[int(leaf)]
+            return None, None, None
+        if not hasattr(obj, leaf):
+            return None, None, None
+        return obj, leaf, getattr(obj, leaf)
     def _state_source_to_var(value):
         if isinstance(value, jt.Var):
             return value
@@ -1383,14 +1407,7 @@ def _install_module_methods(nn, registry=None):
             return jt.array(value.cpu().detach().numpy())
         except Exception:
             return jt.array(value)
-
     def _preserve_target_dtypes_for_load(root, state_dict):
-        # torch.load_state_dict(assign=False), the default used by TRELLIS.2,
-        # copies checkpoint values into existing parameters/buffers and keeps
-        # the destination dtype.  Jittor's native load replaces through update(),
-        # so a bf16 target can be widened to fp32 when the loader had to widen a
-        # BF16 safetensor through numpy. Cast the source to the live target dtype
-        # before delegating to native load_state_dict.
         if not isinstance(state_dict, dict):
             return state_dict
         converted = None
@@ -1410,27 +1427,93 @@ def _install_module_methods(nn, registry=None):
                 converted = dict(state_dict)
             converted[key] = src.cast(target_dtype)
         return state_dict if converted is None else converted
-
+    def _assign_state_value(root, key, value):
+        owner, leaf, target = _find_state_owner(root, key)
+        if owner is None or not isinstance(target, jt.Var):
+            return False
+        source = _state_source_to_var(value)
+        if not isinstance(source, jt.Var) or source.shape != target.shape:
+            return False
+        source_is_meta = bool(getattr(source, "_jittor_torch_meta", False))
+        source_is_cpu = not source_is_meta and _var_is_cpu_resident(source)
+        if isinstance(value, jt.Var):
+            if source_is_cpu and jt.flags.use_cuda:
+                with jt.flag_scope(use_cuda=0):
+                    src = source.clone()
+                    src.sync()
+                src._jittor_torch_force_cpu = True
+                src._jittor_torch_force_cuda = False
+            else:
+                src = source.clone()
+                src.sync()
+        else:
+            src = source
+        _set_meta_placeholder(src, source_is_meta)
+        owner_dict = getattr(owner, "__dict__", {})
+        buffer_names = owner_dict.get("_buffer_names", ())
+        non_persistent_names = owner_dict.get("_non_persistent_buffer_names", ())
+        non_parameter_names = owner_dict.get("_non_parameter_names", ())
+        is_buffer = bool(leaf in buffer_names or getattr(target, "is_buffer", False))
+        persistent = bool(
+            leaf not in non_persistent_names
+            if is_buffer else getattr(target, "persistent", True)
+        )
+        is_parameter = bool(
+            not is_buffer and (
+                isinstance(owner, jt.nn.ParameterList)
+                or getattr(target, "_is_torch_parameter", False)
+                or leaf not in non_parameter_names
+            )
+        )
+        requires_grad = bool(source.requires_grad if is_buffer else target.requires_grad)
+        try:
+            src.requires_grad_(requires_grad)
+        except Exception:
+            src.requires_grad = requires_grad
+        if is_buffer:
+            src.is_buffer = True
+            src.persistent = persistent
+            src._is_torch_parameter = False
+        elif is_parameter:
+            src._is_torch_parameter = True
+        registry = getattr(jt, "_torch_leaf_params", None)
+        if isinstance(registry, dict):
+            registry.pop(id(target), None)
+            if requires_grad and not is_buffer:
+                registry[id(src)] = src
+        if isinstance(owner, jt.nn.ParameterList):
+            owner.params[leaf] = src
+        else:
+            setattr(owner, leaf, src)
+        return True
     def _load_state_dict(self, state_dict, strict=True, assign=False):
-        # preserve trainable flags: jittor assign can flip stop_grad
         trainable = set()
-        try:
-            for n, p in self.named_parameters():
-                if p.requires_grad:
-                    trainable.add(n)
-        except Exception:
-            pass
-        load_state = state_dict if assign else _preserve_target_dtypes_for_load(self, state_dict)
-        _orig_load_state_dict(self, load_state)
-        try:
-            for n, p in self.named_parameters():
-                if n in trainable and p.is_stop_grad():
-                    p.start_grad()
-        except Exception:
-            pass
+        if not assign:
+            try:
+                for n, p in self.named_parameters():
+                    if p.requires_grad:
+                        trainable.add(n)
+            except Exception:
+                pass
+        if assign and isinstance(state_dict, dict):
+            remaining = {
+                key: value for key, value in state_dict.items()
+                if not _assign_state_value(self, key, value)
+            }
+            if remaining:
+                _orig_load_state_dict(self, remaining)
+        else:
+            load_state = _preserve_target_dtypes_for_load(self, state_dict)
+            _orig_load_state_dict(self, load_state)
+        if not assign:
+            try:
+                for n, p in self.named_parameters():
+                    if n in trainable and p.is_stop_grad():
+                        p.start_grad()
+            except Exception:
+                pass
         return _IncompatibleKeys([], [])
     M.load_state_dict = _load_state_dict
-
     # torch's Module.parameters() returns an *iterator*; peft does
     # `next(model.parameters())`. jittor returns a list (needed for len()/
     # indexing by optimizers). Return a list subclass that is also an iterator
@@ -1632,7 +1715,7 @@ def _install_module_methods(nn, registry=None):
                 bare = a.replace("torch.", "")
                 if bare in dtype._registry:
                     ds = bare
-                elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
+                elif bare.split(":")[0] in ("cpu", "cuda", "npu", "meta"):
                     dev = bare
         if _device_is_cuda(dev):
             jt.flags.use_cuda = 1
@@ -1647,6 +1730,8 @@ def _install_module_methods(nn, registry=None):
                 out = _make_cpu_resident(out, inplace=(out is v))
             elif _device_is_cuda(dev):
                 out = _make_cuda_resident(out, force=True, inplace=(out is v))
+            elif _device_is_meta(dev):
+                out = _set_meta_placeholder(out)
             return out
 
         if dev is not None or ds is not None:

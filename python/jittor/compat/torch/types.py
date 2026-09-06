@@ -191,10 +191,11 @@ class device:
     # `_initialize_missing_keys()` step never recomputes non-persistent buffers
     # (e.g. RoPE inv_freq), leaving them as the `torch.empty_like` garbage that
     # `_move_missing_keys_from_meta_to_device` wrote. We can't allocate real
-    # meta tensors in jittor, but we can make the *meta* context observable: push
-    # it on a thread-local stack so Var.device reports "meta" inside it. Tensors
-    # are still really allocated (harmless -- real weights get loaded over them),
-    # but transformers correctly skips the eager init.
+    # meta storage in Jittor, but we can make the context observable to tensor
+    # factories and module parameter registration. Those Vars retain a bounded
+    # placeholder marker until checkpoint assignment or explicit migration
+    # materializes them. Their storage is still really allocated, but
+    # transformers follows the same initialization and tied-weight branches.
     def __enter__(self):
         if self.type == "meta":
             _DEVICE_CTX_STACK.append(self)
@@ -206,10 +207,9 @@ class device:
         return False
 
 
-# Stack of active `torch.device("meta")` contexts (see device.__enter__).
-# Only meta contexts are tracked; real-device `with` blocks stay no-ops.
-# Model construction in from_pretrained is single-threaded, so a plain list
-# is sufficient.
+# Stack of active `torch.device("meta")` contexts (see device.__enter__). Only
+# meta contexts are tracked; real-device `with` blocks stay no-ops. Model
+# construction in from_pretrained is single-threaded, so a plain list suffices.
 _DEVICE_CTX_STACK = []
 
 
@@ -291,6 +291,28 @@ def _device_is_cuda(dev):
     return False
 
 
+def _device_is_meta(dev):
+    """True if a torch device= argument explicitly designates meta."""
+    if dev is None:
+        return False
+    t = getattr(dev, "type", None)
+    if t is not None:
+        return t == "meta"
+    if isinstance(dev, str):
+        return dev.split(":")[0] == "meta"
+    return False
+
+
+def _set_meta_placeholder(v, enabled=True):
+    """Track a real Jittor Var that stands in for a torch meta tensor."""
+    if isinstance(v, jt.Var):
+        try:
+            v._jittor_torch_meta = bool(enabled)
+        except Exception:
+            pass
+    return v
+
+
 def _var_is_cpu_resident(v):
     """True if a Var's data actually lives in host memory.
 
@@ -333,6 +355,7 @@ def _make_cpu_resident(v, inplace=False):
     """
     if not isinstance(v, jt.Var):
         return v
+    _set_meta_placeholder(v, False)
     if _var_is_cpu_resident(v):
         return v
     if v.numel() == 0:
@@ -373,6 +396,7 @@ def _make_cuda_resident(v, force=False, inplace=False):
     """
     if not isinstance(v, jt.Var):
         return v
+    _set_meta_placeholder(v, False)
     if not jt.flags.use_cuda:
         return v
     loc = None
@@ -381,6 +405,11 @@ def _make_cuda_resident(v, force=False, inplace=False):
     except Exception:
         loc = None
     if loc == "device":
+        try:
+            v._jittor_torch_force_cpu = False
+            v._jittor_torch_force_cuda = True
+        except Exception:
+            pass
         return v
     if v.numel() == 0:
         out = v if inplace or loc != "cpu" else v.clone()
@@ -415,6 +444,7 @@ def _make_cuda_resident(v, force=False, inplace=False):
             out.migrate_to_gpu()
             try:
                 out._jittor_torch_force_cpu = False
+                out._jittor_torch_force_cuda = True
             except Exception:
                 pass
             return out
@@ -426,6 +456,7 @@ def _make_cuda_resident(v, force=False, inplace=False):
         out.sync()
     try:
         out._jittor_torch_force_cpu = False
+        out._jittor_torch_force_cuda = True
     except Exception:
         pass
     return out

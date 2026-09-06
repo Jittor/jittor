@@ -263,6 +263,146 @@ class TestStateDict(Base):
 
         both_devices(body)
 
+    def test_load_state_dict_assign_replaces_tied_parameter(self):
+        class TiedBias(nn.Module):
+            def __init__(self, device):
+                super().__init__()
+                self.decoder = nn.Linear(1, 2, bias=False)
+                self.bias = nn.Parameter(torch.zeros(2, device=device))
+                self.decoder.bias = self.bias
+
+            def tie_weights(self):
+                self.decoder.bias = self.bias
+
+        def body(dev):
+            model = TiedBias(dev)
+            canonical = torch.tensor([-3.0, 0.5], device=dev)
+            duplicate = torch.zeros(2, device=dev)
+
+            model.load_state_dict(
+                {"bias": canonical}, strict=False, assign=True)
+            self.assertIsNot(model.bias, model.decoder.bias, dev)
+            self.ac(model.bias.numpy(), [-3.0, 0.5], atol=0, rtol=0, msg=dev)
+
+            model.decoder.load_state_dict(
+                {"bias": duplicate}, strict=False, assign=True)
+            self.ac(model.bias.numpy(), [-3.0, 0.5], atol=0, rtol=0, msg=dev)
+            self.ac(model.decoder.bias.numpy(), [0.0, 0.0], atol=0, rtol=0, msg=dev)
+
+            model.tie_weights()
+            self.assertIs(model.bias, model.decoder.bias, dev)
+            self.ac(model.decoder.bias.numpy(), [-3.0, 0.5], atol=0, rtol=0, msg=dev)
+
+        both_devices(body)
+
+    def test_load_state_dict_assign_does_not_mutate_shared_source(self):
+        class Roles(nn.Module):
+            def __init__(self, device):
+                super().__init__()
+                self.p1 = nn.Parameter(torch.zeros(2, device=device))
+                self.p2 = nn.Parameter(torch.zeros(2, device=device))
+                self.register_buffer(
+                    "buf", torch.zeros(2, device=device), persistent=True)
+                # The module-owned name remains the stable buffer contract even
+                # if a prior replacement lost the per-Var role marker.
+                self.buf.is_buffer = False
+                self.buf._is_torch_parameter = True
+
+        def body(dev):
+            source = torch.tensor([4.0, 5.0], device=dev)
+            source.requires_grad_(False)
+            before = (
+                source.requires_grad,
+                getattr(source, "is_buffer", False),
+                getattr(source, "_is_torch_parameter", False),
+                source.is_meta,
+            )
+            model = Roles(dev)
+            model.load_state_dict(
+                {"p1": source, "p2": source, "buf": source}, assign=True)
+
+            after = (
+                source.requires_grad,
+                getattr(source, "is_buffer", False),
+                getattr(source, "_is_torch_parameter", False),
+                source.is_meta,
+            )
+            self.assertEqual(after, before, dev)
+            self.assertIsNot(model.p1, source, dev)
+            self.assertIsNot(model.p2, source, dev)
+            self.assertIsNot(model.buf, source, dev)
+            self.assertIsNot(model.p1, model.p2, dev)
+            self.assertIsNot(model.p1, model.buf, dev)
+            self.assertTrue(isinstance(model.p1, nn.Parameter), dev)
+            self.assertTrue(isinstance(model.p2, nn.Parameter), dev)
+            self.assertFalse(isinstance(model.buf, nn.Parameter), dev)
+            self.assertTrue(model.p1.requires_grad, dev)
+            self.assertTrue(model.p2.requires_grad, dev)
+            self.assertFalse(model.buf.requires_grad, dev)
+            self.assertTrue(getattr(model.buf, "is_buffer", False), dev)
+            self.assertEqual([name for name, _ in model.named_buffers()], ["buf"])
+            for value in (model.p1, model.p2, model.buf):
+                self.assertEqual(value.dtype, source.dtype, dev)
+                self.assertEqual(value.device.type, dev, dev)
+                self.assertEqual(value.is_cuda, dev == "cuda", dev)
+                self.assertEqual(
+                    value.location(), "device" if dev == "cuda" else "cpu", dev)
+                self.ac(value.numpy(), [4.0, 5.0], atol=0, rtol=0, msg=dev)
+
+        both_devices(body)
+
+    def test_meta_tied_bias_survives_until_checkpoint_retie(self):
+        class TiedBias(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.decoder = nn.Linear(1, 2, bias=False)
+                self.bias = nn.Parameter(torch.zeros(2))
+                self.decoder.bias = self.bias
+
+            def roberta_tie_weights(self):
+                if self.decoder.bias.device.type == "meta":
+                    self.decoder.bias = self.bias
+                    return "decoder_from_bias"
+                self.bias = self.decoder.bias
+                return "bias_from_decoder"
+
+        def body(dev):
+            real = torch.tensor([3.0], device=dev)
+            with torch.device("meta"):
+                self.assertFalse(real.is_meta, dev)
+                model = TiedBias()
+
+            accelerate_model = TiedBias()
+            accelerate_model.bias = nn.Parameter(
+                accelerate_model.bias.to(torch.device("meta")))
+            accelerate_model.decoder.bias = accelerate_model.bias
+
+            for route, candidate in (
+                ("device_context", model),
+                ("accelerate_parameter_to", accelerate_model),
+            ):
+                label = f"{dev}:{route}"
+                self.assertTrue(candidate.bias.is_meta, label)
+                self.assertTrue(candidate.decoder.bias.is_meta, label)
+                self.assertFalse(candidate.bias.is_cpu, label)
+                self.assertFalse(candidate.bias.is_cuda, label)
+                self.assertTrue(candidate.state_dict()["bias"].is_meta, label)
+
+                canonical = torch.tensor([-0.75, 0.5], device=dev)
+                candidate.load_state_dict(
+                    {"bias": canonical}, strict=False, assign=True)
+
+                self.assertFalse(candidate.bias.is_meta, label)
+                self.assertTrue(candidate.decoder.bias.is_meta, label)
+                self.assertIsNot(candidate.bias, candidate.decoder.bias, label)
+                self.assertEqual(
+                    candidate.roberta_tie_weights(), "decoder_from_bias", label)
+                self.assertIs(candidate.bias, candidate.decoder.bias, label)
+                self.ac(candidate.decoder.bias.numpy(), [-0.75, 0.5],
+                        atol=0, rtol=0, msg=label)
+
+        both_devices(body)
+
     def test_state_dict_load_state_dict_multilayer(self):
         # A small Sequential-like stack: keys are dotted submodule paths.
         rs = np.random.RandomState(11)
