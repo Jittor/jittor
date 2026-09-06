@@ -2414,7 +2414,34 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 取得抖动名单，再看候选是否引入了名单之外的差异。这条也说明冷缓存那一轮的红有一部分不是真红。
 
 `tests/structure` 的基线与本波 `cudabk` 那条一致：本机实测 **16 failed**（交接文档旧记的
-「2 条」不成立）。
+「2 条」不成立）；本波三个提交落地后是 **14 failed / 886 passed / 2 xfailed**（上游修掉两条，
+新增本波 3 条），没有一条新红由本波引入。
+
+#### torch 半边的抖动已定位并修掉：`loadgroup` 把有共享状态的文件拆散了
+
+追下去之后，torch 半边那 5 条抖动**全部**来自一个文件
+`tests/compat/torch/test_torch_compat_fsdp2.py`，而且不是「并行造出来的红」，是**漏报的红**。
+
+smoke 用 `--dist loadgroup`（`faad4898` 引入，为的是不让 174 s 的别名文件独占一个 worker）。
+loadgroup 只把**标了组**的用例绑在一起，其余按用例逐个分发——这个文件的用例共享模块级 FSDP2
+状态并依赖文件内顺序（正是第 4 节当初选 `loadfile` 要保住的性质），于是被拆到四个 worker 上，
+每个看到不同子集、不同顺序。实测：
+
+| | 两轮之间逐条不同 | 墙钟 |
+| --- | --- | --- |
+| 改前 | **3 个 nodeid**（两个方向都有），是整个 torch 半边仅有的差异 | 91.5 s / 88.7 s |
+| 改后（模块级 `xdist_group`） | **0**，`compare` 报 `IDENTICAL`（2201 对 2201） | 88.5 s / 88.8 s |
+
+方向要紧：改前与改后逐条比，3 处差异**全是 `passed -> failed`**——拆散文件会让本该失败的
+用例通过。其中 `test_unresharded_full_grad_is_visible_and_controls_step` 单独串行跑也是 FAILED，
+可确认是真红。**这一层此前在漏报失败，而「一轮能报出全部失败」正是 0.15 的第二条验收。**
+防退化断言加在 `tests/structure/test_gate_tiers.py`。
+
+顺带一个坑：loadgroup 下 xdist 会把组名附在 collected 的 nodeid 后（`...::test_x@组名`），
+两个集合都附所以自洽，但**加/删组标记会让 `compare` 报成 NOT COLLECTED / NEWLY COLLECTED**，
+逐条比结论前要先去掉 `@组名`。
+
+native 半边那 22 条尚未逐条追（其中一批是冷缓存才失败，另一批是已编目的并行敏感红），留待下一波。
 
 ### 🔴 `2.0-refactor` 现在无法带 CUDA 导入（`e3ad5be9c`）
 
