@@ -140,8 +140,8 @@ class TestOpCompiler(unittest.TestCase):
                      exc_type=RuntimeError, match="for missing arguments")
         expect_error(lambda: jit_precompile(vars, "@for(i,0,10000,@i)"),
                      exc_type=RuntimeError, match="Too much step")
-        expect_error(lambda: jit_precompile(vars, "@for(i,0,-1,@i)"),
-                     exc_type=RuntimeError, match="Too much step")
+        expect_error(lambda: jit_precompile(vars, "@for(i,0,5,0,@i)"),
+                     exc_type=RuntimeError, match="step must not be zero")
         expect_error(lambda: jit_precompile(vars, "@asd"),
                      exc_type=RuntimeError, match=r"Jit var\s+asd\s+not found")
         expect_error(lambda: jit_precompile(vars, "@if"),
@@ -155,6 +155,48 @@ class TestOpCompiler(unittest.TestCase):
             exc_type=RuntimeError,
             match="Number of macro args not match",
         )
+
+    def test_for_stops_on_the_bound_it_steps_towards(self):
+        """A bound the counter can never equal must expand to nothing.
+
+        ``@for(i,0,-1,@i)`` used to be asserted to raise "Too much step" here,
+        which pinned the defect in place: the same shape reaches the expander
+        from every stride template in the tree, because ``in0_dim-2`` is ``-2``
+        for a 0-d var and the descending loop then walks away from ``-1``
+        forever. ``code_op.cc``'s PRECALC is the one that bit -- a 0-d input to
+        ``jt.code`` (``jt.float32(math.inf).isfinite()``) failed to compile at
+        all. Empty is both the useful answer (no strides to precompute) and the
+        one ``range()`` gives.
+        """
+        vars = {"a": "2", "b": "5"}
+        check = lambda expr, result: \
+            self.assertEqual(jit_precompile(vars, expr), result)
+
+        # the exact expansion code_op.cc's PRECALC reaches at rank 0 and rank 1
+        check("@for(j,-2,-1,-1,@j)", "")
+        check("@for(j,-1,-1,-1,@j)", "")
+        # ... and rank 2 and 3 still expand, so the fix is not "always empty"
+        check("@for(j,0,-1,-1,@j)", "0")
+        check("@for(j,1,-1,-1,@j)", "10")
+
+        # ascending loops with an unreachable bound, likewise empty
+        check("@for(i,0,-1,@i)", "")
+        check("@for(i,0,0,@i)", "")
+        check("@for(i,b,a,@i)", "")
+        # descending loops with an unreachable bound
+        check("@for(i,0,5,-1,@i)", "")
+        check("@for(i,5,5,-1,@i)", "")
+
+        # the directions that did work must be untouched
+        check("@for(i,a,b,+@i)", "+2+3+4")
+        check("@for(i,b,a,-1,@i)", "543")
+        check("@for(i,0,3,@i)", "012")
+
+        # the runaway guard still has to fire on a genuinely huge expansion
+        expect_error(lambda: jit_precompile(vars, "@for(i,0,10000,@i)"),
+                     exc_type=RuntimeError, match="Too much step")
+        expect_error(lambda: jit_precompile(vars, "@for(i,10000,0,-1,@i)"),
+                     exc_type=RuntimeError, match="Too much step")
 
     def test_strcmp(self):
         vars = {"Tx":"float"}

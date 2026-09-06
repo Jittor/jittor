@@ -169,7 +169,33 @@ C++ 头文件。第三，错误处理只有一档：ASSERT/CHECK/LOGf 全部抛 
 | 用 `std::regex` 在最终 C++ 文本上打补丁，修一个没有源码的 pass 的语义 bug | `op_compiler.cc:30-69` 的 `fix_parallel_thread_ranges` 匹配 `^(\s*)int (tn[0-9]+) = (get_thread_range_log\(thread_num_left, [^;]+\));\s*$` 并重写成累加形式；触发条件是 `:1156` 的子串嗅探；产生方 `ParallelPass` 无源码（见第一节） | CPU 线程划分的正确性依赖另一个不可读 pass 输出的确切文本格式（空格、变量名、行尾分号）。格式一变即静默不匹配；单测 `tests/compiler/test_parallel_pass.py:124-129` 断言的正是打完补丁之后的文本 | 在 IR 层修正累积逻辑 | 关键 |
 | 两个 pass 注册同一个名字，`get_pass` 用 C 风格下转型 | `opt/pass/unroll_pass.h:13` 与 `expand_empty_block_pass.h:13` 都是 `Pass("expand_empty_block")`；`pass_manager.h:54` 的 emplace 不覆盖，`:62` `return (T*)iter->second;` 无校验 | `exclude_pass="expand_empty_block"` 同时关掉两个且无法单独关 unroll；一旦有人按 UnrollPass 取就是无声的类型混淆 | 改名；pass 按类型索引 | 主要 |
 | 循环维度的身份用名字字符串表达，`range10` 二义（**2026-09-03 更正：今天不可达，修复是预防性的**。按设想构造命名冲突用例（10 维 + `split9` + reorder 把循环 1、0 排到最内层）**不成立**——reorder 后 1 与 0 在内存序上不相邻，`expr::match` 直接失配、合并不发生。真正兜着的是三条**别处的巧合**：NanoVector 断言 `s<10`（张量最多 10 维）、split 循环永远进不了合并（父循环 `inner.size()!=3`）、嵌套序即内存序。三条里任何一条被改动，二义就回来） | `merge_loop_var_pass.cc:22-24` 用 `str.size()==6` 判断"是单个 range"；`:74-82` 逐字符拆分把 `range_b` 展开成 `range1*range0`；`:128` 新 id 是字符串拼接 | 维度数 ≥10（7 维张量加几次 split 即可）时 `range10` 被拆成 `range1*range0`，循环上界完全错误且能编译通过；`size()==6` 的保护同时失效 | loop id 用整数向量，名字只在输出时生成 | 主要 |
+| `@for` 只按相等停机，步长走不到的上界 = 编译失败（**已修：见本次提交**） | `op_compiler.cc:605` 的 `for (auto vii=vil; vii!=vir; vii+=step)`。全树 18 处步长模板写成 `@for(i, DIM-2, -1, -1, ...)`（`code_op.cc:324,327`、`reduce_op.cc:378,380`、`transpose_op.cc:94,96`、`getitem_op.cc`、`setitem_op.cc`、`reindex*_op.cc`、`broadcast_to_op.cc`、`replace_for_num_pass.cc:58` 等），0 维输入使 `DIM-2` 为 `-2`，计数器从 `-2` 往下走永远不等于 `-1` | 撞上 `:607` 的 `total_step < 1000` 上限，算子**编译失败**而不是展开成空。0 维走 `jt.code` 的每一条路径都不可用（`jt.float32(math.inf).isfinite()`、`jt.bfloat16(math.inf)` 经 `safe_clip` → `isfinite`）；且失败的 Var 只要还被引用就留在图里，之后同进程每一次整图 sync 都重跑它，读起来像几十个互不相关的缺陷（见 skill `jit-compile-failure-attribution` 第 3 节） | 按步长方向停机（`step>0 ? vii<vir : vii>vir`），与 `range()` 一致；步长 0 显式报错 | 关键 |
 | 一次编译至少重跑 2 遍完整 pass pipeline，每遍从文本重新解析（**2026-09-03 实测：确有其事，但代价可忽略，本行的修改方向不值得做**。加 `LOGvvv` 计时实测整条 pass pipeline 占首次执行的 **0.04%–0.22%**（元素级 CPU 737µs 对 1012ms；matmul 两遍 4.6ms 对 2080ms），其余全是 g++/nvcc。「一次解析后 clone IR」最好情况省 **0.008%**。真正值得做的是同一行里的另两件，都已做：ReorderTuner 的候选上界（10 维加 3 次 split 实测 `order0..order12`、**36 亿**种组合 → 6 个 key、720 种）与 `Searcher::timeout` 从「声明了没人读」改成真正生效） | `opt/pass_manager.cc:47` 构造即 `all(oc->get_src())` 把整份生成的 C++ 重新解析成 KernelIR；`tuner_manager.cc:35-38` 与 `:57-59` 各一遍，`jit_searcher.cc:33-35` 每个候选一遍；而 `jit_searcher.cc:58-61` 的 timeout 字段声明了却全文无人读取，`reorder_tuner.cc:22-24` 的候选是 N! 量级 | 首次执行每个融合算子付两次"全文解析加 25 个 pass 加全树 to_string" | tuner 只改 loop_options 不重跑 pass；一次解析后 clone IR | 主要 |
+
+**已修：`@for` 那一行（6.C33），见本次提交。** 三件执行时才知道的事实。
+
+一，**范围比登记的窄也比登记的宽**。登记写的是「0 维 bfloat16」，dtype 与它无关：
+`jt.float32(math.inf).isfinite()` 与 `jt.float64`、`int32` 一样失败，CPU 与 CUDA 一样失败。
+触发条件只有一个——**秩为 0**。低精度只是碰巧：`test_fp16.py` / `test_bf16.py` 的
+`test_safe_clip` 是全树唯一把 0 维喂给 `jt.code` 的用例，于是这条缺陷只在那两个文件里露头。
+
+二，**「约 40 条红」实测是 37 条**，全部是级联，不是 40 个缺陷。修前 `tests/backends/cuda`
+42 failed / 222 passed，修后 **5 failed / 258 passed**，剩下 5 条与本条无关且修前就在
+（`test_cublas_test_op.py` 3 条、`test_cudnn_op.py::test_backward_nhwc`、
+`test_shared_reduce.py::test_shared_reduce_helper_is_two_stage`）。级联本身不是第二个缺陷：
+它就是 skill `jit-compile-failure-attribution` 第 3 节已经写下的生命周期性质（失败的 Var 被
+异常 traceback 的失败帧持有 → 留在图里 → 之后每次整图 sync 重跑）。根因修掉之后没有东西可级联，
+所以本次没有单独去动那条性质。
+
+三，**有人绕过它而不是修它**。`tests/compiler/test_op_compiler.py` 原来断言
+`@for(i,0,-1,@i)` 抛 "Too much step"——把这个行为钉成了契约；本节上方 `dcc335d6` 那一条
+（05-tests.md）也记着「0 维会让 `reduce.add` 超过 `total_step<1000` 而 abort，所以 0 维改成用
+标量 `float(cot)` 缩放」。两处都是同一个根因的绕行。断言已改成「展开为空」。
+
+改动只影响原先**编译不出来**的输入：`!=` 与方向停机在旧代码能终止的每一种参数上迭代次数相同。
+按 skill `jittor-core-cpp-edit-loop` 第 7 节逐字比对生成源码，17 个用到 `@for` 的算子族
+× CPU/CUDA 共 34 份 dump **改前改后逐字节相同**（唯一差异是 CUDA 全归约的取值在 8e-8 量级抖动，
+第三次运行又回到改前的值——`atomicAdd` 求和顺序的固有噪声，同一份生成源码不可能系统性改值）。
 
 ## 补充：内存与分配器（第二轮）
 

@@ -121,6 +121,40 @@ class _Predicates:
         np.testing.assert_array_equal(pos, np.isposinf(raw))
         np.testing.assert_array_equal(neg, np.isneginf(raw))
 
+    def test_a_zero_dim_input_compiles(self):
+        """0-d is a rank the ``code`` op's stride templates got wrong.
+
+        ``_simple_for`` builds a ``jt.code`` op, whose PRECALC is
+        ``@for(j, in0_dim-2, -1, -1, ...)``. At rank 0 that is
+        ``@for(j, -2, -1, -1, ...)``, and the expander used to stop only on
+        equality, so the counter stepped away from ``-1`` until it hit the
+        1000-iteration cap and failed the compile. Every predicate here is
+        reached through that one template, so all of them are covered by the
+        same rank sweep -- and ranks 1 and 2 pin that the fix did not turn
+        working expansions into empty ones.
+
+        This is the defect behind ``test_safe_clip`` in the fp16/bf16 suites:
+        the dtype was incidental, the rank was the trigger.
+        """
+        for dtype in ("float32", "float64", "float16", "bfloat16", "int32"):
+            for shape in ((), (1,), (2, 3)):
+                for name in _PREDICATES:
+                    with self.subTest(dtype=dtype, shape=shape, predicate=name):
+                        raw = np.full(shape, np.inf if dtype.startswith(("float", "bf"))
+                                      else 7).astype(
+                            "float32" if dtype == "bfloat16" else dtype)
+                        with jt.flag_scope(use_cuda=self.use_cuda):
+                            x = jt.array(raw).cast(dtype)
+                            got = getattr(jt, name)(x)
+                            self.assertEqual(tuple(got.shape), shape)
+                            got = got.numpy()
+                        expected = {"isnan": False, "isinf": True,
+                                    "isfinite": False}[name]
+                        if dtype == "int32":
+                            expected = name == "isfinite"
+                        np.testing.assert_array_equal(
+                            got, np.full(shape, expected))
+
     def test_a_large_finite_float64_is_not_infinite(self):
         """The one-line version of the defect, kept legible.
 

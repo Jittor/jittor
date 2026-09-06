@@ -601,8 +601,15 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     }
                     auto new_defs = defs;
                     LOGvvv << "Expand for" << expr >> "[" >> vil >> "," >> vir >> "," >> step >> "]";
+                    CHECK(step!=0) << "Jit error: for step must not be zero.";
                     int total_step = 0;
-                    for (auto vii=vil; vii!=vir; vii+=step) {
+                    // Stop on the bound being reached *in the step's direction*, not on
+                    // equality: a 0-d input makes the stride templates spell
+                    // @for(j, in0_dim-2, -1, -1, ...) as @for(j, -2, -1, -1, ...), whose
+                    // counter walks away from -1 forever. Empty is the right expansion
+                    // there -- a 0-d var has no strides to precompute -- and it is what
+                    // range() would give.
+                    for (auto vii=vil; step>0 ? vii<vir : vii>vir; vii+=step) {
                         total_step ++;
                         ASSERT(total_step < 1000) << "Too much step.";
                         new_defs[vi] = S(vii);
