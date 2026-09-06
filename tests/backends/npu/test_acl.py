@@ -182,7 +182,7 @@ class TestACL(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_block128_paged_decode_uses_direct_incremental_flash(self):
-        from jittor.nn.kv_cache_acl import _paged_attention_decode_acl
+        from jittor.backends.acl.kernels.kv_cache import _paged_attention_decode_acl
 
         rng = np.random.RandomState(47)
         heads, kv_heads, head_dim, length, block_size = 16, 8, 128, 7, 128

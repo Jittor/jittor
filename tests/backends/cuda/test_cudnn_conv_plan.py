@@ -109,7 +109,7 @@ class TestConvPlanRequestHasOneBuilder(unittest.TestCase):
 
     def test_no_op_fills_the_request_field_by_field(self):
         ops_dir = (Path(__file__).resolve().parents[3]
-                   / "python/jittor/extern/cuda/cudnn/ops")
+                   / "backends/cuda/kernels/cudnn")
         offenders = []
         for name in self.OPS:
             text = (ops_dir / name).read_text(encoding="utf-8")
@@ -133,7 +133,7 @@ class TestConvPlanRequestHasOneBuilder(unittest.TestCase):
         same configuration miss its own cache entry.
         """
         header = (Path(__file__).resolve().parents[3]
-                  / "python/jittor/extern/cuda/cudnn/inc/cudnn_conv_plan.h")
+                  / "backends/cuda/libraries/cudnn/include/cudnn_conv_plan.h")
         text = header.read_text(encoding="utf-8")
         self.assertIn("ConvPlanRequest conv_plan_request(", text)
         self.assertIn("memset(&r, 0, sizeof(r));", text)

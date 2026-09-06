@@ -11,6 +11,7 @@ from jittor_utils import run_cmd, get_version, get_int_version
 from jittor_utils.misc import download_url_to_local, safe_tar_extractall
 from jittor_utils import manifest
 import jittor_utils as jit_utils
+from jittor_utils.backend_resources import backend_root
 from ._runtime.backend_libraries import (
     get_library, get_library_ops, library_resource, register_library,
     register_library_loader, register_library_resources, library_attribute,
@@ -309,9 +310,9 @@ def setup_cuda_extern():
             break
     LOG.vv("setup cuda extern...")
     cache_path_cuda = os.path.join(cache_path, "cuda")
-    cuda_include = os.path.join(jittor_path, "extern", "cuda", "inc")
+    cuda_include = os.path.join(backend_root(jittor_path, "cuda"), "include")
     make_cache_dir(cache_path_cuda)
-    cuda_extern_src = os.path.join(jittor_path, "extern", "cuda", "src")
+    cuda_extern_src = os.path.join(backend_root(jittor_path, "cuda"), "src")
     cuda_extern_files = [os.path.join(cuda_extern_src, name)
         for name in os.listdir(cuda_extern_src)]
     so_name = os.path.join(cache_path_cuda, "libcuda_extern"+so)
@@ -353,6 +354,17 @@ or you can let jittor install cuda and cudnn for you:
 """
             raise RuntimeError(msg) from e
 
+def _cuda_library_sources(lib_name):
+    root = backend_root(jittor_path, "cuda")
+    sources = []
+    for directory in (os.path.join(root, "kernels", lib_name),
+                      os.path.join(root, "libraries", lib_name)):
+        for parent, _, names in os.walk(directory):
+            sources.extend(os.path.join(parent, name) for name in names
+                           if name.endswith((".h", ".cc", ".cu", ".cuh")))
+    return sorted(sources)
+
+
 def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     arch_key = "x86_64"
     if platform.machine() not in ["x86_64", "AMD64"]:
@@ -361,8 +373,9 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     LOG.v(f"setup {lib_name}...")
 
     culib_path = os.path.join(cuda_lib, f"lib{lib_name}.so")
-    jt_cuda_include = os.path.join(jittor_path, "extern", "cuda", "inc")
-    jt_culib_include = os.path.join(jittor_path, "extern", "cuda", lib_name, "inc")
+    cuda_root = backend_root(jittor_path, "cuda")
+    jt_cuda_include = os.path.join(cuda_root, "include")
+    jt_culib_include = os.path.join(cuda_root, "libraries", lib_name, "include")
 
     link_flags = ""
     if link:
@@ -432,11 +445,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
                 LOG.w("Failed to load cusparse-specific shared libraries.")
 
     # find all source files
-    culib_src_dir = os.path.join(jittor_path, "extern", "cuda", lib_name)
-    culib_src_files = []
-    for r, _, f in os.walk(culib_src_dir):
-        for fname in f:
-            culib_src_files.append(os.path.join(r, fname))
+    culib_src_files = _cuda_library_sources(lib_name)
     if len(culib_src_files) == 0:
         return
 
@@ -459,11 +468,12 @@ def _setup_fake_cuda_lib(lib_name=None, link=True, extra_flags=""):
         arch_key = "aarch64"
     LOG.v(f"setup {lib_name}...")
 
-    jt_cuda_include = os.path.join(jittor_path, "extern", "cuda", "inc")
-    jt_culib_include = os.path.join(jittor_path, "extern", "cuda", lib_name, "inc")
+    cuda_root = backend_root(jittor_path, "cuda")
+    jt_cuda_include = os.path.join(cuda_root, "include")
+    jt_culib_include = os.path.join(cuda_root, "libraries", lib_name, "include")
 
     # find all source files
-    culib_src_dir = os.path.join(jittor_path, "extern", "cuda", lib_name, "ops")
+    culib_src_dir = os.path.join(cuda_root, "kernels", lib_name)
     culib_src_files = []
     for r, _, f in os.walk(culib_src_dir):
         for fname in f:
@@ -562,12 +572,13 @@ def setup_cutt():
     # We do not link manualy, link in custom ops
     ctypes.CDLL(cutt_lib_name, dlopen_flags)
 
-    cutt_op_dir = os.path.join(jittor_path, "extern", "cuda", "cutt", "ops")
-    cutt_op_files = [os.path.join(cutt_op_dir, name) for name in os.listdir(cutt_op_dir)]
+    cutt_op_files = _cuda_library_sources("cutt")
+    cutt_wrapper_include = os.path.join(backend_root(jittor_path, "cuda"),
+                                       "libraries", "cutt", "include")
     # Keep the module, not just its .ops: the plan-cache accessors are free
     # functions on the module, and every other backend is exposed this way.
     cutt = compile_custom_ops(cutt_op_files, return_module=True, backend="accelerator",
-        extra_flags=f" -I\"{cutt_include_path}\" -L\"{cutt_lib_path}\" -llibcutt ")
+        extra_flags=f" -I\"{cutt_include_path}\" -I\"{cutt_wrapper_include}\" -L\"{cutt_lib_path}\" -llibcutt ")
     cutt_ops = cutt.ops
     register_library("cutt", cutt)
     LOG.vv("Get cutt_ops: "+str(dir(cutt_ops)))

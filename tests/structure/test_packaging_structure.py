@@ -1,6 +1,8 @@
 """Source-checkout contracts for package discovery and runtime resources."""
 
 import unittest
+import ast
+import importlib.util
 from pathlib import Path
 
 
@@ -22,6 +24,14 @@ class TestPackagingStructure(unittest.TestCase):
         }
         discovered = set(find_packages(where=str(self.python_root)))
         self.assertEqual(discovered, expected)
+        backend_root = self.repo_root / "backends"
+        backend_expected = {
+            "jittor.backends." + path.parent.relative_to(backend_root).as_posix().replace("/", ".")
+            for path in backend_root.rglob("__init__.py")
+        }
+        backend_discovered = {"jittor.backends." + name
+                              for name in find_packages(where=str(backend_root))}
+        self.assertEqual(backend_discovered, backend_expected)
 
     def test_pyproject_uses_regular_package_discovery(self):
         try:
@@ -34,9 +44,15 @@ class TestPackagingStructure(unittest.TestCase):
 
         with self.pyproject_path.open("rb") as stream:
             config = tomllib.load(stream)
-        discovery = config["tool"]["setuptools"]["packages"]["find"]
-        self.assertEqual(discovery["where"], ["python"])
-        self.assertIs(discovery["namespaces"], False)
+        package_dirs = config["tool"]["setuptools"]["package-dir"]
+        self.assertEqual(package_dirs[""], "python")
+        for backend in ("cuda", "acl"):
+            self.assertEqual(package_dirs["jittor.backends." + backend], "backends/" + backend)
+        setup_tree = ast.parse((self.repo_root / "setup.py").read_text())
+        discovery_roots = {ast.literal_eval(node.args[0]) for node in ast.walk(setup_tree)
+                           if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                           and node.func.id == "find_packages"}
+        self.assertEqual(discovery_roots, {"python", "backends"})
         self.assertTrue(config["tool"]["setuptools"]["include-package-data"])
         self.assertEqual(
             config["project"]["scripts"]["jittor-torch-shim"],
@@ -56,6 +72,7 @@ class TestPackagingStructure(unittest.TestCase):
             "recursive-include python/jittor/compat/shim/cpp_extension/src *",
             "recursive-include python/jittor/compat/shim/resources *",
             "recursive-include python/jittor/extern *",
+            "recursive-include backends *",
             "recursive-include python/jittor/math_util/src *",
             "recursive-include python/jittor/src *",
             "recursive-include python/jittor/tools *.py",
@@ -86,13 +103,25 @@ class TestPackagingStructure(unittest.TestCase):
             "python/jittor/compat/shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
             "python/jittor/compat/shim/resources/stubs/flash_attn/flash_attn_interface.py",
             "python/jittor/compat/shim/resources/torch_init.py",
-            "python/jittor/nn/backends/softmax_cuda.py",
-            "python/jittor/nn/backends/group_norm_cuda.py",
+            "backends/cuda/kernels/nn/softmax_cuda.py",
+            "backends/cuda/kernels/nn/group_norm_cuda.py",
+            "backends/cuda/include/helper_cuda.h",
+            "backends/cuda/libraries/cutt/include/cutt_wrapper.h",
             "python/jittor/tools/tracer.py",
         )
         for relative in required:
             with self.subTest(path=relative):
                 self.assertTrue((self.repo_root / relative).is_file())
+
+    def test_wheel_audit_distinguishes_runtime_helpers_from_build_artifacts(self):
+        path = self.repo_root / "agent/scripts/check_wheel_contents.py"
+        spec = importlib.util.spec_from_file_location("wheel_layout_contract", path)
+        checker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(checker)
+        for name in ("__init__.py", "dlink_compiler.py", "dumpdef.py"):
+            self.assertIsNone(checker._pollution_reason("jittor/build/" + name))
+        self.assertIsNotNone(checker._pollution_reason("jittor/build/temp.o"))
+        self.assertIsNotNone(checker._pollution_reason("build/jittor/core.py"))
 
 
 if __name__ == "__main__":

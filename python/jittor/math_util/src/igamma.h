@@ -1,6 +1,8 @@
 // THIS FILE ACTS AS THE HEADER OF IGAMMA FUNCTION.
 #include <math.h>
-#define C10_DEVICE __host__ __device__
+#ifndef C10_DEVICE
+#define C10_DEVICE
+#endif
 template <typename scalar_t>
 static C10_DEVICE scalar_t ratevl(scalar_t x, const scalar_t num[], int64_t M,
     const scalar_t denom[], int64_t N) {
@@ -677,18 +679,4 @@ static C10_DEVICE inline scalar_t calc_igamma(scalar_t a, scalar_t x) {
   }
 
   return _igam_helper_series(a, x);
-}
-
-__global__ void igamma_kernel(float* __restrict__ x,
-                float* out,
-                float alpha,
-                int batch_shape) 
-{
-    int tidx = threadIdx.x;
-    int start = batch_shape / blockDim.x * tidx;
-    int end = threadIdx.x == blockDim.x - 1 ? batch_shape : start + batch_shape / blockDim.x;
-    float* bx = x+batch_shape*blockIdx.x;
-    float* bout = out + batch_shape * blockIdx.x;
-    for(int i=start;i<end;i++) 
-        bout[i] = calc_igamma(alpha, bx[i]);
 }

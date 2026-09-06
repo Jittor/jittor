@@ -75,7 +75,7 @@ class TestAtomicTunerClass(unittest.TestCase):
         #
         # This case used to be written `x.sum()+x.sqr().mean()`. Since the CUDA
         # full-reduce fast path was installed, `Var.sum`/`Var.mean` are replaced
-        # (nn/backends/full_reduce_cuda.py) by a two-stage CUB reduction that is
+        # (backends/cuda/kernels/nn/full_reduce_cuda.py) by a two-stage CUB reduction that is
         # a `jt.code` op and never reaches the code generator -- so that spelling
         # stopped exercising the atomic tuner at all and the assertion below was
         # measuring a path nothing runs any more. Call the reduce op directly.

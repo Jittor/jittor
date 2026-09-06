@@ -15,7 +15,23 @@ ALIASES = {
     "jittor.gradfunctional": "jittor.autograd",
     "jittor.gradfunctional.functional": "jittor.autograd.functional",
     "jittor.other": "jittor.nn.backends",
-    "jittor.other.code_softmax": "jittor.nn.backends.softmax_cuda",
+    "jittor.other.code_softmax": "jittor.backends.cuda.kernels.nn.softmax_cuda",
+    "jittor.nn.backends.batch_norm_training_cuda": "jittor.backends.cuda.kernels.nn.batch_norm_training_cuda",
+    "jittor.nn.backends.channel_bias_cuda": "jittor.backends.cuda.kernels.nn.channel_bias_cuda",
+    "jittor.nn.backends.full_reduce_cuda": "jittor.backends.cuda.kernels.nn.full_reduce_cuda",
+    "jittor.nn.backends.group_norm_cuda": "jittor.backends.cuda.kernels.nn.group_norm_cuda",
+    "jittor.nn.backends.layer_norm_cuda": "jittor.backends.cuda.kernels.nn.layer_norm_cuda",
+    "jittor.nn.backends.layer_norm_training_cuda": "jittor.backends.cuda.kernels.nn.layer_norm_training_cuda",
+    "jittor.nn.backends.modulated_layer_norm_cuda": "jittor.backends.cuda.kernels.nn.modulated_layer_norm_cuda",
+    "jittor.nn.backends.rms_norm_training_cuda": "jittor.backends.cuda.kernels.nn.rms_norm_training_cuda",
+    "jittor.nn.backends.softmax_cuda": "jittor.backends.cuda.kernels.nn.softmax_cuda",
+    "jittor.nn.rms_norm_cuda": "jittor.backends.cuda.kernels.nn.rms_norm_cuda",
+    "jittor.nn.rope_cuda": "jittor.backends.cuda.kernels.nn.rope_cuda",
+    "jittor.nn.swiglu_cuda": "jittor.backends.cuda.kernels.nn.swiglu_cuda",
+    "jittor.nn.kv_cache_cuda": "jittor.backends.cuda.kernels.nn.kv_cache_cuda",
+    "jittor.nn.packed_qkv_cuda": "jittor.backends.cuda.kernels.nn.packed_qkv_cuda",
+    "jittor.nn._cuda_inference": "jittor.backends.cuda.kernels.nn._inference",
+    "jittor.nn.kv_cache_acl": "jittor.backends.acl.kernels.kv_cache",
     "jittor.lr_scheduler": "jittor.optim.legacy_schedulers",
     "jittor.nn.sparse": "jittor.sparse.convolution",
     "jittor.weightnorm": "jittor.nn.utils.weight_norm",
@@ -210,6 +226,9 @@ def _bind_parent(alias, module):
     if "." not in alias:
         return
     parent_name, attr = alias.rsplit(".", 1)
+    # Private source aliases preserve imports/pickles, not NN facade exports.
+    if parent_name == "jittor.nn" and attr.startswith("_"):
+        return
     parent = sys.modules.get(parent_name)
     if parent is not None:
         setattr(parent, attr, module)

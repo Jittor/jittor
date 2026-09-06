@@ -20,7 +20,7 @@ from jittor.nn import (
     rope_cuda,
     sparse,
 )
-from jittor.nn.backends.layer_norm_cuda import _layer_norm_no_grad_cuda
+from jittor.backends.cuda.kernels.nn.layer_norm_cuda import _layer_norm_no_grad_cuda
 
 
 class TestAttentionCapabilities(unittest.TestCase):
@@ -718,7 +718,7 @@ class TestCudaCapabilities(unittest.TestCase):
                     fused_residual_np, summed, atol=atol, rtol=rtol)
 
     def test_modulated_layer_norm_preserves_bfloat_rounding(self):
-        from jittor.nn.backends.modulated_layer_norm_cuda import (
+        from jittor.backends.cuda.kernels.nn.modulated_layer_norm_cuda import (
             _modulated_layer_norm_no_grad_cuda,
         )
 
@@ -880,7 +880,7 @@ class TestCudaCapabilities(unittest.TestCase):
                     atol=atol, rtol=rtol)
 
     def test_inference_silu_and_mul_cuda(self):
-        from jittor.nn.swiglu_cuda import _silu_and_mul_cuda
+        from jittor.backends.cuda.kernels.nn.swiglu_cuda import _silu_and_mul_cuda
 
         rng = np.random.RandomState(229)
         x_np = rng.randn(3, 256).astype("float32")
@@ -901,7 +901,7 @@ class TestCudaCapabilities(unittest.TestCase):
                     actual, expected, atol=atol, rtol=rtol)
 
     def test_inference_paged_kv_cache_cuda(self):
-        from jittor.nn.kv_cache_cuda import _reshape_and_cache_cuda
+        from jittor.backends.cuda.kernels.nn.kv_cache_cuda import _reshape_and_cache_cuda
 
         rng = np.random.RandomState(230)
         key_np = rng.randn(3, 2, 3).astype("float32")
@@ -926,7 +926,7 @@ class TestCudaCapabilities(unittest.TestCase):
                 np.testing.assert_allclose(actual, expected, atol=atol, rtol=0)
 
     def test_inference_paged_attention_decode_cuda(self):
-        from jittor.nn.kv_cache_cuda import _paged_attention_decode_cuda
+        from jittor.backends.cuda.kernels.nn.kv_cache_cuda import _paged_attention_decode_cuda
 
         rng = np.random.RandomState(231)
         query_np = rng.randn(2, 4, 16).astype("float32")
@@ -1033,7 +1033,7 @@ class TestCudaCapabilities(unittest.TestCase):
 
 class TestCapabilityStructure(unittest.TestCase):
     def test_lazy_cuda_device_index_uses_dispatch_placement(self):
-        from jittor.nn._cuda_inference import device_index
+        from jittor.backends.cuda.kernels.nn._inference import device_index
 
         class LazyCudaValue:
             def get_device(self):
@@ -1043,7 +1043,7 @@ class TestCapabilityStructure(unittest.TestCase):
                 return "device"
 
         value = LazyCudaValue()
-        with patch("jittor.nn._cuda_inference.dispatch_context",
+        with patch("jittor.backends.cuda.kernels.nn._inference.dispatch_context",
                    return_value=SimpleNamespace(backend="cuda", device_id=3)) as resolve:
             self.assertEqual(device_index(value), 3)
             resolve.assert_called_once_with(value)

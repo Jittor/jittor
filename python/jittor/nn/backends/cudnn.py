@@ -6,7 +6,7 @@ import jittor as jt
 from jittor._runtime.dispatch import optional_kernel, register_kernel
 from jittor._runtime.backend_libraries import get_library_ops
 
-from .channel_bias_cuda import _channel_bias_add_cuda
+from jittor.backends.cuda.kernels.nn.channel_bias_cuda import _channel_bias_add_cuda
 
 
 # Why cuDNN at all: jittor's default conv (reindex + broadcast + reduce) fuses

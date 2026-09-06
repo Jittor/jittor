@@ -1,42 +1,16 @@
 """Exercise native operator registration generation without importing Jittor."""
 
 import ast
-import os
 from pathlib import Path
 import re
-from types import SimpleNamespace
 
 import pytest
+
+from _helpers.op_registration_generator import load_op_registration_generator as _load_generator
 
 
 ROOT = Path(__file__).resolve().parents[2]
 JITTOR = ROOT / "python/jittor"
-
-
-def _load_generator():
-    compiler_path = JITTOR / "compiler.py"
-    tree = ast.parse(compiler_path.read_text(encoding="utf8"))
-    names = {"parse_var_members", "gen_jit_op_maker"}
-    patterns = {"_VAR_MEMBER_DECL", "_VAR_MEMBER_LOOSE"}
-    selected = [
-        node for node in tree.body
-        if (isinstance(node, ast.FunctionDef) and node.name in names)
-        or (isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id in patterns
-            for target in node.targets))
-    ]
-    binding_tree = ast.parse((JITTOR / "pyjt_compiler.py").read_text(encoding="utf8"))
-    selected.extend(node for node in binding_tree.body
-                    if isinstance(node, ast.FunctionDef) and node.name == "parse_attrs")
-    namespace = {
-        "os": os,
-        "re": re,
-        "jittor_path": str(JITTOR),
-        "LOG": SimpleNamespace(vv=lambda *args: None, vvvv=lambda *args: None),
-    }
-    exec(compile(ast.Module(body=selected, type_ignores=[]), str(compiler_path), "exec"), namespace)
-    namespace["pyjt_compiler"] = SimpleNamespace(parse_attrs=namespace["parse_attrs"])
-    return namespace["gen_jit_op_maker"]
 
 
 @pytest.mark.parametrize("backend,mask", [
@@ -45,9 +19,9 @@ def _load_generator():
     ("accelerator", "OpBackendAccelerator"),
     ("both", "OpBackendAny"),
 ])
-def test_generator_registers_typed_definition_with_explicit_or_class_backend(backend, mask):
+def test_generator_registers_typed_definition_with_explicit_or_class_backend(backend, mask, tmp_path):
     header = JITTOR / "src/ops/array_op.h"
-    source = _load_generator()([str(header)], backend=backend)
+    source = _load_generator(tmp_path)([str(header)], backend=backend)
     assert '#include "ops/op_registration.h"' in source
     registration = next(line.strip() for line in source.splitlines()
                         if "register_op_definition<ArrayOp>" in line)
@@ -63,11 +37,12 @@ def test_generator_rejects_unknown_backend_before_reading_headers():
         _load_generator()(["missing_op.h"], backend="typo")
 
 
-@pytest.mark.parametrize("relative", ["src/ops", "extern/cuda/cublas/ops", "extern/mkl/ops"])
-def test_generator_preserves_every_operator_definition(relative):
-    headers = sorted((JITTOR / relative).glob("*_op.h"))
+@pytest.mark.parametrize("relative", ["python/jittor/src/ops", "backends/cuda/kernels/cublas",
+                                      "python/jittor/extern/mkl/ops"])
+def test_generator_preserves_every_operator_definition(relative, tmp_path):
+    headers = sorted((ROOT / relative).glob("*_op.h"))
     assert headers
-    source = _load_generator()([str(header) for header in headers], export="registration_test")
+    source = _load_generator(tmp_path)([str(header) for header in headers], export="registration_test")
     registered = re.findall(r'register_op_definition<\w+>\(\{ "([^"]+)"', source)
     expected = [header.stem[:-3] for header in headers]
     assert registered == expected

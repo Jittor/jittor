@@ -24,6 +24,10 @@ REQUIRED_SOURCE_PATHS = (
     "tools/README.md",
     "tools/build/build_aarch64_mkl.sh",
     "tools/release/pack_offline.py",
+    "backends/cuda/include/helper_cuda.h",
+    "backends/cuda/kernels/math/src/gamma_grad.h",
+    "backends/cuda/kernels/debug/nan_checker.cu",
+    "backends/acl/kernels/kv_cache.py",
 )
 
 FORBIDDEN_DIRECTORY_NAMES = frozenset(
@@ -108,6 +112,7 @@ def _expected_source_paths(repo_root):
         "requirements/docs.txt",
         "requirements/examples.txt",
         "python",
+        "backends",
     )
     try:
         result = subprocess.run(
@@ -247,6 +252,7 @@ def audit_sdist(path, expected_paths):
             relative.startswith("examples/")
             or relative.startswith("docs/")
             or relative.startswith("python/")
+            or relative.startswith("backends/")
             or relative.startswith("tools/")
             or relative
             in (

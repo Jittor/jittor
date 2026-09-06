@@ -167,7 +167,7 @@ from .nn.functional.tensor import kron, tensordot
 from . import numpy2cupy
 from .misc.concatenation import concat, cat
 from .misc.indexing import install_var_indexing as _install_var_indexing
-from .nn.backends.full_reduce_cuda import (
+from .backends.cuda.kernels.nn.full_reduce_cuda import (
     install_full_reduce_fast_path as _install_full_reduce,
 )
 

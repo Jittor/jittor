@@ -30,10 +30,10 @@
 | 分支 | `2.0-refactor`；本批迁移起点 `2328ce4f`，后续提交见 Git 历史 |
 | 相对 `2.0` 的提交 | 迁移起点共 1853 个；提交数不代表任务完成量 |
 | 提交里出现过的任务号 | 329 个 |
-| 看板 | 已合并 **219** / 进行中 **0** / 待领 **53** / 并入其它任务 **13** |
+| 看板 | 已合并 **220** / 进行中 **0** / 待领 **52** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
 
-**交接清理完成不等于整改完成。** 看板仍有 53 条待领；当前只是把中断留下的易失状态全部转成了主线提交、
+**交接清理完成不等于整改完成。** 看板仍有 52 条待领；当前只是把中断留下的易失状态全部转成了主线提交、
 明确待领项或已验证的不采用结论。这个分支不是终态。
 
 看板的「已合并」是权威。提交里的任务号更多，是因为一个任务常有补充提交、改判提交与「更正前一个提交」
@@ -624,7 +624,33 @@ jt.save/load、旧 GLOBAL 名与 stride 往返有实际测试；独立 pre-boots
 CPU-only 联合 82 passed，offline provider/分支 39 passed。测试文件重名已改为 native 前缀，
 序列化新测试恢复 flags，未删除或重写用户缓存；完整 structure 仍为上述九类已记录失败。
 
-下一轮以 4.10/4.15 后端物理布局和 4.11/4.12 移除 legacy 源转换为主线，
+4.10 已完成 CUDA 内核实体迁移：七库与核心 GPU 源、NN/misc/math/pool/sparse/CCL/loss3d
+归顶层 `backends/cuda`，安装名 `jittor.backends.cuda`；NN 只留领域接口和分派。
+共享索引与池化数学没有复制；GPU 前缀/调度和单独内核由真实注册项选择。
+复合源码原子发布并保留原文件行号，旧 `type/cuda_atomic.h` 仅作 include 转发。
+源码 bridge 与 C++ resource resolver 都优先 checkout，避免旧包残留造成实现混用；
+sdist/wheel 包含所有新资源，legacy 转换缓存也纳入迁移，未靠删除用户缓存掩盖问题。
+真实 CUDA 分派/库 13 passed，最终内核/推理/池化/深度卷积组合 27 passed；
+原子展开、scatter/sparse 梯度与别名 14 passed。修复迁移时发现的原子宏丢失，
+以及旧 candidate GPU 的 i/j 语义反转，均有最小修前失败/修后通过。
+隔离安装 wheel 的 CPU-only 冷编译、索引/scatter/softmax、C++ schedule helper
+及 `python -m jittor.selftest`（前后向、13 子包、三步训练）实际通过。
+最终 wheel SHA-256 为 `e810fcb92d94179ef0bd5efc01426f54db393b5817b554a930db0fd32fab14d2`；
+986 个生产文件与源码/安装结果逐字节相同，142 个后端文件无缺失或重复。
+它与已实测 wheel 仅差 9 个行尾空白整理及 bridge/aliases 两个 Python 修复；
+后两项连目录/身份定点 42 passed，未为这些非数学差异重复冷编译。
+ACL 两 TU 与 5 个 launcher ABI 主机语法通过，不代替 CANN/NPU 实机。
+完整 structure 实跑 765 passed/11 failed/2 skipped；本批新增 nan_checker 路径、
+私有 NN alias 导出和跨测试 import 已定点修正，旧九类失败仍在，未再跑完整改前 A/B。
+NCCL 通信资源、FlashAttention 外部集成、共享核心搬出包仍属 4.15，不能视为已完成。
+
+下一轮以 4.11/4.12 的真实 ACL 接线和移除 legacy 源转换为主线：
+四个独立 ownership 是 Python family 注册、native OpImplementation 发布与 ACL 执行、
+ACL BackendOps 设备/内存/流，以及构建和 ROCm/Corex 原生适配。
+必须同时替换 `change_function/warp` 和 `do_compile_hook` 两条执行旁路；
+不能只移动目录或增加注册表元数据。新增后端实现发布需保留 OpId、已构图定义 pin
+和编译身份，完整 int64/类型化属性不能塞进 CodeOp 的 double DataMap。
+删除转换前还须接通 ROCm/Corex，并分开“有加速器”与“依赖 CUDA SDK”的条件。
 独立 torch 包仍要推进实际所有权迁移，不能再回到只写 metadata/validator 的旧波次。
 NativeProviderRegistration 的旧元数据不能当作上述执行/构建迁移已完成的证据。
 独立 torch 包和后端架构仍是未完成的大需求，不要为追低价值计数改变优先级。

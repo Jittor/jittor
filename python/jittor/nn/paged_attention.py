@@ -25,8 +25,8 @@ def reshape_and_cache(key, value, kv_cache, slot_mapping, slots=None):
     mapping already on the host, which spares a device-to-host sync when the
     caller walks many layers with one metadata object.
     """
-    from .kv_cache_cuda import _reshape_and_cache_cuda
-    from .kv_cache_acl import _reshape_and_cache_acl
+    from jittor.backends.cuda.kernels.nn.kv_cache_cuda import _reshape_and_cache_cuda
+    from jittor.backends.acl.kernels.kv_cache import _reshape_and_cache_acl
 
     if _reshape_and_cache_cuda(key, value, kv_cache, slot_mapping) is not None:
         return kv_cache
@@ -64,7 +64,7 @@ def paged_attention(query, kv_cache, cu_seqlens_q, seq_lens, block_table,
     Scores are accumulated in float32 and the result is cast back to the query's
     dtype.
     """
-    from .kv_cache_cuda import _paged_attention_decode_cuda
+    from jittor.backends.cuda.kernels.nn.kv_cache_cuda import _paged_attention_decode_cuda
 
     num_heads, head_dim = int(query.shape[1]), int(query.shape[2])
     block_size, num_kv_heads = int(kv_cache.shape[2]), int(kv_cache.shape[3])
@@ -79,7 +79,7 @@ def paged_attention(query, kv_cache, cu_seqlens_q, seq_lens, block_table,
             query, kv_cache, seq_lens, block_table, scale)
         if decoded is not None:
             return decoded
-        from .kv_cache_acl import _paged_attention_decode_acl
+        from jittor.backends.acl.kernels.kv_cache import _paged_attention_decode_acl
         decoded = _paged_attention_decode_acl(
             query, kv_cache, block_table, scale, key_lengths=key_lengths)
         if decoded is not None:
@@ -185,7 +185,7 @@ def _causal_mask(span_q, span_k):
 
 
 def _gather_cache_blocks(kv_cache, block_ids):
-    from .kv_cache_acl import _gather_cache_blocks_acl
+    from jittor.backends.acl.kernels.kv_cache import _gather_cache_blocks_acl
 
     selected = _gather_cache_blocks_acl(kv_cache, block_ids)
     if selected is not None:
@@ -194,7 +194,7 @@ def _gather_cache_blocks(kv_cache, block_ids):
 
 
 def _gather_block_table(block_table, request_count, block_count, request=None):
-    from .kv_cache_acl import _gather_block_table_acl
+    from jittor.backends.acl.kernels.kv_cache import _gather_block_table_acl
 
     selected = _gather_block_table_acl(
         block_table, request_count, block_count, request=request
@@ -207,7 +207,7 @@ def _gather_block_table(block_table, request_count, block_count, request=None):
 
 
 def _split_cache_kv(cache, dim):
-    from .kv_cache_acl import _split_cache_kv_acl
+    from jittor.backends.acl.kernels.kv_cache import _split_cache_kv_acl
 
     selected = _split_cache_kv_acl(cache, dim)
     if selected is not None:
@@ -220,7 +220,7 @@ def _split_cache_kv(cache, dim):
 
 
 def _slice_dim(value, dim, start, length):
-    from .kv_cache_acl import _slice_dim_acl
+    from jittor.backends.acl.kernels.kv_cache import _slice_dim_acl
 
     selected = _slice_dim_acl(value, dim, start, length)
     if selected is not None:
@@ -231,7 +231,7 @@ def _slice_dim(value, dim, start, length):
 
 
 def _repeat_interleave_dim(value, dim, repeats):
-    from .kv_cache_acl import _repeat_interleave_dim_acl
+    from jittor.backends.acl.kernels.kv_cache import _repeat_interleave_dim_acl
 
     expanded = _repeat_interleave_dim_acl(value, dim, repeats)
     if expanded is not None:
@@ -240,7 +240,7 @@ def _repeat_interleave_dim(value, dim, repeats):
 
 
 def _decode_attention(query, key, value, scale):
-    from .kv_cache_acl import _decode_attention_acl
+    from jittor.backends.acl.kernels.kv_cache import _decode_attention_acl
 
     return _decode_attention_acl(query, key, value, scale)
 

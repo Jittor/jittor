@@ -5,7 +5,7 @@
 # ***************************************************************
 """``peekCudaErrors`` must keep reporting after the first failure.
 
-``peek()`` in ``extern/cuda/inc/helper_cuda.h`` used a process-wide boolean
+``peek()`` in ``backends/cuda/include/helper_cuda.h`` used a process-wide boolean
 latch (``jittor::peek_logged``): the *first* asynchronous CUDA error anywhere in
 the process was printed and every later one -- from any call site, of any kind,
 for the rest of the run -- was dropped.  Since ``peek`` sits on the teardown and
@@ -22,7 +22,7 @@ new header was actually compiled in rather than just "still green": the assert
 counts *three* reports where the old binary could only ever produce one, and the
 old core exports no ``peek_should_log`` at all, so a stale core would fail the
 JIT op's link rather than pass quietly (see the ``cuda-backend-choice-proof``
-skill on changes under ``extern/cuda/inc``).
+skill on changes under ``backends/cuda/include``).
 
 Run::  python -m pytest tests/backends/cuda/test_peek_cuda_error.py
 """

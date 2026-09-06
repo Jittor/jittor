@@ -71,7 +71,7 @@ SEQUENCE = (
         "layer, both of which index Vars while installing."),
     Step(
         "nn.full_reduce_fast_path", True,
-        "jittor/nn/backends/full_reduce_cuda.py. Replaces Var.sum/Var.mean "
+        "backends/cuda/kernels/nn/full_reduce_cuda.py. Replaces Var.sum/Var.mean "
         "and the root jt.sum/jt.mean with the two-stage CUB reduction. Must "
         "precede the explicit in-place alias installation and the Torch "
         "wrappers, so every Var method provider settles first."),

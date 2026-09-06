@@ -105,7 +105,8 @@ def test_core_optional_replacements_do_not_name_implementing_libraries():
 
 def test_every_optional_capability_is_owned_by_a_library():
     declarations = []
-    for directory in (ROOT / "python/jittor/extern/cuda", ROOT / "python/jittor/extern/mkl"):
+    for directory in (ROOT / "backends/cuda", ROOT / "python/jittor/extern/cuda/nccl",
+                      ROOT / "python/jittor/extern/mkl"):
         for path in directory.rglob("*_capabilities.cc"):
             source = path.read_text(encoding="utf-8")
             assert "get_op_info(" not in source, path

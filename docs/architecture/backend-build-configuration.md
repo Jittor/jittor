@@ -87,6 +87,43 @@ but accessing its runtime API before `import jittor` now raises explicitly;
 independent pre-bootstrap unpickling is not claimed compatible. Registering the
 loaders does not import Torch or eagerly load the serialization implementations.
 
+## Backend Resources
+
+CUDA implementations have one physical source owner under top-level
+`backends/cuda`: `kernels/` holds operator kernels and Python implementations,
+`libraries/<name>/{include,src}` holds library support code, and `include/` and
+`src/` hold common support resources. ACL's extracted Python KV-cache kernels
+live under `backends/acl/kernels`. Their Python module names are
+`jittor.backends.cuda.kernels.*` and `jittor.backends.acl.kernels.*`.
+
+The source package `python/jittor/backends` contains only a path bridge; it does
+not duplicate backend implementations. Setuptools maps the two backend packages
+into `jittor/backends/` in a wheel, and the source distribution preserves the
+top-level layout and package mapping. Headers, CUDA sources, host code-generation
+translation units, and Python kernels are all runtime resources.
+
+`jittor_utils.backend_resources.backend_root(jittor_path, name)` resolves the
+source, installed, or converted resource root without importing Jittor. A source
+checkout prefers its top-level backend. Installed candidates require a real
+package marker, so a leftover directory containing only `__pycache__` cannot
+redirect compilation away from the actual resources.
+
+Legacy source conversion copies and transforms moved native files into
+`<converted-jittor>/backends/` with the same callback used for core sources.
+The returned configuration records these roots in `resources['backend_roots']`
+and rewrites include paths to the converted copies. Installed trees are not
+transformed twice. Obsolete converted native paths are archived rather than
+compiled alongside their replacement. Runtime library discovery includes both
+kernel and library-support sources, including cuTT's separate wrapper.
+
+The backend's pure host indexing scheduler remains part of CPU builds; the
+accelerator code-generation translation units and NaN-checking CUDA source are
+included only in accelerator builds. The core `src/` tree is not otherwise
+relocated. NCCL retains its distributed resource location, and the remaining
+ACL/ROCm/Corex sources and legacy conversion machinery are not claimed migrated
+by this resource-layout change. It does not complete the larger layout or lazy
+initialization tasks.
+
 ## Validation
 
 Offline tests cover immutable inputs, entry-point selection, unselected-provider

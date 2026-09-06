@@ -17,7 +17,7 @@ def softmax(x, dim=None, log=False):
     # explicit ``dim`` keeps the previous behavior unchanged.
     if dim is None:
         dim = _get_softmax_dim(x.ndim)
-    from jittor.nn.backends import softmax_cuda
+    from jittor.backends.cuda.kernels.nn import softmax_cuda
 
     fused = softmax_cuda._softmax_v1(x, log=log, dim=dim)
     if fused is not None:

@@ -35,6 +35,12 @@ REQUIRED_MEMBERS = (
     "jittor/compat/shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
     "jittor/compat/shim/resources/stubs/flash_attn/flash_attn_interface.py",
     "jittor/compat/shim/resources/torch_init.py",
+    "jittor/backends/cuda/__init__.py",
+    "jittor/backends/cuda/include/helper_cuda.h",
+    "jittor/backends/cuda/libraries/cutt/include/cutt_wrapper.h",
+    "jittor/backends/cuda/kernels/math/src/gamma_grad.h",
+    "jittor/backends/cuda/kernels/debug/nan_checker.cu",
+    "jittor/backends/acl/kernels/kv_cache.py",
 )
 
 FORBIDDEN_DIRECTORY_NAMES = frozenset(
@@ -61,6 +67,7 @@ FORBIDDEN_TOP_LEVEL_NAMES = frozenset(
         "agent",
         "jittor-lab",
         "jittor_fsdp2",
+        "backends",
     )
 )
 
@@ -78,6 +85,15 @@ FORBIDDEN_MEMBER_PREFIXES = (
     "jittor/torch_shim/",
     "jittor/triton_shim/",
     "jittor/vcompiler/",
+    "jittor/extern/cuda/inc/",
+    "jittor/extern/cuda/src/",
+    "jittor/extern/cuda/cub/",
+    "jittor/extern/cuda/cublas/",
+    "jittor/extern/cuda/cudnn/",
+    "jittor/extern/cuda/cufft/",
+    "jittor/extern/cuda/curand/",
+    "jittor/extern/cuda/cusparse/",
+    "jittor/extern/cuda/cutt/",
 )
 
 FORBIDDEN_EXACT_MEMBERS = frozenset(
@@ -95,6 +111,8 @@ FORBIDDEN_EXACT_MEMBERS = frozenset(
         "jittor/utils/polish.py",
         "jittor/utils/polish_centos.py",
         "jittor/version",
+        "jittor/src/debug/nan_checker.cu",
+        "jittor/math_util/src/gamma_grad.h",
         "jittor_utils/pack_offline.py",
         "jittor_utils/translator.py",
     )
@@ -108,6 +126,12 @@ FORBIDDEN_SUFFIXES = (
     ".ipynb",
     ".src.md",
 )
+
+RUNTIME_BUILD_HELPERS = frozenset((
+    "jittor/build/__init__.py",
+    "jittor/build/dlink_compiler.py",
+    "jittor/build/dumpdef.py",
+))
 
 
 class WheelContentsError(Exception):
@@ -258,6 +282,8 @@ def _pollution_reason(name):
         return "repository-local experiment package"
     directory_parts = parts if name.endswith("/") else parts[:-1]
     for part in directory_parts:
+        if part == "build" and name in RUNTIME_BUILD_HELPERS:
+            continue
         if part in FORBIDDEN_DIRECTORY_NAMES or part.endswith(".egg-info"):
             return "forbidden cache/build directory {!r}".format(part)
     if name.endswith(FORBIDDEN_SUFFIXES):

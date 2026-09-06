@@ -1,6 +1,7 @@
 """Backend source mirrors must not compile obsolete copies after a move."""
 
 import ast
+import importlib.util
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,11 @@ def test_transformed_source_cache_archives_obsolete_native_paths(tmp_path, monke
     tree.body = [node for node in tree.body if isinstance(node, ast.FunctionDef)
                  and node.name == "process_jittor_source"]
     namespace = {"os": os, "LOG": SimpleNamespace(i=lambda *args: None)}
+    spec = importlib.util.spec_from_file_location(
+        "backend_resource_cache_test", ROOT / "python/jittor_utils/backend_resources.py")
+    resources = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(resources)
+    namespace["backend_root"] = resources.backend_root
     exec(compile(tree, str(path), "exec"), namespace)
     source, cache = tmp_path / "source", tmp_path / "cache"
     original = source / "src/misc/helper.cc"

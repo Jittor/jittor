@@ -39,6 +39,7 @@ def providers(monkeypatch):
     monkeypatch.setitem(sys.modules, "jittor_utils", utils)
     monkeypatch.setitem(sys.modules, "jittor_utils.misc", misc)
     _load(monkeypatch, "jittor_utils.compiler_flags", PYTHON / "jittor_utils/compiler_flags.py")
+    _load(monkeypatch, "jittor_utils.backend_resources", PYTHON / "jittor_utils/backend_resources.py")
     config = _load(monkeypatch, "legacy_build_config_contract",
                    PYTHON / "jittor_utils/build_config.py")
     rocm = _load(monkeypatch, "legacy_rocm_contract",
@@ -178,7 +179,8 @@ def test_rocm_extern_uses_injected_build_and_publication_services(providers, tmp
     args = context.compile.call_args.args
     assert args[0] == context.config.cc_path
     assert context.config.cc_flags in args[1]
-    assert args[2] and all(path.startswith(context.config.jittor_path) for path in args[2])
+    cuda_root = providers.rocm.backend_root(context.config.jittor_path, "cuda")
+    assert args[2] and all(path.startswith(cuda_root) for path in args[2])
     assert args[3] == str(tmp_path / "cuda/libcuda_extern.test.so")
     context.load_library.assert_called_once_with(args[3], os.RTLD_NOW | os.RTLD_GLOBAL)
     published = context.publish_library.call_args_list

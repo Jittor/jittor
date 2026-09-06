@@ -1137,7 +1137,7 @@ assert after == before + 1, (before, after)
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_sdpa_cuda_routes_masked_rows_through_safe_softmax(self):
-        from jittor.nn.backends import softmax_cuda
+        from jittor.backends.cuda.kernels.nn import softmax_cuda
 
         calls = []
         original = softmax_cuda.softmax_v1

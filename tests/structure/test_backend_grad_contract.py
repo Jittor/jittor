@@ -3,7 +3,7 @@
 The manifest deliberately distinguishes CPU/Jittor, independent NumPy, and
 distributed or hardware-only references.  A backend implementation must not
 silently disappear from the maintained test inventory when a new ``grad``
-definition is added under ``python/jittor/extern``.
+definition is added under ``backends/cuda/kernels`` or ``python/jittor/extern``.
 """
 
 import ast
@@ -30,43 +30,43 @@ BACKEND_GRAD_COVERAGE = (
      "npu_hardware"),
 
     # CUDA/CUB.
-    ("python/jittor/extern/cuda/cub/ops/cub_arg_reduce_op.cc",
+    ("backends/cuda/kernels/cub/cub_arg_reduce_op.cc",
      "tests/ops/test_arg_reduce_op.py::TestArgReduceOp::test_backward_cuda",
      "cuda_cpu_formula"),
-    ("python/jittor/extern/cuda/cub/ops/cub_argsort_op.cc",
+    ("backends/cuda/kernels/cub/cub_argsort_op.cc",
      "tests/ops/test_argsort_op.py::TestArgsortOp::test_cub_backward",
      "cuda_cpu_formula"),
-    ("python/jittor/extern/cuda/cub/ops/cub_cumsum_op.cc",
+    ("backends/cuda/kernels/cub/cub_cumsum_op.cc",
      "tests/backends/cuda/test_cub_cumsum.py::TestCubCumsumOp::test_1d_backward",
      "cuda_cpu_jittor"),
-    ("python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc",
+    ("backends/cuda/kernels/cublas/cublas_matmul_op.cc",
      "tests/backends/cuda/test_cublas_matmul_grad.py::TestCublasMatmulGrad::test_all_transpose_combinations",
      "cuda_numpy"),
-    ("python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc",
+    ("backends/cuda/kernels/cublas/cublas_batched_matmul_op.cc",
      "tests/backends/cuda/test_cublas_matmul_grad.py::TestCublasMatmulGrad::test_linear_3d_random_projection_grad",
      "cuda_numpy"),
-    ("python/jittor/extern/cuda/cudnn/ops/cudnn_conv_op.cc",
+    ("backends/cuda/kernels/cudnn/cudnn_conv_op.cc",
      "tests/backends/cuda/test_cudnn_conv_plan.py::TestCudnnConvPlan::test_plain_fp32",
      "cuda_cpu_jittor"),
-    ("python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_x_op.cc",
+    ("backends/cuda/kernels/cudnn/cudnn_conv_backward_x_op.cc",
      "tests/backends/cuda/test_cudnn_conv_plan.py::TestCudnnConvPlan::test_plain_fp32",
      "cuda_cpu_jittor"),
-    ("python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_w_op.cc",
+    ("backends/cuda/kernels/cudnn/cudnn_conv_backward_w_op.cc",
      "tests/backends/cuda/test_cudnn_conv_plan.py::TestCudnnConvPlan::test_plain_fp32",
      "cuda_cpu_jittor"),
-    ("python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_op.cc",
+    ("backends/cuda/kernels/cudnn/cudnn_conv3d_op.cc",
      "tests/backends/cuda/test_cudnn_conv3d_algo_cache.py::TestCudnnConv3dAlgoCache::test_forward_and_gradients_match_cpu_reference",
      "cuda_cpu_jittor"),
-    ("python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_backward_x_op.cc",
+    ("backends/cuda/kernels/cudnn/cudnn_conv3d_backward_x_op.cc",
      "tests/backends/cuda/test_cudnn_conv3d_algo_cache.py::TestCudnnConv3dAlgoCache::test_forward_and_gradients_match_cpu_reference",
      "cuda_cpu_jittor"),
-    ("python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_backward_w_op.cc",
+    ("backends/cuda/kernels/cudnn/cudnn_conv3d_backward_w_op.cc",
      "tests/backends/cuda/test_cudnn_conv3d_algo_cache.py::TestCudnnConv3dAlgoCache::test_forward_and_gradients_match_cpu_reference",
      "cuda_cpu_jittor"),
-    ("python/jittor/extern/cuda/cufft/ops/cufft_fft_op.cc",
+    ("backends/cuda/kernels/cufft/cufft_fft_op.cc",
      "tests/ops/test_fft_op.py::TestFFTOp::test_fft_backward",
      "cuda_numpy"),
-    ("python/jittor/extern/cuda/cutt/ops/cutt_transpose_op.cc",
+    ("backends/cuda/kernels/cutt/cutt_transpose_op.cc",
      "tests/backends/cuda/test_cutt_transpose_op.py::TestCuttTransposeOp::test_grad",
      "cuda_numpy"),
 
@@ -111,14 +111,14 @@ REFERENCE_KINDS = {
 
 
 def _source_grad_definitions():
-    extern = ROOT / "python/jittor/extern"
     found = set()
-    for path in extern.rglob("*.cc"):
-        if "/ops/" not in path.as_posix():
-            continue
-        text = path.read_text(encoding="utf-8")
-        if "::grad(" in text:
-            found.add(path.relative_to(ROOT).as_posix())
+    for directory in (ROOT / "python/jittor/extern", ROOT / "backends/cuda/kernels"):
+        for path in directory.rglob("*.cc"):
+            if "/ops/" not in path.as_posix() and "/kernels/" not in path.as_posix():
+                continue
+            text = path.read_text(encoding="utf-8")
+            if "::grad(" in text:
+                found.add(path.relative_to(ROOT).as_posix())
     return found
 
 

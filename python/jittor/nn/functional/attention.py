@@ -34,7 +34,7 @@ def scaled_dot_product_attention(
     source_length = int(key.shape[-2])
     scale_factor = 1.0 / math.sqrt(int(query.shape[-1])) if scale is None else scale
     scores = jt.nn.matmul(query, key.transpose(-2, -1)) * scale_factor
-    from jittor.nn.backends import softmax_cuda
+    from jittor.backends.cuda.kernels.nn import softmax_cuda
 
     cuda_mask_softmax = (
         softmax_cuda.can_softmax_v1(scores, -1)

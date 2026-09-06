@@ -43,7 +43,7 @@ namespace jittor {
 // @pyjt(process)
 string process_acl(const string& src, const string& name, const map<string,string>& kargs) {
     auto new_src = src;
-    new_src = replace(new_src, "helper_cuda.h", "../inc/helper_cuda.h");
+    new_src = replace(new_src, "helper_cuda.h", "../include/helper_cuda.h");
     if (name == "string_view_map.h")
         new_src = replace(new_src, "using std::string_view;", "using string_view = string;");
     if (name == "nan_checker.cu")

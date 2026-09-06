@@ -3,6 +3,10 @@ import numpy as np
 import jittor as jt
 from jittor import nn
 from jittor._runtime.dispatch import register_kernel, select_kernel
+from jittor.backends.cuda.kernels.math import gamma as _cuda_gamma
+from jittor.backends.cuda.kernels.math.gamma import (
+    _gamma_cuda, _digamma_cuda, _polygamma_cuda, gamma_grad,
+)
 
 # ---------------------------------------------------------------------------
 # Device-agnostic (CPU/CUDA/NPU) composite implementations of the special
@@ -86,17 +90,6 @@ def _gamma_cpu(owner, x):
                    cpu_header=getattr(owner, "cpu_header", ""), cpu_src=owner.cpu_src)
 
 
-def _gamma_cuda(owner, x):
-    return jt.code(x.shape, x.dtype, [x],
-                   cuda_header=owner.cuda_header, cuda_src=owner.cuda_src)
-
-
-def _digamma_cuda(owner, x):
-    result = _gamma_cuda(owner, x)
-    result.compile_options = {"FLAGS: --expt-relaxed-constexpr": 1}
-    return result
-
-
 def _lgamma_composite(owner, x):
     return _lgamma_acl(x)
 
@@ -111,17 +104,6 @@ def _polygamma_composite(owner, x, n):
     raise NotImplementedError(
         f"polygamma(n={n}) not implemented on ACL/NPU; only n=1 (trigamma). "
         "Add the corresponding composite series in gamma.py:_trigamma_acl.")
-
-
-def _polygamma_cuda(owner, x, n):
-    source = f'''
-        @alias(x, in0)
-        @alias(px ,out0)
-        int batch_size = x_stride0 == 1 ? 1 : x_shape0;
-        int batch_shape = x_shape0 * x_stride0 / batch_size;
-        polygamma_cuda<<<batch_size, 16>>>(x_p, px_p, {n}, batch_shape);
-    '''
-    return jt.code(x.shape, x.dtype, [x], cuda_header=owner.cuda_header, cuda_src=source)
 
 
 def _polygamma_cpu(owner, x, n):
@@ -146,11 +128,7 @@ register_kernel("math.digamma", "*", _digamma_composite)
 register_kernel("math.polygamma", "cpu", _polygamma_cpu)
 register_kernel("math.polygamma", "acl_legacy", _polygamma_composite)
 register_kernel("math.polygamma", "*", _polygamma_composite)
-for _backend in ("cuda", "rocm_legacy", "corex_legacy"):
-    register_kernel("math.lgamma", _backend, _gamma_cuda, dtypes={"float32"})
-    register_kernel("math.digamma", _backend, _digamma_cuda, dtypes={"float32"})
-    register_kernel("math.polygamma", _backend, _polygamma_cuda, dtypes={"float32"})
-del _backend
+
 
 
 def _special_function_kernel(operation, x):
@@ -169,26 +147,8 @@ class lgamma(jt.Function):
         for(int i=0;i<numel;i++)
             di_x_p[i] = ::lgamma(x_p[i]);
         '''
-        self.cuda_header = '''
-        __global__ void lgamma_cuda(float* __restrict__ x,
-                                float* out,
-                                int batch_shape) 
-        {
-            int tidx = threadIdx.x;
-            int start = batch_shape / blockDim.x * tidx;
-            int end = threadIdx.x == blockDim.x - 1 ? batch_shape : start + batch_shape / blockDim.x;
-            float* bx = x+batch_shape*blockIdx.x;
-            float* bout = out + batch_shape * blockIdx.x;
-            for(int i=start;i<end;i++) bout[i] = ::lgamma(bx[i]);
-        }
-        '''
-        self.cuda_src = '''
-        @alias(x, in0)
-        @alias(lx ,out0)
-        int batch_size = x_stride0 == 1 ? 1 : x_shape0;
-        int batch_shape = x_shape0 * x_stride0 / batch_size;
-        lgamma_cuda<<<batch_size, 16>>>(x_p, lx_p, batch_shape);
-        '''
+        self.cuda_header = _cuda_gamma.LGAMMA_CUDA_HEADER
+        self.cuda_src = _cuda_gamma.LGAMMA_CUDA_SRC
 
     def execute(self, x):
         self.x = x
@@ -204,9 +164,7 @@ class lgamma(jt.Function):
 class polygamma(jt.Function):
     def __init__(self):
         self.cpu_header = '''
-        #ifdef __CUDACC__
-        #define C10_HOST_DEVICE __host__ __device__
-        #else
+        #ifndef C10_HOST_DEVICE
         #define C10_HOST_DEVICE
         #endif
 
@@ -287,22 +245,7 @@ class polygamma(jt.Function):
         }
         using scalar_t = float;
         '''
-        self.cuda_header = self.cpu_header + '''
-        __global__ void polygamma_cuda(float* __restrict__ x,
-                        float* out,
-                        int n,
-                        int batch_shape) 
-        {
-            int tidx = threadIdx.x;
-            int start = batch_shape / blockDim.x * tidx;
-            int end = threadIdx.x == blockDim.x - 1 ? batch_shape : start + batch_shape / blockDim.x;
-            float* bx = x+batch_shape*blockIdx.x;
-            float* bout = out + batch_shape * blockIdx.x;
-            for(int i=start;i<end;i++) 
-                bout[i] = ((n % 2) ? 1.0 : -1.0) * ::exp(::lgamma(static_cast<scalar_t>(n) + 1.0)) *
-                zeta<scalar_t>(static_cast<scalar_t>(n + 1), bx[i]);
-        }
-        '''
+        self.cuda_header = _cuda_gamma.polygamma_cuda_header(self.cpu_header)
 
     def execute(self, x, n):
         return _special_function_kernel("math.polygamma", x)(self, x, n)
@@ -386,92 +329,8 @@ class digamma(jt.Function):
         for(int i=0;i<numel;i++)
             di_x_p[i] = calc_digamma(x_p[i]);
         '''
-        self.cuda_header = '''
-        #define C10_HOST_DEVICE __host__ __device__
-
-        template <typename T>
-        C10_HOST_DEVICE static inline T polevl(const T x, const T A[], size_t len) {
-        T result = 0;
-        for (size_t i = 0; i <= len; i++) {
-            result = result * x + A[i];
-        }
-        return result;
-        }
-
-        __device__ static inline float calc_digamma(float x) {
-        // See [C++ Standard Reference: Gamma Function]
-        static float PSI_10 = 2.25175258906672110764f;
-        if (x == 0) {
-            // As per C++ standard for gamma related functions and SciPy,
-            // If the argument is ±0, ±∞ is returned
-            return std::copysign(INFINITY, -x);
-        }
-
-        bool x_is_integer = x == truncf(x);
-        if (x < 0) {
-            if (x_is_integer) {
-            // As per C++ standard for gamma related functions and SciPy,
-            // If the argument is a negative integer, NaN is returned
-            return std::numeric_limits<float>::quiet_NaN();
-            }
-            // Extracts the fractional part of x as r, since tan(pi * r) is more numerically
-            // accurate than tan(pi * x). While these operations are mathematically equivalent
-            // since both x and r are in radians and tan() has a periodicity of pi, in practice
-            // the computation of pi * x is a source of error (when |x| > 1).
-            double q, r;
-            r = std::modf(x, &q);
-            float pi_over_tan_pi_x = (float)(M_PI / tan(M_PI * r));
-            return calc_digamma(1 - x) - pi_over_tan_pi_x;
-        }
-
-        // Push x to be >= 10
-        float result = 0;
-        while (x < 10) {
-            result -= 1 / x;
-            x += 1;
-        }
-        if (x == 10) {
-            return result + PSI_10;
-        }
-
-        // Compute asymptotic digamma
-        static const float A[] = {
-            8.33333333333333333333E-2f,
-            -2.10927960927960927961E-2f,
-            7.57575757575757575758E-3f,
-            -4.16666666666666666667E-3f,
-            3.96825396825396825397E-3f,
-            -8.33333333333333333333E-3f,
-            8.33333333333333333333E-2f,
-        };
-
-        float y = 0;
-        if (x < 1.0e17f) {
-            float z = 1 / (x * x);
-            y = z * polevl(z, A, 6);
-        }
-        return result + logf(x) - (0.5f / x) - y;
-        }
-
-        __global__ void digamma_cuda(float* __restrict__ x,
-                                float* out,
-                                int batch_shape) 
-        {
-            int tidx = threadIdx.x;
-            int start = batch_shape / blockDim.x * tidx;
-            int end = threadIdx.x == blockDim.x - 1 ? batch_shape : start + batch_shape / blockDim.x;
-            float* bx = x+batch_shape*blockIdx.x;
-            float* bout = out + batch_shape * blockIdx.x;
-            for(int i=start;i<end;i++) bout[i] = calc_digamma(bx[i]);
-        }
-        '''
-        self.cuda_src = '''
-        @alias(x, in0)
-        @alias(di_x, out0)
-        int block_num = x_stride0 == 1 ? 1 : x_shape0;
-        int batch_shape = x_stride0 == 1 ? x_shape0: x_stride0;
-        digamma_cuda<<<block_num, 16>>>(x_p, di_x_p, batch_shape);
-        '''
+        self.cuda_header = _cuda_gamma.DIGAMMA_CUDA_HEADER
+        self.cuda_src = _cuda_gamma.DIGAMMA_CUDA_SRC
     
     def execute(self, x):
         self.input = x
@@ -480,21 +339,9 @@ class digamma(jt.Function):
     def grad(self, grad_d):
         return grad_d * polygamma.apply(self.input, 1)
 
-def gamma_grad(x, alpha):
-    cuda_header = open(os.path.join(os.path.realpath(os.path.dirname(__file__)), "src", "gamma_grad.h"), "r").read()
-    cuda_src = '''
-    @alias(x, in0)
-    @alias(di_x, out0)
-    int block_num = x_stride0 == 1 ? 1 : x_shape0;
-    int batch_shape = x_stride0 == 1 ? x_shape0: x_stride0;
-    float alpha = data["alpha"];
-    gamma_grad_kenrel<<<block_num, 16>>>(x_p, di_x_p, alpha, batch_shape);
-    '''
-    grad = jt.code(x.shape, x.dtype, [x], cuda_header=cuda_header, cuda_src=cuda_src, data={"alpha":alpha})
-    return grad
 
 # --- implicit reparameterization gradient dx/dalpha for x ~ Gamma(alpha, 1) ---
-# Direct port of PyTorch's standard_gamma_grad (src/gamma_grad.h): Taylor series
+# Direct port of the CUDA owner's standard_gamma_grad: Taylor series
 # for small x, Rice saddle-point for large alpha, bivariate rational approx
 # otherwise.  = -d/dalpha[P(alpha,x)] / pdf(x;alpha).  Verified against an
 # independent incomplete-gamma CDF reference across 88 (alpha,x) pairs spanning

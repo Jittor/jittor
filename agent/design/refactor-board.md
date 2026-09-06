@@ -1,7 +1,7 @@
 # 整改看板
 
 当前进度以任务表为准。2026-09-06：2.13 完成原生状态与配置分层，2.14 清空原生 misc，4.03/4.04 接通原生设备与算子执行链，4.05 完成 Python 真实分派迁移；
-4.06 实际回退策略与 4.07 BuildConfig 已接通，下一步推进后端布局和移除 legacy 源转换。下方旧波次中的 Python 字段视图不等于原生存储迁移。
+4.06 实际回退策略与 4.07 BuildConfig 已接通，4.10 将 CUDA 内核实体统一到顶层 backends/cuda；下一步接通独立 ACL 执行并移除 legacy 源转换。下方旧波次中的 Python 字段视图不等于原生存储迁移。
 
 > 第217波：`98c8ee94` 迁移 cuda_allow_tf32 Runtime owner（结构 43 passed）；`b8398291` 修正 Native provider teardown 统一 lifecycle events（结构 12 passed）；`9d49c70c` ACL device_size Python/C++ 对齐（ACL 14 passed）；`d44782d4` Torch bootstrap 非字符串/非法 __all__ fail-closed。未声称 CUDA/NPU 实机。
 
@@ -568,7 +568,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 4.07 | 后端配置改为返回 `BuildConfig` 值 | 已合并 | build | 三个 provider 返回冻结 BuildConfig，显式 BuildContext 注入服务，compiler 统一发布兼容字段，不再由后端改 globals/追加源文件；entry point 仅加载选中后端，CPU 选择不触碰 CUDA 探测/安装，普通 CPU/CUDA cache 指纹保持。utils 整树反向 import 清零，compile_module 服务注入，序列化实现迁 jittor.serialization，旧路径在 bootstrap 后解析同一对象。CPU/CUDA 构建/扩展依赖/序列化/分派组合 50 passed，strict CUDA 与 CPU选择组合 28 passed，CPU-only 联合 82 passed；离线 provider/SDK 分支 39 passed。完整结构 740 passed/9 failed/2 skipped，旧失败不掩盖。保留 Corex 兼容库与 legacy 源转换；旧 utility pre-bootstrap 使用边界、可选后端初始工具链旧耦合及无 CANN/ROCm/Corex 实机证据写入构建文档。 |
 | 4.08 | 流与事件模型 | 已合并 | device | `0dfcb3dd` 每设备 copy/communication stream 与 ready/done event，接入 array H2D、fetch D2H、device_copy、NCCL collective；`78235157` 双 rank NCCL 用 rank 相关输入验证数值且 communication 双向依赖计数精确 +2。GPU 0/2：两 rank 各 1 passed，mixed-device H2D/fetch 2 passed，6.C16 下毒 1 passed，device_copy/multi-device 6 passed，既有 overlap 正确性 1 passed；未用负载敏感绝对墙钟阈值 |
 | 4.09 | per-device 库句柄 | 已合并 | device | `13c28084`；4.02 已有五库 per-device 资源，本提交补齐每次执行前 SetStream。GPU 0/2 新增测试实际执行 cuBLAS/cuDNN/cuSPARSE/cuRAND/cuFFT 各两次并断言两卡逐库 bind 计数均 +2，1 passed；各库现有 wrapper 聚焦 5 passed；CPU 聚焦 1 passed |
-| 4.10 | CUDA kernel 存放位置统一 | 待领 | | |
+| 4.10 | CUDA kernel 存放位置统一 | 已合并 | device/build | CUDA 七库、NN/misc/math/pooling/sparse/CCL/loss3d 与核心 GPU 源统一到顶层 backends/cuda，原生注册项选择实际后端源码；共享索引数学保留单 owner，原子前缀与调度属于后端。NN 根目录实现移出并加 exact-entry，ACL KV 移到 backends/acl，旧模块同对象别名保留且不泄漏私有 facade。源码/安装包/legacy 转换资源解析及 sdist/wheel 同步，真实 CUDA 分派与库 13 passed、最终数值/梯度组合 27 passed、原子展开及稀疏/别名 14 passed；隔离 wheel CPU-only 冷编译、索引/scatter/softmax、C++ schedule 与三步训练 selftest 通过。修复迁移中暴露的 candidate i/j 既有错误、原子宏丢失及复合源码行号；完整结构检查的新增目录/接口问题定点修复，既有失败仍见交接。无 NPU/ROCm/Corex 实机；NCCL 通信资源、FlashAttention 与核心总布局仍归 4.15，不伪报完成。 |
 | 4.11 | ACL 改为注册表后端 | 待领 | | |
 | 4.12 | 删除 `process_jittor_source` 与 `process_acl` | 待领 | | |
 | 4.13 | 跨后端契约矩阵 | 待领 | | |

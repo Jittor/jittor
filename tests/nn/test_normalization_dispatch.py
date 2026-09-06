@@ -7,7 +7,7 @@ import pytest
 def test_normalization_cuda_candidates_decline_cpu_inputs():
     import jittor as jt
     from jittor._runtime.dispatch import select_kernel
-    from jittor.nn.backends import layer_norm_training_cuda, softmax_cuda
+    from jittor.backends.cuda.kernels.nn import layer_norm_training_cuda, softmax_cuda
 
     with jt.flag_scope(use_cuda=0):
         x = jt.array(np.arange(16, dtype=np.float32).reshape(2, 8))
@@ -22,7 +22,7 @@ def test_normalization_cuda_candidates_decline_cpu_inputs():
 def test_registered_cuda_layer_norm_forward_backward_and_capability_limits():
     import jittor as jt
     from jittor._runtime.dispatch import select_kernel
-    from jittor.nn.backends.layer_norm_training_cuda import _layer_norm_cuda
+    from jittor.backends.cuda.kernels.nn.layer_norm_training_cuda import _layer_norm_cuda
 
     if not jt.has_cuda:
         pytest.skip("CUDA runtime required")

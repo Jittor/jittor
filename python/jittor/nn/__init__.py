@@ -55,9 +55,9 @@ from .dual_grid import finalize_dual_grid_mesh_cuda
 from .functional import *
 from .legacy_complex import ComplexNumber
 from .modules import *
-from .packed_qkv_cuda import packed_qkv_rms_rope_cuda
-from .rms_norm_cuda import multihead_rms_norm_cuda
-from .rope_cuda import partial_rotary_embedding_cuda
+from jittor.backends.cuda.kernels.nn.packed_qkv_cuda import packed_qkv_rms_rope_cuda
+from jittor.backends.cuda.kernels.nn.rms_norm_cuda import multihead_rms_norm_cuda
+from jittor.backends.cuda.kernels.nn.rope_cuda import partial_rotary_embedding_cuda
 from jittor.sparse.convolution import (
     build_submanifold_conv3d_neighbors,
     submanifold_conv3d,

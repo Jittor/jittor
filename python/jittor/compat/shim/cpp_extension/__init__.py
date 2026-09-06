@@ -188,6 +188,7 @@ def _jittor_config():
     # Importing the root package ensures its native core is compiled and loaded.
     import jittor  # noqa: F401
     from jittor import compiler as c
+    from jittor_utils.backend_resources import backend_root
 
     cache_path = c.cache_path
     jittor_path = c.jittor_path  # .../python/jittor
@@ -236,7 +237,7 @@ def _jittor_config():
         "jittor_path": jittor_path,
         "src_inc": os.path.join(jittor_path, "src"),
         "extern_inc": os.path.join(jittor_path, "extern"),
-        "extern_cuda_inc": os.path.join(jittor_path, "extern", "cuda", "inc"),
+        "extern_cuda_inc": os.path.join(backend_root(jittor_path, "cuda"), "include"),
         "cuda_inc": cuda_includes[0],
         "cuda_lib": cuda_libs[0],
         "cuda_includes": cuda_includes,

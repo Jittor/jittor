@@ -29,7 +29,9 @@ struct GetitemOp : Op {
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     void grads(Var** dout, VarPtr* dins) override;
     void infer_shape() override;
-    void compile_optimize(string& src) override;
+#ifdef HAS_CUDA
+    static void configure_accelerator_codegen(Codegen& codegen);
+#endif
     void graph_optimize() override;
     DECLARE_jit_run;
 
@@ -38,9 +40,9 @@ struct GetitemOp : Op {
         StackVector<>& __restrict__ i_to_o,
         StackVector<>& __restrict__ out_shape
     );
-    void _compile_optimize(string& src);
 };
 
-void cuda_loop_schedule(NanoVector o_shape, int* masks, int* tdims);
+// Host-only scheduling is shared with backend codegen and its CPU unit tests.
+EXTERN_LIB void cuda_loop_schedule(NanoVector shape, int* masks, int* dimensions);
 
 } // jittor

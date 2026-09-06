@@ -8,16 +8,9 @@
 #include "var.h"
 #include "ops/setitem_op.h"
 #include "ops/getitem_op.h"
-#ifdef JIT
-#ifdef JIT_cuda
-#include <cuda_runtime.h>
-#include "helper_cuda.h"
-#include "type/cuda_atomic.h"
-#endif
-#else
+#ifndef JIT
 #include "ops/op_register.h"
 #ifdef HAS_CUDA
-#include "runtime/device.h"
 #endif
 #endif
 
@@ -244,21 +237,6 @@ void SetitemOp::jit_prepare(JK& jk) {
                 jk << '0';
         }
     }
-    #ifdef HAS_CUDA
-    if (runtime_use_cuda()) {
-        int no = o_shape.size();
-        STACK_ALLOC(int, masks, no);
-        int tdims[6];
-        cuda_loop_schedule(o_shape, masks, tdims);
-        for (int i=0; i<no; i++) {
-            jk << "«LO" << JK::hex1(i) << '=' << JK::hex(masks[i]);
-        }
-    }
-    #endif
-}
-
-void SetitemOp::compile_optimize(string& src) {
-    ((GetitemOp*)this)->_compile_optimize(src);
 }
 
 #else // JIT
@@ -321,8 +299,7 @@ void SetitemOp::jit_run() {
     if (op != ip)
         std::memcpy(op, ip, out->size);
     #else
-    if (op != ip)
-        checkCudaErrors(cudaMemcpyAsync(op, ip, out->size, cudaMemcpyDeviceToDevice, 0));
+    @expand_macro(indexing_backend_copy)
     #endif
 
     if (ns.get(GetitemOp::_inplace) &&
@@ -371,24 +348,13 @@ void SetitemOp::jit_run() {
         )
         auto iid = 0 @for(d, 0, IDIM,  + iid@d * istride@d);
 
-        // CUDA reduce writes must be atomic: many output-loop threads alias the
-        // same iid via the scatter index, so a non-atomic RMW silently drops
-        // colliding contributions. cuda_atomic_*_rmw use raw-IEEE atomics (see
-        // type/cuda_atomic.h) because setitem's output is a raw memcpy copy with
-        // no fix_float/ordered-int pass.
         @if(@is_def(JIT_cpu),
             @if(@strcmp(@OP,void)==0,
                 op[iid] = (Ti)dp[did],
                 op[iid] = @expand_op(@OP, @Ti, op[iid], @Ti, dp[did], @Td)
             );
         ,
-            @if(@strcmp(@OP,void)==0, op[iid] = (Ti)dp[did],
-            @if(@strcmp(@OP,add)==0, atomicAdd(&op[iid], (Ti)dp[did]),
-            @if(@strcmp(@OP,maximum)==0, cuda_atomic_max_rmw(&op[iid], (Ti)dp[did]),
-            @if(@strcmp(@OP,minimum)==0, cuda_atomic_min_rmw(&op[iid], (Ti)dp[did]),
-            @if(@strcmp(@OP,multiply)==0, cuda_atomic_mul(&op[iid], (Ti)dp[did]),
-                op[iid] = @expand_op(@OP, @Ti, op[iid], @Ti, dp[did], @Td)
-            )))));
+            @expand_macro(indexing_backend_update)
         )
     }
 }

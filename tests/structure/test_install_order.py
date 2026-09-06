@@ -137,7 +137,7 @@ class TestFullReduceRoutesBothSpellings(unittest.TestCase):
     """``jt.sum`` and ``Var.sum`` must be routed by the same installer."""
 
     def test_the_installer_routes_the_root_functions_too(self):
-        source = (PACKAGE / "nn" / "backends"
+        source = (PACKAGE.parents[1] / "backends/cuda/kernels/nn"
                   / "full_reduce_cuda.py").read_text(encoding="utf-8")
         self.assertRegex(
             source, r"setattr\(jt, name",

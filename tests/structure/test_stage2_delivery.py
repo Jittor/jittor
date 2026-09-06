@@ -256,7 +256,7 @@ class TestStage2Delivery(unittest.TestCase):
         is now in one shared helper, so the ops are checked for *calling* it
         and the helper is checked for the guards.
         """
-        cudnn = self.repo_root / "python" / "jittor" / "extern" / "cuda" / "cudnn"
+        cuda = self.repo_root / "backends" / "cuda"
         names = (
             "cudnn_conv_op.cc",
             "cudnn_conv_backward_x_op.cc",
@@ -266,7 +266,7 @@ class TestStage2Delivery(unittest.TestCase):
             "cudnn_conv3d_backward_w_op.cc",
         )
         for name in names:
-            source = (cudnn / "ops" / name).read_text(encoding="utf-8")
+            source = (cuda / "kernels" / "cudnn" / name).read_text(encoding="utf-8")
             with self.subTest(operation=name):
                 self.assertIn("int conv_math_key = 0;", source)
                 self.assertIn("#ifndef IS_ROCM", source)
@@ -276,7 +276,7 @@ class TestStage2Delivery(unittest.TestCase):
                 self.assertIn("cudnn_conv_compute_type(", source)
                 self.assertIn('jk << "math=" << conv_math_key', source)
 
-        wrapper = (cudnn / "inc" / "cudnn_wrapper.h").read_text(encoding="utf-8")
+        wrapper = (cuda / "libraries" / "cudnn" / "include" / "cudnn_wrapper.h").read_text(encoding="utf-8")
         self.assertIn("cudnnMathType_t cudnn_conv_math_type(", wrapper)
         self.assertIn("#ifndef IS_ROCM", wrapper)
         self.assertIn("#if CUDNN_VERSION >= 8000", wrapper)

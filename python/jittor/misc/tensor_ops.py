@@ -15,11 +15,65 @@ import builtins as _builtins
 from collections.abc import Sequence,Iterable
 
 from .. import _arg_policy
-from .._runtime.core_api import _output_requires_grad, _stop_grad_outputs
 from .._runtime.dispatch import dispatch_context, optional_kernel, register_kernel, select_kernel
-from .._runtime.backend_libraries import get_library_ops
 
-_CUDA_CODE_BACKENDS = ("cuda", "rocm_legacy", "corex_legacy")
+from jittor.backends.cuda.kernels.misc import ctc as _cuda_ctc
+from jittor.backends.cuda.kernels.misc import codegen as _cuda_codegen
+from jittor.backends.cuda.kernels.misc import tensor_ops as _cuda_tensor_ops
+from jittor.backends.cuda.kernels.misc.tensor_ops import (
+    _repeat_interleave_dim0_cuda, _stack_no_grad_cuda_fast,
+    _unbind_no_grad_cuda_fast, _unique_code_cuda, _scan_2d_cuda,
+)
+
+
+def _repeat_interleave_cpu_source():
+    return ('''
+        @alias(x, in0)
+        @alias(offsets, in1)
+        @alias(out, out0)
+        int64_t total = out->num;
+        int n = x_shape0;
+        int64_t inner = out->num / out_shape0;
+        for (int64_t linear = 0; linear < total; ++linear) {
+            int64_t out_row = linear / inner;
+            int lo = 0, hi = n - 1;
+            while (lo < hi) {
+                int mid = (lo + hi) >> 1;
+                if ((int64_t)offsets_p[mid] > out_row) hi = mid;
+                else lo = mid + 1;
+            }
+            out_p[linear] = (out_type)x_p[(int64_t)lo * inner + (linear % inner)];
+        }
+        '''
+    )
+
+
+def _stack_cpu_source(suffix, n, write_lines):
+    return (f"""
+    const index_t suffix = {suffix};
+    for (index_t iid=0; iid<in0_shape0; ++iid) {{
+        index_t prefix = iid / suffix;
+        index_t rem = iid - prefix * suffix;
+        index_t base_out = prefix * ({n} * suffix);
+{write_lines}
+    }}
+    """
+    )
+
+
+def _unbind_cpu_source(suffix, n, write_lines):
+    return (f"""
+    const index_t suffix = {suffix};
+    const index_t full_stride = suffix * {n};
+    for (index_t oid=0; oid<out0_shape0; ++oid) {{
+        index_t prefix = oid / suffix;
+        index_t rem = oid - prefix * suffix;
+        index_t base_in = prefix * full_stride + rem;
+{write_lines}
+    }}
+    """
+    )
+
 
 def knn(unknown, known, k):
     ''' find k neighbors for unknown array from known array
@@ -191,92 +245,6 @@ jt.Var.repeat = repeat
 # tile = jt.Var.tile = repeat
 ne = jt.Var.ne = jt.Var.not_equal
 
-@optional_kernel("misc.repeat_interleave_dim0", _CUDA_CODE_BACKENDS,
-                 supports=lambda x, repeats, dim, output_size: (
-                     isinstance(repeats, jt.Var) and dim == 0 and output_size is not None))
-def _repeat_interleave_dim0_cuda(x, repeats, dim, output_size):
-    # int64 throughout. This used to cast the counts to int32, prefix-sum
-    # them in int32 and index the output with an `int`, and cover that with
-    # `assert output_size <= 2147483647` -- so the one case the fast path
-    # could not do was refused rather than computed. Counting in int64
-    # costs a wider prefix sum over one small vector and removes the limit.
-    repeats = repeats.reshape(-1).int64()
-    n = x.shape[0]
-    out0 = int(output_size)
-    assert repeats.shape[0] == n, \
-        f"repeat_interleave: repeats length {repeats.shape[0]} != dim size {n}"
-    if out0 == 0:
-        new_shape = list(x.shape); new_shape[0] = 0
-        return jt.zeros(new_shape, x.dtype)
-    offsets = repeats.cumsum(0)
-    inner = int(np.prod(x.shape[1:])) if x.ndim > 1 else 1
-    out_shape = list(x.shape)
-    out_shape[0] = out0
-    return jt.code(
-        out_shape,
-        x.dtype,
-        [x, offsets],
-        cuda_header='''
-        #include <stdint.h>
-        template <typename X, typename R, typename O>
-        __global__ void repeat_interleave_dim0_kernel(
-            const X* __restrict__ x,
-            const R* __restrict__ offsets,
-            O* __restrict__ out,
-            int64_t total,
-            int n,
-            int64_t inner) {
-            int64_t linear = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
-            int64_t stride = (int64_t)blockDim.x * gridDim.x;
-            for (; linear < total; linear += stride) {
-                // out_row and the offsets it is compared against are the
-                // two quantities that count *outputs*, so they are the two
-                // that leave int32 first.
-                int64_t out_row = linear / inner;
-                int lo = 0, hi = n - 1;
-                while (lo < hi) {
-                    int mid = (lo + hi) >> 1;
-                    if ((int64_t)offsets[mid] > out_row) hi = mid;
-                    else lo = mid + 1;
-                }
-                out[linear] = (O)x[(int64_t)lo * inner + (linear % inner)];
-            }
-        }
-        ''',
-        cuda_src=f'''
-        @alias(x, in0)
-        @alias(offsets, in1)
-        @alias(out, out0)
-        const int64_t total = out->num;
-        const int n = x_shape0;
-        const int64_t inner = {inner};
-        int threads = 256;
-        int blocks = (int)((total + threads - 1) / threads);
-        if (blocks > 4096) blocks = 4096;
-        repeat_interleave_dim0_kernel<x_type, offsets_type, out_type>
-            <<<blocks, threads>>>(x_p, offsets_p, out_p, total, n, inner);
-        ''',
-        cpu_src='''
-        @alias(x, in0)
-        @alias(offsets, in1)
-        @alias(out, out0)
-        int64_t total = out->num;
-        int n = x_shape0;
-        int64_t inner = out->num / out_shape0;
-        for (int64_t linear = 0; linear < total; ++linear) {
-            int64_t out_row = linear / inner;
-            int lo = 0, hi = n - 1;
-            while (lo < hi) {
-                int mid = (lo + hi) >> 1;
-                if ((int64_t)offsets_p[mid] > out_row) hi = mid;
-                else lo = mid + 1;
-            }
-            out_p[linear] = (out_type)x_p[(int64_t)lo * inner + (linear % inner)];
-        }
-        '''
-    )
-
-
 
 def repeat_interleave(x,repeats,dim=None,output_size=None):
     # torch-compatible: `repeats` may be a python int (every element repeated the
@@ -300,7 +268,7 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
                 dims.append(f"i{i}")
         return x.reindex(tar_shape,dims)
 
-    result = _repeat_interleave_dim0_cuda(x, repeats, dim, output_size)
+    result = _repeat_interleave_dim0_cuda(x, repeats, dim, output_size, _repeat_interleave_cpu_source)
     if result is not None:
         return result
 
@@ -378,143 +346,6 @@ def median(x, dim=None, keepdim=False, keepdims=False):
 
 jt.Var.median = median
 
-@optional_kernel("misc.stack_no_grad", _CUDA_CODE_BACKENDS)
-def _stack_no_grad_cuda_fast(xs, dim):
-    if _output_requires_grad(xs):
-        return None
-    n = len(xs)
-    if n not in (2, 3):
-        return None
-    if not xs:
-        return None
-    for x in xs:
-        if not isinstance(x, jt.Var) or getattr(x, "_jittor_torch_force_cpu", False):
-            return None
-    base_shape = list(xs[0].shape)
-    base_dtype = xs[0].dtype
-    for x in xs[1:]:
-        if list(x.shape) != base_shape or x.dtype != base_dtype:
-            return None
-    if dim < 0:
-        dim += len(base_shape) + 1
-    if dim < 0 or dim > len(base_shape):
-        return None
-
-    out_shape = base_shape[:dim] + [n] + base_shape[dim:]
-    suffix = 1
-    for size in base_shape[dim:]:
-        suffix *= int(size)
-    input_total = 1
-    for size in base_shape:
-        input_total *= int(size)
-    if input_total == 0 or suffix == 0:
-        return None
-    flat_inputs = [x.reshape([-1]) for x in xs]
-    write_lines = "\n".join(
-        f"            @out(base_out + {i} * suffix + rem) = @in{i}(iid);"
-        for i in range(n)
-    )
-    cuda_src = f"""
-    __global__ void stack_kernel(@ARGS_DEF) {{
-        @PRECALC
-        index_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-        index_t step = blockDim.x * gridDim.x;
-        const index_t suffix = {suffix};
-        for (index_t iid = tid; iid < in0_shape0; iid += step) {{
-            index_t prefix = iid / suffix;
-            index_t rem = iid - prefix * suffix;
-            index_t base_out = prefix * ({n} * suffix);
-{write_lines}
-        }}
-    }}
-    int block = 256;
-    int grid = (in0_shape0 + block - 1) / block;
-    if (grid > 65535) grid = 65535;
-    stack_kernel<<<grid, block>>>(@ARGS);
-    """
-    cpu_src = f"""
-    const index_t suffix = {suffix};
-    for (index_t iid=0; iid<in0_shape0; ++iid) {{
-        index_t prefix = iid / suffix;
-        index_t rem = iid - prefix * suffix;
-        index_t base_out = prefix * ({n} * suffix);
-{write_lines}
-    }}
-    """
-    return _stop_grad_outputs(jt.code(
-        [input_total * n], base_dtype, flat_inputs,
-        cuda_src=cuda_src, cpu_src=cpu_src).reshape(out_shape))
-
-@optional_kernel("misc.unbind_no_grad", _CUDA_CODE_BACKENDS)
-def _unbind_no_grad_cuda_fast(x, dim):
-    if _output_requires_grad(x):
-        return None
-    if not isinstance(x, jt.Var) or getattr(x, "_jittor_torch_force_cpu", False):
-        return None
-    shape = list(x.shape)
-    if not shape:
-        return None
-    if dim < 0:
-        dim += len(shape)
-    if dim < 0 or dim >= len(shape):
-        return None
-    n = int(shape[dim])
-    if n not in (2, 3):
-        return None
-    out_shape = shape[:dim] + shape[dim + 1:]
-    suffix = 1
-    for size in shape[dim + 1:]:
-        suffix *= int(size)
-    out_total = 1
-    for size in out_shape:
-        out_total *= int(size)
-    if out_total < 4096 or suffix == 0:
-        return None
-    if n == 2 and out_total < 1024 * 1024:
-        return None
-
-    flat = x.reshape([-1])
-    write_lines = "\n".join(
-        f"            @out{i}(oid) = @in0(base_in + {i} * suffix);"
-        for i in range(n)
-    )
-    cuda_src = f"""
-    __global__ void unbind_kernel(@ARGS_DEF) {{
-        @PRECALC
-        index_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-        index_t step = blockDim.x * gridDim.x;
-        const index_t suffix = {suffix};
-        const index_t full_stride = suffix * {n};
-        for (index_t oid = tid; oid < out0_shape0; oid += step) {{
-            index_t prefix = oid / suffix;
-            index_t rem = oid - prefix * suffix;
-            index_t base_in = prefix * full_stride + rem;
-{write_lines}
-        }}
-    }}
-    int block = 256;
-    int grid = (out0_shape0 + block - 1) / block;
-    if (grid > 65535) grid = 65535;
-    unbind_kernel<<<grid, block>>>(@ARGS);
-    """
-    cpu_src = f"""
-    const index_t suffix = {suffix};
-    const index_t full_stride = suffix * {n};
-    for (index_t oid=0; oid<out0_shape0; ++oid) {{
-        index_t prefix = oid / suffix;
-        index_t rem = oid - prefix * suffix;
-        index_t base_in = prefix * full_stride + rem;
-{write_lines}
-    }}
-    """
-    outs = jt.code(
-        [[out_total] for _ in range(n)],
-        [x.dtype for _ in range(n)],
-        [flat],
-        cuda_src=cuda_src,
-        cpu_src=cpu_src,
-    )
-    return _stop_grad_outputs([out.reshape(out_shape) for out in outs])
 
 def stack(x, dim=0):
     r'''
@@ -546,7 +377,7 @@ def stack(x, dim=0):
     if len(x) < 2:
         return x[0].unsqueeze(dim)
 
-    fast = jt.misc._stack_no_grad_cuda_fast(x, dim)
+    fast = jt.misc._stack_no_grad_cuda_fast(x, dim, _stack_cpu_source)
     if fast is not None:
         return fast
 
@@ -713,7 +544,7 @@ def unbind(x, dim=0):
 
     '''
     if dim < 0: dim += len(x.shape)
-    fast = jt.misc._unbind_no_grad_cuda_fast(x, dim)
+    fast = jt.misc._unbind_no_grad_cuda_fast(x, dim, _unbind_cpu_source)
     if fast is not None:
         return fast
     return [x[(slice(None),)*dim+(i,)] for i in range(x.shape[dim])]
@@ -772,20 +603,13 @@ _triple = _ntuple(3)
 _quadruple = _ntuple(4)
 
 
-def _unique_code_cuda(*args, **kwargs):
-    with jt.flag_scope(compile_options={"FLAGS:  --extended-lambda ": 1}):
-        return jt.code(*args, **kwargs)
-
-
 def _unique_code_generic(*args, **kwargs):
     with jt.flag_scope(compile_options={}):
         return jt.code(*args, **kwargs)
 
 
 register_kernel("misc.unique_code", "*", _unique_code_generic)
-for _backend in _CUDA_CODE_BACKENDS:
-    register_kernel("misc.unique_code", _backend, _unique_code_cuda)
-del _backend
+
 
 
 def unique(
@@ -873,71 +697,9 @@ def unique(
             return false;
         });
         ''',
-        cuda_header='''
-        #undef out
-        #include <thrust/extrema.h>
-        #include <thrust/device_ptr.h>
-        #include <thrust/execution_policy.h>
-        #include <thrust/device_vector.h>
-        #include <thrust/sequence.h>
-
-        #include <thrust/sequence.h>
-        #include <thrust/sort.h>
-        #include <thrust/unique.h>
-
-        #include <cub/cub.cuh>
-        #include <executor.h>
-        ''',
+        cuda_header=_cuda_tensor_ops.unique_sort_header(),
         cuda_src=
-        '''
-            @alias(input_flatten, in0)
-            @alias(indice, out)
-            int dimlen = indice_shape0, dimsize = input_flatten_shape1;
-
-            if (dimsize == 1) {
-                size_t raw_allocation, d_allocation, temp_storage_bytes = 0;
-                void *d_temp_storage = NULL;
-                // Two allocations, not one block carved by hand. The old
-                // code put the sorted keys at `raw_ptr + dimlen` -- 4*dimlen
-                // bytes in, which is 8-byte aligned only when dimlen is
-                // even, so an int64 or float64 input of odd length handed
-                // cub a misaligned buffer. Carving the other way round
-                // misaligns the int32 iota for 1- and 2-byte keys. Let the
-                // allocator align each.
-                size_t keys_bytes = dimlen * sizeof(input_flatten_type);
-                size_t iota_bytes = dimlen * sizeof(int32_t);
-                input_flatten_type* keys_out = (input_flatten_type*)runtime_executor().allocator->alloc(keys_bytes, raw_allocation);
-                size_t iota_allocation;
-                int32_t* raw_ptr = (int32_t*)runtime_executor().allocator->alloc(iota_bytes, iota_allocation);
-
-                thrust::device_ptr<int32_t> arange_ptr = thrust::device_pointer_cast(raw_ptr);
-                thrust::sequence(arange_ptr, arange_ptr + dimlen);
-
-                cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, input_flatten_p,
-                                                keys_out, thrust::raw_pointer_cast(arange_ptr), indice_p, dimlen);
-                d_temp_storage = runtime_executor().allocator->alloc(temp_storage_bytes, d_allocation);
-                cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, input_flatten_p,
-                                                keys_out, thrust::raw_pointer_cast(arange_ptr), indice_p, dimlen);
-
-                runtime_executor().allocator->free(raw_ptr, iota_bytes, iota_allocation);
-                runtime_executor().allocator->free(keys_out, keys_bytes, raw_allocation);
-                runtime_executor().allocator->free(d_temp_storage, temp_storage_bytes, d_allocation);
-            } else {
-                thrust::device_ptr<input_flatten_type> input_ptr = thrust::device_pointer_cast(input_flatten_p);
-                thrust::device_ptr<int32_t> indice_ptr = thrust::device_pointer_cast(indice_p);
-
-                thrust::sequence(indice_ptr, indice_ptr + dimlen);
-                thrust::sort(thrust::device, indice_ptr, indice_ptr + dimlen,
-                    [=] __device__ (int32_t a, int32_t b)->bool {
-                        for(int i = 0; i < dimsize; ++i) {
-                            input_flatten_type lhs = input_ptr[i + a * dimsize],
-                                            rhs = input_ptr[i + b * dimsize];
-                            if (lhs != rhs) return lhs < rhs;
-                        }
-                        return false;
-                    });
-            }
-        '''
+        _cuda_tensor_ops.unique_sort_source()
     )
     input_sorted = input_flatten[indice][:]
     
@@ -983,60 +745,9 @@ def unique(
             }
             output->set_shape({tot + 1});
         ''',
-        cuda_header='''
-            #undef out
-
-            #include <thrust/extrema.h>
-            #include <thrust/device_ptr.h>
-            #include <thrust/execution_policy.h>
-
-            #include <thrust/sequence.h>
-            #include <thrust/unique.h>
-            #include <thrust/sort.h>
-
-            #include <thrust/scan.h>
-            #include <executor.h>
-
-            @alias(input_sorted, in0)
-            @alias(diff, in1)
-            @alias(indice, in2)
-            @alias(output, out0)
-            @alias(inverse, out1)
-        ''',
+        cuda_header=_cuda_tensor_ops.unique_compact_header(),
         cuda_src=
-        f"bool return_inverse = {int(need_inverse)};" +
-        '''
-            int dimlen = input_sorted_shape0, dimsize = input_sorted_shape1;
-            size_t raw_allocation;
-            int32_t* raw_ptr = (int32_t*)runtime_executor().allocator->alloc(2 * dimlen * sizeof(int), raw_allocation);
-
-            thrust::device_ptr<int32_t> diff_ptr = thrust::device_pointer_cast(diff_p),
-                                        inverse_ptr = thrust::device_pointer_cast(inverse_p),
-                                        array_ptr = thrust::device_pointer_cast(raw_ptr),
-                                        sum_ptr = thrust::device_pointer_cast(raw_ptr + dimlen),
-                                        indice_ptr = thrust::device_pointer_cast(indice_p);
-            thrust::device_ptr<input_sorted_type> input_ptr = thrust::device_pointer_cast(input_sorted_p);
-
-            if (return_inverse) {
-                thrust::inclusive_scan(diff_ptr, diff_ptr + dimlen, sum_ptr);
-                thrust::scatter(sum_ptr, sum_ptr + dimlen, indice_ptr, inverse_ptr);
-            }
-
-            thrust::sequence(array_ptr, array_ptr + dimlen);
-            int32_t num = thrust::unique(array_ptr, array_ptr + dimlen,
-                [=] __device__ (int32_t a, int32_t b)->bool {
-                    for(int i = 0; i < dimsize; ++i) {
-                        input_sorted_type lhs = input_ptr[i + a * dimsize],
-                                        rhs = input_ptr[i + b * dimsize];
-                        if (lhs != rhs) return false;
-                    }
-                    return true;
-                }) - array_ptr;
-
-            cudaMemcpy(output_p, raw_ptr, sizeof(int32_t) * num, cudaMemcpyDeviceToDevice);
-            runtime_executor().allocator->free(raw_ptr, 2 * dimlen * sizeof(int32_t), raw_allocation);
-            output->set_shape({ num });
-        '''
+        _cuda_tensor_ops.unique_compact_source(need_inverse)
     )
     indice_shape = (output.shape[0], )
     output = input_sorted[output][:]
@@ -1509,13 +1220,6 @@ def _scan_2d(x, reverse):
     return kernel(x, reverse)
 
 
-def _scan_2d_cuda(x, reverse):
-    operations = get_library_ops("cub", load=True)
-    if operations is None:
-        raise RuntimeError("CUB is unavailable for CUDA cumsum")
-    return operations.cub_cumsum(x, reverse)
-
-
 def _scan_2d_cpu(x, reverse):
     index = "n - 1 - k" if reverse else "k"
     return jt.code(x.shape, x.dtype, [x], cpu_src=f'''
@@ -1534,9 +1238,7 @@ def _scan_2d_cpu(x, reverse):
 
 
 register_kernel("misc.scan_2d", "cpu", _scan_2d_cpu)
-for _backend in _CUDA_CODE_BACKENDS:
-    register_kernel("misc.scan_2d", _backend, _scan_2d_cuda)
-del _backend
+
 
 
 class _Cumsum(jt.Function):
@@ -1953,54 +1655,21 @@ def auto_parallel(n, src, block_num=1024, **kw):
     pnargs = pargs[0::2]
     pnargs2 = [ a.split()[-1] for a in pnargs ]
     oargs2 = [ a.split()[-1] for a in oargs ]
-    entry_func_args_def = ",".join(["int tn"+str(i) for i in range(n)]
-        + pnargs + oargs)
-    entry_func_args = ",".join(["tn"+str(i) for i in range(n)]
-        + pnargs2 + oargs2)
-    tid_def = ""
-    tid_loop = ""
     call_args = []
-    for i in reversed(range(n)):
-        tid_def += f"\nauto tid{i} = tid & ((1<<tn{i})-1);"
-        tid_def += f"\nauto tnum{i} = 1<<tn{i};"
-        tid_def += f"\ntid = tid>>tn{i};"
     for i in range(n):
-        tid_loop += f"\nfor (int i{i}=tid{i}; i{i}<{pnargs2[i]}; i{i}+=tnum{i})"
-        call_args.append(pnargs2[i])
-        call_args.append(f"i{i}")
+        call_args.extend((pnargs2[i], f"i{i}"))
     call_args += oargs2
-    call_args = ",".join(call_args)
-    xn = '\n'
-    new_src = f"""
-#ifdef JIT_cuda
-__device__
-#endif
+    loops = "\n".join(f"for (int i{i}=0; i{i}<{pnargs2[i]}; i{i}++)" for i in range(n))
+    cpu_source = f"""
 {src.replace(func_name, func_name+"_inner", 1)}
-
-#ifdef JIT_cuda
-__global__ static void {func_name}_entry({entry_func_args_def}) {{
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    {tid_def}
-    {tid_loop}
-    {func_name}_inner({call_args});
-}}
-#endif
-
 inline static void {func_name}({",".join(pargs+oargs)}) {{
-#ifdef JIT_cuda
-    int thread_num = 256*{block_num};
-    {xn.join([f"int tn{i} = NanoVector::get_nbits(std::min(thread_num, {pnargs2[i]})) - 2;thread_num >>= tn{i};" for i in reversed(range(n))])}
-    thread_num = 1<<({"+".join([f"tn{i}" for i in range(n)])});
-    int p1 = std::max(thread_num/{block_num}, 1);
-    int p2 = std::min(thread_num, {block_num});
-    {func_name}_entry<<<p1,p2>>>({entry_func_args});
-#else
-    {xn.join([f"for (int i{i}=0; i{i}<{pnargs2[i]}; i{i}++)" for i in range(n)])}
-    {func_name}_inner({call_args});
-#endif
+    {loops}
+    {func_name}_inner({",".join(call_args)});
 }}
 """
-    return new_src
+    return _cuda_codegen.auto_parallel_cuda(
+        n, src, block_num, func_name, pargs, oargs, pnargs, pnargs2, oargs2, cpu_source)
+
 
 
 def numpy_cumprod(a, dim):
@@ -2509,53 +2178,7 @@ class _CTCLossFunction(jt.Function):
                     @out1(i) = -log_likelihood;
                 }}
             }}
-        """, cuda_src=f"""
-        __global__ void kernel(@ARGS_DEF) {{
-            @PRECALC;
-            constexpr int blank = {blank};
-            for (int i=blockIdx.x; i<in0_shape1; i+=gridDim.x) {{
-                int input_len = @in2(i);
-                int target_len = @in3(i);
-                @out0(0,i,0) = @in0(0,i,blank);
-                if (target_len)
-                    @out0(0,i,1) = @in0(0,i,@in1(i,0));
-                for (int j=1; j<input_len; j++)
-                    for (int k=threadIdx.x; k-threadIdx.x<target_len*2+1; k+=blockDim.x) {{
-                        __syncthreads();
-                        if (k>=target_len*2+1)
-                            continue;
-                        int target = k%2 ? @in1(i,k/2) : blank;
-                        int target_2 = target;
-                        if (k>1 && k%2) target_2 = @in1(i,k/2-1);
-                        out_type l1 = @out0(j-1,i,k);
-                        out_type l2 = -1e30;
-                        if (k>0) l2 = @out0(j-1,i,k-1);
-                        out_type l3 = -1e30;
-                        if (k>1 && target_2 != target)
-                            l3 = @out0(j-1,i,k-2);
-                        out_type m = ::max(l1, ::max(l2, l3));
-                        @out0(j,i,k) = ::log(
-                            ::exp(l1-m) +
-                            ::exp(l2-m) +
-                            ::exp(l3-m)
-                        ) + m + @in0(j,i,target);
-                    }}
-                 __syncthreads();
-                if (input_len==0)
-                    @out1(i) = @out0(0,i,0);
-                else {{
-                    out_type l1 = @out0(input_len-1, i, target_len*2);
-                    out_type l2 = -1e30;
-                    if (target_len)
-                        l2 = @out0(input_len-1, i, target_len*2-1);
-                    out_type m = ::max(l1, l2);
-                    out_type log_likelihood = ::log(::exp(l1-m)+::exp(l2-m))+m;
-                    @out1(i) = -log_likelihood;
-                }}
-            }}
-        }}
-        kernel<<<std::min(in0_shape1, 1024), std::min(in1_shape1*2+1, 1024)>>>(@ARGS);
-        """)
+        """, cuda_src=_cuda_ctc.forward_source(blank))
         self.saved_var = [log_probs, targets, input_lengths, target_lengths, log_alpha, result]
         return result
 
@@ -2626,79 +2249,7 @@ class _CTCLossFunction(jt.Function):
                 if (target_len)
                     @out0(0,i,@in1(i,0)) += @out1(0,i,1);
             }}
-        """, cuda_src=f"""
-        __global__ void kernel(@ARGS_DEF) {{
-            @PRECALC;
-            constexpr int blank = {blank};
-            for (int i=blockIdx.x; i<in0_shape1; i+=gridDim.x) {{
-                int input_len = @in2(i);
-                int target_len = @in3(i);
-                if (input_len==0)
-                    // write out1 --> read in6
-                    // out1(i) = out0(0,i,0);
-                    @out1(0,i,0) = @in6(i);
-                else {{
-                    out_type l1 = @in4(input_len-1, i, target_len*2);
-                    out_type l2 = -1e30;
-                    if (target_len)
-                        l2 = @in4(input_len-1, i, target_len*2-1);
-                    out_type m = ::max(l1, l2);
-                    // out_type log_likelihood = ::log(::exp(l1-m)+::exp(l2-m))+m;
-                    // out1(i) = -log_likelihood;
-                    out_type l1_exp = ::exp(l1-m);
-                    out_type l2_exp = ::exp(l2-m);
-                    out_type sumexp = l1_exp + l2_exp;
-
-                    out_type dlog_likelihood = -@in6(i);
-                    out_type dl1 = dlog_likelihood * l1_exp / sumexp;
-                    out_type dl2 = dlog_likelihood * l2_exp / sumexp;
-
-                    @out1(input_len-1, i, target_len*2) = dl1;
-                    if (target_len)
-                        @out1(input_len-1, i, target_len*2-1) = dl2;
-                }}
-                for (int j=input_len-1; j>0; j--)
-                    for (int k=threadIdx.x; k-threadIdx.x<target_len*2+1; k+=blockDim.x) {{
-                        __syncthreads();
-                        if (k>=target_len*2+1)
-                            continue;
-                        int target = k%2 ? @in1(i,k/2) : blank;
-                        int target_2 = target;
-                        if (k>1 && k%2) target_2 = @in1(i,k/2-1);
-                        out_type l1 = @in4(j-1,i,k);
-                        out_type l2 = -1e30;
-                        if (k>0) l2 = @in4(j-1,i,k-1);
-                        out_type l3 = -1e30;
-                        if (k>1 && target_2 != target)
-                            l3 = @in4(j-1,i,k-2);
-                        out_type m = ::max(l1, ::max(l2, l3));
-                        out_type l1_exp = ::exp(l1-m);
-                        out_type l2_exp = ::exp(l2-m);
-                        out_type l3_exp = ::exp(l3-m);
-                        out_type sumexp = l1_exp + l2_exp + l3_exp;
-                        out_type dalpha = @out1(j,i,k);
-
-                        atomicAdd(&@out0(j,i,target), dalpha);
-
-                        atomicAdd(&@out1(j-1,i,k), dalpha * l1_exp / sumexp);
-                        if (k>0)
-                            atomicAdd(&@out1(j-1,i,k-1), dalpha * l2_exp / sumexp);
-                        if (k>1 && target_2 != target)
-                            atomicAdd(&@out1(j-1,i,k-2), dalpha * l3_exp / sumexp);
-                    }}
-                // read in0 -> white out0
-                // write out0 ->read out1
-                // out0(0,i,0) = in0(0,i,blank);
-                __syncthreads();
-                if (threadIdx.x==0) {{
-                    @out0(0,i,blank) += @out1(0,i,0);
-                    if (target_len)
-                        @out0(0,i,@in1(i,0)) += @out1(0,i,1);
-                }}
-            }}
-        }}
-        kernel<<<std::min(in0_shape1, 1024), std::min(in1_shape1*2+1, 1024)>>>(@ARGS);
-        """)
+        """, cuda_src=_cuda_ctc.backward_source(blank))
         return (dlog_probs,)
 
 

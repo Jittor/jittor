@@ -15,12 +15,14 @@ import jittor as jt
 import numpy as np
 
 from _helpers.child_process import run_python_child
+from jittor_utils.backend_resources import backend_root
 
 
 class TestRootDomainStructure(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.runtime_root = Path(jt.__file__).resolve().parent
+        cls.cuda_root = Path(backend_root(cls.runtime_root, "cuda"))
 
     def test_retired_physical_paths_are_absent(self):
         for relative in (
@@ -43,7 +45,8 @@ class TestRootDomainStructure(unittest.TestCase):
             "jittor.lr_scheduler": "jittor.optim.legacy_schedulers",
             "jittor.nn.sparse": "jittor.sparse.convolution",
             "jittor.other": "jittor.nn.backends",
-            "jittor.other.code_softmax": "jittor.nn.backends.softmax_cuda",
+            "jittor.other.code_softmax": "jittor.backends.cuda.kernels.nn.softmax_cuda",
+            "jittor.nn.backends.softmax_cuda": "jittor.backends.cuda.kernels.nn.softmax_cuda",
             "jittor.weightnorm": "jittor.nn.utils.weight_norm",
         }
         for legacy_name, canonical_name in aliases.items():
@@ -65,7 +68,7 @@ class TestRootDomainStructure(unittest.TestCase):
         pooling = importlib.import_module("jittor.pool.layers")
         autograd = importlib.import_module("jittor.autograd.functional")
         weight_norm = importlib.import_module("jittor.nn.utils.weight_norm")
-        softmax = importlib.import_module("jittor.nn.backends.softmax_cuda")
+        softmax = importlib.import_module("jittor.backends.cuda.kernels.nn.softmax_cuda")
 
         contracts = (
             (concatenation.concat, "jittor.misc.concatenation", "(arr, dim=0)"),
@@ -98,7 +101,7 @@ class TestRootDomainStructure(unittest.TestCase):
             ),
             (
                 softmax.softmax_v1,
-                "jittor.nn.backends.softmax_cuda",
+                "jittor.backends.cuda.kernels.nn.softmax_cuda",
                 "(a, log=False, zero_all_neg_inf=False)",
             ),
         )
@@ -155,6 +158,8 @@ class TestRootDomainStructure(unittest.TestCase):
 
     def test_legacy_pickle_globals_resolve_to_canonical_objects(self):
         cases = (
+            ("jittor.nn.backends.softmax_cuda", "softmax_v1",
+             "jittor.backends.cuda.kernels.nn.softmax_cuda"),
             ("jittor.contrib", "concat", "jittor.misc.concatenation"),
             ("jittor.contrib", "check", "jittor.compat.contrib"),
             ("jittor.contrib", "slice_var_index", "jittor.compat.contrib"),
@@ -167,7 +172,7 @@ class TestRootDomainStructure(unittest.TestCase):
             (
                 "jittor.other.code_softmax",
                 "softmax_v1",
-                "jittor.nn.backends.softmax_cuda",
+                "jittor.backends.cuda.kernels.nn.softmax_cuda",
             ),
             (
                 "jittor.lr_scheduler",
@@ -194,13 +199,17 @@ class TestRootDomainStructure(unittest.TestCase):
             "WeightNorm": {"nn/utils/weight_norm.py"},
             "argmax_pool": {"pool/layers.py"},
             "jvp": {"autograd/functional.py"},
-            "softmax_v1": {"nn/backends/softmax_cuda.py"},
+            "softmax_v1": {"backends/cuda/kernels/nn/softmax_cuda.py"},
             "vjp": {"autograd/functional.py"},
         }
         actual = {name: set() for name in expected}
-        for path in self.runtime_root.rglob("*.py"):
+        paths = list(self.runtime_root.rglob("*.py")) + list(self.cuda_root.rglob("*.py"))
+        for path in paths:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            relative = path.relative_to(self.runtime_root).as_posix()
+            if self.cuda_root in path.parents:
+                relative = "backends/cuda/" + path.relative_to(self.cuda_root).as_posix()
+            else:
+                relative = path.relative_to(self.runtime_root).as_posix()
             for node in tree.body:
                 if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
                     if node.name in actual:
@@ -252,7 +261,6 @@ class TestRootDomainStructure(unittest.TestCase):
             "compat/contrib.py",
             "misc/concatenation.py",
             "misc/indexing.py",
-            "nn/backends/softmax_cuda.py",
             "nn/utils/__init__.py",
             "nn/utils/weight_norm.py",
             "optim/legacy_schedulers.py",
@@ -260,9 +268,10 @@ class TestRootDomainStructure(unittest.TestCase):
             "sparse/convolution.py",
             "sparse/coo.py",
         )
-        for relative in paths:
-            path = self.runtime_root / relative
-            with self.subTest(path=relative):
+        sources = [self.runtime_root / relative for relative in paths]
+        sources.append(self.cuda_root / "kernels/nn/softmax_cuda.py")
+        for path in sources:
+            with self.subTest(path=str(path)):
                 ast.parse(
                     path.read_text(encoding="utf-8"),
                     filename=str(path),

@@ -79,87 +79,87 @@ MIGRATED_UNARY_OP_USER_BOUNDARIES = {
 }
 
 MIGRATED_CURAND_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/curand/ops/curand_random_op.cc": 2,
+    "backends/cuda/kernels/curand/curand_random_op.cc": 2,
 }
 
 MIGRATED_CUFFT_DTYPE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cufft/ops/cufft_fft_op.cc": 1,
+    "backends/cuda/kernels/cufft/cufft_fft_op.cc": 1,
 }
 
 MIGRATED_CUDNN_RNN_DTYPE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cudnn/inc/cudnn_rnn_descriptor.h": 1,
+    "backends/cuda/libraries/cudnn/include/cudnn_rnn_descriptor.h": 1,
 }
 
 MIGRATED_CUDNN_RNN_DESCRIPTOR_MODE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cudnn/inc/cudnn_rnn_descriptor.h": 2,
+    "backends/cuda/libraries/cudnn/include/cudnn_rnn_descriptor.h": 2,
 }
 
 MIGRATED_CUDNN_RNN_OP_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_rnn_op.cc": 7,
+    "backends/cuda/kernels/cudnn/cudnn_rnn_op.cc": 7,
 }
 
 MIGRATED_CUDNN_RNN_BWD_X_MODE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_rnn_backward_x_op.cc": 4,
+    "backends/cuda/kernels/cudnn/cudnn_rnn_backward_x_op.cc": 4,
 }
 
 MIGRATED_CUTT_TRANSPOSE_AXES_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cutt/ops/cutt_transpose_op.cc": 2,
+    "backends/cuda/kernels/cutt/cutt_transpose_op.cc": 2,
 }
 
 MIGRATED_CUTT_TRANSPOSE_RANK_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cutt/ops/cutt_transpose_op.cc": 1,
+    "backends/cuda/kernels/cutt/cutt_transpose_op.cc": 1,
 }
 
 MIGRATED_CUBLAS_MATMUL_DTYPE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc": 4,
+    "backends/cuda/kernels/cublas/cublas_matmul_op.cc": 4,
 }
 
 MIGRATED_CUBLAS_MATMUL_RANK_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc": 1,
+    "backends/cuda/kernels/cublas/cublas_matmul_op.cc": 1,
 }
 
 MIGRATED_CUBLAS_BATCHED_MATMUL_DTYPE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc": 2,
+    "backends/cuda/kernels/cublas/cublas_batched_matmul_op.cc": 2,
 }
 
 MIGRATED_CUBLAS_BATCHED_MATMUL_RANK_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc": 3,
+    "backends/cuda/kernels/cublas/cublas_batched_matmul_op.cc": 3,
 }
 
 MIGRATED_CUBLAS_BATCHED_MATMUL_INNER_DIM_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc": 1,
+    "backends/cuda/kernels/cublas/cublas_batched_matmul_op.cc": 1,
 }
 
 MIGRATED_CUBLAS_BATCHED_MATMUL_BATCH_SHAPE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc": 1,
+    "backends/cuda/kernels/cublas/cublas_batched_matmul_op.cc": 1,
 }
 
 MIGRATED_CUBLAS_ACC_MATMUL_DTYPE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc": 2,
+    "backends/cuda/kernels/cublas/cublas_acc_matmul_op.cc": 2,
 }
 
 MIGRATED_CUBLAS_ACC_MATMUL_RANK_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc": 2,
+    "backends/cuda/kernels/cublas/cublas_acc_matmul_op.cc": 2,
 }
 
 MIGRATED_CUBLAS_ACC_MATMUL_INNER_DIM_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc": 1,
+    "backends/cuda/kernels/cublas/cublas_acc_matmul_op.cc": 1,
 }
 
 MIGRATED_CUSPARSE_SPMMCSR_DTYPE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcsr_op.cc": 2,
+    "backends/cuda/kernels/cusparse/cusparse_spmmcsr_op.cc": 2,
 }
 
 MIGRATED_CUSPARSE_SPMMCSR_SHAPE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcsr_op.cc": 2,
+    "backends/cuda/kernels/cusparse/cusparse_spmmcsr_op.cc": 2,
 }
 
 MIGRATED_CUSPARSE_SPMMCOO_DTYPE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcoo_op.cc": 2,
+    "backends/cuda/kernels/cusparse/cusparse_spmmcoo_op.cc": 2,
 }
 
 MIGRATED_CUSPARSE_SPMMCOO_SHAPE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcoo_op.cc": 2,
+    "backends/cuda/kernels/cusparse/cusparse_spmmcoo_op.cc": 2,
 }
 
 MIGRATED_NCCL_REDUCE_SCATTER_SHAPE_USER_BOUNDARIES = {
@@ -167,63 +167,63 @@ MIGRATED_NCCL_REDUCE_SCATTER_SHAPE_USER_BOUNDARIES = {
 }
 
 MIGRATED_CUB_CUMSUM_RANK_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cub/ops/cub_cumsum_op.cc": 1,
+    "backends/cuda/kernels/cub/cub_cumsum_op.cc": 1,
 }
 
 MIGRATED_CUB_OP_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cub/ops/cub_argsort_op.cc": 5,
-    "python/jittor/extern/cuda/cub/ops/cub_arg_reduce_op.cc": 3,
+    "backends/cuda/kernels/cub/cub_argsort_op.cc": 5,
+    "backends/cuda/kernels/cub/cub_arg_reduce_op.cc": 3,
 }
 
 MIGRATED_CUDNN_CONV_FORMAT_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_op.cc": 4,
+    "backends/cuda/kernels/cudnn/cudnn_conv_op.cc": 4,
 }
 
 MIGRATED_CUDNN_CONV_FORMAT_COMPARE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_op.cc": 1,
+    "backends/cuda/kernels/cudnn/cudnn_conv_op.cc": 1,
 }
 
 MIGRATED_CUDNN_CONV_BWD_X_FORMAT_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_x_op.cc": 3,
+    "backends/cuda/kernels/cudnn/cudnn_conv_backward_x_op.cc": 3,
 }
 
 MIGRATED_CUDNN_CONV_BWD_X_FORMAT_COMPARE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_x_op.cc": 1,
+    "backends/cuda/kernels/cudnn/cudnn_conv_backward_x_op.cc": 1,
 }
 
 MIGRATED_CUDNN_CONV_BWD_W_FORMAT_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_w_op.cc": 3,
+    "backends/cuda/kernels/cudnn/cudnn_conv_backward_w_op.cc": 3,
 }
 
 MIGRATED_CUDNN_CONV_BWD_W_FORMAT_COMPARE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_w_op.cc": 1,
+    "backends/cuda/kernels/cudnn/cudnn_conv_backward_w_op.cc": 1,
 }
 
 INTERNAL_BACKEND_ASSERTION_CONTRACTS = {
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_op.cc": "ASSERT(best_algo_idx!=-1)",
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_op.cc": "ASSERT(best_algo_idx!=-1)",
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_x_op.cc": "ASSERT(best_algo_idx!=-1)",
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_w_op.cc": "ASSERT(best_algo_idx!=-1)",
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_backward_x_op.cc": "ASSERT(best_algo_idx!=-1)",
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_backward_w_op.cc": "ASSERT(best_algo_idx!=-1)",
-    "python/jittor/extern/cuda/cudnn/inc/cudnn_conv_plan.h": "ASSERT(ok)",
-    "python/jittor/extern/cuda/cudnn/src/cudnn_rnn_descriptor.cc": "ASSERT(linLayerMat)",
-    "python/jittor/extern/cuda/cutt/ops/cutt_wrapper.cc": "CHECK(ret == CUTT_SUCCESS)",
-    "python/jittor/extern/cuda/cub/ops/cub_test_op.cc": "ASSERT(cub_test_entry",
-    "python/jittor/extern/cuda/cublas/ops/cublas_test_op.cc": "ASSERT(cublas_test_entry",
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_test_op.cc": "ASSERT(cudnn_test_entry",
+    "backends/cuda/kernels/cudnn/cudnn_conv_op.cc": "ASSERT(best_algo_idx!=-1)",
+    "backends/cuda/kernels/cudnn/cudnn_conv3d_op.cc": "ASSERT(best_algo_idx!=-1)",
+    "backends/cuda/kernels/cudnn/cudnn_conv_backward_x_op.cc": "ASSERT(best_algo_idx!=-1)",
+    "backends/cuda/kernels/cudnn/cudnn_conv_backward_w_op.cc": "ASSERT(best_algo_idx!=-1)",
+    "backends/cuda/kernels/cudnn/cudnn_conv3d_backward_x_op.cc": "ASSERT(best_algo_idx!=-1)",
+    "backends/cuda/kernels/cudnn/cudnn_conv3d_backward_w_op.cc": "ASSERT(best_algo_idx!=-1)",
+    "backends/cuda/libraries/cudnn/include/cudnn_conv_plan.h": "ASSERT(ok)",
+    "backends/cuda/libraries/cudnn/src/cudnn_rnn_descriptor.cc": "ASSERT(linLayerMat)",
+    "backends/cuda/libraries/cutt/src/cutt_wrapper.cc": "CHECK(ret == CUTT_SUCCESS)",
+    "backends/cuda/kernels/cub/cub_test_op.cc": "ASSERT(cub_test_entry",
+    "backends/cuda/kernels/cublas/cublas_test_op.cc": "ASSERT(cublas_test_entry",
+    "backends/cuda/kernels/cudnn/cudnn_test_op.cc": "ASSERT(cudnn_test_entry",
 }
 
 MIGRATED_CUDNN_CONV3D_X_RANK_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_op.cc": 3,
+    "backends/cuda/kernels/cudnn/cudnn_conv3d_op.cc": 3,
 }
 
 MIGRATED_CUDNN_CONV3D_BWD_X_W_RANK_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_backward_x_op.cc": 2,
+    "backends/cuda/kernels/cudnn/cudnn_conv3d_backward_x_op.cc": 2,
 }
 
 MIGRATED_CUDNN_CONV3D_BWD_W_X_RANK_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_backward_w_op.cc": 2,
+    "backends/cuda/kernels/cudnn/cudnn_conv3d_backward_w_op.cc": 2,
 }
 
 MIGRATED_FUSED_ADAMW_CARDINALITY_BOUNDARIES = {
@@ -410,10 +410,10 @@ def test_unary_op_user_boundary_migration_is_explicit_and_bounded():
 
 
 def test_curand_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/extern/cuda/curand/ops/curand_random_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/curand/curand_random_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_CURAND_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/curand/ops/curand_random_op.cc"]
+        "backends/cuda/kernels/curand/curand_random_op.cc"]
     assert "curand_random supports float32 and float64 only" in source
     assert "type == ns_normal || type == ns_uniform" in source
     negative = (ROOT / "tests/backends/cuda/test_curand_odd_length.py").read_text()
@@ -421,117 +421,117 @@ def test_curand_user_boundary_migration_is_explicit_and_bounded():
 
 
 def test_cufft_dtype_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/extern/cuda/cufft/ops/cufft_fft_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cufft/cufft_fft_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_CUFFT_DTYPE_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cufft/ops/cufft_fft_op.cc"]
+        "backends/cuda/kernels/cufft/cufft_fft_op.cc"]
     assert "not supported fft dtype" in source
 
 
 def test_cudnn_rnn_dtype_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/extern/cuda/cudnn/inc/cudnn_rnn_descriptor.h").read_text()
+    source = (ROOT / "backends/cuda/libraries/cudnn/include/cudnn_rnn_descriptor.h").read_text()
     actual = source.count("USER_CHECK(")
     assert actual == MIGRATED_CUDNN_RNN_DTYPE_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cudnn/inc/cudnn_rnn_descriptor.h"]
+        "backends/cuda/libraries/cudnn/include/cudnn_rnn_descriptor.h"]
     assert "cudnn rnn supports float16, float32 and float64" in source
     negative = (ROOT / "tests/backends/cuda/test_cudnn_rnn_dtype.py").read_text()
     assert "test_unsupported_dtype_names_itself" in negative
 
 
 def test_cudnn_rnn_descriptor_mode_is_a_catchable_user_error():
-    source = (ROOT / "python/jittor/extern/cuda/cudnn/inc/cudnn_rnn_descriptor.h").read_text()
+    source = (ROOT / "backends/cuda/libraries/cudnn/include/cudnn_rnn_descriptor.h").read_text()
     marker = 'USER_CHECKop(mode,==,"gru")'
     assert source.count(marker) == MIGRATED_CUDNN_RNN_DESCRIPTOR_MODE_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cudnn/inc/cudnn_rnn_descriptor.h"]
+        "backends/cuda/libraries/cudnn/include/cudnn_rnn_descriptor.h"]
     assert 'ASSERT(mode == "gru")' not in source
     assert "mode must be relu, tanh, lstm, or gru" in source
 
 
 def test_cudnn_rnn_op_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_rnn_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cudnn/cudnn_rnn_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_CUDNN_RNN_OP_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cudnn/ops/cudnn_rnn_op.cc"]
+        "backends/cuda/kernels/cudnn/cudnn_rnn_op.cc"]
     negative = (ROOT / "tests/backends/cuda/test_cudnn_rnn_dtype.py").read_text()
     assert "test_mixed_input_weight_dtype_is_rejected_clearly" in negative
 
 
 def test_cudnn_rnn_bwd_x_mode_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_rnn_backward_x_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cudnn/cudnn_rnn_backward_x_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_CUDNN_RNN_BWD_X_MODE_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cudnn/ops/cudnn_rnn_backward_x_op.cc"]
+        "backends/cuda/kernels/cudnn/cudnn_rnn_backward_x_op.cc"]
 
 
 def test_cutt_transpose_axes_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/extern/cuda/cutt/ops/cutt_transpose_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cutt/cutt_transpose_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     actual -= source.count("USER_CHECK(xdim)")
     assert actual == MIGRATED_CUTT_TRANSPOSE_AXES_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cutt/ops/cutt_transpose_op.cc"]
+        "backends/cuda/kernels/cutt/cutt_transpose_op.cc"]
     negative = (ROOT / "tests/backends/cuda/test_cutt_transpose_op.py").read_text()
     assert "test_axes_length_is_a_catchable_user_error" in negative
     assert "test_duplicate_axes_are_a_catchable_user_error" in negative
 
 
 def test_cutt_transpose_scalar_rank_is_a_catchable_user_error():
-    source = (ROOT / "python/jittor/extern/cuda/cutt/ops/cutt_transpose_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cutt/cutt_transpose_op.cc").read_text()
     assert 'USER_CHECK(xdim) << "cutt transpose requires a non-scalar input"' in source
     assert "CHECK(xdim);" not in source
     assert source.count("USER_CHECK(xdim)") == MIGRATED_CUTT_TRANSPOSE_RANK_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cutt/ops/cutt_transpose_op.cc"]
+        "backends/cuda/kernels/cutt/cutt_transpose_op.cc"]
 
 
 def test_cublas_matmul_dtype_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cublas/cublas_matmul_op.cc").read_text()
     # Keep the new b-rank cohort independent from the existing dtype/rank/inner
     # ledger represented by this historical count.
     actual = source.count("USER_CHECK(")
     actual += source.count("USER_CHECKop(a->shape.size(),==,2)")
     actual += source.count("USER_CHECKop(m,==,m_)")
     assert actual == MIGRATED_CUBLAS_MATMUL_DTYPE_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc"]
+        "backends/cuda/kernels/cublas/cublas_matmul_op.cc"]
     negative = (ROOT / "tests/backends/cuda/test_cublas_matmul_grad.py").read_text()
     assert "test_non_float_inputs_are_rejected_clearly" in negative
     assert "test_mixed_input_dtypes_are_rejected_clearly" in negative
 
 
 def test_cublas_matmul_b_rank_is_a_catchable_user_error():
-    source = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cublas/cublas_matmul_op.cc").read_text()
     marker = "USER_CHECKop(b->shape.size(),==,2)"
     assert marker in source
     assert "ASSERTop(b->shape.size(),==,2)" not in source
     assert "rank-2 input b" in source
     assert source.count(marker) == MIGRATED_CUBLAS_MATMUL_RANK_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc"]
+        "backends/cuda/kernels/cublas/cublas_matmul_op.cc"]
 
 
 def test_cublas_matmul_inner_dimension_is_a_catchable_user_error():
-    source = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cublas/cublas_matmul_op.cc").read_text()
     assert "USER_CHECKop(m,==,m_)" in source
     assert "ASSERTop(m,==,m_)" not in source
     assert "inner dimensions must match" in source
 
 
 def test_cublas_batched_matmul_dtype_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cublas/cublas_batched_matmul_op.cc").read_text()
     # Rank checks have a separate ledger below; count only the two constructor
     # dtype checks here to keep the cohorts independent.
     actual = source.count("USER_CHECK(")
     assert actual == MIGRATED_CUBLAS_BATCHED_MATMUL_DTYPE_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc"]
+        "backends/cuda/kernels/cublas/cublas_batched_matmul_op.cc"]
     negative = (ROOT / "tests/backends/cuda/test_cublas_matmul_grad.py").read_text()
     assert "test_batched_non_float_inputs_are_rejected_clearly" in negative
     assert "test_batched_mixed_input_dtypes_are_rejected_clearly" in negative
 
 
 def test_cublas_batched_matmul_rank_is_a_catchable_user_error():
-    source = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cublas/cublas_batched_matmul_op.cc").read_text()
     actual = source.count("USER_CHECKop(adim,>=,3)")
     actual += source.count("USER_CHECKop(bdim,>=,3)")
     actual += source.count("USER_CHECKop(adim,==,bdim)")
     assert actual == MIGRATED_CUBLAS_BATCHED_MATMUL_RANK_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc"]
+        "backends/cuda/kernels/cublas/cublas_batched_matmul_op.cc"]
     markers = (
         "USER_CHECKop(adim,>=,3)",
         "USER_CHECKop(bdim,>=,3)",
@@ -544,36 +544,36 @@ def test_cublas_batched_matmul_rank_is_a_catchable_user_error():
 
 
 def test_cublas_batched_matmul_inner_dimension_is_a_catchable_user_error():
-    source = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cublas/cublas_batched_matmul_op.cc").read_text()
     assert "USER_CHECKop(m,==,m_)" in source
     assert "ASSERTop(m,==,m_)" not in source
     assert "inner dimensions must match" in source
     assert source.count("USER_CHECKop(m,==,m_)") == MIGRATED_CUBLAS_BATCHED_MATMUL_INNER_DIM_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc"]
+        "backends/cuda/kernels/cublas/cublas_batched_matmul_op.cc"]
 
 
 def test_cublas_batched_matmul_batch_shape_is_a_catchable_user_error():
-    source = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cublas/cublas_batched_matmul_op.cc").read_text()
     marker = "USER_CHECKop(a->shape[i],==,b->shape[i])"
     assert marker in source
     assert "ASSERTop(a->shape[i],==,b->shape[i])" not in source
     assert "batch dimensions must match" in source
     assert source.count(marker) == MIGRATED_CUBLAS_BATCHED_MATMUL_BATCH_SHAPE_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc"]
+        "backends/cuda/kernels/cublas/cublas_batched_matmul_op.cc"]
 
 
 def test_cublas_acc_matmul_dtype_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cublas/cublas_acc_matmul_op.cc").read_text()
     actual = source.count("USER_CHECK(")
     assert actual == MIGRATED_CUBLAS_ACC_MATMUL_DTYPE_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc"]
+        "backends/cuda/kernels/cublas/cublas_acc_matmul_op.cc"]
     negative = (ROOT / "tests/backends/cuda/test_cublas_matmul_grad.py").read_text()
     assert "test_acc_non_float_inputs_are_rejected_clearly" in negative
     assert "test_acc_mixed_input_dtypes_are_rejected_clearly" in negative
 
 
 def test_cublas_acc_matmul_rank_is_a_catchable_user_error():
-    source = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cublas/cublas_acc_matmul_op.cc").read_text()
     markers = (
         "USER_CHECKop(a->shape.size(),==,2)",
         "USER_CHECKop(b->shape.size(),==,2)",
@@ -583,31 +583,31 @@ def test_cublas_acc_matmul_rank_is_a_catchable_user_error():
     assert "ASSERTop(b->shape.size(),==,2)" not in source
     actual = sum(source.count(marker) for marker in markers)
     assert actual == MIGRATED_CUBLAS_ACC_MATMUL_RANK_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc"]
+        "backends/cuda/kernels/cublas/cublas_acc_matmul_op.cc"]
 
 
 def test_cublas_acc_matmul_inner_dimension_is_a_catchable_user_error():
-    source = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cublas/cublas_acc_matmul_op.cc").read_text()
     marker = "USER_CHECKop(m,==,m_)"
     assert marker in source
     assert "ASSERTop(m,==,m_)" not in source
     assert "inner dimensions must match" in source
     assert source.count(marker) == MIGRATED_CUBLAS_ACC_MATMUL_INNER_DIM_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc"]
+        "backends/cuda/kernels/cublas/cublas_acc_matmul_op.cc"]
 
 
 def test_cusparse_spmmcsr_dtype_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcsr_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cusparse/cusparse_spmmcsr_op.cc").read_text()
     actual = source.count("USER_CHECK(")
     assert actual == MIGRATED_CUSPARSE_SPMMCSR_DTYPE_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcsr_op.cc"]
+        "backends/cuda/kernels/cusparse/cusparse_spmmcsr_op.cc"]
     negative = (ROOT / "tests/backends/cuda/test_cusparse_dtype.py").read_text()
     assert "test_csr_rejects_non_float_input" in negative
     assert "test_csr_rejects_mixed_input_dtypes" in negative
 
 
 def test_cusparse_spmmcsr_shape_is_a_catchable_user_error():
-    source = (ROOT / "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcsr_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cusparse/cusparse_spmmcsr_op.cc").read_text()
     markers = (
         "USER_CHECKop(xs,==,os)",
         "USER_CHECKop(A_col,==,xs[0])",
@@ -618,21 +618,21 @@ def test_cusparse_spmmcsr_shape_is_a_catchable_user_error():
     assert "sizes must match" in source
     assert "columns must match" in source
     assert sum(source.count(marker) for marker in markers) == MIGRATED_CUSPARSE_SPMMCSR_SHAPE_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcsr_op.cc"]
+        "backends/cuda/kernels/cusparse/cusparse_spmmcsr_op.cc"]
 
 
 def test_cusparse_spmmcoo_dtype_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcoo_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cusparse/cusparse_spmmcoo_op.cc").read_text()
     actual = source.count("USER_CHECK(")
     assert actual == MIGRATED_CUSPARSE_SPMMCOO_DTYPE_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcoo_op.cc"]
+        "backends/cuda/kernels/cusparse/cusparse_spmmcoo_op.cc"]
     negative = (ROOT / "tests/backends/cuda/test_cusparse_dtype.py").read_text()
     assert "test_coo_rejects_non_float_input" in negative
     assert "test_coo_rejects_mixed_input_dtypes" in negative
 
 
 def test_cusparse_spmmcoo_shape_is_a_catchable_user_error():
-    source = (ROOT / "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcoo_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cusparse/cusparse_spmmcoo_op.cc").read_text()
     markers = (
         "USER_CHECKop(xs,==,os)",
         "USER_CHECKop(A_col,==,xs[0])",
@@ -643,7 +643,7 @@ def test_cusparse_spmmcoo_shape_is_a_catchable_user_error():
     assert "sizes must match" in source
     assert "columns must match" in source
     assert sum(source.count(marker) for marker in markers) == MIGRATED_CUSPARSE_SPMMCOO_SHAPE_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcoo_op.cc"]
+        "backends/cuda/kernels/cusparse/cusparse_spmmcoo_op.cc"]
 
 
 def test_nccl_reduce_scatter_shape_user_boundary_migration_is_explicit_and_bounded():
@@ -655,10 +655,10 @@ def test_nccl_reduce_scatter_shape_user_boundary_migration_is_explicit_and_bound
 
 
 def test_cub_cumsum_rank_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/extern/cuda/cub/ops/cub_cumsum_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cub/cub_cumsum_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_CUB_CUMSUM_RANK_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cub/ops/cub_cumsum_op.cc"]
+        "backends/cuda/kernels/cub/cub_cumsum_op.cc"]
     negative = (ROOT / "tests/backends/cuda/test_cub_cumsum.py").read_text()
     assert "test_rank_three_is_rejected_clearly" in negative
 
@@ -675,102 +675,102 @@ def test_cub_op_user_boundary_migration_is_explicit_and_bounded():
 
 
 def test_cudnn_conv_format_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cudnn/cudnn_conv_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_CUDNN_CONV_FORMAT_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_op.cc"]
+        "backends/cuda/kernels/cudnn/cudnn_conv_op.cc"]
     assert "Not a valid format" in source
 
 
 def test_cudnn_conv_format_compare_is_a_catchable_user_error():
-    source = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cudnn/cudnn_conv_op.cc").read_text()
     marker = "USER_CHECKop(c,==,format[3])"
     assert marker in source
     assert "USER_CHECK(c==format[3])" not in source
     assert source.count(marker) == MIGRATED_CUDNN_CONV_FORMAT_COMPARE_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_op.cc"]
+        "backends/cuda/kernels/cudnn/cudnn_conv_op.cc"]
 
 
 def test_cudnn_conv_bwd_x_format_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_x_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cudnn/cudnn_conv_backward_x_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_CUDNN_CONV_BWD_X_FORMAT_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_x_op.cc"]
+        "backends/cuda/kernels/cudnn/cudnn_conv_backward_x_op.cc"]
     assert "Not a valid format" in source
 
 
 def test_cudnn_conv_bwd_x_format_compare_is_a_catchable_user_error():
-    source = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_x_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cudnn/cudnn_conv_backward_x_op.cc").read_text()
     marker = "USER_CHECKop(c,==,format[3])"
     assert marker in source
     assert "USER_CHECK(c==format[3])" not in source
     assert source.count(marker) == MIGRATED_CUDNN_CONV_BWD_X_FORMAT_COMPARE_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_x_op.cc"]
+        "backends/cuda/kernels/cudnn/cudnn_conv_backward_x_op.cc"]
 
 
 def test_cudnn_conv_bwd_w_format_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_w_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cudnn/cudnn_conv_backward_w_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_CUDNN_CONV_BWD_W_FORMAT_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_w_op.cc"]
+        "backends/cuda/kernels/cudnn/cudnn_conv_backward_w_op.cc"]
     assert "Not a valid format" in source
 
 
 def test_cudnn_conv_bwd_w_format_compare_is_a_catchable_user_error():
-    source = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_w_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cudnn/cudnn_conv_backward_w_op.cc").read_text()
     marker = "USER_CHECKop(c,==,format[3])"
     assert marker in source
     assert "USER_CHECK(c==format[3])" not in source
     assert source.count(marker) == MIGRATED_CUDNN_CONV_BWD_W_FORMAT_COMPARE_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_w_op.cc"]
+        "backends/cuda/kernels/cudnn/cudnn_conv_backward_w_op.cc"]
 
 
 def test_backend_internal_assertion_classification_is_explicit():
     for relative, marker in INTERNAL_BACKEND_ASSERTION_CONTRACTS.items():
         source = (ROOT / relative).read_text()
         assert marker in source, (relative, marker)
-    descriptor = (ROOT / "python/jittor/extern/cuda/cudnn/src/cudnn_rnn_descriptor.cc").read_text()
+    descriptor = (ROOT / "backends/cuda/libraries/cudnn/src/cudnn_rnn_descriptor.cc").read_text()
     assert descriptor.count("ASSERT(linLayerMat)") == 1
     assert "ASSERT(linLayerBias)" in descriptor
     assert descriptor.count("ASSERT(linLayerBias)") == 1
-    plan = (ROOT / "python/jittor/extern/cuda/cudnn/inc/cudnn_conv_plan.h").read_text()
+    plan = (ROOT / "backends/cuda/libraries/cudnn/include/cudnn_conv_plan.h").read_text()
     assert plan.count("ASSERT(ok)") == 1
-    cub_test = (ROOT / "python/jittor/extern/cuda/cub/ops/cub_test_op.cc").read_text()
+    cub_test = (ROOT / "backends/cuda/kernels/cub/cub_test_op.cc").read_text()
     assert cub_test.count("ASSERT(cub_test_entry") == 1
     assert cub_test.count("ASSERT(status == cudaSuccess)") == 1
-    cublas_test = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_test_op.cc").read_text()
+    cublas_test = (ROOT / "backends/cuda/kernels/cublas/cublas_test_op.cc").read_text()
     assert cublas_test.count("ASSERT(cublas_test_entry") == 1
-    cudnn_test = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_test_op.cc").read_text()
+    cudnn_test = (ROOT / "backends/cuda/kernels/cudnn/cudnn_test_op.cc").read_text()
     assert cudnn_test.count("ASSERT(cudnn_test_entry") == 1
-    cudnn_conv = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_op.cc").read_text()
+    cudnn_conv = (ROOT / "backends/cuda/kernels/cudnn/cudnn_conv_op.cc").read_text()
     assert cudnn_conv.count("ASSERT(best_algo_idx!=-1)") == 1
-    cudnn_conv3d = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_op.cc").read_text()
+    cudnn_conv3d = (ROOT / "backends/cuda/kernels/cudnn/cudnn_conv3d_op.cc").read_text()
     assert cudnn_conv3d.count("ASSERT(best_algo_idx!=-1)") == 1
-    cudnn_conv_bwd_x = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_x_op.cc").read_text()
+    cudnn_conv_bwd_x = (ROOT / "backends/cuda/kernels/cudnn/cudnn_conv_backward_x_op.cc").read_text()
     assert cudnn_conv_bwd_x.count("ASSERT(best_algo_idx!=-1)") == 1
-    cutt_wrapper = (ROOT / "python/jittor/extern/cuda/cutt/ops/cutt_wrapper.cc").read_text()
+    cutt_wrapper = (ROOT / "backends/cuda/libraries/cutt/src/cutt_wrapper.cc").read_text()
     assert cutt_wrapper.count("CHECK(ret == CUTT_SUCCESS)") == 2
 
 
 def test_cudnn_conv3d_x_rank_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cudnn/cudnn_conv3d_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_CUDNN_CONV3D_X_RANK_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_op.cc"]
+        "backends/cuda/kernels/cudnn/cudnn_conv3d_op.cc"]
 
 
 def test_cudnn_conv3d_bwd_x_w_rank_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_backward_x_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cudnn/cudnn_conv3d_backward_x_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_CUDNN_CONV3D_BWD_X_W_RANK_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_backward_x_op.cc"]
+        "backends/cuda/kernels/cudnn/cudnn_conv3d_backward_x_op.cc"]
 
 
 def test_cudnn_conv3d_bwd_w_x_rank_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_backward_w_op.cc").read_text()
+    source = (ROOT / "backends/cuda/kernels/cudnn/cudnn_conv3d_backward_w_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_CUDNN_CONV3D_BWD_W_X_RANK_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_backward_w_op.cc"]
+        "backends/cuda/kernels/cudnn/cudnn_conv3d_backward_w_op.cc"]
 
 
 def test_fused_adamw_cardinality_migration_is_explicit_and_bounded():

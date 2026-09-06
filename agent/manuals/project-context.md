@@ -43,9 +43,9 @@ current tree has:
 - durable design documents under semantic `docs/` directories;
 - Python 3.7-3.13 packaging, with real 3.12/3.13 wheel gates and NumPy 2.x on 3.13.
 
-Source ownership and future moves must follow
-[source architecture](../../docs/architecture/source-architecture.md). Runtime compiler
-resources under `python/jittor/src/` and `python/jittor/extern/` remain physical-path contracts.
+Follow [source architecture](../../docs/architecture/source-architecture.md): CUDA resources
+live in top-level `backends/cuda/`, packaged as `jittor.backends.cuda`; shared core and
+remaining legacy resources still use `python/jittor/src/` and `python/jittor/extern/`.
 
 ## Active work areas
 

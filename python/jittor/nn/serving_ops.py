@@ -17,9 +17,9 @@ from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
 from jittor._runtime.dispatch import dispatch_context, optional_kernel
 
 from .backends import hooks as _backend_hooks
-from .rms_norm_cuda import _fused_add_rms_norm_cuda, _rms_norm_cuda
-from .rope_cuda import _rotary_embedding_cuda
-from .swiglu_cuda import _silu_and_mul_cuda
+from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _fused_add_rms_norm_cuda, _rms_norm_cuda
+from jittor.backends.cuda.kernels.nn.rope_cuda import _rotary_embedding_cuda
+from jittor.backends.cuda.kernels.nn.swiglu_cuda import _silu_and_mul_cuda
 
 __all__ = [
     "silu_and_mul", "rms_norm", "dual_rms_norm",

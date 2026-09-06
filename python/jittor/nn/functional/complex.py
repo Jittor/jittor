@@ -3,6 +3,10 @@
 import numpy as np
 
 import jittor as jt
+from jittor.backends.cuda.kernels.nn.complex_views import (
+    COMPLEX64_TO_REAL2_CUDA_SOURCE,
+    REAL2_TO_COMPLEX64_CUDA_SOURCE,
+)
 
 # Native complex64 <-> float32[..., 2] bridge. This lets FFT / linalg use the native
 # complex64 dtype while the internal kernels still consume a real/imag float pair:
@@ -38,13 +42,7 @@ def _complex64_to_real2_raw(z):
             @out(i,0) = @in0(i).real;
             @out(i,1) = @in0(i).imag;
         }""",
-        cuda_src="""
-        __global__ void k(@ARGS_DEF) {
-            @PRECALC
-            int i = blockIdx.x*blockDim.x + threadIdx.x;
-            if (i < in0_shape0) { @out(i,0) = @in0(i).real; @out(i,1) = @in0(i).imag; }
-        }
-        int n = in0_shape0; k<<<(n+63)/64, 64>>>(@ARGS);""",
+        cuda_src=COMPLEX64_TO_REAL2_CUDA_SOURCE,
     )
     return flat.reshape(list(z.shape) + [2])
 
@@ -68,15 +66,7 @@ def _real2_to_complex64_raw(x):
         for (int i=0; i<in0_shape0; i++) {
             @out(i) = complex64(float(@in0(i,0)), float(@in0(i,1)));
         }""",
-        cuda_src="""
-        __global__ void k(@ARGS_DEF) {
-            @PRECALC
-            int i = blockIdx.x*blockDim.x + threadIdx.x;
-            if (i < in0_shape0) {
-                @out(i) = complex64(float(@in0(i,0)), float(@in0(i,1)));
-            }
-        }
-        int n = in0_shape0; k<<<(n+63)/64, 64>>>(@ARGS);""",
+        cuda_src=REAL2_TO_COMPLEX64_CUDA_SOURCE,
     )
     return flat.reshape(out_shape)
 

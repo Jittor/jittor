@@ -41,6 +41,8 @@ import hashlib
 from functools import partial
 from jittor_utils import backend_discovery as _backend_discovery
 from jittor_utils import build_config as _build_config_api
+from jittor_utils import backend_resources as _backend_resources_api
+from jittor_utils.backend_resources import backend_root
 from jittor_utils.build_config import BuildConfig, BuildContext, ModuleBuildServices
 
 
@@ -389,6 +391,37 @@ def parse_var_members(src, header="<src>"):
 
 
 def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
+    def compose_backend_source(operator, segments):
+        import tempfile
+
+        parts = []
+        for source_path in segments:
+            with open(source_path, encoding="utf-8") as source_file:
+                text = source_file.read()
+            parts.append('#line 1 ' + json.dumps(source_path) + '\n' + text + '\n')
+        content = "".join(parts)
+        directory = os.path.join(cache_path, "backend_sources")
+        os.makedirs(directory, exist_ok=True)
+        destination = os.path.join(directory, operator + "_cuda.cc")
+        try:
+            with open(destination, encoding="utf-8") as current:
+                if current.read() == content:
+                    return destination
+        except FileNotFoundError:
+            pass
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=directory,
+                                             prefix=operator + ".", suffix=".tmp", delete=False) as output:
+                temporary = output.name
+                output.write(content)
+            os.replace(temporary, destination)
+            temporary = None
+        finally:
+            if temporary is not None:
+                os.unlink(temporary)
+        return destination
+
     backend_masks = {
         None: None,
         "cpu": "OpBackendCpu",
@@ -573,6 +606,18 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
         var_member_src = [ f"VAR_MEMBER_NAME_AND_OFFSET({name}, {name2})" for name in var_member ]
         var_member_src = ",".join(var_member_src)
         mask_arg = f", {backend_mask}" if backend_mask is not None else ""
+        # Optional backend sources are composed into the first definition, not
+        # registered as a replacement (which would invalidate persistent JIT keys).
+        if os.path.realpath(os.path.dirname(header)) == os.path.realpath(os.path.join(jittor_path, "src", "ops")):
+            kernel_directory = os.path.join(backend_root(jittor_path, "cuda"), "kernels", "core")
+            accelerator_source = os.path.join(kernel_directory, func_name + "_op.cc")
+            prefix_source = os.path.join(kernel_directory, func_name + "_prefix.cc")
+            if os.path.isfile(prefix_source):
+                accelerator_source = compose_backend_source(func_name, [prefix_source, cc_name])
+            if os.path.isfile(accelerator_source):
+                mask = backend_mask if backend_mask is not None else name2 + "::backend_mask"
+                accelerator_flags = ' -I"' + kernel_directory + '" '
+                mask_arg = ", " + mask + ", " + json.dumps(accelerator_source) + ", " + json.dumps(accelerator_flags)
         initer.append(f'\n        register_op_definition<{name2}>({{ "{func_name}", R"({cc_name})", extra_flags, {{{constructors}}}, {{{var_member_src}}} }}{mask_arg});')
         for hid, h_def in enumerate(res):
             h_def = list(h_def)
@@ -996,7 +1041,7 @@ def check_cuda():
     cuda_lib_dirs = list(dict.fromkeys(
         path for path in cuda_lib_dirs if os.path.isdir(path)
     ))
-    cuda_include2 = os.path.join(jittor_path, "extern","cuda","inc")
+    cuda_include2 = os.path.join(backend_root(jittor_path, "cuda"), "include")
     cc_flags += " -DHAS_CUDA -DIS_CUDA "
     cc_flags += "".join(f' -I"{path}"' for path in cuda_include_dirs)
     cc_flags += f" -I\"{cuda_include2}\" "
@@ -1600,6 +1645,7 @@ make_cache_dir(ck_path)
 # build cache_compile
 cc_flags += f" -I\"{os.path.join(jittor_path, 'src')}\" "
 cc_flags += f" -I\"{os.path.join(jittor_path, 'extern')}\" "
+cc_flags += f" -I\"{backend_root(jittor_path, 'cuda')}\" "
 
 ascend_toolkit_home = os.getenv('ASCEND_TOOLKIT_HOME')
 
@@ -1664,7 +1710,7 @@ if has_cuda:
         nvcc_flags += f" -x cu --cudart=shared -ccbin=\"{cc_path}\" --use_fast_math "
         # nvcc warning is noise
         nvcc_flags += " -w "
-        nvcc_flags += f" -I\"{os.path.join(jittor_path, 'extern/cuda/inc')}\" "
+        nvcc_flags += f" -I\"{os.path.join(backend_root(jittor_path, 'cuda'), 'include')}\" "
         if os.environ.get("cuda_debug", "0") == "1":
             nvcc_flags += " -G "
         return nvcc_flags
@@ -1749,8 +1795,14 @@ def core_source_signature():
     every import.
     """
     signature = {}
-    for top in ("src", "extern"):
-        root_dir = os.path.join(jittor_path, top)
+    roots = [(top, os.path.join(jittor_path, top)) for top in ("src", "extern")]
+    for backend in ("cuda", "acl"):
+        try:
+            root = backend_root(jittor_path, backend)
+        except FileNotFoundError:
+            continue
+        roots.append(("backends/" + backend, root))
+    for top, root_dir in roots:
         for directory, _, names in os.walk(root_dir):
             for name in names:
                 path = os.path.join(directory, name)
@@ -1758,7 +1810,7 @@ def core_source_signature():
                     info = os.stat(path)
                 except OSError:
                     continue
-                signature[os.path.relpath(path, jittor_path)] = \
+                signature[os.path.join(top, os.path.relpath(path, root_dir))] = \
                     [info.st_mtime_ns, info.st_size]
     return signature
 
@@ -1778,6 +1830,7 @@ def core_generator_signature():
         os.path.abspath(pyjt_compiler.__file__),
         os.path.abspath(_build_config_api.__file__),
         os.path.abspath(_backend_discovery.__file__),
+        os.path.abspath(_backend_resources_api.__file__),
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "_runtime", "flag_policy.py"),
     ]
     records = {}
@@ -1956,6 +2009,15 @@ def build_core(force=False):
     ext_args = 'c[cu]' if has_cuda or has_rocm else 'cc'
     files4 = glob.glob(jittor_path+"/src/**/*."+ext_args, recursive=True)
     files4 = [ f[len(jittor_path)+1:] for f in files4 ]
+    indexing_schedule_source = os.path.join(
+        backend_root(jittor_path, "cuda"), "kernels", "core", "indexing_schedule_codegen.cc")
+    files4.append(indexing_schedule_source)
+    if has_cuda or has_rocm or has_acl or has_corex:
+        files4 += [path for path in sorted(glob.glob(os.path.join(
+            backend_root(jittor_path, "cuda"), "kernels", "core", "*_codegen.cc")))
+            if path != indexing_schedule_source]
+        files4 += sorted(glob.glob(os.path.join(
+            backend_root(jittor_path, "cuda"), "kernels", "debug", "*.cu")))
     at_beginning = [
         "src/ops/op_utils.cc",
         "src/ops/op_register.cc",

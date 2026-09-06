@@ -20,8 +20,8 @@ import re
 import unittest
 
 
-CUDNN = Path(__file__).resolve().parents[3] / "python/jittor/extern/cuda/cudnn"
-OWNER = CUDNN / "inc" / "cudnn_descriptor.h"
+CUDA = Path(__file__).resolve().parents[3] / "backends/cuda"
+OWNER = CUDA / "libraries/cudnn/include/cudnn_descriptor.h"
 
 # Where the raw calls are allowed to appear, each for a stated reason:
 #
@@ -38,8 +38,8 @@ _DESTROY = re.compile(r"cudnnDestroy(Tensor|Filter|Convolution)Descriptor")
 
 
 def _sources():
-    for sub in ("ops", "inc", "src"):
-        for path in sorted((CUDNN / sub).glob("*")):
+    for sub in ("kernels/cudnn", "libraries/cudnn/include", "libraries/cudnn/src"):
+        for path in sorted((CUDA / sub).glob("*")):
             if path.suffix in (".cc", ".h"):
                 yield path
 

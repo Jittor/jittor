@@ -82,7 +82,7 @@ sed -i 's/launch(ret, aclnnSWhere, true);/launch(ret, aclnnSWhereGetWorkspaceSiz
 
 - `__fp16` 是 aarch64 的内建类型，CANN 机器都是 aarch64。x86_64 复核机上脚本自动加
   `-D__fp16=_Float16`，否则 `binary_op_acl.cc` 的 fp16 分支根本解析不了。
-- `extern/cuda/inc/helper_cuda.h` 里 `findCudaDevice` 调的 `checkCmdLineFlag` 只在 `IS_CUDA`
+- `backends/cuda/include/helper_cuda.h` 里 `findCudaDevice` 调的 `checkCmdLineFlag` 只在 `IS_CUDA`
   定义时才随 `helper_string.h` 引入，所以脚本固定加 `-DIS_CUDA`（连同 `-DHAS_CUDA -DIS_ACL`）。
 - 需要 `/usr/local/cuda/include` 存在（`executor.h` 直接 include `cuda_runtime.h`）。
 

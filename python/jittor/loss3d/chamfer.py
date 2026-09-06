@@ -6,6 +6,7 @@
 
 import jittor as jt
 import jittor.nn as nn
+from jittor.backends.cuda.kernels.loss3d.chamfer import build_sources as _cuda_sources
 
 cpu_src = '''
     for (int bs = 0; bs < in0_shape0; ++bs)
@@ -26,32 +27,7 @@ cpu_src = '''
         }
 '''
 
-cuda_src = '''
-    __global__ void chamfer_loss_min_idx_kernel(@ARGS_DEF) {
-        @PRECALC
-        int bs = blockIdx.x;
-        int n = in0_shape1;
-        int m = in1_shape1;
 
-        for (int i = threadIdx.x; i < n; i += blockDim.x) {
-            float min_dis = (@in0(bs, i, 0) - @in1(bs, 0, 0)) * (@in0(bs, i, 0) - @in1(bs, 0, 0)) +
-                            (@in0(bs, i, 1) - @in1(bs, 0, 1)) * (@in0(bs, i, 1) - @in1(bs, 0, 1)) +
-                            (@in0(bs, i, 2) - @in1(bs, 0, 2)) * (@in0(bs, i, 2) - @in1(bs, 0, 2));
-            @out(bs, i) = 0;
-            for (int j = 1; j < m; ++j) {
-                float dis = (@in0(bs, i, 0) - @in1(bs, j, 0)) * (@in0(bs, i, 0) - @in1(bs, j, 0)) +
-                            (@in0(bs, i, 1) - @in1(bs, j, 1)) * (@in0(bs, i, 1) - @in1(bs, j, 1)) +
-                            (@in0(bs, i, 2) - @in1(bs, j, 2)) * (@in0(bs, i, 2) - @in1(bs, j, 2));
-                if (dis < min_dis) {
-                    min_dis = dis;
-                    @out(bs, i) = j;
-                }
-            }
-        }
-    }
-
-    chamfer_loss_min_idx_kernel<<<in0_shape0, 512>>>(@ARGS);
-'''
 
 
 def chamfer_loss(pc1, pc2, reduction='mean', dims='BNC', bidirectional=False):
@@ -94,8 +70,7 @@ def chamfer_loss(pc1, pc2, reduction='mean', dims='BNC', bidirectional=False):
     batch_size = batch_size_1
 
     idx = jt.code([batch_size, N], 'int32', [pc1, pc2],
-                        cpu_src=cpu_src,
-                        cuda_src=cuda_src)
+                  cpu_src=cpu_src, **_cuda_sources())
 
     nearest_pts = pc2.reindex([batch_size, idx.shape[1], 3], [
         'i0',

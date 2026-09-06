@@ -9,15 +9,9 @@
 #include "executor.h"
 #include "ops/getitem_op.h"
 #include "ops/op_register.h"
-#ifdef JIT_cuda
-#include <cuda_runtime.h>
-#include "helper_cuda.h"
-#endif
 #ifndef JIT
 #include "utils/stack_vector.h"
-#include "opt/kernel_ir.h"
 #ifdef HAS_CUDA
-#include "runtime/device.h"
 #endif
 #endif
 
@@ -183,177 +177,6 @@ void GetitemOp::infer_slices(
     }
 }
 
-void cuda_loop_schedule(NanoVector o_shape, int* masks, int* tdims) {
-    // bz by bx tz ty tx
-    // 5  4  3  2  1  0
-    // LOi: bitmask of used dims of loop i
-    // LOi bit 6: need for
-    //    if need for, keep for range: for (int i@i=tid; tid<range; tid+=tnum)
-    //    if not need for, replace range -> tnum, for -> int i@i = tid
-    int rtnum = 1024;
-    // int max_tnum = {1024, 1024, 64, (1u<<31)-1, 65535, 65535};
-    int loop_id = (int)o_shape.size()-1;
-    int tid = 0;
-    int64 block_size = 1;
-    int thread_size = 1;
-    for (int i=0; i<6; i++) tdims[i] = 1;
-    for (; tid<3 && loop_id>=0 && rtnum>1; tid++) {
-        int64 si = o_shape[loop_id];
-        int mask = 1<<tid;
-        if (tid==2) rtnum = std::min(64, rtnum);
-        if (si>rtnum*4) {
-            // need for, use tid(1<<i) and bx(8)
-            mask |= 8|(1<<6);
-            block_size = (si-1)/rtnum+1;
-            tdims[tid] = rtnum;
-            tdims[3] = block_size;
-            tid = 3;
-            thread_size *= rtnum;
-            rtnum = 0;
-        } else
-        if (si>rtnum) {
-            mask |= (1<<6);
-            thread_size *= rtnum;
-            tdims[tid] = rtnum;
-            rtnum = 0;
-        } else {
-            rtnum = rtnum / std::max(si, (int64)1);
-            thread_size *= si;
-            tdims[tid] = si;
-            if (si == 0) mask |= 1<<7;
-        }
-        masks[loop_id] = mask;
-        loop_id --;
-    }
-    int64 total_size = (int64)block_size*thread_size;
-    if (tid<3) tid=3;
-    for (; tid<6 && loop_id>=0 && total_size<(256*1024); tid++) {
-        int64 si = o_shape[loop_id];
-        int mask = 1<<tid;
-        if (si == 0) mask |= 1<<7;
-        int64 max_thread = tid>=4 ? 65535 : (1u<<31)-1;
-        if (si > max_thread) {
-            si = max_thread;
-            mask |= 1<<6;
-        }
-        total_size *= si;
-        tdims[tid] = si;
-        masks[loop_id] = mask;
-        loop_id --;
-    }
-    while (loop_id>=0) {
-        masks[loop_id--] = 0;
-    }
-}
-
-void GetitemOp::compile_optimize(string& src) {
-    _compile_optimize(src);
-}
-
-void GetitemOp::_compile_optimize(string& src) {
-    if (!flag(OpFlags::_cuda))
-        return;
-
-    auto jd = get_jit_define();
-    map<string,string> jd_map(jd.begin(), jd.end());
-
-    KernelIR main(src);
-    auto& func = main.children.back()->children.back();
-    // auto& loop = func->children.back();
-
-    func->push_back("void slice_func() {}", &func->before);
-
-    auto& new_func = func->before.back();
-    // auto new_func = func->before.back()->move_out();
-
-    new_func->attrs[kir::dtype] = "static __global__ void";
-    // LOGir << main.to_string();
-    src = main.to_string();
-    string arg_call = "";
-    const char* tname[] = {"threadIdx.x", "threadIdx.y", "threadIdx.z", "blockIdx.x", "blockIdx.y", "blockIdx.z"};
-    const char* tname2[] = {"blockDim.x", "blockDim.y", "blockDim.z", "gridDim.x", "gridDim.y", "gridDim.z"};
-    for (auto& ir : func->children) {
-        if (ir->type == KernelIRType::define) {
-            string& rvalue = ir->require_attr(kir::rvalue);
-            string& lvalue = ir->require_attr(kir::lvalue);
-            string& dtype = ir->require_attr(kir::dtype);
-            if (startswith(rvalue, "input")
-                || startswith(rvalue, "output")
-                || startswith(rvalue, "vs.")
-                || rvalue.back() == ')'
-                || rvalue.back() == ']')
-            {
-                if (dtype == "auto")
-                    LOGvvvv << "keep" << rvalue;
-                else {
-                    LOGvvvv << "args" << rvalue;
-                    if (arg_call.size()) arg_call += ", ";
-                    arg_call += lvalue;
-                    LOGvvvv << dtype+" "+lvalue;
-                    new_func->push_back(dtype+" "+lvalue+";", &new_func->inner);
-                }
-            } else {
-                LOGvvvv << "move" <<rvalue;
-                new_func->push_back(ir->clone());
-            }
-        }
-    }
-    new_func->push_back(func->children.back()->move_out());
-    auto& loop = new_func->children.back();
-    int no = o_shape.size();
-    STACK_ALLOC(KernelIR*, loops, no);
-    if (!no) {
-        func->push_back("slice_func<<<1,1>>>("+arg_call+");");
-    } else {
-        bool has_zero = 0;
-        loops[0] = loop.get();
-        for (int i=1; i<no; i++)
-            loops[i] = loops[i-1]->children.back().get();
-        for (int i=0; i<no; i++) {
-            auto l = loops[i];
-            ASSERT(l->inner.size() == 3);
-            auto lo = l->find_define("LO"+S(i));
-            ASSERT(lo);
-            auto loi = std::stoi(lo->require_attr(kir::rvalue));
-            if (loi>>7) has_zero = 1;
-            string tid = "";
-            string tnum = "";
-            for (int j=0; j<6; j++) {
-                if ((loi>>j)&1) {
-                    if (tid.size()) {
-                        tid += string("+")+tnum+"*"+tname[j];
-                        tnum += string("*")+tname2[j];
-                    } else {
-                        tid = tname[j];
-                        tnum = tname2[j];
-                    }
-                }
-            }
-            if (!tid.size()) {
-                continue;
-            }
-            if (loi&(1<<6)) {
-                l->inner.at(0)->require_attr(kir::rvalue) = tid;
-                l->inner.at(2)->require_attr(kir::code) = "i"+S(i)+"+="+tnum+";";
-            } else {
-                // no need for
-                while (l->inner.size())
-                    l->inner.at(0)->erase();
-                l->push_front("index_t i"+S(i)+" = "+tid+";");
-            }
-        }
-        if (!has_zero) {
-            func->push_back("int no = o_shape.size();");
-            func->push_back("STACK_ALLOC(int,masks,no);");
-            func->push_back("int tdims[6];");
-            func->push_back("cuda_loop_schedule(o_shape, masks, tdims);");
-            func->push_back("dim3 grid_dim(tdims[3],tdims[4],tdims[5]);");
-            func->push_back("dim3 block_dim(tdims[0],tdims[1],tdims[2]);");
-            func->push_back("slice_func<<<grid_dim, block_dim>>>("+arg_call+");");
-        }
-    }
-    src = main.to_string();
-}
 
 void GetitemOp::infer_shape() {
     auto in = inputs().front();
@@ -488,17 +311,6 @@ void GetitemOp::jit_prepare(JK& jk) {
                 jk << '0';
         }
     }
-    #ifdef HAS_CUDA
-    if (runtime_use_cuda()) {
-        int no = o_shape.size();
-        STACK_ALLOC(int, masks, no);
-        int tdims[6];
-        cuda_loop_schedule(o_shape, masks, tdims);
-        for (int i=0; i<no; i++) {
-            jk << "«LO" << JK::hex1(i) << '=' << JK::hex(masks[i]);
-        }
-    }
-    #endif
 }
 
 #else // JIT
@@ -561,9 +373,8 @@ void GetitemOp::jit_run() {
     // `#pragma` line is not run through the template substitution (only the
     // `@if` around it is), and building it with `_Pragma` instead makes
     // KernelIR read it as a function definition and abort. The `JIT_cpu` guard
-    // is not decoration: the CUDA build makes its `__global__` kernel by
-    // re-parsing *this* body with KernelIR, so anything added here lands in the
-    // CUDA source too. A gather does not vectorise either way, so the `if`
+    // excludes host pragmas when a backend specializes this common body.
+    // A gather does not vectorise either way, so the `if`
     // clause costs nothing here.
     @if(@is_def(JIT_cpu) && ODIM>0, index_t o_total = 1 @for(d, 0, ODIM, * oshape@d);)
     @if(@is_def(JIT_cpu) && ODIM==1, #pragma omp parallel for if(o_total >= 65536))

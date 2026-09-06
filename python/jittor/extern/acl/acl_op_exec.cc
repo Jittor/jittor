@@ -694,7 +694,7 @@ namespace jittor
     };
 
     // CUDA external operators are disabled on ACL by an explicit registry.
-    // Keep this list in sync with python/jittor/extern/cuda/*/ops/*.h; using
+    // Keep this list in sync with backends/cuda/kernels/*/*_op.h; using
     // a name prefix here also catches unrelated operators and hides omissions.
     static const set<string> acl_cuda_external_ops = {
         "cub_arg_reduce", "cub_argsort", "cub_cumsum", "cub_test", "cub_where",

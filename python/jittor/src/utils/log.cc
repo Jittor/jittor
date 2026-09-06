@@ -25,7 +25,7 @@
 
 namespace jittor {
 
-// Rate limit for peekCudaErrors (extern/cuda/inc/helper_cuda.h).
+// Rate limit for peekCudaErrors (backends/cuda/include/helper_cuda.h).
 //
 // This used to be `bool peek_logged`: one latch for the whole process, set by
 // the first asynchronous CUDA error and never reset, so every later error --

@@ -12,7 +12,7 @@ import numpy as np
 
 import jittor as jt
 
-from jittor.nn.backends.full_reduce_cuda import _full_reduce_cuda
+from jittor.backends.cuda.kernels.nn.full_reduce_cuda import _full_reduce_cuda
 
 
 class TestFullReduceDispatch(unittest.TestCase):

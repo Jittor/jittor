@@ -7,7 +7,7 @@ import re
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "python/jittor/src"
 OWNERS = {
-    "debug": ("nan_checker.h", "nan_checker.cc", "nan_checker.cu"),
+    "debug": ("nan_checker.h", "nan_checker.cc"),
     "runtime": ("cuda_streams.h", "float32_precision.h",
                 "node_index.h", "ring_buffer.h", "ring_buffer.cc",
                 "collective_dtype.h", "file_rendezvous.h"),
@@ -26,11 +26,13 @@ def test_native_support_files_have_physical_domain_owners():
     for owner, files in OWNERS.items():
         for name in files:
             assert (SRC / owner / name).is_file(), (owner, name)
+    assert (ROOT / "backends/cuda/kernels/debug/nan_checker.cu").is_file()
+    assert not (SRC / "debug/nan_checker.cu").exists()
 
 
 def test_native_sources_do_not_include_the_removed_misc_directory():
     obsolete = []
-    for root in (SRC, ROOT / "python/jittor/extern"):
+    for root in (SRC, ROOT / "python/jittor/extern", ROOT / "backends"):
         for path in root.rglob("*"):
             if path.suffix not in (".cc", ".cu", ".h", ".py"):
                 continue

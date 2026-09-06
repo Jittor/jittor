@@ -601,9 +601,19 @@ class TestPoolStructure(unittest.TestCase):
                     if isinstance(node, (ast.Import, ast.ImportFrom))
                 ]
                 self.assertTrue(imports)
+                backend_builders = {
+                    "jittor.pool.core_2d": (
+                        "jittor.backends.cuda.kernels.pooling.pool2d", "pool2d_cuda_options"),
+                    "jittor.pool.core_3d": (
+                        "jittor.backends.cuda.kernels.pooling.pool3d", "pool3d_cuda_options"),
+                }
                 self.assertTrue(all(
-                    isinstance(node, ast.Import)
-                    and any(alias.name == "jittor" for alias in node.names)
+                    (isinstance(node, ast.Import)
+                     and all(alias.name == "jittor" for alias in node.names))
+                    or (isinstance(node, ast.ImportFrom) and node.level == 0
+                        and len(node.names) == 1
+                        and (node.module, node.names[0].name)
+                        == backend_builders.get(module.__name__))
                     for node in imports
                 ))
                 self.assertNotIn("preserve_facade_origins", path.read_text())

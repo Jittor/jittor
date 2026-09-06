@@ -69,7 +69,7 @@ def compile_flags(repo, cache, stub):
         # fp16 branch of binary_op_acl.cc cannot be parsed at all.
         extra.append("-D__fp16=_Float16")
     return extra + [
-        # IS_CUDA is what makes extern/cuda/inc/helper_cuda.h self-consistent:
+        # IS_CUDA is what makes the CUDA helper header self-consistent:
         # without it the header still parses findCudaDevice but not the
         # helper_string.h it calls into.
         "-fsyntax-only", "-std=c++14", "-fPIC",
@@ -78,7 +78,8 @@ def compile_flags(repo, cache, stub):
         "-I", str(repo / "python" / "jittor" / "src"),
         "-I", str(repo / "python" / "jittor" / "extern"),
         "-I", str(acl), "-I", str(acl / "aclnn"), "-I", str(acl / "aclops"),
-        "-I", str(repo / "python" / "jittor" / "extern" / "cuda" / "inc"),
+        "-I", str(repo / "backends" / "cuda" / "include"),
+        "-I", str(repo / "backends" / "cuda"),
         "-I", "/usr/local/cuda/include",
         "-I", str(cache),
     ]

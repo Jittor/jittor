@@ -26,14 +26,14 @@ import unittest
 import numpy as np
 import jittor as jt
 from jittor import nn
-from jittor.nn.backends.batch_norm_training_cuda import (
+from jittor.backends.cuda.kernels.nn.batch_norm_training_cuda import (
     _batch_norm_cuda,
     _batch_norm_eval_cuda,
 )
-from jittor.nn.backends.channel_bias_cuda import _channel_bias_add_cuda
-from jittor.nn.backends.group_norm_cuda import _group_norm_cuda
-from jittor.nn.backends.layer_norm_training_cuda import _layer_norm_cuda
-from jittor.nn.backends.rms_norm_training_cuda import _rms_norm_training_cuda
+from jittor.backends.cuda.kernels.nn.channel_bias_cuda import _channel_bias_add_cuda
+from jittor.backends.cuda.kernels.nn.group_norm_cuda import _group_norm_cuda
+from jittor.backends.cuda.kernels.nn.layer_norm_training_cuda import _layer_norm_cuda
+from jittor.backends.cuda.kernels.nn.rms_norm_training_cuda import _rms_norm_training_cuda
 
 from _helpers.common import (
     JittorTestCase, net_scaled_max_err, get_all_device_types, use_cuda_for,

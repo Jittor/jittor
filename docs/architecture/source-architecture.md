@@ -42,7 +42,7 @@ python/
 │   ├── nn/                      # neural-network public API
 │   │   ├── modules/             # stateful Module implementations
 │   │   ├── functional/          # stateless tensor functions
-│   │   ├── backends/            # explicit optimized backend adapters
+│   │   ├── backends/            # cuDNN and read-only hook call adapters
 │   │   ├── utils/               # construction helpers such as weight norm
 │   │   └── attention.py
 │   ├── autograd/                # functional automatic differentiation
@@ -60,8 +60,9 @@ python/
 │   │   ├── module_patcher.py
 │   │   └── external_backend.py
 │   ├── selftest.py              # installed smoke test
-│   ├── src/                     # JIT compiler and operator C++/CUDA sources
-│   └── extern/                  # backend resources loaded by path
+│   ├── backends/                # source-checkout package path bridge
+│   ├── src/                     # shared/CPU operators and core/compiler sources
+│   └── extern/                  # remaining legacy SDK, CPU and communication resources
 └── jittor_utils/                # compiler, installation, and release helpers
 ```
 
@@ -71,7 +72,8 @@ python/
 
 `jittor.nn` is the public package. Stateful layers live under `nn.modules`,
 stateless operations under `nn.functional`, and optional accelerated paths under
-`nn.backends`. A public re-export must point at the canonical implementation
+`jittor.backends.cuda.kernels`. `nn.backends` retains call adapters, not CUDA
+implementations. A public re-export must point at the canonical implementation
 object; wrappers are justified only when they enforce a real API contract.
 
 Dependency direction is:
@@ -102,7 +104,7 @@ name is a same-object alias of `jittor.sparse.convolution`; `jittor.nn` and
 the differentiable FFT/shift/frequency namespace shared by native Jittor and
 Torch mode. Concatenation and
 indexing live in `jittor.misc`, pooling in `jittor.pool`, optimized softmax in
-`jittor.nn.backends`, and weight normalization in `jittor.nn.utils`. Historical
+`jittor.backends.cuda.kernels.nn`, and weight normalization in `jittor.nn.utils`. Historical
 root spellings are import aliases only; they do not retain physical source
 files or wrapper implementations.
 
@@ -202,6 +204,42 @@ Tensor checkpoint algorithms live in `jittor.serialization`; legacy utility
 paths query runtime-injected loaders after bootstrap. See
 [backend build configuration](backend-build-configuration.md) for the service
 protocol, cache compatibility and pre-bootstrap/hardware limits.
+
+### CUDA Resource Layout
+
+The checkout's `backends/cuda/` is the physical CUDA owner. Library operators
+live under `kernels/<library>`, library wrappers and headers under
+`libraries/<library>/{src,include}`, and common support under `src` and `include`.
+Native indexing/where/candidate/transpose implementations live under
+`kernels/core`; diagnostic kernels live under `kernels/debug`. Python CUDA
+implementations and source builders live under `kernels/{nn,misc,math,pooling,
+sparse,ccl,loss3d}`. ACL KV implementations live under `backends/acl/kernels`.
+
+Python imports use the canonical `jittor.backends` namespace in both checkouts
+and wheels. A source-only path bridge and explicit package-directory mappings
+avoid a second editable implementation tree under `python/`. Old NN module
+spellings remain same-object aliases. `nn/` has no CUDA kernel modules or ACL
+KV module; `nn/backends` contains only its initializer, cuDNN adapter and hook view.
+
+Shared indexing and pooling mathematics remain single-source. The registration
+generator composes backend indexing fragments with the shared source into an
+atomically published, content-stable JIT source, preserving each segment's
+`#line` mapping. CPU-only builds still compile the pure host loop-schedule helper.
+The legacy `type/cuda_atomic.h` include forwards to the backend-owned header;
+it no longer contains the CUDA implementation.
+
+Resource lookup distinguishes source checkouts, installed packages and legacy
+converted trees. Conversion mirrors the moved resources into its cache before
+compiling a selected legacy backend. A directory containing only `__pycache__`
+cannot mask the real source owner. Packaging tests check every backend file in
+the sdist, wheel and isolated installation.
+
+This does not complete task 4.15: the shared C++ core remains under
+`python/jittor/src`, NCCL wrappers remain with the pending communication layout,
+and the external FlashAttention integration retains its separate migration.
+Remaining ACL/ROCm/Corex source conversion is not removed. `fused_adamw` has no
+CUDA algorithm to relocate; its existing ACL implementation and shared error
+entry do not establish CUDA support.
 
 ### Native Support Layout
 

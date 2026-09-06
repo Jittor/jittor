@@ -7,7 +7,18 @@
 namespace jittor {
 
 template<class T>
-void register_op_definition(OpDef definition, uint32 backend_mask = T::backend_mask) {
+auto configure_registered_accelerator(Codegen& codegen, int)
+    -> decltype(T::configure_accelerator_codegen(codegen), void()) {
+    T::configure_accelerator_codegen(codegen);
+}
+
+template<class T>
+void configure_registered_accelerator(Codegen&, long) {}
+
+template<class T>
+void register_op_definition(OpDef definition, uint32 backend_mask = T::backend_mask,
+                            const string& accelerator_source = "",
+                            const string& accelerator_flags = "") {
     definition.codegen.fragment = [](Op* op, JK& key) {
         static_cast<T*>(op)->T::jit_prepare(key);
     };
@@ -26,8 +37,13 @@ void register_op_definition(OpDef definition, uint32 backend_mask = T::backend_m
     kernel.jit = execute_registered_jit;
     if (backend_mask & OpBackendCpu)
         definition.implementations.emplace(BackendId::Cpu, OpImplementation{kernel, definition.codegen});
-    if (backend_mask & OpBackendAccelerator)
-        definition.implementations.emplace(accelerator_backend_id(), OpImplementation{kernel, definition.codegen});
+    if (backend_mask & OpBackendAccelerator) {
+        auto codegen = definition.codegen;
+        if (!accelerator_source.empty()) codegen.source_path = accelerator_source;
+        codegen.extra_flags += accelerator_flags;
+        configure_registered_accelerator<T>(codegen, 0);
+        definition.implementations.emplace(accelerator_backend_id(), OpImplementation{kernel, codegen});
+    }
     op_registe(definition);
 }
 

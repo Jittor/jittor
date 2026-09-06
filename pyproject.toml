@@ -57,12 +57,8 @@ rocm = "jittor.extern.rocm.rocm_compiler"
 corex = "jittor.extern.corex.corex_compiler"
 
 [tool.setuptools]
-package-dir = { "" = "python" }
+package-dir = { "" = "python", "jittor.backends.cuda" = "backends/cuda", "jittor.backends.acl" = "backends/acl" }
 include-package-data = true
-
-[tool.setuptools.packages.find]
-where = ["python"]
-namespaces = false
 
 [tool.setuptools.dynamic]
 version = { attr = "jittor.__version__" }

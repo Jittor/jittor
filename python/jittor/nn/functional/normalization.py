@@ -6,13 +6,13 @@ import jittor as jt
 
 from ... import _arg_policy
 from ..backends import hooks as _backend_hooks
-from ..backends.batch_norm_training_cuda import (
+from jittor.backends.cuda.kernels.nn.batch_norm_training_cuda import (
     _batch_norm_cuda,
     _batch_norm_eval_cuda,
 )
-from ..backends.group_norm_cuda import _group_norm_cuda
-from ..backends.layer_norm_cuda import _layer_norm_no_grad_cuda
-from ..backends.layer_norm_training_cuda import _layer_norm_cuda
+from jittor.backends.cuda.kernels.nn.group_norm_cuda import _group_norm_cuda
+from jittor.backends.cuda.kernels.nn.layer_norm_cuda import _layer_norm_no_grad_cuda
+from jittor.backends.cuda.kernels.nn.layer_norm_training_cuda import _layer_norm_cuda
 
 
 @lru_cache(maxsize=128)

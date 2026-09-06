@@ -6,6 +6,8 @@
 // ***************************************************************
 #include <regex>
 #include <algorithm>
+#include <iomanip>
+#include <sstream>
 #include "op.h"
 #include "fused_op.h"
 #include "op_compiler.h"
@@ -54,19 +56,35 @@ static string line_directive_path(const string& path) {
 
 static string annotate_jit_run_lines(const string& src, const string& path) {
     string annotated;
+    string logical_path = path;
     size_t line = 1;
     size_t start = 0;
     while (start < src.size()) {
         size_t end = src.find('\n', start);
         if (end == string::npos) end = src.size();
         string source_line = src.substr(start, end-start);
-        if (source_line.find("::jit_run() {") != string::npos)
+        bool mapped_line = false;
+        std::istringstream directive(source_line);
+        string directive_name, mapped_path;
+        size_t next_line = 0;
+        if ((directive >> directive_name) && directive_name == "#line"
+                && (directive >> next_line) && next_line) {
+            directive >> std::ws;
+            if (directive.eof()) {
+                mapped_line = true;
+            } else if (directive.peek() == '"' && (directive >> std::quoted(mapped_path))) {
+                logical_path = mapped_path;
+                mapped_line = true;
+            }
+            if (mapped_line) line = next_line;
+        }
+        if (!mapped_line && source_line.find("::jit_run() {") != string::npos)
             annotated += "#line " + S(line) + " \"" +
-                line_directive_path(path) + "\"\n";
+                line_directive_path(logical_path) + "\"\n";
         annotated += source_line;
         if (end < src.size()) annotated += '\n';
         start = end+1;
-        line++;
+        if (!mapped_line) line++;
     }
     return annotated;
 }

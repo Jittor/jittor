@@ -16,11 +16,11 @@ required_paths=(
   python/jittor/selftest.py tests examples tools docs/conf.py docs/index.md
   python/jittor/extern/__init__.py python/jittor/extern/acl/aclops
   python/jittor/extern/acl/aclnn python/jittor/extern/acl/hccl
-  python/jittor/extern/corex/corex_compiler.py python/jittor/extern/cuda/inc
-  python/jittor/extern/cuda/src python/jittor/extern/cuda/cub
-  python/jittor/extern/cuda/cublas python/jittor/extern/cuda/cudnn
-  python/jittor/extern/cuda/cufft python/jittor/extern/cuda/curand
-  python/jittor/extern/cuda/cusparse python/jittor/extern/cuda/cutt
+  python/jittor/extern/corex/corex_compiler.py backends/cuda/include
+  backends/cuda/src backends/cuda/kernels/cub
+  backends/cuda/kernels/cublas backends/cuda/kernels/cudnn
+  backends/cuda/kernels/cufft backends/cuda/kernels/curand
+  backends/cuda/kernels/cusparse backends/cuda/libraries/cutt
   python/jittor/extern/cuda/nccl python/jittor/extern/mkl/ops
   python/jittor/extern/mpi/inc python/jittor/extern/mpi/ops
   python/jittor/extern/mpi/src python/jittor/extern/rocm

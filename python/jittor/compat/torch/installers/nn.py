@@ -10,8 +10,8 @@ import os
 import jittor as jt
 from jittor import nn
 from jittor.nn.backends import hooks as _backend_hooks
-from jittor.nn.backends.rms_norm_training_cuda import _rms_norm_training_cuda
-from jittor.nn.rms_norm_cuda import _rms_norm_cuda
+from jittor.backends.cuda.kernels.nn.rms_norm_training_cuda import _rms_norm_training_cuda
+from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _rms_norm_cuda
 
 from ..context import registry_for
 from .nn_init import _install_init_aliases

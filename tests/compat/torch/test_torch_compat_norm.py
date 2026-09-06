@@ -35,7 +35,7 @@ import jittor as torch          # the whole point: jittor IS torch here
 import jittor as jt
 from jittor._runtime.dispatch import override_kernel
 from jittor import nn
-from jittor.nn.backends.layer_norm_cuda import _layer_norm_no_grad_cuda
+from jittor.backends.cuda.kernels.nn.layer_norm_cuda import _layer_norm_no_grad_cuda
 
 F = nn.functional
 
