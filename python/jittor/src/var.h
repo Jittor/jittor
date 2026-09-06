@@ -30,8 +30,19 @@ struct Var : Node {
     // or heap residue, which the "already shared in place" checks in
     // getitem_op/setitem_op compare for equality.
     size_t allocation = 0;
-    // Memory this var wants to alias, requested by share_with() and resolved by
-    // alloc(). These two used to be stored in `allocator` and `allocation`, the
+    // The storage a Var occupies is (base, offset, shape), and strides are not
+    // stored because they are not free: every generated kernel derives
+    // `istride@i = istride@{i+1} * ishape@{i+1}` from `shape` at codegen time,
+    // so a Var whose strides did not follow from its shape could not be fed to
+    // one. Sharing is therefore restricted to sub-ranges that are themselves
+    // contiguous -- which is what getitem_contiguous_inplace in
+    // opt/gopt/setitem_gopt.cc checks before it offers an alias, and why an
+    // expanded (stride-0) var still has to be materialized.
+    //
+    // `share_src` and `share_offset` are that base and that byte offset while
+    // the alias is still a *request*; alloc() serves it and clears them, and
+    // from then on the established relationship is the ring below. These two
+    // used to be stored in `allocator` and `allocation`, the
     // Var* reinterpreted as an Allocator*, told apart from a real allocator
     // only by mem_ptr == nullptr. So every `var->allocator->is_cuda()` that
     // could be reached between share_with() and alloc() was a virtual call on a
