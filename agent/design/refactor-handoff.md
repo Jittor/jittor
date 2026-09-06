@@ -676,6 +676,51 @@ Python provider 40、tensor 路由 10、纯 C++ copy-plan NumPy 对拍 38 项通
 分开“有加速器”与“依赖 CUDA SDK”的编译条件；完整 int64/类型化属性不能塞进
 CodeOp 的 double DataMap，8.06 仍需真正 typed 属性消费和描述符缓存。
 
+### 2026-09-07 3.18 收口（链路早已删除，验收数字与 movnt 均按实测否决）
+
+`pyother`。3.18 的两件事（删 `asm_tuner` 链路、movnt 换实现）**在本波开始前就已由
+`cb853074`、`acfed956` 做完**，本波做的是复测与收口，结论是两个「按实测否决」。
+
+**一、验收「CPU kernel 冷编译时间下降 ≥ 50%」不成立，实测 18.1–23.1%。**
+量法：从 `jit_compiler.cc` 日志里原样抄下一条真实 kernel 的 g++ 命令行，把源文件、输出和
+depfile 都换成私有路径——**每次都是真冷编译，没有任何缓存参与**，不需要清空 `JITTOR_HOME`
+也不会量成缓存查找。直接执行 vs 包成 `python asm_tuner.py --cc_path=…`，各 8 对、共 3 轮。
+两个坑各绊过一次，都记在这里：**(a)** 不预热时首个样本比后续快 2 倍多（g++ 与头文件还没
+被 fault in），min-to-min 出来 9.3%、median 21.3%、max-to-max 33.2%，看着像"负载噪声"其实
+是顺序效应——各跑一次不计时的预热之后，三轮独立结果收敛到 0.808–0.853s 对 1.013–1.055s；
+**(b)** 两种形态必须交替先后，否则这台机器上另外九个 agent 的编译负载会系统性地偏向先跑
+的一方。**审计原文写的「2–3 倍」实测是 1.25 倍**，≥50% 这个数就是从那个错误倍数推导来的。
+
+**二、movnt 一并删除，判据是反汇编，不是数值结果。**
+`acfed956` 之后 `UseMovntPass` 要求 `cc_type=="clang"`，而本机默认 g++——`objdump -d` 生成的
+`.so` 得 **0 条 movnt**，即**在默认工具链上它早已完全不生效**。写 256 MiB 只写不读三轮实测：
+普通 store 15.0 GB/s；整循环 `_mm256_stream_ps` 25.3 GB/s（**+69%，这条优化本身有价值**）；
+但**逐元素**形态——一个改写单条 store *语句*的 pass 唯一能表达的形态——clang
+`__builtin_nontemporal_store` 14.6 GB/s（打平）、g++ `_mm_stream_si32` 9.1 GB/s（**慢 40%**）。
+两个编译器都不肯把逐元素非临时 store 重新向量化（clang `-Rpass=loop-vectorize` 不报该循环
+向量化，加 `__restrict__` 也一样）。所以删 pass，而不是给 g++ 补一个会慢 40% 的移植。
+
+**三条方法上的记账，下一个人可以直接用：**
+
+1. **「结果数值正确」在这条任务上完全没有信息量。** 非临时 store 与普通 store 给出一模一样
+   的数字，被替换掉的老测试 `test_use_movnt_is_emitted_as_a_compiler_intrinsic` 正是这么写的：
+   它带一个 `if cc_type == "clang" … else …` 分支，而本机默认 g++，**永远只走 else，断言的是
+   「pass 什么也没干」**，读起来像"movnt 有测试"，实际一条 movnt 指令都没查过。换成
+   `objdump -d | grep movnt`，并**验证过这条判据有牙齿**：把真实融合 kernel 的 store 按老 pass
+   的写法改成 `__builtin_nontemporal_store` 再用 clang 编，同一条命令数出 135 条 movnt（未改的
+   0 条）。做这个验证时先踩了一次坑——clang 缺 `-lomp` 链接失败，脚本照样报"0 条 movnt"，
+   **和想要的答案长得一模一样**；现在脚本编译失败就拒绝给结论。
+2. **靠日志找"这次编译了哪个 kernel"的测试会在第二次运行时静默失效。** 缓存命中不会重新
+   `Generate`，改看 `Opening jit lib` 之后又发现同一进程内同一 jit key 只 open 一次——先跑的
+   用例把 key 用掉，后跑的就拿到空列表。最后让每个用例带自己的 `compile_options` tag 把 key
+   隔开，并在拿到空列表时显式失败（`"no kernel was loaded, so nothing was checked"`）。
+3. **JIT kernel 的文件名会被长度上限截断。** 融合 kernel 的 `.so` 名字里 `OP_subtract` 那段
+   被切掉了，按文件名筛选拿到 0 个匹配。改成读 `.cc` 里的 `#define op2_OP subtract`。
+
+三套门禁（原生 CPU `tests/core`+`tests/ops`+`tests/compiler`、CPU torch shim
+`tests/structure`、CUDA `tests/backends/cuda`）与推前 CUDA 冒烟见提交正文。本波删除的是
+g++ 上本就不执行的代码路径，生成代码逐字不变。
+
 ### 2026-09-06 4.12 WIP 收口
 
 本轮工作树已经收成可交接的 4.12 前置，但**没有把 4.12 标成完成**。当前未提交内容包含：

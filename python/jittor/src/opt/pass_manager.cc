@@ -23,7 +23,6 @@
 #include "opt/pass/restride_pass.h"
 #include "opt/pass/vectorize_pass.h"
 #include "opt/pass/unroll_pass.h"
-#include "opt/pass/use_movnt_pass.h"
 #include "opt/pass/loop_to_func_pass.h"
 #include "opt/pass/assume_aligned_pass.h"
 #include "opt/pass/parallel_pass.h"
@@ -153,9 +152,6 @@ void PassManager::run_passes() {
     // Needs the accumulators above to already be in place: they are what makes
     // a reduction's iterations independent of one another.
     run_pass<CpuParallelPass>();
-    // Rewrite the final output stores after outlining/parallelization has used
-    // their ordinary assignment form to prove loop bounds.
-    run_pass<UseMovntPass>();
     
     run_pass<InsertProfileLoopPass>();
     

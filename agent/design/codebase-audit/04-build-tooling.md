@@ -148,6 +148,41 @@ import。`test_editing_an_unnamed_header_changes_the_answer` 用两个子进程�
 | env_or_try_find 在两处重复定义 | `jittor_utils/__init__.py:573` 与 `compiler.py:949` 函数体完全一致，后者遮蔽前者 | 修一处漏一处 | 删掉副本 | 次要 |
 | 每个 CPU kernel 编译都要起一个 Python 进程 | `src/jit_compiler.cc:253-256` Linux 上 CPU kernel 命令被包成 `python asm_tuner.py`；`asm_tuner.py:145-160` 先编成 .post.s（带 -g）、Python 文本改写、再汇编成 .so | 冷启动 kernel 编译成本 2–3 倍；整套机制只服务一个用途：`use_movnt_pass.cc:24` 那一条正则 | movnt 改写做成 intrinsic 或编译器选项，删掉 asm_tuner 链路 | 主要 |
 
+**已修：`cb853074`、`acfed956`（绕过与删除链路）、`<3.18>`（复测与 movnt 收口）。**
+上表「冷启动 kernel 编译成本 2–3 倍」这个数字**实测不成立，本条据此更正**，原条目按约定保留。
+
+把同一条真实 kernel 编译命令（`jit_compiler.cc` 日志里原样抄下来的 g++ 命令行，输出与
+depfile 换成私有路径，保证每次都是真冷编译、没有任何缓存参与）分别直接执行、和包成
+`python asm_tuner.py --cc_path=…` 执行，各 8 对、共 3 轮；每轮先各跑一次不计时的预热，
+并让两种形态交替先后，以免这台机器上另外九个 agent 的编译负载系统性地偏向先跑的一方：
+
+| | 直接调用编译器（今天） | 包成 `asm_tuner.py`（上游） |
+| --- | --- | --- |
+| 三轮各自的 min–max | 0.808–0.853s | 1.013–1.055s |
+| 中位 | 约 0.82s | 约 1.03s |
+
+即 **1.25 倍，不是 2–3 倍；降幅 18.1–23.1%（中位约 20%）**。计划里 3.18 的验收
+「CPU kernel 冷编译时间下降 ≥ 50%」是从「2–3 倍」推导出来的，删掉这条链路拿不到，
+该验收已在看板按实测否决。
+
+那条正则服务的 movnt 优化本身也**按实测删除**，判据是反汇编而不是数值结果——普通 store
+会给出一模一样的数值，数值对不能证明 movnt 生效。`UseMovntPass` 改 intrinsic 后要求
+`cc_type=="clang"`，而本机默认 g++，`objdump -d` 生成的 `.so` 得 0 条 movnt：**在默认
+工具链上它早已完全不生效**。写 256 MiB 只写不读，三轮实测：
+
+| 输出 store 的形态 | 带宽 |
+| --- | --- |
+| 普通 store | 15.0 GB/s（g++ 与 clang 一致） |
+| 逐元素非临时 store，clang `__builtin_nontemporal_store` | 14.6 GB/s（打平） |
+| 逐元素非临时 store，g++ `_mm_stream_si32` | 9.1 GB/s（**比普通 store 慢 40%**） |
+| 整循环 `_mm256_stream_ps` | 25.3 GB/s（**+69%**） |
+
+非临时输出 store 这条优化本身是有价值的（+69%），但**只有整个循环都流式写才拿得到**；
+一个改写单条 store *语句*的 pass 只能产出逐元素形态，而两个编译器都不肯把它重新向量化
+（clang `-Rpass=loop-vectorize` 明确不报该循环向量化）。所以把 `use_movnt_pass.{cc,h}`、
+`pass_manager` 的注册和 `broadcast_tuner` 的 `use_movnt` 候选一并删除，而不是给 g++ 补
+一个会慢 40% 的移植。要拿回 +69% 需要循环级的流式变换，属于另一件事。
+
 ## 门禁与开发工具链
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
 | --- | --- | --- | --- | --- |

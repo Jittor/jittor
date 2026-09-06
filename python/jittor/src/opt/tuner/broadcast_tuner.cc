@@ -63,7 +63,14 @@ void BroadcastTuner::run(PassManager* pm, TunerManager* tm) {
     add_candidate("order1", 1);
     for (int i=2; i<=number_of_ranges; i++)
         add_candidate("order"+S(i), 0);
-    add_candidate("use_movnt", 1);
+    // No "use_movnt" candidate: UseMovntPass is gone. A non-temporal output
+    // store is worth having -- a hand-vectorized _mm256_stream_ps loop reaches
+    // 25.3 GB/s against 15.0 GB/s for an ordinary store on this hardware --
+    // but only when the whole loop streams. Rewriting the single store
+    // statement, which is all a source-level pass can do, yields a per-element
+    // non-temporal store that no vectorizer will widen: measured 14.6 GB/s
+    // under clang (a wash) and 9.1 GB/s under g++ (40% worse than plain).
+    // Recovering the win needs a loop-level transform, not this candidate.
 }
 
 }

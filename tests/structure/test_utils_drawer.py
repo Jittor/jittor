@@ -166,8 +166,8 @@ class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
             with self.subTest(reference=relative):
                 self.assertTrue(
                     needle in _text(path),
-                    "%s no longer contains %r: %s may now be free to move "
-                    "(task 3.18), and this rule needs rewriting"
+                    "%s no longer contains %r: %s may now be free to move, "
+                    "and this rule needs rewriting"
                     % (relative, needle, name))
 
     def test_dumpdef_is_reached_from_the_installed_build_package(self):

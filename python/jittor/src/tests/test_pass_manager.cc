@@ -32,7 +32,6 @@
 #include "opt/pass/solve_conflict_define_pass.h"
 #include "opt/pass/split_loop_pass.h"
 #include "opt/pass/unroll_pass.h"
-#include "opt/pass/use_movnt_pass.h"
 #include "opt/pass/vectorize_pass.h"
 #include "opt/pass/warp_reduce_pass.h"
 
@@ -83,7 +82,6 @@ JIT_TEST(pass_names_are_unique) {
     add(SolveConflictDefinePass().name, "SolveConflictDefinePass");
     add(SplitLoopPass().name, "SplitLoopPass");
     add(UnrollPass().name, "UnrollPass");
-    add(UseMovntPass().name, "UseMovntPass");
     add(VectorizePass().name, "VectorizePass");
     add(WarpReducePass().name, "WarpReducePass");
     CHECK(seen.size() > 20) << "expected every pass to be listed here, got" << seen.size();
