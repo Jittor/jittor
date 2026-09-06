@@ -5,6 +5,25 @@ import types
 import jittor as jt
 
 from .context import registry_for
+from .types import _DEVICE_CTX_STACK, _set_meta_placeholder
+
+
+def _meta_parameter_registration_device(module):
+    """Return an active Accelerate-style meta registration target."""
+    register = getattr(module, "register_parameter", None)
+    function = getattr(register, "__func__", register)
+    # Transformers 4.56 carries its own copy under
+    # transformers.integrations.accelerate, so identify the bounded context by
+    # its function/closure contract rather than one provider module name.
+    if getattr(function, "__name__", None) != "register_empty_parameter":
+        return None
+    closure = getattr(function, "__closure__", None)
+    freevars = getattr(getattr(function, "__code__", None), "co_freevars", ())
+    if not closure:
+        return None
+    captured = dict(zip(freevars, (cell.cell_contents for cell in closure)))
+    target = captured.get("device")
+    return target if getattr(target, "type", None) == "meta" else None
 
 
 def install_module_namespace(nn, registry=None):
@@ -66,6 +85,37 @@ def install_module_namespace(nn, registry=None):
                     result = hook(self, name, value)
                     if result is not None:
                         value = result
+            elif isinstance(value, jt.Var) and _DEVICE_CTX_STACK:
+                # Native Jittor initializers do not pass through the wrapped
+                # torch factories. Mark Vars as they are installed on a module
+                # so parameters created under `with torch.device("meta")`
+                # retain that identity after the context exits.
+                if not (
+                    getattr(value, "_jittor_torch_force_cpu", False)
+                    or getattr(value, "_jittor_torch_force_cuda", False)
+                ):
+                    _set_meta_placeholder(value)
+            value_attrs = value.__dict__ if isinstance(value, jt.Var) else {}
+            buffer_names = self.__dict__.get("_buffer_names", ())
+            meta_parameter_candidate = (
+                isinstance(value, jt.Var)
+                and not name.startswith("_")
+                and name not in buffer_names
+                and value_attrs.get("is_buffer") is not True
+                and value_attrs.get("persistent") is not False
+                and (
+                    value_attrs.get("_is_torch_parameter") is True
+                    or value_attrs.get("_jt_plain_tensor") is not True
+                )
+            )
+            if (meta_parameter_candidate
+                    and _meta_parameter_registration_device(self) is not None):
+                # Accelerate normally rewraps the result of Parameter.to(meta)
+                # with type(param). A compatibility Parameter is a marked Var,
+                # whose native constructor cannot accept PyTorch Parameter
+                # kwargs. Register the same semantic parameter as the bounded
+                # meta placeholder directly instead.
+                _set_meta_placeholder(value)
             return original_module_setattr(self, name, value)
 
         module_setattr._torch_module_registration_hooks = True

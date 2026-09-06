@@ -208,6 +208,25 @@ class TestShapeOps(Base):
 
 
 class TestComparisonWhere(Base):
+    def test_inplace_mul_with_graph_boolean_mask_stays_finite(self):
+        def body(dev):
+            value = torch.full(
+                (1, 4), torch.finfo(torch.float32).min, dtype=torch.float32
+            )
+            condition = torch.arange(4) > torch.tensor([3]).reshape(-1, 1)
+            identity = id(value)
+            value *= condition
+
+            self.assertEqual(id(value), identity, f"in-place multiply identity {dev}")
+            self.assertEqual(tuple(value.shape), (1, 4), f"in-place multiply shape {dev}")
+            self.assertEqual(value.dtype, torch.float32, f"in-place multiply dtype {dev}")
+            self.assertTrue(np.isfinite(value.numpy()).all(),
+                            f"in-place multiply produced non-finite values {dev}")
+            self.ae(value.numpy(), np.zeros((1, 4), dtype=np.float32),
+                    msg=f"in-place multiply values {dev}")
+
+        both_devices(body)
+
     def test_clamp_boundary_gradient_matches_torch(self):
         values = np.array(
             [-1.10, -1.00, -0.50, 0.50, 1.00, 1.10], dtype="float32"

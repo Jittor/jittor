@@ -50,13 +50,80 @@ def _patch_transformers_npu_probe(module, modules):
     return True
 
 
+def _patch_transformers_generation_utils(module):
+    """Preserve scalar decoder-start intent despite Jittor's physical rank-1 scalar."""
+    if module is None:
+        return False
+    generation_mixin = getattr(module, "GenerationMixin", None)
+    if generation_mixin is None:
+        return False
+
+    prepare_tokens = getattr(generation_mixin, "_prepare_special_tokens", None)
+    prepare_decoder = getattr(
+        generation_mixin, "_prepare_decoder_input_ids_for_generation", None
+    )
+    if not callable(prepare_tokens) or not callable(prepare_decoder):
+        return False
+    if getattr(prepare_tokens, "_jittor_scalar_decoder_start", False):
+        return True
+
+    def _is_scalar_token(token):
+        if isinstance(token, jt.Var):
+            return bool(getattr(token, "_torch_0d", False))
+        try:
+            return np.asarray(token).ndim == 0
+        except (TypeError, ValueError):
+            return False
+
+    def _prepare_special_tokens(self, generation_config, *args, **kwargs):
+        decoder_start = generation_config.decoder_start_token_id
+        if decoder_start is None and self.config.is_encoder_decoder:
+            decoder_start = generation_config.bos_token_id
+        result = prepare_tokens(self, generation_config, *args, **kwargs)
+        token = getattr(generation_config, "_decoder_start_token_tensor", None)
+        if token is not None and _is_scalar_token(decoder_start):
+            token._jittor_transformers_scalar_token = True
+        return result
+
+    def _prepare_decoder_input_ids_for_generation(
+        self,
+        batch_size,
+        model_input_name,
+        model_kwargs,
+        decoder_start_token_id,
+        device=None,
+    ):
+        if getattr(decoder_start_token_id, "_jittor_transformers_scalar_token", False):
+            decoder_start_token_id = decoder_start_token_id.broadcast((int(batch_size),))
+        return prepare_decoder(
+            self,
+            batch_size,
+            model_input_name,
+            model_kwargs,
+            decoder_start_token_id,
+            device,
+        )
+
+    _prepare_special_tokens._jittor_scalar_decoder_start = True
+    _prepare_special_tokens._jittor_original = prepare_tokens
+    _prepare_decoder_input_ids_for_generation._jittor_original = prepare_decoder
+    generation_mixin._prepare_special_tokens = _prepare_special_tokens
+    generation_mixin._prepare_decoder_input_ids_for_generation = (
+        _prepare_decoder_input_ids_for_generation
+    )
+    return True
+
+
 def _install_transformers_runtime_guard(g, registry=None):
-    """Make Transformers use Jittor's device API instead of real ``torch_npu``."""
+    """Install the small runtime adaptations owned by the Transformers bridge."""
     modules = registry_for(g, registry).module_map
     import builtins
 
     _patch_transformers_npu_probe(
         modules.get("transformers.utils.import_utils"), modules
+    )
+    _patch_transformers_generation_utils(
+        modules.get("transformers.generation.utils")
     )
     original_import = builtins.__import__
     if getattr(original_import, "_jittor_transformers_runtime_guard", False):
@@ -67,6 +134,9 @@ def _install_transformers_runtime_guard(g, registry=None):
         if name == "transformers.utils.import_utils" or name.startswith("transformers"):
             _patch_transformers_npu_probe(
                 modules.get("transformers.utils.import_utils"), modules
+            )
+            _patch_transformers_generation_utils(
+                modules.get("transformers.generation.utils")
             )
         return result
 

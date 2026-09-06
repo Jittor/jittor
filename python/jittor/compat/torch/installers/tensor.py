@@ -23,9 +23,10 @@ from ..nested import (
 )
 from .factories import _install_random_and_linspace, _wrap_constructors
 from ..types import (
-    _DEVICE_CTX_STACK, _device_is_cpu, _device_is_cuda, _dtype_to_str,
+    _DEVICE_CTX_STACK, _device_is_cpu, _device_is_cuda, _device_is_meta, _dtype_to_str,
     _make_cpu_resident, _make_cuda_resident, _mark_cpu_like,
-    _var_has_cpu_residency_hint, _var_is_cpu_resident, device, dtype,
+    _set_meta_placeholder, _var_has_cpu_residency_hint, _var_is_cpu_resident,
+    device, dtype,
 )
 
 import collections as _collections
@@ -636,6 +637,19 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.sub_ = lambda self, o, alpha=1: _ip(self, self - (o * alpha))
     Var.mul_ = lambda self, o: _ip(self, self * o)
     Var.div_ = lambda self, o: _ip(self, self / o)
+    # CUDA fusion of an exact-shape float tensor with a graph-produced bool mask
+    # can turn finite extreme values into NaN in the native __imul__ slot. Cast
+    # only that mask to the lhs dtype, then keep the native in-place operation.
+    # All other calls retain the native slot unchanged.
+    _native_imul = Var.__imul__
+    def _torch_imul(self, other):
+        if (isinstance(other, Var) and str(other.dtype) == "bool"
+                and getattr(jt, "_torch_leaf_params", {}).get(id(self)) is not self
+                and str(self.dtype) in ("float16", "bfloat16", "float32", "float64")
+                and tuple(self.shape) == tuple(other.shape)):
+            return _native_imul(self, other.cast(str(self.dtype)))
+        return _native_imul(self, other)
+    Var.__imul__ = _torch_imul
     # in-place unary math ops (recurrent_gemma uses x.log_(); common torch idioms)
     for _name, _fn in (("log_", jt.log), ("exp_", jt.exp), ("sqrt_", jt.sqrt),
                        ("neg_", lambda x: -x), ("abs_", jt.abs), ("sigmoid_", jt.sigmoid),
@@ -755,21 +769,47 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # .data_ptr() / .untyped_storage().nbytes() to detect shared/tied weights.
     # jittor has no exposed storage object; expose identity-based stand-ins so
     # save_pretrained's tied-weight detection works (each Var is its own storage).
+    def _storage_owner(var):
+        owner = getattr(var, "_torch_data_owner", None)
+        return owner if isinstance(owner, Var) else var
+
+    def _storage_offset(var):
+        try:
+            return int(getattr(var, "_torch_data_offset", 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _var_data_ptr(var):
+        # Jittor does not expose a raw allocation pointer. Use the stable
+        # identity of the root Var as a process-local storage token and add the
+        # byte offset for basic views (notably ``view(-1)[-1]``), which
+        # safetensors uses to compute an alias's end address.
+        owner = _storage_owner(var)
+        # The pointer token itself must stay independent of the logical shape;
+        # views and tied aliases use the same root allocation token.
+        offset = _storage_offset(var)
+        return id(owner) + offset * _DTYPE_BYTES.get(str(owner.dtype), 4)
+
+    def _storage_size(var):
+        owner = _storage_owner(var)
+        return int(owner.numel()) * _DTYPE_BYTES.get(str(owner.dtype), 4)
+
     class _Storage:
         def __init__(self, var):
             self._var = var
         def data_ptr(self):
-            return id(self._var)
+            return id(_storage_owner(self._var))
         def size(self):
-            return int(self._var.numel())
+            return int(_storage_owner(self._var).numel())
         def nbytes(self):
-            return int(self._var.numel()) * _DTYPE_BYTES.get(str(self._var.dtype), 4)
+            owner = _storage_owner(self._var)
+            return int(owner.numel()) * _DTYPE_BYTES.get(str(owner.dtype), 4)
     if not hasattr(Var, "storage"):
         Var.storage = lambda self: _Storage(self)
     if not hasattr(Var, "untyped_storage"):
         Var.untyped_storage = lambda self: _Storage(self)
     if not hasattr(Var, "data_ptr"):
-        Var.data_ptr = lambda self: id(self)
+        Var.data_ptr = _var_data_ptr
     # torch tensors expose is_contiguous()/contiguous(); jittor Vars are always
     # contiguous in the sense safetensors cares about.
     if not hasattr(Var, "is_contiguous"):
@@ -830,11 +870,12 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         Var.__invert__ = _invert
 
     def _device(self):
-        # Inside a `with torch.device("meta")` block (transformers'
-        # from_pretrained), report "meta" so its meta-context detection
-        # fires and eager weight init is skipped. See device.__enter__.
-        if _DEVICE_CTX_STACK:
-            return _DEVICE_CTX_STACK[-1]
+        # Jittor has no meta storage, so Vars built for a torch meta model keep
+        # a marker until checkpoint assignment or explicit device migration
+        # materializes them. Existing real tensors do not change device merely
+        # because a meta context is active.
+        if getattr(self, "_jittor_torch_meta", False):
+            return device("meta")
         # Report the Var's ACTUAL memory residency (matches jtorch's C++
         # is_cpu()/device()): a Var built/migrated to host -- e.g. via
         # torch.zeros(device='cpu') or .cpu() -- is "cpu" even while the
@@ -865,12 +906,26 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 try:
                     out._torch_index_parent = self
                     out._torch_index_slices = slices
-                    data_owner = getattr(self, "_torch_data_owner", None)
-                    if isinstance(data_owner, Var):
-                        out._torch_data_owner = data_owner
-                        out._torch_data_path = getattr(
-                            self, "_torch_data_path", ()
-                        ) + (slices,)
+                    data_owner = _storage_owner(self)
+                    out._torch_data_owner = data_owner
+                    # Keep the complete indexing path for write-through data
+                    # aliases.  A row view such as ``weight.data[0]`` must
+                    # update only that row; dropping this path would make
+                    # ``zero_``/``copy_`` assign the row-shaped value to the
+                    # whole parameter and corrupt its logical shape.
+                    out._torch_data_path = getattr(
+                        self, "_torch_data_path", ()
+                    ) + (slices,)
+                    parent_offset = _storage_offset(self)
+                    # Safetensors probes a flat view's last element to infer
+                    # the storage extent. Preserve its exact element offset.
+                    if isinstance(slices, numbers.Integral) and self.ndim == 1:
+                        index = int(slices)
+                        if index < 0:
+                            index += int(self.shape[0])
+                        out._torch_data_offset = parent_offset + index
+                    else:
+                        out._torch_data_offset = parent_offset
                 except Exception:
                     pass
             return out
@@ -1302,7 +1357,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 bare = a.replace("torch.", "")
                 if bare in dtype._registry:
                     ds = bare
-                elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
+                elif bare.split(":")[0] in ("cpu", "cuda", "npu", "meta"):
                     dev = bare
         if ds is not None:
             out = self.cast(ds) if copy else _cast_if_needed(self, ds)
@@ -1314,6 +1369,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             out = _make_cpu_resident(out)
         elif _device_is_cuda(dev):
             out = _make_cuda_resident(out, force=True)
+        elif (_device_is_meta(dev) or
+              (dev is None and getattr(self, "_jittor_torch_meta", False))):
+            _set_meta_placeholder(out)
         if getattr(self, "_torch_0d", False):
             out._torch_0d = True
         return out
@@ -1324,9 +1382,23 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # then expose the scalar shape only at the Python/NumPy boundary.
     _native_detach = Var.detach
     def _var_detach(self):
-        out = _native_detach(self)
+        source_is_cpu = _var_is_cpu_resident(self)
+        if source_is_cpu and jt.flags.use_cuda:
+            # Native detach is lazy. If it is built under the global CUDA flag,
+            # materializing detach().cpu() can migrate the original CPU input to
+            # the GPU. Build and realize this view in the CPU scope so host export
+            # does not mutate the source tensor's residency.
+            with jt.flag_scope(use_cuda=0):
+                out = _native_detach(self)
+                out.sync()
+            out._jittor_torch_force_cpu = True
+            out._jittor_torch_force_cuda = False
+        else:
+            out = _native_detach(self)
         if getattr(self, "_torch_0d", False):
             out._torch_0d = True
+        if getattr(self, "_jittor_torch_meta", False):
+            _set_meta_placeholder(out)
         return out
     Var.detach = _var_detach
 
@@ -1553,11 +1625,15 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # global flag (matches jtorch's C++ is_cuda()/is_cpu()). When CUDA is off
     # everything is host-resident.
     def _is_cuda(self):
+        if getattr(self, "_jittor_torch_meta", False):
+            return False
         if not (jt.flags.use_cuda or getattr(jt.compiler, "has_acl", 0)):
             return False
         return not _var_is_cpu_resident(self)
     Var.is_cuda = property(_is_cuda)
-    Var.is_cpu = property(lambda self: not _is_cuda(self))
+    Var.is_cpu = property(
+        lambda self: not getattr(self, "_jittor_torch_meta", False) and not _is_cuda(self)
+    )
     Var.is_mps = property(lambda self: False)
     Var.is_xpu = property(lambda self: False)
     Var.is_meta = property(lambda self: getattr(self.device, "type", None) == "meta")
@@ -1877,8 +1953,22 @@ def install(ctx):
     def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
         import numpy as _np
         ds = _dtype_to_str(dtype)
-        if isinstance(data, Var):
-            v = data.clone()
+        want_meta = (_device_is_meta(device) or
+                     (device is None and bool(_DEVICE_CTX_STACK)))
+        source_is_var = isinstance(data, Var)
+        if source_is_var:
+            source_is_cpu = _var_is_cpu_resident(data)
+            if source_is_cpu and jt.flags.use_cuda:
+                # A lazy clone built under the global CUDA flag would move a
+                # CPU source tensor when materialized. Copy it in the source
+                # device scope first; an explicit CUDA target is handled below.
+                with jt.flag_scope(use_cuda=0):
+                    v = data.clone()
+                    v.sync()
+                v._jittor_torch_force_cpu = True
+                v._jittor_torch_force_cuda = False
+            else:
+                v = data.clone()
         elif isinstance(data, _np.ndarray):
             # Respect an explicit complex64 request before constructing the Var.
             # NumPy otherwise keeps complex literals as unsupported complex128,
@@ -1910,11 +2000,17 @@ def install(ctx):
             v = v.cast(ds)
         # torch.tensor(..., device='cpu') must land in host memory so native
         # extensions' tensor.is_cpu() checks pass.
-        if _device_is_cpu(device):
+        # PyTorch's default tensor type remains CPU even when CUDA execution is
+        # active. Preserve the source device only for copy construction from an
+        # existing tensor; Python/NumPy data with no explicit device is CPU.
+        if (not want_meta and (_device_is_cpu(device)
+                or (device is None and (not source_is_var or source_is_cpu)))):
             v = _make_cpu_resident(v)
         elif _device_is_cuda(device):
             jt.flags.use_cuda = 1
             v = _make_cuda_resident(v, force=True)
+        if want_meta:
+            _set_meta_placeholder(v)
         if requires_grad:
             v.requires_grad_(True)
             _torch_register_leaf(v)
@@ -1924,19 +2020,45 @@ def install(ctx):
 
     def as_tensor(data, dtype=None, device=None):
         if isinstance(data, Var):
-            r = data if dtype is None else data.cast(_dtype_to_str(dtype))
+            source_is_meta = bool(getattr(data, "_jittor_torch_meta", False))
+            source_is_cpu = not source_is_meta and _var_is_cpu_resident(data)
+            ds = _dtype_to_str(dtype)
+            needs_cast = ds is not None and str(data.dtype) != ds
+            if needs_cast and source_is_cpu and jt.flags.use_cuda:
+                with jt.flag_scope(use_cuda=0):
+                    r = data.cast(ds)
+                    r.sync()
+                r._jittor_torch_force_cpu = True
+                r._jittor_torch_force_cuda = False
+            else:
+                r = data.cast(ds) if needs_cast else data
+            if _device_is_meta(device):
+                if not source_is_meta and r is data:
+                    if source_is_cpu and jt.flags.use_cuda:
+                        with jt.flag_scope(use_cuda=0):
+                            r = data.clone()
+                            r.sync()
+                        r._jittor_torch_force_cpu = True
+                        r._jittor_torch_force_cuda = False
+                    else:
+                        r = data.clone()
+                return _set_meta_placeholder(r)
             if _device_is_cpu(device):
                 return _make_cpu_resident(r)
             if _device_is_cuda(device):
                 jt.flags.use_cuda = 1
                 return _make_cuda_resident(r, force=True)
+            if source_is_meta:
+                return _set_meta_placeholder(r)
+            if source_is_cpu:
+                return _make_cpu_resident(r)
             return r
         return tensor(data, dtype=dtype, device=device)
     g.as_tensor = as_tensor
 
     def from_numpy(arr, *, device=None):
         v = _array_keep_dtype(arr)
-        if _device_is_cpu(device):
+        if _device_is_cpu(device) or device is None:
             return _make_cpu_resident(v)
         if _device_is_cuda(device):
             jt.flags.use_cuda = 1
@@ -2238,7 +2360,19 @@ def install_methods(ctx):
             return _bitcast(self, shape[0])
         if len(shape) == 1 and isinstance(shape[0], tuple) and type(shape[0]) is not tuple:
             shape = (tuple(int(s) for s in shape[0]),)
-        return _orig_reshape(self, *shape)
+        out = _orig_reshape(self, *shape)
+        if isinstance(out, Var):
+            try:
+                owner = getattr(self, "_torch_data_owner", None)
+                if not isinstance(owner, Var):
+                    owner = self
+                out._torch_data_owner = owner
+                out._torch_data_offset = int(
+                    getattr(self, "_torch_data_offset", 0)
+                )
+            except Exception:
+                pass
+        return out
     Var.reshape = _torch_reshape
     Var.view = _torch_reshape
 

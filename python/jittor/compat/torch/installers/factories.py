@@ -14,7 +14,9 @@ import jittor as jt
 import numpy as np
 
 from ..types import (
-    _device_is_cpu, _device_is_cuda, _dtype_to_str, _make_cuda_resident,
+    _DEVICE_CTX_STACK, _device_is_cpu, _device_is_cuda, _device_is_meta,
+    _dtype_to_str, _make_cuda_resident, _set_meta_placeholder,
+    _var_is_cpu_resident,
 )
 from ..nested import _torch_register_leaf
 
@@ -66,7 +68,7 @@ def _wrap_constructors(g):
         @functools.wraps(orig)
         def wrapped(*args, **kwargs):
             # ACL adapters call jt.empty thousands of times; keep the FP32 fast path.
-            if (name == "empty" and not kwargs and args and
+            if (name == "empty" and not _DEVICE_CTX_STACK and not kwargs and args and
                     g.get_default_dtype() == g.float32 and
                     (len(args) == 1 or all(type(dim) is int for dim in args))):
                 shape = args[0]
@@ -82,8 +84,34 @@ def _wrap_constructors(g):
             # when CPU is requested, build the Var under use_cuda=0 so its
             # allocator is the host allocator (Var.location()=='cpu').
             _requested_device = kwargs.get("device")
-            _want_cpu = _device_is_cpu(_requested_device)
-            _want_cuda = _device_is_cuda(_requested_device)
+            _inherits_device = name.endswith("_like") or name in _TENSOR_ARGUMENT
+            _device_input = (
+                args[0] if _inherits_device and args and isinstance(args[0], jt.Var)
+                else None
+            )
+            _implicit_input_device = (
+                _requested_device is None and _device_input is not None
+            )
+            _input_is_meta = bool(
+                _implicit_input_device
+                and getattr(_device_input, "_jittor_torch_meta", False)
+            )
+            _input_is_cpu = bool(
+                _implicit_input_device and not _input_is_meta
+                and _var_is_cpu_resident(_device_input)
+            )
+            _want_cpu = (
+                _device_is_cpu(_requested_device) or _input_is_cpu
+            )
+            _want_cuda = (
+                _device_is_cuda(_requested_device) or
+                (_implicit_input_device and not _input_is_meta and not _input_is_cpu)
+            )
+            _want_meta = (
+                _device_is_meta(_requested_device) or _input_is_meta or
+                (_requested_device is None and not _implicit_input_device
+                 and bool(_DEVICE_CTX_STACK))
+            )
             if _want_cuda:
                 jt.flags.use_cuda = 1
             _requires_grad = bool(kwargs.get("requires_grad", False))
@@ -148,6 +176,7 @@ def _wrap_constructors(g):
                     out._jittor_torch_force_cpu = True
                 except Exception:
                     pass
+                _set_meta_placeholder(out, False)
                 if _requires_grad:
                     out.requires_grad_(True)
                     _torch_register_leaf(out)
@@ -157,6 +186,8 @@ def _wrap_constructors(g):
                 out = out.cast(_cast_to)
             if _want_cuda:
                 out = _make_cuda_resident(out, force=True)
+            if _want_meta:
+                _set_meta_placeholder(out)
             try:
                 out._jittor_torch_ext_mutable = True
             except Exception:
@@ -240,5 +271,3 @@ def _install_random_and_linspace(g):
     for name in ("randn", "rand", "randint", "randperm", "normal",
                  "randn_like", "rand_like", "multinomial", "bernoulli"):
         wrap_gen(name)
-
-
