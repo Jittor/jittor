@@ -22,7 +22,7 @@ namespace jittor {
 //            graph optimizers to a fixpoint, numbers the batch, partitions it
 //            into fused segments, orders the segments, and orders the ops
 //            inside each segment. Reads the graph; writes only batch-scoped
-//            numbering. Produces a value.
+//            numbering. Produces a value -- see `ExecPlan` in exec_plan.h.
 //   Runner   execution plan -> executed kernels. Per segment: pick the device,
 //            allocate outputs, migrate inputs across the host/device boundary,
 //            launch, then release the liveness the batch was holding. This is
