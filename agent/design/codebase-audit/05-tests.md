@@ -212,6 +212,25 @@ nodeid 也算进去了。** 插件用 `pytest_collection_modifyitems` 回答「�
 于是**排序 bug 和算术 bug 长得一样**；`ExecPlan` 是值类型之后可以直接断言，而 `JIT_TEST` 自动
 变成 pytest 节点，不需要改任何门禁配置。方法与坑（合成图怎么绕开 JIT 编译器、为什么不能录快照）
 见 skill `core-invariant-property-tests` 第 1 节。
+
+**这条「零执行」的代价当场就兑现了：把桥接接进门禁的第一次运行，就有 4 条红。**
+它们全在 `src/tests/test_op_register.cc` 的 native provider registry 系列（另一分区
+`c1a67c91b`..`b8398291b` 那串重构带进来的），**在任何门禁里都从未被执行过，而它们不过**。
+三个各自独立的根因，都是 registry 自身的行为、不是桥接的问题：
+- `test_op_register.cc:267`，观察者收到的生命周期事件过不了自己的 `event.valid()`
+  （`native_op_registry_lifecycle_consumer_boundary` 与 `..._scopes_transfer_teardown_ownership`
+  两条撞的是同一句）；
+- `op_register.cc:210`，`native_op_registry_provider_dispatch_boundary` 把 op 注册进**局部**的
+  `NativeOpRegistry`，却用自由函数 `get_op_id()` 去查——后者读的是 `op_registry()` 单例，
+  这个名字不可能在那里，于是报 `Op definition not registered: jit_test_provider_dispatch`；
+- `test_op_register.cc:414`，`native_op_registry_registration_scope_is_identity_checked` 的
+  registration scope 退出后，被它替换掉的 provider 仍然注册着。
+本波**不修**：`ops/op_register.{h,cc}` 是别的分区正在改的工作集，且其中三条断言的是 registry
+的行为而非测试脚手架。处理方式是 `test_jit_tests.py:KNOWN_BROKEN_TESTS` 隔离为
+`xfail(strict=True)`，**strict 是要点**——用 skip 的话对方修好了这边不会有任何反应，隔离就永久留着；
+strict 下一旦修好这四条立刻变红、逼着删掉隔离条目。这个方向也实测过：把一条本来就绿的
+`op_register_reads_and_writes_the_same_key` 临时写进隔离表，它报 FAILED（XPASS strict）而不是悄悄放过。
+另加 `test_the_quarantine_names_only_tests_that_exist`，防止用例被改名后隔离条目变成空指向。
 | 该桥接自身会静默产生 0 个用例 | `test_jit_tests.py:31-36` 遍历 dir(jt.tests)，为空时无任何方法，pytest 报 0 项通过 | wheel 裁掉 src 或扫描失败时测试通过但什么也没跑 | 断言 len(names) > 0 | 主要 |
 | 安装后 wheel 的验证只有一次乘法 | `selftest.py` 共 60 行只验证 `[1,2,3]**2` 的前向与梯度 | 打包遗漏任何模块都不会被发现 | 扩成 conv+bn+optimizer 三步训练加关键子包 import 清单 | 主要 |
 | CPU 卷积后端（oneDNN/MKL）无门禁 | `tests/backends/cpu/` 2 文件 236 行不在任何 session | 默认 CPU 卷积路径没有自动验证 | 加入 CPU 门禁 | 主要 |
