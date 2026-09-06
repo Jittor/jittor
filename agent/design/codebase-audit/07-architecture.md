@@ -71,6 +71,19 @@ phase 6 那 1.94 ms 的 per-op 发射常数与 phase 7 那 9.78 ms 背后「CPU 
 2. `Executor` ⇄ `VarHolder`：`var_holder.h:11` include executor.h；`executor.cc:24` include var_holder.h（另有 13 个核心 .cc 包含 var_holder.h）。
 3. `Node` ⇄ pyjt tracer：`node.h:10`。
 
+**已修：`a82fd5b9`（10.21）。** 上面三条本波实测**一条都不在了**，原条目保留是为了记住它们曾经存在：
+
+- 第 1 条已闭合：`jittor_utils` 26 个模块里模块级和函数内都没有任何 `jittor` import（`c4799f1a1` 起由 `tests/structure/test_import_direction.py` 钉住）。
+- 第 2 条已闭合：`318a688e7`（2.12）解除了头依赖，`var_holder.h` 不再 include `executor.h`。
+- 第 3 条已闭合：`node.h` 现在只 include `common.h`、`type/nano_string.h`、`type/nano_vector.h`，没有任何 pyjt/tracer/PyObject。
+
+实测**真正还在**的环（AST 加 Tarjan，扫描根从 `pyproject.toml` 的 `package-dir` 读，含 `backends/` overlay 共 384 个模块）：
+
+- Python 模块级 3 个 SCC、共 164 个模块：157（`jittor` 包门面——`__init__` 导入子模块，约 150 个子模块又在模块级 `import jittor as jt`；这是 4.07 的面）、4（`jittor_utils` 内部 `__init__` ⇄ `lock`/`misc`/`install_msvc`）、3（`jittor.einops`，随上游 vendor 进来）。
+- C++ 头文件环 1 个 SCC、42 个头，全部在 `python/jittor/extern/acl`（`aclnn.h` ⇄ `aclops/*.h` ⇄ `base_op.h`）。
+
+三条契约由 `tools/lint/check_import_layering.py` 执行，接在 `tests/structure/test_import_layering.py` 与 `nox -s imports` 两个入口上；不用 import-linter 的原因（grimp 静态解析看不见 `backends/` overlay，实测只看到 294/384 个模块）写在该文件头部。
+
 **反向依赖**（下层被上层改写）：
 - 三个后端模块 import 时直接改写 compiler 模块全局共 22 处：`rocm_compiler.py:145-153`、`acl_compiler.py:134-139`、`corex_compiler.py:67-77`；`acl_compiler.py:76` 更往 `compiler.extra_core_files` 追加核心源文件。
 - 核心算子按字符串名认识可选后端：`ops/transpose_op.cc:43` has_op("cutt_transpose")、`random_op.cc:25`、`argsort_op.cc:43`、`where_op.cc:28`、`arg_reduce_op.cc:45`；全树 127 处 get_op_info。

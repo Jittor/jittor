@@ -2901,6 +2901,38 @@ contextmanager，普通函数再用 fixture 包一层同一个 contextmanager。
 `cp` → `git checkout --` → 跑 → `cp` 回来，并把还原放在 `trap ... EXIT` 里，中途失败也不会把
 工作丢在退回状态。
 
+**10.21（`mem`，`a82fd5b9` + `7627bc0ae`）：三个「真环」实测一条都不在了，而 `nox -s typing` 在 base 上一直是红的。**
+环这一项闭合。先自己跑环检测（AST 加 Tarjan，扫描根从 `pyproject.toml` 的 `package-dir` 读）再看文档，
+结论是审计 §分层与依赖方向 记的三条全已闭合：`jittor_utils` 26 个模块里模块级和函数内都没有 `jittor` import；
+`var_holder.h` 不再 include `executor.h`（`318a688e7`）；`node.h` 只剩 `common.h` 与两个 `type/nano_*`，无 pyjt/tracer。
+**实测真正还在的**是 Python 模块级 3 个 SCC 共 164 模块（157 是 `jittor` 包门面，约 150 个子模块在模块级
+`import jittor as jt`，属 4.07 的面；4 是 `jittor_utils` 内部；3 是 vendored `einops`），外加 1 个 42 个头的
+ACL C++ 头环。所以验收按实测改判并同步了计划与看板两侧。
+
+**不用 import-linter，理由是量出来的**：它的图由 grimp 建，grimp 靠 importlib 定位根包再走那一个目录，而
+`backends/` 是 `package-dir` 映射加上 `python/jittor/backends/__init__.py` 运行期 `__path__.insert` 拼进来的，
+静态解析看不见。实测 `grimp.build_graph("jittor","jittor_utils")` 得 294 个模块、`jittor.backends.*` 只有 1 个，
+对比自建图的 384 个模块／86 个 backends 模块——91 个模块不可见且全在最大的那个环里，契约会「零违规」通过。
+要让它看见就得把 `jittor.backends.cuda` 当根包，那会先 import jittor 即先编译 C++ 核心。于是 checker 用 stdlib 手写，
+无新增依赖，接在 `tests/structure/test_import_layering.py`（每次 structure 门禁都跑，无可选依赖故不会退化成 skip）
+与 `nox -s imports` 两个入口。
+
+**反例是在真树上构造的，不是只跑一遍看退出码**：把审计环 1 放回 `jittor_utils/misc.py` → 点名
+`misc.py:237 imports jittor.compiler`；给 `jittor/serialization/__init__.py` 加 `import jittor` → 点名
+`newly on an import-time cycle: jittor.serialization`；把 `package-dir` 的 `jittor.backends.cuda` 指到不存在的目录
+→ 4 条 coverage 报错。**第三条最值得记**：丢掉 overlay 之后 cycle-surface 反而报 `ok`（模块变少是子集），
+只有 coverage 的下限挡住了——所以断言写成「每个根非空、模块数 ≥360、backends ≥80、边数 ≥900、契约数 ≥3」。
+这正是 `test_destructor_and_handler_contract.py` 那次「后端搬进 backends/ 后一条没扫到而总数看着健康」的同一形状。
+
+mypy 这一项只做了一个子包，剩余面留了数字。7 个文件 → 34。**先修的是门禁本身**：`noxfile.py` 早就在
+`[tool.mypy] files` 里，但 `git show HEAD:pyproject.toml` 单独跑 mypy 是 `13 errors in 1 file (checked 7 source files)`
+——这条门禁一直不过、一直没人跑。修绿后再扩 `python/jittor_utils` 整包（26 模块，**按目录写进 `files` 而不是逐文件列**，
+以后往这个包加模块自动进覆盖）。29 条错误全按真实类型修掉，没有加一个 `# type: ignore`，没有动任何 mypy 开关。
+其中值得记的：`get_py3_include_path` 在 macOS 分支对声明为 `Optional[str]` 的全局直接 `.strip()`，改成算在局部再赋回；
+`Logwrapper._log` 把 `*msg` 元组就地改写成字符串；`in_ipynb` 依赖 IPython 注入 builtins 的裸 `get_ipython`。
+**剩余面**：`python/jittor` 2514 errors／165 files（checked 269），`backends/` 79 errors／32 files（checked 87），
+合计约 2593 条／197 文件，下一波按同样「一个子包、一次真干净」的粒度推进。
+
 ## 6bis. 这一轮的主要失效模式：门禁绿着，但不是因为它通过了
 
 2026-09-06 一天之内，在七个互不相干的分区各撞到一次同一形状的问题：**验证手段自己坏了，而且
