@@ -58,4 +58,4 @@ elif cmd == "vtune_so":
     vtune_cmd = "amplxe-cl -collect uarch-exploration -r ./__res "+__file__+" "+lib_path+" run_so"
     run_cmd(vtune_cmd)
 else:
-    assert 0, "unknown cmd: {cmd}".format(cmd)
+    assert 0, "unknown cmd: {cmd}".format(cmd=cmd)
