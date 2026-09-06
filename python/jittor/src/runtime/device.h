@@ -9,8 +9,7 @@
 #include "runtime/device_state.h"
 
 
-#ifdef HAS_CUDA
-#include <cuda_runtime.h>
+#ifdef HAS_ACCELERATOR
 
 namespace jittor {
 
@@ -20,16 +19,16 @@ inline int runtime_use_cuda() { return runtime_device_state().use_cuda; }
 int get_device_count();
 
 // ---- Device placement -------------------------------------------------
-// One process uses every visible CUDA device. `device_id` is the *current*
+// One process uses every visible device of the selected backend. `device_id` is the *current*
 // device: new Vars are placed on it (Var::device_id) and kernels launch on
-// it until an op says otherwise. Setting it calls cudaSetDevice and lets
+// it until an op says otherwise. Setting it calls the backend and lets
 // every library wrapper swap in that device's handle; it never restarts the
 // process, and the other devices stay visible and usable.
 
-// The current device, or -1 when no CUDA device is visible.
+// The current device, or -1 when no accelerator is visible.
 // @pyjt(current_device)
 int current_device();
-// Make `device` current: cudaSetDevice plus every registered switch hook.
+// Make `device` current through the backend and every registered switch hook.
 // @pyjt(set_device)
 void set_current_device(int device);
 
@@ -40,26 +39,15 @@ void add_device_switch_hook(device_switch_hook_t hook);
 
 // Let `to` read `from`'s memory directly, once per ordered pair. Where the
 // hardware cannot peer this does nothing and copies fall back to staging
-// through the host, which cudaMemcpy does on its own.
+// through the backend's supported staging path.
 void enable_peer_access(int from, int to);
 
-// cudaDeviceSynchronize on every device in the bitmask (bit d = device d),
+// Synchronize every device in the bitmask (bit d = device d),
 // restoring the current device afterwards. An empty mask means "the current
 // device only".
 void sync_devices(uint64 devices);
 
 } // jittor
-
-// ROCm's legacy converter used to select this branch by the old filename.
-#if defined(IS_ROCM) || (defined(CUDART_VERSION) && CUDART_VERSION < 10000)
-    #define _cudaLaunchHostFunc(a,b,c) \
-        cudaStreamAddCallback(a,b,c,0)
-    #define CUDA_HOST_FUNC_ARGS cudaStream_t stream, cudaError_t status, void*
-#else
-    #define _cudaLaunchHostFunc(a,b,c) \
-        cudaLaunchHostFunc(a,b,c)
-    #define CUDA_HOST_FUNC_ARGS void*
-#endif
 
 #else
 

@@ -5,12 +5,11 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
 #include <list>
 #include <mutex>
 #include <cstring>
-#include <cuda_runtime.h>
-#include "helper_cuda.h"
+#include <exception>
 #include "runtime/device.h"
 #include "runtime/backend.h"
 #include "var.h"
@@ -27,7 +26,7 @@ struct DualAllocation {
 
 EXTERN_LIB SFRLAllocator cuda_dual_host_allocator;
 EXTERN_LIB SFRLAllocator cuda_dual_device_allocator;
-EXTERN_LIB bool no_cuda_error_when_free;
+EXTERN_LIB bool no_device_error_when_free;
 
 struct CudaDualAllocator : Allocator {
     //for recycle block_id
@@ -85,7 +84,7 @@ EXTERN_LIB list<Allocation> allocations;
 
 }
 
-void to_free_allocation(CUDA_HOST_FUNC_ARGS);
+void to_free_allocation(void* user_data);
 
 struct DelayFree final : Allocator {
     inline uint64 flags() const override { return _cuda; };
@@ -101,9 +100,16 @@ struct DelayFree final : Allocator {
     bool can_share() const override { return true; }
     void free(void* mem_ptr, size_t size, const size_t& allocation) override {
         using namespace cuda_dual_local;
-        if (no_cuda_error_when_free) return;
+        if (no_device_error_when_free) return;
         allocations.emplace_back(mem_ptr, allocation, size, &cuda_dual_allocator);
-        peekCudaErrors(_cudaLaunchHostFunc(0, &to_free_allocation, 0));
+        auto target = Device{accelerator_backend_id(), device()};
+        try {
+            backend_ops(target.backend).host_callback(
+                backend_stream(target, BackendStreamKind::Compute),
+                &to_free_allocation, nullptr);
+        } catch (const std::exception& error) {
+            LOGe << "Delayed allocation release callback failed:" << error.what();
+        }
     }
 
     void migrate_to_cpu(void*& mem_ptr, size_t& allocation, size_t size, Allocator* allocator) {

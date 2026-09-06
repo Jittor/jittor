@@ -25,6 +25,7 @@
 #include "var_holder.h"
 #include "graph.h"
 #include "runtime/device.h"
+#include "runtime/backend.h"
 #include "mem/allocator/sfrl_allocator.h"
 #include "mem/allocator/stat_allocator.h"
 #include "mem/allocator/temp_allocator.h"
@@ -211,8 +212,10 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
 #endif
     size_t gpu_free = 0, _gpu_total = 0;
     (void)gpu_free; (void)_gpu_total;
-    #ifdef HAS_CUDA
-    cudaMemGetInfo(&gpu_free, &_gpu_total);
+    #ifdef HAS_ACCELERATOR
+    if (get_device_count() > 0)
+        backend_ops(accelerator_backend_id()).memory_info(
+            current_device(), gpu_free, _gpu_total);
     #endif
     log << "free: cpu(">>FloatOutput{(double)cpu_free, " KMG", 1024, "B"}
         >> ") gpu(">>FloatOutput{(double)gpu_free, " KMG", 1024, "B"} >> ")\n";
@@ -301,9 +304,11 @@ MemInfo::MemInfo() {
 #endif
 
     total_cuda_ram = 0;
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
     size_t gpu_free = 0, _gpu_total = 0;
-    cudaMemGetInfo(&gpu_free, &_gpu_total);
+    if (get_device_count() > 0)
+        backend_ops(accelerator_backend_id()).memory_info(
+            current_device(), gpu_free, _gpu_total);
     total_cuda_ram = _gpu_total;
 #endif
     // sigquit_callback.push_back(&meminfo_callback);

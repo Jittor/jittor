@@ -10,8 +10,6 @@
 #include "ops/getitem_op.h"
 #ifndef JIT
 #include "ops/op_register.h"
-#ifdef HAS_CUDA
-#endif
 #endif
 
 namespace jittor {

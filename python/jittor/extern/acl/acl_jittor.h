@@ -8,6 +8,11 @@
 #include "common.h"
 #include "aclnn/aclnn.h"
 #include <acl/acl.h>
+#include "acl_runtime.h"
+#include "acl_workspace.h"
+
+#define aclstream acl_current_stream()
+#define workspaceAddr acl_workspace_address()
 
 std::string acl_error_to_string(aclError error);
 
@@ -21,14 +26,6 @@ namespace jittor
         *count = static_cast<int>(acl_count);
         return status;
     }
-
-    EXTERN_LIB uint64_t acl_jittor_tid;
-    EXTERN_LIB aclrtStream aclstream;
-    EXTERN_LIB void *workspaceAddr;
-
-    // Returns a temp-allocator-owned buffer. Allocation failure throws and
-    // leaves workspaceAddr in an empty, retryable state.
-    void *mallocWorkSpace(uint64_t size);
 
     void acl_jittor_op_compiler(string &filename, string &src, bool is_acl, string &extra_flags);
 

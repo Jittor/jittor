@@ -4,9 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#ifdef HAS_CUDA
-#include <cuda_runtime.h>
-#include "helper_cuda.h"
+#ifdef HAS_ACCELERATOR
 #include "mem/allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "event_queue.h"
@@ -16,60 +14,12 @@
 #include "var.h"
 #include "ops/array_op.h"
 #include "runtime/device.h"
-#include "runtime/cuda_streams.h"
+#include "runtime/backend_streams.h"
 #include "runtime/backend.h"
 #include "mem/allocator.h"
 #include "mem/swap.h"
 
 namespace jittor {
-
-#ifdef IS_ACL
-#pragma GCC visibility push(hidden)
-namespace array_local {
-cudaStream_t stream;
-cudaEvent_t event;
-// A stream and an event belong to the device they were created on: an event
-// of device 0 cannot be recorded on device 1's default stream. So there is a
-// pair per device and the globals name the current device's, swapped by the
-// device-switch hook -- the same shape as the library handles.
-static vector<cudaStream_t> streams;
-static vector<cudaEvent_t> events;
-
-static void array_switch_device(int device) {
-    if ((int)streams.size() <= device) {
-        streams.resize(device+1, nullptr);
-        events.resize(device+1, nullptr);
-    }
-    if (!streams[device]) {
-        checkCudaErrors(cudaStreamCreateWithFlags(&streams[device], cudaStreamNonBlocking));
-        checkCudaErrors(cudaEventCreate(&events[device], cudaEventDisableTiming));
-    }
-    stream = streams[device];
-    event = events[device];
-}
-
-struct Init {
-Init() {
-    if (!get_device_count()) return;
-    add_device_switch_hook(array_switch_device);
-}
-~Init() {
-    if (!get_device_count()) return;
-    peekCudaErrors(cudaDeviceSynchronize());
-    for (size_t i=0; i<streams.size(); i++)
-        if (streams[i]) {
-            peekCudaErrors(cudaStreamDestroy(streams[i]));
-            peekCudaErrors(cudaEventDestroy(events[i]));
-        }
-    streams.clear();
-    events.clear();
-}
-} init;
-
-}
-using namespace array_local;
-
-#endif
 
 ArrayOp::ArrayOp(const void* ptr, NanoVector shape, NanoString dtype)
     : ArrayOp(ArrayArgs{ptr, shape, dtype}) {}
@@ -83,7 +33,7 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
     }
     if (shape.size() == 0)
         output->set_flag(VarFlags::_is_scalar);
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
     // Fused scalar values are emitted inside generated kernels on both backends.
     if (runtime_use_cuda() && output->flag(VarFlags::_force_fuse))
         set_flag(OpFlags::_cuda, 1);
@@ -124,26 +74,16 @@ void ArrayOp::jit_prepare(JK& jk) {
 }
 
 void ArrayOp::run() {
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
     if (allocation.allocator == &cuda_dual_allocator) {
         auto host_ptr = cuda_dual_allocator.get_dual_allocation(allocation.allocation).host_ptr;
-        #ifdef IS_CUDA
         int device = output->device_id;
-        auto copy_stream = cuda_side_stream(CUDA_COPY_STREAM, device);
+        auto copy_stream = backend_stream(
+            {accelerator_backend_id(), device}, BackendStreamKind::Copy);
         Device target{accelerator_backend_id(), cuda_dual_device_allocator.device()};
         backend_copy_async(allocation.ptr, target, host_ptr, {}, allocation.size,
-                           BackendStream{{accelerator_backend_id(), device},
-                                         reinterpret_cast<void*>(copy_stream)});
-        cuda_default_stream_wait_side(CUDA_COPY_STREAM, device, device);
-        #else
-        Device target{accelerator_backend_id(), cuda_dual_device_allocator.device()};
-        backend_copy_async(allocation.ptr, target, host_ptr, {}, allocation.size,
-                           BackendStream{{accelerator_backend_id(), current_device()},
-                                         reinterpret_cast<void*>(stream)});
-        checkCudaErrors(cudaEventRecord(event, stream));
-        // ACL kernels run on aclstream rather than CUDA's default stream.
-        checkCudaErrors(cudaStreamWaitEvent(aclstream, event, 0));
-        #endif
+                           copy_stream);
+        backend_default_stream_wait_side(BackendStreamKind::Copy, device, device);
         // delay free this allocation
         allocation.allocator = &delay_free;
     }

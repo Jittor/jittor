@@ -152,7 +152,7 @@ struct VarHolder {
     // @attrs(return_self)
     inline VarHolder* migrate_to_gpu_() {
         sync(true, false);
-        #ifdef HAS_CUDA
+        #ifdef HAS_ACCELERATOR
         migrate_to_gpu(var, get_allocator());
         #endif
         return this;
@@ -388,7 +388,7 @@ struct VarHolder {
     // @pyjt(__get__device_raw_ptr)
     inline uint64 device_raw_ptr() {
         sync(true, false);
-        #ifdef HAS_CUDA
+        #ifdef HAS_ACCELERATOR
         if (!var->allocator->is_cuda())
             migrate_to_gpu(var, get_allocator());
         #endif

@@ -13,15 +13,16 @@
 #include <dlfcn.h>
 #endif
 #include <mutex>
+#include <algorithm>
 
 #include "jit_compiler.h"
 #include "runtime/jit_policy.h"
+#include "runtime/configuration.h"
 #include "op.h"
 #include "utils/cache_compile.h"
 #include "utils/flags.h"
 #include "fused_op.h"
 #include "utils/str_utils.h"
-JPU(header)
 
 namespace jittor {
     
@@ -34,6 +35,34 @@ DEFINE_FLAG(string, nvcc_flags, "", "Flags of CUDA C++ compiler");
 DEFINE_FLAG(string, python_path, "", "Path of python interpreter");
 DEFINE_FLAG(string, cache_path, "", "Cache path of jittor");
 DEFINE_FLAG(int, rewrite_op, 1, "Rewrite source file of jit operator or not");
+
+struct AcceleratorCompilerSpec {
+    string path, flags, language, source_suffix;
+    vector<string> remove_flags;
+    bool device_link = false;
+    bool configured = false;
+};
+
+static AcceleratorCompilerSpec accelerator_compiler;
+
+void configure_accelerator_compiler(const string& path, const string& flags,
+        const string& language, const string& source_suffix,
+        const vector<string>& remove_flags, bool device_link) {
+    check_startup_config_write("accelerator compiler");
+    USER_CHECK(!path.empty()) << "Accelerator compiler path must not be empty";
+    USER_CHECK(language == "cuda" || language == "hip" || language == "cxx")
+        << "Accelerator compiler language must be cuda, hip, or cxx";
+    USER_CHECK(source_suffix == ".cc" || source_suffix == ".cpp"
+        || source_suffix == ".cxx" || source_suffix == ".cu" || source_suffix == ".hip")
+        << "Unsupported accelerator source suffix" << source_suffix;
+    USER_CHECK(!device_link || language == "cuda")
+        << "The device-link wrapper requires the CUDA compiler interface";
+    for (const auto& flag : remove_flags)
+        USER_CHECK(!flag.empty() && flag.front() == '-' && flag.find_first_of(" \t\r\n") == string::npos)
+            << "Compiler flag filters must name individual option tokens";
+    AcceleratorCompilerSpec next{path, flags, language, source_suffix, remove_flags, device_link, true};
+    accelerator_compiler = move(next);
+}
 
 vector<string> shsplit(const string& s) {
     auto s1 = split(s, " ");
@@ -53,6 +82,33 @@ vector<string> shsplit(const string& s) {
         }
     }
     return s2;
+}
+
+static string accelerator_flags_for_key(const string& key, const string& extra_flags) {
+    USER_CHECK(accelerator_compiler.configured) << "Accelerator compiler is not configured";
+    const auto& spec = accelerator_compiler;
+    const auto base = spec.language == "cxx" ? spec.flags : cuda_math_flags_for_key(spec.flags, key);
+    string result = " ";
+    for (auto token : shsplit(base + " " + extra_flags)) {
+        if (std::find(spec.remove_flags.begin(), spec.remove_flags.end(), token) != spec.remove_flags.end())
+            continue;
+        if (token == "--device-c") token = "-dc";
+        // The captured strict-math policy uses the same driver vocabulary as
+        // the CUDA frontend. HIP's Clang driver consumes equivalent options.
+        if (spec.language == "hip") {
+            if (token == "--fmad=false") token = "-ffp-contract=off";
+            else if (token == "--prec-div=true" || token == "--prec-sqrt=true") token = "-fno-fast-math";
+            else if (token == "--use_fast_math") token = "-ffast-math";
+        }
+        result += token + " ";
+    }
+    return result;
+}
+
+static bool requests_device_link(const string& flags) {
+    for (const auto& token : shsplit(flags))
+        if (token == "-dc" || token == "--device-c") return true;
+    return false;
 }
 
 string fix_cl_flags(const string& cmd, bool is_cuda) {
@@ -215,14 +271,13 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
     LOGvv << "Compile op" << jit_key;
     // compiler do not allowed filename too long
     CHECK(cc_path.size());
-    string jit_src_path;
-    if (is_cuda_op && extra_flags.find("-dc") != string::npos)
-        jit_src_path = Op::get_filename_from_jit_key(jit_key, ".cu");
-    else
-        jit_src_path = Op::get_filename_from_jit_key(jit_key, ".cc");
-    string* src2 = (string*)&src;
-    string* extra_flags2 = (string*)&extra_flags;
-    JPU(op_compiler(jit_src_path, *src2, is_cuda_op, *extra_flags2));
+    const string kernel_flags = is_cuda_op ? accelerator_flags_for_key(jit_key, extra_flags) : string();
+    const bool device_link = is_cuda_op && requests_device_link(kernel_flags);
+    USER_CHECK(!device_link || accelerator_compiler.device_link)
+        << "Selected accelerator compiler does not support device-link requests";
+    const string suffix = is_cuda_op
+        ? (device_link ? ".cu" : accelerator_compiler.source_suffix) : ".cc";
+    string jit_src_path = Op::get_filename_from_jit_key(jit_key, suffix);
     #ifdef _WIN32
     string jit_lib_path = Op::get_filename_from_jit_key(jit_key, ".dll");
     string jit_src_path2 = _to_winstr(jit_src_path);
@@ -230,43 +285,40 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
     string jit_lib_path = Op::get_filename_from_jit_key(jit_key, ".so");
     string& jit_src_path2 = jit_src_path;
     #endif
-    string other_src;
     LOGvvv << "Generate" << jit_src_path >> "\n" >> src;
     if (rewrite_op || !file_exist(jit_src_path2))
         write(jit_src_path2, src);
     string cmd;
     // The preparation key captures policy before asynchronous compilation.
     // Extension-local flags remain explicit per-op overrides.
-    const string kernel_nvcc_flags = is_cuda_op
-        ? cuda_math_flags_for_key(nvcc_flags, jit_key) : string();
     
     auto symbol_name = get_symbol_name(jit_key);
 #ifndef _MSC_VER
     if (is_cuda_op) {
-        cmd = "\"" + nvcc_path + "\""
-            + " \"" + jit_src_path + "\"" + other_src
-            + fix_cl_flags(kernel_nvcc_flags + extra_flags, is_cuda_op)
+        cmd = "\"" + accelerator_compiler.path + "\""
+            + " \"" + jit_src_path + "\""
+            + fix_cl_flags(kernel_flags, accelerator_compiler.language == "cuda")
             + " -o \"" + jit_lib_path + "\"";
-        if (cmd.find("-dc") != string::npos) {
+        if (device_link) {
             cmd = python_path+" "+jittor_path+"/build/dlink_compiler.py " + cmd;
         }
     } else {
         cmd = "\"" + cc_path + "\""
-            + " \"" + jit_src_path + "\"" + other_src
+            + " \"" + jit_src_path + "\""
             + fix_cl_flags(cc_flags + extra_flags, is_cuda_op)
             + " -o \"" + jit_lib_path + "\"";
     }
 #else // Windows _MSC_VER
     if (is_cuda_op) {
-        cmd = "\"" + nvcc_path + "\""
-            + " \"" + jit_src_path + "\"" + other_src
-            + kernel_nvcc_flags + extra_flags
+        cmd = "\"" + accelerator_compiler.path + "\""
+            + " \"" + jit_src_path + "\""
+            + kernel_flags
             + " -o \"" + jit_lib_path + "\""
             +  " -Xlinker -EXPORT:\""
             + symbol_name + "\"";
     } else {
         cmd = "\"" + cc_path + "\""
-            + " \"" + jit_src_path + "\"" + other_src
+            + " \"" + jit_src_path + "\""
             + " -Fe: \"" + jit_lib_path + "\" "
             + fix_cl_flags(cc_flags + extra_flags, is_cuda_op) + " -EXPORT:\""
             + symbol_name + "\"";

@@ -38,6 +38,7 @@
 #include "opt/pass/check_cache_pass.h"
 #include "opt/pass/mark_raw_pass.h"
 #include "utils/str_utils.h"
+#include "runtime/backend.h"
 
 namespace jittor {
 
@@ -93,11 +94,14 @@ bool PassManager::check(Pass* pass) {
 
 void PassManager::run_passes() {
     auto& ir = *main_ir;
+    const bool accelerator = oc->op->flag(OpFlags::_cuda);
+    const auto& policy = backend_ops(oc->op->execution_backend()).execution;
+    const bool generated_parallel = !accelerator || policy.supports_generated_device_kernels;
 
     LOGvvvv << "KernelIR:\n" << ir.to_string();
     if (oc->op->ops.size() == 1 && oc->op->ops[0]->is_op(op_ids::array())) {
         ir.remove_all_unused();
-        if (oc->op->flag(OpFlags::_cuda)) {
+        if (accelerator && policy.supports_generated_device_kernels) {
             ir.children.back()->erase();
             string type = oc->op->ops[0]->outputs().front()->dtype().to_cstring();
             ir.push_back("kernel<<<1,1>>>(op0_outputp, op0_outputv);");
@@ -138,12 +142,12 @@ void PassManager::run_passes() {
     run_pass<CheckCachePass>();
     run_pass<LoopToFuncPass>();
     run_pass<AssumeAlignedPass>();
-    run_pass<ParallelPass>();
-    run_pass<AtomicTunerPass>();
-    run_pass<SharedReducePass>();
+    run_pass<ParallelPass>(generated_parallel);
+    run_pass<AtomicTunerPass>(generated_parallel);
+    run_pass<SharedReducePass>(generated_parallel);
     // After the atomic tuner has decided where the atomics go.
-    run_pass<WarpReducePass>();
-    run_pass<FloatAtomicFixPass>();
+    run_pass<WarpReducePass>(generated_parallel);
+    run_pass<FloatAtomicFixPass>(generated_parallel && (!accelerator || policy.ordered_float_atomics));
     // After every pass that restructures loops, so it only sees the final nest.
     run_pass<ReduceAccumulatorPass>();
     // Needs the accumulators above to already be in place: they are what makes

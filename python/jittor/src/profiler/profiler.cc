@@ -13,11 +13,8 @@
 #else
 #include <dlfcn.h>
 #endif
-#ifdef HAS_CUDA
-#include <cuda_runtime.h>
-#include "helper_cuda.h"
-#endif
 #include "runtime/device.h"
+#include "runtime/backend.h"
 #include "profiler/profiler.h"
 #include "op.h"
 #include "fused_op.h"
@@ -157,27 +154,31 @@ static void stat_peek_bandwidth(uint64 in, uint64 out, uint64 loop, uint64& peek
     loop = 1 << loop;
     int warmup = std::max(loop/8, (uint64)1);
     for (int i=0; i<warmup; i++)
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
         if (runtime_use_cuda())
-            cudaMemcpyAsync(temp1.ptr, temp2.ptr, size, cudaMemcpyDeviceToDevice, 0);
+            backend_copy_async(temp1.ptr, allocation_device(temp1.allocator),
+                temp2.ptr, allocation_device(temp2.allocator), size,
+                backend_stream(allocation_device(temp1.allocator), BackendStreamKind::Compute));
         else
     #endif
             std::memcpy(temp1.ptr, temp2.ptr, size);
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
     if (runtime_use_cuda())
-        checkCudaErrors(cudaDeviceSynchronize());
+        backend_synchronize(allocation_device(temp1.allocator));
     #endif
     auto start = std::chrono::high_resolution_clock::now();
     for (int i=0; i<loop; i++)
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
         if (runtime_use_cuda())
-            cudaMemcpyAsync(temp1.ptr, temp2.ptr, size, cudaMemcpyDeviceToDevice, 0);
+            backend_copy_async(temp1.ptr, allocation_device(temp1.allocator),
+                temp2.ptr, allocation_device(temp2.allocator), size,
+                backend_stream(allocation_device(temp1.allocator), BackendStreamKind::Compute));
         else
     #endif
             std::memcpy(temp1.ptr, temp2.ptr, size);
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
     if (runtime_use_cuda())
-        checkCudaErrors(cudaDeviceSynchronize());
+        backend_synchronize(allocation_device(temp1.allocator));
     #endif
     auto finish = std::chrono::high_resolution_clock::now();
     auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(finish-start).count();
@@ -325,9 +326,9 @@ void Profiler::record_and_run(
             for (int64_t i=0; i<warmup; i++) {
                 jit_entry(op);
             }
-            #ifdef HAS_CUDA
+            #ifdef HAS_ACCELERATOR
             if (runtime_use_cuda())
-                checkCudaErrors(cudaDeviceSynchronize());
+                backend_synchronize({accelerator_backend_id(), current_device()});
             #endif
         }
 
@@ -335,9 +336,9 @@ void Profiler::record_and_run(
         for (int64_t i=0; i<num; i++) {
             jit_entry(op);
         }
-        #ifdef HAS_CUDA
+        #ifdef HAS_ACCELERATOR
         if (runtime_use_cuda())
-            checkCudaErrors(cudaDeviceSynchronize());
+            backend_synchronize({accelerator_backend_id(), current_device()});
         #endif
         auto finish = std::chrono::high_resolution_clock::now();
         auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(finish-start).count();

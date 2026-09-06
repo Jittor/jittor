@@ -12,7 +12,7 @@
 
 namespace jittor {
 
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
 struct EventQueue {
     typedef void(*Func)();
 

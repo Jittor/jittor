@@ -78,10 +78,23 @@ void backend_synchronize(Device device) {
     backend_ops(device.backend).synchronize(1ull << device.index);
 }
 
+BackendStream backend_stream(Device device, BackendStreamKind kind) {
+    return {device, backend_ops(device.backend).stream(device.index, kind)};
+}
+
+BackendEvent backend_event(Device device, bool timing) {
+    return {device, backend_ops(device.backend).event_create(device.index, timing)};
+}
+
 vector<string> registered_backends() { return backend_registry().names(); }
 
 int backend_device_count(const string& name) {
     return backend_registry().get(name).device_count();
+}
+
+void initialize_backend_operators() {
+    auto callback = backend_ops(accelerator_backend_id()).register_operators;
+    if (callback) callback();
 }
 
 } // namespace jittor

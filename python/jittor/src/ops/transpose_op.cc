@@ -34,7 +34,7 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
         forward(var);
         return;
     }
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
     if (runtime_use_cuda()) {
         auto accelerated_transpose = find_op_capability<VarPtr, Var*, NanoVector>(
             accelerator_backend_id(), OpCapability::Transpose, x, axes);

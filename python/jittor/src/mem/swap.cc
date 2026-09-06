@@ -6,10 +6,6 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#ifdef HAS_CUDA
-#include <cuda_runtime.h>
-#include "helper_cuda.h"
-#endif
 #include <stdio.h>
 #include <memory>
 #include <random>
@@ -69,7 +65,7 @@ void swap_to_disk(Var* x, Swap& swap) {
     // than corrupt it silently.
     ASSERT(!x->share_next) << "cannot swap out an aliased var" << x;
     string path = swap_file_path(x);
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
     if (x->allocator->is_cuda()) {
         // was a function-local `static char* buffer = new char[8MB]`: leaked,
         // and two threads swapping at once trampled each other's staging area
@@ -215,7 +211,7 @@ bool move_with_swap(Var* x, Allocator* allocator, bool force) {
     }
     if (x->flag(VarFlags::_is_swapped)) {
         string path = swap_file_path(x);
-        #ifdef HAS_CUDA
+        #ifdef HAS_ACCELERATOR
         if (x->allocator->is_cuda()) {
             int64 buf_size = std::min(x->size, SWAP_BUF_SIZE);
             std::unique_ptr<char[]> buf(new char[buf_size]);

@@ -8,7 +8,7 @@
 #include "runtime/device.h"
 #include "runtime/backend.h"
 
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
 #include "mem/allocator/cuda_dual_allocator.h"
 #endif
 #include "mem/allocator/stat_allocator.h"
@@ -55,7 +55,7 @@ DECLARE_FLAG(int, use_cuda_managed_allocator);
 DEFINE_FLAG_WITH_SETTER(int, use_cuda_host_allocator, 1, "use cuda host allocator for cpu memory globally");
 
 void setter_use_cuda_host_allocator(const int& old_value, const int& value) {
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
     // `use_cuda_host_allocator = value;` used to be here so that the
     // get_allocator() below could see the new value. The macro assigns first
     // now, so it already does.
@@ -70,7 +70,7 @@ extern int64 sfrl_large_block_size_device;
 
 bool use_pinned_host_memory() {
     if (use_cuda_host_allocator) return true;
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
     if (runtime_use_cuda())
         return backend_ops(accelerator_backend_id()).execution.requires_pinned_host_storage;
 #endif
@@ -78,7 +78,7 @@ bool use_pinned_host_memory() {
 }
 
 Allocator* get_array_host_allocator() {
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
     if (runtime_use_cuda()
             && backend_ops(accelerator_backend_id()).execution.requires_pinned_host_storage)
         return get_allocator(-1, false);
@@ -88,7 +88,7 @@ Allocator* get_array_host_allocator() {
 
 Allocator* get_allocator(bool temp_allocator) {
     int device = -1;
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
     if (runtime_use_cuda()) device = current_device();
 #endif
     return get_allocator(device, temp_allocator);
@@ -101,7 +101,7 @@ Allocator* get_allocator(int device, bool temp_allocator) {
         // temp allocator
         temp_allocator = false;
     }
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
     if (runtime_use_cuda() && device >= 0 && !allocator) {
         LOGvv << "Using cuda allocator of device" << device;
         allocator = backend_raw_allocator({accelerator_backend_id(), device},
@@ -153,7 +153,7 @@ static void migrate_empty_var(Var* var, Allocator* allocator) {
     target.ptr = nullptr;
 }
 
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
 // Move every var that shares one allocation, in one step.
 //
 // Var::alloc's share_with branch leaves a child indistinguishable from its
@@ -244,7 +244,7 @@ static bool migrate_group(Var* var, Allocator* allocator, bool to_gpu) {
 #endif
 
 void migrate_to_cpu(Var* var, Allocator* allocator) {
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
     if (!use_cuda_managed_allocator)
         allocator = cpu_allocator;
     #endif
@@ -263,7 +263,7 @@ void migrate_to_cpu(Var* var, Allocator* allocator) {
         move_with_swap(var, cpu_allocator, true);
         return;
     }
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
     // An aliased var can only move together with the rest of its group; if it
     // turns out not to be aliased after all, migrate_group says so and the
     // plain path below runs instead (see migrate_group).
@@ -297,7 +297,7 @@ void migrate_to_cpu(Var* var, Allocator* allocator) {
 
 
 void migrate_to_gpu(Var* var, Allocator* allocator) {
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
     // only happend when not using use_cuda_managed_allocator
     if (var->size == 0) {
         migrate_empty_var(var, allocator);

@@ -12,12 +12,14 @@
 #include "opt/pass_manager.h"
 #include "opt/pass/float_atomic_fix_pass.h"
 #include "utils/str_utils.h"
+#include "runtime/backend.h"
 
 namespace jittor {
 
 void FloatAtomicFixPass::run() {
     auto choice = op->get_loop_option("parallel");
     bool is_cuda = op->flag(OpFlags::_cuda);
+    if (is_cuda && !backend_ops(op->execution_backend()).execution.ordered_float_atomics) return;
     if (is_cuda) choice=1;
     if (!choice) return;
 

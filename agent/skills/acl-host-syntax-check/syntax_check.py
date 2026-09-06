@@ -80,6 +80,7 @@ def compile_flags(repo, cache, stub):
         "-I", str(acl), "-I", str(acl / "aclnn"), "-I", str(acl / "aclops"),
         "-I", str(repo / "backends" / "cuda" / "include"),
         "-I", str(repo / "backends" / "cuda"),
+        "-I", str(repo / "backends" / "acl" / "include"),
         "-I", "/usr/local/cuda/include",
         "-I", str(cache),
     ]

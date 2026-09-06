@@ -391,6 +391,4 @@ std::ostream& operator<<(std::ostream& os, const Caster<T,To>& input) {
     return os << ']';
 }
 
-#define JPU(x) ;
-
 } // jittor

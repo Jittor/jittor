@@ -5,7 +5,8 @@
 namespace jittor {
 namespace {
 bool supports_where(Var* condition, NanoString) {
-    return condition->shape.size() > 1 || std::abs(condition->num) > 4096;
+    return backend_ops(accelerator_backend_id()).execution.prefer_compaction_kernel
+        || condition->shape.size() > 1 || std::abs(condition->num) > 4096;
 }
 
 RegisterOpCapability<vector<VarPtr>, Var*, Var*, NanoString, bool> arg_reduce(

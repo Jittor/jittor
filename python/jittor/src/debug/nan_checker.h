@@ -10,5 +10,6 @@
 namespace jittor {
 
 bool check_nan(Var* v, Op* op);
+void dump_var(Var* v, string name);
 
 }

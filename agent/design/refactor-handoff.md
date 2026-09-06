@@ -675,6 +675,30 @@ Python provider 40、tensor 路由 10、纯 C++ copy-plan NumPy 对拍 38 项通
 构建服务以及 ROCm/Corex 原生适配，不能只删工具让可选后端断路。
 分开“有加速器”与“依赖 CUDA SDK”的编译条件；完整 int64/类型化属性不能塞进
 CodeOp 的 double DataMap，8.06 仍需真正 typed 属性消费和描述符缓存。
+
+### 2026-09-06 4.12 WIP 收口
+
+本轮工作树已经收成可交接的 4.12 前置，但**没有把 4.12 标成完成**。当前未提交内容包含：
+
+- `BackendOps` ABI 3 的通用内存、拷贝、stream/event、host callback、架构查询、NaN hook、
+  operator bootstrap 和执行策略字段；CPU 后端实现与共享 stream/事件状态已加入，CUDA
+  SDK 实现正迁到顶层 `backends/cuda/runtime/`。
+- `executor`、`init`、`event_queue`、`profiler`、核心内存/array/fetch/copy/pyjt 消费者
+  已移除直接 CUDA SDK include，使用 `HAS_ACCELERATOR` 和 BackendOps；6 个无 CUDA SDK
+  C++ TU 语法检查、共享消费者结构合同 2 passed。CUDA NaN TU 使用本机 CUDA 12.2
+  host syntax 通过，未做运行时设备验收。
+- ACL 侧新增懒初始化的 provider 目录和 workspace/stream 接线前置；ROCm 新增独立
+  hipBLAS matmul、rocPRIM cumsum/library build spec，官方 HIP 6.2 头文件下 4 个 TU
+  语法通过。MIOpen、RCCL、其余 rocPRIM family、完整低精度/batched GEMM 仍未迁移，
+  不能登记为支持；Corex 的 converter 删除和真实 provider 仍在进行。
+- 编译侧新增值型 `BuildSource/BuildConfig` backend source/link/language 字段和 native
+  JIT compiler 配置入口；目标是选中后端直接编译自己的 TU，不再复制和文本改写核心源码。
+  `process_jittor_source`、`process_acl` 尚未删除，ROCm/Corex 的所有旧调用也尚未清零。
+
+本 WIP 未执行 Git 提交前的首次 JIT，也未声称 ACL/ROCm/Corex 硬件验证。下一位接手时先检查
+`git status` 中上述文件，按 ABI3 合同统一 provider 工厂和 canonical backend 名称
+(`acl`/`rocm`/`corex`)，再做 CPU-only 核心语法和一次串行 CUDA 回归；只有三后端均不再
+调用源码转换、其设备/编译入口有实际 owner、以及转换负向门禁通过后，才可将 4.12 改为已合并。
 独立 torch 包仍要推进实际所有权迁移，不能再回到只写 metadata/validator 的旧波次。
 NativeProviderRegistration 的旧元数据不能当作上述执行/构建迁移已完成的证据。
 独立 torch 包和后端架构仍是未完成的大需求，不要为追低价值计数改变优先级。

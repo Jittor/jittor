@@ -20,7 +20,7 @@ namespace jittor {
 
 #ifndef JIT
 
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
 static auto make_array = op_constructor<VarPtr, const void*, NanoVector, NanoString>("array");
 static auto make_binary = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
 static auto make_transpose = op_constructor<VarPtr, Var*, NanoVector>("transpose");
@@ -35,7 +35,7 @@ ArgReduceOp::ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims)
     if  (this->dim == -1)
         this->dim = x->shape.size() - 1;
     dim = this->dim;
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
     if (runtime_use_cuda()) {
         if (has_op_capability(accelerator_backend_id(), OpCapability::SegmentedArgReduce)) {
             int dims = x->shape.size();

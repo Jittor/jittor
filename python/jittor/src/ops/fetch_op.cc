@@ -6,12 +6,11 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#ifdef HAS_CUDA
-#include <cuda_runtime.h>
-#include "helper_cuda.h"
+#ifdef HAS_ACCELERATOR
+#include <exception>
 #include <mutex>
 #include "runtime/device.h"
-#include "runtime/cuda_streams.h"
+#include "runtime/backend_streams.h"
 #include "mem/allocator/sfrl_allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "event_queue.h"
@@ -23,7 +22,7 @@
 
 namespace jittor {
 
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
 
 #pragma GCC visibility push(hidden)
 namespace fetcher_local {
@@ -37,21 +36,25 @@ static void fetch_caller() {
     fetch_tasks.pop_front();
 }
 
-static void to_fetch(CUDA_HOST_FUNC_ARGS) {
+static void to_fetch(void* user_data) {
     event_queue.push(fetch_caller);
 }
 
 struct Init {
 Init() {
     if (!get_device_count()) return;
-    cuda_side_stream(CUDA_COPY_STREAM, 0);
+    backend_stream({accelerator_backend_id(), 0}, BackendStreamKind::Copy);
 }
 ~Init() {
     if (!get_device_count()) return;
     // do not call deleter on exit
     for (auto& f : fetch_tasks)
         f.func.deleter = nullptr;
-    peekCudaErrors(cudaDeviceSynchronize());
+    try {
+        backend_synchronize({accelerator_backend_id(), current_device()});
+    } catch (const std::exception& error) {
+        LOGe << "Fetch shutdown synchronization failed:" << error.what();
+    }
 }
 } ;
 
@@ -66,7 +69,7 @@ list<VarPtr> fetcher_to_free;
 
 FetchOp::FetchOp(vector<Var*>&& inputs, FetchFunc&& func) 
 : fetch_vars(inputs), func(move(func)) {
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
     // Side streams are lazy so CUDA is initialized before they are created.
     static Init init_fetch;
     #endif
@@ -103,8 +106,8 @@ FetchOp::FetchOp(vector<Var*>&& inputs, FetchFunc&& func)
 void FetchOp::run() {
     vector<Allocation> allocations(fetch_vars.size());
     vector<ArrayArgs> arrays(fetch_vars.size());
-    #ifdef HAS_CUDA
-    bool has_cuda_memcpy = false;
+    #ifdef HAS_ACCELERATOR
+    bool has_device_copy = false;
     // References taken on the source vars' blocks so they cannot be handed out
     // again while the staging copies are still queued; they ride along in the
     // fetch task and are released with it, after the callback has run.
@@ -116,7 +119,8 @@ void FetchOp::run() {
     uint64 src_devices = 0;
     int entry_device = current_device();
     int copy_device = 0;
-    auto copy_stream = cuda_side_stream(CUDA_COPY_STREAM, copy_device);
+    auto copy_stream = backend_stream(
+        {accelerator_backend_id(), copy_device}, BackendStreamKind::Copy);
     event_queue.flush();
     #endif
     LOGvvvv << "fetch" << fetch_vars.size() << "vars" << fetch_vars;
@@ -124,7 +128,7 @@ void FetchOp::run() {
     for (auto v : fetch_vars) {    
         auto& allocation = allocations[i];
 
-        #ifdef HAS_CUDA
+        #ifdef HAS_ACCELERATOR
         if (v->allocator->is_cuda()) {
             // The event that orders this fetch after the kernels that
             // produced v has to be recorded on v's *own* device: stream 0 is
@@ -136,8 +140,8 @@ void FetchOp::run() {
                 if (src != current_device()) set_current_device(src);
                 if (src < 64) src_devices |= 1ull << src;
             }
-            cuda_side_stream_wait_default(
-                CUDA_COPY_STREAM, copy_device, src);
+            backend_side_stream_wait_default(
+                BackendStreamKind::Copy, copy_device, src);
             new (&allocation) Allocation(&cuda_dual_allocator, v->size);
             // mostly device to device
             // This staging copy is the only read of the source var's own
@@ -145,8 +149,7 @@ void FetchOp::run() {
             // which is why the two legs are separate loops now.
             Device target{accelerator_backend_id(), cuda_dual_device_allocator.device()};
             backend_copy_async(allocation.ptr, target, v->mem_ptr, source, v->size,
-                BackendStream{{accelerator_backend_id(), copy_device},
-                              reinterpret_cast<void*>(copy_stream)});
+                copy_stream);
             // The copy is queued, not done. Keep the source block reserved
             // until this fetch task is destroyed, which happens after the host
             // callback and so after the copy. Holding memory is much cheaper
@@ -158,7 +161,7 @@ void FetchOp::run() {
                                     v->allocator);
             } else
                 need_copy_fence = true;
-            has_cuda_memcpy = true;
+            has_device_copy = true;
         } else
         #endif
         {
@@ -170,8 +173,8 @@ void FetchOp::run() {
         arrays[i].dtype = v->dtype();
         i++;
     }
-    #ifdef HAS_CUDA
-    if (has_cuda_memcpy) {
+    #ifdef HAS_ACCELERATOR
+    if (has_device_copy) {
         if (PREDICT_BRANCH_NOT_TAKEN(need_copy_fence)) {
             // Some source could not be pinned (an allocator with no notion of
             // sharing), so the only way left to keep its block from being
@@ -182,8 +185,8 @@ void FetchOp::run() {
             // from, not only whichever one happens to be current.
             for (int d = 0; d < 64; d++) {
                 if (!((src_devices >> d) & 1)) continue;
-                cuda_default_stream_wait_side(
-                    CUDA_COPY_STREAM, copy_device, d);
+                backend_default_stream_wait_side(
+                    BackendStreamKind::Copy, copy_device, d);
             }
         }
         for (uint j=0; j<allocations.size(); j++) {
@@ -195,8 +198,7 @@ void FetchOp::run() {
             // device to host
             Device source{accelerator_backend_id(), cuda_dual_device_allocator.device()};
             backend_copy_async(host_ptr, {}, allocation.ptr, source, allocation.size,
-                BackendStream{{accelerator_backend_id(), copy_device},
-                              reinterpret_cast<void*>(copy_stream)});
+                copy_stream);
             allocation.ptr = host_ptr;
             arrays[j].ptr = host_ptr;
         }
@@ -205,7 +207,7 @@ void FetchOp::run() {
             allocations.emplace_back(move(p));
         fetch_tasks.push_back({move(func), move(allocations), move(arrays)});
         if (current_device() != copy_device) set_current_device(copy_device);
-        checkCudaErrors(_cudaLaunchHostFunc(copy_stream, &to_fetch, 0));
+        backend_ops(copy_stream.device.backend).host_callback(copy_stream, &to_fetch, nullptr);
         if (entry_device >= 0 && entry_device != current_device())
             set_current_device(entry_device);
     } else

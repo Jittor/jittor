@@ -29,7 +29,7 @@ struct GetitemOp : Op {
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     void grads(Var** dout, VarPtr* dins) override;
     void infer_shape() override;
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
     static void configure_accelerator_codegen(Codegen& codegen);
 #endif
     void graph_optimize() override;

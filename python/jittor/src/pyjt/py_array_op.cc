@@ -4,9 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#ifdef HAS_CUDA
-#include <cuda_runtime.h>
-#include "helper_cuda.h"
+#ifdef HAS_ACCELERATOR
 #include "mem/allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "event_queue.h"
@@ -177,7 +175,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
     if (shape.size() == 0)
         output->set_flag(VarFlags::_is_scalar);
     void* host_ptr = nullptr;
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
     // Fused scalar values are emitted inside generated kernels on both backends.
     if (runtime_flag_use_cuda() && output->flag(VarFlags::_force_fuse))
         set_flag(OpFlags::_cuda, 1);

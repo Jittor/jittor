@@ -40,27 +40,27 @@ def test_acl_tensor_creation_returns_a_real_failure_status():
 
 
 def test_acl_workspace_uses_one_retryable_temp_allocation_contract():
-    header = ACL_H.read_text(encoding="utf-8")
-    source = ACL_CC.read_text(encoding="utf-8")
-    assert "void *mallocWorkSpace(uint64_t size);" in header
-    body = _function_body(source, "void *mallocWorkSpace(uint64_t size)")
+    header = (REPO_ROOT / "backends/acl/include/acl_workspace.h").read_text(encoding="utf-8")
+    source = (REPO_ROOT / "backends/acl/src/workspace.cc").read_text(encoding="utf-8")
+    assert "void* mallocWorkSpace(uint64_t size);" in header
+    body = _function_body(source, "void* mallocWorkSpace(uint64_t size)")
     assert "runtime_executor().temp_allocator" in body
-    assert "workspaceAllocator" in body
-    assert "workspaceAllocation" in body
+    assert "get_allocator(device, true)" in body
+    assert "workspace.allocator = allocator" in body
+    assert "workspace.allocation = allocation" in body
     assert "aclrtMalloc" not in body
     assert "LOGf" in body
 
-    reset = body.index("releaseWorkSpace();")
+    reset = body.index("release_workspace(workspace);")
     allocate = body.index("->alloc(")
-    commit = body.index("workspaceAddr = new_workspace")
+    commit = body.index("workspace.address = address")
     assert reset < allocate < commit
 
-    release = _function_body(source, "void releaseWorkSpace()")
-    for field in ("workspaceAddr", "nowWorkSpaceSize",
-                  "workspaceAllocator", "workspaceAllocation"):
-        assert field in release
-    assert "allocator->free(ptr, size, allocation)" in release
-    assert release.index("workspaceAddr = nullptr") < release.index("allocator->free(")
+    release = _function_body(source, "void release_workspace(Workspace& workspace)")
+    assert release.index("aclrtSynchronizeStream") < release.index("workspace = Workspace()")
+    assert release.index("workspace = Workspace()") < release.index("allocator->free(")
+    assert "previous.address, previous.size, previous.allocation" in release
+    assert "void *workspaceAddr =" not in ACL_CC.read_text(encoding="utf-8")
 
 
 def test_ascend_guide_has_workspace_failure_and_release_checks():

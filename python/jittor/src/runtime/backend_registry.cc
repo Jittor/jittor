@@ -4,13 +4,18 @@
 namespace jittor {
 
 void BackendRegistry::register_backend(const BackendOps& backend) {
-    if (backend.abi_version != 2 || backend.struct_size != sizeof(BackendOps))
+    if (backend.abi_version != 3 || backend.struct_size != sizeof(BackendOps))
         throw std::invalid_argument("Backend callback table ABI or size mismatch");
     if (!backend.name || !backend.name[0])
         throw std::invalid_argument("Backend name must not be empty");
     if (!backend.device_count || !backend.current_device || !backend.set_device
             || !backend.allocator || !backend.copy || !backend.copy_async
-            || !backend.synchronize || !backend.stream || !backend.enable_peer)
+            || !backend.synchronize || !backend.stream || !backend.enable_peer
+            || !backend.memory_allocate || !backend.memory_free || !backend.memory_info
+            || !backend.check_error || !backend.compute_stream || !backend.stream_create
+            || !backend.stream_destroy || !backend.stream_synchronize || !backend.event_create
+            || !backend.event_destroy || !backend.event_record || !backend.event_synchronize
+            || !backend.event_elapsed || !backend.stream_wait_event || !backend.host_callback)
         throw std::invalid_argument("Backend callback table is incomplete");
     if (backends_.count(backend.id))
         throw std::invalid_argument("Backend id is already registered");

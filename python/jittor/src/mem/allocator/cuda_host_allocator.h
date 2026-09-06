@@ -5,7 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
 #include "mem/allocator.h"
 
 namespace jittor {

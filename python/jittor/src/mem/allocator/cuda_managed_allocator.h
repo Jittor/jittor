@@ -5,13 +5,13 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
 #include "mem/allocator.h"
 
 namespace jittor {
 
 struct CudaManagedAllocator : Allocator {
-    // The device cudaMalloc has to be pointed at before it runs.
+    // The device passed to the backend's raw allocator.
     // One instance per device; the global one is device 0's.
     int device_id = 0;
     uint64 flags() const override { return _cuda; }

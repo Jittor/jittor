@@ -34,9 +34,13 @@ typedef int aclnnStatus;
 typedef void *aclrtStream;
 typedef void *aclrtEvent;
 typedef void *aclrtContext;
+typedef void (*aclrtCallback)(void *userData);
+typedef enum { ACL_CALLBACK_NO_BLOCK = 0, ACL_CALLBACK_BLOCK = 1 } aclrtCallbackBlockType;
 
 #define ACL_SUCCESS 0
 #define ACL_ERROR_NONE 0
+#define ACL_EVENT_TIME_LINE 0x08
+#define ACL_DDR_MEM 0
 
 typedef enum {
     ACL_FLOAT = 0, ACL_FLOAT16 = 1, ACL_INT8 = 2, ACL_INT32 = 3,
@@ -95,16 +99,20 @@ aclError aclrtGetDeviceCount(uint32_t *count);
 aclError aclrtResetDevice(int32_t deviceId);
 aclError aclrtSynchronizeDevice();
 aclError aclrtCreateEvent(aclrtEvent *event);
+aclError aclrtCreateEventWithFlag(aclrtEvent *event, uint32_t flag);
 aclError aclrtDestroyEvent(aclrtEvent event);
 aclError aclrtRecordEvent(aclrtEvent event, aclrtStream stream);
 aclError aclrtStreamWaitEvent(aclrtStream stream, aclrtEvent event);
 aclError aclrtSynchronizeEvent(aclrtEvent event);
+aclError aclrtEventElapsedTime(float *ms, aclrtEvent start, aclrtEvent end);
 aclError aclrtGetMemInfo(int attr, size_t *free, size_t *total);
 aclError aclrtMallocHost(void **hostPtr, size_t size);
 aclError aclrtFreeHost(void *hostPtr);
 aclError aclrtProcessReport(int32_t timeout);
 aclError aclrtSubscribeReport(uint64_t threadId, aclrtStream stream);
 aclError aclrtUnSubscribeReport(uint64_t threadId, aclrtStream stream);
+aclError aclrtLaunchCallback(aclrtCallback function, void *argument,
+                           aclrtCallbackBlockType blockType, aclrtStream stream);
 aclError aclrtCreateContext(aclrtContext *context, int32_t deviceId);
 aclError aclrtDestroyContext(aclrtContext context);
 aclError aclrtSetCurrentContext(aclrtContext context);

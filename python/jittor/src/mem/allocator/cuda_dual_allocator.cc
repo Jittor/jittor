@@ -4,7 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
 #include "runtime/device.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "event_queue.h"
@@ -29,7 +29,7 @@ static void free_caller() {
 
 }
 
-void to_free_allocation(CUDA_HOST_FUNC_ARGS) {
+void to_free_allocation(void* user_data) {
     using namespace cuda_dual_local;
     event_queue.push(free_caller);
 }

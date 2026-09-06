@@ -37,6 +37,16 @@ void expect_error(std::function<void()> func);
 #define __builtin_popcount __popcnt
 #endif
 
+#if defined(HAS_CUDA) && !defined(HAS_ACCELERATOR)
+#define HAS_ACCELERATOR 1
+#endif
+
+#ifdef HAS_ACCELERATOR
+#define _HAS_ACCELERATOR 1
+#else
+#define _HAS_ACCELERATOR 0
+#endif
+
 #ifdef HAS_CUDA
 #define _HAS_CUDA 1
 #else

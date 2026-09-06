@@ -5,14 +5,11 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <sstream>
-#ifdef HAS_CUDA
-#include <cuda_runtime.h>
-#include "helper_cuda.h"
-#endif
 #include "var_holder.h"
 #include "var.h"
 #include "executor.h"
 #include "runtime/device.h"
+#include "runtime/backend.h"
 #include "graph.h"
 #include "grad.h"
 #include "mem/allocator/cuda_dual_allocator.h"
@@ -69,7 +66,7 @@ void submit_pending(VarHolder* holder) {
 
 VarHolder* VarHolder::migrate_to_cpu_() {
     sync(true, false);
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
     migrate_to_cpu(var, runtime_executor().allocator);
 #endif
     return this;
@@ -78,7 +75,7 @@ VarHolder* VarHolder::migrate_to_cpu_() {
 DataView VarHolder::data() {
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
         sync(true, false);
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
         migrate_to_cpu(var, runtime_executor().allocator);
 #endif
     }
@@ -87,7 +84,7 @@ DataView VarHolder::data() {
 
 uint64 VarHolder::raw_ptr() {
     sync(true, false);
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
     migrate_to_cpu(var, runtime_executor().allocator);
 #endif
     return (uint64)var->mem_ptr;
@@ -101,7 +98,7 @@ void VarHolder::set_data(ArrayArgs&& array) {
     for (int i=0; i<array.shape.size(); i++)
         size *= array.shape[i];
     USER_CHECK(size==var->size);
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
     migrate_to_cpu(var, runtime_executor().allocator);
 #endif
     std::memcpy(var->mem_ptr, array.ptr, size);
@@ -302,7 +299,7 @@ VarHolder* VarHolder::sync(bool device_sync, bool weak_sync) {
 ArrayArgs VarHolder::fetch_sync() {
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
         sync(true);
-        if (save_mem || _HAS_CUDA)
+        if (save_mem || _HAS_ACCELERATOR)
             migrate_to_cpu(var, runtime_executor().allocator);
     }
     return {var->mem_ptr, var->shape, var->dtype()};
@@ -345,20 +342,15 @@ ItemData VarHolder::item() {
     data.dtype = var->dtype();
     auto dsize = data.dtype.dsize();
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
-        #ifdef IS_ACL
-        // ACL kernels run on aclstream, while the synchronous host copy below
-        // is not ordered after that custom stream. A scalar host read is a
-        // synchronization boundary, so drain the device before migrating it.
-        sync(true);
-        #else
+        // A blocking backend host copy waits for its producer stream.
         sync();
-        #endif
-        if (save_mem || _HAS_CUDA)
+        if (save_mem || _HAS_ACCELERATOR)
             migrate_to_cpu(var, runtime_executor().allocator);
     }
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
     if (var->allocator->is_cuda()) {
-        checkCudaErrors(cudaMemcpy(&data.data, var->mem_ptr, dsize, cudaMemcpyDeviceToHost));
+        backend_copy(&data.data, {BackendId::Cpu, 0}, var->mem_ptr,
+                     allocation_device(var->allocator), dsize);
     } else
     #endif
     {
@@ -399,7 +391,7 @@ vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh) {
     vector<ArrayArgs> ret(vh.size());
     sync(vh, true);
     for (uint i=0; i<vh.size(); i++) {
-        if (save_mem || _HAS_CUDA)
+        if (save_mem || _HAS_ACCELERATOR)
             migrate_to_cpu(vh[i]->var, runtime_executor().allocator);
         ret[i].ptr = vh[i]->var->mem_ptr;
         ret[i].shape = vh[i]->var->shape;
@@ -446,7 +438,7 @@ VarHolder* ternary_out_hint(VarHolder* cond, VarHolder* x, VarHolder* y) {
 
 void migrate_all_to_cpu() {
     sync_all(true);
-    if (save_mem || _HAS_CUDA)
+    if (save_mem || _HAS_ACCELERATOR)
         for (auto vh : runtime_holder_state().holders()) {
             auto v = vh->var;
             // if (v->_outputs.size()) continue;

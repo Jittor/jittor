@@ -15,7 +15,10 @@
 
 namespace jittor {
 
-DEFINE_FLAG(int, para_opt_level, 3, "para_opt_level");
+#ifndef JT_DEFAULT_PARA_OPT_LEVEL
+#define JT_DEFAULT_PARA_OPT_LEVEL 3
+#endif
+DEFINE_FLAG(int, para_opt_level, JT_DEFAULT_PARA_OPT_LEVEL, "para_opt_level");
 
 void LoopVarAnalyzePass::run() {
     // loop_vars: opi_xx->shape[j]

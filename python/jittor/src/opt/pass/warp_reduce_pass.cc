@@ -8,6 +8,7 @@
 #include "opt/pass_manager.h"
 #include "opt/pass/warp_reduce_pass.h"
 #include "utils/str_utils.h"
+#include "runtime/backend.h"
 
 namespace jittor {
 
@@ -52,12 +53,9 @@ static bool shuffleable(NanoString dtype) {
 }
 
 void WarpReducePass::run() {
-#ifdef IS_ROCM
-    // A wavefront is 64 lanes wide there, so the mask and the shuffle offsets
-    // below are simply wrong; the pass has never been measured on ROCm either.
-    return;
-#else
     if (!op->flag(OpFlags::_cuda)) return;
+    const auto& policy = backend_ops(op->execution_backend()).execution;
+    if (!policy.supports_generated_device_kernels || policy.warp_shuffle_width != 32) return;
     if (op->get_loop_option("no_warp_reduce")) return;
     ir->dfs([&](unique_ptr<KernelIR>& i) {
         if (!i->has_attr(kir::code)) return;
@@ -120,7 +118,6 @@ void WarpReducePass::run() {
             " } else " + fallback + " }";
         LOGvvvv << "warp reduce" << pointer << index;
     });
-#endif
 }
 
 } // jittor

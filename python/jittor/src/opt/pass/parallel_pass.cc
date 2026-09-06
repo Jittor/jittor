@@ -205,7 +205,7 @@ void ParallelPass::run() {
     } else {
         ir->push_front("#include \"helper_cuda.h\"", &ir->before);
         ir->push_front("#include \"type/cuda_limits.h\"", &ir->before);
-        ir->push_front("#include \"type/cuda_atomic.h\"", &ir->before);
+        ir->push_front("#include <jittor_accelerator.h>", &ir->before);
         max_parallel_depth = op->get_loop_option("max_parallel_depth", 4);
     }
     ir->push_back("#pragma GCC diagnostic ignored \"-Wunused-function\"", &ir->before, true);

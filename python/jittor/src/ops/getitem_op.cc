@@ -11,8 +11,6 @@
 #include "ops/op_register.h"
 #ifndef JIT
 #include "utils/stack_vector.h"
-#ifdef HAS_CUDA
-#endif
 #endif
 
 namespace jittor {

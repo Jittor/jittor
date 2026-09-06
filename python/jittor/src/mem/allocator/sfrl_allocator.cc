@@ -11,6 +11,7 @@
 #include <mutex>
 #include "mem/allocator/sfrl_allocator.h"
 #include "runtime/device.h"
+#include "runtime/backend.h"
 
 namespace jittor {
 
@@ -141,30 +142,18 @@ void SFRLAllocator::setup(Allocator* underlying) {
 }
 
 size_t SFRLAllocator::allocation_size(size_t size) {
-    // #ifdef HAS_CUDA
-    // if (is_cuda() && size >= SMALL_BLOCK_SIZE) {
-    //     // just take all free mem
-    //     size_t gpu_free = 0, _gpu_total = 0;
-    //     cudaMemGetInfo(&gpu_free, &_gpu_total);
-    //     // left 512MB
-    //     size_t left = 1<<29;
-    //     if (gpu_free >= left) {
-    //         gpu_free = (gpu_free - left) / LARGE_ALIGN_SIZE * LARGE_ALIGN_SIZE;
-    //         if (gpu_free >= size)
-    //             return gpu_free;
-    //     }
-    // }
-    // #endif
     if (size <= SMALL_BLOCK_SIZE)
         return SMALL_BLOCK_SIZE;
     int64 large_block_size = is_cuda() ? sfrl_large_block_size_device : sfrl_large_block_size_cpu;
     int64 align_size = (size + LARGE_ALIGN_SIZE - 1) / LARGE_ALIGN_SIZE * LARGE_ALIGN_SIZE;
     if (size <= large_block_size) {
-        #ifdef HAS_CUDA
+        #ifdef HAS_ACCELERATOR
         if (is_cuda()) {
             // just take all free mem
-            int64 gpu_free = 0, _gpu_total = 0;
-            cudaMemGetInfo((size_t*)&gpu_free, (size_t*)&_gpu_total);
+            size_t available = 0, total = 0;
+            auto target = allocation_device(this);
+            backend_ops(target.backend).memory_info(target.index, available, total);
+            int64 gpu_free = available;
             // left 512MB
             int64 left = 1<<29;
             gpu_free = (gpu_free - left) / LARGE_ALIGN_SIZE * LARGE_ALIGN_SIZE;
@@ -258,12 +247,11 @@ void SFRLAllocator::try_free_this_allocator() {
 
 void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
     std::unique_lock<std::recursive_mutex> lock(mutex);
-    #ifdef IS_ACL
-    // output of acl op need additional 32 bytes
-    size = align_size(size+32);
-    #else
-    size = align_size(size);
+    size_t padding = 0;
+    #ifdef HAS_ACCELERATOR
+    padding = backend_ops(accelerator_backend_id()).execution.allocation_padding;
     #endif
+    size = align_size(size + padding);
     CachingBlockPool* blocks = get_blocks(size);
     //search cached block
     CachingBlock* block = blocks->pop_block(size);

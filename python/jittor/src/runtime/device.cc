@@ -17,7 +17,7 @@ DEFINE_RUNTIME_FLAG(int, sync_run, 1, "Enable per-op-sync or not");
 
 EXTERN_LIB void sync_all(bool device_sync);
 
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
 int get_device_count() { return backend_ops(accelerator_backend_id()).device_count(); }
 int current_device() { return backend_ops(accelerator_backend_id()).current_device(); }
 void set_current_device(int device) { backend_ops(accelerator_backend_id()).set_device(device); }
@@ -35,7 +35,7 @@ void add_device_switch_hook(device_switch_hook_t hook) {
 void setter_use_cuda(const int& old_value, const int& requested) {
     if (old_value == requested) return;
     int value = requested;
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
     if (value) {
         if (backend_ops(accelerator_backend_id()).device_count() == 0) {
             LOGw << "No CUDA device available; falling back to CPU (use_cuda=0).";
@@ -60,7 +60,7 @@ void setter_use_cuda(const int& old_value, const int& requested) {
 }
 
 void setter_device_id(const int& old_value, const int& value) {
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
     if (value < 0) return;
     if (!get_device_count()) {
         LOGw << "No CUDA device available; ignoring device_id" << value;

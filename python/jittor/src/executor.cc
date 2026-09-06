@@ -10,10 +10,7 @@
 #include <algorithm>
 #include <functional>
 #include <queue>
-#ifdef HAS_CUDA
-#include <cuda_runtime.h>
-#include "helper_cuda.h"
-#include "mem/allocator/cuda_dual_allocator.h"
+#ifdef HAS_ACCELERATOR
 #include "event_queue.h"
 #endif
 #include "runtime/device.h"
@@ -79,8 +76,9 @@ void Executor::submit_pending(Var* target, bool force) {
         return;
     }
 
-#ifdef IS_CUDA
+#ifdef HAS_ACCELERATOR
     if (auto_flush_ops > 0 && runtime_use_cuda()
+            && backend_ops(accelerator_backend_id()).execution.supports_auto_flush
             && Op::number_of_created_ops - last_run_ops >= auto_flush_ops) {
         vector<Var*> vars;
         for (auto holder : runtime_holder_state().holders()) {
@@ -119,7 +117,7 @@ void Executor::submit_pending(Var* target, bool force) {
 // from fetch_op.cc
 EXTERN_LIB list<VarPtr> fetcher_to_free;
 // from cuda_managed_allocator
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
 DECLARE_FLAG(int, use_cuda_managed_allocator);
 #endif
 
@@ -266,7 +264,7 @@ static void top_weak_sync(vector<Var*>& vars) {
     }
 }
 
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
 // The device an op runs on: where its outputs are placed. Op::propagate_device
 // has already made the outputs agree with the inputs, so either end answers;
 // outputs first because device_copy is the one op where they differ.
@@ -299,7 +297,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     auto temp_allocator = get_allocator(true);
     this->allocator = allocator;
     this->temp_allocator = temp_allocator;
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
     // Each op allocates from and launches on the device its outputs live on;
     // the caller gets its own current device back when the run is over, and
     // every device the run touched is waited on rather than just one.
@@ -655,7 +653,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // running
     SetupFreeBuffer setup_free_buffer;
     vector<Var*> outputs_bk;
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
     int sync_times = 0;
     #endif
     auto& jkl = get_jk();
@@ -672,7 +670,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             root = fuse_ops[rr-1];
             load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
         }
-        #ifdef HAS_CUDA
+        #ifdef HAS_ACCELERATOR
         if (runtime_use_cuda()) {
             int dev = op_target_device(op);
             if (dev >= 0) {
@@ -721,7 +719,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             check_backend_fallback(op->name_ex(), accelerator_backend_id(), BackendId::Cpu,
                 "operator has no accelerator execution path for this invocation");
         }
-        #ifdef HAS_CUDA
+        #ifdef HAS_ACCELERATOR
         if (!is_cuda) {
             if (last_is_cuda) {
                 // if prev op in gpu and this op in cpu
@@ -770,7 +768,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         // _JT_SEH_START2;
         op->execute_prepared(jkl);
         // _JT_SEH_END2;
-        #ifdef HAS_CUDA
+        #ifdef HAS_ACCELERATOR
         // migrate to gpu
         if (PREDICT_BRANCH_NOT_TAKEN((!is_cuda && runtime_use_cuda() && !use_cuda_managed_allocator))) {
             for (Var* v : op->outputs()) {
@@ -781,7 +779,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         // record trace data
         if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var>=2)) {
             trace_data.record_execution(op, is_fused_op, jkl);
-            #ifdef HAS_CUDA
+            #ifdef HAS_ACCELERATOR
             if (runtime_use_cuda())
                 backend_synchronize({accelerator_backend_id(), current_device()});
             #endif
@@ -791,7 +789,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             check_nan(var, op);
         #endif
         #ifdef JT_SYNC
-        #ifdef HAS_CUDA
+        #ifdef HAS_ACCELERATOR
         backend_synchronize({accelerator_backend_id(), current_device()});
         #endif
         #endif
@@ -850,7 +848,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     fetcher_to_free.clear();
     if (device_sync && !runtime_use_cuda())
         backend_ops(BackendId::Cpu).synchronize(0);
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
     if (device_sync && runtime_use_cuda()) {
         last_is_cuda = false;
         sync_times++;

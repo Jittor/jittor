@@ -8,7 +8,7 @@
 
 namespace jittor {
 
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
 EventQueue event_queue;
 
 void EventQueue::Worker::start() {

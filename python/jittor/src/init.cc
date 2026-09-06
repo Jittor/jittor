@@ -4,11 +4,8 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#ifdef HAS_CUDA
-#include <cuda_runtime.h>
-#include "helper_cuda.h"
 #include "runtime/device.h"
-#endif
+#include "runtime/backend.h"
 #include <random>
 
 #include <csignal>
@@ -80,24 +77,13 @@ void cleanup() {
     cleanup_callback.clear();
 }
 
-static void init_cuda_devices() {
-#ifdef IS_CUDA
+static void init_device_architectures() {
+#ifdef HAS_ACCELERATOR
     if (cuda_archs.size()) return;
-    int count=0;
-    cudaGetDeviceCount(&count);
-    for (int i=0; i<count; i++) {
-        cudaDeviceProp devProp;
-        cudaGetDeviceProperties(&devProp, i);
-        int number = devProp.major * 10 + devProp.minor;
-        int found = 0;
-        for (auto v : cuda_archs)
-            if (v==number) {
-                found = 1;
-                break;
-            }
-        if (!found) cuda_archs.push_back(number);
-    }
-    LOGi << "Found cuda archs:" << cuda_archs;
+    const auto& backend = backend_ops(accelerator_backend_id());
+    if (!backend.architectures) return;
+    cuda_archs = backend.architectures();
+    if (cuda_archs.size()) LOGi << "Found device architectures:" << cuda_archs;
 #endif
 }
 
@@ -121,7 +107,7 @@ void init() {
     fused.implementations.emplace(accelerator_backend_id(), OpImplementation{fused_kernel, fused_codegen});
     op_registe(fused);
     register_op_definition<Tapes>({"tapes", "", ""});
-    init_cuda_devices();
+    init_device_architectures();
     LOGv << "sizeof(Node)" << sizeof(Node);
     LOGv << "sizeof(Var)" << sizeof(Var);
     LOGv << "sizeof(Op)" << sizeof(Op);
@@ -146,15 +132,15 @@ void add_set_seed_callback(set_seed_callback callback) {
 
 std::default_random_engine* get_random_engine() { return eng.get(); }
 
-#ifdef HAS_CUDA
-bool no_cuda_error_when_free = 0;
+#ifdef HAS_ACCELERATOR
+bool no_device_error_when_free = 0;
 #endif
 
 void jt_init_subprocess() {
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
     runtime_device_state().use_cuda = 0;
     runtime_executor().last_is_cuda = false;
-    no_cuda_error_when_free = 1;
+    no_device_error_when_free = 1;
     #endif
     callbacks.clear();
 }

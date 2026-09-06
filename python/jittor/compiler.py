@@ -43,7 +43,7 @@ from jittor_utils import backend_discovery as _backend_discovery
 from jittor_utils import build_config as _build_config_api
 from jittor_utils import backend_resources as _backend_resources_api
 from jittor_utils.backend_resources import backend_root
-from jittor_utils.build_config import BuildConfig, BuildContext, ModuleBuildServices
+from jittor_utils.build_config import BuildConfig, BuildContext, BuildSource, ModuleBuildServices
 
 
 def _module_build_services(config):
@@ -62,7 +62,38 @@ def make_backend_context(config=None, *, publish_library=None, mpi_compile_flags
         compile=compile, compile_custom_ops=compile_custom_ops,
         publish_library=publish_library, make_cache_dir=make_cache_dir,
         load_library=ctypes.CDLL, mpi_compile_flags=mpi_compile_flags, so=so,
+        native_core=globals().get("core"),
     )
+
+
+def compile_backend_sources(config, common_flags):
+    objects, commands = [], []
+    directory = os.path.join(config.cache_path, "obj_files", "backends")
+    os.makedirs(directory, exist_ok=True)
+    for source in config.backend_sources:
+        path = os.path.abspath(source.path)
+        identity = json.dumps((path, source.language, source.flags, source.compiler),
+                              separators=(",", ":"))
+        tag = hashlib.sha256(identity.encode("utf8")).hexdigest()[:12]
+        output = os.path.join(directory, os.path.basename(path) + "." + tag + ".o")
+        flags = remove_flags(common_flags + " " + source.flags,
+                             ['-l', '-L', '-Wl,', '.lib', '-shared'])
+        driver = source.compiler or config.cc_path
+        if source.language in ("cuda", "hip"):
+            driver = source.compiler or config.kernel_compiler or config.nvcc_path
+            if not driver:
+                raise RuntimeError("backend source requires a compiler: " + path)
+            if config.convert_nvcc_flags is not None:
+                flags = config.convert_nvcc_flags(flags)
+        if "nan_checker" in path:
+            flags = remove_flags(flags, ["--use_fast_math", "-Ofast"]) + " -O2 "
+        command = '"%s" "%s" %s -c -o "%s"' % (driver, path, flags, output)
+        commands.append(fix_cl_flags(command))
+        objects.append(output)
+    if commands:
+        jit_utils.run_cmds(commands, config.cache_path, config.jittor_path,
+                           "Compiling " + config.backend + " backend")
+    return objects
 
 def find_jittor_path():
     return os.path.dirname(__file__)
@@ -1020,6 +1051,7 @@ def check_cuda():
         return
     global cc_flags, has_cuda, is_cuda, core_link_flags, cuda_dir, cuda_lib, cuda_include, cuda_home, cuda_bin
     global cuda_include_dirs, cuda_lib_dirs, cuda_runtime_lib
+    global cuda_sdk_flags, cuda_link_flags
     cuda_dir = os.path.dirname(get_full_path_of_executable(nvcc_path))
     cuda_bin = cuda_dir
     cuda_home = os.path.abspath(os.path.join(cuda_dir, ".."))
@@ -1042,17 +1074,13 @@ def check_cuda():
         path for path in cuda_lib_dirs if os.path.isdir(path)
     ))
     cuda_include2 = os.path.join(backend_root(jittor_path, "cuda"), "include")
-    cc_flags += " -DHAS_CUDA -DIS_CUDA "
-    cc_flags += "".join(f' -I"{path}"' for path in cuda_include_dirs)
-    cc_flags += f" -I\"{cuda_include2}\" "
+    cc_flags += " -DHAS_ACCELERATOR -DHAS_CUDA -DIS_CUDA "
+    cuda_sdk_flags = "".join(f' -I"{path}"' for path in cuda_include_dirs)
+    cuda_sdk_flags += f" -I\"{cuda_include2}\" "
     if os.name == 'nt':
         cuda_lib = os.path.abspath(os.path.join(cuda_dir, "..", "lib", "x64"))
         # cc_flags += f" \"{cuda_lib}\\cudart.lib\" "
-        cuda_lib_path = glob.glob(cuda_bin+"/cudart64*")[0]
-        cc_flags += f" -lcudart -L\"{cuda_lib}\" -L\"{cuda_bin}\" "
-        dll = ctypes.CDLL(cuda_lib_path, dlopen_flags)
-        ret = dll.cudaDeviceSynchronize()
-        assert ret == 0
+        cuda_link_flags = f" -lcudart -L\"{cuda_lib}\" -L\"{cuda_bin}\" "
     else:
         cuda_runtime_lib = find_cuda_library("cudart")
         if not cuda_runtime_lib:
@@ -1060,8 +1088,7 @@ def check_cuda():
                 "CUDA compiler was found, but libcudart was not found in %s"
                 % cuda_lib_dirs
             )
-        cc_flags += " " + cuda_library_link_flags("cudart", cuda_runtime_lib) + " "
-        preload_cuda_library("cudart", required=True)
+        cuda_link_flags = " " + cuda_library_link_flags("cudart", cuda_runtime_lib) + " "
     is_cuda = has_cuda = 1
 
 def _write_jit_utils_cache_key(files, output):
@@ -1365,7 +1392,7 @@ if os.path.isfile(ex_python_path):
     python_path = ex_python_path
 
 def _discover_cuda_compiler(requested_backend):
-    if requested_backend == "cpu":
+    if requested_backend not in (None, "cuda"):
         return ""
     nvcc = None
     if install_cuda.has_installation() or os.name == 'nt':
@@ -1647,18 +1674,6 @@ cc_flags += f" -I\"{os.path.join(jittor_path, 'src')}\" "
 cc_flags += f" -I\"{os.path.join(jittor_path, 'extern')}\" "
 cc_flags += f" -I\"{backend_root(jittor_path, 'cuda')}\" "
 
-ascend_toolkit_home = os.getenv('ASCEND_TOOLKIT_HOME')
-
-if ascend_toolkit_home:
-    cc_flags += f" -I\"{os.path.join(ascend_toolkit_home, 'include')}\" "
-    cc_flags += f" -I\"{os.path.join(ascend_toolkit_home, 'include/acl')}\" "
-    cc_flags += f" -I\"{os.path.join(ascend_toolkit_home, 'include/aclnn')}\" "
-    cc_flags += f" -I\"{os.path.join(ascend_toolkit_home, 'include/aclnnop')}\" "
-    cc_flags += f" -L\"{os.path.join(ascend_toolkit_home, 'lib64')}\" "
-    cc_flags += " -llibascendcl "
-    cc_flags += " -llibnnopbase "
-    cc_flags += " -llibopapi "
-
 cc_flags += py_include
 
 check_cache_compile()
@@ -1666,6 +1681,7 @@ LOG.v(f"Get cache_compile: {jit_utils.cc}")
 
 # check cuda
 is_cuda = has_cuda = has_acl = has_rocm = has_corex = 0
+cuda_sdk_flags = cuda_link_flags = ""
 check_cuda()
 if _requested_backend == "cuda" and not has_cuda:
     raise RuntimeError("JT_BACKEND=cuda requires a usable CUDA compiler; set nvcc_path")
@@ -1673,7 +1689,7 @@ nvcc_flags = os.environ.get("nvcc_flags", "")
 def convert_nvcc_flags(value):
     return value
 if has_cuda:
-    nvcc_flags += cc_flags
+    nvcc_flags += cc_flags + cuda_sdk_flags
     def convert_nvcc_flags(nvcc_flags):
         # nvcc don't support -Wall option
         if os.name == 'nt':
@@ -1720,8 +1736,21 @@ build_config = BuildConfig(
     backend="cuda" if has_cuda else "cpu", cc_path=cc_path, cc_type=cc_type,
     cc_flags=cc_flags, nvcc_path=nvcc_path, nvcc_flags=nvcc_flags,
     kernel_flags=kernel_opt_flags, cache_path=cache_path, jittor_path=jittor_path,
-    has_cuda=bool(has_cuda), is_cuda=bool(is_cuda),
+    has_cuda=bool(has_cuda), is_cuda=bool(is_cuda), has_accelerator=bool(has_cuda),
     convert_nvcc_flags=convert_nvcc_flags,
+    backend_sources=(
+        BuildSource(os.path.join(backend_root(jittor_path, "cuda"), "runtime/driver.cc"), flags=cuda_sdk_flags),
+        BuildSource(os.path.join(backend_root(jittor_path, "cuda"), "runtime/nan_checker.cc"), flags=cuda_sdk_flags),
+        BuildSource(os.path.join(backend_root(jittor_path, "cuda"), "kernels/debug/nan_checker.cu"),
+                    language="cuda", flags=cuda_sdk_flags),
+    ) if has_cuda else (),
+    backend_link_flags=cuda_link_flags,
+    extension_compile_flags=cuda_sdk_flags,
+    kernel_compiler=nvcc_path if has_cuda else cc_path,
+    kernel_language="cuda" if has_cuda else "cxx",
+    kernel_compile_flags=cuda_sdk_flags,
+    kernel_device_link=bool(has_cuda),
+    kernel_source_roots=(os.path.join(backend_root(jittor_path, "cuda"), "kernels/core"),) if has_cuda else (),
 )
 _backend_provider = _backend_discovery.load_backend_provider(_requested_backend)
 backend_modules = () if _backend_provider is None else (_backend_provider,)
@@ -1739,6 +1768,7 @@ cc_path, cc_type, cc_flags = build_config.cc_path, build_config.cc_type, build_c
 nvcc_path, nvcc_flags = build_config.nvcc_path, build_config.nvcc_flags
 kernel_opt_flags = build_config.kernel_flags
 jittor_path, cache_path = build_config.jittor_path, build_config.cache_path
+has_accelerator = build_config.has_accelerator
 has_cuda, has_acl = build_config.has_cuda, build_config.has_acl
 has_rocm, has_corex = build_config.has_rocm, build_config.has_corex
 hipcc_path, tikcc_path = build_config.hipcc_path, build_config.tikcc_path
@@ -1796,7 +1826,7 @@ def core_source_signature():
     """
     signature = {}
     roots = [(top, os.path.join(jittor_path, top)) for top in ("src", "extern")]
-    for backend in ("cuda", "acl"):
+    for backend in ("cuda", "acl", "rocm", "corex"):
         try:
             root = backend_root(jittor_path, backend)
         except FileNotFoundError:
@@ -1879,9 +1909,15 @@ def core_build_ingredients():
         "extension_suffix": extension_suffix,
         "lib_suffix": lib_suffix,
         "has_cuda": int(bool(has_cuda)),
+        "has_accelerator": int(bool(has_accelerator)),
         "has_rocm": int(bool(has_rocm)),
         "is_cuda": int(bool(is_cuda)),
         "extra_core_files": list(extra_core_files),
+        "backend_sources": [vars(source) for source in build_config.backend_sources],
+        "backend_link_flags": build_config.backend_link_flags,
+        "kernel_compiler": build_config.kernel_compiler,
+        "kernel_language": build_config.kernel_language,
+        "kernel_compile_flags": build_config.kernel_compile_flags,
         "jit_utils_core_files": list(jit_utils_core_files),
         "os_name": os.name,
         "generators": core_generator_signature(),
@@ -2006,18 +2042,15 @@ def build_core(force=False):
     # 3. op_utils
     # 4. other
     files2 = pyjt_gen_src
-    ext_args = 'c[cu]' if has_cuda or has_rocm else 'cc'
-    files4 = glob.glob(jittor_path+"/src/**/*."+ext_args, recursive=True)
+    files4 = glob.glob(jittor_path+"/src/**/*.cc", recursive=True)
     files4 = [ f[len(jittor_path)+1:] for f in files4 ]
     indexing_schedule_source = os.path.join(
         backend_root(jittor_path, "cuda"), "kernels", "core", "indexing_schedule_codegen.cc")
     files4.append(indexing_schedule_source)
-    if has_cuda or has_rocm or has_acl or has_corex:
+    if has_accelerator:
         files4 += [path for path in sorted(glob.glob(os.path.join(
             backend_root(jittor_path, "cuda"), "kernels", "core", "*_codegen.cc")))
             if path != indexing_schedule_source]
-        files4 += sorted(glob.glob(os.path.join(
-            backend_root(jittor_path, "cuda"), "kernels", "debug", "*.cu")))
     at_beginning = [
         "src/ops/op_utils.cc",
         "src/ops/op_register.cc",
@@ -2058,7 +2091,9 @@ def build_core(force=False):
         _preflight.assert_ready()
 
     try:
-        compile(cc_path, core_cc_flags+opt_flags, files, core_output_name)
+        provider_objects = compile_backend_sources(build_config, core_cc_flags+opt_flags+lto_flags)
+        compile(cc_path, core_cc_flags+opt_flags+build_config.backend_link_flags,
+                files + provider_objects, core_output_name)
     except RuntimeError as error:
         # A build that fails here usually fails for a reason the preconditions
         # above can name. Say all of them, rather than leaving the user with a
@@ -2078,6 +2113,7 @@ def build_core(force=False):
     # signature is the pre-build one on purpose: it is the state the sources
     # were in when this build was decided on, and a source edited *during* the
     # build must leave the stamp stale rather than claim to cover the edit.
+    files += [source.path for source in build_config.backend_sources]
     _write_core_build_stamp(signature, ingredients, files)
     return True
 

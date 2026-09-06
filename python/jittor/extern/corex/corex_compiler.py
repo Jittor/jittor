@@ -6,9 +6,10 @@
 # ***************************************************************
 import os
 from collections import namedtuple
-import jittor_utils
+import shlex
 from jittor_utils.compiler_flags import remove_flags
-import glob
+from jittor_utils.backend_resources import backend_root
+from jittor_utils.build_config import BuildSource
 
 
 CorexDiscovery = namedtuple(
@@ -28,67 +29,68 @@ def discover(corex_home=None):
     return CorexDiscovery(home, compiler_path, True, "ready")
 
 def configure(context, corex_home=None):
+    """Declare Corex SDK units and kernel compilation without source rewriting."""
     discovery = discover(corex_home)
     if not discovery.available:
         raise RuntimeError(discovery.reason)
-    corex_compiler_home = os.path.dirname(__file__)
-    cc_files = sorted(glob.glob(corex_compiler_home+"/**/*.cc", recursive=True))
-    jittor_utils.LOG.i("COREX detected")
-
-    mod = context.compile_module('''
-#include "common.h"
-#include "utils/str_utils.h"
-
-namespace jittor {
-// @pyjt(process)
-string process_acl(const string& src, const string& name, const map<string,string>& kargs) {
-    auto new_src = src;
-    new_src = replace(new_src, "helper_cuda.h", "../include/helper_cuda.h");
-    if (name == "string_view_map.h")
-        new_src = replace(new_src, "using std::string_view;", "using string_view = string;");
-    if (name == "nan_checker.cu")
-        new_src = replace(new_src, "__trap()", "assert(0)");
-    if (name == "jit_compiler.cc") {
-        // remove asm tuner
-        new_src = token_replace_all(new_src, "cmd = python_path$1;", "");
-        new_src = token_replace_all(new_src, "JPU(op_compiler($1));", 
-        R"(JPU(op_compiler($1));
-            *extra_flags2 = replace(*extra_flags2, "--extended-lambda", "");
-            *extra_flags2 = replace(*extra_flags2, "--expt-relaxed-constexpr", "");
-        )");
-        new_src = token_replace_all(new_src, 
-            "if (is_cuda_op && $1 != string::npos)",
-            "if (is_cuda_op)");
-    }
-    if (name == "where_op.cc") {
-        // default where kernel cannot handle 64 warp size, use cub_where instead
-        new_src = token_replace_all(new_src, "if (cub_where$1) {", "if (cub_where) {");
-    }
-    if (name == "loop_var_analyze_pass.cc") {
-        new_src = token_replace_all(new_src, "DEFINE_FLAG($1, para_opt_level,$2,$3);", 
-                                             "DEFINE_FLAG($1, para_opt_level, 4,$3);");
-    }
-    return new_src;
-}
-}''', context.config.cc_flags + " " + " ".join(cc_files))
-    config = context.transform_sources(context.config, "corex", mod.process)
-    cc_flags = remove_flags(config.cc_flags, ["-fopenmp", "-DIS_CUDA", "-DHAS_CUDA"])
-    cc_flags += " -DHAS_CUDA "
+    config = context.config
+    corex_root = backend_root(config.jittor_path, "corex")
+    cuda_root = backend_root(config.jittor_path, "cuda")
+    sdk_include = os.path.join(discovery.home, "include")
+    sdk_lib = os.path.join(discovery.home, "lib64")
+    if not os.path.isdir(sdk_lib) and os.path.isdir(os.path.join(discovery.home, "lib")):
+        sdk_lib = os.path.join(discovery.home, "lib")
+    sdk_bin = os.path.join(discovery.home, "bin")
+    include_paths = (os.path.join(corex_root, "include"), sdk_include,
+                     os.path.join(cuda_root, "include"), cuda_root)
+    sdk_flags = " " + " ".join("-I" + shlex.quote(path) for path in include_paths)
+    common_flags = remove_flags(
+        config.cc_flags, ("-fopenmp", "-DIS_CUDA", "-DHAS_CUDA"))
+    common_flags += " -DHAS_ACCELERATOR -DIS_COREX -DJT_DEFAULT_PARA_OPT_LEVEL=4 "
+    link_flags = (" -L" + shlex.quote(sdk_lib)
+                  + " -Wl,-rpath," + shlex.quote(sdk_lib) + " -lcudart ")
+    device_flags = sdk_flags + " -x cu -Ofast -DNO_ATOMIC64 -Wno-c++11-narrowing "
+    driver = os.path.join(cuda_root, "runtime", "driver.cc")
+    abi_flags = sdk_flags + " -DHAS_CUDA -DIS_CUDA "
+    sources = (
+        BuildSource(driver, flags=abi_flags,
+                    compiler=discovery.compiler_path),
+        BuildSource(os.path.join(cuda_root, "runtime", "nan_checker.cc"),
+                    flags=abi_flags, compiler=discovery.compiler_path),
+        BuildSource(os.path.join(cuda_root, "kernels", "debug", "nan_checker.cu"),
+                    language="cuda", flags=abi_flags + device_flags,
+                    compiler=discovery.compiler_path),
+        BuildSource(os.path.join(corex_root, "runtime", "corex_backend.cc"),
+                    compiler=discovery.compiler_path),
+    )
     return config.evolve(
-        backend="corex", has_corex=True, has_cuda=True, is_cuda=False,
+        backend="corex", has_corex=True, has_accelerator=True,
+        has_cuda=False, is_cuda=False, has_acl=False, has_rocm=False,
         cc_path=discovery.compiler_path, nvcc_path=discovery.compiler_path,
-        cc_type="clang", cc_flags=cc_flags,
-        kernel_flags=config.kernel_flags.replace("-fopenmp", ""),
-        nvcc_flags=cc_flags + " -x cu -Ofast -DNO_ATOMIC64 -Wno-c++11-narrowing ",
+        cc_type="clang", cc_flags=common_flags,
+        kernel_flags=remove_flags(config.kernel_flags, ("-fopenmp",)),
+        nvcc_flags=convert_nvcc_flags(common_flags + device_flags),
+        backend_sources=config.backend_sources + sources,
+        backend_link_flags=config.backend_link_flags + link_flags,
+        kernel_compiler=discovery.compiler_path, kernel_language="cuda",
+        kernel_compile_flags=device_flags,
+        kernel_flag_filter=("--extended-lambda", "--expt-relaxed-constexpr"),
+        kernel_source_suffix=".cc", kernel_device_link=False,
         convert_nvcc_flags=convert_nvcc_flags,
         environment=dict(config.environment, use_cutt="0"),
-        resources=dict(config.resources, corex_home=discovery.home,
-                       corex_converter=mod),
+        resources=dict(
+            config.resources, corex_home=discovery.home,
+            cuda_home=discovery.home, cuda_bin=sdk_bin, cuda_dir=sdk_bin,
+            cuda_include=sdk_include, cuda_lib=sdk_lib,
+            cuda_include_dirs=(sdk_include,), cuda_lib_dirs=(sdk_lib, sdk_bin)),
     )
 
 
 def convert_nvcc_flags(flags):
-    return flags
+    """Adapt flags only; filenames, source text and linker wrappers are not inputs."""
+    unsupported = {"--extended-lambda", "--expt-relaxed-constexpr"}
+    return " ".join(shlex.quote(flag) for flag in shlex.split(flags)
+                    if flag not in unsupported)
 
 
 def install_extern(context):

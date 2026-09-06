@@ -22,7 +22,7 @@ namespace jittor {
 static auto make_index = op_constructor<VarPtr, NanoVector, int64, NanoString>("index");
 static auto make_reindex_reduce = op_constructor<VarPtr, Var*, NanoString, NanoVector, vector<string>&&, vector<string>&&, vector<Var*>&&>("reindex_reduce");
 
-#ifdef HAS_CUDA
+#ifdef HAS_ACCELERATOR
 static auto make_array = op_constructor<VarPtr, const void*, NanoVector, NanoString>("array");
 static auto make_binary = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
 static auto make_transpose = op_constructor<VarPtr, Var*, NanoVector>("transpose");
@@ -33,7 +33,7 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype)
     if  (this->dim == -1)
         this->dim = x->shape.size() - 1;
     dim = this->dim;
-    #ifdef HAS_CUDA
+    #ifdef HAS_ACCELERATOR
     if (runtime_use_cuda()) {
         if (has_op_capability(accelerator_backend_id(), OpCapability::SegmentedArgsort)) {
             int dims = x->shape.size();
