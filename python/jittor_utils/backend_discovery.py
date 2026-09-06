@@ -6,7 +6,7 @@ import os
 ENTRY_POINT_GROUP = "jittor.backends"
 BUILTIN_PROVIDERS = {
     "acl": "jittor.extern.acl.acl_compiler",
-    "rocm": "jittor.extern.rocm.rocm_compiler",
+    "rocm": "jittor.backends.rocm",
     "corex": "jittor.extern.corex.corex_compiler",
 }
 
