@@ -29,9 +29,15 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+#: ``backends/`` holds the CUDA, ACL and ROCm kernels and library wrappers.
+#: They used to live under ``python/jittor/extern`` and were moved out by the
+#: backend reorganisation; a scan that names only the two old roots stops
+#: seeing every destructor in them, including the ones that release device
+#: handles from a static destructor at exit.
 SOURCE_ROOTS = (
     REPO_ROOT / "python" / "jittor" / "src",
     REPO_ROOT / "python" / "jittor" / "extern",
+    REPO_ROOT / "backends",
 )
 
 #: Every macro in the tree that reports by throwing.  The `_PEEK` and
@@ -87,34 +93,44 @@ def balanced_body(text, open_at):
     return text[open_at:]
 
 
-def sources():
-    for root in SOURCE_ROOTS:
-        if not root.is_dir():
-            continue
-        for suffix in ("*.cc", "*.h"):
-            yield from sorted(root.rglob(suffix))
+def sources(root):
+    if not root.is_dir():
+        return
+    for suffix in ("*.cc", "*.h", "*.cu", "*.cuh"):
+        yield from sorted(root.rglob(suffix))
 
 
 def test_no_destructor_reports_by_throwing():
     offenders = []
-    scanned = 0
-    for path in sources():
-        raw = path.read_text(encoding="utf8", errors="replace")
-        if "~" not in raw:
-            continue
-        text = strip_comments_and_strings(raw)
-        for match in DESTRUCTOR.finditer(text):
-            scanned += 1
-            body = balanced_body(text, match.end() - 1)
-            used = sorted(set(THROWING.findall(body)))
-            if used:
-                line = raw[:match.start()].count("\n") + 1
-                offenders.append("%s:%d: ~%s uses %s" % (
-                    path.relative_to(REPO_ROOT), line, match.group(2),
-                    ", ".join(used)))
-    assert scanned > 50, (
+    scanned = {}
+    for root in SOURCE_ROOTS:
+        scanned[root] = 0
+        for path in sources(root):
+            raw = path.read_text(encoding="utf8", errors="replace")
+            if "~" not in raw:
+                continue
+            text = strip_comments_and_strings(raw)
+            for match in DESTRUCTOR.finditer(text):
+                scanned[root] += 1
+                body = balanced_body(text, match.end() - 1)
+                used = sorted(set(THROWING.findall(body)))
+                if used:
+                    line = raw[:match.start()].count("\n") + 1
+                    offenders.append("%s:%d: ~%s uses %s" % (
+                        path.relative_to(REPO_ROOT), line, match.group(2),
+                        ", ".join(used)))
+    # Per root, not in total: a root that has been moved or renamed away
+    # contributes nothing and the total from the others still looks healthy,
+    # which is how the backend sources stopped being checked at all.
+    empty = [str(root.relative_to(REPO_ROOT))
+             for root, count in scanned.items() if not count]
+    assert not empty, (
+        "no destructor was found under %s; either the sources moved or the "
+        "scan is broken, and in both cases this test now proves nothing about "
+        "them" % ", ".join(empty))
+    assert sum(scanned.values()) > 50, (
         "the destructor scan matched %d bodies; it has stopped finding them "
-        "and would pass on anything" % scanned)
+        "and would pass on anything" % sum(scanned.values()))
     assert not offenders, (
         "a throw leaving a destructor is std::terminate; report and carry on "
         "instead (CHECK_ACL_PEEK, HCCLCHECK_PEEK, peekCudaErrorsAlways, or a "

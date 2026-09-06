@@ -21,6 +21,25 @@ class TestTransposeOp(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Invalid axes"):
             jt.transpose(jt.ones((2, 3)), (0, 0))
 
+    def test_axes_shorter_than_input_is_a_catchable_user_error(self):
+        # `(0,)` counts up from 0, so it used to satisfy the constructor's
+        # "axes[i]==i for all i" identity test and forward the input unchanged.
+        # infer_shape, which holds the rank check, was never reached: a wrong
+        # axes argument silently returned the untransposed input.
+        for axes in ((0,), (0, 1, 2)):
+            with self.assertRaisesRegex(RuntimeError, "axes.size"):
+                jt.transpose(jt.ones((2, 3)), axes).sync()
+
+    def test_fuse_transpose_axes_shorter_than_input_is_a_catchable_user_error(self):
+        for axes in ((0,), (0, 1, 2)):
+            with self.assertRaisesRegex(RuntimeError, "axes.size"):
+                jt.ones((2, 3)).fuse_transpose(axes).sync()
+
+    def test_identity_axes_still_forward_the_input(self):
+        a = jt.array(gen_data([2, 3])).float()
+        np.testing.assert_allclose(jt.transpose(a, (0, 1)).data, a.data)
+        np.testing.assert_allclose(a.fuse_transpose((0, 1)).data, a.data)
+
     def test_with_np(self):
         def check(a):
             perms = list(permutations(range(a.ndim))) + [None]

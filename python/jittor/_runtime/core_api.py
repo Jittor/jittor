@@ -19,6 +19,7 @@ import hashlib
 import sys, os
 import traceback
 from .acl_clamp import dispatch_acl_clamp
+from .backend_libraries import get_library as _get_library
 from .dispatch import register_kernel as _register_kernel, try_dispatch as _try_dispatch
 from .state import RuntimeContext, RuntimeState
 
@@ -887,6 +888,43 @@ def reshape(x, *shape):
 reshape.__doc__ = origin_reshape.__doc__
 Var.view = Var.reshape = view = reshape
 
+_accelerator_transpose_tried = False
+
+def _load_accelerator_transpose():
+    """Build cuTT, which provides the accelerated CUDA transpose kernel.
+
+    TransposeOp looks the kernel up through OpCapability::Transpose, and that
+    capability only exists once the cuTT module has been compiled and loaded.
+    Loading downloads and builds cutt-1.2, so it does not happen during import
+    (9.01); the first transpose pays for it, the same way the first CPU float32
+    batched matmul pays for MKL. setup_cutt() decides whether this
+    configuration has CUDA at all, so there is nothing to test for here.
+
+    Failing to build cuTT is not fatal -- TransposeOp has its own kernel -- so
+    it is reported once and not retried.
+    """
+    global _accelerator_transpose_tried
+    if _accelerator_transpose_tried:
+        return
+    _accelerator_transpose_tried = True
+    try:
+        _get_library("cutt", load=True)
+    except Exception as e:
+        LOG.w("cuTT is unavailable, transposing with the built-in kernel:", e)
+
+def _with_accelerator_kernel_loaded(func):
+    """Load cuTT around ``transpose`` rather than inside it.
+
+    ``transpose`` below is the argument adapter -- axis forms, shapes, backend
+    dispatch -- and its dependencies are kept to what that needs. Building a
+    backend is a different concern and stays outside the function.
+    """
+    @_functools.wraps(func)
+    def transpose_with_accelerator_kernel(x, *dim):
+        _load_accelerator_transpose()
+        return func(x, *dim)
+    return transpose_with_accelerator_kernel
+
 origin_transpose = transpose
 def transpose(x, *dim):
     original_dim = dim
@@ -932,6 +970,7 @@ def transpose(x, *dim):
         pass
     return out
 transpose.__doc__ = origin_transpose.__doc__
+transpose = _with_accelerator_kernel_loaded(transpose)
 Var.transpose = Var.permute = permute = transpose
 
 def _flatten_cpu(input, start_dim=0, end_dim=-1):

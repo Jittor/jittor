@@ -10,18 +10,18 @@ import unittest
 import jittor as jt
 import numpy as np
 from jittor import compile_extern
+from _helpers.cutt import require_cutt_ops
 from _helpers.logs import find_log_with_re
 import copy
-if jt.has_cuda:
-    from jittor.compile_extern import cutt_ops
-else:
-    cutt_ops = None
 
 class TestCutt(unittest.TestCase):
-    @unittest.skipIf(cutt_ops==None, "Not use cutt, Skip")
+    @classmethod
+    def setUpClass(cls):
+        cls.cutt_ops = require_cutt_ops()
+
     @jt.flag_scope(use_cuda=1)
     def test(self):
-        t = cutt_ops.cutt_test("213")
+        t = self.cutt_ops.cutt_test("213")
         assert t.data == 123
 if __name__ == "__main__":
     unittest.main()

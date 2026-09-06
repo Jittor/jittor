@@ -101,6 +101,11 @@ Foo::~Foo() {
 会 abort**。判据：**析构里只要调用了非 `noexcept` 的东西，静态扫描就已经不作数了，
 必须有一条运行时用例。**
 
+**扫描的根目录也要核。** 这类扫描按目录列举源码，而目录会搬。后端搬进 `backends/` 之后，
+只写 `python/jittor/{src,extern}` 的扫描对 CUDA/ACL/ROCm 的析构**一条都没看**，
+而总数看上去仍然健康。所以断言要**逐个根目录非空**，不是断言总数；后缀也要带
+`.cu`/`.cuh`。同样的道理适用于任何「按路径清单扫全树」的门禁。
+
 顺带：一旦让错误能从这些路径传出去，**被打断的全局状态要用 RAII 复位**（jittor 的
 liveness 队列就是一例：抛在半路会留下 `front` 下标，下一次 drain 从陈旧位置继续）。
 
@@ -143,25 +148,39 @@ jittor 装了进程级 SIGCHLD 处理器：子进程被信号杀死会让 pytest
 | --- | --- | --- |
 | `this machine has 1 visible CUDA device(s), the test needs 2` | 真（你被分了一张卡） | 记下来，不要去抢别人的卡 |
 | `Only test without CUDA` | 真（这条就是测无 CUDA 分支的） | 正常 |
-| `Not use cutt, Skip` | **假绿** | 见下 |
+| `Not use cutt, Skip` | **曾经是假绿**，2026-09-06 已修 | 见下，形态会重现 |
 
-**`Not use cutt` 是一个永久 skip。** `compile_extern.setup_cutt()` 全树**没有任何调用点**
-（`setup_mkl` 有 `nn/functional/matrix.py`，`setup_nccl` 有 `compat/collectives.py`，
-只有 `setup_cutt` 没有），所以 `cutt_ops` 恒为 `None`，`tests/backends/cuda/test_cutt*.py`
-里全部 6 条用例从来没跑过一次。**恒 skip 的条目等于没有条目**：任何以
-「cuTT 负向用例已通过」为依据的验收都不成立。
+**「后端库没人装载」这个形态会重复出现，判据是「谁调用 setup_X」。** cuTT 是它的样本：
+9.01 把 `setup_nccl`/`setup_cutt`/`setup_mkl` 三个 import 期调用改成惰性时，给 NCCL 和 MKL
+补了惰性调用点（`compat/collectives.py`、`nn/functional/matrix.py`），**漏了 `setup_cutt`**。
+后果不是「慢路径」而是「后端不可达」：`cutt_ops` 恒为 `None`，`tests/backends/cuda/test_cutt*.py`
+六条用例从来没跑过一次。**恒 skip 的条目等于没有条目**，任何以它为依据的验收都不成立。
 
-查一个 skip 是真是假：
+查一个后端库是不是活的（**注意 `load=True`**：惰性库直接读属性一定是 `None`，
+这正是那六条用例给出假理由的原因）：
 
 ```bash
 python -c "
 import jittor as jt; jt.flags.use_cuda = 1
-from jittor import compile_extern as ce
-for n in ('cub_ops','cudnn_ops','curand_ops','cublas_ops','cufft_ops','cusparse_ops','cutt_ops'):
-    print(n, getattr(ce, n, 'MISSING'))
+from jittor._runtime.backend_libraries import get_library_ops
+for n in ('cub','cudnn','curand','cublas','cufft','cusparse','cutt','mkl'):
+    print(n, get_library_ops(n, load=True))
 "
 ```
-`None` 的那些，对应的整个测试文件都是死的。
+
+配套的两条判据：
+
+- **`grep -rn 'setup_<lib>' | grep -v 'def setup_'` 为空 = 该后端不可达**，与硬件无关。
+- **测试文件不要在 import 期读后端属性。** 写成 `setUpClass` 里 `load=True` 取一次、
+  取不到就 `raise unittest.SkipTest`；在模块作用域取会让「收集一个文件」变成「编译一个后端」。
+
+**打开一个长期恒 skip 的后端，要预期它带着积攒的坏账。** cuTT 这次一次暴露了三层：
+`setup_cutt` 的编译命令缺 `cuda_sdk_flags` 与后端 include（与 4.12 报告里第 2、3 层同因，
+只是没人编过所以没人看见）；`cutt_transpose` 的构造函数把「axes 从 0 递增」当成恒等置换而
+不比较秩，`[0]` 作用在二维输入上**静默返回原张量**，`infer_shape` 里那两条 `USER_CHECK`
+根本不可达（`transpose_op.cc`、`fuse_transpose_op.cc` 同一处写法，同样静默）；测试文件里
+`test_matmul_grad` 定义了两次，后一个把前一个盖掉。**恒 skip 的目录第一次跑绿之前，
+不要把里面任何一条当成证据。**
 
 # 这台机器上真正缺的硬件
 

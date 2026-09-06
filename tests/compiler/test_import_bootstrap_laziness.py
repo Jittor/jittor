@@ -141,6 +141,47 @@ class TestImportBootstrapLaziness(unittest.TestCase):
                 matrix._mkl_batched_matmul_is_available(operand, operand))
             setup_mock.assert_called_once_with()
 
+    def test_first_cuda_transpose_initializes_cutt(self):
+        """cuTT needs a caller, and for a long time it had none.
+
+        9.01 replaced the import-time ``setup_nccl`` / ``setup_cutt`` /
+        ``setup_mkl`` calls with lazy ones, but only wrote the lazy call sites
+        for NCCL and MKL. ``setup_cutt`` was left with no caller anywhere in
+        the tree, which is not a slow path -- it is an unreachable backend:
+        ``cutt_ops`` stayed ``None`` forever and every cuTT test skipped with
+        a reason that was not true.
+        """
+        import jittor as jt
+        from jittor._runtime import core_api
+
+        operand = jt.array([[1.0, 2.0], [3.0, 4.0]])
+        with mock.patch.object(core_api, "_load_accelerator_transpose") as load:
+            result = jt.transpose(operand, (1, 0))
+        load.assert_called_once_with()
+        # The bootstrap wrapper must not change what transpose returns.
+        self.assertEqual(result.shape, [2, 2])
+
+    def test_accelerator_transpose_load_is_attempted_once(self):
+        from jittor._runtime import backend_libraries, core_api
+
+        requests = []
+
+        def unavailable():
+            requests.append("cutt")
+            raise RuntimeError("cuTT build failed")
+
+        libraries = backend_libraries.BackendLibraries()
+        libraries.register_loader("cutt", unavailable)
+
+        with mock.patch.object(backend_libraries, "_libraries", libraries), \
+                mock.patch.object(core_api, "_accelerator_transpose_tried",
+                                  False):
+            # A backend that cannot be built is not fatal -- TransposeOp has
+            # its own kernel -- but it must not be retried on every transpose.
+            core_api._load_accelerator_transpose()
+            core_api._load_accelerator_transpose()
+        self.assertEqual(requests, ["cutt"])
+
     def test_disabled_mkl_is_not_selected_even_when_already_loaded(self):
         import jittor as jt
         from jittor.nn.functional import matrix

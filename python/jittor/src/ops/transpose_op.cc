@@ -19,7 +19,12 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     int i=0;
     for (; i<axes.size(); i++)
         if (i!=axes[i]) break;
-    if (i==axes.size() && axes.size()) {
+    // Only a *complete* identity permutation forwards x. Matching axes[i]==i
+    // without also matching the rank made every ascending prefix look like the
+    // identity: `axes=[0]` on a 2-D var, or `[0,1,2]` on a 2-D var, returned x
+    // unchanged and never reached infer_shape, so the axes checks there could
+    // not fire and a wrong `axes` silently did nothing.
+    if (i==axes.size() && axes.size() && axes.size()==x->shape.size()) {
         forward(x);
         return;
     }
