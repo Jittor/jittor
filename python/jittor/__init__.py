@@ -26,6 +26,7 @@ _compat_preflight_result = _prepare_compat_import(
 
 from jittor_utils import lock as _lock
 from jittor_utils import limit_openmp_to_physical_cores as _limit_openmp
+from jittor_utils import env_config as _env_config
 
 # The root composes; it does not define. Both helpers below used to be written
 # out here, which put them on ``jittor.`` as public-by-accident names and is
@@ -86,7 +87,8 @@ _limit_openmp(_os.environ)
 # only point early enough. Guarded to multi-process launches (mpirun sets
 # OMPI_COMM_WORLD_SIZE); harmless/no-op otherwise. jittor's mpi module detects
 # the already-initialized MPI and skips its own MPI_Init.
-if _os.environ.get("OMPI_COMM_WORLD_SIZE") and _os.environ.get("use_mpi", "1") != "0":
+if _os.environ.get("OMPI_COMM_WORLD_SIZE") and \
+        _env_config.build_flag("use_mpi", True):
     try:
         import mpi4py
         mpi4py.rc.initialize = True
@@ -324,6 +326,13 @@ core.seal_startup_config()
 from ._runtime.state import StartupConfig as _StartupConfig, freeze_compiler_config as _freeze_compiler_config
 config = _StartupConfig(flags)
 _freeze_compiler_config(compiler)
+
+# Say, once, what the environment configured. Every static initializer and every
+# build variable has been read by now, which is why this cannot live in the
+# files that do the reading. See _runtime/env_report.py for what was silent
+# before.
+from ._runtime import env_report as _env_report
+_env_report.report(core, LOG)
 
 
 _ROOT_EXPORTS = (
