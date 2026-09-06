@@ -2550,6 +2550,52 @@ CUDA `tests/backends/cuda` 42 failed / 220 passed / 41 skipped / 1 xfailed，42 
 「未构建配置」的**可重复**办法；不要用换 `cc_flags` 指纹那招——它要付一次完整冷编译、留
 几百 MB、而且因为指纹固定，**只有第一次是未构建的**，之后测试静默变成空转通过。
 
+### ⚠ `IDENTICAL` 这个判据在 `c31439067` 之前对带 `-n` 的会话是空的
+
+`0.22` 造的 `tools/gate_conclusion_diff.py` 是本轮唯一能证明「一次门禁优化没有丢结论」的工具，
+而 `0.15` 的执行者查明它**在 xdist 下不给判据**：`gate_conclusion_plugin.py` 只在
+`pytest_collection_modifyitems` 里记 `collected`，而 `-n` 下 controller 不做收集，于是每个带 `-n`
+的会话 `collected` 恒为空，`compare` 里报「丢结论」的两个分支**都以它为准、全被禁用**。实测形态：
+四条用例、候选 deselect 掉一条，`compare` 在同一段输出里先打 `passed 4 -> 3`、再打 `IDENTICAL`，
+退出码 0。已由 `c31439067` 修好（改用 `pytest_xdist_node_collection_finished` 取并集），并补了
+`tests/structure/test_gate_conclusion_record.py` 的反向用例。
+
+**影响范围**：交接与看板里共有 9 处拿 `IDENTICAL` 当证据（本文 5 处、看板 4 处）。
+**判据是那次运行有没有带 `-n`**：
+
+- **不带 `-n`（串行）的仍然有效** —— `pytest_collection_modifyitems` 在 controller 上正常跑。
+  `0.22` 的设备对拍 A/B 属这一类（26 个 nodeid、单卡串行，备注里没有 `-n`），初判完好，
+  但请 `0.22` 的下一位接手者按上面的判据自己确认一次，不要因为这行字就当它已确认。
+- **带 `-n` 的一律作废**，要用修好的工具重跑。`0.15` 自己就撞上了：smoke 的 torch 半边在
+  `loadgroup` 下有 3 个 nodeid 从 `passed` 变成 `failed`——**拆散文件让本该失败的用例通过了**，
+  而「一轮能报出全部失败」正是 0.15 的第二条验收。也就是说这一层此前在漏报失败。
+
+一个附带的坑：加或删 `xdist_group` 标记会改 nodeid 字符串，`compare` 会把它报成
+NOT COLLECTED / NEWLY COLLECTED。比结论之前要先把组名归一化掉。
+
+### 更正：`tests/structure` 不是 smoke 的瓶颈（我先前的判断是错的）
+
+我曾据「19774 行、跑一遍 5 分半」推断结构套件吃掉了整个 smoke 预算，并据此派活。**实测不成立**：
+按门禁自己的口径（热缓存、`gate_scope` 选择集、`-m "not slow"`、`-n 4 --dist loadgroup`），
+`tests/structure` 只占 smoke 的 **9.4%（约 47 s / 498 s）**，而且整个落在 torch 半边；占 81.6%
+墙钟的 native 半边里一条结构测试都没有。把整个目录推迟也只从 498 s 到约 451 s。
+
+我引用的「5 分半」是**序贯且开着 CUDA** 的数。**不按门禁口径量，排名会错 50 倍**：
+`test_process_mode_contract.py::test_naming_a_torch_path...` 序贯 269.4 s、占该目录 44.9%，
+门禁口径下是 **4.8 s**。那份序贯数据会把三个「其实是数值测试」的文件排到前三。
+
+**行数也不是耗时**：16 个 ACL 静态合同 3292 行实测合计 **13.2 s**；序贯最贵的三个文件分别只有
+116、68、127 行。所以「缺硬件用静态合同顶替」这件事**并没有**在 PR 门禁上收税，我先前担心的那个
+冲突不存在——真正的账在 `0.19` 那条「< 2000 行」的验收本身，已由 `0.25` 承接改判。
+
+真正的 smoke 瓶颈是 native 半边，且两个半边都是 **work-bound**（层内工作量 /4 ≈ 墙钟），没有被
+某个长文件卡住，所以「再挑几个慢文件推迟」买不到多少。要到 300 s，native 的层内工作量得从
+1592.9 s 降到约 550 s（砍 65%），那是 `10.18` 的「更少或更便宜的比较」或更多机器的事。
+
+**其中一个单点值得你知道**：`tests/core/test_setitem.py` 一个文件占 smoke 的 **15%（238.4 s）**，
+比整个结构套件的层内成本还高 5 倍。而它在「三个属于别人、任何时候不要提交」的清单里，所以
+两位执行者都只报不碰。**要动它需要那个 owner 点头**，这是目前 smoke 预算上最大的一块无主成本。
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
