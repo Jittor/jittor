@@ -80,6 +80,66 @@ class TestFSDP2Compat(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stdout)
         self.assertIn("MATERIALIZATION_OK", completed.stdout)
 
+    def test_fsdp_var_methods_do_not_retain_temporary_full_parameter(self):
+        code = textwrap.dedent(
+            """
+            import gc
+            import types
+            import jittor as jt
+            import jittor.compat.torch
+            from jittor.compat.fsdp2 import shard as fsdp_shard
+
+            with jt.flag_scope(
+                    use_cuda=0, use_stat_allocator=1, use_sfrl_allocator=0):
+                jt.sync_all(True)
+                gc.collect()
+                baseline = (
+                    jt.flags.stat_allocator_total_alloc_byte
+                    - jt.flags.stat_allocator_total_free_byte)
+                shard = jt.ones((1,), dtype="float32").stop_grad()
+                owner = types.SimpleNamespace(weight=shard)
+                entry = types.SimpleNamespace(
+                    owner=owner, attr="weight", shard=shard, full_param=None,
+                    requires_grad=False)
+                state = types.SimpleNamespace(
+                    true_fsdp_initialized=True, true_fsdp_flat=False,
+                    true_fsdp_unsharded=True, true_fsdp_params=(entry,))
+                full = jt.ones((4 * 1024 * 1024,), dtype="float32")
+                full.sync()
+                fsdp_shard._mark_fsdp_param_var(full, state, entry, "full")
+                entry.full_param = full
+                owner.weight = full
+                assert full.to_local() is shard
+                assert full.full_tensor() is full
+                assert "to_local" not in getattr(full, "__dict__", {})
+                fsdp_shard._reshard_module_params(
+                    types.SimpleNamespace(_fsdp_state=state))
+                del full
+                gc.collect()
+                jt.gc()
+                jt.sync_all(True)
+                live_delta = (
+                    jt.flags.stat_allocator_total_alloc_byte
+                    - jt.flags.stat_allocator_total_free_byte
+                    - baseline)
+                assert entry.full_param is None
+                assert owner.weight is shard
+                assert live_delta < 8 * 1024 * 1024, live_delta
+                assert "to_local" not in getattr(shard, "__dict__", {})
+                print("FSDP_TEMP_FULL_RELEASE_OK", live_delta)
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            env=os.environ.copy(),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout)
+        self.assertIn("FSDP_TEMP_FULL_RELEASE_OK", completed.stdout)
+
     def test_reshard_releases_only_frozen_full_parameters(self):
         _, state, entries, full = self._fake_fsdp_state(
             ([1.0, 2.0], [3.0, 4.0]))
@@ -139,6 +199,57 @@ class TestFSDP2Compat(unittest.TestCase):
         self.assertEqual(result, "output")
         self.assertEqual(
             events, ["unshard", "execute", "sync", "reshard", "gc"])
+
+    def test_frozen_execute_materializes_nested_output_without_input_grad(self):
+        state = types.SimpleNamespace(
+            true_fsdp_initialized=True,
+            true_fsdp_params=(types.SimpleNamespace(requires_grad=False),),
+            reshard_after_forward=True,
+        )
+        module = types.SimpleNamespace(_fsdp_state=state)
+        inputs = jt.array([1.0, 2.0]).stop_grad()
+        original = inputs * 3
+
+        with mock.patch.object(
+                fsdp_shard, "_unshard_module_params"), mock.patch.object(
+                    fsdp_shard, "_reshard_module_params"), mock.patch.object(
+                        fsdp_shard.jt, "gc"):
+            result = fsdp_shard._execute_with_true_fsdp(
+                module,
+                lambda value: {
+                    "tensor": original,
+                    "nested": (original + 1, [original + 2]),
+                },
+                inputs,
+            )
+
+        np.testing.assert_allclose(result["tensor"].numpy(), [3.0, 6.0])
+        np.testing.assert_allclose(result["nested"][0].numpy(), [4.0, 7.0])
+        np.testing.assert_allclose(result["nested"][1][0].numpy(), [5.0, 8.0])
+        self.assertFalse(result["tensor"].requires_grad)
+        self.assertTrue(result["tensor"].is_stop_grad())
+        self.assertIsNot(result["tensor"], original)
+
+    def test_frozen_execute_preserves_graph_for_trainable_input(self):
+        state = types.SimpleNamespace(
+            true_fsdp_initialized=True,
+            true_fsdp_params=(types.SimpleNamespace(requires_grad=False),),
+            reshard_after_forward=True,
+        )
+        module = types.SimpleNamespace(_fsdp_state=state)
+        inputs = jt.array([1.0, 2.0])
+        original = inputs * 3
+
+        with mock.patch.object(
+                fsdp_shard, "_unshard_module_params"), mock.patch.object(
+                    fsdp_shard, "_reshard_module_params"), mock.patch.object(
+                        fsdp_shard.jt, "gc"):
+            result = fsdp_shard._execute_with_true_fsdp(
+                module, lambda value: original, inputs)
+
+        self.assertIs(result, original)
+        self.assertTrue(result.requires_grad)
+        self.assertFalse(result.is_stop_grad())
 
     def test_trainable_execute_does_not_force_forward_sync(self):
         events = []

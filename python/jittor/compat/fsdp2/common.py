@@ -78,6 +78,74 @@ def _slice_flat(flat, start, length):
     return flat[start:start + length]
 
 
+def _materialize_initial_shard(shard):
+    """Detach a persistent shard from its full parameter's device storage."""
+    shard = (shard + jt.zeros_like(shard)).stop_grad()
+    shard.sync()
+    return shard
+
+
+def _value_requires_grad(value):
+    if isinstance(value, jt.Var):
+        try:
+            return bool(value.requires_grad)
+        except (AttributeError, TypeError):
+            return not value.is_stop_grad()
+    if isinstance(value, dict):
+        return any(_value_requires_grad(item) for item in value.values())
+    if isinstance(value, (tuple, list)):
+        return any(_value_requires_grad(item) for item in value)
+    return False
+
+
+def _primary_input_requires_grad(args, kwargs):
+    """Conservatively identify whether a module must propagate input grads."""
+    if args:
+        return _value_requires_grad(args[0])
+    for name in (
+            "input", "inputs", "hidden_states", "inputs_embeds", "x",
+            "input_ids", "pixel_values"):
+        if name in kwargs:
+            return _value_requires_grad(kwargs[name])
+    return any(_value_requires_grad(value) for value in kwargs.values())
+
+
+def _materialize_frozen_output(value):
+    """Sever a completed frozen forward graph while preserving its structure."""
+    if isinstance(value, jt.Var):
+        return (value + jt.zeros_like(value)).stop_grad()
+    if isinstance(value, tuple):
+        values = tuple(_materialize_frozen_output(item) for item in value)
+        if hasattr(value, "_fields"):
+            return type(value)(*values)
+        if type(value) is tuple:
+            return values
+        try:
+            return type(value)(values)
+        except TypeError:
+            return values
+    if isinstance(value, list):
+        values = [_materialize_frozen_output(item) for item in value]
+        if type(value) is list:
+            return values
+        try:
+            return type(value)(values)
+        except TypeError:
+            return values
+    if isinstance(value, dict):
+        values = {
+            key: _materialize_frozen_output(item)
+            for key, item in value.items()
+        }
+        if type(value) is dict:
+            return values
+        try:
+            return type(value)(values)
+        except TypeError:
+            return values
+    return value
+
+
 def _all_gather_shards(local_shard):
     # On one rank the gather is the local shard itself. Say so before reaching
     # for a collective: ``fully_shard`` on a single process is a supported

@@ -29,6 +29,9 @@ _EXPORTS = (
 )
 
 
+_materialize_initial_shard = common._materialize_initial_shard
+
+
 def _flat_local_overlap(state, entry):
     rank_start = int(state.true_fsdp_rank) * int(state.true_fsdp_flat_shard_numel)
     rank_end = rank_start + int(state.true_fsdp_flat_shard_numel)
@@ -63,19 +66,6 @@ def _refresh_flat_entry_shards(state):
             shard.stop_grad()
 
 
-def _materialize_initial_shard(shard):
-    """Detach an initial shard from the full parameter's device storage.
-
-    Jittor's slice result keeps its producer graph alive after ``sync()``.  A
-    long-lived slice would therefore retain the full checkpoint tensor that it
-    came from.  Materialize through a device-side elementwise op and stop the
-    graph before publishing the shard as a parameter leaf.
-    """
-    shard = (shard + jt.zeros_like(shard)).stop_grad()
-    shard.sync()
-    return shard
-
-
 def _parameter_requires_grad(param):
     """Read torch-facing trainability without conflating it with graph stop."""
     try:
@@ -86,6 +76,15 @@ def _parameter_requires_grad(param):
 
 def _mark_fsdp_param_var(var, state, entry, role):
     try:
+        var_type = type(var)
+        if not getattr(var_type, "_jittor_fsdp2_methods_installed", False):
+            # Instance-bound methods form Var -> method -> Var cycles. Jittor's
+            # extension Var is not collected by Python's cyclic GC, so every
+            # temporary all-gathered full parameter would otherwise leak.
+            setattr(var_type, "to_local", _fsdp_var_to_local)
+            setattr(var_type, "full_tensor", _fsdp_var_full_tensor)
+            setattr(var_type, "redistribute", _fsdp_var_redistribute)
+            setattr(var_type, "_jittor_fsdp2_methods_installed", True)
         object.__setattr__(var, "_jittor_fsdp2_state", state)
         object.__setattr__(var, "_jittor_fsdp2_entry", entry)
         object.__setattr__(var, "_jittor_fsdp2_module", getattr(state, "true_fsdp_module", None))
@@ -99,12 +98,6 @@ def _mark_fsdp_param_var(var, state, entry, role):
             mesh=getattr(var, "_dtensor_device_mesh"),
             placements=getattr(var, "_dtensor_placements")))
         object.__setattr__(var, "_local_tensor", entry.shard if entry is not None else var)
-        object.__setattr__(
-            var, "to_local", types.MethodType(_fsdp_var_to_local, var))
-        object.__setattr__(
-            var, "full_tensor", types.MethodType(_fsdp_var_full_tensor, var))
-        object.__setattr__(
-            var, "redistribute", types.MethodType(_fsdp_var_redistribute, var))
     except Exception:
         pass
     return var
@@ -367,8 +360,12 @@ def _execute_with_true_fsdp(module, orig_execute, *args, **kwargs):
                 and getattr(state, "reshard_after_forward", True)):
             # Jittor executes lazily, so dropping Python references alone cannot
             # release an all-gather that the pending forward graph still uses.
-            # Finish a fully frozen unit before resharding; jt.gc() below can
-            # then reclaim its full weights before the next unit all-gathers.
+            # When no upstream input gradient is needed, publish a materialized
+            # stop-grad output so the all-gather graph itself can be reclaimed.
+            # A frozen unit fed by a trainable activation retains its graph for
+            # the input gradient, matching PyTorch autograd semantics.
+            if not common._primary_input_requires_grad(args, kwargs):
+                out = common._materialize_frozen_output(out)
             jt.sync_all(True)
             frozen_forward_synced = True
         return out
