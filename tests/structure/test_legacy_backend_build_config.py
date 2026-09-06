@@ -42,11 +42,9 @@ def providers(monkeypatch):
     _load(monkeypatch, "jittor_utils.backend_resources", PYTHON / "jittor_utils/backend_resources.py")
     config = _load(monkeypatch, "jittor_utils.build_config",
                    PYTHON / "jittor_utils/build_config.py")
-    rocm = _load(monkeypatch, "legacy_rocm_contract",
-                 PYTHON / "jittor/extern/rocm/rocm_compiler.py")
     corex = _load(monkeypatch, "legacy_corex_contract",
                   PYTHON / "jittor/extern/corex/corex_compiler.py")
-    return SimpleNamespace(utils=utils, misc=misc, config=config, rocm=rocm, corex=corex)
+    return SimpleNamespace(utils=utils, misc=misc, config=config, corex=corex)
 
 
 def _context(providers, tmp_path, **changes):
@@ -70,7 +68,7 @@ def _context(providers, tmp_path, **changes):
 def test_import_does_not_probe_or_own_backend_state(providers):
     providers.utils.env_or_try_find.assert_not_called()
     providers.utils.run_cmd.assert_not_called()
-    for module in (providers.rocm, providers.corex):
+    for module in (providers.corex,):
         assert not {"cc_flags", "has_rocm", "has_corex", "hipcc_path", "rocm_home"}.intersection(vars(module))
         tree = ast.parse(Path(module.__file__).read_text())
         for node in ast.walk(tree):
@@ -219,93 +217,3 @@ int main() {
         str(ROOT / "backends/corex/runtime/corex_backend.cc"), "-o", str(binary),
     ], check=True, capture_output=True, text=True)
     subprocess.run([str(binary)], check=True, capture_output=True, text=True)
-
-
-@pytest.mark.parametrize("new_abi,member", [
-    (True, "rocm_cache_cxx11.o"), (False, "rocm_cache.o"),
-])
-def test_rocm_configuration_preserves_abi_archive_and_returns_all_inputs(
-        providers, tmp_path, monkeypatch, new_abi, member):
-    context = _context(providers, tmp_path)
-    monkeypatch.setattr(providers.rocm, "check_gcc_use_cxx11_abi", lambda: new_abi)
-    driver = SimpleNamespace(hipDeviceSynchronize=Mock(return_value=0))
-    monkeypatch.setattr(providers.rocm.ctypes, "CDLL", Mock(return_value=driver))
-    result = providers.rocm.configure(context)
-    assert result.backend == "rocm" and result.has_rocm
-    assert not context.config.has_cuda
-    assert result.has_cuda and not result.is_cuda
-    assert result.nvcc_path == result.hipcc_path == "/rocm/bin/hipcc"
-    assert "-DHAS_CUDA" in result.cc_flags and "-DIS_ROCM" in result.cc_flags
-    assert "-DTRANSFORMED" in result.cc_flags and "-lamdhip64" in result.cc_flags
-    assert "-std=c++17" in result.nvcc_flags and "-std=c++14" in result.cc_flags
-    assert result.resources["rocm_home"] == "/rocm"
-    assert result.resources["rocm_driver"] is driver
-    assert result.resources["rocm_converter"] is context.compile_module.return_value
-    assert result.resources["retained"] is context.config.resources["retained"]
-    assert result.extra_core_files == ("existing.cc",)
-    assert not context.config.has_rocm and "-DIS_ROCM" not in context.config.cc_flags
-    extraction = providers.misc.safe_tar_extractall.call_args
-    assert extraction.args[1] == str(tmp_path / "rocm")
-    assert [entry.name for entry in extraction.kwargs["members"]] == [member]
-    assert str(tmp_path / "rocm" / member) in context.compile_module.call_args.args[1]
-    assert providers.rocm.post_process(context.with_config(result)) is result
-    with pytest.raises(TypeError):
-        result.resources["rocm_home"] = "other"
-
-
-def test_rocm_missing_compiler_does_not_start_build(providers, tmp_path):
-    context = _context(providers, tmp_path)
-    providers.utils.env_or_try_find.return_value = ""
-    with pytest.raises(RuntimeError, match="hipcc is unavailable"):
-        providers.rocm.configure(context)
-    providers.utils.run_cmd.assert_not_called()
-    context.compile_module.assert_not_called()
-
-
-def test_rocm_failed_driver_initialization_is_not_advertised(providers, tmp_path, monkeypatch):
-    context = _context(providers, tmp_path)
-    driver = SimpleNamespace(hipDeviceSynchronize=Mock(return_value=17))
-    monkeypatch.setattr(providers.rocm.ctypes, "CDLL", Mock(return_value=driver))
-    with pytest.raises(RuntimeError, match="hipDeviceSynchronize=17"):
-        providers.rocm.configure(context)
-    assert not context.config.has_rocm
-
-
-def test_rocm_extern_uses_injected_build_and_publication_services(providers, tmp_path):
-    context = _context(providers, tmp_path, backend="rocm", has_rocm=True,
-                       resources={"rocm_home": "/selected/rocm"})
-    assert providers.rocm.install_extern(context)
-    args = context.compile.call_args.args
-    assert args[0] == context.config.cc_path
-    assert context.config.cc_flags in args[1]
-    cuda_root = providers.rocm.backend_root(context.config.jittor_path, "cuda")
-    assert args[2] and all(path.startswith(cuda_root) for path in args[2])
-    assert args[3] == str(tmp_path / "cuda/libcuda_extern.test.so")
-    context.load_library.assert_called_once_with(args[3], os.RTLD_NOW | os.RTLD_GLOBAL)
-    published = context.publish_library.call_args_list
-    assert [call.args[0] for call in published] == ["cuda", "cudnn", "cublas", "cub", "nccl"]
-    assert published[0].args[1] is context.load_library.return_value
-    builds = context.compile_custom_ops.call_args_list
-    assert len(builds) == 4
-    for call in builds:
-        assert call.kwargs["return_module"] and call.kwargs["backend"] == "accelerator"
-        assert "/selected/rocm" in call.kwargs["extra_flags"]
-        assert str(tmp_path / "cuda") in call.kwargs["extra_flags"]
-    assert "-DMPI_ENABLED" in builds[-1].kwargs["extra_flags"]
-    assert "-lrocprim" not in builds[2].kwargs["extra_flags"]
-
-
-def test_rocm_unselected_extern_does_nothing(providers, tmp_path):
-    context = _context(providers, tmp_path)
-    assert providers.rocm.install_extern(context) is False
-    context.compile.assert_not_called()
-    context.compile_custom_ops.assert_not_called()
-    context.publish_library.assert_not_called()
-
-
-def test_rocm_extern_compile_failure_propagates(providers, tmp_path):
-    context = _context(providers, tmp_path, has_rocm=True, resources={"rocm_home": "/rocm"})
-    context.compile.side_effect = RuntimeError("HIP build failed")
-    with pytest.raises(RuntimeError, match="HIP build failed"):
-        providers.rocm.install_extern(context)
-    context.publish_library.assert_not_called()

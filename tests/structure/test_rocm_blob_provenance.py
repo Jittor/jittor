@@ -5,11 +5,10 @@
 # ***************************************************************
 """The one binary in this repository that has no source, pinned and explained.
 
-`python/jittor/extern/rocm/rocm_cache.tar.gz` holds two prebuilt object files.
-`MANIFEST.in`'s `recursive-include python/jittor/extern *` puts them in every
-wheel, including wheels for machines with no AMD GPU, and `rocm_compiler.py`
-links one of them into the running process. Nothing in this repository builds
-them and nothing declares where they came from.
+The historical `rocm_cache.tar.gz` holds two prebuilt object files. It is
+retained only as a provenance record while the native provider is rolled out;
+the active ROCm entry point must not load or link it. Nothing in this
+repository builds these historical objects.
 
 These tests do not make that acceptable. They make it *visible*: the bytes
 cannot change without the digest below changing with them, and the file that
@@ -66,6 +65,12 @@ class TestRocmBlobProvenance(unittest.TestCase):
         # The two things a reader most needs to know.
         self.assertIn("not in this repository", text)
         self.assertIn("manifest.py", text)
+
+    def test_active_provider_does_not_reference_the_historical_blob(self):
+        source = (REPO_ROOT / "python/jittor/extern/rocm/rocm_compiler.py").read_text(
+            encoding="utf-8")
+        self.assertNotIn("rocm_cache", source)
+        self.assertNotIn("process_rocm", source)
 
 
 if __name__ == "__main__":

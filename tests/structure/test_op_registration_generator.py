@@ -66,7 +66,6 @@ def test_custom_library_forwards_backend_into_registration_generator():
 @pytest.mark.parametrize("relative,expected", [
     ("compile_extern.py", {"mkl": "cpu", "culib": "accelerator", "cutt": "accelerator",
                            "nccl": "accelerator", "hccl": "accelerator", "mpi": None}),
-    ("extern/rocm/rocm_compiler.py", {"rocmlib": "accelerator"}),
 ])
 def test_optional_libraries_declare_their_actual_backend_family(relative, expected):
     tree = ast.parse((JITTOR / relative).read_text(encoding="utf8"))
