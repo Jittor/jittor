@@ -120,11 +120,11 @@ import。`test_editing_an_unnamed_header_changes_the_answer` 用两个子进程�
 
 三处实测修正，与原条目的描述不同，按实测记录：
 
-- **`name` 从来不是 flag。** 原条目的名单来自把 `log.h` 的 `DEFINE_FLAG(type, name, default, doc)` 宏形参本身当成了 flag 定义（同一个正则也把 `nthread` 算了进来，而它在 `#ifdef TEST_LOG` 里，正式构建不存在）。实测 `dir(jt.flags)` 82 项，无 `name` 无 `nthread`。`tests/core/test_env_var_namespaces.py::test_name_was_never_a_flag` 把这条钉住。
+- **`name` 从来不是 flag。** 原条目的名单来自把 `log.h` 的 `DEFINE_FLAG(type, name, default, doc)` 宏形参本身当成了 flag 定义（同一个正则也把 `nthread` 算了进来，而它在 `#ifdef TEST_LOG` 里，正式构建不存在）。实测（2026-09-06，rebase 到主线之后）`dir(jt.flags)` **89** 项，其中 `DEFINE_FLAG` 现场扫出来的原生 flag **84** 个（余下 5 项不是 `DEFINE_FLAG` 定义的成员），**无 `name` 无 `nthread`**。`tests/core/test_env_var_namespaces.py::test_name_was_never_a_flag` 把「没有 `name`」这条钉住——它是可判据的那一半，计数会随主线漂（本波内就从 82 漂到 84，因为主线新增了两个 flag），所以门禁断的是集合相等而不是数量。
 - **真正可被普通英文单词命中的只有 `debug`**（`compiler.py` 读，选 `-g -O0` 的调试构建）。规则因此定为：**名字里没有 `_` 的设置一律只从带前缀的名字读**，无前缀形式不是"弃用"而是"忽略并告知"。这条规则同时挡住以后再加单词名设置。
 - **`cc_flags` 追加对替换的矛盾**：原条目说的两个读者现在只剩一个。`compiler.py:2185-2192` 本来就会把这 9 个构建 flag 整体覆写，所以核心那次"替换"是死代码却看着像活的；核心现在对这 9 个（`compiler_owned_flag_names`，`src/utils/log.cc`）完全不读环境，`JT_BUILD_CC_FLAGS` 只有一个读者、语义只有"追加"。`tests/structure/test_env_var_manifest.py` 断言这 9 个名字等于 `compiler.py` 里 `flags.X =` 赋的那一组。
 
-`python -m jittor_utils.env_manifest` 是自动生成的变量清单（102 项：82 个原生 flag 从 `DEFINE_FLAG` 现场扫出来，20 项 Python 侧设置来自 `env_config` 的表），结构门禁断言除 `env_config` 与 shim preflight（它跑在 `jittor_utils` 可导入之前，例外被限定为两个名字）之外，没有任何模块直接按无前缀名读设置——否则值到不了启动摘要，也到不了缓存指纹。
+`python -m jittor_utils.env_manifest` 是自动生成的变量清单（实测 104 项：84 个原生 flag 从 `DEFINE_FLAG` 现场扫出来，20 项 Python 侧设置来自 `env_config` 的表；原生那部分的数量随主线变动，清单是生成的所以不需要跟着改），结构门禁断言除 `env_config` 与 shim preflight（它跑在 `jittor_utils` 可导入之前，例外被限定为两个名字）之外，没有任何模块直接按无前缀名读设置——否则值到不了启动摘要，也到不了缓存指纹。
 
 仍未做（不属本项验收）：大写无前缀的一组（`CUTT_PATH`、`DISABLE_MULTIPROCESSING`、`FIX_TORCH_ERROR`、`SKEY`、`JTCUDA*`）与 `JITTOR_*` 前缀的约 40 项只进了清单，没有改名；`import` 期反写环境变量与 `cuda_arch` 死代码属 `9.07`。
 

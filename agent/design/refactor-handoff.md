@@ -3032,6 +3032,77 @@ warmup 之后、三次采样：
 （需要编译 C++ 核心，而机器当时已不可用），所以上面这份清单是**待实测的假设，不是结论**。
 `jt.code(cpu_src=...)` 加一段坏 `@` 语法就是现成的探针，`tests/compiler/` 是它的落点。
 
+### 本波（pyops 分区）：2.22 闭合；10.20 只复核了数字，仍待领
+
+**首先更正一条会误导下一位的编号。** 本波接手的是上一波被硬取消时留下的 507 行未提交工作
+（27 个已跟踪文件 + 5 个新文件，零提交，HEAD 停在 `803e37853`，主线已领先 49 个提交）。
+交接给我时它被称作 `10.20`，**实际是 `2.22`**：五个新文件自己的模块标题写的就是 `[2.22]`，
+上一波在 `codebase-audit/07-architecture.md` 里也已明写「本波未实现：`2.22` 占满了本波预算，
+`10.20` 保持「待领」」。计划里 `10.20` 是「给测试提供受支持的内省 API」，与环境变量无关。
+按 `2.22` 收口，看板两行都已更新。
+
+**那 507 行成立多少：机制与门禁自洽且接近完成，方向没有问题，全部保住。** 判断依据是它把
+分界线接到了 `2.13` 已有的 `flag_policy.STARTUP_FLAGS` 而不是新发明一份名单，把「哪些旧名可以
+留」定成了机械可判的规则（名字里有没有 `_`），并且已经自己踩到并写下了两个扫描坑。
+**唯一一处方向问题是门禁的一个空集合漏洞**（下面第三段），已修。另外有意识地**没有**扩大战线：
+大写无前缀的一组与 `JITTOR_*` 前缀的约 40 项只进了清单、没有改名，那是开放面，关不掉。
+
+拆成六个提交，一 family 一个：`4751ce240` 机制（`env_config.py` 唯一读取点 + `env_manifest.py`
+生成器）、`972adc722` C++ 侧、`66a7727f2` 启动摘要与弃用告警、`1a4c9bebb` 十个调用点、
+`7e58c3216` 门禁与反例、`043d19be2` 文档与审计。**顺序是先在旧基线上按 family 提交、然后才
+rebase**，所以冲突是在提交之间解的，不是在工作树里丢的。
+
+**rebase 只有一个文件真冲突，不是预告的七个**：`compile_extern.py`、`compiler.py`、`log.cc`、
+`jittor_utils/__init__.py`、`04-build-tooling.md`、`07-architecture.md` 六个都自动合上了（双方
+改的是不同区域）。**但自动合上不等于没丢东西**，所以按 2026-09-03 那次整文件取一侧的教训，
+逐条审了「HEAD 相对主线删掉的每一行」：**全部是我自己有意替换的 `os.environ.get(...)` 调用点**，
+外加 `SKILL.md` 的两行（description 与被我改号的 `## 7. 判据` 标题），主线内容一行都没回退。
+主线修 cuTT 构建缺 `cuda_sdk_flags` 那处仍在 5 个位置。真冲突的
+`agent/skills/process-global-state-and-optin/SKILL.md` 是**双方都在同一位置插新节**：主线插
+§6.5「可回滚 ledger 怎么验」（含「同线程探 RLock 什么也证明不了」那段与 `install_lock_is_free`），
+我插 §7「环境变量」并把判据从 §7 改号成 §8。解法是两节都留：6 → 6.5（主线原文，一字未改）
+→ 7（环境变量）→ 8（判据，两侧的条目都在，判据列表本身在冲突区之外所以已经含两边）。
+**主线新加的那节没有被覆盖掉**，`install_lock_is_free` 与「RLock 拒绝跨线程 release」都在。
+
+**门禁的空集合漏洞，本波修的就是这个。** `test_env_var_manifest.py` 的主力规则是参数化扫全树
+300 个 `python/**/*.py`，而参数列表来自 `SOURCE.rglob("*.py")`：扫描根一旦与树不再匹配——目录
+改名、移动之后 `parents[2]` 差一层——`rglob` 什么都不产出，规则**展开成零个用例**，于是「什么都
+没检查」报出和「全都检查过了」一样的绿。这正是清单类门禁最典型的坏法，且坏在往「全过」的方向。
+三处防住：两个根各自断言非空且各用一个必须包含的文件（**故意不写成「总数多于 N」**，因为一个
+总数在「两个根里一个空了、另一个大得足以兜住」时照样通过）；参数列表为空时代换成哨兵参数，让
+规则报**一个失败**而不是消失；这条规则本身的反例进了树，两个方向都断言。为此给
+`env_manifest.py` 加了具名的 `default_source_root()`，好让门禁断言「它检查的根就是清单实际读的根」。
+
+**反例结果（两个方向都实测跑过，不是推断）**：往 `python/jittor/dataset/dataset.py` 插一行
+`os.environ.get("nvcc_path")` → **1 failed / 297 passed**，失败用例名里带的就是那个文件；
+把 `SOURCE` 指到一个不存在的根 → **6 failed / 6 passed**，其中 `test_every_scan_root_matches_the_tree`
+与哨兵用例 `[<no python module matched the scan root>]` 各报一次；恢复之后 **307 passed / 2 skipped**。
+
+**三套门禁与基线对拍，零回归**（基线自己跑的，没有引用文档里的数字）：CPU torch 模式
+`JITTOR_TORCH_SHIM=1 tests/structure` **15 failed / 1199 passed**，failed 数与基线的 15 相同、
+15 条逐条相同且全部与环境变量无关，passed 从 887 涨到 1199（含本任务新增 307 与主线 49 个提交
+带来的）；CUDA `tests/backends/cuda` **5 failed / 269 passed / 35 skipped**，与基线 5 failed /
+269 passed 相同；定向 `tests/core/test_env_var_namespaces.py` 与 `tests/compiler/test_lock.py`
+共 **20 passed**——这一组是本波唯一从未被跑过的部分，它在子进程里实测了 `JT_BUILD_DEBUG=1` 改
+缓存目录、裸 `debug=1` 被忽略且被报告为忽略、旧名 `log_v=1` 仍生效且恰好告警一次并写出
+`JT_LOG_V`、走错前缀的 `JT_CC_FLAGS` 无效而 `JT_BUILD_CC_FLAGS` 有效。
+
+**CUDA 冒烟照第 6 节的规矩做了**：`import jittor` + matmul，`has_cuda=True`、
+`Found device architectures: [89,]`、nvcc 12.2.140、`cuda key:cu12.2.140_..._sm_89`。
+顺带这次导入本身就是机制的活证据：因为门禁环境用的是旧名 `nvcc_path=`，启动摘要打出
+`environment set 1 setting(s): nvcc_path='/usr/local/cuda/bin/nvcc' from nvcc_path [deprecated name]`
+并跟一条 `nvcc_path -> JT_BUILD_NVCC_PATH` 的 `DeprecationWarning`。整套 `tests/structure` 那轮
+则打出三个旧名（`nvcc_path`、`use_cutt`、`use_nccl`），即门禁自己一直在用的那些。
+
+**`2.22` 的剩余面（都不属它的验收，是开放面）**：大写无前缀的一组（`CUTT_PATH`、
+`DISABLE_MULTIPROCESSING`、`FIX_TORCH_ERROR`、`SKEY`、`JTCUDA*`）与 `JITTOR_*` 前缀的约 40 项
+只进了清单、没有改名；`import` 期反写环境变量与 `compiler.py` 的 `cuda_arch` 死代码属 `9.07`。
+按交接给我的边界，本波只求把「清单机制本身 + 它的门禁」闭合，没有把所有调用点一次改完。
+
+`10.20` 只做了数字复核（三个数字全漂了，且复核改变了那条任务的形状——`use_cuda` 的多数用法是
+**能力查询**而不是策略读取，`2.13` 的 `jt.config`/`jt.runtime` 答不了），**未实现，仍待领**，
+详见看板该行与 `codebase-audit/07-architecture.md`。
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
