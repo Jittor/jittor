@@ -158,7 +158,7 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
 // element count alone sweeps in a real one-element user tensor that already
 // holds data; pendingness alone retargets a `jt.array(np.ones(1000))` the
 // caller deliberately built on cuda:0 and merely has not synced yet --
-// silently, where torch raises. See tests/backends/cuda/test_multi_device.py.
+// silently, where torch raises. See tests/backends/cuda/test_cuda_multi_device.py.
 //
 // One edge remains and is accepted: `jt.zeros(n)` is `unary(0).broadcast(n)`,
 // and _is_scalar comes through the broadcast, so an unsynced zeros/ones does

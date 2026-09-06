@@ -31,7 +31,7 @@ before the runtime exists.
 
 Usage: every installer site calls :func:`record` with its declared name, and
 ``jittor/__init__.py`` calls :func:`verify` once the sequence should be
-complete. ``tests/structure/test_install_order.py`` fails the gate if the list
+complete. ``tests/structure/test_install_order_structure.py`` fails the gate if the list
 here and the ``record()`` calls in the tree ever drift apart.
 """
 

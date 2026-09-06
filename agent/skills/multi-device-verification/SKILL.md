@@ -17,7 +17,7 @@ Two cards are required; one card cannot distinguish "placed" from "ignored".
 cd <worktree>
 JITTOR_HOME=<worktree-home> TMPDIR=<worktree-tmp> \
 CUDA_VISIBLE_DEVICES=<A>,<B> nvcc_path=/usr/local/cuda/bin/nvcc \
-taskset -c <cores> <python> -m pytest tests/backends/cuda/test_multi_device.py -q
+taskset -c <cores> <python> -m pytest tests/backends/cuda/test_cuda_multi_device.py -q
 ```
 
 Indices are always *logical*: `CUDA_VISIBLE_DEVICES=3,7` means device 0 and
@@ -178,7 +178,7 @@ not the flag:
 
 ```bash
 # native placement + per-device pools/handles
-pytest tests/backends/cuda/test_multi_device.py -q
+pytest tests/backends/cuda/test_cuda_multi_device.py -q
 # the cross-device copy op
 pytest tests/backends/cuda/test_device_copy.py -q
 # the torch facade -- separate command, shim mode is process-global

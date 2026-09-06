@@ -104,7 +104,7 @@ that neither branch had noticed.
 is wrong on a case the other catches, and the repository has a test for each:
 
 * **Element count alone** exempts a real one-element tensor that already holds
-  the user's data (`tests/backends/cuda/test_multi_device.py::
+  the user's data (`tests/backends/cuda/test_cuda_multi_device.py::
   test_a_one_element_tensor_is_not_a_scalar`). `device-select` chose it because
   a flag bit was said to be unavailable; that is no longer true —
   `node.h`'s `_is_scalar` has been its own bit (26) since the mixed-precision
