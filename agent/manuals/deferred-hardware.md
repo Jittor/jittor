@@ -100,7 +100,31 @@ HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md
 | 命令 | **尚无 nox session** ← 硬件日之前要建 |
 | 现有材料 | [`docs/guides/corex.md`](../../docs/guides/corex.md)（48 行，最薄的一份）；`tests/backends/corex/test_corex_discovery.py` 用离线 fake compiler 验发现路径 |
 
-等它的看板项：**`8.14`**（`check()` 只读、路径可配置；正式前置 `4.12` 未满足）。
+等它的看板项：**`8.14`**（`check()` 只读、路径可配置）。**代码半已闭合**（2026-09-07 复核）：
+前置 `4.12` 已合并，`process_acl` 全树 0 处；`corex_compiler.py` 现在没有 `check()`，只有只读的
+`discover()`，路径经 `corex_home` 实参或 `COREX_HOME` 解析、默认 `/usr/local/corex`。
+
+**「探测无副作用」这条验收现在真的被证明了。** 原来那条断言只比较一个临时目录**顶层**的
+`os.listdir`，对四类真副作用全盲——而 `check()` 当年的问题恰恰是**去跑编译器**。现在
+`side_effect_recorder` 同时看:进程派生（`subprocess.run`/`Popen`/`check_output`/`os.system`/
+`os.popen` 全部换成会记录并抛出的守卫）、写模式的 `open`、`os.environ` 前后比较、监视目录的
+**递归**文件树快照（大小 + mtime）、以及 cwd。
+
+`TestTheGuardCanNoticeSideEffects` 给上面几条装牙齿:把三类副作用分别注入 `discover()` 的一份
+**副本**，断言守卫报得出来。牙齿本身也验过——把守卫里的 `os.environ` 比较去掉，那条立刻报
+`env side effect went unnoticed`（1 failed / 4 passed）。没有这一层，前几条会在守卫悄悄失效后
+继续全绿，正是本轮那七例的形状（见交接文档 §6bis）。
+
+**硬件日要跑的**（本机无 Corex/Iluvatar 卡）：
+
+1. `COREX_HOME=<真实安装路径> python -c "from jittor.extern.corex import corex_compiler as c; print(c.discover())"`
+   ——判据：`available=True`、`reason == "ready"`、`compiler_path` 指向真实 `bin/clang++`。
+2. 带 `COREX_HOME` 的 `import jittor`，判据：`jt.flags.backend == "corex"`、`has_corex=True`、
+   `has_cuda=False`（`configure()` 明确把 CUDA 标记置假而只在设备编译上保留 CUDA ABI 标记）。
+3. 一个逐元素算子加一个归约算子的数值对拍（对 numpy），判据：与 CPU 参考一致；
+   注意 `configure()` 把 `use_cutt=0` 写进 environment，所以 transpose 走内建 kernel。
+4. `kernel_source_roots` 只声明了 CUDA 的 `kernels/core`——判据：真机上确认内建加速器覆盖生效，
+   即那批算子没有退回通用路径（源码注释里点明空元组会让它静默退回，这一条要在真机复核）。
 
 ### 两台机器
 
