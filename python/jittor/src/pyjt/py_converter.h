@@ -998,21 +998,26 @@ DEF_IS(GradCallback, T) from_py_object(PyObject* obj) {
 
             PyObjHolder ret(PyObject_Call(obj, list.obj, nullptr));
             auto is_seq = PyList_CheckExact(ret.obj) || PyTuple_CheckExact(ret.obj);
+            // What Function.grad returned is user-written Python, and nothing
+            // upstream has checked it: the generated argument parser validates
+            // the call into the binding, not a value coming back out of it.
+            // A wrong count or a non-Var here is the caller's mistake and is
+            // reported as a catchable user error, not an internal invariant.
             auto check = [&](int i, PyObject* obj) {
                 if (obj == Py_None) {
                     dins[i] = nullptr;
                 } else {
-                    CHECK(Py_TYPE(obj) == &PyjtVarHolder.ht_type) << "returned grad("<<Py_TYPE(obj)->tp_name<<") is not jittor variable";
+                    USER_CHECK(Py_TYPE(obj) == &PyjtVarHolder.ht_type) << "returned grad("<<Py_TYPE(obj)->tp_name<<") is not jittor variable";
                     auto vh = from_py_object<typename T::VarHolderPtr>(obj);
                     dins[i] = vh->var;
                 }
             };
             if (!is_seq) {
-                CHECKop(n_i,==,1) << n_i >> " returned grad required, but 1 given.";
+                USER_CHECKop(n_i,==,1) << n_i >> " returned grad required, but 1 given.";
                 check(0, ret.obj);
             } else {
                 auto size = Py_SIZE(ret.obj);
-                CHECKop(n_i,==,size) << n_i >> " returned grad required, but " >> size >> " given.";
+                USER_CHECKop(n_i,==,size) << n_i >> " returned grad required, but " >> size >> " given.";
                 auto arr = PySequence_Fast_ITEMS(ret.obj);
                 for (int i=0; i<size; i++) {
                     auto oi = arr[i]; 

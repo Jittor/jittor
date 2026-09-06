@@ -16,6 +16,45 @@ from _helpers.state_leaks import assert_rss_growth_bounded
 from jittor import Function
 
 class TestFunction(unittest.TestCase):
+    def test_returning_the_wrong_number_of_grads_is_a_catchable_user_error(self):
+        class TwoInputsOneGrad(Function):
+            def execute(self, a, b):
+                self.save_vars = a, b
+                return a * b
+
+            def grad(self, grad):
+                return grad          # two inputs, one gradient
+
+        a = jt.array([1.0, 2.0])
+        b = jt.array([3.0, 4.0])
+        out = TwoInputsOneGrad()(a, b)
+        error = expect_error(
+            lambda: jt.grad(out.sum(), [a, b]),
+            exc_type=RuntimeError,
+            match="returned grad required",
+        )
+        self.assertIn("2", str(error))
+        # Reporting it must leave the runtime usable.
+        np.testing.assert_allclose((a * b).numpy(), [3.0, 8.0])
+
+    def test_returning_a_non_var_grad_is_a_catchable_user_error(self):
+        class NonVarGrad(Function):
+            def execute(self, value):
+                self.save_vars = value
+                return value * 2
+
+            def grad(self, grad):
+                return 5             # not a jt.Var
+
+        value = jt.array([1.0, 2.0])
+        out = NonVarGrad()(value)
+        expect_error(
+            lambda: jt.grad(out.sum(), value),
+            exc_type=RuntimeError,
+            match="is not jittor variable",
+        )
+        np.testing.assert_allclose((value * 2).numpy(), [2.0, 4.0])
+
     def test_first_order_only_gradient_rejects_higher_order(self):
         class FirstOrderOnlySquare(Function):
             def execute(self, value):

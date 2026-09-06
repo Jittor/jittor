@@ -140,7 +140,18 @@ C++ 头文件。第三，错误处理只有一档：ASSERT/CHECK/LOGf 全部抛 
 它看不见，于是**门禁全绿而进程 abort**。判据：**析构里只要调用了非 `noexcept` 的东西，静态扫描就已经
 不作数，必须有运行时用例**（`tests/backends/cuda/test_var_holder_teardown.py`）。
 
-**尚未做的**：486 处 ASSERT/62 处 LOGf 的分档仍在进行（看板 2.19），信号处理器那条见本表下一行。
+**「析构与信号处理器里没有 `LOGf`」这一半已修并已验收：`4bdc7e797`（2.19）。** 全树 612 个 C++ 文件、
+110 个析构体，字面 `LOGf` 与其他抛出宏各 0 处，一跳外可达 `LOGf` 也是 0（唯一命中 `~AsyncQueue → lock()`
+是 `std::unique_lock<std::mutex> lock(mutex)` 变量声明的误报）；`segfault_sigaction` 与 Windows-only 的
+`handle_signal` 字面与一跳均为 0。同一提交补上门禁本身的漏洞：`test_destructor_and_handler_contract.py`
+的扫描根只有 `python/jittor/{src,extern}`，后端搬进 `backends/` 之后 CUDA/ACL/ROCm 的析构一条都没扫到，
+而总数看上去仍然健康——已补该根与 `.cu/.cuh` 后缀，并把断言从「总数 > 50」改成「每个根目录都非空」。
+核法与三处会骗人的地方记在交接文档「`LOGf` 验收的精确核法」一节。
+
+**尚未做的**：ASSERT/CHECK 的分档仍在进行（看板 2.19）；全树该类宏现有 986 处，其中约 380 处在
+`src/tests/*.cc` 的自测里、天然属内部档，未逐条走过公开实参可达性的主要聚集在 `op_compiler.cc`、
+`opt/kernel_ir.cc`、`utils/cache_compile.cc`、`opt/expr.cc`、`ops/op_register.cc`。全树 `LOGf` 实为
+161 处（含测试与宏定义），本表上一行的「62 处」是旧口径。信号处理器那条见本表下一行。
 
 ## 补充：代码生成与优化 pass（文本当作 IR）
 

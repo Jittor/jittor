@@ -2596,6 +2596,37 @@ NOT COLLECTED / NEWLY COLLECTED。比结论之前要先把组名归一化掉。
 比整个结构套件的层内成本还高 5 倍。而它在「三个属于别人、任何时候不要提交」的清单里，所以
 两位执行者都只报不碰。**要动它需要那个 owner 点头**，这是目前 smoke 预算上最大的一块无主成本。
 
+### 2026-09-06 `bindings`：2.19 收口（cuTT 可达、LOGf 验收达成、绑定层边界归类）
+
+| 项 | 结果 |
+| --- | --- |
+| `4bdc7e797` | **cuTT 六条第一次真跑，并因此发现一处静默算错。** `setup_cutt()` 全树无调用点（9.01 把三个 setup 改惰性时给 NCCL/MKL 补了、漏了它），调用点补在 `core_api.transpose` 首次调用（与 MKL 首次 CPU float32 batched matmul 同形，import 期仍不装载）。**静默算错**：`transpose`/`fuse_transpose`/`cutt_transpose` 三处构造函数把「`axes[i]==i` 全部成立」当恒等置换而**不比较秩**，`axes=[0]` 或 `[0,1,2]` 作用在二维输入上直接 `forward(x)` 返回未转置的原张量，`infer_shape` 里的 `USER_CHECK` 不可达；三处统一要求 `axes.size()==x->shape.size()`。修前失败／修后通过：回退三个 `.cc` 实测 3 failed / 23 passed，改回 21 passed 与 cuTT 9 passed（此前 6 skipped）。 |
+| `4bdc7e797` | **验收「析构与信号处理器里 grep `LOGf` 为 0」已达成**，核法与结论见下节。同一提交把 `test_destructor_and_handler_contract.py` 的扫描根补上 `backends/` 与 `.cu/.cuh`，并把「总数 > 50」改成「每个根目录都非空」。 |
+| 本波第二个提交 | **绑定层剩余边界归类**：`py_converter.h` 看着像一大批未迁边界，实际不是（`is_type` 已在更早的地方挡住坏输入）；真正的用户边界是从绑定**返回**的值——`GradCallback` 收到用户 `Function.grad` 的返回值，三处迁 `USER_CHECK`，负向 2 passed。分类理由写进 `docs/testing/error-categories.md` 并加结构门禁。 |
+| 三套门禁（都做了同树 HEAD 对照，不引用旧数字） | CUDA `tests/backends/cuda`：改前 42 failed / 220 passed / 41 skipped / 1 xfailed，改后 42 failed / 229 passed / 35 skipped / 1 xfailed，**失败集合逐条相同**（+9/−6 就是 cuTT 六条恒 skip 变成 9 条真跑）。原生 CPU `JITTOR_TEST_DEVICES=cpu nvcc_path="" tests/core`：同树 HEAD 22 failed / 642 passed / 113 skipped，本波 21 failed / 643 passed / 113 skipped，**无新增失败**（HEAD 上红的 `test_complex_svd_batch` 本波未复现，未宣称是本波修好的）。CPU torch 模式 `JITTOR_TORCH_SHIM=1 tests/structure`：rebase 前 15 failed / 872 passed、与同树 HEAD **逐条相同**；rebase 后 14 failed / 881 passed，上游修掉一条。 |
+| 基线更正 | 交接文档此前记「`tests/structure` 2 条失败」，`cudabk` 已更正为 16 条，**本机本树实测 14–15 条**（随上游变动）；引用时必须带树与日期。另 `tests/core` 的「17 条」是更早的树，本树 CPU-only 口径是 **HEAD 22 条**。 |
+| 顺带发现，未修 | `tests/compiler/test_import_bootstrap_laziness.py::TestCoreBuildStamp::test_source_signature_sees_same_size_edits_and_new_files` 在 HEAD 上就红：它 `mock.patch.object(compiler, "jittor_path", tmp)`，而 `jittor_path` 是 `_FrozenCompilerModule` 的 startup flag，**mock 退出时的还原被拒绝**（`state.py:48 AttributeError: jittor_path is immutable startup configuration`），于是 `compiler.jittor_path` 停在已删除的临时目录上，**随机顺序下把它后面跑的用例一起带红**。属配置冻结（7.05/9.01 一侧），本波未动。 |
+
+### `LOGf` 验收的精确核法（2026-09-06，`bindings`）
+
+验收原文是「析构与信号处理器里 grep `LOGf` 为 0」。**逐条核过，结论是 0，但一次朴素的 grep 得不到这个结论**，
+三个地方会骗人：
+
+1. **扫描根**。全树 `LOGf` 实际 **161 处**（含测试与 `log.h` 的宏定义本身），不是 8 处；计划正文的
+   「62 处」是旧口径。真正相关的只有析构体与信号处理器里的，所以要先框定范围，而框定范围的目录清单
+   **会随重构搬家**——后端搬进 `backends/` 之后，只写 `python/jittor/{src,extern}` 的既有门禁对
+   CUDA/ACL/ROCm 的析构一条都没扫到，而总数看着仍然健康。
+2. **字面 grep 只是必要条件**。`~VarHolder` 那次就是经 `release_both_liveness` 一跳抛出的，字面扫描全绿而进程 abort。
+3. **信号处理器不止一个**，且要跟着它调用的东西走。
+
+实际做法与数字（脚本一次性，不入库）：全树 **612** 个 C++ 文件（`.cc/.h/.cu/.cuh`，三个根）、**110** 个析构体——
+字面 `LOGf` **0**，其他抛出宏（`ASSERT`/`CHECK`/`checkCudaErrors`/`throw` 等）**0**；再对每个析构体做一跳
+被调函数展开，唯一命中是 `~AsyncQueue → lock()`，**误报**（`std::unique_lock<std::mutex> lock(mutex)` 是变量声明，
+不是 `lock.cc:127` 那个带 `LOGf` 的自由函数）。信号处理器侧：`segfault_sigaction` 字面与一跳均为 0，它到达的
+`sig_write*`／`print_trace_from_signal` 只做 `write(2)` 与 `_exit`；Windows-only 的 `handle_signal` 也没有 `LOGf`
+（它用 `std::cerr` + `abort()`，不是本条验收的对象，但**不是 async-signal-safe**，已写进
+`docs/testing/error-categories.md` 单独记账）。
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。

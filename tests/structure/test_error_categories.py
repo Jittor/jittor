@@ -43,7 +43,8 @@ MIGRATED_GETITEM_SHAPE_BOUNDARIES = {
 }
 
 MIGRATED_PY_CONVERTER_USER_BOUNDARIES = {
-    "python/jittor/src/pyjt/py_converter.h": 1,
+    # 1 bool-slice input + 3 on the value Function.grad hands back.
+    "python/jittor/src/pyjt/py_converter.h": 4,
 }
 
 MIGRATED_DEVICE_COPY_USER_BOUNDARIES = {
@@ -353,6 +354,24 @@ def test_py_converter_user_boundary_migration_is_explicit_and_bounded():
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_PY_CONVERTER_USER_BOUNDARIES[
         "python/jittor/src/pyjt/py_converter.h"]
+    negative = (ROOT / "tests/core/test_function.py").read_text()
+    assert "test_returning_the_wrong_number_of_grads_is_a_catchable_user_error" in negative
+    assert "test_returning_a_non_var_grad_is_a_catchable_user_error" in negative
+
+
+def test_py_converter_conversion_checks_stay_internal_invariants():
+    """The rest of py_converter.h is not a user boundary.
+
+    ``from_py_object`` only runs after the generated argument parser has
+    accepted the call through ``is_type``; a disagreement between those two
+    halves of the same generated binding is the framework contradicting
+    itself, not bad input. Bad input is rejected earlier, by the parser, with
+    a catchable RuntimeError that names the op and the types it was given.
+    """
+    source = (ROOT / "python/jittor/src/pyjt/py_converter.h").read_text()
+    conversion_guards = source.count("CHECK(is_type<")
+    assert conversion_guards >= 3, source.count("CHECK(is_type<")
+    assert "USER_CHECK(is_type<" not in source
 
 
 def test_device_copy_user_boundary_migration_is_explicit_and_bounded():

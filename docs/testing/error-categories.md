@@ -23,6 +23,24 @@ The current backend manifest has no additional safe user-input assertions;
 future entries should first demonstrate a direct public-argument path before
 changing an `ASSERT` to `USER_CHECK`.
 
+## The binding layer: what `is_type` already covers
+
+`py_converter.h` looks like a large block of unmigrated user boundaries and is
+mostly not one. The generated wrapper resolves an overload by asking
+`is_type<T>` about each argument, and only then calls `from_py_object<T>`. Bad
+input is therefore rejected *before* conversion, by the parser, with a
+catchable `RuntimeError` that names the op and lists the types it was given.
+The `CHECK(is_type<...>)` calls inside `from_py_object` fire only when those
+two halves of the same generated binding disagree, which is the framework
+contradicting itself. They stay internal invariants.
+
+The exception is a value coming back *out* of a binding, where no parser has
+looked at it: `GradCallback` receives whatever the user's `Function.grad`
+returned. A wrong gradient count or a non-Var is the caller's mistake and is a
+`USER_CHECK`. Reaching a `from_py_object` check from Python, if some future
+argument does get past `is_type` with an element the converter rejects, is what
+would move one of the others across.
+
 ## Destructors and signal handlers
 
 Neither may report by throwing, and `LOGf` throws. Two things decide whether
