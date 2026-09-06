@@ -730,6 +730,50 @@ NativeProviderRegistration 的旧元数据不能当作上述执行/构建迁移�
 及 `tests/backends/cuda/test_multi_device.py`；NPU 依 `docs/guides/ascend-910b.md` 做真实构建/执行验收。
 下文波次表保留为历史证据，不应作为当前已完成范围。
 
+### 2026-09-06 3.02 / 3.03 收口（3.01 解锁的两条内存安全缺陷）
+
+`9cdae20fc`（3.02）与 `0ad6c7504`（3.03）已合并推送，两条都标已合并。它们同时碰
+`executor.cc`／`fused_op.cc` 一片代码，所以由一个 agent 串行做完，没有拆分区。
+
+**3.02**：`JitKey` 的 2 MB 无检查缓冲与 mprotect 守护页换成堆分配、按需增长（8 KB 起）、
+每个写入口先 `reserve()`、超过 flag `jit_key_max_size`（默认仍 2 MB）抛可捕获 `UserError`；
+`utils/log.cc` 的 `protected_page` 与信号处理器里那段一并删除。以 `_` 开头的 loop option
+改为也入键。**融合边变长编码那一项核实为 6.C05（`21a4f4fc`）已提前做完，`13ac1d14` 的四条
+临时 `ASSERT(<256)` 在那个提交里就已删除**，本波只补键级判据。
+
+**3.03**：`string_view_map` → `jit_cache_map`（键改自有 `string`、容量上限 + LRU、
+flag `jit_cache_size` 默认 4096），`jit_fused_ops` 值改 `shared_ptr<FusedOpContext>`
+使 context 可释放，`VarRelayManager::fop` 删除（改显式传参），
+`execute_fused_prepared` 里每次命中重指向栈上 `FusedOp` 的那句一起删除。
+加上淘汰之后原来正确的 `t[a] = t[b] = v` 三处变成 UB，全部拆成两句。
+
+**四条值得记的判据**：
+
+1. **「ASan 无悬垂」跑了真 ASan，办法是单编那个头文件。** `jit_cache_map.h` 除
+   `common.h` 与一个 `DECLARE_FLAG` 外无依赖，`-I python/jittor/src -I <python include>`
+   两个就能编，不需要建 jittor、不需要生成的 cfg 目录，一次编译加运行不到一秒。
+   `tests/compiler/test_jit_cache_map_asan.py` 把它变成常驻用例，并**在同一个文件里再编
+   一份旧写法断言 ASan 确实报它**——没有这条牙齿，libasan 缺失或场景没触发缺陷时第一条
+   都会漂亮地通过。旧写法不带 sanitizer 也是错的：4096 个短键里 2017 个查不回来。
+2. **验收那句「含 300 个算子的融合段与 200 个的键不同」比它看起来弱。** 实测把定长编码
+   放回去，这条仍然通过——每个算子都有一条变长的 `«opkey<i>`，算子数不同就必然不同键。
+   真正的判据是同算子数同 var 数、边结构不同（链 vs 平衡树）不得同键。**建议以后写这类
+   验收句时把「同规模不同结构」写进去**，否则它会被一条空洞地通过的用例满足。
+3. **限额做成 runtime flag 时，比较阈值必须在每次操作开头重读。** 第一版只在 `grow()`
+   里重算，而缓冲区只增不减，于是在已经跑过大 key 的进程里把 flag 调小完全不生效，
+   用例报 `did not raise`。改成 `clear()`（每个 key 一次）重算。
+4. **改一个被广泛 include 的头文件会让 `test_cache_dependencies` 在复用缓存里假红。**
+   它扫缓存目录里所有 `.key`，要求每个依赖路径只有一个哈希；改前改后的条目同时在那里
+   就必然两个。`jittor-core-cpp-edit-loop` §4 记的判据是「失败指向一个你没碰过的头文件」，
+   **本例正好相反**（指向 `op.h`，就是我改的），所以判据只能是换空 `JITTOR_HOME` 重跑：
+   实测 18 failed / 391 passed，清单与基线逐字相同。
+
+三套门禁（原生 CPU `tests/core`+`tests/ops`+`tests/compiler`、CPU torch shim
+`tests/structure`、CUDA `tests/backends/cuda`）**FAILED 集合与本波开始时自测的基线
+`f5a0ec5a1` 逐条相同**，passed 只涨不跌；`tests/core` 那三条存活 Var 数断言的数字两轮
+不同而用例名集合相同（3.01 记过这个），判据用集合。两个提交各做了推前 CUDA 冒烟。
+沉淀 skill：`jittor-core-cpp-edit-loop` 新增 §7ter／§7quater／§7quinquies。
+
 第五十五波新增 3 个严格保持待领的前置：
 
 | 分区 | 第五十五波结果 |
