@@ -151,10 +151,12 @@ RATCHET_FILES = (
     "tools/docs/check_build.py",
     "tools/docs/check_catalogs.py",
     "tools/docs/check_links.py",
+    "tools/lint/check_import_layering.py",
     "tests/integration/test_notebooks.py",
     "tests/models/test_network_training_parity.py",
     "tests/structure/test_cleanup_structure.py",
     "tests/structure/test_docs_structure.py",
+    "tests/structure/test_import_layering.py",
     "tests/structure/test_pytest_contract.py",
     "tests/structure/test_selftest_structure.py",
     "tests/structure/test_stage2_delivery.py",
@@ -173,10 +175,12 @@ FORMAT_FILES = (
     "tools/docs/check_build.py",
     "tools/docs/check_catalogs.py",
     "tools/docs/check_links.py",
+    "tools/lint/check_import_layering.py",
     "tests/integration/test_notebooks.py",
     "tests/models/test_network_training_parity.py",
     "tests/structure/test_cleanup_structure.py",
     "tests/structure/test_docs_structure.py",
+    "tests/structure/test_import_layering.py",
     "tests/structure/test_packaging_structure.py",
     "tests/structure/test_torch_shim_structure.py",
     "tests/structure/test_pytest_contract.py",
@@ -1001,6 +1005,18 @@ def format(session):
     """Check Ruff formatting for files admitted to the format ratchet."""
     session.install(RUFF)
     session.run("ruff", "format", "--check", "--no-cache", *FORMAT_FILES)
+
+
+@nox.session(python="3.11", venv_backend="none")
+def imports(session):
+    """Check import direction and the import-cycle ratchet.
+
+    No `session.install`: the checker is stdlib-only on purpose, so that the
+    rule is enforced by `tests/structure/test_import_layering.py` in every
+    gate as well as here, instead of only where a linter got installed.
+    """
+    session.run("python", str(REPO_ROOT / "tools" / "lint" / "check_import_layering.py"),
+                external=True)
 
 
 @nox.session(python="3.11")
