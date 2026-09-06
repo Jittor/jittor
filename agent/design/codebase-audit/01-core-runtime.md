@@ -148,6 +148,11 @@ C++ 头文件。第三，错误处理只有一档：ASSERT/CHECK/LOGf 全部抛 
 而总数看上去仍然健康——已补该根与 `.cu/.cuh` 后缀，并把断言从「总数 > 50」改成「每个根目录都非空」。
 核法与三处会骗人的地方记在交接文档「`LOGf` 验收的精确核法」一节。
 
+**绑定层的分档已修：`7faf209f3`（2.19）。** `py_converter.h` 里 `from_py_object` 的转换检查经实测**不是**用户边界
+（生成的参数解析器先用 `is_type<T>` 挡掉坏输入，且已经是可捕获的 `RuntimeError`），保持内部不变量档；真正的
+用户边界是从绑定返回、没有解析器看过的值——`GradCallback` 收到的用户 `Function.grad` 返回值，三处改
+`USER_CHECK`。判据写在 `docs/testing/error-categories.md`。
+
 **尚未做的**：ASSERT/CHECK 的分档仍在进行（看板 2.19）；全树该类宏现有 986 处，其中约 380 处在
 `src/tests/*.cc` 的自测里、天然属内部档，未逐条走过公开实参可达性的主要聚集在 `op_compiler.cc`、
 `opt/kernel_ir.cc`、`utils/cache_compile.cc`、`opt/expr.cc`、`ops/op_register.cc`。全树 `LOGf` 实为
