@@ -351,14 +351,21 @@ def setup_cuda_extern():
     # These two sources are host-compiled but include CUDA SDK headers, so
     # they need the SDK include set that moved out of the global cc_flags
     # when the backend flags became per-source.
-    compile(cc_path, cc_flags+cuda_sdk_flags+f" -I\"{cuda_include}\" ",
-            cuda_extern_files, so_name)
+    compile_if_stale("libcuda_extern", cc_path,
+                     cc_flags+cuda_sdk_flags+f" -I\"{cuda_include}\" ",
+                     cuda_extern_files, so_name)
     link_cuda_extern = f" -L\"{cache_path_cuda}\" -llibcuda_extern "
     ctypes.CDLL(so_name, dlopen_flags)
     register_library_resources("cuda_extern", link_flags=link_cuda_extern)
 
     try:
         setup_cub()
+    except compiler.BuildNotAllowed:
+        # A refusal to build is a policy stop, not a missing cub. Downgrading
+        # it to a warning would let `JITTOR_NO_BUILD=1` import "successfully"
+        # with cub silently absent, which is the one outcome the switch exists
+        # to prevent.
+        raise
     except Exception as e:
         import traceback
         line = traceback.format_exc()

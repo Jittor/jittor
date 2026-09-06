@@ -912,8 +912,8 @@ def compile_custom_ops(
     if len(gen_name) > 50:
         gen_name = gen_name[:50] + "___hash" + hashlib.md5(gen_name.encode()).hexdigest()[:6]
 
-    includes = sorted(list(set(includes)))
-    includes = "".join(map(lambda x: f" -I\"{x}\" ", includes))
+    include_dirs = sorted(list(set(includes)))
+    includes = "".join(map(lambda x: f" -I\"{x}\" ", include_dirs))
     LOG.vvvv(f"Include flags:{includes}")
 
     op_extra_flags = includes + extra_flags
@@ -925,6 +925,26 @@ def compile_custom_ops(
     gen_lib = os.path.join(lib_path, gen_name+extension_suffix)
     libname = gen_name + lib_suffix
     op_extra_flags += f" -L\"{lib_path}\" -l\"{libname}\" "
+
+    # Everything below -- generating the op maker, running pyjt over the
+    # headers, and handing the translation units to the compile pool -- is
+    # skipped when the stamp says this library was already built from exactly
+    # these inputs. See :func:`product_build_is_current` for why the cheap
+    # answer is worth having.
+    stamp_sources = {
+        "files": _stat_signature([os.path.realpath(name)
+                                  for name in filenames]),
+        "includes": _include_tree_signature(_custom_op_include_dirs(
+            filenames, include_dirs, extra_flags)),
+        "core_sources": core_source_signature(),
+    }
+    stamp_ingredients = custom_op_build_ingredients(
+        gen_name, extra_flags, includes, backend)
+    if product_build_is_current(gen_lib, stamp_sources, stamp_ingredients):
+        LOG.v(f"custom op lib {gen_name} is current, skipping build")
+        return _import_custom_op_lib(gen_name, dlopen_flags, return_module)
+    if not build_is_allowed():
+        _refuse_build("the custom op library " + gen_name)
 
     gen_src = gen_jit_op_maker(headers.values(), export=gen_name,
                              extra_flags=op_extra_flags, backend=backend)
@@ -956,8 +976,17 @@ def compile_custom_ops(
     LOG.vvvv(f"Build sources:{builds}")
     compile(cc_path, extra_flags+cc_flags+opt_flags+includes, builds, gen_lib)
 
-    # add python path and import
-    LOG.vvv(f"Import custum ops lib:{gen_lib}")
+    # After the compile, so the stamp records the product that exists now. The
+    # source signature is the pre-build one on purpose: a source edited during
+    # the build must leave the stamp stale rather than claim to cover the edit.
+    _write_product_build_stamp(gen_lib, stamp_sources, stamp_ingredients)
+
+    return _import_custom_op_lib(gen_name, dlopen_flags, return_module)
+
+
+def _import_custom_op_lib(gen_name, dlopen_flags, return_module):
+    """dlopen a built custom-op library and hand back its ops."""
+    LOG.vvv(f"Import custum ops lib:{gen_name}")
     lib_path = os.path.join(cache_path, "custom_ops")
     if lib_path not in os.sys.path:
         os.sys.path.append(lib_path)
@@ -1809,8 +1838,14 @@ def core_build_stamp_path():
     return core_output_path + ".build_stamp.json"
 
 
-def core_source_signature():
+def core_source_signature(root=None):
     """``{relative path: [mtime_ns, size]}`` for every core source file.
+
+    ``root`` overrides the tree that is walked. It exists for the tests: the
+    startup configuration on this module is frozen after bootstrap (see
+    ``_runtime/state.py``), so ``jittor_path`` can no longer be patched, and a
+    walk that can only ever look at the real checkout cannot be shown to
+    notice a new or same-size-edited file.
 
     A walk of ``src/`` and ``extern/`` rather than the individual globs the
     generators use, so that a source or header that did not exist at the last
@@ -1824,14 +1859,15 @@ def core_source_signature():
     Costs about 3 ms for ~600 files, which is what makes it affordable on
     every import.
     """
+    tree = jittor_path if root is None else root
     signature = {}
-    roots = [(top, os.path.join(jittor_path, top)) for top in ("src", "extern")]
+    roots = [(top, os.path.join(tree, top)) for top in ("src", "extern")]
     for backend in ("cuda", "acl", "rocm", "corex"):
         try:
-            root = backend_root(jittor_path, backend)
+            backend_directory = backend_root(tree, backend)
         except FileNotFoundError:
             continue
-        roots.append(("backends/" + backend, root))
+        roots.append(("backends/" + backend, backend_directory))
     for top, root_dir in roots:
         for directory, _, names in os.walk(root_dir):
             for name in names:
@@ -2002,6 +2038,279 @@ def _write_core_build_stamp(signature, ingredients, compile_order):
             pass
 
 
+class BuildNotAllowed(Exception):
+    """Raised instead of compiling when builds are not allowed.
+
+    ``import jittor`` is supposed to load a build, not produce one, but for
+    most of Jittor's history the difference was invisible: a cache that did
+    not match compiled for forty seconds to several minutes and said so only
+    through progress lines. There was no way for a deployment to state "this
+    import must not build" and be told when it was about to.
+
+    ``JITTOR_NO_BUILD=1`` is that statement. Under it, anything that would
+    have to compile raises this instead, naming the explicit entry point that
+    is allowed to build. Offline and read-only installations are the reason it
+    exists: there the compile does not merely cost a minute, it fails a minute
+    later for a reason that has nothing to do with the actual problem.
+    """
+
+
+def build_is_allowed():
+    """False when ``JITTOR_NO_BUILD`` forbids compiling during this process."""
+    return os.environ.get("JITTOR_NO_BUILD", "0") in ("0", "")
+
+
+def _refuse_build(what):
+    raise BuildNotAllowed(
+        "JITTOR_NO_BUILD=1 is set, and %s is not built for this "
+        "configuration -- importing jittor would have to compile it.\n"
+        "Build it once with the explicit entry point:\n"
+        "    python -m jittor_utils.bootstrap\n"
+        "then import with the same JITTOR_HOME and the same build flags "
+        "(nvcc_path, cc_flags, nvcc_flags), because each combination gets "
+        "its own cache directory.\n"
+        "cache_path: %s" % (what, cache_path))
+
+
+#: Stamp version for build products other than the core. Independent of the
+#: core's, so either can change meaning without invalidating the other's.
+PRODUCT_BUILD_STAMP_VERSION = 1
+
+_SOURCE_EXTENSIONS = (".h", ".hpp", ".cuh", ".inc", ".cc", ".cpp", ".cu", ".c")
+
+
+def product_build_stamp_path(product):
+    """Where the stamp for a build product lives: right next to it.
+
+    Beside the product rather than in an index, so that deleting the product
+    -- by hand, or with ``jittor_utils.clean_cache`` -- cannot leave a stamp
+    behind that claims it is still there.
+    """
+    return product + ".build_stamp.json"
+
+
+def _stat_signature(paths):
+    """``{path: [mtime_ns, size]}``, with ``None`` for a path that is gone.
+
+    A missing path is recorded explicitly rather than skipped: dropping it
+    would make "the file was deleted" indistinguishable from "the file was
+    never listed", and the second one must not be treated as up to date.
+    """
+    record = {}
+    for path in paths:
+        try:
+            info = os.stat(path)
+        except OSError:
+            record[path] = None
+            continue
+        record[path] = [info.st_mtime_ns, info.st_size]
+    return record
+
+
+def _is_within(path, root):
+    return path == root or path.startswith(root + os.sep)
+
+
+def _include_tree_signature(directories):
+    """Stat every source and header under each of the caller's include dirs.
+
+    ``filenames`` names the op sources and their paired headers; it does not
+    name the sibling headers those include. The per-file dependency scan
+    inside :func:`compile` does find them -- and that scan is exactly what the
+    stamp exists to skip, so the stamp has to cover them another way.
+
+    Two kinds of directory are deliberately not walked, because walking them
+    costs more than it can ever detect:
+
+    * anything inside the Jittor tree -- :func:`core_source_signature` already
+      covers it, including ``backends/*/libraries/*/include``;
+    * the CUDA SDK's include directories. ``cache_path`` is partitioned by the
+      cuda key, so a different toolkit builds into a different directory and
+      gets a cold build rather than a stale one. This is the same argument
+      :func:`core_source_signature` makes for external headers -- and it is
+      what keeps this off the import path: those trees hold ~1400 headers
+      each, and walking six of them cost 90 ms of every warm CUDA import.
+
+    What is left is the caller's own directories, which is the case that
+    matters for a custom op built outside this repository.
+    """
+    signature = {}
+    tree = os.path.realpath(jittor_path)
+    toolkit = [os.path.realpath(path) for path in cuda_include_dirs]
+    for directory in sorted(set(directories)):
+        if not directory:
+            continue
+        real = os.path.realpath(directory)
+        if _is_within(real, tree):
+            continue
+        if any(_is_within(real, path) or _is_within(path, real)
+               for path in toolkit):
+            continue
+        for current, _, names in os.walk(real):
+            for name in names:
+                if not name.endswith(_SOURCE_EXTENSIONS):
+                    continue
+                path = os.path.join(current, name)
+                try:
+                    info = os.stat(path)
+                except OSError:
+                    continue
+                signature[os.path.relpath(path, real)] = \
+                    [info.st_mtime_ns, info.st_size]
+    return signature
+
+
+def _custom_op_include_dirs(filenames, include_dirs, extra_flags):
+    """Every directory the custom-op compile can reach a header through.
+
+    The auto-derived ones, the directories the named files live in, and the
+    ``-I`` the caller passed by hand in ``extra_flags`` -- that last one is
+    the only way a public caller can point the compile at a tree Jittor knows
+    nothing about, so parsing it out is what keeps the stamp honest for code
+    outside this repository.
+    """
+    directories = list(include_dirs)
+    directories += [os.path.dirname(os.path.realpath(name))
+                    for name in filenames]
+    for match in re.finditer(r'-I\s*(?:"([^"]*)"|(\S+))', extra_flags or ""):
+        directories.append(match.group(1) or match.group(2))
+    return directories
+
+
+def custom_op_build_ingredients(gen_name, extra_flags, include_flags, backend):
+    """Everything besides the sources that the compile commands use.
+
+    ``cc_flags`` is safe to record verbatim here, unlike for the core: by the
+    time any custom op is built the core is linked and ``-ljittor_core`` is
+    already on it, so re-reading it after the import yields the same string
+    the build used.
+    """
+    return {
+        "version": __version__,
+        "gen_name": gen_name,
+        "cc_path": cc_path,
+        "cc_type": cc_type,
+        "cc_flags": cc_flags,
+        "opt_flags": opt_flags,
+        "extra_flags": extra_flags,
+        "include_flags": include_flags,
+        "backend": backend,
+        "nvcc_path": nvcc_path,
+        "nvcc_flags": nvcc_flags,
+        "extension_suffix": extension_suffix,
+        "lib_suffix": lib_suffix,
+        "has_cuda": int(bool(has_cuda)),
+        "has_accelerator": int(bool(has_accelerator)),
+        "core_output": _core_output_signature(),
+        "generators": core_generator_signature(),
+    }
+
+
+def product_build_is_current(product, sources, ingredients):
+    """True when ``product`` was already built from exactly these inputs.
+
+    Same bargain as the core's stamp, for the same reason: finding out the
+    expensive way cost about 0.35 s of every warm CUDA import, because the
+    bundled cuDNN/cuBLAS/cuRAND/cuFFT/cuSPARSE/CUB op libraries handed ~50
+    compile commands to the pool so each worker could hash a dependency
+    closure and report that there was nothing to do.
+
+    Conservative in one direction only. A mismatch means "build", and
+    building re-runs the full per-file dependency check that was always there,
+    so a stamp that wrongly reports "stale" costs time and nothing else.
+
+    The callers decide what goes in ``sources`` and ``ingredients``; this only
+    promises that a build is current when *all* of it matches. Getting those
+    two right is the whole safety argument, because the direction that is not
+    safe -- claiming current when it is not -- does not fail, it silently
+    keeps running the previous build.
+    """
+    try:
+        with open(product_build_stamp_path(product), "r",
+                  encoding="utf8") as handle:
+            stamp = json.load(handle)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(stamp, dict):
+        return False
+    if stamp.get("stamp_version") != PRODUCT_BUILD_STAMP_VERSION:
+        return False
+    if stamp.get("output") != _stat_signature([product]).get(product):
+        return False
+    if stamp.get("ingredients") != ingredients:
+        return False
+    if stamp.get("sources") != sources:
+        return False
+    return True
+
+
+def _write_product_build_stamp(product, sources, ingredients):
+    """Record what a build product was just built from.
+
+    Written to a temporary name and renamed, so a reader arriving mid-write
+    sees either the old stamp or the new one, never a truncated file.
+    """
+    stamp = {
+        "stamp_version": PRODUCT_BUILD_STAMP_VERSION,
+        "output": _stat_signature([product]).get(product),
+        "ingredients": ingredients,
+        "sources": sources,
+    }
+    if stamp["output"] is None:
+        return
+    path = product_build_stamp_path(product)
+    temporary = path + ".tmp." + str(os.getpid())
+    try:
+        with open(temporary, "w", encoding="utf8") as handle:
+            json.dump(stamp, handle)
+        os.replace(temporary, path)
+    except OSError as error:
+        # A read-only or full cache directory must not fail a build that
+        # otherwise succeeded; the cost is one expensive check next time.
+        LOG.v("could not write build stamp for %s: %s" % (path, error))
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+
+
+def compile_if_stale(what, compiler_path, flags, sources, output,
+                     extra_ingredients=None):
+    """:func:`compile`, skipped when the stamp says ``output`` is current.
+
+    For the products that are neither the core nor a custom op library but
+    still sit on the import path. ``libcuda_extern`` is the whole reason this
+    exists: two translation units, nothing to do on a warm import, and 0.073 s
+    of every one of them spent proving it -- the last compile fan-out left on
+    the import path once the core and the op libraries had stamps.
+
+    Returns True if it built.
+    """
+    stamp_sources = {
+        "files": _stat_signature([os.path.realpath(name) for name in sources]),
+        "core_sources": core_source_signature(),
+    }
+    ingredients = {
+        "version": __version__,
+        "what": what,
+        "cc_path": compiler_path,
+        "flags": flags,
+        "opt_flags": opt_flags,
+        "extension_suffix": extension_suffix,
+        "generators": core_generator_signature(),
+    }
+    if extra_ingredients:
+        ingredients.update(extra_ingredients)
+    if product_build_is_current(output, stamp_sources, ingredients):
+        LOG.v("%s is current, skipping build" % what)
+        return False
+    if not build_is_allowed():
+        _refuse_build(what)
+    compile(compiler_path, flags, sources, output)
+    _write_product_build_stamp(output, stamp_sources, ingredients)
+    return True
+
+
 def build_core(force=False):
     """Generate the core's sources and compile ``jittor_core``.
 
@@ -2025,6 +2334,8 @@ def build_core(force=False):
             files = stamp["files"]
             LOG.v("core build is current, skipping generation and compile")
             return False
+        if not build_is_allowed():
+            _refuse_build("jittor_core")
 
     gen_jit_flags()
     gen_jit_tests()

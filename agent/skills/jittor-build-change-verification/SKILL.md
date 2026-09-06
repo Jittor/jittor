@@ -1,6 +1,6 @@
 ---
 name: jittor-build-change-verification
-description: 改了 Jittor 构建系统（jittor_utils、compiler.py、compile_extern.py、cache_compile.cc、lock.cc、pyproject 的 pytest 配置）之后，怎么确认没把别人的构建弄坏。给出冷缓存 / 热缓存 / 并发 / 切 flag 四种情形各自的验证命令与判据，以及多 worktree 并行时哪些状态是全局共享的。另含 §2.5「怎么可复现地量 import jittor 的耗时并归因到具体一步」（三种造冷缓存的办法、为什么不能用 profiler 得结论、配套脚本 measure_import_cost.py）。凡是会改变缓存路径、锁、编译命令行、探测流程或 import 耗时的改动都要按这个走一遍再推。
+description: 改了 Jittor 构建系统（jittor_utils、compiler.py、compile_extern.py、cache_compile.cc、lock.cc、pyproject 的 pytest 配置）之后，怎么确认没把别人的构建弄坏。给出冷缓存 / 热缓存 / 并发 / 切 flag 四种情形各自的验证命令与判据，以及多 worktree 并行时哪些状态是全局共享的。另含 §2.5「怎么可复现地量 import jittor 的耗时并归因到具体一步」（三种造冷缓存的办法、为什么不能用 profiler 得结论、配套脚本 measure_import_cost.py）、§2.6「给构建产物加构建戳」（判错两个方向代价不对称、戳里必须记什么才不会静默算错、为什么同进程内验不出来）、§2.7「JITTOR_NO_BUILD=1 把『这次 import 不许编译』变成可断言的」。凡是会改变缓存路径、锁、编译命令行、探测流程或 import 耗时的改动都要按这个走一遍再推。
 ---
 
 # 改了构建系统之后怎么确认没弄坏别人
@@ -174,6 +174,90 @@ EXPECT_JITTOR_SRC=$WT/python env $E \
   就算了。
 
 一份写完的归因表见 `agent/results/2026-09-04-import-jittor-cost-attribution.md`。
+
+## 2.6 给一个构建产物加「已经最新」的快路（构建戳）
+
+热缓存 import 的成本几乎全是**空转校验**：产物已经是最新的，但要花几百毫秒把每个翻译
+单元的依赖闭包读一遍才知道。加一份构建戳可以把这一步整块跳过。`compiler.py` 里已经有
+两处在用，用的是同一组函数：
+
+```python
+product_build_stamp_path(product)                     # 戳就放在产物旁边
+product_build_is_current(product, sources, ingredients)
+compile_if_stale(what, cc, flags, sources, output)    # 裸 compile() 的带戳版本
+```
+
+**判错的两个方向代价完全不对称**，这是设计这类检查唯一要想清楚的事：
+
+| 判错方向 | 后果 |
+| --- | --- |
+| 该跳过却说「过期」 | 多花一次原来就有的完整校验，**只损失时间** |
+| 该重建却说「最新」 | 继续用旧产物，**静默算错**，而且和你的改动看起来毫无关系 |
+
+所以戳里记什么，标准不是「够用」而是「漏了会不会静默算错」。踩过的三条：
+
+- **只记显式列出的文件不够。** `compile_custom_ops(filenames)` 里 `filenames` 只点名
+  算子源与配对头文件；它们 `#include` 的**兄弟头文件**本来靠 `compile()` 里的逐文件依赖
+  扫描发现——而那正是戳要跳过的那一步。所以要另外递归扫调用方的每个 `-I` 目录，
+  **包括 `extra_flags` 里手写的那些**（正则把 `-I"..."` / `-I...` 都抠出来）。
+- **但不要扫工具链目录。** CUDA SDK 的 include 每个约 1400 个头文件，六个库合计
+  90 ms/次 import，而且扫了也发现不了任何东西：`cache_path` 已经按 cuda key 分区，
+  换工具链本来就落到另一个目录。树内目录同理（`core_source_signature()` 已覆盖）。
+  判据：**排除一个目录，先说清「它变了为什么一定会从别处被发现」**，说不出来就别排除。
+- **`cc_flags` 这类全局串要看你在什么时刻读它。** 核心的戳**不能**记 `cc_flags`：
+  它在核心链接之后还会追加 `-ljittor_core`，事后再读就永远不匹配，戳等于白加（第一版
+  真这么写过）。自定义算子的戳记它反而是对的，因为那时它已经不再变了。
+
+### 怎么证明戳没漏
+
+**同一个进程里验不出来。** `compile_custom_ops` 结尾是 `__import__(gen_name)`，第二次
+调用拿到的是 `sys.modules` 里已经加载的模块，也就是**第一次**那份代码——产物在磁盘上
+重建了也一样。所以「答案变了没有」只能跨进程验，在进程内断言会不论戳对错都通过。
+
+写法：让被测头文件参与**数值**（`x[i] = i * FACTOR`），起子进程一，断言 factor=2 的结果；
+改头文件为 3，起子进程二，断言结果是 3。见
+`tests/compiler/test_import_bootstrap_laziness.py::test_editing_an_unnamed_header_changes_the_answer`。
+
+另外两条断言也要有，否则测试会**空转通过**：
+
+- 「热 import 不重编」要断言**扇出条数为 0**，不要只断言「没有 jittor_core」——漏掉的
+  那一条（`libcuda_extern`）就是这么留了一波的。
+- CPU-only 配置根本不建自定义算子库，所以「没有 gen_ops_ 扇出」在两套门禁里是**恒真**的。
+  要么按 `jt.has_cuda` 分支断言戳文件真的存在，要么这条测试等于没写。
+- 枚举戳里**每一个字段**各改一次（`subTest`），因为这类检查烂掉的方式是某个字段悄悄
+  不再参与比较，而任何「它能用」的测试都看不见。
+
+### `custom_ops/` 里的 `.so` 不能拿来枚举
+
+那个目录会**堆积孤儿库**：后端源文件改名之后 `gen_name` 的哈希变了，旧 `.so` 永远留在
+那里，既不会被重建也不会有戳。要枚举「建好的库」就枚举 `*.build_stamp.json`，
+按 `.so` 枚举会拿到一个永远失败的断言。
+
+## 2.7 `JITTOR_NO_BUILD=1`：把「这次 import 不许编译」变成可断言的
+
+`import jittor` 会把缺的东西编出来，这件事以前只能事后看日志。现在可以声明：
+
+```bash
+env $E JITTOR_NO_BUILD=1 python -c "import jittor"
+```
+
+要编译的动作会抛 `jittor.compiler.BuildNotAllowed` 并指名
+`python -m jittor_utils.bootstrap`（那是允许编译的显式入口，`--check` 则是只检查不建）。
+用途有两个：
+
+- **量热缓存 import 时加上它**，这样「我以为在量热缓存、其实撞上了一次重编」不可能发生。
+- **离线只读验收的判据从「import 成功」升级为「import 成功且证明没编译」**，见
+  本文 §1 的判据不再需要靠 grep 日志里的 `Compiling`。
+
+两个坑：
+
+- **`jit_utils_core` 不在这道闸门之内。** 它在 `jittor` 里任何代码跑起来之前就建好，
+  所以一个全新的构建配置的**第一条**命令仍然是 0.11 那个「重跑同一条命令」。测试里要
+  容忍这一次重试（`_run_gate_probe` 就是这么写的）。
+- **`except Exception` 会把它降级成警告。** `setup_cub` 那个 handler 的本意是「缺 cub
+  不该挡住 import」，但拒绝编译不是缺 cub；不显式 re-raise 的话，结果正是这个开关要防的
+  那一种——import「成功」了而 cub 悄悄不在。加这类闸门时，**把它抛出的异常沿调用链
+  grep 一遍 `except`**。
 
 ## 3. 并发两个进程
 
