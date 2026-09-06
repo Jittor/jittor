@@ -69,11 +69,13 @@ inline 了一份「现在有没有事务在记账」的查找（`factories.py`�
 grep 说的是「什么匹配上了」，不是「还剩什么」。现在
 `tests/structure/test_compat_write_entry_points.py` 用 AST 扫出
 `python/jittor/compat` 里对 `os.environ`、`sys.modules`、`sys.meta_path`、
-`sys.path`、`builtins.__import__`、jt.flags 的**全部** 50 个写入口，每一个都必须
+`sys.path`、`builtins.__import__`、jt.flags 的**全部** 53 个写入口，每一个都必须
 在分类表里，否则红；表里有而树里已没有的也红。五个类别中四个是**不属于这本账
-的理由**：`ledger`（14 项）、`runtime`（12 项，调用方在安装之后自己要的）、
+的理由**：`ledger`（17 项）、`runtime`（11 项，调用方在安装之后自己要的）、
 `pre-ledger`（12 项，事务还不存在，preflight 在 core import 之前跑）、
 `deployed-payload`（5 项，另一个进程）、`pending`（8 项）。
+提交 `c2fa74d8` 的说明里记的是 50 项与 ledger 14 / runtime 12，那是改完之前
+一次扫描的数，真值以 `CLASSIFIED` 自己数为准。
 `pending` 另有一份按文件记障碍的清单，做完一项在同一个 diff 里变短。
 
 **7.05 因此仍是待领**，剩余四处（`PENDING` 里逐条写着原因）：
