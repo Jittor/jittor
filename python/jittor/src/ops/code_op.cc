@@ -18,9 +18,9 @@
 
 namespace jittor {
 
-static auto make_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&, vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&>("code");
+static auto make_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&, vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&, string&&>("code");
 
-static auto make_code_multi = op_constructor<vector<VarPtr>, vector<NanoVector>&&, vector<NanoString>&&, vector<Var*>&&, string&&, vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&>("code");
+static auto make_code_multi = op_constructor<vector<VarPtr>, vector<NanoVector>&&, vector<NanoString>&&, vector<Var*>&&, string&&, vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&, string&&>("code");
     
 static inline void check_vary_shape(NanoVector v) {
     USER_CHECK(v.size()) << "Vary shape should not be zero dimension";
@@ -32,10 +32,10 @@ static inline void check_vary_shape(NanoVector v) {
 CodeOp::CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs, 
     string&& cpu_src, vector<string>&& cpu_grad_src, string&& cpu_header, 
     string&& cuda_src, vector<string>&& cuda_grad_src, string&& cuda_header,
-    DataMap&& data)
+    DataMap&& data, string&& backend)
     : _inputs(inputs), cpu_src(move(cpu_src)), cpu_grad_src(move(cpu_grad_src)), cpu_header(move(cpu_header)),
     cuda_src(move(cuda_src)), cuda_grad_src(move(cuda_grad_src)), cuda_header(move(cuda_header)), 
-    data(move(data))
+    data(move(data)), backend(move(backend))
 {
     set_flag(OpFlags::_cpu, !!this->cpu_src.size());
     set_flag(OpFlags::_cuda, !!this->cuda_src.size());
@@ -52,10 +52,10 @@ CodeOp::CodeOp(
     vector<NanoVector>&& shapes, vector<NanoString>&& dtypes, vector<Var*>&& inputs, 
     string&& cpu_src, vector<string>&& cpu_grad_src, string&& cpu_header, 
     string&& cuda_src, vector<string>&& cuda_grad_src, string&& cuda_header,
-    DataMap&& data)
+    DataMap&& data, string&& backend)
     : _inputs(inputs), cpu_src(move(cpu_src)), cpu_grad_src(move(cpu_grad_src)), cpu_header(move(cpu_header)),
     cuda_src(move(cuda_src)), cuda_grad_src(move(cuda_grad_src)), cuda_header(move(cuda_header)), 
-    data(move(data))
+    data(move(data)), backend(move(backend))
 {
     set_flag(OpFlags::_cpu, !!this->cpu_src.size());
     set_flag(OpFlags::_cuda, !!this->cuda_src.size());
@@ -75,10 +75,10 @@ CodeOp::CodeOp(
     vector<Var*>&& inputs, vector<Var*>&& outputs, 
     string&& cpu_src, vector<string>&& cpu_grad_src, string&& cpu_header, 
     string&& cuda_src, vector<string>&& cuda_grad_src, string&& cuda_header,
-    DataMap&& data)
+    DataMap&& data, string&& backend)
     : _inputs(inputs), cpu_src(move(cpu_src)), cpu_grad_src(move(cpu_grad_src)), cpu_header(move(cpu_header)),
     cuda_src(move(cuda_src)), cuda_grad_src(move(cuda_grad_src)), cuda_header(move(cuda_header)), 
-    data(move(data))
+    data(move(data)), backend(move(backend))
 {
     set_flag(OpFlags::_cpu, !!this->cpu_src.size());
     set_flag(OpFlags::_cuda, !!this->cuda_src.size());
@@ -96,6 +96,9 @@ CodeOp::CodeOp(
 }
 
 void CodeOp::configure_grad() {
+    USER_CHECK(backend.empty() || backend == "cuda" || backend == "acl"
+               || backend == "rocm" || backend == "corex")
+        << "code backend must be cuda, acl, rocm, or corex";
     if (cuda_grad_src.size() == 0 && cpu_grad_src.size() == 0)
         set_flag(OpFlags::_manual_set_vnbb);
     auto iter = data.find("multi_grad");
@@ -132,7 +135,7 @@ VarPtr CodeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         move(inputs),
         move(cpu_src), {}, alias+cpu_header,
         move(cuda_src), {}, alias+cuda_header,
-        DataMap(data)
+        DataMap(data), string(backend)
     );
 }
 
@@ -184,7 +187,7 @@ void CodeOp::grads(Var** douts, VarPtr* dins) {
         move(shapes), move(dtypes), move(inputs),
         move(cpu_src), {}, alias+cpu_header,
         move(cuda_src), {}, alias+cuda_header,
-        {}
+        {}, string(backend)
     );
     CHECKop(outputs.size(),==,input_count);
     for (int i=0; i<outputs.size(); i++)
@@ -241,6 +244,17 @@ static const string& code_op_key_tail(const string& header, const string& src) {
 }
 
 void CodeOp::jit_prepare(JK& jk) {
+    if (!backend.empty()) {
+        if (flag(OpFlags::_cuda)) {
+            auto expected = backend == "cuda" ? BackendId::Cuda
+                : backend == "acl" ? BackendId::Acl
+                : backend == "rocm" ? BackendId::Rocm : BackendId::Corex;
+            USER_CHECK(execution_backend() == expected)
+                << "code backend source is for" << backend
+                << "but execution backend is" << backend_ops(execution_backend()).name;
+        }
+        add_jit_define(jk, "source_backend", backend);
+    }
 
     // forward: in0 in1 in2 -> out0 out1
     // backward: in0 in1 in2 in3(pout0) in4(pout1)

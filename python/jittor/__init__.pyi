@@ -846,7 +846,7 @@ def argsort(x: Var, dim: int=-1, descending: bool=False, dtype: str="int32")-> T
 	            # return [[0 1 0],[1 0 1]],  [[11 11 12],[12 13 13]]'''
 	...
 @overload
-def code(shape: Tuple[int], dtype: str, inputs: List[Var]={}, cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str="", data={})-> Var:
+def code(shape: Tuple[int], dtype: str, inputs: List[Var]={}, cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str="", data={}, backend: str="")-> Var:
 	'''Document:
 	*
 	    Code Operator for easily customized op.
@@ -1090,7 +1090,7 @@ def code(shape: Tuple[int], dtype: str, inputs: List[Var]={}, cpu_src: str="", c
 	        print(jt.grad(c, [a, b]))'''
 	...
 @overload
-def code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var]={}, cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str="", data={})-> Tuple[Var]:
+def code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var]={}, cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str="", data={}, backend: str="")-> Tuple[Var]:
 	'''Document:
 	*
 	    Code Operator for easily customized op.
@@ -1334,7 +1334,7 @@ def code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var]={}, cpu_
 	        print(jt.grad(c, [a, b]))'''
 	...
 @overload
-def code(inputs: List[Var], outputs: List[Var], cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str="", data={})-> Tuple[Var]:
+def code(inputs: List[Var], outputs: List[Var], cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str="", data={}, backend: str="")-> Tuple[Var]:
 	'''Document:
 	*
 	    Code Operator for easily customized op.
@@ -8210,6 +8210,7 @@ class Var:
 		'''Document:
 		 Add dependency, make var computed after vars'''
 		...
+	def _needs_cascade_setitem(self)-> bool: ...
 	def check_cascade_setitem(self, out: Var)-> Var:
 		'''Document:
 		 check a[x][y] = c'''

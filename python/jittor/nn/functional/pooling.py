@@ -12,6 +12,7 @@ return different numbers for the same arguments.
 
 import jittor as jt
 from jittor.misc import _pair, _triple
+from jittor._runtime.dispatch import try_dispatch
 
 
 def _pool_output_size(size, kernel, stride, padding, ceil_mode):
@@ -95,6 +96,11 @@ def _avg_pool_nd(x, rank, kernel_size, stride, padding, ceil_mode,
             "{}: output size is non-positive ({}): input {} is too small for "
             "kernel {}, stride {}, padding {}.".format(
                 api, tuple(out_sizes), tuple(x.shape), kernel, strides, pads))
+    if rank == 2:
+        fast = try_dispatch("nn.pool2d", x, kernel, strides, pads, None, False,
+                            ceil_mode, count_include_pad, "mean")
+        if fast is not None:
+            return fast
     window = ["i{}*{}-{}+i{}".format(2 + a, strides[a], pads[a], 2 + rank + a)
               for a in range(rank)]
     summed = x.reindex(

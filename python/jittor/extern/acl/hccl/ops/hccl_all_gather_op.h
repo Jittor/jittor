@@ -13,6 +13,9 @@
 namespace jittor {
 
 struct HcclAllGatherOp : Op {
+    static void configure_accelerator_kernel(Kernel& kernel) {
+        kernel.compile = compile_registered_source;
+    }
     Var* x, * y;
     int group_id;
 

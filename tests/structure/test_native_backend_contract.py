@@ -65,7 +65,9 @@ void reject(BackendOps ops) {
 int main() {
     static_assert(!std::is_copy_constructible<BackendRegistry>::value, "owner");
     auto bad = complete(); bad.abi_version = 0; reject(bad);
+    bad = complete(); bad.abi_version = 1; reject(bad);
     bad = complete(); bad.struct_size = 0; reject(bad);
+    bad = complete(); bad.struct_size = offsetof(BackendOps, execution); reject(bad);
     bad = complete(); bad.name = nullptr; reject(bad);
     bad = complete(); bad.name = ""; reject(bad);
     bad = complete(); bad.device_count = nullptr; reject(bad);
@@ -81,9 +83,15 @@ int main() {
     char mutable_name[] = "cpu";
     auto ops = complete();
     ops.name = mutable_name;
+    assert(ops.execution.supports_parallel_compile);
+    assert(!ops.execution.requires_pinned_host_storage);
+    assert(!ops.execution.preserve_reduction_dtype);
+    assert(!ops.execution.native_low_precision_reduction);
     registry.register_backend(ops);
     mutable_name[0] = 'X';
     ops.device_count = nullptr;
+    ops.execution.supports_parallel_compile = false;
+    assert(registry.get(BackendId::Cpu).execution.supports_parallel_compile);
     assert(registry.names() == vector<string>{"cpu"});
     assert(std::strcmp(registry.get(BackendId::Cpu).name, "cpu") == 0);
     assert(registry.get(BackendId::Cpu).device_count == count);

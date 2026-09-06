@@ -3,6 +3,7 @@
 import numpy as np
 
 import jittor as jt
+from jittor._runtime.dispatch import try_dispatch
 
 from ... import _arg_policy
 
@@ -36,6 +37,9 @@ def relu(x, inplace=False):
     if inplace:
         _arg_policy.ignored("jittor.nn.relu", "inplace", inplace,
                             _INPLACE_CONSEQUENCE)
+    fast = try_dispatch("nn.relu", x, inplace=inplace)
+    if fast is not None:
+        return fast
     cond = x>0.0
     return jt.ternary_out_hint(cond, x, 0.0)
 
@@ -69,6 +73,9 @@ def leaky_relu(x, scale=0.01, negative_slope=None, inplace=False):
     if inplace:
         _arg_policy.ignored("jittor.nn.leaky_relu", "inplace", inplace,
                             _INPLACE_CONSEQUENCE)
+    fast = try_dispatch("nn.leaky_relu", x, scale=scale, inplace=inplace)
+    if fast is not None:
+        return fast
     return jt.ternary(x>0, x, x*scale)
 
 
@@ -208,6 +215,9 @@ def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignor
     if inplace:
         _arg_policy.ignored("jittor.nn.silu", "inplace", inplace,
                             _INPLACE_CONSEQUENCE)
+    fast = try_dispatch("nn.silu", x, inplace=inplace)
+    if fast is not None:
+        return fast
     return x * x.sigmoid()
 
 

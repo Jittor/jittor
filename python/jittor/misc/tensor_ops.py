@@ -15,7 +15,7 @@ import builtins as _builtins
 from collections.abc import Sequence,Iterable
 
 from .. import _arg_policy
-from .._runtime.dispatch import dispatch_context, optional_kernel, register_kernel, select_kernel
+from .._runtime.dispatch import dispatch_context, optional_kernel, register_kernel, select_kernel, try_dispatch
 
 from jittor.backends.cuda.kernels.misc import ctc as _cuda_ctc
 from jittor.backends.cuda.kernels.misc import codegen as _cuda_codegen
@@ -229,10 +229,16 @@ def sort(input, dim=-1, descending=False, stable=False):
 jt.Var.sort = sort
 
 def all(x, dim=()):
+    result = try_dispatch("tensor.all", x, dim)
+    if result is not None:
+        return result
     return jt.ops.all_(x, dim).bool()
 jt.Var.all = all
 
 def any(x,dim=()):
+    result = try_dispatch("tensor.any", x, dim)
+    if result is not None:
+        return result
     return jt.ops.any_(x, dim).bool()
 jt.Var.any = any
     
@@ -412,6 +418,9 @@ def flip(x, dim=0, dims=None):
         if dim[i]<0:
             dim[i] += x.ndim
         assert dim[i]>=0 and dim[i]<x.ndim
+    result = try_dispatch("tensor.flip", x, dim)
+    if result is not None:
+        return result
     dim = set(dim)
 
     tar_dims = []
@@ -886,6 +895,9 @@ def nonzero(x):
     r'''
     Return the index of the elements of input tensor which are not equal to zero.
     '''
+    result = try_dispatch("tensor.nonzero", x)
+    if result is not None:
+        return result
     x = jt.where(x)
     x = [xx.unsqueeze(1) for xx in x]
     if len(x)<2:
@@ -973,6 +985,9 @@ def split(d, split_size, dim=0):
 
         dim (int) – dimension along which to split the tensor.
     '''
+    result = try_dispatch("tensor.split", d, split_size, dim)
+    if result is not None:
+        return result
     if isinstance(split_size,int):
         shape = d.shape[dim]
         if shape % split_size == 0:
@@ -1169,6 +1184,9 @@ def cub_cumsum(x, dim=None):
     
         This function should not be called directly. Instead, jittor.misc.cumsum is recommended.
     '''
+    result = try_dispatch("tensor.cumsum", x, -1 if dim is None else dim)
+    if result is not None:
+        return result
     if (dim == None):
         dim = -1
     assert(dim >= -1 and dim < len(x.shape))
@@ -1186,6 +1204,8 @@ def cub_cumsum(x, dim=None):
     if (dim != -1 and dim != len(shape) - 1):
         x = x.permute(order)
     return x
+
+jt.Var.cub_cumsum = cub_cumsum
 
 def _cumsum_dim(dim, ndim):
     '''torch's dim contract: ``-ndim <= dim < ndim``, negatives from the end.
@@ -1274,6 +1294,9 @@ def cumsum(x, dim=None):
     gradient rule each and a ``dim`` guard each.
     '''
     dim = jt.misc._cumsum_dim(dim, x.ndim)
+    result = try_dispatch("tensor.cumsum", x, dim)
+    if result is not None:
+        return result
     shape = list(x.shape)
     last = max(len(shape) - 1, 0)
     order = None
@@ -1909,6 +1932,9 @@ inline static void searchsorted(
 
 def _scatter_into(x, dim, index, src, reduce='void'):
     '''The in-place core shared by ``scatter`` and ``scatter_``: writes into ``x``.'''
+    result = try_dispatch("tensor.scatter", x, dim, index, src, reduce)
+    if result is not None:
+        return result
     shape = index.shape
     # torch allows a SCALAR src: scatter(x, dim, index, value) fills the indexed
     # positions with a constant (e.g. phimoe masks logits with torch.scatter(.., -inf)).
@@ -2073,6 +2099,9 @@ Example::
     assert (data.data == [[ 1,  2], [ 3,  2]]).all()
 
     '''
+    result = try_dispatch("tensor.gather", x, dim, index)
+    if result is not None:
+        return result
     shape = index.shape
     indexes = [ f'i{i}' for i in range(len(shape)) ]
     indexes[dim] = index
@@ -2100,6 +2129,9 @@ Examples::
         assert (y.numpy() == [[6,5],[8,7],[2,1],[4,3]]).all()
 
     '''
+    result = try_dispatch("tensor.roll", x, shifts, dims)
+    if result is not None:
+        return result
     if dims is None:
         # torch: when dims is None the tensor is FLATTENED, rolled by the (scalar)
         # shift, then restored to the original shape (NOT rolled along dim 0).
@@ -2638,6 +2670,9 @@ def triu(input: jt.Var, diagonal:int=0) -> jt.Var:
         assert jt.all_equal(b, [[1,1,1],[1,1,1],[0,1,1]])
 
     '''
+    result = try_dispatch("tensor.triu", input, diagonal)
+    if result is not None:
+        return result
     index = input.index()
     mask = index[-2] <= index[-1] - diagonal
     return jt.ternary(mask, input, jt.zeros_like(input))

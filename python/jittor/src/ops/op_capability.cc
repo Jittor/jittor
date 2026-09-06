@@ -62,13 +62,13 @@ vector<OpCapabilityRegistration> op_capability_registrations(BackendId backend) 
 
 bool has_op_capability(BackendId backend, OpCapability capability) {
     auto registration = find_op_capability_registration(backend, capability);
-    return registration.entry && has_op(registration.implementation);
+    return bool(op_capability_definition(registration));
 }
 
 vector<string> backend_supported_capabilities(const string& backend) {
     vector<string> result;
     for (const auto& registration : op_capability_registrations(backend_registry().get(backend).id))
-        if (has_op(registration.implementation))
+        if (op_capability_definition(registration))
             result.emplace_back(op_capability_name(registration.capability));
     return result;
 }

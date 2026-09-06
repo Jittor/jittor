@@ -208,7 +208,7 @@ def test_preflight_and_execution_share_launcher_keys_before_any_fallback_migrati
     assert fallback.index("AclCpuFallbackScope restore") < fallback.index("migrate_to_cpu(")
     assert "try_exec_and_fallback_cpu" not in source
     assert 'LOGir << "fallback cpu"' not in source
-    assert "dispatch_acl_checked(fused_acl_unsupported(fop)" in source
+    assert "dispatch_acl_checked(fused_acl_unsupported(ops)" in source
     assert source.count("op.name = fused_acl_name(current_op);") == 6
     assert "AclExecutionRunner<ArgReduceOpRunner, false>" in source
     assert "AclExecutionRunner<AdamWListOpRunner, false>" in source

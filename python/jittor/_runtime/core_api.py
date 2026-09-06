@@ -897,6 +897,8 @@ def transpose(x, *dim):
         a, b = dim
         axes[a], axes[b] = axes[b], axes[a]
         dim = axes
+    if not dim:
+        dim = tuple(reversed(range(x.ndim)))
     # NumPy helpers such as np.argsort return numpy.integer axis values.  The
     # C++ transpose binding requires exact Python ints, while torch accepts any
     # integral sequence in Tensor.permute().
@@ -908,7 +910,9 @@ def transpose(x, *dim):
             break
     if coerce:
         dim = tuple(pyint(d.item()) if isinstance(d, Var) else pyint(d) for d in dim)
-    out = origin_transpose(x, dim)
+    out = _try_dispatch("tensor.transpose", x, dim)
+    if out is None:
+        out = origin_transpose(x, dim)
     try:
         axes_tuple = tuple(pyint(i) for i in dim)
         last2 = list(range(x.ndim))
@@ -1095,6 +1099,84 @@ def outer(x, y):
 
 
 Var.outer = outer
+
+
+_native_index = index
+_native_arg_reduce = arg_reduce
+_native_where = where
+_native_floor_int = floor_int
+_native_sigmoid = sigmoid
+
+
+def index(inshape=None, dim=None, dtype="int32", **kwargs):
+    if "shape" in kwargs or "a" in kwargs:
+        if inshape is not None or ("shape" in kwargs and "a" in kwargs):
+            raise TypeError("index received its input twice")
+        inshape = kwargs.pop("shape") if "shape" in kwargs else kwargs.pop("a")
+    if kwargs:
+        raise TypeError("index got an unexpected keyword argument: " + next(iter(kwargs)))
+    if isinstance(dim, (str, NanoString, np.dtype)) or callable(dim):
+        dtype, dim = dim, None
+    result = _try_dispatch("tensor.index", inshape, dim, dtype)
+    if result is not None:
+        return result
+    if dim is None:
+        return _native_index(inshape, dtype=dtype)
+    return _native_index(inshape, dim, dtype)
+
+
+def arg_reduce(x, op, dim, keepdims=False):
+    result = _try_dispatch("tensor.arg_reduce", x, op, dim, keepdims)
+    if result is not None:
+        return result
+    return _native_arg_reduce(x, op, dim, keepdims)
+
+
+def where(condition=None, x=None, y=None, dtype=None, **kwargs):
+    if "cond" in kwargs:
+        if condition is not None:
+            raise TypeError("where received its condition twice")
+        condition = kwargs.pop("cond")
+    if kwargs:
+        raise TypeError("where got an unexpected keyword argument: " + next(iter(kwargs)))
+    if y is None and dtype is None and (isinstance(x, (str, NanoString, np.dtype)) or callable(x)):
+        dtype, x = x, None
+    if x is None and y is None:
+        result = _try_dispatch("tensor.where", condition)
+        if result is None:
+            return _native_where(condition) if dtype is None else _native_where(condition, dtype)
+        if dtype is not None:
+            result = [value.cast(dtype) for value in result]
+        return result
+    if dtype is not None:
+        raise TypeError("where dtype is only valid for the coordinate overload")
+    if x is None or y is None:
+        raise TypeError("where requires both x and y")
+    result = _try_dispatch("tensor.where", condition, x, y)
+    return _native_where(condition, x, y) if result is None else result
+
+
+def floor_int(x):
+    result = _try_dispatch("tensor.floor_int", x)
+    return _native_floor_int(x) if result is None else result
+
+
+def sigmoid(x):
+    result = _try_dispatch("tensor.sigmoid", x)
+    return _native_sigmoid(x) if result is None else result
+
+
+index.__doc__ = _native_index.__doc__
+arg_reduce.__doc__ = _native_arg_reduce.__doc__
+where.__doc__ = _native_where.__doc__
+floor_int.__doc__ = _native_floor_int.__doc__
+sigmoid.__doc__ = _native_sigmoid.__doc__
+Var.index = index
+Var.arg_reduce = arg_reduce
+Var.where = where
+Var.floor_int = floor_int
+Var.sigmoid = sigmoid
+
 
 def erfinv_(x):
     ''' In-place version of erfinv().
@@ -3012,21 +3094,21 @@ Var.__reduce__ = lambda self: (Var, (self.data,))
 
 __all__ = (
     "ExitHooks", "Function", "GradHooker", "Module", "abs_", "add_",
-    "amp_flags", "argmax", "argmin", "array", "array64", "attrs", "cast",
+    "amp_flags", "arg_reduce", "argmax", "argmin", "array", "array64", "attrs", "cast",
     "clamp", "clamp_", "clean", "detach", "dfs_to_numpy",
     "dirty_fix_pytorch_runtime_error", "display_memory_info", "double",
     "empty", "enable_grad", "erf_", "erfinv_", "fetch", "flag_scope",
-    "flags", "flatten", "float", "float_auto", "format", "full",
+    "flags", "flatten", "float", "float_auto", "floor_int", "format", "full",
     "full_like", "get_len", "grad", "grad_hooker", "half", "hooks", "int",
-    "is_var", "jittor_exit", "liveness_info", "load", "log_capture_scope",
+    "index", "is_var", "jittor_exit", "liveness_info", "load", "log_capture_scope",
     "make_module", "masked_fill", "multiply_", "ne", "new_empty",
     "new_full", "new_ones", "new_zeros", "no_grad", "norm", "normal",
     "ones", "ones_like", "origin_reshape", "origin_transpose", "outer",
     "permute", "pow", "profile_mark", "profile_scope", "rand", "rand_like",
     "randint", "randint_like", "randn", "randn_like", "random",
     "register_hook", "reshape", "safepickle", "safeunpickle", "save",
-    "sigmoid_", "single_log_capture", "single_process_scope", "size", "sqr",
+    "sigmoid", "sigmoid_", "single_log_capture", "single_process_scope", "size", "sqr",
     "sqrt_", "squeeze", "std", "to_bool", "to_device", "to_float",
     "to_int", "transpose", "type_as", "unsqueeze", "var", "view", "vtos",
-    "zeros", "zeros_like", "runtime",
+    "where", "zeros", "zeros_like", "runtime",
 )

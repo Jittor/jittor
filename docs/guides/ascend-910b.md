@@ -748,8 +748,43 @@ Legacy `nn.backends.hooks.*`, `jt.cudnn` and `compile_extern.*` library attribut
 are now read-only views. Backend integrations publish through
 `_runtime.dispatch.register_kernel` and `_runtime.backend_libraries`; temporary
 test overrides use `override_kernel`, which also restores absent registrations.
-The existing ACL source conversion and the remaining `change_function` logic
-are not removed by this Python migration.
+ACL implementations now register without `change_function` or public Module
+replacement. The existing ACL source conversion remains until the separate
+native SDK migration is complete.
+
+### Custom ACL source migration
+
+Custom SDK snippets must declare their source backend explicitly:
+
+```python
+result = jt.code(shape, dtype, inputs, cuda_header=acl_header,
+                 cuda_src=acl_source, backend="acl")
+```
+
+The former `// aclop` marker is no longer a dispatch mechanism. The same
+`backend="acl"` argument is required for preallocated `outputs=` snippets;
+gradient CodeOps inherit it automatically. This does not select an NPU or make
+an arbitrary CUDA kernel valid ACL code. Wrong accelerator targets fail before
+execution; an optional `cpu_src` remains the CPU implementation.
+
+The canonical Python SDK builders are in `jittor.backends.acl.kernels.ops`;
+legacy `jittor.extern.acl.aclops` imports resolve as same-object aliases.
+Rebuild native extensions against BackendOps ABI 2 and the updated CodeOp
+constructor. On the target CANN machine, rerun indexing forward/backward and
+writeback, normalization, convolution, explicit CodeOp outputs/gradients, and
+HCCL nodes under the strict fallback policy above. Host syntax checks and
+CPU/CUDA regressions are not evidence that these SDK calls passed on NPU.
+
+Native basic Getitem/Setitem now use checked ACL device-copy plans for integer
+indices, positive-step slices, new axes, ellipses, empty selections and broadcast
+assignment. Validate chained forms such as `x[0][1] = value`, fp16/bf16 indexing
+gradients with float32 upstream weights, and `return_x` on the target machine.
+Copies must follow `aclstream` producers; a final synchronization alone cannot
+repair a missing producer dependency. Non-equivalent storage overlap is rejected
+before writes. Advanced/string/negative-step indexing and reduction assignment
+are not implemented by this native copy entry; existing Python ACL paths may
+handle variants before reaching it. Scalar broadcast currently uses repeated
+device copies and has not been optimized or performance-validated.
 
 ## ACL attribute data-channel owner
 

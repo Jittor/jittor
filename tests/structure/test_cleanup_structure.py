@@ -42,6 +42,11 @@ from _helpers.child_process import run_python_child
 MIGRATION_GUARD_EXPIRY = datetime.date(2027, 3, 1)
 
 
+def _runtime_sources(repo_root):
+    return sorted(path for root in (repo_root / "python/jittor", repo_root / "backends")
+                  for path in root.rglob("*.py"))
+
+
 class TestCleanupStructure(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -92,9 +97,8 @@ class TestCleanupStructure(unittest.TestCase):
                 self.assertFalse((self.repo_root / relative).exists())
 
     def test_runtime_tree_has_no_module_package_path_collisions(self):
-        runtime_root = self.repo_root / "python" / "jittor"
         collisions = []
-        for module_path in runtime_root.rglob("*.py"):
+        for module_path in _runtime_sources(self.repo_root):
             if module_path.name == "__init__.py":
                 continue
             package_path = module_path.with_suffix("")
@@ -108,9 +112,8 @@ class TestCleanupStructure(unittest.TestCase):
         self.assertEqual(collisions, [])
 
     def test_runtime_files_have_no_shadowed_top_level_definitions(self):
-        runtime_root = self.repo_root / "python" / "jittor"
         duplicates = []
-        for path in sorted(runtime_root.rglob("*.py")):
+        for path in _runtime_sources(self.repo_root):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             definitions: Dict[str, List[int]] = {}
             for node in tree.body:
@@ -136,9 +139,10 @@ class TestCleanupStructure(unittest.TestCase):
         self.assertEqual(duplicates, [])
 
     def test_cross_file_duplicate_implementations_are_reviewed(self):
-        source_root = self.repo_root / "python"
         implementations: Dict[str, List[Tuple[str, str]]] = {}
-        for path in sorted(source_root.rglob("*.py")):
+        sources = sorted(path for root in (self.repo_root / "python", self.repo_root / "backends")
+                         for path in root.rglob("*.py"))
+        for path in sources:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in tree.body:
                 if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -187,8 +191,7 @@ class TestCleanupStructure(unittest.TestCase):
         )
         tuple_helpers = frozenset(
             {
-                ("python/jittor/extern/acl/acl_compiler.py", "_ntuple"),
-                ("python/jittor/extern/acl/aclops/conv_op.py", "_ntuple"),
+                ("backends/acl/kernels/ops/conv_op.py", "_ntuple"),
                 ("python/jittor/misc/tensor_ops.py", "_ntuple"),
             }
         )
@@ -206,16 +209,16 @@ class TestCleanupStructure(unittest.TestCase):
         acl_shared_helpers = {
             frozenset(
                 {
-                    ("python/jittor/extern/acl/aclops/getitem_op.py", name),
-                    ("python/jittor/extern/acl/aclops/setitem_op.py", name),
+                    ("backends/acl/kernels/ops/getitem_op.py", name),
+                    ("backends/acl/kernels/ops/setitem_op.py", name),
                 }
             )
             for name in ("caculate_shape", "can_broadcast_and_shape")
         }
         acl_forward_helpers = frozenset(
             {
-                ("python/jittor/extern/acl/aclops/index_op.py", "range_forward"),
-                ("python/jittor/extern/acl/aclops/setitem_op.py", "setitem_forward"),
+                ("backends/acl/kernels/ops/index_op.py", "range_forward"),
+                ("backends/acl/kernels/ops/setitem_op.py", "setitem_forward"),
             }
         )
         legacy_loader_names = {
@@ -254,7 +257,7 @@ class TestCleanupStructure(unittest.TestCase):
                 and names <= legacy_loader_names
             ):
                 return True
-            if all(path.startswith("python/jittor/extern/acl/aclops/") for path in paths):
+            if all(path.startswith("backends/acl/kernels/ops/") for path in paths):
                 return len(group) > 10 and all(name.endswith("_cmd") for _path, name in group)
             return False
 

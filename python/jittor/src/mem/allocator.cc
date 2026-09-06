@@ -68,6 +68,24 @@ void setter_use_cuda_host_allocator(const int& old_value, const int& value) {
 
 extern int64 sfrl_large_block_size_device;
 
+bool use_pinned_host_memory() {
+    if (use_cuda_host_allocator) return true;
+#ifdef HAS_CUDA
+    if (runtime_use_cuda())
+        return backend_ops(accelerator_backend_id()).execution.requires_pinned_host_storage;
+#endif
+    return false;
+}
+
+Allocator* get_array_host_allocator() {
+#ifdef HAS_CUDA
+    if (runtime_use_cuda()
+            && backend_ops(accelerator_backend_id()).execution.requires_pinned_host_storage)
+        return get_allocator(-1, false);
+#endif
+    return cpu_allocator;
+}
+
 Allocator* get_allocator(bool temp_allocator) {
     int device = -1;
 #ifdef HAS_CUDA
@@ -92,7 +110,7 @@ Allocator* get_allocator(int device, bool temp_allocator) {
 #endif
     {
         allocator = backend_raw_allocator({BackendId::Cpu, 0},
-            use_cuda_host_allocator ? BackendMemoryKind::Pinned : BackendMemoryKind::Device);
+            use_pinned_host_memory() ? BackendMemoryKind::Pinned : BackendMemoryKind::Device);
     }
     if (use_stat_allocator==1) {
         LOGvv << "Using stat_allocator";

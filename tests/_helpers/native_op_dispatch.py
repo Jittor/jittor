@@ -41,7 +41,9 @@ void dispatch_probe_copy_install(bool missing) {
     auto replacement = saved_copy;
     if (missing) replacement.implementations.erase(BackendId::Cpu);
     else replacement.implementations.at(BackendId::Cpu).kernel.native = shifted_copy;
-    op_registe(replacement);
+    if (missing) op_registe(replacement);
+    else register_op_implementation("copy", BackendId::Cpu,
+                                    replacement.implementations.at(BackendId::Cpu));
     copy_installed = true;
     copy_runs = 0;
 }

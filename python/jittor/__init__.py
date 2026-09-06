@@ -167,6 +167,7 @@ from .nn.functional.tensor import kron, tensordot
 from . import numpy2cupy
 from .misc.concatenation import concat, cat
 from .misc.indexing import install_var_indexing as _install_var_indexing
+from .misc.indexing import var_getitem as getitem, var_setitem as setitem
 from .backends.cuda.kernels.nn.full_reduce_cuda import (
     install_full_reduce_fast_path as _install_full_reduce,
 )
@@ -245,9 +246,11 @@ _publish(globals(), math_util, math_util.__all__)
 from . import distributions
 
 if compiler.has_acl:
-    from jittor.extern.acl.acl_compiler import change_function
-    change_function()
-    _record_install("acl.change_function")
+    from .backends.acl.kernels.install import install as _install_acl_kernels
+    acl_allow_hf32 = False
+    _install_acl_kernels()
+    _record_install("acl.register_kernels")
+    del _install_acl_kernels
 
 # MPI-free Ascend multi-card: the optimizer/users call Var.mpi_all_reduce /
 # Var.mpi_broadcast, normally provided by the MPI op module. In the env/file

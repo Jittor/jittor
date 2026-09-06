@@ -171,10 +171,12 @@ def test_post_process_uses_returned_converter(acl, setup, monkeypatch):
     )
     monkeypatch.setitem(sys.modules, "jittor", fake_jittor)
     acl.post_process(setup.context.with_config(config))
-    assert not pool.pool_use_code_op
-    assert flags.use_cuda_host_allocator == 1
-    assert flags.use_parallel_op_compiler == 0
-    assert flags.amp_reg == 14
+    # These defaults are native BackendOps.execution policies now, not
+    # mutations of CPU/Torch state during ACL bootstrap.
+    assert pool.pool_use_code_op is True
+    assert flags.use_cuda_host_allocator == 0
+    assert flags.use_parallel_op_compiler == 1
+    assert flags.amp_reg == 8
     assert setup.calls[-1] == ("init",)
     before = list(setup.calls)
     acl.post_process(setup.context)

@@ -48,8 +48,8 @@ def matmul_forward(name: str,
         data=extra_data,
     )
     if outputs is not None:
-        return jt.code(outputs=outputs, inputs=inputs, **code_kwargs)
-    return jt.code(output_shapes, output_dtypes, inputs, **code_kwargs)
+        return jt.code(outputs=outputs, inputs=inputs, backend="acl", **code_kwargs)
+    return jt.code(output_shapes, output_dtypes, inputs, backend="acl", **code_kwargs)
 
 
 class MatmulACL:

@@ -1,7 +1,7 @@
 # 整改看板
 
 当前进度以任务表为准。2026-09-06：2.13 完成原生状态与配置分层，2.14 清空原生 misc，4.03/4.04 接通原生设备与算子执行链，4.05 完成 Python 真实分派迁移；
-4.06 实际回退策略与 4.07 BuildConfig 已接通，4.10 将 CUDA 内核实体统一到顶层 backends/cuda；下一步接通独立 ACL 执行并移除 legacy 源转换。下方旧波次中的 Python 字段视图不等于原生存储迁移。
+4.06 实际回退策略与 4.07 BuildConfig 已接通，4.10 统一 CUDA 内核目录，4.11 接通 ACL 注册执行并删除 Python 替换与全局编译钩子；下一步移除 legacy SDK 源转换。下方旧波次中的 Python 字段视图不等于原生存储迁移。
 
 > 第217波：`98c8ee94` 迁移 cuda_allow_tf32 Runtime owner（结构 43 passed）；`b8398291` 修正 Native provider teardown 统一 lifecycle events（结构 12 passed）；`9d49c70c` ACL device_size Python/C++ 对齐（ACL 14 passed）；`d44782d4` Torch bootstrap 非字符串/非法 __all__ fail-closed。未声称 CUDA/NPU 实机。
 
@@ -569,7 +569,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 4.08 | 流与事件模型 | 已合并 | device | `0dfcb3dd` 每设备 copy/communication stream 与 ready/done event，接入 array H2D、fetch D2H、device_copy、NCCL collective；`78235157` 双 rank NCCL 用 rank 相关输入验证数值且 communication 双向依赖计数精确 +2。GPU 0/2：两 rank 各 1 passed，mixed-device H2D/fetch 2 passed，6.C16 下毒 1 passed，device_copy/multi-device 6 passed，既有 overlap 正确性 1 passed；未用负载敏感绝对墙钟阈值 |
 | 4.09 | per-device 库句柄 | 已合并 | device | `13c28084`；4.02 已有五库 per-device 资源，本提交补齐每次执行前 SetStream。GPU 0/2 新增测试实际执行 cuBLAS/cuDNN/cuSPARSE/cuRAND/cuFFT 各两次并断言两卡逐库 bind 计数均 +2，1 passed；各库现有 wrapper 聚焦 5 passed；CPU 聚焦 1 passed |
 | 4.10 | CUDA kernel 存放位置统一 | 已合并 | device/build | CUDA 七库、NN/misc/math/pooling/sparse/CCL/loss3d 与核心 GPU 源统一到顶层 backends/cuda，原生注册项选择实际后端源码；共享索引数学保留单 owner，原子前缀与调度属于后端。NN 根目录实现移出并加 exact-entry，ACL KV 移到 backends/acl，旧模块同对象别名保留且不泄漏私有 facade。源码/安装包/legacy 转换资源解析及 sdist/wheel 同步，真实 CUDA 分派与库 13 passed、最终数值/梯度组合 27 passed、原子展开及稀疏/别名 14 passed；隔离 wheel CPU-only 冷编译、索引/scatter/softmax、C++ schedule 与三步训练 selftest 通过。修复迁移中暴露的 candidate i/j 既有错误、原子宏丢失及复合源码行号；完整结构检查的新增目录/接口问题定点修复，既有失败仍见交接。无 NPU/ROCm/Corex 实机；NCCL 通信资源、FlashAttention 与核心总布局仍归 4.15，不伪报完成。 |
-| 4.11 | ACL 改为注册表后端 | 待领 | | |
+| 4.11 | ACL 改为注册表后端 | 已合并 | device/coreops/pyops | 代码阶段按用户授权完成，未声称 NPU 实机：35 个 Python SDK builder 归 backends/acl/kernels/ops，模块级实际实现经确定注册清单接入原生 owner，change_function/warp/公共类替换删除；post_process 仅注册，pinned/并行/归约要求归 BackendOps ABI 2 策略。原生 Kernel.compile 取代全局 hook，注册期 composer 同时处理已有及晚加载 OpDef，旧图 pin 与稳定启动缓存身份保留；显式 backend=acl CodeOp 替代源码注释猜测，反向继承标记，HCCL 明确编译入口。typed 基本 Get/Set 经 aclstream 的设备复制保留整数视图/写回/梯度，地址计划 NumPy 对拍 38 passed，unsupported 变体写入前拒绝；scalar 广播未优化。CPU/CUDA CodeOp/注册 30 passed，索引/低精度梯度/张量入口 13 passed，rotary/安装/策略 24 passed，CPU-only 最终 17 passed/2 个 CUDA skip；两 ACL TU 与坏符号负向检查通过。完整结构及迁移前已有归一化失败证据见交接；4.12 转换器、4.15 SDK 总布局与 NPU 真机/性能仍未完成。 |
 | 4.12 | 删除 `process_jittor_source` 与 `process_acl` | 待领 | | |
 | 4.13 | 跨后端契约矩阵 | 待领 | | |
 | 4.14 | `Module.cuda(i)`/`npu(i)`/`x.to(...)`/`x.cpu()` … | 已合并 | device | 14e5920e；修前 CPU 2 项、双卡 CUDA 4 项失败；修后新增 CPU 2 项、GPU 0/2 双卡 4 项及 4.02 聚焦回归 4 项通过；无 NPU 硬件，未做真 NPU 验证，无 ACL 时解析设备号后明确报能力错误 |

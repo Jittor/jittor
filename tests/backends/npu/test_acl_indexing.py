@@ -237,7 +237,7 @@ def test_disabling_device_execution_disables_acl_dispatch():
 def test_acl_contiguous_last_axis_slice_gradients_use_concat():
     if not getattr(jt.compiler, "has_acl", 0):
         pytest.skip("ACL backend is unavailable")
-    from jittor.extern.acl.aclops.getitem_op import _slice_zero_cache
+    from jittor.backends.acl.kernels.ops.getitem_op import _slice_zero_cache
 
     source_shape = (2, 3, 8)
     slices = (slice(0, 3), slice(2, 6), slice(5, 8), slice(0, 3))

@@ -473,6 +473,10 @@ struct VarHolder {
 
     /* check a[x][y] = c
     */
+    // Backend adapters must preserve native chained-index writeback.
+    // @pyjt(_needs_cascade_setitem)
+    bool needs_cascade_setitem();
+
     // @pyjt(check_cascade_setitem)
     // @attrs(return_self)
     VarHolder* check_cascade_setitem(VarHolder* out);

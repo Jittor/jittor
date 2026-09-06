@@ -50,7 +50,7 @@ def _reshape_and_cache_acl(key, value, kv_cache, slot_mapping, slots=None):
         return _stop_grad_outputs(kv_cache)
 
     if token_count <= 16 and len(valid_tokens) == token_count:
-        from jittor.extern.acl.aclops.flashattention_op import KVCacheMemcpyACL
+        from jittor.backends.acl.kernels.ops.flashattention_op import KVCacheMemcpyACL
         KVCacheMemcpyACL(cache_shape[2], slots)(key, value, kv_cache)
         return _stop_grad_outputs(kv_cache)
 
@@ -193,7 +193,7 @@ def _decode_attention_acl(query, key, value, scale):
     ):
         return None
 
-    from jittor.extern.acl.aclops.flashattention_op import (
+    from jittor.backends.acl.kernels.ops.flashattention_op import (
         scaled_dot_product_attention_acl,
     )
 
@@ -260,7 +260,7 @@ def _paged_attention_decode_acl(query, kv_cache, block_table, scale,
     ):
         return None
 
-    from jittor.extern.acl.aclops.flashattention_op import (
+    from jittor.backends.acl.kernels.ops.flashattention_op import (
         PagedIncreFlashAttentionACL,
     )
 

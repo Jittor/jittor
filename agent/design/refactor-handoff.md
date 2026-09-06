@@ -30,10 +30,10 @@
 | 分支 | `2.0-refactor`；本批迁移起点 `2328ce4f`，后续提交见 Git 历史 |
 | 相对 `2.0` 的提交 | 迁移起点共 1853 个；提交数不代表任务完成量 |
 | 提交里出现过的任务号 | 329 个 |
-| 看板 | 已合并 **220** / 进行中 **0** / 待领 **52** / 并入其它任务 **13** |
+| 看板 | 已合并 **221** / 进行中 **0** / 待领 **51** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
 
-**交接清理完成不等于整改完成。** 看板仍有 52 条待领；当前只是把中断留下的易失状态全部转成了主线提交、
+**交接清理完成不等于整改完成。** 看板仍有 51 条待领；当前只是把中断留下的易失状态全部转成了主线提交、
 明确待领项或已验证的不采用结论。这个分支不是终态。
 
 看板的「已合并」是权威。提交里的任务号更多，是因为一个任务常有补充提交、改判提交与「更正前一个提交」
@@ -644,13 +644,37 @@ ACL 两 TU 与 5 个 launcher ABI 主机语法通过，不代替 CANN/NPU 实机
 私有 NN alias 导出和跨测试 import 已定点修正，旧九类失败仍在，未再跑完整改前 A/B。
 NCCL 通信资源、FlashAttention 外部集成、共享核心搬出包仍属 4.15，不能视为已完成。
 
-下一轮以 4.11/4.12 的真实 ACL 接线和移除 legacy 源转换为主线：
-四个独立 ownership 是 Python family 注册、native OpImplementation 发布与 ACL 执行、
-ACL BackendOps 设备/内存/流，以及构建和 ROCm/Corex 原生适配。
-必须同时替换 `change_function/warp` 和 `do_compile_hook` 两条执行旁路；
-不能只移动目录或增加注册表元数据。新增后端实现发布需保留 OpId、已构图定义 pin
-和编译身份，完整 int64/类型化属性不能塞进 CodeOp 的 double DataMap。
-删除转换前还须接通 ROCm/Corex，并分开“有加速器”与“依赖 CUDA SDK”的条件。
+4.11 代码阶段已完成，按用户授权把缺失的 NPU 真机/性能留给异机验证，不冒充已验收：
+35 个 Python SDK builder 搬到 `backends/acl/kernels/ops`，实际 tensor/neural/normalization
+实现模块级注册，旧 module aliases 同对象；native Module/函数/参数 owner 保留。
+`change_function/warp`、全局 `do_compile_hook`、CUDA 算子删除清单与源码注释猜测均删除。
+`Kernel.compile` 承担真实 ACL 路由，注册期 composer 同时适配现有与晚加载定义；
+安装幂等/事务化，稳定启动身份与动态替换代次、旧图 pin 分开，HCCL 显式选择编译。
+`jt.code` 的 `backend="acl"` 源标记进入键并由反向继承；第三方旧 `// aclop` 写法必须迁移。
+post_process 不再覆盖四个全局，BackendOps ABI 2 的 pinned/并行/归约策略由实际 owner 消费。
+typed 基本 Get/Set 新增正步 slice/整数/None/Ellipsis/empty/broadcast/return_x 的纯设备实现，
+连续 suffix 合并，实际排队在 `aclstream`，不是默认流；只对核实的相同共享映射 noop。
+不安全 overlap、advanced/string/negative-step、native reduction assignment 在写入前拒绝；
+Python ACL 路径仍处理其既有变体，scalar 广播尚未优化。十层 cascade 的整体视图重写仍归 5.02。
+基本索引反向显式保留赋值 dtype（标量零仍 0-D），advanced indexed-add 累加精度未改。
+
+验证：CodeOp/注册 CPU 与真实 CUDA 30 passed；低精度索引/张量入口/CUDA 小内核 13 passed；
+rotary/安装/cascade/策略 24 passed；最后 CPU-only 17 passed/2 个真实 CUDA skip。
+Python provider 40、tensor 路由 10、纯 C++ copy-plan NumPy 对拍 38 项通过；
+两个 ACL TU 语法与坏符号反向检查通过，不证明 CANN SDK ABI/设备执行。
+最终 wheel SHA-256 为 `7556ec1218e38e23b81cb86657ce52f3896181fae9f56d4460d87aa2d7eefb2e`；
+992 个生产文件与源码/安装结果逐字节相同，新 SDK 文件齐全、旧 Python 副本为零。
+该最终安装包在隔离空缓存下完成 CPU-only 核心编译、前后向、13 子包导入与三步训练自检。
+矩阵/归一化/路由组合 60 passed/1 failed；唯一归一化失败在迁移前 `fd4d8820`
+独立源码、全新缓存、真实 CUDA 同一 node 复现：`test_norm_unification.py::TestNormParityCUDA::test_module_and_functional_agree`
+在 scope 切换 flush 报 `broadcast_to doesn't have cpu version`；只证明既有，不提前认定根因。
+完整 structure 793 passed/11 failed/2 skipped；新增 provenance 计数与 pool 分派导入合同
+已定点修正（连 install 合同 8 passed），旧九类失败保留，未再重复完整目录。
+
+下一轮以 4.12 移除 legacy SDK 源转换为主线：仍需真正的 ACL 设备/内存/流 provider、
+构建服务以及 ROCm/Corex 原生适配，不能只删工具让可选后端断路。
+分开“有加速器”与“依赖 CUDA SDK”的编译条件；完整 int64/类型化属性不能塞进
+CodeOp 的 double DataMap，8.06 仍需真正 typed 属性消费和描述符缓存。
 独立 torch 包仍要推进实际所有权迁移，不能再回到只写 metadata/validator 的旧波次。
 NativeProviderRegistration 的旧元数据不能当作上述执行/构建迁移已完成的证据。
 独立 torch 包和后端架构仍是未完成的大需求，不要为追低价值计数改变优先级。

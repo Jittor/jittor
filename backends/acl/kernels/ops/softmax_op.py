@@ -42,7 +42,7 @@ def softmax_cmd(name: str,
     output_code = ''
     for i in range(len(outputs_)):
         output_code += f"op.add(out{i}, false);\n"
-    return jt.code(outputs=outputs_,
+    return jt.code(backend="acl", outputs=outputs_,
                    inputs=inputs,
                    cuda_header=attr_header + cuda_header,
                    cuda_src=f"""

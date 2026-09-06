@@ -287,6 +287,14 @@ def layer_norm(
     eps: float = 1e-5,
     elementwise_affine: bool = True,
 ):
+    normalized_shape = tuple(normalized_shape)
+    if not normalized_shape or len(normalized_shape) > x.ndim:
+        raise ValueError("layer_norm normalized_shape must match trailing input dimensions")
+    if tuple(x.shape[-len(normalized_shape):]) != normalized_shape:
+        raise ValueError("layer_norm normalized_shape must match trailing input dimensions")
+    for name, value in (("weight", weight), ("bias", bias)):
+        if isinstance(value, jt.Var) and tuple(value.shape) != normalized_shape:
+            raise ValueError("layer_norm {} must match normalized_shape".format(name))
     dims = [-i for i in range(len(normalized_shape), 0, -1)]
     weight = 1.0 if weight is None else weight
     bias = 0.0 if bias is None else bias

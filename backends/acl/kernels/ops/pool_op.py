@@ -40,7 +40,7 @@ def pool_cmd(name: str,
     output_code = ''
     for i in range(len(outputs_)):
         output_code += f"op.add(out{i}, false);\n"
-    return jt.code(outputs=outputs_,
+    return jt.code(backend="acl", outputs=outputs_,
                    inputs=inputs,
                    cuda_header=attr_header + cuda_header,
                    cuda_src=f"""
@@ -92,6 +92,8 @@ class PoolACL(jt.Function):
         self.count_include_pad = count_include_pad
 
     def execute(self, input):
+        from jittor.nn.functional.pooling import _pool_output_size
+
         self.input = input
         attr_code = f"""
         op.jt_name  = "{"avgpool" if self.op == 'mean' else "maxpool"}";
@@ -104,25 +106,11 @@ class PoolACL(jt.Function):
         attr->countIncludePad = {"true" if self.count_include_pad else "false"};
         op.op_attr.reset(attr);
         """
-        input_height, input_width = input.shape[-2:]
-        kernel_height, kernel_width = self.kernel_size[-2:]
-
-        if self.ceil_mode:
-            output_height = (input_height + 2 * self.padding[0] -
-                             kernel_height + self.stride[0] - 1
-                             ) // self.stride[0] + 1
-            output_width = (input_width + 2 * self.padding[1] -
-                            kernel_width + self.stride[1] - 1
-                            ) // self.stride[1] + 1
-            if (output_height - 1) * self.stride[0] >= input_height + self.padding[0]:
-                output_height -= 1
-            if (output_width - 1) * self.stride[1] >= input_width + self.padding[1]:
-                output_width -= 1
-        else:
-            output_height = (input_height + 2 * self.padding[0] -
-                             kernel_height) // self.stride[0] + 1
-            output_width = (input_width + 2 * self.padding[1] -
-                            kernel_width) // self.stride[1] + 1
+        output_height, output_width = (
+            _pool_output_size(size, kernel, stride, padding, self.ceil_mode)
+            for size, kernel, stride, padding in zip(
+                input.shape[-2:], self.kernel_size, self.stride, self.padding)
+        )
 
         output_shape = (input.shape[0], input.shape[1], output_height,
                         output_width)

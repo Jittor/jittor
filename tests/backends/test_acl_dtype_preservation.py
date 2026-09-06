@@ -6,7 +6,7 @@
 # ***************************************************************
 """ACL ops must not silently widen their input to float32 (6.B11).
 
-Six ops in ``jittor/extern/acl/aclops`` opened with ``x = x.float32()``. That
+Six ops in ``backends/acl/kernels/ops`` opened with ``x = x.float32()``. That
 is not a conversion for the kernel's benefit: the result var keeps the promoted
 dtype, so a bf16 or fp16 model quietly became fp32 at silu / softmax / sigmoid /
 relu / leaky_relu / layernorm and stayed fp32 for the rest of the graph. It
@@ -29,9 +29,9 @@ import numpy as np
 
 import jittor as jt
 
-from jittor.extern.acl.aclops import _code as acl_code_mod
-from jittor.extern.acl.aclops import (norms_op, relu_op, sigmoid_op, silu_op,
-                                      softmax_op)
+from jittor.backends.acl.kernels.ops import _code as acl_code_mod
+from jittor.backends.acl.kernels.ops import (norms_op, relu_op, sigmoid_op, silu_op,
+                                           softmax_op)
 
 
 class _Recorder:

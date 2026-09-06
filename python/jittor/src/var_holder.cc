@@ -457,11 +457,7 @@ void migrate_all_to_cpu() {
 
 static auto make_setitem = op_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>("setitem");
 
-VarHolder* VarHolder::check_cascade_setitem(VarHolder* out) {
-    // return this;
-    auto v = var;
-    int n=0;
-    int64 slices[10];
+static Var* cascade_setitem_root(Var* v, int64* slices, int& n) {
     while (n<10) {
         Op* iop = v->input();
         if (!iop) break;
@@ -471,23 +467,34 @@ VarHolder* VarHolder::check_cascade_setitem(VarHolder* out) {
         if (gop->vs.n == 1 && gop->vs.slices[0].is_int()) {
             slices[n++] = gop->vs.slices[0].i;
         } else break;
-        if (v->holder) {
-            // found holder var: v
-            // v[a][b][c][d] = y
-            // ^
-            auto* prev_op = (SetitemOp*)out->var->input();
-            VarSlices& old_slices = prev_op->vs;
-            Var* y = prev_op->input(1);
-            VarSlices new_slices(n+old_slices.n);
-            for (int i=n-1; i>=0; i--)
-                new_slices.slices[n-1-i].set_int(slices[i]);
-            for (int i=0; i<old_slices.n; i++)
-                new_slices.slices[n+i] = old_slices.slices[i];
-            // apply new slice
-            // v[a][b][c][d] = y -> v[a,b,c,d] = y
-            (*v->holder) = make_setitem(v, move(new_slices), y, ns_void);
-            break;
-        }
+        if (v->holder) return v;
+    }
+    return nullptr;
+}
+
+bool VarHolder::needs_cascade_setitem() {
+    int n = 0;
+    int64 slices[10];
+    return cascade_setitem_root(var, slices, n) != nullptr;
+}
+
+VarHolder* VarHolder::check_cascade_setitem(VarHolder* out) {
+    int n = 0;
+    int64 slices[10];
+    if (auto* v = cascade_setitem_root(var, slices, n)) {
+        Op* producer = out->var->input();
+        CHECK(producer && producer->is_op(op_ids::setitem()))
+            << "Chained indexing writeback requires a native setitem result";
+        auto* prev_op = static_cast<SetitemOp*>(producer);
+        VarSlices& old_slices = prev_op->vs;
+        Var* y = prev_op->input(1);
+        VarSlices new_slices(n+old_slices.n);
+        for (int i=n-1; i>=0; i--)
+            new_slices.slices[n-1-i].set_int(slices[i]);
+        for (int i=0; i<old_slices.n; i++)
+            new_slices.slices[n+i] = old_slices.slices[i];
+        // v[a][b][c][d] = y -> v[a,b,c,d] = y
+        (*v->holder) = make_setitem(v, move(new_slices), y, ns_void);
     }
     return assign(out);
 }

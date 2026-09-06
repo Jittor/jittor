@@ -12,13 +12,13 @@ from typing import Union
 from collections.abc import Sequence, Iterable
 
 
-def nantonum_cmd(name: str,
-                 inputs: list,
-                 output_dtypes: list = None,
-                 output_shapes: list = None,
-                 attr_code: str = "",
-                 attr_header: str = "",
-                 outputs: list = None):
+def flip_cmd(name: str,
+             inputs: list,
+             output_dtypes: list = None,
+             output_shapes: list = None,
+             attr_code: str = "",
+             attr_header: str = "",
+             outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -40,7 +40,7 @@ def nantonum_cmd(name: str,
     output_code = ''
     for i in range(len(outputs_)):
         output_code += f"op.add(out{i}, false);\n"
-    return jt.code(outputs=outputs_,
+    return jt.code(backend="acl", outputs=outputs_,
                    inputs=inputs,
                    cuda_header=attr_header + cuda_header,
                    cuda_src=f"""
@@ -53,23 +53,33 @@ def nantonum_cmd(name: str,
     op.run();""")
 
 
-class NanToNumACL(jt.Function):
+class FlipACL(jt.Function):
 
     def __init__(self):
-        super(NanToNumACL, self).__init__()
+        super(FlipACL, self).__init__()
 
-    def execute(self, input, nan_or_inf):
+    def execute(self, input, dim):
+        if type(dim) is tuple:
+            dim = list(dim)
+        if type(dim) is not list:
+            dim = [dim]
         attr_code = f"""
-        op.jt_name = "NanToNum";
-        NanToNumAttr *attr = new NanToNumAttr();
-        attr->nan = {nan_or_inf};
-        attr->posinf = {-nan_or_inf};
-        attr->neginf = {-nan_or_inf};
+        op.jt_name = "flip";
+        ReduceAttr *attr = new ReduceAttr();
+        attr->axes = {{{', '.join(map(str, (list(dim))))}}};
+        attr->prod_dim = {len(dim)};
         op.op_attr.reset(attr);
         """
         self.attr_code = attr_code
-        result = nantonum_cmd("NanToNum", [input],
-                              output_dtypes=[input[0].dtype],
-                              output_shapes=[input.shape],
-                              attr_code=self.attr_code)[0]
+        result = flip_cmd("Flip", [input],
+                          output_dtypes=[input.dtype],
+                          output_shapes=[input.shape],
+                          attr_code=self.attr_code)[0]
         return result
+
+    def grad(self, grad_output):
+        grad_input = flip_cmd("Flip", [grad_output],
+                              output_dtypes=[grad_output.dtype],
+                              output_shapes=[grad_output.shape],
+                              attr_code=self.attr_code)[0]
+        return grad_input

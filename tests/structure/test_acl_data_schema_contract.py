@@ -5,7 +5,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-HOST_SCHEMA = ROOT / "python/jittor/extern/acl/aclops/acl_data.py"
+HOST_SCHEMA = ROOT / "backends/acl/kernels/ops/acl_data.py"
 
 
 def validate_acl_data_schema(record):

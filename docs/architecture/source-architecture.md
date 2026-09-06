@@ -349,8 +349,59 @@ lazy core import remains a separate task.
 providers publish implementations directly; the view never stores an independent
 callback. Internal tests use `override_kernel` for scoped replacement or absence,
 and restore the prior registration on exit. Direct legacy hook/library attribute
-assignment is rejected. None of this removes the remaining ACL source converter
-or its broader Python replacements, which belong to the legacy-backend migration.
+assignment is rejected. The ACL source converter remains a separate migration;
+Python kernel publication no longer replaces the native public API.
+
+### ACL Kernel Registration
+
+`backends/acl/kernels/install.py` publishes module-level tensor, neural-network
+and normalization implementations in the existing Python dispatch table.
+The paired SDK source builders live in `backends/acl/kernels/ops`; old Python
+module paths are same-object aliases. Native functions and Module classes keep
+their own identities, validation, parameter management and generic mathematics.
+There is no `change_function` or `warp` installer. An unsupported Python variant
+returns `None` to its same-device generic owner; execution errors propagate.
+
+The native registry composes ACL `OpImplementation` values when definitions
+are published, including extensions loaded after initialization. Installing
+the composer also handles existing definitions transactionally. Definitions
+remain immutable and existing graphs keep their pinned values. A stable startup
+version preserves cross-process JIT keys; dynamic implementation replacement
+still receives a unique identity. A late extension cannot acquire ACL support
+merely by avoiding an initialization-time scan.
+
+`Kernel.compile` replaces the global compilation hook. ACL registers distinct
+fused, mapped, primitive and explicitly unsupported paths; fused relay selection
+still follows tuning. SDK-native extensions such as HCCL explicitly declare
+their compiler. Unsupported fallback entries do not appear as implemented
+operators or capabilities, and other backends' constructors are not deleted.
+
+`jt.code(..., backend="acl")` identifies the accelerator source as ACL SDK code.
+It does not change the active device. Constructors validate the marker, cache
+keys include it, ordinary and multi-output gradients inherit it, and a wrong
+accelerator target is rejected before execution. `cpu_src` remains independent.
+Third-party code that relied on `// aclop` or another incidental `acl` substring
+must add the marker; comment-based recognition is deliberately removed.
+
+Typed native Getitem/Setitem entries cover basic positive-step slices, integer
+indices, new axes, ellipses, empty selections and broadcast assignment. A pure
+checked address plan coalesces contiguous suffixes; device copies are queued on
+the existing ACL computation stream. No tensor data is staged through the CPU.
+Only exact shared mappings are no-ops; unsafe overlap, advanced/string indexing,
+negative steps and native reduction assignment are explicitly unsupported by
+this entry. Existing Python ACL builders retain their separate variants.
+Scalar broadcast copies are conservative and are not a performance claim.
+Native integer views retain the producer needed for chained writeback; basic
+index gradients make assignment casts explicit without changing indexed-add
+accumulation. The retained ten-level writeback model is still a separate
+view/storage redesign, not solved by this backend migration.
+
+ACL post-processing only publishes its native implementations. Its pinned-host,
+compiler-concurrency and reduction requirements belong to the backend descriptor
+and are consumed by the allocator, compiler and reduction owners; public flags
+are not overwritten. BackendOps ABI 2 rejects older descriptors and extensions
+must rebuild. This registration migration does not remove `process_acl`, the
+legacy SDK translation or the need for real CANN/NPU verification.
 
 ### Backend Fallback Policy
 

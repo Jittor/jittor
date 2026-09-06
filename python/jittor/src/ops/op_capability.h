@@ -54,15 +54,26 @@ public:
     }
 };
 
+inline shared_ptr<const OpDef> op_capability_definition(const OpCapabilityRegistration& registration) {
+    if (!registration.entry) return nullptr;
+    auto definition = get_op_definition(registration.implementation, false);
+    if (!definition) return nullptr;
+    auto implementation = definition->implementations.find(registration.backend);
+    if (implementation == definition->implementations.end() || implementation->second.kernel.fallback_only)
+        return nullptr;
+    return definition;
+}
+
 template<class To, class... Ts>
 To (*find_op_capability(BackendId backend, OpCapability capability, Ts... args))(Ts...) {
     auto registration = find_op_capability_registration(backend, capability);
-    if (!registration.entry || !has_op(registration.implementation)) return nullptr;
+    auto definition = op_capability_definition(registration);
+    if (!definition) return nullptr;
     auto typed = std::dynamic_pointer_cast<TypedOpCapabilityEntry<To, Ts...>>(registration.entry);
     USER_CHECK(typed) << "Capability constructor signature mismatch:"
         << op_capability_name(capability) << registration.implementation;
     if (typed->supports && !typed->supports(args...)) return nullptr;
-    return get_op_info(registration.implementation).template get_constructor<To, Ts...>();
+    return definition->template get_constructor<To, Ts...>();
 }
 
 // @pyjt(backend_supported_capabilities)

@@ -29,7 +29,7 @@ def rope_cmd(name: str,
     output_code = ''
     for i in range(len(outputs_)):
         output_code += f"op.add(out{i}, false);\n"
-    return jt.code(outputs=outputs_,
+    return jt.code(backend="acl", outputs=outputs_,
                    inputs=inputs,
                    cuda_header=attr_header + cuda_header,
                    cuda_src=f"""
@@ -57,6 +57,7 @@ class ExpandRotaryCacheACL:
             jt.empty(half_shape, cache.dtype),
         ]
         result = jt.code(
+            backend="acl",
             outputs=outputs,
             inputs=[cache],
             cuda_header='''
@@ -120,6 +121,7 @@ class GroupedQKRmsNormRotaryACL:
             jt.empty(key_rstd_shape, "float32"),
         ]
         result = jt.code(
+            backend="acl",
             outputs=outputs,
             inputs=[
                 query, key, query_unit, key_unit,

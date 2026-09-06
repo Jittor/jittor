@@ -16,6 +16,15 @@ template<class T>
 void configure_registered_accelerator(Codegen&, long) {}
 
 template<class T>
+auto configure_registered_accelerator_kernel(Kernel& kernel, int)
+    -> decltype(T::configure_accelerator_kernel(kernel), void()) {
+    T::configure_accelerator_kernel(kernel);
+}
+
+template<class T>
+void configure_registered_accelerator_kernel(Kernel&, long) {}
+
+template<class T>
 void register_op_definition(OpDef definition, uint32 backend_mask = T::backend_mask,
                             const string& accelerator_source = "",
                             const string& accelerator_flags = "") {
@@ -42,6 +51,7 @@ void register_op_definition(OpDef definition, uint32 backend_mask = T::backend_m
         if (!accelerator_source.empty()) codegen.source_path = accelerator_source;
         codegen.extra_flags += accelerator_flags;
         configure_registered_accelerator<T>(codegen, 0);
+        configure_registered_accelerator_kernel<T>(kernel, 0);
         definition.implementations.emplace(accelerator_backend_id(), OpImplementation{kernel, codegen});
     }
     op_registe(definition);

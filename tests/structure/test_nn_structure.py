@@ -280,7 +280,8 @@ _ACCIDENTAL_EXPORTS = {
 
 
 def _is_acl_wrapper(value):
-    return getattr(value, "__module__", "").startswith("jittor.extern.acl")
+    return getattr(value, "__module__", "").startswith(
+        ("jittor.extern.acl", "jittor.backends.acl"))
 
 
 def _is_runtime_wrapper(value):

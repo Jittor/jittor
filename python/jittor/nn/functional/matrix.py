@@ -99,11 +99,21 @@ def _mkl_batched_matmul(a, b, trans_a=False, trans_b=False):
     return get_library_ops("mkl").mkl_batched_matmul(a, b, trans_a, trans_b)
 
 
+def _check_matmul_shapes(a, b, trans_a=False, trans_b=False):
+    assert a.ndim > 0 and b.ndim > 0, "matmul operands must have at least one dimension"
+    inner_a = a.shape[0] if a.ndim == 1 else a.shape[-2 if trans_a else -1]
+    inner_b = b.shape[0] if b.ndim == 1 else b.shape[-1 if trans_b else -2]
+    assert inner_a == inner_b, f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
+    for left, right in zip(reversed(a.shape[:-2]), reversed(b.shape[:-2])):
+        assert left == right or left == 1 or right == 1, (
+            f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}")
+
+
 def matmul_transpose(a, b):
     """
     returns a * b^T
     """
-    assert a.shape[-1] == b.shape[-1], (a.shape, b.shape)
+    _check_matmul_shapes(a, b, trans_b=True)
     if len(a.shape) != 2:
         aa = a.reshape((-1, a.shape[-1]))
         cc = jt.nn.matmul_transpose(aa, b)
@@ -125,6 +135,8 @@ def bmm_transpose(a, b):
     """
     returns a * b^T
     """
+    assert a.ndim > 2 and b.ndim > 2
+    _check_matmul_shapes(a, b, trans_b=True)
     # The amp_reg scope is matmul's and matmul_transpose's too. It is what tells
     # the reduce in the generic path below to keep its input dtype rather than
     # accumulate in float32, so leaving it off here made the same product depend
@@ -230,6 +242,7 @@ def matmul(a, b):
         c = jt.matmul(a, b)
         assert c.shape == [8, 10, 3, 5]
     """
+    _check_matmul_shapes(a, b)
     with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce
                       | jt.amp_flags.reduce16_no_fp32_acc):
         len_a = len(a.shape)

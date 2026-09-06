@@ -38,7 +38,7 @@ def acl_cmd(name: str,
     for i in range(len(inputs)):
         input_code += f"op.add(in{i}, true);\n"
 
-    return jt.code(outputs=outputs_,
+    return jt.code(backend="acl", outputs=outputs_,
                    inputs=inputs,
                    cuda_header=attr_header + cuda_header,
                    cuda_src=f"""

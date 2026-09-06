@@ -21,10 +21,17 @@ struct BackendStream {
     void* handle = nullptr;
 };
 
+struct BackendExecutionPolicy {
+    bool supports_parallel_compile = true;
+    bool requires_pinned_host_storage = false;
+    bool preserve_reduction_dtype = false;
+    bool native_low_precision_reduction = false;
+};
+
 // The registry copies this versioned table; callback code and allocator pools
 // must outlive the runtime. Published callbacks retain the serialized contract.
 struct BackendOps {
-    uint32 abi_version = 1;
+    uint32 abi_version = 2;
     uint32 struct_size = sizeof(BackendOps);
     BackendId id = BackendId::Cpu;
     const char* name = nullptr;
@@ -37,6 +44,7 @@ struct BackendOps {
     void (*synchronize)(uint64) = nullptr;
     void* (*stream)(int, BackendStreamKind) = nullptr;
     void (*enable_peer)(int, int) = nullptr;
+    BackendExecutionPolicy execution;
 };
 
 class BackendRegistry {

@@ -131,6 +131,7 @@ VarPtr SetitemOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         if (v_index == 0) {
             float32 number = 0;
             VarPtr zero = make_array(&number, {}, ns_float32);
+            if (zero->dtype() != dout->dtype()) zero = make_unary(zero, dout->dtype());
             return make_setitem(dout, VarSlices(vs, true), zero, ns_void);
         } else {
             return make_getitem(dout, VarSlices(vs, true));

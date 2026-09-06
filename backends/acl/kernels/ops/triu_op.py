@@ -11,14 +11,13 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
-
-def floor_cmd(name: str,
-              inputs: list,
-              output_dtypes: list = None,
-              output_shapes: list = None,
-              attr_code: str = "",
-              attr_header: str = "",
-              outputs: list = None):
+def triu_cmd(name: str,
+            inputs: list,
+            output_dtypes: list = None,
+            output_shapes: list = None,
+            attr_code: str = "",
+            attr_header: str = "",
+            outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -40,7 +39,7 @@ def floor_cmd(name: str,
     output_code = ''
     for i in range(len(outputs_)):
         output_code += f"op.add(out{i}, false);\n"
-    return jt.code(outputs=outputs_,
+    return jt.code(backend="acl", outputs=outputs_,
                    inputs=inputs,
                    cuda_header=attr_header + cuda_header,
                    cuda_src=f"""
@@ -51,20 +50,25 @@ def floor_cmd(name: str,
     {output_code}
     {attr_code}
     op.run();""")
-
-
-class FloorIntACL(jt.Function):
+    
+class TriuACL(jt.Function):
 
     def __init__(self):
-        super(FloorIntACL, self).__init__()
+        super(TriuACL, self).__init__()
 
-    def execute(self, input):
-        self.shape = input.shape
-        result = floor_cmd("Floor", [input],
-                           output_dtypes=[input.dtype],
-                           output_shapes=[input.shape],
-                           attr_code="op.jt_name=\"floor\";")[0]
+    def execute(self, input, diagonal):
+        attr_code = f"""
+        op.jt_name = "triu";
+        TriuAttr *attr = new TriuAttr();
+        attr->diagonal = {diagonal};
+        op.op_attr.reset(attr);
+        """
+
+        result = triu_cmd("Triu", [input],
+                            output_dtypes=[input.dtype],
+                            output_shapes=[input.shape],
+                            attr_code=attr_code)[0]
         return result
 
     def grad(self, grad_output):
-        return jt.zeros(self.shape, dtype=grad_output.dtype)
+        return grad_output

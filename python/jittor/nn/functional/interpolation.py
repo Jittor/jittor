@@ -1,6 +1,7 @@
 """Image interpolation operations exposed through :mod:`jittor.nn`."""
 
 import jittor as jt
+from jittor._runtime.dispatch import try_dispatch
 
 
 def _bicubic(x, a, func):
@@ -82,6 +83,11 @@ def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
             f"Input and output sizes should be greater than 0, but got input "
             f"(H: {h}, W: {w}) output (H: {H}, W: {W})"
         )
+    if mode not in ("nearest", "bilinear", "bicubic", "area"):
+        raise ValueError("unsupported interpolation mode: {}".format(mode))
+    fast = try_dispatch("nn.resize", img, (H, W), mode, align_corners, tf_mode)
+    if fast is not None:
+        return fast
     nid, cid, hid, wid = jt.index((n, c, H, W))
     if align_corners:
         x = hid * ((h - 1) / max(1, H - 1))

@@ -60,9 +60,18 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     padding = _pair(padding)
     stride = _pair(stride)
     dilation = _pair(dilation)
+    if weight.ndim != 4:
+        raise ValueError("Conv2d expected a 4-D weight, got shape {}".format(tuple(weight.shape)))
+    if any(len(values) != 2 for values in (padding, stride, dilation)):
+        raise ValueError("Conv2d stride, padding and dilation must each have two entries")
+    if (any(value <= 0 for values in (stride, dilation) for value in values)
+            or any(value < 0 for value in padding)):
+        raise ValueError("Conv2d stride and dilation must be positive and padding non-negative")
     out_channels = weight.shape[0]
     if groups <= 0:
         raise ValueError("groups must be a positive integer")
+    if out_channels % groups:
+        raise ValueError("Conv2d output channels must be divisible by groups")
     # Clear, torch-grade errors for the two most common Conv2d misuses, instead
     # of an empty `AssertionError:` (channel mismatch) or a cryptic "not enough
     # values to unpack" (wrong ndim). These used to live only in the module.

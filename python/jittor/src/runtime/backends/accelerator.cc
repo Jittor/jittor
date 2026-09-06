@@ -150,6 +150,12 @@ BackendOps make_accelerator_backend() {
     ops.name = ops.id == BackendId::Acl ? "acl_legacy"
         : ops.id == BackendId::Rocm ? "rocm_legacy"
         : ops.id == BackendId::Corex ? "corex_legacy" : "cuda";
+    if (ops.id == BackendId::Acl) {
+        ops.execution.supports_parallel_compile = false;
+        ops.execution.requires_pinned_host_storage = true;
+        ops.execution.preserve_reduction_dtype = true;
+        ops.execution.native_low_precision_reduction = true;
+    }
     ops.device_count = accelerator_count;
     ops.current_device = accelerator_current;
     ops.set_device = accelerator_set;

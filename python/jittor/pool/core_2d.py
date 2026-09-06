@@ -1,6 +1,7 @@
 """Legacy 2D pooling core and generated CPU/CUDA kernels."""
 
 import jittor as jt
+from jittor._runtime.dispatch import try_dispatch
 from jittor.backends.cuda.kernels.pooling.pool2d import pool2d_cuda_options
 
 
@@ -60,6 +61,11 @@ class Pool(jt.Module):
             w = (W+self.padding[1]*2-self.kernel_size[1] + self.stride[1] - 1)//self.stride[1]+1
             use_code_op = self.op in ['maximum', 'minimum']
 
+        fast = try_dispatch(
+            "nn.pool2d", x, self.kernel_size, self.stride, self.padding,
+            None, self.return_indices, self.ceil_mode, self.count_include_pad, self.op)
+        if fast is not None:
+            return fast
         if use_code_op and jt.pool.pool_use_code_op:
             forward_body = f'''
                 int k3 = i3*{self.stride[1]}-{self.padding[1]};

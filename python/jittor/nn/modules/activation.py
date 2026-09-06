@@ -72,7 +72,7 @@ class Sigmoid(jt.Module):
         super().__init__()
 
     def execute(self, x):
-        return x.sigmoid()
+        return jt.nn.sigmoid(x)
 
 
 class Softplus(jt.Module):

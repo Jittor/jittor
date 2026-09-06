@@ -14,7 +14,7 @@ result from ordinary ops, so the same call works on CPU and under autograd.
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
-from jittor._runtime.dispatch import dispatch_context, optional_kernel
+from jittor._runtime.dispatch import dispatch_context, optional_kernel, try_dispatch
 
 from .backends import hooks as _backend_hooks
 from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _fused_add_rms_norm_cuda, _rms_norm_cuda
@@ -23,9 +23,30 @@ from jittor.backends.cuda.kernels.nn.swiglu_cuda import _silu_and_mul_cuda
 
 __all__ = [
     "silu_and_mul", "rms_norm", "dual_rms_norm",
-    "fused_add_rms_norm", "rotary_embedding",
+    "fused_add_rms_norm", "rotary_embedding", "rotary_emb",
     "has_qk_rms_norm_rotary", "qk_rms_norm_rotary",
 ]
+
+
+def rotary_emb(xq, xk, freqs_cis=None, freq_sin=None, freq_cos=None):
+    """Apply split-half rotary embedding to query/key with broadcast tables."""
+    if freqs_cis is not None:
+        freq_cos = freqs_cis[..., 0]
+        freq_sin = freqs_cis[..., 1]
+    if freq_cos is None or freq_sin is None:
+        raise ValueError("rotary_emb requires freqs_cis or both freq_cos and freq_sin")
+    fast = try_dispatch("nn.rotary_emb", xq, xk, None, freq_sin, freq_cos)
+    if fast is not None:
+        return fast
+
+    def rotate_half(x):
+        half = x.shape[-1] // 2
+        return jt.concat([-x[..., half:], x[..., :half]], dim=-1)
+
+    return (
+        xq * freq_cos + rotate_half(xq) * freq_sin,
+        xk * freq_cos + rotate_half(xk) * freq_sin,
+    )
 
 
 def silu_and_mul(x):

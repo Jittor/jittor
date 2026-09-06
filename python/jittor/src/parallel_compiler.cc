@@ -25,6 +25,7 @@
 #include "lock.h"
 #include "opt/jit_searcher.h"
 #include "fused_op.h"
+#include "runtime/backend.h"
 
 
 namespace jittor {
@@ -134,6 +135,8 @@ static int last_compiled_op_num = 0;
 static int not_compile_window = 0;
 
 void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int64 tt, int force_compile) {
+    if (!backend_ops(accelerator_backend_id()).execution.supports_parallel_compile)
+        return;
     // jit_search_kernel require compile at runtime
     if (!force_compile)
         if (jit_search_kernel || !use_parallel_op_compiler || not_compile_window > 100000)

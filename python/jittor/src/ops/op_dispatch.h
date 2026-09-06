@@ -23,6 +23,8 @@ struct Codegen {
 struct Kernel {
     void (*native)(Op*) = nullptr;
     void (*jit)(Op*, JK&) = nullptr;
+    jit_op_entry_t (*compile)(Op*) = nullptr;
+    bool fallback_only = false;
 };
 
 struct OpImplementation {
@@ -32,6 +34,7 @@ struct OpImplementation {
 
 EXTERN_LIB void prepare_registered_codegen(Op* op, JK& key);
 EXTERN_LIB void execute_registered_jit(Op* op, JK& key);
+EXTERN_LIB jit_op_entry_t compile_registered_source(Op* op);
 EXTERN_LIB shared_ptr<const OpDef> get_op_definition(const string& name, bool required = true);
 
 } // namespace jittor

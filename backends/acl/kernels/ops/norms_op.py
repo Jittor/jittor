@@ -215,6 +215,7 @@ class GroupedAddRmsNormACL:
             jt.empty(reduced_shape, "float32"),
         ]
         result = jt.code(
+            backend="acl",
             outputs=outputs,
             inputs=[x, residual, weight],
             cuda_header='''
@@ -256,6 +257,7 @@ class GroupedBFloat16RmsNormACL:
             jt.empty(reduced_shape, "float32"),
         ]
         result = jt.code(
+            backend="acl",
             outputs=outputs,
             inputs=[x, unit_weight, weight],
             cuda_header='''
@@ -303,6 +305,7 @@ class GroupedDualBFloat16RmsNormACL:
             jt.empty(second_rstd_shape, "float32"),
         ]
         result = jt.code(
+            backend="acl",
             outputs=outputs,
             inputs=[
                 first, second, first_unit, second_unit,

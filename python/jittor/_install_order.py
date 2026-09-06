@@ -7,10 +7,10 @@
 
 Importing jittor rewrites ``Var`` and the root namespace in a fixed sequence of
 steps: native bindings, indexing, the CUDA full-reduce fast path, the backends'
-``post_process``, the declared ``x.func_()`` in-place aliases, ACL's operator
-swap, the MPI-free collectives, and finally the Torch compatibility layer. There
-are 169 assignments of the form ``Var.x = ...`` across eight files, and **which
-one wins is decided entirely by the order these steps run in**.
+``post_process``, the declared ``x.func_()`` in-place aliases, ACL kernel
+registration, the MPI-free collectives, and finally the Torch compatibility
+layer. Native method composition must finish before compatibility adaptation;
+backend registration selects implementations without replacing public objects.
 
 That order was load-bearing and undeclared. It lived in the physical arrangement
 of statements in ``jittor/__init__.py``, so:
@@ -23,9 +23,8 @@ of statements in ``jittor/__init__.py``, so:
   skipped, a compat composition that returned early -- left a half-installed
   runtime that still imported cleanly.
 
-``jittor/nn/functional/softmax.py`` says it out loud: *"Backend integrations
-replace the public symbol at runtime."* These patches are the **contract**, not
-incidental repair work, so they get written down like one.
+The sequence distinguishes public method composition from kernel publication,
+so moving a backend registration cannot silently replace a public method.
 
 This module holds no jittor state and imports nothing from jittor: it is loaded
 before the runtime exists.
@@ -77,18 +76,18 @@ SEQUENCE = (
         "wrappers, so every Var method provider settles first."),
     Step(
         "backends.post_process", False,
-        "compiler.backend_modules[*].post_process(context). Hardware backends adjust "
-        "flags (ACL sets amp_reg here). After the Python-side Var surface is "
-        "complete, before anything reads those flags."),
+        "compiler.backend_modules[*].post_process(context). Publishes backend "
+        "native kernels after core registration. Backend execution policy lives "
+        "on its descriptor rather than changing user flags."),
     Step(
         "root.inplace_aliases", True,
         "jittor/__init__.py. Installs the explicit true-in-place Var method "
         "allowlist after nn, misc and full-reduce bindings are settled."),
     Step(
-        "acl.change_function", False,
-        "jittor/extern/acl/acl_compiler.py. Swaps operator implementations "
-        "for Ascend. After the aliases (it replaces functions the aliases "
-        "already captured -- see the note above) and before compat."),
+        "acl.register_kernels", False,
+        "backends/acl/kernels/install.py. Publishes Ascend implementations in "
+        "the Python dispatch table, preserving public functions and classes. "
+        "After native domain composition and before compat."),
     Step(
         "collectives.hccl", False,
         "jittor/__init__.py. Routes Var.mpi_all_reduce/mpi_broadcast to HCCL "

@@ -21,6 +21,7 @@ namespace jittor {
 
 
 static auto make_number = op_constructor<VarPtr, float, Var*>("number");
+static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
 static auto make_empty = op_constructor<VarPtr, NanoVector, NanoString>("empty");
 static auto make_setitem = op_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>("setitem");
 
@@ -244,7 +245,9 @@ VarPtr GetitemOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         if (vs.slices[i].is_var()) {
             return make_setitem(zeros, VarSlices(vs, true), dout, ns_add);
         }
-    return make_setitem(zeros, VarSlices(vs, true), dout, ns_void);
+    VarPtr value = dout;
+    if (value->dtype() != zeros->dtype()) value = make_unary(value, zeros->dtype());
+    return make_setitem(zeros, VarSlices(vs, true), value, ns_void);
 }
 
 void GetitemOp::grads(Var** dout, VarPtr* dins) {
@@ -261,6 +264,7 @@ void GetitemOp::grads(Var** dout, VarPtr* dins) {
     if (!y) {
         y = make_number(0, outputs().front());
     }
+    if (y->dtype() != x->dtype()) y = make_unary(y, x->dtype());
     dins[0] = make_setitem(x, VarSlices(vs, true), y, ns_void);
 }
 

@@ -3,6 +3,60 @@
 import numpy as np
 
 import jittor as jt
+from .._runtime.dispatch import dispatch_context, try_dispatch
+
+
+_native_var_getitem = jt.Var.getitem
+_native_var_setitem = jt.Var.setitem
+
+
+def _is_cascade_index(slices):
+    if isinstance(slices, tuple) and len(slices) == 1:
+        slices = slices[0]
+    return isinstance(slices, (int, np.integer)) and not isinstance(slices, (bool, np.bool_))
+
+
+def _native_bool_coordinates(slices):
+    if isinstance(slices, jt.Var) and slices.dtype == "bool":
+        return tuple(slices.where())
+    return slices
+
+
+def var_getitem(x, slices, return_x=None):
+    """Native getitem overloads with optional backend execution."""
+    # Integer views retain their native producer so chained assignment can
+    # discover the held ancestor without a second Python view graph.
+    if return_x is None and not _is_cascade_index(slices):
+        result = try_dispatch("tensor.getitem", x, slices, return_x)
+        if result is not None:
+            return result
+    slices = _native_bool_coordinates(slices)
+    if return_x is None:
+        return _native_var_getitem(x, slices)
+    return _native_var_getitem(x, slices, return_x)
+
+
+def var_setitem(x, slices, value, reduce=None):
+    """Return an updated Var; assignment belongs to the public write owner."""
+    value = _acl_assignment_value(x, value, reduce)
+    if reduce in (None, "void") and not x._needs_cascade_setitem():
+        result = try_dispatch("tensor.setitem", x, slices, value, reduce)
+        if result is not None:
+            return result
+    slices = _native_bool_coordinates(slices)
+    if reduce is None:
+        return _native_var_setitem(x, slices, value)
+    return _native_var_setitem(x, slices, value, reduce)
+
+
+def _acl_assignment_value(x, value, reduce=None):
+    if reduce not in (None, "void") or dispatch_context(x).backend != "acl_legacy":
+        return value
+    if not isinstance(value, jt.Var):
+        return jt.array(value, dtype=x.dtype).stop_grad()
+    if value.dtype != x.dtype:
+        return value.cast(x.dtype)
+    return value
 
 
 def _is_torch_0d(value):
@@ -15,6 +69,22 @@ def _mark_0d(value):
     except Exception:
         pass
     return value
+
+
+def _dispatch_slices(slices):
+    if isinstance(slices, range):
+        return jt.array(list(slices))
+    if isinstance(slices, tuple):
+        return tuple(
+            (item != 0) if isinstance(item, jt.Var) and item.dtype == "uint8"
+            else jt.array(list(item)) if isinstance(item, range)
+            else int(item.item()) if _is_torch_0d(item)
+            else item
+            for item in slices
+        )
+    if _is_torch_0d(slices):
+        return int(slices.item())
+    return slices
 
 
 def _maybe_constant_index_gather(x, slices):
@@ -42,6 +112,11 @@ def getitem(x, slices):
 
     if isinstance(slices, jt.Var) and slices.dtype == "uint8":
         slices = slices != 0
+    slices = _dispatch_slices(slices)
+    if not _is_cascade_index(slices):
+        result = try_dispatch("tensor.getitem", x, slices, None)
+        if result is not None:
+            return result
     if isinstance(slices, jt.Var) and slices.dtype == "bool":
         return getitem(x, slices.where())
     if isinstance(slices, range):
@@ -82,9 +157,16 @@ def setitem(x, slices, value):
 
     if x.dtype == "complex64" and isinstance(value, (complex, np.complexfloating)):
         value = jt.array(np.asarray([value], dtype=np.complex64))
+    value = _acl_assignment_value(x, value)
 
     if isinstance(slices, jt.Var) and slices.dtype == "uint8":
         slices = slices != 0
+    slices = _dispatch_slices(slices)
+    needs_cascade = x._needs_cascade_setitem()
+    if not needs_cascade:
+        result = try_dispatch("tensor.setitem", x, slices, value, None)
+        if result is not None:
+            return x.assign(result)
     if isinstance(slices, jt.Var) and slices.dtype == "bool":
         if slices.shape == x.shape:
             if isinstance(value, (int, float)):
@@ -104,15 +186,18 @@ def setitem(x, slices, value):
             else:
                 normalized.append(item)
         slices = tuple(normalized)
-    return x.check_cascade_setitem(x.setitem(slices, value))
+    result = x.setitem(slices, value)
+    return x.check_cascade_setitem(result) if needs_cascade else x.assign(result)
 
 
 def install_var_indexing():
     """Install the native indexing layer before backend and Torch wrappers."""
 
+    jt.Var.getitem = var_getitem
+    jt.Var.setitem = var_setitem
     jt.Var.__getitem__ = getitem
     jt.Var.slice_var = getitem
     jt.Var.__setitem__ = setitem
 
 
-__all__ = ["getitem", "install_var_indexing", "setitem"]
+__all__ = ["getitem", "install_var_indexing", "setitem", "var_getitem", "var_setitem"]

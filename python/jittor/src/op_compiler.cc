@@ -1316,8 +1316,6 @@ jit_op_entry_t OpCompiler::compile(const string& jit_key, const string& src) {
     return jit_compiler::compile(jit_key, src, is_cuda, extra_flags);
 }
 
-jit_op_entry_t (*do_compile_hook)(Op*) = nullptr;
-
 jit_op_entry_t do_compile_inner(Op* op) {
     OpCompiler oc(op);
     string* src = &oc.src;
@@ -1335,9 +1333,12 @@ jit_op_entry_t do_compile_inner(Op* op) {
     return ret;
 }
 
+jit_op_entry_t compile_registered_source(Op* op) { return do_compile_inner(op); }
+
 jit_op_entry_t OpCompiler::do_compile(Op* op) {
     jittor::lock_guard lg;
-    if (do_compile_hook) return do_compile_hook(op);
+    auto compile = op->implementation().kernel.compile;
+    if (compile) return compile(op);
     return do_compile_inner(op);
 }
 

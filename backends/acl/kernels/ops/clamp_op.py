@@ -8,6 +8,7 @@ class ClampACL(jt.Function):
         self.min_value = min_value
         self.max_value = max_value
         result = jt.code(
+            backend="acl",
             outputs=[jt.empty(input.shape, input.dtype)],
             inputs=[input, min_value, max_value],
             cuda_header='''

@@ -3,6 +3,7 @@
 import math
 
 import jittor as jt
+from jittor._runtime.dispatch import try_dispatch
 
 
 def scaled_dot_product_attention(
@@ -30,6 +31,11 @@ def scaled_dot_product_attention(
             allowed_mask_dtypes.add("float32")
         if mask_dtype != "bool" and mask_dtype not in allowed_mask_dtypes:
             raise RuntimeError("attention mask dtype must match query dtype or be float32")
+    fast = try_dispatch(
+        "nn.scaled_dot_product_attention", query, key, value,
+        attn_mask=attn_mask, dropout_p=probability, is_causal=is_causal, scale=scale)
+    if fast is not None:
+        return fast
     query_length = int(query.shape[-2])
     source_length = int(key.shape[-2])
     scale_factor = 1.0 / math.sqrt(int(query.shape[-1])) if scale is None else scale

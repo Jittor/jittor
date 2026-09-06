@@ -31,6 +31,23 @@ and converter alive as resources, and publishes its libraries through the
 injected registry callback. These changes do not replace the legacy backend
 source conversions or improve their kernel algorithms.
 
+ACL post-processing only initializes its operator registrations. It does not
+rewrite pooling selection, the user's host-allocation/parallel-compilation
+switches, or `amp_reg`. The copied native backend descriptor owns execution
+requirements instead: ACL compilation cannot enter the unsafe parallel compiler,
+ACL array staging selects the actual pinned host pool without the dual-storage
+path, and ACL reductions retain the existing native low-precision/dtype policy.
+Reduction and host-staging requirements are selected for the actual accelerator
+target; an ACL build running a CPU scope uses the ordinary CPU policies. The
+compiler restriction belongs to the selected compiler backend and cannot be
+bypassed by forcing parallel compilation.
+
+These fields extend `BackendOps` to ABI version 2. Version and exact structure
+size are checked before the descriptor is copied or its policy tail is read;
+extensions providing version-1 tables must rebuild. Default CPU/CUDA descriptors
+retain their existing choices. Host-only contracts and syntax checks do not
+prove ACL allocation, asynchronous copying, or low-precision execution on CANN.
+
 ## Discovery
 
 Providers are registered in the `jittor.backends` package entry-point group.

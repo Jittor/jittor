@@ -33,6 +33,7 @@ def _truth_reduce_cmd(input, dims, reduce_all):
     output = jt.empty(output_shape, dtype="bool")
     axes = ", ".join(map(str, dims))
     return jt.code(
+        backend="acl",
         outputs=[output],
         inputs=[input],
         cuda_header='#include "acl/aclops/aclops.h"',

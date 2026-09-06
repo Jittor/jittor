@@ -40,6 +40,7 @@
 #include "utils/str_utils.h"
 #include "aclnn/aclnn.h"
 #include "aclops/aclops.h"
+#include "aclops/native_indexing_op_acl.h"
 namespace jittor
 {
     void free_var_mem(Var *v);
@@ -353,9 +354,9 @@ namespace jittor
             || dtype == ns_uint32 || dtype == ns_bool || dtype == ns_complex64;
     }
 
-    static string fused_acl_unsupported(FusedOp *fused)
+    static string fused_acl_unsupported(const vector<Op *> &ops)
     {
-        for (auto *op : fused->ops)
+        for (auto *op : ops)
         {
             if (op->name() == string("array")) continue;
             const auto name = fused_acl_name(op);
@@ -382,32 +383,27 @@ namespace jittor
         return {};
     }
 
-    extern jit_op_entry_t (*do_compile_hook)(Op *);
-    jit_op_entry_t do_compile_inner(Op *op);
-
-    void exec_fused_acl(Op *op)
+    static void exec_acl_sequence(Op *op, const vector<Op *> &ops)
     {
-        auto fop = (FusedOp *)op;
-
         std::set<Var *> new_alloced;
         map<Op *, int> op_indeg;
         map<Var *, int> var_outdeg;
         std::queue<Op *> queue;
 
-        for (Op *op : fop->ops)
+        for (Op *op : ops)
             op_indeg[op] = 0;
 
         map<Op *, vector<Op *>> out_map;
         map<Var *, vector<Op *>> from;
 
         int len = 0;
-        for (Op *v : fop->ops)
+        for (Op *v : ops)
         {
             for (auto in : v->inputs())
                 from[in].push_back(v);
             ++len;
         }
-        for (Op *u : fop->ops)
+        for (Op *u : ops)
         {
             for (auto out : u->outputs())
             {
@@ -422,14 +418,14 @@ namespace jittor
                 }
             }
         }
-        for (Op *op : fop->ops)
+        for (Op *op : ops)
         {
             if (op_indeg[op] == 0)
                 queue.push(op);
         }
 
         int total = 0;
-        dispatch_acl_checked(fused_acl_unsupported(fop), [&]
+        dispatch_acl_checked(fused_acl_unsupported(ops), [&]
         {
             while (!queue.empty())
             {
@@ -638,10 +634,22 @@ namespace jittor
         });
     }
 
+    void exec_fused_acl(Op *op)
+    {
+        exec_acl_sequence(op, static_cast<FusedOp *>(op)->ops);
+    }
+
+    static void exec_single_acl(Op *op)
+    {
+        exec_acl_sequence(op, {op});
+    }
+
     extern int current_seed;
     extern int64 current_offset;
 
     static unordered_map<string, std::function<void(Op *)>> acl_ops = {
+        {"getitem", exec_native_acl_getitem},
+        {"setitem", exec_native_acl_setitem},
         {"fused_adamw", [](Op *op)
          {
              auto _op = (FusedAdamwOp *)op;
@@ -693,19 +701,6 @@ namespace jittor
          }},
     };
 
-    // CUDA external operators are disabled on ACL by an explicit registry.
-    // Keep this list in sync with backends/cuda/kernels/*/*_op.h; using
-    // a name prefix here also catches unrelated operators and hides omissions.
-    static const set<string> acl_cuda_external_ops = {
-        "cub_arg_reduce", "cub_argsort", "cub_cumsum", "cub_test", "cub_where",
-        "cublas_acc_matmul", "cublas_batched_matmul", "cublas_matmul", "cublas_test",
-        "cudnn_conv", "cudnn_conv3d", "cudnn_conv3d_backward_w",
-        "cudnn_conv3d_backward_x", "cudnn_conv_backward_w", "cudnn_conv_backward_x",
-        "cudnn_rnn", "cudnn_rnn_backward_x", "cudnn_test",
-        "cufft_fft", "curand_random", "cusparse_spmmcoo", "cusparse_spmmcsr",
-        "cutt_test", "cutt_transpose",
-    };
-
     static void exec_mapped_acl_ops(Op *op)
     {
         auto iter = acl_ops.find(op->name());
@@ -721,6 +716,10 @@ namespace jittor
             for (auto *output : op->outputs())
                 if (!acl_has_dtype(output->dtype()))
                     unsupported = string(op->name()) + " does not support output dtype " + S(output->dtype());
+            if (unsupported.empty() && op->name() == string("getitem"))
+                unsupported = acl_getitem_unsupported_reason(op);
+            if (unsupported.empty() && op->name() == string("setitem"))
+                unsupported = acl_setitem_unsupported_reason(op);
             if (op->name() == string("arg_reduce"))
             {
                 auto *reduce = static_cast<ArgReduceOp *>(op);
@@ -749,7 +748,7 @@ namespace jittor
         });
     }
 
-    static jit_op_entry_t acl_do_compile(Op *op)
+    static jit_op_entry_t compile_acl_fused(Op *op)
     {
         LOGv << "compile" << op;
         OpCompiler oc(op);
@@ -765,67 +764,77 @@ namespace jittor
             src = &src_after_passes;
         }
         op->optimize_generated_source(*src);
-        if (!op->flag(OpFlags::_cuda))
+        auto *fop = static_cast<FusedOp *>(op);
+        // Tuning creates relay groups. Choose the executable only after the
+        // registered passes have finished, preserving their source and key.
+        if (!fop->context->vrm.relay_groups.empty())
         {
-            LOGv << "compile cpu";
+            LOGv << "relay fused op";
             return oc.compile(op->get_jit_key(get_jk()), *src);
         }
-        if (op->name() == string("fused"))
+        return &exec_fused_acl;
+    }
+
+    static void exec_unsupported_acl(Op *op)
+    {
+        fallback_cpu(op, string("no registered ACL implementation for ") + op->name());
+    }
+
+    static jit_op_entry_t compile_acl_unsupported(Op *) { return &exec_unsupported_acl; }
+    static jit_op_entry_t compile_acl_mapped(Op *) { return &exec_mapped_acl_ops; }
+    static jit_op_entry_t compile_acl_single(Op *) { return &exec_single_acl; }
+
+    static void exec_unmarked_acl_code(Op *op)
+    {
+        fallback_cpu(op, "accelerator source is not explicitly marked backend=acl");
+    }
+
+    static jit_op_entry_t compile_acl_code(Op *op)
+    {
+        const auto *code = static_cast<CodeOp *>(op);
+        if (code->backend != "acl") return &exec_unmarked_acl_code;
+        return compile_registered_source(op);
+    }
+
+    static OpImplementation compose_acl_implementation(
+        const OpDef &definition, const OpImplementation &original)
+    {
+        // The same launcher sequence handles fused graphs and a standalone
+        // primitive. Unsupported implementations stay explicit fallback entries;
+        // other backends' OpDefs and constructors are never removed.
+        static const set<string> primitives = {
+            "unary", "binary", "ternary", "broadcast_to", "fuse_transpose", "reduce"};
+        auto implementation = original;
+        const auto &name = definition.name;
+        // Backend-native extensions such as HCCL declare their own compiler
+        // through configure_accelerator_kernel at registration.
+        if (implementation.kernel.compile) return implementation;
+        if (name == "fused")
+            implementation.kernel.compile = compile_acl_fused;
+        else if (name == "code")
+            implementation.kernel.compile = compile_acl_code;
+        else if (acl_ops.count(name))
         {
-            FusedOp *fop = (FusedOp *)op;
-            // if is a relayed op
-            if (fop->context->vrm.relay_groups.size())
-            {
-                LOGv << "relay fused op";
-                return oc.compile(op->get_jit_key(get_jk()), *src);
-            }
-            else
-            {
-                return &exec_fused_acl;
-            }
+            implementation.kernel.compile = compile_acl_mapped;
+            implementation.kernel.native = exec_mapped_acl_ops;
         }
-        else if (op->name() == string("code"))
+        else if (primitives.count(name))
         {
-            CodeOp *cop = (CodeOp *)op;
-            if (cop->cuda_src.find("acl") != string::npos)
-            {
-                LOGv << "compile acl op";
-                return oc.compile(op->get_jit_key(get_jk()), *src);
-            }
-            else
-            {
-                return &exec_mapped_acl_ops;
-            }
-        }
-        else if (strncmp(op->name(), "hccl", 4) == 0)
-        {
-            LOGv << "Compiling HCCL op: " << op->name();
-            return oc.compile(op->get_jit_key(get_jk()), *src);
+            implementation.kernel.compile = compile_acl_single;
+            implementation.kernel.native = exec_single_acl;
         }
         else
         {
-            LOGv << "compile finish" << op;
-            return &exec_mapped_acl_ops;
+            implementation.kernel.compile = compile_acl_unsupported;
+            implementation.kernel.fallback_only = !implementation.kernel.native;
         }
-        return do_compile_inner(op);
+        return implementation;
     }
 
     void init_acl_ops()
     {
-        do_compile_hook = acl_do_compile;
-        vector<string> to_erase;
-        for (const auto &name : registered_op_names())
-        {
-            if (acl_cuda_external_ops.count(name) != 0 && acl_ops.count(name) == 0)
-            {
-                to_erase.push_back(name);
-            }
-        }
-        for (auto &k : to_erase)
-        {
-            LOGv << "op not supported: " << k << ", erase it.";
-            unregister_op(k);
-        }
+        register_backend_implementation_composer(
+            BackendId::Acl, compose_acl_implementation, "acl-native-v1");
     }
 
 } // jittor

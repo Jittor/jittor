@@ -143,7 +143,7 @@ class TestACL(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_paged_attention_bfloat16_decode_uses_incremental_flash(self):
-        from jittor.extern.acl.aclops.flashattention_op import (
+        from jittor.backends.acl.kernels.ops.flashattention_op import (
             scaled_dot_product_attention_acl,
         )
 

@@ -62,6 +62,8 @@ struct Allocation {
 };
 
 EXTERN_LIB Allocator* cpu_allocator;
+EXTERN_LIB bool use_pinned_host_memory();
+EXTERN_LIB Allocator* get_array_host_allocator();
 Allocator* get_allocator(bool temp_allocator=false);
 // The allocator stack for one CUDA device. `device` < 0 selects the host
 // stack, which is what a CPU-only process gets.

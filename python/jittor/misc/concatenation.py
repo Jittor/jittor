@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 
 import jittor as jt
+from .._runtime.dispatch import select_kernel
 
 
 _MAX_DIRECT_INPUTS = 64
@@ -96,7 +97,15 @@ def concat(arr, dim=0):
                     )
             dtypes.append(str(value.dtype))
 
-        return _concat_bounded(arr, dim, _merge_dtypes(dtypes))
+        dtype = _merge_dtypes(dtypes)
+        kernel = select_kernel("tensor.concat", arr, dim)
+        if kernel is not None:
+            inputs = tuple(value if str(value.dtype) == str(dtype) else value.cast(dtype)
+                           for value in arr)
+            result = kernel(inputs, dim)
+            if result is not None:
+                return result
+        return _concat_bounded(arr, dim, dtype)
 
 
 cat = concat

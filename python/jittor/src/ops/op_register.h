@@ -55,7 +55,7 @@ struct OpDef {
         codegen.var_members = move(var_members);
     }
 
-    template<class To, class ...Ts> auto get_constructor() {
+    template<class To, class ...Ts> auto get_constructor() const {
         typedef To (*func_t)(Ts...);
         for (const auto& constructor : constructors) {
             auto typed = std::dynamic_pointer_cast<TypedOpConstructorEntry<func_t>>(constructor);
@@ -67,6 +67,10 @@ struct OpDef {
 };
 
 using OpInfo = OpDef;
+
+// Registration-time composition only: no execution, driver discovery, or
+// recursive publication. The provider may update only the returned backend row.
+using OpImplementationComposer = OpImplementation (*)(const OpDef&, const OpImplementation&);
 
 // Versioned, backend-neutral registration record. Backend libraries may be
 // built independently of the core, so registration carries an explicit ABI
@@ -360,6 +364,16 @@ struct NativeProviderLifecycleObserver {
 class NativeOpRegistry {
 public:
     void register_op(const OpInfo& op_info);
+    // Publish a new immutable definition while old graph nodes retain their
+    // pinned definition. Constructor identity and other backend entries stay put.
+    // A nonempty bootstrap identity is a provider-owned version token, accepted
+    // only before the existing startup configuration seal. Ordinary replacement
+    // gets a fresh process-independent cache generation.
+    void register_op_implementation(const string& name, BackendId backend,
+                                    const OpImplementation& implementation,
+                                    const string& bootstrap_identity = "");
+    void register_backend_implementation_composer(BackendId backend,
+        OpImplementationComposer composer, const string& bootstrap_identity);
     bool has(const string& name) const;
     OpInfo get(const string& name) const;
     shared_ptr<const OpDef> definition(const string& name, bool required = true) const;
@@ -426,6 +440,12 @@ public:
                                         uint32 provider_id);
 
 private:
+    struct BackendImplementationComposer {
+        OpImplementationComposer compose;
+        string identity;
+    };
+    void compose_backend_implementations(OpDef& definition) const;
+    std::map<BackendId, BackendImplementationComposer> implementation_composers;
     static string key(const string& name);
     bool try_provider_consumer_dispatch_locked(
         OpId op_id, const string& provider,
@@ -599,6 +619,11 @@ private:
 NativeOpRegistry& op_registry();
 
 void op_registe(const OpInfo& op_info);
+EXTERN_LIB void register_op_implementation(const string& name, BackendId backend,
+                                           const OpImplementation& implementation,
+                                           const string& bootstrap_identity = "");
+EXTERN_LIB void register_backend_implementation_composer(BackendId backend,
+    OpImplementationComposer composer, const string& bootstrap_identity);
 bool has_op(const string& name);
 OpInfo get_op_info(const string& name);
 OpId get_op_id(const string& name);

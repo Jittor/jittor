@@ -27,6 +27,10 @@ std::map<string, OpInfo>& definitions() {
 }
 bool has_op(const string& name) { return definitions().count(name); }
 OpInfo get_op_info(const string& name) { return definitions().at(name); }
+shared_ptr<const OpDef> get_op_definition(const string& name, bool) {
+    auto found = definitions().find(name);
+    return found == definitions().end() ? nullptr : std::make_shared<const OpDef>(found->second);
+}
 BackendRegistry& backend_registry() { static BackendRegistry value; return value; }
 const BackendOps& BackendRegistry::get(const string& name) const {
     static BackendOps cpu;
@@ -52,6 +56,7 @@ int main() {
     OpInfo definition;
     definition.name = "late_implementation";
     definition.constructors = {op_constructor_entry(&increment)};
+    definition.implementations[BackendId::Cpu].kernel.native = [](Op*) {};
     definitions()[definition.name] = definition;
     assert(has_op_capability(BackendId::Cpu, OpCapability::Matmul));
     assert(find(4)(4) == 5);
@@ -59,6 +64,14 @@ int main() {
     assert(!has_op_capability(BackendId::Cuda, OpCapability::Matmul));
     assert((!find_op_capability<int, int>(BackendId::Cuda, OpCapability::Matmul, 1)));
     assert(backend_supported_capabilities("cpu") == vector<string>{"matmul"});
+    definitions()[definition.name].implementations[BackendId::Cpu].kernel.fallback_only = true;
+    assert(!find(4));
+    assert(!has_op_capability(BackendId::Cpu, OpCapability::Matmul));
+    assert(backend_supported_capabilities("cpu").empty());
+    definitions()[definition.name].implementations.erase(BackendId::Cpu);
+    assert(!find(4));
+    assert(!has_op_capability(BackendId::Cpu, OpCapability::Matmul));
+    definitions()[definition.name] = definition;
     // Replacement is observed rather than retaining the first function pointer.
     definitions()[definition.name].constructors = {op_constructor_entry(&double_value)};
     assert(find(4)(4) == 8);

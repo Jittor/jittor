@@ -10,7 +10,7 @@ from ..base import (
 
 
 def _acl_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
-    from jittor.extern.acl.aclops.adamw_op import fused_adamw_acl
+    from jittor.backends.acl.kernels.ops.adamw_op import fused_adamw_acl
 
     results = [None] * len(entries)
     buckets = {}

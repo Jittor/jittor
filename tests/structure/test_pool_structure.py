@@ -612,8 +612,11 @@ class TestPoolStructure(unittest.TestCase):
                      and all(alias.name == "jittor" for alias in node.names))
                     or (isinstance(node, ast.ImportFrom) and node.level == 0
                         and len(node.names) == 1
-                        and (node.module, node.names[0].name)
-                        == backend_builders.get(module.__name__))
+                        and ((node.module, node.names[0].name)
+                             == backend_builders.get(module.__name__)
+                             or (module.__name__ == "jittor.pool.core_2d"
+                                 and (node.module, node.names[0].name)
+                                 == ("jittor._runtime.dispatch", "try_dispatch"))))
                     for node in imports
                 ))
                 self.assertNotIn("preserve_facade_origins", path.read_text())

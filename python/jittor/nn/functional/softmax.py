@@ -17,6 +17,8 @@ def softmax(x, dim=None, log=False):
     # explicit ``dim`` keeps the previous behavior unchanged.
     if dim is None:
         dim = _get_softmax_dim(x.ndim)
+    if isinstance(dim, int) and not -max(x.ndim, 1) <= dim < max(x.ndim, 1):
+        raise IndexError("softmax dimension out of range for input rank {}".format(x.ndim))
     from jittor.backends.cuda.kernels.nn import softmax_cuda
 
     fused = softmax_cuda._softmax_v1(x, log=log, dim=dim)
@@ -33,9 +35,7 @@ def softmax(x, dim=None, log=False):
 
 
 def log_softmax(x,dim=None):
-    # Backend integrations replace the public softmax symbol at runtime.  Keep
-    # this dependency routed through the facade, as it was when both functions
-    # lived in the same module namespace.
+    # Both spellings share the same native parameter checks and backend table.
     return jt.nn.softmax(x,dim=dim, log=True)
 
 

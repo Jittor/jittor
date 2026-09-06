@@ -5,7 +5,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-MODULE_PATH = ROOT / "python/jittor/extern/acl/aclops/acl_data.py"
+MODULE_PATH = ROOT / "backends/acl/kernels/ops/acl_data.py"
 SPEC = importlib.util.spec_from_file_location("acl_data_contract", MODULE_PATH)
 ACL_DATA = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ACL_DATA)

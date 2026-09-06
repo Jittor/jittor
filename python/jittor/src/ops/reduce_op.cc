@@ -10,6 +10,8 @@
 #include "ops/reduce_op.h"
 #include "ops/op_register.h"
 #include "executor.h"
+#include "runtime/backend.h"
+#include "runtime/device.h"
 
 namespace jittor {
 
@@ -249,8 +251,10 @@ EXTERN_LIB int amp_reg;
 
 ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
     : x(x) {
+    const auto& policy = backend_ops(runtime_use_cuda()
+        ? accelerator_backend_id() : BackendId::Cpu).execution;
     // improve float16 mean precision
-    if (!(amp_reg & 32) && (x->dtype() == ns_float16 || x->dtype() == ns_bfloat16) && (op == ns_mean || op == ns_add)) {
+    if (!policy.native_low_precision_reduction && !(amp_reg & 32) && (x->dtype() == ns_float16 || x->dtype() == ns_bfloat16) && (op == ns_mean || op == ns_add)) {
         auto x_float32 = make_unary(x, ns_float32);
         auto mean = make_reduce(x_float32, op, dims, keepdims);
         mean = make_unary(mean, x->dtype());
@@ -282,13 +286,15 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
     if (x->dtype() == ns_bool)
         y = create_output(nullptr, ns_int32);
     else
-        y = create_output(nullptr, reduce_dtype_infer(ns, x->ns));
+        y = create_output(nullptr, reduce_dtype_infer(ns, x->ns, policy.preserve_reduction_dtype));
 }
 
 ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, uint keepdims_mask)
     : x(x) {
+    const auto& policy = backend_ops(runtime_use_cuda()
+        ? accelerator_backend_id() : BackendId::Cpu).execution;
     // improve float16 mean precision
-    if (!(amp_reg & 32) && (x->dtype() == ns_float16 || x->dtype() == ns_bfloat16) && (op == ns_mean || op == ns_add)) {
+    if (!policy.native_low_precision_reduction && !(amp_reg & 32) && (x->dtype() == ns_float16 || x->dtype() == ns_bfloat16) && (op == ns_mean || op == ns_add)) {
         auto x_float32 = make_unary(x, ns_float32);
         auto mean = make_reduce2(x_float32, op, dims_mask, keepdims_mask);
         mean = make_unary(mean, x->dtype());
@@ -304,7 +310,7 @@ ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, uint keepdims_mask)
     ASSERT(ns.is_binary());
     reduce_mask = dims_mask;
     this->keepdims_mask = keepdims_mask;
-    y = create_output(nullptr, reduce_dtype_infer(ns, x->ns));
+    y = create_output(nullptr, reduce_dtype_infer(ns, x->ns, policy.preserve_reduction_dtype));
 }
 
 ReduceOp::ReduceOp(Var* x, NanoString op, int dim, bool keepdims)

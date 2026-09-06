@@ -74,8 +74,6 @@ using namespace array_local;
 ArrayOp::ArrayOp(const void* ptr, NanoVector shape, NanoString dtype)
     : ArrayOp(ArrayArgs{ptr, shape, dtype}) {}
 
-DECLARE_FLAG(int, use_cuda_host_allocator);
-
 ArrayOp::ArrayOp(ArrayArgs&& args) {
     output = create_output(args.shape, args.dtype);
     NanoVector shape = output->shape;
@@ -89,7 +87,7 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
     // Fused scalar values are emitted inside generated kernels on both backends.
     if (runtime_use_cuda() && output->flag(VarFlags::_force_fuse))
         set_flag(OpFlags::_cuda, 1);
-    if (runtime_use_cuda() && !save_mem && !use_cuda_host_allocator) {
+    if (runtime_use_cuda() && !save_mem && !use_pinned_host_memory()) {
         set_flag(OpFlags::_cpu, 0);
         set_flag(OpFlags::_cuda, 1);
         if (!output->flag(VarFlags::_force_fuse)) {
@@ -105,7 +103,7 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
     }
     #endif
     // TODO: args.buffer too many copy
-    new (&allocation) Allocation(cpu_allocator, output->size);
+    new (&allocation) Allocation(get_array_host_allocator(), output->size);
     backend_copy(allocation.ptr, {}, args.ptr, {}, output->size);
 }
 

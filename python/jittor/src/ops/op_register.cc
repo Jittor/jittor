@@ -6,6 +6,8 @@
 // ***************************************************************
 #include "op.h"
 #include "ops/op_register.h"
+#include "runtime/configuration.h"
+#include "utils/hash.h"
 #include <algorithm>
 #include <atomic>
 #include <random>
@@ -53,6 +55,81 @@ static string replacement_compile_identity() {
     return identity.str();
 }
 
+static string bootstrap_compile_identity(const OpDef& definition, BackendId backend,
+                                         const string& version) {
+    const vector<string> components = {
+        definition.name, definition.codegen.source_path, definition.compile_identity,
+        std::to_string(static_cast<uint32>(backend)), version,
+    };
+    string identity;
+    for (const auto& component : components)
+        identity += std::to_string(component.size()) + ":" + component;
+    return "b" + content_hash(identity);
+}
+
+static bool same_implementation(const OpImplementation& left, const OpImplementation& right) {
+    return left.kernel.native == right.kernel.native && left.kernel.jit == right.kernel.jit
+        && left.kernel.compile == right.kernel.compile
+        && left.kernel.fallback_only == right.kernel.fallback_only
+        && left.codegen.source_path == right.codegen.source_path
+        && left.codegen.extra_flags == right.codegen.extra_flags
+        && left.codegen.var_members == right.codegen.var_members
+        && left.codegen.fragment == right.codegen.fragment
+        && left.codegen.prepare == right.codegen.prepare
+        && left.codegen.optimize == right.codegen.optimize;
+}
+
+void NativeOpRegistry::compose_backend_implementations(OpDef& definition) const {
+    for (const auto& composer : implementation_composers) {
+        auto current = definition.implementations.find(composer.first);
+        if (current == definition.implementations.end()) continue;
+        auto composed = composer.second.compose(definition, current->second);
+        if (same_implementation(composed, current->second)) continue;
+        USER_CHECK(composed.kernel.native || composed.kernel.jit)
+            << "Backend composer returned no execution callback:" << definition.name;
+        definition.compile_identity = bootstrap_compile_identity(
+            definition, composer.first, composer.second.identity);
+        current->second = move(composed);
+    }
+}
+
+void NativeOpRegistry::register_backend_implementation_composer(
+        BackendId backend, OpImplementationComposer composer, const string& bootstrap_identity) {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    USER_CHECK(composer && !bootstrap_identity.empty())
+        << "Backend composer requires a callback and stable version identity";
+    auto existing = implementation_composers.find(backend);
+    if (existing != implementation_composers.end()) {
+        USER_CHECK(existing->second.compose == composer && existing->second.identity == bootstrap_identity)
+            << "A different backend implementation composer is already registered";
+        return;
+    }
+    check_startup_config_write("backend implementation composer");
+    vector<pair<string, shared_ptr<const OpDef>>> pending;
+    for (const auto& entry : entries) {
+        auto current = entry.second->implementations.find(backend);
+        if (current == entry.second->implementations.end()) continue;
+        auto composed = composer(*entry.second, current->second);
+        if (same_implementation(composed, current->second)) continue;
+        USER_CHECK(composed.kernel.native || composed.kernel.jit)
+            << "Backend composer returned no execution callback:" << entry.first;
+        auto replacement = *entry.second;
+        replacement.implementations[backend] = move(composed);
+        replacement.compile_identity = bootstrap_compile_identity(replacement, backend, bootstrap_identity);
+        pending.emplace_back(entry.first, std::make_shared<const OpDef>(move(replacement)));
+    }
+    // Stage all callback results before publication; a failed composer cannot
+    // leave half the registered operators using a different backend policy.
+    implementation_composers.emplace(backend, BackendImplementationComposer{composer, bootstrap_identity});
+    for (auto& replacement : pending)
+        entries.find(replacement.first)->second = move(replacement.second);
+}
+
+void register_backend_implementation_composer(BackendId backend,
+        OpImplementationComposer composer, const string& bootstrap_identity) {
+    op_registry().register_backend_implementation_composer(backend, composer, bootstrap_identity);
+}
+
 void NativeOpRegistry::register_op(const OpInfo& op_info) {
     std::lock_guard<std::recursive_mutex> guard(mutex);
     string op_file_name = key(op_info.name);
@@ -66,6 +143,7 @@ void NativeOpRegistry::register_op(const OpInfo& op_info) {
             OpInfo replacement = op_info;
             replacement.id = iter->second->id;
             replacement.compile_identity = replacement_compile_identity();
+            compose_backend_implementations(replacement);
             iter->second = std::make_shared<const OpDef>(move(replacement));
             return;
         }
@@ -83,10 +161,37 @@ void NativeOpRegistry::register_op(const OpInfo& op_info) {
         registered.compile_identity = replacement_compile_identity();
     else
         registered.compile_identity.clear();
+    compose_backend_implementations(registered);
     const auto registered_id = registered.id;
     entries[op_file_name] = std::make_shared<const OpDef>(move(registered));
     registered_names.emplace(op_file_name);
     op_keys_by_id.emplace(registered_id, op_file_name);
+}
+
+void NativeOpRegistry::register_op_implementation(
+        const string& name, BackendId backend, const OpImplementation& implementation,
+        const string& bootstrap_identity) {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    auto found = entries.find(key(name));
+    USER_CHECK(found != entries.end()) << "Op definition not registered:" << name;
+    USER_CHECK(implementation.kernel.native || implementation.kernel.jit)
+        << "Backend implementation requires an execution callback:" << name;
+    OpDef replacement = *found->second;
+    replacement.implementations[backend] = implementation;
+    if (bootstrap_identity.empty()) {
+        replacement.compile_identity = replacement_compile_identity();
+    } else {
+        check_startup_config_write("backend implementation bootstrap");
+        replacement.compile_identity = bootstrap_compile_identity(replacement, backend, bootstrap_identity);
+    }
+    compose_backend_implementations(replacement);
+    found->second = std::make_shared<const OpDef>(move(replacement));
+}
+
+void register_op_implementation(const string& name, BackendId backend,
+                                const OpImplementation& implementation,
+                                const string& bootstrap_identity) {
+    op_registry().register_op_implementation(name, backend, implementation, bootstrap_identity);
 }
 
 bool NativeOpRegistry::has(const string& name) const {
@@ -111,8 +216,12 @@ shared_ptr<const OpDef> NativeOpRegistry::definition(const string& name, bool re
 vector<string> NativeOpRegistry::supported_ops(BackendId backend) const {
     std::lock_guard<std::recursive_mutex> guard(mutex);
     vector<string> names;
-    for (const auto& entry : entries)
-        if (entry.second->implementations.count(backend)) names.push_back(entry.first);
+    for (const auto& entry : entries) {
+        auto implementation = entry.second->implementations.find(backend);
+        if (implementation != entry.second->implementations.end()
+            && !implementation->second.kernel.fallback_only)
+            names.push_back(entry.first);
+    }
     std::sort(names.begin(), names.end());
     return names;
 }

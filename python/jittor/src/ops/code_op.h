@@ -21,6 +21,7 @@ struct CodeOp : Op {
     vector<string> cuda_grad_src;
     string cuda_header;
     DataMap data;
+    string backend;
     /**
     Code Operator for easily customized op.
 
@@ -43,6 +44,10 @@ struct CodeOp : Op {
     * [in] cuda_src: cuda source code string.
 
     * [in] cuda_header: cuda header code string.
+    * [in] backend: accelerator source provenance (cuda, acl, rocm, corex).
+    *     Empty preserves the ordinary generated-source path; ACL SDK code
+    *     requires backend="acl". The marker does not select a device and
+    *     is inherited by gradient CodeOps. CPU source remains independent.
 
     ----------------
     
@@ -262,13 +267,13 @@ struct CodeOp : Op {
         print(c)
         print(jt.grad(c, [a, b]))
      */
-    CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs={}, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="", DataMap&& data={});
+    CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs={}, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="", DataMap&& data={}, string&& backend="");
 
     // @attrs(multiple_outputs)
-    CodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtypes, vector<Var*>&& inputs={}, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="", DataMap&& data={});
+    CodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtypes, vector<Var*>&& inputs={}, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="", DataMap&& data={}, string&& backend="");
 
     // @attrs(multiple_outputs,replace_outputs)
-    CodeOp(vector<Var*>&& inputs, vector<Var*>&& outputs, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="", DataMap&& data={});
+    CodeOp(vector<Var*>&& inputs, vector<Var*>&& outputs, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="", DataMap&& data={}, string&& backend="");
 
 
     const char* name() const override { return "code"; }

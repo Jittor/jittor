@@ -293,6 +293,11 @@ def test_public_shape_cardinality_migration_is_explicit_and_bounded():
     for relative, expected in MIGRATED_SHAPE_CARDINALITY_BOUNDARIES.items():
         source = (ROOT / relative).read_text()
         actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+        if relative == "python/jittor/src/ops/code_op.cc":
+            # Backend provenance is independent of the shape/cardinality ledger.
+            for guard in ("USER_CHECK(backend.empty()", "USER_CHECK(execution_backend() == expected)"):
+                assert source.count(guard) == 1
+                actual -= 1
         counts[relative] = actual
         assert actual == expected, (relative, actual, expected)
     assert sum(counts.values()) == 14

@@ -4,7 +4,7 @@
 namespace jittor {
 
 void BackendRegistry::register_backend(const BackendOps& backend) {
-    if (backend.abi_version != 1 || backend.struct_size != sizeof(BackendOps))
+    if (backend.abi_version != 2 || backend.struct_size != sizeof(BackendOps))
         throw std::invalid_argument("Backend callback table ABI or size mismatch");
     if (!backend.name || !backend.name[0])
         throw std::invalid_argument("Backend name must not be empty");
