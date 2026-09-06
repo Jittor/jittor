@@ -8,6 +8,7 @@
 // ***************************************************************
 #include <list>
 #include <unordered_map>
+#include "stream_compat.h"
 #include "cutt_wrapper.h"
 #include "runtime/cuda_streams.h"
 #include "utils/log.h"

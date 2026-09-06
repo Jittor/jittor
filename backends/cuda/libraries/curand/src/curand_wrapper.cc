@@ -7,6 +7,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include "stream_compat.h"
 #include "curand_wrapper.h"
 #include "init.h"
 #include "runtime/device.h"

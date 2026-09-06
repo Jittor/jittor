@@ -316,7 +316,11 @@ def setup_cuda_extern():
     cuda_extern_files = [os.path.join(cuda_extern_src, name)
         for name in os.listdir(cuda_extern_src)]
     so_name = os.path.join(cache_path_cuda, "libcuda_extern"+so)
-    compile(cc_path, cc_flags+f" -I\"{cuda_include}\" ", cuda_extern_files, so_name)
+    # These two sources are host-compiled but include CUDA SDK headers, so
+    # they need the SDK include set that moved out of the global cc_flags
+    # when the backend flags became per-source.
+    compile(cc_path, cc_flags+cuda_sdk_flags+f" -I\"{cuda_include}\" ",
+            cuda_extern_files, so_name)
     link_cuda_extern = f" -L\"{cache_path_cuda}\" -llibcuda_extern "
     ctypes.CDLL(so_name, dlopen_flags)
     register_library_resources("cuda_extern", link_flags=link_cuda_extern)
@@ -451,7 +455,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
 
     # compile and get operators
     culib = compile_custom_ops(culib_src_files, return_module=True, backend="accelerator",
-        extra_flags=f" -I\"{jt_cuda_include}\" -I\"{jt_culib_include}\" {link_flags} {extra_flags} ")
+        extra_flags=f" -I\"{jt_cuda_include}\" -I\"{jt_culib_include}\" {cuda_sdk_flags} {link_flags} {extra_flags} ")
     culib_ops = culib.ops
     register_library(lib_name, culib)
     LOG.vv(f"Get {lib_name}_ops: "+str(dir(culib_ops)))

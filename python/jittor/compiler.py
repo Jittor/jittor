@@ -2198,6 +2198,22 @@ build_config = build_config.evolve(
     cc_flags=cc_flags, nvcc_flags=nvcc_flags, is_cuda=bool(is_cuda),
     kernel_flags=kernel_opt_flags,
 )
+
+# The accelerator JIT compiler is configured, not inferred from flags: the
+# core's `configure_accelerator_compiler` is the only way it learns which
+# compiler builds a device kernel. Without this call every accelerator JIT op
+# fails with "Accelerator compiler is not configured", which is what an
+# unconfigured accelerator looks like from the inside.
+if build_config.has_accelerator and build_config.kernel_compiler:
+    core.configure_accelerator_compiler(
+        build_config.kernel_compiler,
+        build_config.kernel_compile_flags + nvcc_flags
+        if build_config.kernel_language == "cuda" else build_config.kernel_compile_flags,
+        build_config.kernel_language,
+        build_config.kernel_source_suffix,
+        list(build_config.kernel_flag_filter),
+        build_config.kernel_device_link,
+    )
 jit_utils.configure_module_build(_module_build_services(build_config))
 
 # Hand the one lock descriptor over to C++. Both sides now take flock() on

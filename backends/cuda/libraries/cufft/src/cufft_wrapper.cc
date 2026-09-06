@@ -9,6 +9,7 @@
 // ***************************************************************
 #include <list>
 #include <unordered_map>
+#include "stream_compat.h"
 #include "cufft_wrapper.h"
 #include "runtime/device.h"
 #include "runtime/cuda_streams.h"
