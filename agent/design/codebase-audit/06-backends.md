@@ -271,6 +271,29 @@ ROCm 的**实机正确性**未验证——本机无 ROCm 卡，`nox -s rocm` 与
 外加约 30 处 `register_kernel(..., "acl_legacy")`/`dispatch_context().backend == "acl_legacy"`
 调用点与测试，跨 4.12 的改动面，且无 Ascend 硬件复验。归 4.15（布局收尾）一并做，已记在看板 4.15 行。
 
+## 后端梯度的参考覆盖
+
+| 问题 | 证据 | 后果 | 修改方向 | 严重度 |
+| --- | --- | --- | --- | --- |
+| 后端 `grad()` 的覆盖清单只认两个目录、只认 C++，实际漏掉 34/60 条 | `tests/structure/test_backend_grad_contract.py` 原版只扫 `backends/cuda/kernels` 与 `python/jittor/extern`，且只匹配 `.cc` 里的 `::grad(`；`backends/rocm/libraries` 的 `HipblasMatmulOp`/`RocprimCumsumOp` 两条落在扫描根之外，`backends/acl/kernels/ops` 的 23 条与 `backends/cuda/kernels/nn` 的 9 条 `jt.Function.grad` 落在语言之外 | 断言写成「总数 == 26」，而 26 正是那两个目录的全部，于是**漏掉的部分同时不在分子也不在分母**，清单看着齐全。这正是「扫描根失配后在空集合上通过」：后端搬进 `backends/` 之后 ROCm 一条都没扫到，总数却毫无变化 | 扫描根按后端拆开并**逐个断言非空**；应为空的根（corex）另立一类，同时断言目录真实存在且有源文件；Python 侧用 AST 找带 `grad` 方法的类 | 主要 |
+
+**已修：`15dd50518`。** 现枚举 60 条（C++ 28 + Python 32）并与源码树逐条相等；24 条本机真跑，
+36 条硬件延迟，`kind` 字段区分七种路线并全部登记进
+[`agent/manuals/deferred-hardware.md`](../../manuals/deferred-hardware.md)。
+
+补两条执行时才知道的事实。一，**「缺硬件」和「缺用例」是两回事，原清单把它们混成一档**：
+七条即使有卡也测不到反向——`HcclAllGatherOp::grad()` 直接 `LOGf << "not implemented"`，
+`RocprimCumsumOp` 全树没有任何用例碰过，`FloorIntACL`/`IndexACL`/`NonzeroACL`/`StackACL`/`TriuACL`
+只有前向用例。这七条现在单列一类并逐个列名，补齐之前删不掉那段文字。
+二，CUDA 侧真正没有梯度对拍的只有 `softmax_cuda.py` 的两条 streaming 反向路线
+（见 `a55d66b6d`）：既有用例最长一行 2049 列，只走 register 核。其余 22 条 CUDA 梯度
+本波逐条对 CPU 重跑过，**未发现梯度 bug**。
+
+顺带记一个与本条无关但会误导后来者的数值事实：在 131072 列上，CUDA softmax 反向对 float64
+精确解的偏差是 3.3e-5，jittor **CPU** 后端是 1.5e-1——CPU 的顺序 float32 求和才是精度下限
+（`tests/backends/cuda/test_full_reduce.py::test_cpu_results_are_unchanged` 已就同一现象给出误差界）。
+**长行上拿 CPU 当紧容差的参考会得出反向的结论**，紧的那条断言必须对 float64。
+
 ## 优先级
 - **先修会静默出错的**：MPI 的 MPI_DOUBLE_INT、ACL 的 checkRet 空实现与 find() 未检查、
   mallocWorkSpace 失败后的悬垂指针、分布式初始化失败退化单卡。四条都属于"不报错但结果错"。

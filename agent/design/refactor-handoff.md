@@ -2933,6 +2933,67 @@ mypy 这一项只做了一个子包，剩余面留了数字。7 个文件 → 34
 **剩余面**：`python/jittor` 2514 errors／165 files（checked 269），`backends/` 79 errors／32 files（checked 87），
 合计约 2593 条／197 文件，下一波按同样「一个子包、一次真干净」的粒度推进。
 
+### 本波（`dist` 分区）：10.19 后端梯度清单，26 → 60，扫描根逐个设下限
+
+`a55d66b6d`、`15dd50518`、`7c5115df8`。**原清单是本轮「验证手段自己坏在往全过方向」的又一例，
+坏法正是 6bis 里点名的那一种**，而且与上一节 `10.21` 撞见的是同一个形状——注意上一节末尾那句
+「后端搬进 `backends/` 后一条没扫到而总数看着健康」，这里是它的第三例。原
+`test_backend_grad_contract.py` 只扫 `backends/cuda/kernels` 与 `python/jittor/extern`、只匹配
+`.cc` 里的 `::grad(`，然后断言**总数 == 26**。26 恰好就是那两个目录里 C++ 梯度的全部，于是漏掉的
+34 条**同时不在分子也不在分母**：`backends/rocm/libraries` 的两条在扫描根之外，
+`backends/acl/kernels/ops` 的 23 条与 `backends/cuda/kernels/nn` 的 9 条 Python `jt.Function.grad`
+在语言之外。
+
+现枚举 **60** 条（C++ 28 + Python 32），与源码树逐条相等。扫描根按后端拆开
+（`backends/acl`、`backends/cuda`、`backends/rocm`、`python/jittor/extern`），**每个单独断言
+非空**——不写「总数 > N」；`backends/corex` 单列为「应为空」，但同时断言目录存在且有源文件，
+免得写错路径的空集合冒充通过；`python/jittor/src` 也扫，断言里面没有后端命名的梯度，堵住
+「搬进核心树就不用登记」。
+
+**反例三条都在真树上跑过**，不是只在测试内部造集合：往 `backends/cuda/kernels/cub` 放一个带
+`::grad()` 的假 `.cc` → 报红；往 `backends/acl/kernels/ops` 放一个带 `def grad` 的假 `.py` →
+报红（这一类原清单完全看不见）；把 `rocprim_cumsum_op.cc` 移出树 → 报红；把扫描根写成
+`backends/rocm/kernels` → 「每根非空」那条报红，即原清单当年应该报而没报的那一条。
+
+**24 条本机真跑，36 条硬件延迟，七种 `kind` 全部登记进
+`agent/manuals/deferred-hardware.md` 新增一节**（前置、命令、通过判据）。CUDA 侧唯一缺口是
+`softmax_cuda.py` 的两条 streaming 反向：既有 `test_misc_op.py::test_code_softmax` 最长一行
+2049 列，只走 register 核，`CodeSoftmaxStreaming.grad` 与「register 前向 + streaming 反向」
+的混合路线一直没有任何梯度被对过。已补 6 长度 × log/plain 共 12 组。其余 22 条 CUDA 梯度本波
+逐条对 CPU 重跑（cumsum/matmul/bmm/transpose/argmax/argsort/conv2d/conv3d），**未发现梯度 bug**。
+
+**两个数值坑，都会让梯度对拍静默失去分辨力，写进了模块 docstring**：
+一，**余切必须取正**。用标准正态余切时行归约抵消到远低于其自身舍入误差的量级——131072 列上
+`sum(g)` 约 400 而其误差界约 5——于是任何宽到容纳「两个 float32 归约的诚实分歧」的容差，也宽到
+容纳「算错百分之一的核」。实测：往 streaming 归约注入 0.1% 误差**仍然全过**。改成正余切后同一
+注入立刻报红。二，**长行上不能拿 CPU 当紧容差的参考**。131072 列上 CUDA 反向对 float64 精确解
+偏差 3.3e-5，jittor **CPU** 后端是 1.5e-1（CPU 顺序 float32 求和是精度下限，正负相同的项不抵消，
+误差按 n·eps 累积；`test_full_reduce.py::test_cpu_results_are_unchanged` 已就同一现象给过误差界）。
+我第一版参考写成 CPU 就得出了「CUDA 核不准」的**反向结论**——紧的那条断言必须对 float64，
+CPU 那条按顺序求和的 n·eps 预算另立一条，只用来抓公式级错误。
+
+**三套门禁**（都自己重跑，未引用文档数字）：原生 CPU（`JITTOR_TEST_DEVICES=cpu nvcc_path=""`）
+19 passed / 3 skipped；CPU torch 模式 `JITTOR_TORCH_SHIM=1 tests/structure` **15 failed /
+922 passed**（与基线同 15 条，逐条核对过 offender 列表里没有本波文件；passed 从 887 涨到 922 是
+本波 +14 与其他分区新增）；CUDA `tests/backends/cuda` **5 failed / 274 passed**（基线 269，
+同 5 条既有失败：`test_cublas_test_op` 3 条、`test_cudnn_op::test_backward_nhwc`、
+`test_shared_reduce_helper_is_two_stage`）。推前 CUDA 冒烟：`has_cuda True`、64×64 matmul 求和
+467.53、`jittor.__file__` 指向本分区。
+
+**余项属真窟窿而非单纯缺卡**，这是本波把状态从「待领」改成「代码半闭合」时最要紧的区分：七条
+即使有卡也测不到反向——`HcclAllGatherOp::grad()` 仍直接 `LOGf << "not implemented"`；
+`RocprimCumsumOp` 全树**没有任何用例**碰过（前向反向都没有）；`FloorIntACL`、`IndexACL`、
+`NonzeroACL`、`StackACL`、`TriuACL` 只有前向用例。七条逐个列名在手册里，并由
+`test_every_gradient_without_a_gradient_test_is_listed_in_the_manual` 钉住：补上用例并改掉
+`kind` 之前，谁都删不掉那段文字。**没有用 skip 冒充通过。**
+
+**变基时这两个文档撞了一次冲突，处置记在这里**，因为它正是禁「整文件取一侧」的场景：上游把
+`10.18` 改成「已合并」、把 `10.20`/`10.21` 从空行填成长备注，而我的基线里这三行还是旧的（`10.20`
+甚至是空的）。取我这一侧会**静默还原另外三条已合并的工作**。实际处置是先机械确认我这个提交对
+看板只有 `1 insertion / 1 deletion`（就是 `10.19` 那一行）、对交接是 `53 insertions / 0 deletions`
+（纯追加），因此「上游内容 + 重新施加这两处」与逐块解等价且可验证；解完 `git diff` 复核确认
+`10.18`/`10.20`/`10.21` 三行与上游逐字相同。
+
 ## 6bis. 这一轮的主要失效模式：门禁绿着，但不是因为它通过了
 
 2026-09-06 一天之内，在七个互不相干的分区各撞到一次同一形状的问题：**验证手段自己坏了，而且
