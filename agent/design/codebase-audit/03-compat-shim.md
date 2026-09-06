@@ -26,7 +26,7 @@
 | 可选步骤失败被永久记为 failed 且无人看见 | `context.py:run_optional` 吞掉所有异常；`InstallReport` 只进 `context.reports`，`compat/runtime.py:52` 收集后无输出 | 可选面失败后报错出现在离病因很远的地方 | 失败必须 warn 一次并可通过 API 查询 | 主要 |
 | install 全程无锁无重入保护 | `context.py` 无锁（对比 `module_patcher.py` 有 `_LOCK`）；flag setter 可从任意线程触发 | 多线程下竞争产生半装配状态 | 一次性锁加幂等哨兵 | 次要 |
 
-已修：提交 `<7.05-commit-1>`（失败路径的 ledger 生命周期）。三处此前无人覆盖的漏洞：
+已修：提交 `a2b1b49d`（失败路径的 ledger 生命周期）。三处此前无人覆盖的漏洞：
 (1) `install()` 的失败分支按顺序调 `rollback()` → `release()` → 弹出
 `context.state["_install_transaction"]`，中间没有 `finally`；一旦 `rollback()`
 因外部改写抛 `TransactionConflict`，后两步都不执行——类级 RLock 永久被占，
