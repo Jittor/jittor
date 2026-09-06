@@ -1760,27 +1760,35 @@ ratio 0.84——**整体已经贴着屋顶**，超出部分由 72 MB L2 承担�
 CUDA kernel 接回发起它的 aten 算子栈，再按语义配对，**并用每步调用次数当配对成立的判据**。
 三行全部对上：卷积偏置梯度 51:51、其余通用求和 67:67、GroupNorm 41:41。
 
-| 类别 | Jittor（profiler / nsys） | PyTorch 2.12.1 |
-| --- | ---: | ---: |
-| 通用求和（卷积/线性偏置梯度、广播梯度、loss 全和） | 749.4 us | 652.6 us |
-| GroupNorm 全部（统计量 + 仿射写回，41 个） | 1794.8 us | 1275.5 us |
-| **归约类合计** | **2544.2 us** | **1928.1 us** |
-| 同一次测量的整步 | 21.38 / 23.09 ms | 21.11 ms |
+**每边跑两到三次列范围。** profiler 的逐算子测量对机器负载敏感：一分钟负载 22 时手写
+GroupNorm 报 1715 us，负载 9–13 的三次运行是 1533 / 1535 / 1544 us（高估 12%）。
+nsys 稳得多，两次运行同一族 kernel 在 0.5% 以内。
 
-**Jittor 慢 616 us（32%），3.22 的验收未达成**；PyTorch 的实测对应值也不是 1.13/1.20 ms
-而是 1.93 ms。**差距的 84% 在 GroupNorm**（519 us），其中 1715 us 在
-`backends/cuda/kernels/nn/group_norm_cuda.py` 的手写 CUDA 里，**不在代码生成里**；
-通用求和那一栏只差 97 us。已在看板单列一行给手写 kernel 的 owner。
-Jittor 手写的 attention softmax（1.59 ms）在 PyTorch 侧没有对应的独立 kernel
-（融进 `fmha_cutlassF/B`，与 QK^T、PV 同一个 kernel），单列不进合计。
+| 类别 | Jittor profiler（三次） | Jittor nsys（两次） | PyTorch 2.12.1 CUPTI（三次） |
+| --- | ---: | ---: | ---: |
+| 通用求和（卷积/线性偏置梯度、广播梯度、全和） | 744.9–753.2 us | ~853 us | 652.6–681.9 us |
+| GroupNorm 全部（统计量 + 仿射写回，41 个） | 1532.9–1543.8 us | ~1850 us | 1275.5–1315.6 us |
+| **归约类合计** | **2279–2297 us** | **~2705 us** | **1928–1998 us** |
+| 同次整步 | 21.19–21.35 ms | 23.09 ms | 21.11–21.95 ms |
+
+**Jittor 慢 15%（profiler 口径）到 36%（nsys 口径），3.22 的验收未达成**；PyTorch 的实测
+对应值也不是 1.13/1.20 ms 而是 1.93–2.00 ms。两种量法在手写 kernel 上系统性地差一截，
+但方向与归因一致；严格同口径的一对是 **nsys 对 CUPTI**，两边都是真实流水的 kernel 轨迹。
+**差距的 75% 在 GroupNorm**（profiler 口径 +241 us、nsys 口径 +555 us，两种量法算出的
+占比都是 75%），其中 1.5–1.8 ms 在 `backends/cuda/kernels/nn/group_norm_cuda.py` 的手写
+CUDA 里，**不在代码生成里**；通用求和那一栏只差 79–184 us。已在看板单列一行给手写
+kernel 的 owner。Jittor 手写的 attention softmax（1.58 / 1.41 ms）在 PyTorch 侧没有对应
+的独立 kernel（融进 `fmha_cutlassF/B`，与 QK^T、PV 同一个 kernel），单列不进合计。
 
 **`edf70f52` 的处置：保留为 opt-in，不改默认，但它「慢 1.64%」的判据被推翻了。**
 那四个「代表形状」不是 UNet 用的形状。在真实 UNet 上直接量（`--flag para_opt_level=4
---compile-option reduce_lvl4=1`）：`reduce` 角色 **527.9 us**，对默认 warp 的三次独立运行
-568.3 / 566.7 / 571.5 us，**快 7.1–7.6%**；逐形状 best-of-30 的 `reduce_ab.py --shapes unet`
-是 0.968，同向。不改默认的理由换成：40 us 只有整步的 0.19%、616 us 差距的 6.5%，
-够不到验收；而在输出少每输出长的形状上（`--shapes representative` 那四个）它仍慢到
-1.39 倍；`para_opt_level=4` 又是个同时改 AtomicTunerPass 的粗开关。
+--compile-option reduce_lvl4=1`）：`reduce` 角色三次 527.9 / 517.8 / 514.3（均值
+**520.0 us**），对默认 warp 的五次独立运行 568.3 / 566.7 / 571.5 / 560.3 / 562.4（均值
+**565.8 us**），**快 8.1%**；只看通用求和是 486.0 → 436.4 us（快 10.2%）；逐形状 best-of-30
+的 `reduce_ab.py --shapes unet` 是 0.968，同向。不改默认的理由换成：约 45 us 只有整步的
+0.2%、320–740 us 差距的 6%–14%，够不到验收；而在输出少每输出长的形状上
+（`--shapes representative` 那四个）它仍慢到 1.39 倍；`para_opt_level=4` 又是个同时改
+AtomicTunerPass 的粗开关。
 
 顺带三条方法上的坑，都已写进 skill：
 
@@ -2414,8 +2422,8 @@ host 编译器编、却不走那条新管线的后端源码。** 逐层实测到
 
 | 项 | 结果 |
 | --- | --- |
-| `9ab5ea42` + 本提交 | **3.22 归约口径对齐，验收判定未达成，保持待领。** 对齐后 Jittor 归约类 **2544 us** 对 PyTorch **1928 us**（慢 32%），而不是 3.23 记的「0.57 对 1.20 ms、快一倍以上」——那两个桶几乎不相交，配对与拆解见上文同名小节。差距 84% 在手写 GroupNorm（1715 us 在 `backends/cuda/kernels/nn/group_norm_cuda.py`），**不在代码生成里**，已在看板单列一行待派。`edf70f52` 定为 opt-in 不改默认，但其「四形状慢 1.64%」被推翻：真实 UNet 上 level 4 的 `reduce` 角色 527.9 us 对 warp 三次 568.3/566.7/571.5 us，**快 7.1–7.6%**。顺带修 `test_shared_reduce_helper_is_two_stage`（`fd4d8820d` 移走了 `shared_reduce` 的头文件，断言留在旧路径）：修前 1 failed → 修后 7 passed。无产品代码改动 |
-| 测量环境 | RTX 4090 sm_89，卡号从环境读，**非独占**（同卡另有一个 15 天前起的推理服务常驻，占 12 GB、GPU 利用率 0），八个分区并行，`uptime` 一分钟负载在 **7.7–22** 之间。关键数字都取了两到三次独立运行：warp 的 `reduce` 角色 568.3 / 566.7 / 571.5 us（离散 0.85%），整步 21.38 / 21.28 / 21.19 ms |
+| `9ab5ea42` + 本提交 | **3.22 归约口径对齐，验收判定未达成，保持待领。** 对齐后 Jittor 归约类 **2279–2297 us**（nsys 口径 ~2705）对 PyTorch **1928–1998 us**，慢 15%–36%，而不是 3.23 记的「0.57 对 1.20 ms、快一倍以上」——那两个桶几乎不相交，配对与拆解见上文同名小节。**差距 75% 在手写 GroupNorm**（1.5–1.8 ms 在 `backends/cuda/kernels/nn/group_norm_cuda.py`），**不在代码生成里**，已在看板单列一行待派。`edf70f52` 定为 opt-in 不改默认，但其「四形状慢 1.64%」被推翻：真实 UNet 上 level 4 的 `reduce` 角色均值 520.0 us 对 warp 的 565.8 us，**快 8.1%**。顺带修 `test_shared_reduce_helper_is_two_stage`（`fd4d8820d` 移走了 `shared_reduce` 的头文件，断言留在旧路径）：修前 1 failed → 修后 7 passed。无产品代码改动 |
+| 测量环境与复测 | RTX 4090 sm_89，卡号从环境读，**非独占**（同卡另有一个 15 天前起的推理服务常驻，占 12 GB、GPU 利用率 0），八个分区并行，`uptime` 一分钟负载在 **7.7–22** 之间。**这一波最该记住的一条：`--mode profiler` 的逐算子数字对负载敏感，第一次发出去的那组来自负载 22 的单次运行，手写 GroupNorm 高估 12%（1715 对复测三次的 1533/1535/1544 us），归约类合计因此从 2545 修正到 2279–2297。**多 kernel 组成的 `reduce` 角色离散约 2%（五次 568.3/566.7/571.5/560.3/562.4），单个大手写 kernel 能到 12%；nsys 两次运行同族 kernel 在 0.5% 以内。凡要写进报告的数字，跑三次列范围 |
 | 新增可复用件 | `cuda-reduction-strategy-comparison/reduce_ab.py`（同进程内两条策略的时间 + 对 float64 的误差，两套形状集）；`profile_step_torch.py --attribute`（kernel → aten 算子栈归属）；`profile_step.py --compile-option`（`para_opt_level` 这类不进 jit key 的 flag 必须配它）与 `build()` 的 `set_global_seed` |
 
 ## 7. 接手怎么开始

@@ -255,24 +255,28 @@ profiler 两法互校，整步 Jittor 23.02 / 22.03 ms、同机 PyTorch 2.12.1 �
   统计量归约（`RowwiseMomentsCUDAKernel` 等四种，0.74 ms）全落在 `other` 里。
 
 按语义配对、并用 `profile_step_torch.py --attribute` 的 aten 归属核对每步调用次数之后
-（三行次数分别 51:51、67:67、41:41，全部对上）：
+（三行次数分别 51:51、67:67、41:41，全部对上）。**每边跑两到三次并列范围**——profiler 的
+逐算子测量对机器负载敏感，本节第一版的单次运行（当时一分钟负载 22）把手写 GroupNorm
+高估了 12%：
 
-| 类别 | Jittor（profiler / nsys） | PyTorch 2.12.1 |
-| --- | ---: | ---: |
-| 通用求和（卷积/线性偏置梯度、广播梯度、loss 全和） | 749.4 us | 652.6 us |
-| GroupNorm 全部（统计量 + 仿射写回，41 个） | 1794.8 us | 1275.5 us |
-| **归约类合计** | **2544.2 us** | **1928.1 us** |
+| 类别 | Jittor profiler（三次） | Jittor nsys（两次） | PyTorch 2.12.1 CUPTI（三次） |
+| --- | ---: | ---: | ---: |
+| 通用求和（卷积/线性偏置梯度、广播梯度、全和） | 744.9–753.2 us | ~853 us | 652.6–681.9 us |
+| GroupNorm 全部（统计量 + 仿射写回，41 个） | 1532.9–1543.8 us | ~1850 us | 1275.5–1315.6 us |
+| **归约类合计** | **2279–2297 us** | **~2705 us** | **1928–1998 us** |
+| 同次整步 | 21.19–21.35 ms | 23.09 ms | 21.11–21.95 ms |
 
-**Jittor 慢 616 us（32%）**，同一次测量整步 21.38 / 23.09 ms 对 21.11 ms（差 1.3%）。
-所以 3.22 的验收「UNet 归约类 kernel 合计不慢于 PyTorch 的 1.13 ms」在对齐口径下
-**未达成**，PyTorch 的实测对应值也不是 1.13/1.20 ms 而是 1.93 ms。
+**Jittor 慢 15%（profiler 口径）到 36%（nsys 口径）**。两种量法在手写 kernel 上系统性
+地差一截，但方向与归因一致；严格同口径的一对是 nsys 对 CUPTI，两边都是真实流水的
+kernel 轨迹。所以 3.22 的验收「UNet 归约类 kernel 合计不慢于 PyTorch 的 1.13 ms」在
+对齐口径下**未达成**，PyTorch 的实测对应值也不是 1.13/1.20 ms 而是 1.93–2.00 ms。
 
-**差距的 84% 在 GroupNorm，且其中 1715 us 跑在
+**差距的 75% 在 GroupNorm（两种量法算出的占比都是 75%），且其中 1.5–1.8 ms 跑在
 `backends/cuda/kernels/nn/group_norm_cuda.py` 的手写 CUDA 里，不在代码生成器里**；
-通用求和那一栏只差 97 us（15%）。本节上文「需要一条可读的块内归约实现」的方向由此
+通用求和那一栏只差 79–184 us。本节上文「需要一条可读的块内归约实现」的方向由此
 再次收敛：块内实现已经有了（`shared_reduce_pass.cc`，`para_opt_level>=4`），在真实
-UNet 形状上实测比 warp 默认快 7.1–7.6%（reduce 角色 527.9 对 568.3/566.7/571.5 us），
-但那只有 40 us，够不到 616 us 的差距，所以默认仍是 `WarpReducePass`。
+UNet 形状上实测比 warp 默认快 8.1%（reduce 角色五次 / 三次运行的均值 565.8 对 520.0 us），
+但那只有约 45 us，够不到 320–740 us 的差距，所以默认仍是 `WarpReducePass`。
 Jittor 手写的 attention softmax（1.59 ms）在 PyTorch 侧没有对应的独立 kernel
 （融进 `fmha_cutlassF/B`，与 QK^T、PV 同 kernel），单列不进合计。
 配对表、脚本与「为什么整网梯度 diff 判不出归约改动」在

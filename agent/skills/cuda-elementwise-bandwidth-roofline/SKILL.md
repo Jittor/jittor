@@ -105,6 +105,12 @@ python classify.py nsys jt_kern_cuda_gpu_kern_sum.csv --jittor base.json \
 **互校判据**：两边的 elementwise 合计应当在 10% 以内（实测 3.29 对 3.37 ms）。
 差两倍 → 看第 3 节。差得没有规律 → 你的 nsys 捕获范围没盖住稳态步。
 
+**A 对机器负载敏感，一次运行不够。** 十几个 agent 同时在机器上时，`--mode profiler` 的
+逐算子数字会整体抬高：实测同一配置，`uptime` 一分钟负载 22 时手写 GroupNorm 报 1715 us，
+负载 9–13 时的三次运行是 1533 / 1535 / 1544 us（**高估 12%**）。**每个要写进报告的数字
+至少跑三次并列范围**；`reduce` 这种由多个小 kernel 组成的角色离散度约 2%，手写的大 kernel
+可以到 12%。B（nsys）稳得多，两次运行的同一族 kernel 在 0.5% 以内。
+
 再加一条独立的清醒剂：`--mode profiler` 会同时打印**不带 profiler 的墙钟**。
 GPU 时间必须小于墙钟。实测 22.0 ms 对 31.9 ms，合理；如果 GPU 时间反而更大，
 先怀疑 rerun 因子。
@@ -173,8 +179,9 @@ reduce/norm 1.20、other 0.84。
    **这条已被推翻，不要再引用**（2026-09-06 对齐口径后复核）。两个桶装的东西几乎
    没有交集：Jittor 的 0.57 ms 只有代码生成器的归约，PyTorch 的 1.20 ms 是 0.65 ms
    真归约加 0.47 ms 被误归类的 GroupNorm 逐元素写回，而 PyTorch 的 GroupNorm 统计量
-   归约 0.74 ms 落在 `other` 里。按语义配对并核对调用次数之后是 **Jittor 2.54 ms 对
-   PyTorch 1.93 ms，慢 32%**。全套口径与配对表在
+   归约 0.74 ms 落在 `other` 里。按语义配对并核对调用次数、每边跑两到三次之后是
+   **Jittor 2.28–2.71 ms 对 PyTorch 1.93–2.00 ms，慢 15%（profiler 口径）到 36%
+   （nsys 口径）**。全套口径与配对表在
    `cuda-reduction-strategy-comparison` 的「口径」一节。
    **`classify_torch` 的 `reduce/norm` 与 `other` 两桶只对逐元素分析够用**，
    要谈归约必须换那套口径。
