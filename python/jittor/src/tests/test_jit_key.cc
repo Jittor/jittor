@@ -4,15 +4,20 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <cstdio>
 #include "jit_key.h"
 
 namespace jittor {
 
 JIT_TEST(jit_key) {
     JK& jk = get_jk();
+    // Dirty the buffer first: nothing below may depend on it starting out
+    // zeroed. This used to store into `jk.buffer` directly, which was only
+    // possible while the buffer was a fixed 2 MB array.
     jk.clear();
-    for (int i=0; i<JK::buffer_size/2; i++)
-        jk.buffer[i] = i%256;
+    for (int i=0; i<256; i++)
+        jk << "0123456789abcdef";
+    jk.clear();
     jk << JK::key << "key" << JK::val << "value";
     jk << JK::key << "key" << JK::val << JK::hex(0x123123);
     jk << JK::key << "key" << JK::val << JK::hex1(0x123123);
@@ -62,26 +67,70 @@ JIT_TEST(jit_key) {
 
 }
 
-// Writing past the end of the jit key buffer must reach the mprotect guard
-// page, and that fault must stop the process: the key selects which compiled
-// kernel runs, so an overrun that merely wrapped or truncated would pick the
-// wrong kernel and give a wrong answer with no error.
+// A key far larger than the buffer started out as must still be assembled
+// exactly: the buffer grows, and growth must not lose or reorder bytes.
 //
-// This case is EXPECTED TO KILL THE PROCESS. It used to live inside
-// `expect_error()` in the case above, which worked only because the SIGSEGV
-// handler threw a C++ exception -- throwing out of a signal handler is
-// undefined behaviour that happened to unwind on this ABI, and the case had
-// been "passing" on it for years. The handler now reports through write(2) and
-// `_exit`s (2.20), so there is nothing to catch and nothing should try:
-// tests/compiler/test_jit_tests.py runs this one in a child process and asserts
-// on its exit status and on the message the handler prints.
-JIT_TEST(jit_key_guard_page) {
+// It starts at `init_capacity`, so this crosses several reallocations. The
+// content is checked rather than only the length, because a growth that copied
+// the wrong number of bytes would still produce a plausible `size`.
+JIT_TEST(jit_key_grows) {
     JK& jk = get_jk();
     jk.clear();
-    for (int i=0; i<JK::buffer_size; i++)
-        jk.buffer[i] = i%256;
-    LOGf << "writing past the jit key buffer did not fault: the guard page is"
-        << "missing, so an over-long key would be truncated in silence";
+    ASSERTop(jk.size,==,0);
+    string expect;
+    char hexbuf[32];
+    for (int i=0; i<40000; i++) {
+        jk << JK::key << "opkey" << i << JK::val << "add";
+        // `operator<<(JK&, int)` is variable-width lowercase hex without
+        // leading zeros, i.e. what %x prints.
+        snprintf(hexbuf, sizeof(hexbuf), "%x", i);
+        expect += "«opkey";
+        expect += hexbuf;
+        expect += ":add";
+    }
+    ASSERTop((size_t)jk.size,>,JK::init_capacity);
+    ASSERTop(jk.to_string(),==,expect);
+    jk.finilize();
+    ASSERTop(string(jk.to_cstring()),==,expect);
+}
+
+// Writing past the size limit must be *reported*, not truncated and not fatal.
+//
+// The key selects which compiled kernel runs, so a key that silently wrapped
+// or got cut short would look up an unrelated kernel and return a wrong answer
+// with nothing printed. Until 3.02 the check was an mprotect'ed guard page at
+// the end of a fixed 2 MB array: an overrun raised SIGSEGV, jittor's handler
+// wrote "Accessing protect pages, maybe jit_key too long" and `_exit`ed, and
+// tests/compiler/test_jit_tests.py had to run the case in a child process and
+// assert on its exit status because there was nothing to catch. There is now:
+// the limit is enforced before every store and raises `UserError`, which
+// reaches Python as a RuntimeError.
+JIT_TEST(jit_key_overflow) {
+    JK& jk = get_jk();
+    size_t limit = JK::size_limit();
+    jk.clear();
+    string chunk(64*1024, 'x');
+    bool caught = false;
+    string message;
+    try {
+        for (size_t written=0; written <= limit + chunk.size();
+                written += chunk.size())
+            jk << chunk;
+    } catch (const UserError& e) {
+        caught = true;
+        message = e.what();
+    }
+    ASSERT(caught) << "an over-long jit key was accepted";
+    ASSERT(message.find("jit key too long") != string::npos) << message;
+    // Nothing was half-applied: the refused store did not advance `size`, and
+    // what did fit is still inside the limit and still a whole number of
+    // chunks.
+    ASSERTop((size_t)jk.size,<=,limit);
+    ASSERTop(jk.size % (int64)chunk.size(),==,0);
+    // And the JK is reusable afterwards -- the point of not dying.
+    jk.clear();
+    jk << JK::key << "key" << JK::val << "value";
+    ASSERTop(jk.to_string(),==,string("«key:value"));
 }
 
 } // jittor

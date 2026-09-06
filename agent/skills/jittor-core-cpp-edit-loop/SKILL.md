@@ -1,6 +1,6 @@
 ---
 name: jittor-core-cpp-edit-loop
-description: 改 python/jittor/src 下 C++ 核心时的编辑—重编—验证循环。包含隔离缓存与解释器选树的自检、把重编从 ~10 分钟压到 ~30 秒的 CPU-only 循环、每次 C++ 改动后第一次 pytest 必然失败的"jit_utils updated"陷阱、"读到未初始化字节"这类静默错值的复现判据，以及怎么给 UB 类改动找到可达后果、并在禁止 git stash 的前提下跑出「修前失败」那一轮。
+description: 改 python/jittor/src 下 C++ 核心时的编辑—重编—验证循环。包含隔离缓存与解释器选树的自检、把重编从 ~10 分钟压到 ~30 秒的 CPU-only 循环、每次 C++ 改动后第一次 pytest 必然失败的"jit_utils updated"陷阱、"读到未初始化字节"这类静默错值的复现判据、怎么给 UB 类改动找到可达后果、把守护页/崩溃换成可捕获错误的四个必查项，并在禁止 git stash 的前提下跑出「修前失败」那一轮。
 ---
 
 # 改 Jittor C++ 核心的验证循环
@@ -255,6 +255,29 @@ done
 
 如果确实找不到可达后果（纯可维护性重构），**在提交说明里直说**，用往返用例把契约钉住，
 不要编一个看着像回归测试的空断言。
+
+## 7ter. 把「守护页 / 崩溃」换成可捕获错误：四个必查项
+
+`JitKey` 原来没有任何长度检查，兜底的是缓冲区末尾一个 `mprotect(PROT_NONE)` 的守护页：
+键写超了就 SIGSEGV。把这类「进程级防线」换成「检查 + 可捕获异常」时：
+
+1. **先 grep 谁在断言那次崩溃。** 这里有两处，漏一处就是「修对了但门禁红」：
+   `tests/compiler/test_jit_tests.py` 的 `CRASHING_TESTS` 拿子进程退出码断言输出里有
+   "Accessing protect pages"，`utils/log.cc` 的 SIGSEGV 处理器里有一段专门认那个页。
+2. **找到所有写入口，确认它们汇成一个漏斗。** `JitKey` 上百个 `operator<<` 最终只有四个
+   真的动内存（`jk_put_str_with_len`、`operator<<(const string&)`、`operator<<(char)`、
+   `operator<<(const NanoString&)`），其余都由它们组合而成；判据是 grep 直接写缓冲区的
+   地方——`jk.buffer` 只出现在 `jit_key.h` 和一条单元测试里。
+3. **注意「写得比要求的多」的那个写入口。** `operator<<(const NanoString&)` 无论字符串多短
+   都存 16 字节。写成 `size+n <= capacity` 的检查对它是错的。做法是在逻辑末尾之上留一段
+   tail slack，并且让 slack 大于最宽的单次写。
+4. **限额如果是 runtime flag，检查必须在每次操作开头重读它，不能只在扩容时重读。**
+   这一条我付了一轮的代价：第一版把比较阈值 `check_at` 只在 `grow()` 里重算，而缓冲区
+   只增不减——于是先跑过大 key 的进程里缓冲区已经很大，把 flag **调小**根本不生效，
+   用例报 `did not raise`。改成在 `clear()`（每个 key 一次）重算才对：那才是这个限额有
+   意义的粒度。
+
+收益写进提交说明的方式：这条用例从「子进程 + 断言退出码」变成了本进程里一条普通用例。
 
 ## 8. 怎么跑出「修前失败」这一轮（禁止 `git stash`）
 

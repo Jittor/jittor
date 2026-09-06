@@ -225,8 +225,19 @@ void FusedOp::prepare_fused_key(JK& jk) {
             }
         }
         jk << "«choices:";
+        // Every option, including the ones whose name starts with '_'.
+        //
+        // Those used to be skipped, which made two configurations that differ
+        // only in an underscore-prefixed option share one compiled product --
+        // and the key is the only thing that decides that. Nothing reads such
+        // an option today, so nothing needed the exemption; the cost of the
+        // exemption was that the day something did, the wrong kernel would run
+        // and nothing would say so. (The other half of the plan's remedy,
+        // refusing them where they are set, is not enough on its own: the
+        // tuners write straight into `loop_options_tuned`, which no setter
+        // sees.)
         for (auto& kv : *loop_options) {
-            if (kv.first.size() && kv.first[0] != '_')
+            if (kv.first.size())
                 jk << kv.first << ':' << kv.second << ',';
         }
     }

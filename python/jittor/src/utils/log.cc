@@ -235,7 +235,6 @@ void log_exiting();
 // interruption, and nothing else in the language says "this can change under
 // you at any instruction".
 volatile sig_atomic_t exited = 0;
-size_t thread_local protected_page = 0;
 volatile sig_atomic_t segfault_happen = 0;
 static int _pid = getpid();
 vector<void(*)()> cleanup_callback;
@@ -392,15 +391,14 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
             print_trace_from_signal(signal, fault_pc, caller_pc);
     }
 #endif
-    if (protected_page && 
-        si->si_addr>=(void*)protected_page && 
-        si->si_addr<(void*)(protected_page+4*1024)) {
-        // LOGf *throws*. Throwing out of a signal handler unwinds through a
-        // frame the runtime did not create; there is no catch on this path, so
-        // it reached std::terminate -- a second crash on top of the first, and
-        // the original fault address never got reported.
-        sig_write("Accessing protect pages, maybe jit_key too long\n");
-    }
+    // There used to be a special case here for a fault inside the jit key
+    // buffer's mprotect'ed guard page ("Accessing protect pages, maybe jit_key
+    // too long"). That page was how an over-long jit key was detected: there
+    // was no length check anywhere, so the only thing that stopped a runaway
+    // key was hitting PROT_NONE -- which meant a recoverable condition was
+    // reported from a signal handler and killed the process. `JitKey::reserve`
+    // checks the length now and raises a catchable error (3.02), so there is
+    // no guard page and nothing here to recognise.
     if (!exited) {
         exited = 1;
         if (signal == SIGSEGV) {

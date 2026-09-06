@@ -4,10 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#ifndef _WIN32
-#include <sys/mman.h>
-#include <unistd.h>
-#endif
+#include <cstdlib>
 #include <iomanip>
 #include <limits>
 #include <locale>
@@ -17,38 +14,59 @@
 
 namespace jittor {
 
-#ifndef _WIN32
-EXTERN_LIB thread_local size_t protected_page;
-
-static size_t get_buffer_end_page(size_t buffer_end) {
-    // get the last complete page in buffer
-    // 4k align :
-    //  |       |       |       |       |
-    //  buffer:    xxxxxxxxxxxxxxxxxxxxxxxx
-    //                          ^  buffer_end_page
-    size_t buffer_end_page = buffer_end - buffer_end % getpagesize();
-    if (buffer_end_page + getpagesize()-1 > buffer_end)
-        buffer_end_page -= getpagesize();
-    return buffer_end_page;
-}
-#endif
+DEFINE_FLAG(int, jit_key_max_size, 2*1024*1024,
+    "Largest jit key, in bytes. A key that would grow past this raises a "
+    "catchable error instead of being truncated -- the key selects which "
+    "compiled kernel runs, so a truncated one would silently run another "
+    "kernel. Before 3.02 the limit was the size of a fixed buffer with an "
+    "mprotect'ed guard page at the end, and exceeding it killed the process.");
 
 JitKey::JitKey() {
-#ifndef _WIN32
-    auto buffer_end_page = get_buffer_end_page((size_t)&buffer[buffer_size-1]);
-    LOGvv << "protect page" << (void*)buffer_end_page;
-    ASSERT(0==mprotect((void*)buffer_end_page, getpagesize(), PROT_NONE));
-    protected_page = buffer_end_page;
-#endif
+    // Eager, so `to_cstring()`/`to_string()` are valid before anything is
+    // written. One allocation per thread that ever builds a key.
+    buffer = (char*)std::malloc(init_capacity);
+    CHECK(buffer) << "out of memory allocating the jit key buffer"
+        << init_capacity << "bytes";
+    capacity = init_capacity;
+    check_at = effective_check_at();
+    buffer[0] = 0;
 }
 
 JitKey::~JitKey() {
-#ifndef _WIN32
-    auto buffer_end_page = get_buffer_end_page((size_t)&buffer[buffer_size-1]);
-    LOGvv << "un-protect page" << (void*)buffer_end_page;
-    mprotect((void*)buffer_end_page, getpagesize(), PROT_READ|PROT_WRITE|PROT_EXEC);
-    protected_page = 0;
-#endif
+    std::free(buffer);
+    buffer = nullptr;
+    capacity = check_at = 0;
+}
+
+void JitKey::grow(size_t n) {
+    size_t limit = size_limit();
+    size_t need = (size_t)size + n;
+    // The key selects which compiled kernel runs, so a key that does not fit
+    // must not be truncated or wrapped: either would look up somebody else's
+    // kernel and return a wrong answer with nothing reported. It used to run
+    // into an mprotect'ed guard page and kill the process from the signal
+    // handler; now it is a normal exception the caller can catch, and this JK
+    // is left usable -- `size` is unchanged, so `clear()` recovers it.
+    USER_CHECK(need <= limit)
+        << "jit key too long:" << need << "bytes, the limit is" << limit
+        << "(jit_key_max_size)."
+        << "\nA key this long means one fused operator grew far past the sizes"
+        << "fusion is meant for; jt.flags.no_fuse=1 or a smaller expression"
+        << "will avoid it, and jt.flags.jit_key_max_size raises the limit.";
+    size_t want = need + tail_slack;
+    if (want > capacity) {
+        size_t new_capacity = capacity ? capacity : init_capacity;
+        while (new_capacity < want) new_capacity *= 2;
+        if (new_capacity > limit + tail_slack)
+            new_capacity = limit + tail_slack;
+        char* grown = (char*)std::realloc(buffer, new_capacity);
+        CHECK(grown) << "out of memory growing the jit key buffer to"
+            << new_capacity << "bytes";
+        buffer = grown;
+        capacity = new_capacity;
+    }
+    // Also the path that picks up a change to the flag.
+    check_at = effective_check_at();
 }
 
 static void hex_to_dec(string& s) {

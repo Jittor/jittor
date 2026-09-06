@@ -29,22 +29,24 @@ LOAD_SENSITIVE_TESTS = frozenset((
 #: C++ unit tests whose whole point is that the process dies, mapped to a string
 #: their crash report must contain.
 #:
-#: ``jit_key_guard_page`` writes past the jit key buffer into the mprotect guard
-#: page on purpose. The fault is delivered to jittor's signal handler, which
-#: reports and ``_exit``s -- there is no catchable path and there should not be
-#: one, because throwing out of a signal handler is undefined behaviour. (It
-#: used to be caught with ``expect_error()``, and "passed" for years on exactly
-#: that undefined behaviour; 2.20 replaced it with defined behaviour and this
-#: dependency surfaced.)
+#: Asserted on the child's exit status rather than with ``expect_error()``,
+#: because there is nothing to catch: the fault is delivered to jittor's signal
+#: handler, which reports through ``write(2)`` and ``_exit``s -- throwing out of
+#: a signal handler is undefined behaviour. ``crash_isolated`` keeps the crash
+#: from taking this pytest process down with it: here the crash is what is under
+#: test, but the runner surviving is a precondition for reporting it, which is
+#: the opposite of the cases in ``tests/core/test_signal_and_teardown.py`` that
+#: deliberately do not isolate.
 #:
-#: So these are asserted on the child's exit status instead. ``crash_isolated``
-#: keeps the crash from taking this pytest process down with it -- here the
-#: crash is what is under test, but the runner surviving is a precondition for
-#: reporting it, which is the opposite of the cases in
-#: ``tests/core/test_signal_and_teardown.py`` that deliberately do not isolate.
-CRASHING_TESTS = {
-    "jit_key_guard_page": "Accessing protect pages",
-}
+#: This held ``jit_key_guard_page`` until 3.02. Writing past the end of the jit
+#: key buffer used to run into an mprotect'ed guard page, so an over-long key
+#: was a SIGSEGV; the case asserted on "Accessing protect pages" in the child's
+#: output. There is a length check now and an over-long key raises a catchable
+#: ``UserError``, so its successor ``jit_key_overflow`` is an ordinary case in
+#: this process -- which is the improvement, not a gap. That an over-long key is
+#: still refused rather than truncated is asserted there and, from Python, in
+#: ``tests/compiler/test_jit_key_structure.py``.
+CRASHING_TESTS = {}
 
 
 def _run_test(name):
