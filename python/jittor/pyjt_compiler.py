@@ -6,6 +6,7 @@
 # ***************************************************************
 import re
 import os
+from jittor_utils.backend_resources import core_root
 from jittor_utils import LOG, run_cmd, simple_timer
 import json
 from collections import OrderedDict
@@ -1186,7 +1187,7 @@ def compile_single(head_file_name, src_file_name, src=None):
     return True
 
 def compile(cache_path, jittor_path):
-    headers1 = glob.glob(jittor_path+"/src/**/*.h", recursive=True)
+    headers1 = glob.glob(core_root(jittor_path)+"/**/*.h", recursive=True)
     headers2 = glob.glob(cache_path+"/gen/**/*.h", recursive=True)
     headers = headers1 + headers2
     basenames = []
@@ -1199,7 +1200,7 @@ def compile(cache_path, jittor_path):
         # jit_op_maker.h merge compile with var_holder.h
         if bh == "var_holder.h": continue
         if bh == "jit_op_maker.h":
-            with open(os.path.join(jittor_path, "src", "var_holder.h"), "r", encoding='utf8') as f:
+            with open(os.path.join(core_root(jittor_path), "var_holder.h"), "r", encoding='utf8') as f:
                 src = f.read() + src
         basename = bh.split(".")[0]
         fname = "pyjt_"+basename+".cc"

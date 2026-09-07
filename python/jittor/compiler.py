@@ -44,7 +44,7 @@ from functools import partial
 from jittor_utils import backend_discovery as _backend_discovery
 from jittor_utils import build_config as _build_config_api
 from jittor_utils import backend_resources as _backend_resources_api
-from jittor_utils.backend_resources import backend_root
+from jittor_utils.backend_resources import backend_root, core_root
 from jittor_utils.build_config import BuildConfig, BuildContext, BuildSource, ModuleBuildServices
 
 
@@ -125,6 +125,24 @@ def map_flags(flags, func):
         output.append(func(s))
     return " ".join(output)
 
+def _source_path(name):
+    """Resolve a source named relative to the package, or pass an absolute one.
+
+    `4.15` moved the C++ core out of the Python package to the top level, so a
+    name beginning with ``src/`` no longer sits under ``jittor_path``. Routing
+    it through ``core_root`` here is why the dozens of relative names in the
+    core file lists below did not each have to learn where the core went --
+    and why ``jit_utils_core_files`` can stay in the same spelling as the list
+    it is later removed from (``files.remove`` matches strings, not paths).
+    """
+    if os.path.isabs(name):
+        return name
+    head = name.replace("\\", "/").split("/", 1)
+    if head[0] == "src" and len(head) == 2:
+        return os.path.join(core_root(jittor_path), head[1])
+    return os.path.join(jittor_path, name)
+
+
 def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="", obj_dirname="obj_files", return_cmd=False):
     def do_compile(cmd):
         if jit_utils.cc:
@@ -155,7 +173,7 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="",
         if name[-1] in 'oab':
             ex_obj_files.append(name)
         else:
-            new_inputs.append(os.path.join(jittor_path, name))
+            new_inputs.append(_source_path(name))
             obj_files.append(os.path.join(
                 obj_dir, os.path.basename(name)+".o"))
     inputs = new_inputs
@@ -208,7 +226,7 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="",
     return do_compile(fix_cl_flags(cmd))
 
 def gen_jit_tests():
-    all_src = glob.glob(jittor_path+"/src/**/*.cc", recursive=True)
+    all_src = glob.glob(core_root(jittor_path)+"/**/*.cc", recursive=True)
     jit_declares = []
     re_def = re.compile("JIT_TEST\\((.*?)\\)")
     names = set()
@@ -290,7 +308,7 @@ def strip_cxx_comments(src):
 
 
 def gen_jit_flags():
-    all_src = glob.glob(jittor_path+"/src/**/*.cc", recursive=True)
+    all_src = glob.glob(core_root(jittor_path)+"/**/*.cc", recursive=True)
     jit_declares = []
     re_def = re.compile("DEFINE_(RUNTIME_)?FLAG(_WITH_SETTER)?\\((.*?)\\);", re.DOTALL)
 
@@ -649,7 +667,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
         mask_arg = f", {backend_mask}" if backend_mask is not None else ""
         # Optional backend sources are composed into the first definition, not
         # registered as a replacement (which would invalidate persistent JIT keys).
-        if os.path.realpath(os.path.dirname(header)) == os.path.realpath(os.path.join(jittor_path, "src", "ops")):
+        if os.path.realpath(os.path.dirname(header)) == os.path.realpath(os.path.join(core_root(jittor_path), "ops")):
             kernel_directory = os.path.join(backend_root(jittor_path, "cuda"), "kernels", "core")
             accelerator_source = os.path.join(kernel_directory, func_name + "_op.cc")
             prefix_source = os.path.join(kernel_directory, func_name + "_prefix.cc")
@@ -736,7 +754,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
             )
             if func_name in ["binary", "unary", "reduce"]:
                 # generate binary op alias
-                with open(os.path.join(jittor_path, f"src/ops/{func_name}_op.cc"), encoding="utf-8") as f:
+                with open(os.path.join(core_root(jittor_path), f"ops/{func_name}_op.cc"), encoding="utf-8") as f:
                     src = f.read()
                 src = src.split(f"unordered_set<string> {func_name}_ops = ""{")[1].split("};")[0]
                 match_result = re.findall(pybind_reg + "\"([a-z_A-Z0-9]*)\"", src, re.S)
@@ -1720,7 +1738,7 @@ ck_path = os.path.join(cache_path, "checkpoints")
 make_cache_dir(ck_path)
 
 # build cache_compile
-cc_flags += f" -I\"{os.path.join(jittor_path, 'src')}\" "
+cc_flags += f" -I\"{core_root(jittor_path)}\" "
 cc_flags += f" -I\"{os.path.join(jittor_path, 'extern')}\" "
 cc_flags += f" -I\"{backend_root(jittor_path, 'cuda')}\" "
 
@@ -2361,7 +2379,7 @@ def build_core(force=False):
 
     gen_jit_flags()
     gen_jit_tests()
-    op_headers = glob.glob(jittor_path+"/src/ops/**/*op.h", recursive=True)
+    op_headers = glob.glob(core_root(jittor_path)+"/ops/**/*op.h", recursive=True)
     jit_src = gen_jit_op_maker(op_headers)
     LOG.vvvv(jit_src)
     with open(os.path.join(cache_path, "gen", "jit_op_maker.h"), 'w', encoding='utf8') as f:
@@ -2375,8 +2393,15 @@ def build_core(force=False):
     # 3. op_utils
     # 4. other
     files2 = pyjt_gen_src
-    files4 = glob.glob(jittor_path+"/src/**/*.cc", recursive=True)
-    files4 = [ f[len(jittor_path)+1:] for f in files4 ]
+    files4 = glob.glob(core_root(jittor_path)+"/**/*.cc", recursive=True)
+    # Keep the historical "src/..." spelling: at_beginning/at_last and
+    # jit_utils_core_files below are matched with list.remove, which compares
+    # strings. 4.15 moved the core out of jittor_path, so the old
+    # f[len(jittor_path)+1:] slice would produce garbage; relpath against
+    # core_root reproduces exactly the same names, and _source_path maps them
+    # back to wherever the core now lives.
+    files4 = [os.path.join("src", os.path.relpath(f, core_root(jittor_path)))
+              for f in files4]
     indexing_schedule_source = os.path.join(
         backend_root(jittor_path, "cuda"), "kernels", "core", "indexing_schedule_codegen.cc")
     files4.append(indexing_schedule_source)
