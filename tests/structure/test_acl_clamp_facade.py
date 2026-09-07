@@ -8,8 +8,8 @@ from jittor._runtime import acl_clamp, dispatch
 @pytest.fixture(autouse=True)
 def isolated_acl_registration(monkeypatch):
     monkeypatch.setattr(dispatch, "dispatch_context", lambda *args, **kwargs:
-                        dispatch.DispatchContext("acl_legacy", 0, ("float32",)))
-    with dispatch.override_kernel("clamp.scalar", "acl_legacy", None):
+                        dispatch.DispatchContext("acl", 0, ("float32",)))
+    with dispatch.override_kernel("clamp.scalar", "acl", None):
         with dispatch.override_kernel("clamp.scalar", "*", None):
             yield
 
@@ -31,15 +31,15 @@ def test_acl_clamp_registration_and_removal_are_replaceable():
         return "second-result"
 
     assert acl_clamp.register_acl_clamp(first) is None
-    assert dispatch.registered_kernel("clamp.scalar", "acl_legacy") is first
+    assert dispatch.registered_kernel("clamp.scalar", "acl") is first
     assert acl_clamp.register_acl_clamp(first) is first
     assert acl_clamp.dispatch_acl_clamp("x", 0, 1) == "first-result"
     assert acl_clamp.register_acl_clamp(second) is first
-    assert dispatch.registered_kernel("clamp.scalar", "acl_legacy") is second
+    assert dispatch.registered_kernel("clamp.scalar", "acl") is second
     assert acl_clamp.unregister_acl_clamp(first) is None
     assert acl_clamp.dispatch_acl_clamp("x", 0, 1) == "second-result"
     assert acl_clamp.unregister_acl_clamp(second) is second
-    assert dispatch.registered_kernel("clamp.scalar", "acl_legacy") is None
+    assert dispatch.registered_kernel("clamp.scalar", "acl") is None
     assert calls == [("first", ("x", 0, 1)), ("second", ("x", 0, 1))]
 
 
@@ -70,7 +70,7 @@ def test_acl_clamp_does_not_select_acl_on_cpu(monkeypatch):
 def test_acl_clamp_observes_registry_removal():
     handler = lambda *_args: "result"
     acl_clamp.register_acl_clamp(handler)
-    dispatch.unregister_kernel("clamp.scalar", "acl_legacy", handler)
+    dispatch.unregister_kernel("clamp.scalar", "acl", handler)
     assert acl_clamp.dispatch_acl_clamp("x", 0, 1) is None
     assert acl_clamp.unregister_acl_clamp(handler) is None
 
@@ -80,4 +80,4 @@ def test_acl_clamp_invalid_replacement_preserves_registration():
     acl_clamp.register_acl_clamp(handler)
     with pytest.raises(TypeError, match="handler must be callable"):
         acl_clamp.register_acl_clamp(None)
-    assert dispatch.registered_kernel("clamp.scalar", "acl_legacy") is handler
+    assert dispatch.registered_kernel("clamp.scalar", "acl") is handler

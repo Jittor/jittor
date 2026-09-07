@@ -32,6 +32,10 @@ _lock = threading.RLock()
 _kernels = {}
 
 
+def _canonical_backend(backend):
+    return "acl" if backend == "acl_legacy" else backend
+
+
 def _collect_tensors(values, var_type, tensors, active_containers):
     """Append the tensors reachable from `values` in argument order.
 
@@ -77,11 +81,12 @@ def dispatch_context(*args, **kwargs):
     _collect_tensors(args, var_type, tensors, None)
     _collect_tensors(kwargs.values(), var_type, tensors, None)
     backend, device_id = native.core.dispatch_context(tensors)
-    return DispatchContext(backend, device_id, tuple(str(value.dtype) for value in tensors))
+    return DispatchContext(_canonical_backend(backend), device_id, tuple(str(value.dtype) for value in tensors))
 
 
 def register_kernel(op, backend, implementation, *, dtypes=None,
                     supports=None, priority=0, runtime_modes=None):
+    backend = _canonical_backend(backend)
     if not isinstance(op, str) or not op or not isinstance(backend, str) or not backend:
         raise ValueError("kernel operator and backend must be non-empty names")
     if not callable(implementation) or (supports is not None and not callable(supports)):
@@ -113,6 +118,7 @@ def register_kernel(op, backend, implementation, *, dtypes=None,
 
 
 def unregister_kernel(op, backend, implementation):
+    backend = _canonical_backend(backend)
     with _lock:
         key = (op, backend)
         current = _kernels.get(key, ())
@@ -128,6 +134,7 @@ def unregister_kernel(op, backend, implementation):
 
 def registered_kernel(op, backend):
     """Inspect publication only; this does not grant dtype/shape eligibility."""
+    backend = _canonical_backend(backend)
     with _lock:
         entries = _kernels.get((op, backend), ())
         return entries[0].implementation if entries else None
@@ -177,6 +184,7 @@ def optional_kernel(op, backend, *, dtypes=None, supports=None, priority=0,
 def override_kernel(op, backend, implementation, *, dtypes=None,
                     supports=None, priority=0, runtime_modes=None):
     """Temporarily replace one backend's entries, restoring absence as well."""
+    backend = _canonical_backend(backend)
     with _lock:
         previous = _kernels.pop((op, backend), ())
         try:

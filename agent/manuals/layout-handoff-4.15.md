@@ -5,6 +5,33 @@
 
 ## 0. 你第一件事：解掉 preflight 对冷构建的拒绝
 
+最新收口状态：物理目录链已经完成，`python/jittor/{src,extern}` 均不存在。
+后续又将 ProcessGroup/Work 及其 communicator、rank/world 实现归入原生
+`distributed/process_group.py`，compat 保留同对象别名和 Torch bootstrap 事务；旧
+pickle GLOBAL 可解析到原生类。非法 native world_size 不再吞错降级为 1。
+ACL 描述符及所有内部消费者统一 `acl`，旧 `acl_legacy` 仅在 C++/Python 查询边界
+映射到同一份状态，重复注册不会创建第二份 kernel。
+CPU Store/身份/别名回归 14 passed，双 rank WORLD/逆序子组/singleton/非成员共存
+实际各 1 passed；此前双 rank 七类通信测试各 7 passed。NPU 与多机仍未实测。
+本段描述的是后续工作，下面旧“尚待迁移”文字保留为过程记录，不应重复执行。
+
+最终 CUDA structure：1289 collected，7 failed / 1280 passed / 2 skipped / 0 xfailed，
+命令 `PYTHONPATH=python nvcc_path=/usr/local/cuda/bin/nvcc CUDA_VISIBLE_DEVICES=6,7`
+`JITTOR_TORCH_SHIM=1 JITTOR_TORCH_KEEP_HOME=1 use_mkl=0 use_mpi=0 use_nccl=0`
+`DISABLE_MULTIPROCESSING=0 python -m pytest -q --tb=short tests/structure --junitxml=<state>/structure-cuda-final-layout.xml`。
+JITTOR_HOME 使用独立 acl-move-cuda 缓存，不能与 CPU-only 的收集数直接比较。
+同 flags 的 `ef1e2a599` 独立 git archive 对照：1286 collected、14 failed、1270 passed、
+2 skipped、0 xfailed。当前7失败全在baseline集合中；baseline额外7项分别为6项需要.git
+的docs/binary检查，以及ROCm测试对绝对临时目录中出现cuda子串的误判，均有错误诊断。
+因此不声称两份原始失败集合相同：已确认没有新增失败，但archive不是完整worktree等价环境。
+当前7失败即第1节CPU列表去掉CPU构建不存在cuda_allow_tf32那项；其余仍待总体任务处理。
+
+最终 wheel SHA-256：`65bf07525e99c22de872a1701933d35b5511576d3639678a5d31acc233a72061`；
+1028 个生产文件与源码及安装结果字节一致，包含native ProcessGroup。官方sdist通过；
+隔离安装CPU冷编译selftest通过。历史wheel基线审批metadata漂移未刷白，不代表发布门禁全绿。
+4.15 按本交接修正后的布局范围收口；8.19 的通信资源与Python owner收口。
+后续从5.26继续；5.26/7.18负责剩余compat/math_util原生资源，不应重复迁移已不存在的extern。
+
 2026-09-07 后续执行记录：coord 已从 `4fbcaab64` 同步（实际落后 126 提交，无冲突）。
 正在修复本节前置：preflight 接收实际 BuildConfig，CPU/ACL/ROCm 不要求可选归档；
 `setup_cub()` 实际仅 CUDA 版本小于 11 时下载 CUB，11+ 使用 SDK 自带 CUB，

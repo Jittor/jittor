@@ -72,7 +72,7 @@ def rms_norm(x, weight, eps=1e-6):
     backend = _backend_hooks.rms_norm_cuda or _rms_norm_cuda
     backend_weight = weight
     if (
-        dispatch_context(x, weight).backend == "acl_legacy"
+        dispatch_context(x, weight).backend == "acl"
         and not _output_requires_grad(x, weight)
         and str(x.dtype) == "float32"
         and str(weight.dtype) in ("float16", "bfloat16")
@@ -239,7 +239,7 @@ def _supports_rotary_embedding_acl(
     return True
 
 
-@optional_kernel("nn.rotary_embedding.packed_acl", "acl_legacy",
+@optional_kernel("nn.rotary_embedding.packed_acl", "acl",
                  supports=_supports_rotary_embedding_acl)
 def _rotary_embedding_acl(
         positions, query, key, cos_sin_cache,

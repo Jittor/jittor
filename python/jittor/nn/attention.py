@@ -112,7 +112,7 @@ def _tensor_device(value):
         context = dispatch_context(value)
         if context.backend == "cpu":
             return "cpu"
-        family = "npu" if context.backend == "acl_legacy" else "cuda"
+        family = "npu" if context.backend == "acl" else "cuda"
         return "{}:{}".format(family, context.device_id)
     raise TypeError("attention tensor must expose its device")
 

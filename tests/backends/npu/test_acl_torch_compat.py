@@ -405,7 +405,7 @@ class TestACLTorchCompat(unittest.TestCase):
 
         candidates = []
         native_dispatches = []
-        acl_group_norm = registered_kernel("nn.group_norm", "acl_legacy")
+        acl_group_norm = registered_kernel("nn.group_norm", "acl")
         self.assertIsNotNone(acl_group_norm)
 
         def record_group_norm(*args):
@@ -413,7 +413,7 @@ class TestACLTorchCompat(unittest.TestCase):
             native_dispatches.append(result is not None)
             return result
 
-        with override_kernel("nn.group_norm", "acl_legacy", record_group_norm):
+        with override_kernel("nn.group_norm", "acl", record_group_norm):
             self.assertTrue(jt.flags.use_acl)
             self.assertTrue(jt.flags.use_cuda)
             with jt.log_capture_scope(
@@ -486,7 +486,7 @@ class TestACLTorchCompat(unittest.TestCase):
         loss_weight_np = rng.randn(*source_np.shape).astype("float32")
 
         dispatches = []
-        acl_batch_norm = registered_kernel("nn.batch_norm.eval", "acl_legacy")
+        acl_batch_norm = registered_kernel("nn.batch_norm.eval", "acl")
         self.assertIsNotNone(acl_batch_norm)
 
         def record_batch_norm(*args):
@@ -494,7 +494,7 @@ class TestACLTorchCompat(unittest.TestCase):
             dispatches.append(result is not None)
             return result
 
-        with override_kernel("nn.batch_norm.eval", "acl_legacy", record_batch_norm):
+        with override_kernel("nn.batch_norm.eval", "acl", record_batch_norm):
             module = torch.nn.BatchNorm2d(4)
             module.eval()
             module.weight.assign(weight_np).start_grad()
@@ -749,7 +749,7 @@ class TestACLTorchCompat(unittest.TestCase):
         additive_np = rng.randn(shape[-2], shape[-2]).astype("float32") * 0.05
         candidates = []
         native_dispatches = []
-        acl_attention = registered_kernel("nn.scaled_dot_product_attention", "acl_legacy")
+        acl_attention = registered_kernel("nn.scaled_dot_product_attention", "acl")
         self.assertIsNotNone(acl_attention)
 
         def record_attention(*args, **kwargs):
@@ -757,7 +757,7 @@ class TestACLTorchCompat(unittest.TestCase):
             native_dispatches.append(result is not None)
             return result
 
-        with override_kernel("nn.scaled_dot_product_attention", "acl_legacy", record_attention):
+        with override_kernel("nn.scaled_dot_product_attention", "acl", record_attention):
             with jt.log_capture_scope(
                 log_v=0, log_vprefix="acl_op_exec.cc=100"
             ) as logs:
@@ -884,7 +884,7 @@ class TestACLTorchCompat(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_constant_pad_forward_backward_stays_on_acl(self):
-        acl_pad = registered_kernel("nn.constant_pad", "acl_legacy")
+        acl_pad = registered_kernel("nn.constant_pad", "acl")
         self.assertIsNotNone(acl_pad)
         calls = []
 
@@ -892,7 +892,7 @@ class TestACLTorchCompat(unittest.TestCase):
             calls.append((tuple(amounts), value))
             return acl_pad(x, amounts, value)
 
-        with override_kernel("nn.constant_pad", "acl_legacy", record_acl_pad):
+        with override_kernel("nn.constant_pad", "acl", record_acl_pad):
             with jt.log_capture_scope(
                 log_v=0, log_vprefix="acl_op_exec.cc=100"
             ) as logs:

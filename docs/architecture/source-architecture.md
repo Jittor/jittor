@@ -227,16 +227,16 @@ atomically published, content-stable JIT source, preserving each segment's
 The legacy `type/cuda_atomic.h` include forwards to the backend-owned header;
 it no longer contains the CUDA implementation.
 
-Resource lookup distinguishes source checkouts, installed packages and legacy
-converted trees. Conversion mirrors the moved resources into its cache before
-compiling a selected legacy backend. A directory containing only `__pycache__`
+Resource lookup distinguishes source checkouts and installed packages.
+The whole-tree source conversion mechanism has been removed.
+A directory containing only `__pycache__`
 cannot mask the real source owner. Packaging tests check every backend file in
 the sdist, wheel and isolated installation.
 
-This does not complete task 4.15: the shared C++ core remains under
-the top-level `src` tree (packaged as `jittor/src`), NCCL wrappers remain with the pending communication layout,
-and the external FlashAttention integration retains its separate migration.
-Remaining ACL/ROCm/Corex source conversion is not removed. `fused_adamw` has no
+The shared C++ core is under top-level `src` (packaged as `jittor/src`), and
+MPI/NCCL/HCCL wrappers are under `backends/comm`. Neither `python/jittor/src`
+nor `python/jittor/extern` remains in the checkout. The external FlashAttention
+integration retains its separate compatibility-package migration. `fused_adamw` has no
 CUDA algorithm to relocate; its existing ACL implementation and shared error
 entry do not establish CUDA support.
 
@@ -257,13 +257,15 @@ for its current residency. Dual staging and delayed-free storage report their
 actual pool device. Ordered peer copies preserve both source and destination
 stream dependencies, and fetch retains blocks through its callback.
 The old CUDA stream functions remain adapters into the registered stream hook;
-their implementation now lives in `runtime/backends/cuda_streams.cc`.
+shared implementation lives in `src/runtime/backend_streams.cc`, with SDK
+operations in the corresponding backend driver.
 
 `core.registered_backends()` and `core.backend_device_count(name)` query the
 native registry. The four legacy accelerator-mode aliases in `jt.flags` emit
-`DeprecationWarning` but retain their setter behavior. Converted ACL/ROCm/Corex
-builds are explicitly named `*_legacy`; this is not a claim that their source
-transformation has been removed. Python selection consumes the native device
+`DeprecationWarning` but retain their setter behavior. ACL publishes the canonical
+name `acl`; the old `acl_legacy` spelling resolves to that same native descriptor
+and Python kernel table without registering duplicate implementations.
+Python selection consumes the native device
 context; there is no separate Python allocator or hard-coded backend-capability
 prototype.
 
@@ -410,9 +412,20 @@ view/storage redesign, not solved by this backend migration.
 ACL post-processing only publishes its native implementations. Its pinned-host,
 compiler-concurrency and reduction requirements belong to the backend descriptor
 and are consumed by the allocator, compiler and reduction owners; public flags
-are not overwritten. BackendOps ABI 2 rejects older descriptors and extensions
+are not overwritten. BackendOps ABI 3 rejects older descriptors and extensions
 must rebuild. The legacy whole-tree SDK translation (`process_acl`,
 `process_jittor_source`) is gone; real CANN/NPU verification is still required.
+
+### Distributed Ownership
+
+`jittor.distributed.process_group` owns `ProcessGroup`, `Work`, communicator
+creation and live native rank/world queries. Launching and rendezvous are owned
+by `distributed.launch` and `distributed.store`. The Torch installer delegates
+to these objects, retaining only Torch spelling, argument adaptation and its
+installation/bootstrap transaction. Historical `_JittorProcessGroup` and
+`_JittorWork` imports remain aliases, so old pickle globals resolve to the same
+canonical classes. Invalid native world-size metadata now raises instead of
+being silently treated as a single-process runtime.
 
 ### Backend Fallback Policy
 

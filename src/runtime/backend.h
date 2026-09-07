@@ -111,8 +111,7 @@ EXTERN_LIB BackendStream backend_stream(Device device, BackendStreamKind kind);
 EXTERN_LIB BackendEvent backend_event(Device device, bool timing = false);
 
 // Canonical spelling of a backend id, independent of registration.
-// A descriptor may publish a different `BackendOps::name` (the ACL descriptor
-// registers as "acl_legacy"), so this is the enum's own name, not a lookup.
+// This is the enum's own name, not a registry lookup.
 EXTERN_LIB const char* backend_name(BackendId id);
 
 // @pyjt(registered_backends)

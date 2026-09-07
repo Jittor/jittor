@@ -28,7 +28,7 @@ def _acl_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
     return results
 
 
-register_kernel("optim.adamw_fused", "acl_legacy", _acl_fused_adamw_updates)
+register_kernel("optim.adamw_fused", "acl", _acl_fused_adamw_updates)
 
 
 class Adam(Optimizer):

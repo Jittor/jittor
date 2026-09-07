@@ -86,7 +86,7 @@ def test_attention_qualifies_the_softmax_variant_it_executes(
         module.__path__ = []
         monkeypatch.setitem(sys.modules, name, module)
     jt = sys.modules["jittor"]
-    jt.core = SimpleNamespace(Var=_Tensor, dispatch_context=lambda tensors: ("acl_legacy", 0))
+    jt.core = SimpleNamespace(Var=_Tensor, dispatch_context=lambda tensors: ("acl", 0))
     jt.runtime = SimpleNamespace(use_cuda=1)
     jt.nn = SimpleNamespace(
         matmul=lambda left, right: _Tensor(np.matmul(left.value, right.value)),
@@ -133,7 +133,7 @@ def test_attention_qualifies_the_softmax_variant_it_executes(
         executions.append((log, zero_all_neg_inf, dim))
         return _softmax(value, dim, zero_all_neg_inf)
 
-    dispatch.register_kernel("nn.softmax", "acl_legacy", implementation, supports=supports)
+    dispatch.register_kernel("nn.softmax", "acl", implementation, supports=supports)
     query = _Tensor(np.zeros((1, 1, 2, 2), dtype=np.float32))
     value = _Tensor(np.array([[[[2, 4], [6, 8]]]], dtype=np.float32))
     keep = np.array([[True, False], [False, False]])

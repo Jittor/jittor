@@ -642,7 +642,7 @@ void shutdown_acl_backend() noexcept {
 BackendOps make_acl_backend() {
     BackendOps ops;
     ops.id = BackendId::Acl;
-    ops.name = "acl_legacy";
+    ops.name = "acl";
     ops.device_count = device_count;
     ops.current_device = acl_runtime_current_device;
     ops.set_device = set_device;

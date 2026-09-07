@@ -48,6 +48,10 @@ vector<string> BackendRegistry::names() const {
 const BackendOps& BackendRegistry::get(const string& name) const {
     for (const auto& entry : names_)
         if (entry.second == name) return get(entry.first);
+    if (name == "acl_legacy") {
+        auto found = names_.find(BackendId::Acl);
+        if (found != names_.end() && found->second == "acl") return get(found->first);
+    }
     throw std::out_of_range("Unknown backend: " + name);
 }
 

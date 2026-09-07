@@ -79,7 +79,7 @@ def test_python_dispatch_queries_native_placement_without_fake_backend_capabilit
         for node in ast.walk(context)
     )
     # Backend selection belongs to the native query, including no-input calls.
-    assert not any(isinstance(node, ast.Str) and node.s in {"cpu", "cuda", "acl_legacy"}
+    assert not any(isinstance(node, ast.Str) and node.s in {"cpu", "cuda", "acl"}
                    for node in ast.walk(context))
     assert not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                    and node.func.id == "bytearray" for node in ast.walk(tree))

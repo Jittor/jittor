@@ -1054,7 +1054,7 @@ class TestCapabilityStructure(unittest.TestCase):
             cuda_one = attention._active_device_key()
             resolve.return_value = SimpleNamespace(backend="cuda", device_id=2)
             cuda_two = attention._active_device_key()
-            resolve.return_value = SimpleNamespace(backend="acl_legacy", device_id=1)
+            resolve.return_value = SimpleNamespace(backend="acl", device_id=1)
             acl_one = attention._active_device_key()
         self.assertEqual(len({cuda_one, cuda_two, acl_one}), 3)
 

@@ -47,7 +47,7 @@ def _definitions(relative, names, namespace):
 def routing(monkeypatch):
     native = SimpleNamespace(
         Var=Tensor, Module=Module, nn=SimpleNamespace(),
-        core=SimpleNamespace(Var=Tensor, dispatch_context=lambda tensors: ("acl_legacy", 0)),
+        core=SimpleNamespace(Var=Tensor, dispatch_context=lambda tensors: ("acl", 0)),
         flag_scope=lambda **kwargs: nullcontext(),
         flags=SimpleNamespace(amp_reg=0),
         amp_flags=SimpleNamespace(keep_reduce=1, reduce16_no_fp32_acc=2),
@@ -65,7 +65,7 @@ def routing(monkeypatch):
         def implementation(*args, **kwargs):
             seen.append((key, args, kwargs))
             return marker
-        dispatch.register_kernel(key, "acl_legacy", implementation)
+        dispatch.register_kernel(key, "acl", implementation)
 
     def ignored(*args):
         raise ValueError("non-default inplace rejected before dispatch")

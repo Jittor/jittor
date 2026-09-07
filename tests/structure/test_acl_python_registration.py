@@ -60,7 +60,7 @@ def providers(monkeypatch):
         monkeypatch.setitem(sys.modules, name, package)
     native = sys.modules["jittor"]
     native.Var = _Tensor
-    native.core = SimpleNamespace(Var=_Tensor, dispatch_context=lambda tensors: ("acl_legacy", 0))
+    native.core = SimpleNamespace(Var=_Tensor, dispatch_context=lambda tensors: ("acl", 0))
     native.flags = SimpleNamespace(no_grad=1)
     native.runtime = SimpleNamespace(use_cuda=1)
     native.ops = SimpleNamespace(arg_reduce=lambda *args: ("indices", "values"))
@@ -115,7 +115,7 @@ def test_acl_install_publishes_real_owners_idempotently_without_facade_writes(pr
     assert providers.calls == []
     assert len(providers.install.KERNELS) == 44
     for operation, implementation in providers.install.KERNELS:
-        assert providers.dispatch.registered_kernel(operation, "acl_legacy") is implementation
+        assert providers.dispatch.registered_kernel(operation, "acl") is implementation
         assert implementation.__module__.startswith("jittor.backends.acl.kernels.") or (
             operation == "nn.scaled_dot_product_attention"
         )

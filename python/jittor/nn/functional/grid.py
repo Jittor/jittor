@@ -102,9 +102,9 @@ def _make_base_grid_5d(theta, N, C, D, H, W, align_corners):
 
 
 register_kernel("nn.base_grid_4d", "*", _make_base_grid_4d)
-register_kernel("nn.base_grid_4d", "acl_legacy", _make_base_grid_4d_acl)
+register_kernel("nn.base_grid_4d", "acl", _make_base_grid_4d_acl)
 register_kernel("nn.base_grid_5d", "*", _make_base_grid_5d)
-register_kernel("nn.base_grid_5d", "acl_legacy", _make_base_grid_5d_acl)
+register_kernel("nn.base_grid_5d", "acl", _make_base_grid_5d_acl)
 
 
 def make_base_grid_4D(theta, N, C, H, W, align_corners):

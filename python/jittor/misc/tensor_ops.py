@@ -967,7 +967,7 @@ def _split_slice_acl(d, selection, is_last, gopt_disable):
 
 
 register_kernel("misc.split_slice", "*", _split_slice)
-register_kernel("misc.split_slice", "acl_legacy", _split_slice_acl)
+register_kernel("misc.split_slice", "acl", _split_slice_acl)
 
 
 def split(d, split_size, dim=0):
@@ -1125,7 +1125,7 @@ def _kthvalue_argsort(input, dim):
 
 
 register_kernel("misc.kthvalue_argsort", "*", _kthvalue_argsort)
-register_kernel("misc.kthvalue_argsort", "acl_legacy", _kthvalue_native_argsort)
+register_kernel("misc.kthvalue_argsort", "acl", _kthvalue_native_argsort)
 
 
 def kthvalue(input, k, dim=None, keepdim=False, keepdims=False):
@@ -1827,7 +1827,7 @@ def _seed_jittor_at_import():
 
 _seed_jittor_at_import()
 
-@optional_kernel("misc.searchsorted", "acl_legacy")
+@optional_kernel("misc.searchsorted", "acl")
 def _searchsorted_acl(sorted, values, right, out_dtype, out):
     if sorted.ndim == 1:
         sorted_view = sorted.reshape(
@@ -2487,7 +2487,7 @@ def _classify_code(x, expr, acl_body):
 
 
 register_kernel("misc.classify", "*", _classify_code)
-register_kernel("misc.classify", "acl_legacy", _classify_acl)
+register_kernel("misc.classify", "acl", _classify_acl)
 
 
 def isnan(x):
@@ -2583,7 +2583,7 @@ def _parse_to(args, kwargs):
             if location == "cpu":
                 target_device = "cpu"
             elif location == "device":
-                backend = "npu" if dispatch_context(first).backend == "acl_legacy" else "cuda"
+                backend = "npu" if dispatch_context(first).backend == "acl" else "cuda"
                 target_device = "%s:%d" % (backend, first.device_id)
             device_given = target_device is not None
         else:
@@ -2713,7 +2713,7 @@ def _to_float(x: jt.Var) -> jt.Var:
     return x
 jt.Var._to_float = _to_float
 
-@optional_kernel("misc.index_select", "acl_legacy")
+@optional_kernel("misc.index_select", "acl")
 def _index_select_acl(input, dim, indices):
     ndim = input.ndim
     output_shape = list(input.shape)

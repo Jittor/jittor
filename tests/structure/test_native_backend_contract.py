@@ -141,6 +141,10 @@ int main() {
     auto cuda = complete(); cuda.name = "cuda"; cuda.id = BackendId::Cuda;
     registry.register_backend(cuda);
     assert(registry.names().size() == 2);
+    auto acl = complete(); acl.name = "acl"; acl.id = BackendId::Acl;
+    registry.register_backend(acl);
+    assert(&registry.get("acl") == &registry.get("acl_legacy"));
+    assert(registry.names().size() == 3);
     assert(registry.get(BackendId::Cpu).device_count == count);
     assert(std::strcmp(registry.get(BackendId::Cpu).name, "cpu") == 0);
 }

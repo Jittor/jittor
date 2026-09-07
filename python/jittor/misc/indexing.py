@@ -72,7 +72,7 @@ def var_setitem(x, slices, value, reduce=None):
 
 
 def _acl_assignment_value(x, value, reduce=None):
-    if reduce not in (None, "void") or dispatch_context(x).backend != "acl_legacy":
+    if reduce not in (None, "void") or dispatch_context(x).backend != "acl":
         return value
     if not isinstance(value, jt.Var):
         return jt.array(value, dtype=x.dtype).stop_grad()

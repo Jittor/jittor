@@ -174,7 +174,7 @@ class IndexingRouting(unittest.TestCase):
     def test_value_cast_is_limited_to_acl_plain_assignment(self):
         x, value = self.Var(dtype="float16"), self.Var(dtype="float32")
         namespace = self.owner.var_setitem.__globals__
-        namespace["dispatch_context"] = lambda *args: SimpleNamespace(backend="acl_legacy")
+        namespace["dispatch_context"] = lambda *args: SimpleNamespace(backend="acl")
         self.owner.var_setitem(x, slice(None), value)
         converted = self.native_calls[-1][3]
         self.assertEqual(converted.dtype, "float16")

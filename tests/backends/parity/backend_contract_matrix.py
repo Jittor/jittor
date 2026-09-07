@@ -132,7 +132,7 @@ def backend_rows():
     ``known_backends()`` is the universe and ``registered_backends()`` is the
     subset this build has. A name in the second and not the first would mean a
     descriptor published a spelling the enum does not know -- which is true
-    today for ACL, whose descriptor registers as ``acl_legacy`` -- so those are
+    today for ACL, whose descriptor registers as ``acl`` -- so those are
     carried as extra rows rather than dropped.
     """
     known = list(jt.core.known_backends())

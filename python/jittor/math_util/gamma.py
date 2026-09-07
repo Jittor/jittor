@@ -120,13 +120,13 @@ def _polygamma_cpu(owner, x, n):
 
 
 register_kernel("math.lgamma", "cpu", _gamma_cpu)
-register_kernel("math.lgamma", "acl_legacy", _lgamma_composite)
+register_kernel("math.lgamma", "acl", _lgamma_composite)
 register_kernel("math.lgamma", "*", _lgamma_composite)
 register_kernel("math.digamma", "cpu", _gamma_cpu)
-register_kernel("math.digamma", "acl_legacy", _digamma_composite)
+register_kernel("math.digamma", "acl", _digamma_composite)
 register_kernel("math.digamma", "*", _digamma_composite)
 register_kernel("math.polygamma", "cpu", _polygamma_cpu)
-register_kernel("math.polygamma", "acl_legacy", _polygamma_composite)
+register_kernel("math.polygamma", "acl", _polygamma_composite)
 register_kernel("math.polygamma", "*", _polygamma_composite)
 
 

@@ -13,7 +13,7 @@ from .dispatch import register_kernel, registered_kernel, try_dispatch, unregist
 
 
 _OP = "clamp.scalar"
-_BACKEND = "acl_legacy"
+_BACKEND = "acl"
 
 
 def register_acl_clamp(handler):

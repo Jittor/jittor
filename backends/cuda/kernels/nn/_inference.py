@@ -23,7 +23,7 @@ def cached_source(template, params):
 
 def on_acl():
     """Whether the native runtime currently selects the legacy ACL backend."""
-    return dispatch_context().backend == "acl_legacy"
+    return dispatch_context().backend == "acl"
 
 
 def device_index(value):

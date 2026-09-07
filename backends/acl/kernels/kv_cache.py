@@ -12,7 +12,7 @@ def _gather_rows(value, row_ids):
     return jt.gather(value, 0, index)
 
 
-@optional_kernel("nn.reshape_and_cache_acl", "acl_legacy",
+@optional_kernel("nn.reshape_and_cache_acl", "acl",
                  dtypes={"float16", "bfloat16", "float32", "int32", "int64"})
 def _reshape_and_cache_acl(key, value, kv_cache, slot_mapping, slots=None):
     tensors = (key, value, kv_cache, slot_mapping)
@@ -74,7 +74,7 @@ def _reshape_and_cache_acl(key, value, kv_cache, slot_mapping, slots=None):
     return _stop_grad_outputs(kv_cache)
 
 
-@optional_kernel("nn.gather_cache_blocks_acl", "acl_legacy")
+@optional_kernel("nn.gather_cache_blocks_acl", "acl")
 def _gather_cache_blocks_acl(kv_cache, block_ids):
     if not all(isinstance(tensor, jt.Var) for tensor in (kv_cache, block_ids)):
         return None
@@ -93,7 +93,7 @@ def _gather_cache_blocks_acl(kv_cache, block_ids):
     return _stop_grad_outputs(jt.gather(kv_cache, 0, gather_index))
 
 
-@optional_kernel("nn.gather_block_table_acl", "acl_legacy", dtypes={"int32", "int64"})
+@optional_kernel("nn.gather_block_table_acl", "acl", dtypes={"int32", "int64"})
 def _gather_block_table_acl(block_table, request_count, block_count, request=None):
     if not isinstance(block_table, jt.Var):
         return None
@@ -108,7 +108,7 @@ def _gather_block_table_acl(block_table, request_count, block_count, request=Non
     return _stop_grad_outputs(jt.gather(block_table, 0, row_ids))
 
 
-@optional_kernel("nn.split_cache_kv_acl", "acl_legacy")
+@optional_kernel("nn.split_cache_kv_acl", "acl")
 def _split_cache_kv_acl(cache, dim):
     if not isinstance(cache, jt.Var):
         return None
@@ -128,7 +128,7 @@ def _split_cache_kv_acl(cache, dim):
     return _stop_grad_outputs((key, value))
 
 
-@optional_kernel("nn.slice_dim_acl", "acl_legacy")
+@optional_kernel("nn.slice_dim_acl", "acl")
 def _slice_dim_acl(value, dim, start, length):
     if not isinstance(value, jt.Var):
         return None
@@ -150,7 +150,7 @@ def _slice_dim_acl(value, dim, start, length):
     return _stop_grad_outputs(jt.gather(value, dim, index))
 
 
-@optional_kernel("nn.repeat_interleave_dim_acl", "acl_legacy")
+@optional_kernel("nn.repeat_interleave_dim_acl", "acl")
 def _repeat_interleave_dim_acl(value, dim, repeats):
     if not isinstance(value, jt.Var):
         return None
@@ -170,7 +170,7 @@ def _repeat_interleave_dim_acl(value, dim, repeats):
         value.reshape(reshaped).broadcast(expanded).reshape(result))
 
 
-@optional_kernel("nn.decode_attention_acl", "acl_legacy")
+@optional_kernel("nn.decode_attention_acl", "acl")
 def _decode_attention_acl(query, key, value, scale):
     if not all(isinstance(tensor, jt.Var) for tensor in (query, key, value)):
         return None
@@ -223,7 +223,7 @@ def _decode_attention_acl(query, key, value, scale):
             query_shape).cast(output_dtype))
 
 
-@optional_kernel("nn.paged_attention_decode_acl", "acl_legacy")
+@optional_kernel("nn.paged_attention_decode_acl", "acl")
 def _paged_attention_decode_acl(query, kv_cache, block_table, scale,
                                 key_lengths=None):
     tensors = (query, kv_cache, block_table)

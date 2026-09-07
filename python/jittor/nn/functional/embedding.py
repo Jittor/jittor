@@ -14,7 +14,7 @@ def _embedding_renorm_indices_acl(input):
 
 
 register_kernel("nn.embedding_renorm_indices", "*", _embedding_renorm_indices)
-register_kernel("nn.embedding_renorm_indices", "acl_legacy", _embedding_renorm_indices_acl)
+register_kernel("nn.embedding_renorm_indices", "acl", _embedding_renorm_indices_acl)
 
 
 def embedding(
