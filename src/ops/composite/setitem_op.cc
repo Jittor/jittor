@@ -280,10 +280,13 @@ void SetitemOp::jit_run() {
     @for(i, 0, IDIM, 
         @if(IV@i>=0 && IO@i<0, 
             @if(VS@i>=0,
-                index_t vs@i@@s@{VD-1} = 1;
                 VST@i* vp@i = vs.slices[IV@i].var->ptr<VST@i>();
-                @for(j,VD-2,-1,-1,index_t vs@i@@s@j = vs@i@@s@{j+1} * 
-                    @if((VS@i>>(j+1))&1,oshape@{j+1+FOV},1);
+                // Scalar index tensors use vp[0] and have no strides.
+                @if(VD>0,
+                    index_t vs@i@@s@{VD-1} = 1;
+                    @for(j,VD-2,-1,-1,index_t vs@i@@s@j = vs@i@@s@{j+1} *
+                        @if((VS@i>>(j+1))&1,oshape@{j+1+FOV},1);
+                    )
                 )
             );
         )

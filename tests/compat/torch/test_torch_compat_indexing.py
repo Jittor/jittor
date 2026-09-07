@@ -97,6 +97,18 @@ class TestBasicSlicing(Base):
 
 
 class TestFancyIndexing(Base):
+    def test_scalar_tensor_index_forward_and_gradient(self):
+        def body(dev):
+            for dtype in (torch.int32, torch.int64):
+                for index, expected in ((0, [1., 0., 0.]), (-1, [0., 0., 1.])):
+                    value = torch.tensor([10., 20., 30.], requires_grad=True)
+                    result = value[torch.tensor(index, dtype=dtype)]
+                    self.assertEqual(tuple(result.shape), ())
+                    self.assertEqual(result.item(), 10. if index == 0 else 30.)
+                    gradient = jt.grad(result, value)
+                    np.testing.assert_array_equal(gradient.numpy(), expected)
+        both_devices(body)
+
     def setUp(self):
         self.x = np.arange(20).reshape(4, 5).astype("float32")
 

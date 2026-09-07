@@ -1322,11 +1322,17 @@ def install(ctx):
 
     _alias("sparse_coo_tensor", sparse_coo_tensor)
     import jittor.sparse as _jt_sparse
-    if not hasattr(_jt_sparse, "sum"):
+    if g is not ctx.native_backend:
+        from ...namespace import native_module_facade
+        sparse_namespace = native_module_facade(_jt_sparse, "torch.sparse")
+    else:
+        sparse_namespace = _jt_sparse
+    g.sparse = sparse_namespace
+    if not hasattr(sparse_namespace, "sum"):
         def _sparse_sum(x, dim=None):
             d = x._dense if isinstance(x, _SparseCOO) else x
             return _SparseCOO(d.sum(dim) if dim is not None else d.sum())
-        _jt_sparse.sum = _sparse_sum
+        sparse_namespace.sum = _sparse_sum
 
     # det/inverse on (batched) square matrices (mmrotate GWD/KLD/KFIoU Gaussian losses)
     def _vdet(self):
@@ -1349,10 +1355,13 @@ def install_parity(ctx):
     def module(name):
         return registry.ensure(name)
     import jittor.linalg as linalg
+    if g is not ctx.native_backend:
+        from ...namespace import native_module_facade
+        linalg = native_module_facade(linalg, "torch.linalg")
     registry.publish("torch.linalg", linalg)
     g.linalg = linalg
 
-    import jittor.sparse as sparse
+    sparse = g.sparse
     registry.publish("torch.sparse", sparse)
     g.sparse = sparse
 

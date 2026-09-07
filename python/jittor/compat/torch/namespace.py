@@ -14,6 +14,21 @@ import importlib.machinery
 import types
 
 
+def native_module_facade(source, name):
+    """Give native implementations an installation-owned writable namespace."""
+    facade = types.ModuleType(name, source.__doc__)
+    facade.__package__ = name if hasattr(source, "__path__") else name.rpartition(".")[0]
+    if hasattr(source, "__path__"):
+        facade.__path__ = []
+    for key, value in vars(source).items():
+        if key.startswith("__") and key != "__all__":
+            continue
+        if isinstance(value, (dict, list, set)):
+            value = value.copy()
+        setattr(facade, key, value)
+    return facade
+
+
 class TorchNamespace(types.ModuleType):
     """Module-shaped view over one Jittor compatibility owner.
 

@@ -55,6 +55,11 @@ def test_independent_tensor_installation_preserves_native_type():
         optimizer_before = [(cls, dict(vars(cls))) for cls in optimizer_types]
         function_before = dict(vars(jt.Function))
         autograd_before = dict(vars(jt.autograd))
+        namespace_before = [(module, dict(vars(module)))
+                            for module in (jt.linalg, jt.sparse, jt.distributions)]
+        distribution_types = [(cls, dict(vars(cls))) for cls in
+                              (jt.distributions.Distribution, jt.distributions.Normal,
+                               jt.distributions.Categorical, jt.distributions.Bernoulli)]
         native_nn = jt.nn
         native_init = jt.nn.init
         policy_before = jt.autograd.get_policy()
@@ -103,6 +108,11 @@ def test_independent_tensor_installation_preserves_native_type():
         assert all(value is vars(jt.Function)[key] for key, value in function_before.items())
         assert autograd_before.keys() == vars(jt.autograd).keys()
         assert all(value is vars(jt.autograd)[key] for key, value in autograd_before.items())
+        for module, original in namespace_before + distribution_types:
+            assert original.keys() == vars(module).keys()
+            assert all(value is vars(module)[key] for key, value in original.items())
+        assert torch.linalg is not jt.linalg and torch.sparse is not jt.sparse
+        assert torch.distributions is not jt.distributions
         assert torch.nn is not native_nn
         assert torch.nn.init is not native_init
         assert torch.nn.Module is not jt.Module
@@ -279,6 +289,27 @@ def test_independent_tensor_installation_preserves_native_type():
             assert converted_model.weight is original_weight and original_weight.is_cpu
             assert original_weight.dtype is torch.float64 and original_weight.is_leaf
         assert jt.autograd.get_policy() is policy_before
+        normal = torch.distributions.Normal(loc=0.0, scale=1.0)
+        assert isinstance(normal, torch.distributions.Distribution)
+        assert type(normal.loc) is torch.Tensor and not normal.loc.requires_grad
+        assert type(normal.sample((3,))) is torch.Tensor
+        assert not normal.rsample((3,)).requires_grad
+        np.testing.assert_allclose(normal.log_prob(torch.tensor(0.)).numpy(),
+                                   -0.5 * np.log(2 * np.pi), atol=1e-6)
+        loc = torch.tensor(0., requires_grad=True)
+        sampled = torch.distributions.Normal(loc=loc, scale=1.).rsample((3,))
+        loc_gradient, = torch.autograd.grad(sampled.sum(), loc)
+        np.testing.assert_allclose(loc_gradient.numpy(), 3.)
+        categorical = torch.distributions.Categorical(probs=torch.tensor([0.25, 0.75]))
+        assert type(categorical.sample((3,))) is torch.Tensor
+        np.testing.assert_allclose(categorical.log_prob(torch.tensor(1)).numpy(), np.log(0.75), atol=1e-6)
+        bernoulli = torch.distributions.Bernoulli(probs=0.25)
+        assert type(bernoulli.sample((3,))) is torch.Tensor
+        np.testing.assert_allclose(bernoulli.log_prob(torch.tensor(1.)).numpy(), np.log(0.25), atol=1e-6)
+        matrix = torch.tensor([[2., 0.], [0., 4.]])
+        inverse = torch.linalg.inv(matrix)
+        assert type(inverse) is torch.Tensor
+        np.testing.assert_allclose(inverse.numpy(), [[0.5, 0.], [0., 0.25]])
         print("INDEPENDENT_TENSOR_OK")
     """)], without_torch_mode=True, merge_stderr=True)
     assert result.returncode == 0, result.stdout
