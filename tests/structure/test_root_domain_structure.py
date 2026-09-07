@@ -48,6 +48,12 @@ class TestRootDomainStructure(unittest.TestCase):
             "jittor.other.code_softmax": "jittor.backends.cuda.kernels.nn.softmax_cuda",
             "jittor.nn.backends.softmax_cuda": "jittor.backends.cuda.kernels.nn.softmax_cuda",
             "jittor.weightnorm": "jittor.nn.utils.weight_norm",
+            "jittor.misc.concatenation": "jittor.ops.concatenation",
+            "jittor.misc.indexing": "jittor.ops.indexing",
+            "jittor.misc.reductions": "jittor.ops.reductions",
+            "jittor.misc.shape_composition": "jittor.ops.shape_composition",
+            "jittor.misc.shape_transforms": "jittor.ops.shape_transforms",
+            "jittor.misc.tensor_ops": "jittor.ops.tensor_ops",
         }
         for legacy_name, canonical_name in aliases.items():
             with self.subTest(legacy=legacy_name):
@@ -71,12 +77,12 @@ class TestRootDomainStructure(unittest.TestCase):
         softmax = importlib.import_module("jittor.backends.cuda.kernels.nn.softmax_cuda")
 
         contracts = (
-            (concatenation.concat, "jittor.misc.concatenation", "(arr, dim=0)"),
-            (indexing.getitem, "jittor.misc.indexing", "(x, slices)"),
-            (indexing.setitem, "jittor.misc.indexing", "(x, slices, value)"),
+            (concatenation.concat, "jittor.ops.concatenation", "(arr, dim=0)"),
+            (indexing.getitem, "jittor.ops.indexing", "(x, slices)"),
+            (indexing.setitem, "jittor.ops.indexing", "(x, slices, value)"),
             (
                 pooling.argmax_pool,
-                "jittor.pool.layers",
+                "jittor.nn.functional.pooling.entrypoints",
                 "(x, size, stride, padding=0)",
             ),
             (
@@ -160,7 +166,7 @@ class TestRootDomainStructure(unittest.TestCase):
         cases = (
             ("jittor.nn.backends.softmax_cuda", "softmax_v1",
              "jittor.backends.cuda.kernels.nn.softmax_cuda"),
-            ("jittor.contrib", "concat", "jittor.misc.concatenation"),
+            ("jittor.contrib", "concat", "jittor.ops.concatenation"),
             ("jittor.contrib", "check", "jittor.compat.contrib"),
             ("jittor.contrib", "slice_var_index", "jittor.compat.contrib"),
             ("jittor.gradfunctional", "jvp", "jittor.autograd.functional"),
@@ -197,7 +203,7 @@ class TestRootDomainStructure(unittest.TestCase):
     def test_implementations_are_unique_and_compat_only_owns_legacy_helpers(self):
         expected = {
             "WeightNorm": {"nn/utils/weight_norm.py"},
-            "argmax_pool": {"pool/layers.py"},
+            "argmax_pool": {"nn/functional/pooling/entrypoints.py"},
             "jvp": {"autograd/functional.py"},
             "softmax_v1": {"backends/cuda/kernels/nn/softmax_cuda.py"},
             "vjp": {"autograd/functional.py"},
@@ -259,8 +265,8 @@ class TestRootDomainStructure(unittest.TestCase):
             "autograd/__init__.py",
             "autograd/functional.py",
             "compat/contrib.py",
-            "misc/concatenation.py",
-            "misc/indexing.py",
+            "ops/concatenation.py",
+            "ops/indexing.py",
             "nn/utils/__init__.py",
             "nn/utils/weight_norm.py",
             "optim/legacy_schedulers.py",

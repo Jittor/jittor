@@ -23,12 +23,12 @@ def _backend_reads(tree):
 def test_operator_domains_use_registered_device_selection():
     source = RUNTIME.parent
     offenders = []
-    for directory in ("nn", "misc", "math_util", "fft", "optim"):
+    for directory in ("nn", "ops", "math_util", "fft", "optim"):
         for path in (source / directory).rglob("*.py"):
             tree = ast.parse(path.read_text())
             # These are explicit user device-transfer commands, not kernel
             # selectors. Their setter validation belongs to the runtime.
-            if path == source / "misc/tensor_ops.py":
+            if path == source / "ops/tensor_protocol.py":
                 tree.body = [node for node in tree.body
                              if not isinstance(node, ast.FunctionDef)
                              or node.name not in {"cuda", "npu"}]

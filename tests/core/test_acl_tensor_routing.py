@@ -17,6 +17,15 @@ def definitions(relative, names=None, **namespace):
     tree = ast.parse(path.read_text(encoding="utf8"))
     tree.body = [node for node in tree.body if isinstance(node, ast.FunctionDef)
                  and (names is None or node.name in names)]
+    if names is not None:
+        assert {node.name for node in tree.body} == names, (path, names)
+    # Local imports must use the same injected host stand-ins as former globals.
+    class InjectedImports(ast.NodeTransformer):
+        def visit_Import(self, node):
+            node.names = [alias for alias in node.names
+                          if (alias.asname or alias.name) not in namespace]
+            return node if node.names else None
+    tree = InjectedImports().visit(tree)
     exec(compile(tree, str(path), "exec"), namespace)
     return SimpleNamespace(**namespace)
 
@@ -88,7 +97,7 @@ class IndexingRouting(unittest.TestCase):
             self.calls.append((operation, args))
             return self.provider_result
 
-        self.owner = definitions("misc/indexing.py", jt=self.jt, np=np,
+        self.owner = definitions("ops/indexing.py", jt=self.jt, np=np,
                                  try_dispatch=dispatch,
                                  dispatch_context=lambda *args: SimpleNamespace(backend="cpu"),
                                  _native_var_getitem=Var.getitem,
@@ -206,9 +215,18 @@ class DomainRouting(unittest.TestCase):
             ndim = 2
 
         jt = SimpleNamespace(Var=Var, misc=SimpleNamespace(_cumsum_dim=lambda dim, ndim: dim % ndim))
-        names = {"all", "any", "flip", "nonzero", "split", "cumsum", "cub_cumsum",
-                 "gather", "roll", "triu", "_scatter_into"}
-        owner = definitions("misc/tensor_ops.py", names, jt=jt, try_dispatch=dispatch)
+        owners = {
+            "numerical": {"all", "any"},
+            "shape_ops": {"flip", "split", "roll", "triu"},
+            "scan": {"cumsum", "cub_cumsum"},
+            "advanced_indexing": {"nonzero", "gather", "_scatter_into"},
+        }
+        owner = SimpleNamespace()
+        for module, names in owners.items():
+            domain = definitions("ops/" + module + ".py", names,
+                                 jt=jt, Var=Var, try_dispatch=dispatch)
+            for name in names:
+                setattr(owner, name, getattr(domain, name))
         x = Var()
         cases = [("all", (x,), "all"), ("any", (x,), "any"),
                  ("flip", (x, -1), "flip"), ("nonzero", (x,), "nonzero"),
@@ -278,7 +296,7 @@ class DomainRouting(unittest.TestCase):
                              flags=SimpleNamespace(amp_reg=0),
                              amp_flags=SimpleNamespace(keep_reduce=4),
                              binary_dtype_infer=lambda *args: "float32")
-        owner = definitions("misc/concatenation.py", {"concat", "_merge_dtypes"},
+        owner = definitions("ops/concatenation.py", {"concat", "_merge_dtypes"},
                             jt=jt, Sequence=(list, tuple), select_kernel=select)
         inputs = (Var("int32"), Var("float32"))
         self.assertIs(owner.concat(inputs, -1), result)

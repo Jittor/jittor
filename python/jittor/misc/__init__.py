@@ -1,4 +1,4 @@
-"""Miscellaneous tensor operations and compatibility helpers."""
+"""Deprecated tensor API facade; implementations belong to :mod:`jittor.ops`."""
 
 from .concatenation import cat, concat
 from .reductions import amax, amin, count_nonzero

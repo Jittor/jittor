@@ -2,7 +2,7 @@
 
 # ruff: noqa: F401
 
-from jittor.pool import max_pool2d, max_pool3d, pool, pool3d
+from .pooling import max_pool2d, max_pool3d, pool, pool3d
 
 from ..attention import (
     cumulative_sequence_lengths,

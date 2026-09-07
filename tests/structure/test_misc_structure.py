@@ -1,6 +1,7 @@
 """Architecture and compatibility contracts for the ``jittor.misc`` facade."""
 
 import ast
+import importlib
 import inspect
 import pickle
 from pathlib import Path
@@ -130,9 +131,9 @@ class TestMiscStructure(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(str(inspect.signature(function)), signature)
                 expected_module = (
-                    "jittor.misc.shape_transforms"
+                    "jittor.ops.shape_transforms"
                     if name in {"repeat", "chunk", "expand"}
-                    else "jittor.misc.shape_composition"
+                    else "jittor.ops.shape_composition"
                 )
                 self.assertEqual(function.__module__, expected_module)
                 self.assertEqual(function.__qualname__, name)
@@ -147,27 +148,37 @@ class TestMiscStructure(unittest.TestCase):
                 self.assertIs(pickle.loads(legacy_pickle), function)
 
     def test_tensor_operations_use_real_paths_and_legacy_pickle_aliases(self):
-        source = Path(tensor_ops.__file__).read_text(encoding="utf-8")
+        scan = importlib.import_module("jittor.ops.scan")
+        source = Path(scan.__file__).read_text(encoding="utf-8")
         for private_name in ("_cummax_min", "_CumMax", "_CumMin"):
             self.assertNotIn("jt.misc." + private_name, source)
-        for name in ("repeat_interleave", "cumsum", "scatter_reduce", "CTCLoss"):
+        owners = {
+            "repeat_interleave": "jittor.ops.shape_ops",
+            "cumsum": "jittor.ops.scan",
+            "scatter_reduce": "jittor.ops.advanced_indexing",
+            "CTCLoss": "jittor.ops.ctc",
+        }
+        for name, owner in owners.items():
             implementation = getattr(tensor_ops, name)
             with self.subTest(name=name):
                 self.assertIs(getattr(misc, name), implementation)
                 if name != "cumsum":
                     self.assertIs(getattr(jt, name), implementation)
-                self.assertEqual(implementation.__module__, tensor_ops.__name__)
+                self.assertEqual(implementation.__module__, owner)
+                self.assertIs(getattr(importlib.import_module(owner), name), implementation)
                 self.assertIs(
                     pickle.loads(pickle.dumps(implementation)), implementation,
                 )
 
                 current_pickle = pickle.dumps(implementation, protocol=0)
                 legacy_pickle = current_pickle.replace(
-                    ("c" + tensor_ops.__name__ + "\n").encode(),
+                    ("c" + owner + "\n").encode(),
                     b"cjittor.misc\n",
                     1,
                 )
                 self.assertIs(pickle.loads(legacy_pickle), implementation)
+                old_child_pickle = ("cjittor.misc.tensor_ops\n" + name + "\n.").encode()
+                self.assertIs(pickle.loads(old_child_pickle), implementation)
 
     def test_tensor_operation_dependencies_remain_dynamic(self):
         # cumsum resolves its kernel through the module at call time, so a
@@ -295,12 +306,15 @@ class TestMiscStructure(unittest.TestCase):
             self.assertNotIn("preserve_facade_origins", source)
             self.assertNotIn("_JittorRuntimeProxy", source)
             tree = ast.parse(source, filename=str(path))
-            imports_jittor = [
-                node for node in tree.body
-                if isinstance(node, ast.Import)
-                and any(alias.name == "jittor" for alias in node.names)
-            ]
-            self.assertEqual(len(imports_jittor), 1)
+            self.assertTrue(module.__name__.startswith("jittor.ops."))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    self.assertFalse(node.module == "jittor.misc" or
+                                     node.module.startswith("jittor.misc."))
+                if isinstance(node, ast.Assign):
+                    self.assertFalse(any(isinstance(target, ast.Attribute) and
+                                         target.attr == "__module__"
+                                         for target in node.targets))
 
     def test_package_discovery_includes_private_package(self):
         repo_root = Path(misc.__file__).resolve().parents[3]
@@ -310,6 +324,7 @@ class TestMiscStructure(unittest.TestCase):
 
         packages = find_packages(where=str(repo_root / "python"))
         self.assertIn("jittor.misc", packages)
+        self.assertIn("jittor.ops", packages)
         self.assertNotIn("jittor._misc", packages)
 
 

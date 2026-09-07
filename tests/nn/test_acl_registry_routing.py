@@ -121,7 +121,9 @@ def test_resize_validates_geometry_and_mode_before_the_registered_kernel(routing
 
 
 def test_pool_keeps_the_native_module_and_routes_after_validation(routing):
-    ns = _definitions("pool/core_2d.py", ["Pool"], routing.namespace)
+    ns = _definitions("nn/functional/pooling/core_2d.py",
+                      ["_pool2d_parameters", "_pool2d"], routing.namespace)
+    _definitions("nn/modules/pooling.py", ["Pool"], ns)
     routing.register("nn.pool2d")
     original_class = ns["Pool"]
     pool = original_class((2, 3), stride=(2, 1), return_indices=True)
@@ -138,7 +140,7 @@ def test_pool_keeps_the_native_module_and_routes_after_validation(routing):
 
 
 def test_average_pooling_uses_the_same_registry_without_duplicating_math(routing):
-    ns = _definitions("nn/functional/pooling.py", ["_pool_output_size", "_avg_pool_nd", "avg_pool2d"],
+    ns = _definitions("nn/functional/pooling/average.py", ["_pool_output_size", "_avg_pool_nd", "avg_pool2d"],
                       routing.namespace)
     routing.register("nn.pool2d")
     x = Tensor((1, 2, 8, 10))

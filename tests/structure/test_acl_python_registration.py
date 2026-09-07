@@ -200,7 +200,7 @@ def test_acl_pool_declines_unsupported_semantics(providers, dtype, dilation, ret
 def test_acl_pool_uses_canonical_output_geometry(
     providers, monkeypatch, size, kernel, stride, padding, ceil_mode, expected, op
 ):
-    geometry_source = (ROOT / "python/jittor/nn/functional/pooling.py").read_text(encoding="utf-8")
+    geometry_source = (ROOT / "python/jittor/nn/functional/pooling/average.py").read_text(encoding="utf-8")
     geometry = next(
         node
         for node in ast.parse(geometry_source).body

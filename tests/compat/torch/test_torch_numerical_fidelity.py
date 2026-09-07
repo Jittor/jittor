@@ -1933,7 +1933,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         owners = {
             "outer": "jittor._core.var",
             "tensordot": "jittor.nn.functional.tensor",
-            "repeat_interleave": "jittor.misc.tensor_ops",
+            "repeat_interleave": "jittor.ops.shape_ops",
         }
         for name, owner_module in owners.items():
             with self.subTest(name=name):

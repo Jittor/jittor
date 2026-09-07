@@ -20,21 +20,35 @@ def load_definitions(path, names=None, **namespace):
         elif isinstance(node, ast.Assign) and names is None:
             selected.append(node)
     tree.body = selected
+    if names is not None:
+        assert {node.name for node in selected} == names, (path, names)
+    class InjectedImports(ast.NodeTransformer):
+        def visit_ImportFrom(self, node):
+            node.names = [alias for alias in node.names
+                          if (alias.asname or alias.name) not in namespace]
+            return node if node.names else None
+    tree = InjectedImports().visit(tree)
     exec(compile(tree, str(path), "exec"), namespace)
     return SimpleNamespace(**namespace)
 
 
 class NativeCudaSources(unittest.TestCase):
     def test_native_domains_do_not_store_cuda_algorithms(self):
-        for filename in ("misc/tensor_ops.py", "math_util/gamma.py", "math_util/igamma.py",
-                         "distributions.py", "math_util/src/igamma.h"):
-            source = (ROOT / "python" / "jittor" / filename).read_text(encoding="utf8")
+        package = ROOT / "python" / "jittor"
+        paths = [package / filename for filename in (
+            "math_util/gamma.py", "math_util/igamma.py", "math_util/src/igamma.h")]
+        for domain in ("ops", "distributions"):
+            implementations = list((package / domain).rglob("*.py"))
+            self.assertTrue(implementations, domain)
+            paths.extend(implementations)
+        for path in paths:
+            source = path.read_text(encoding="utf8")
             for token in ("__global__", "__device__", "<<<"):
-                self.assertNotIn(token, source, filename)
+                self.assertNotIn(token, source, str(path))
 
     def test_auto_parallel_keeps_cpu_body_outside_cuda_generator(self):
         codegen = load_definitions(KERNELS / "misc" / "codegen.py")
-        native = load_definitions(ROOT / "python" / "jittor" / "misc" / "tensor_ops.py",
+        native = load_definitions(ROOT / "python" / "jittor" / "ops" / "codegen.py",
                                   {"auto_parallel"}, _cuda_codegen=codegen)
         generated = native.auto_parallel(
             2, "void sample(int n0, int i0, int n1, int i1, float* out) "

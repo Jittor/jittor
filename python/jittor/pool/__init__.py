@@ -1,34 +1,30 @@
-# ***************************************************************
-# Copyright (c) 2023 Jittor. All Rights Reserved.
-# Maintainers:
-#     Guowei Yang <471184555@qq.com>
-#     Wenyang Zhou <576825820@qq.com>
-#     Meng-Hao Guo <guomenghao1997@gmail.com>
-#     Dun Liang <randonlang@gmail.com>.
-#
-#
-# This file is subject to the terms and conditions defined in
-# file 'LICENSE.txt', which is part of this source code package.
-# ***************************************************************
-import jittor as jt
-from jittor import init, Module
-import numpy as np
+"""Deprecated pooling namespace; canonical implementations belong to jittor.nn.
+
+Historical submodule and pickle globals remain same-object re-exports.
+The legacy adaptive-average class intentionally retains its fixed-window rule.
+"""
+
 import math
-
-pool_use_code_op = True
-
-from .core_2d import Pool
-from .core_3d import Pool3d, _triple
-from .adaptive import (
-    AdaptiveAvgPool2d, AdaptiveAvgPool3d, AdaptiveMaxPool2d,
-    AdaptiveMaxPool3d,
+import sys as _sys
+from jittor.nn.functional.pooling._state import PoolingStateView as _PoolingStateView
+from jittor.nn.functional.pooling import (
+    argmax_pool, avg_pool2d, max_pool2d, max_pool3d, pool, pool2d, pool3d,
 )
-from .pooling_1d import AdaptiveAvgPool1d, AvgPool1d, MaxPool1d
-from .layers import (
-    AvgPool2d, AvgPool3d, MaxPool2d, MaxPool3d, _no_dilation, argmax_pool,
-    avg_pool2d, max_pool2d, max_pool3d, pool, pool3d,
+from jittor.nn.functional.pooling.core_3d import _triple
+from jittor.nn.functional.pooling.entrypoints import _no_dilation
+from jittor.nn.modules.pooling import (
+    AdaptiveAvgPool1d, AdaptiveAvgPool3d, AdaptiveMaxPool2d, AdaptiveMaxPool3d,
+    AvgPool1d, MaxPool1d, MaxPool2d, MaxPool3d, MaxUnpool2d, MaxUnpool3d,
+    Pool, Pool3d,
 )
+from jittor.nn.modules.pooling_legacy import AdaptiveAvgPool2d, AvgPool2d, AvgPool3d
 
-pool2d = pool
+__all__ = [
+    "AdaptiveAvgPool1d", "AdaptiveAvgPool2d", "AdaptiveAvgPool3d",
+    "AdaptiveMaxPool2d", "AdaptiveMaxPool3d", "AvgPool1d", "AvgPool2d",
+    "AvgPool3d", "MaxPool1d", "MaxPool2d", "MaxPool3d", "MaxUnpool2d",
+    "MaxUnpool3d", "Pool", "Pool3d", "argmax_pool", "avg_pool2d",
+    "max_pool2d", "max_pool3d", "pool", "pool2d", "pool3d", "pool_use_code_op",
+]
 
-from .unpool import MaxUnpool2d, MaxUnpool3d
+_sys.modules[__name__].__class__ = _PoolingStateView

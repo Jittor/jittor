@@ -2,6 +2,7 @@
 
 import ast
 import inspect
+import importlib
 import pickle
 import unittest
 from pathlib import Path
@@ -18,10 +19,18 @@ from jittor.pool import pooling_1d
 from jittor.pool import unpool
 
 
-_IMPLEMENTATION_MODULES = (
+_LEGACY_MODULES = (
     core_2d, core_3d, pooling_1d, adaptive, layers, unpool,
 )
 
+
+_native_pooling = importlib.import_module("jittor.nn.modules.pooling")
+_legacy_pooling = importlib.import_module("jittor.nn.modules.pooling_legacy")
+_entrypoints = importlib.import_module("jittor.nn.functional.pooling.entrypoints")
+_average = importlib.import_module("jittor.nn.functional.pooling.average")
+_adaptive_math = importlib.import_module("jittor.nn.functional.pooling.adaptive")
+_core3d_math = importlib.import_module("jittor.nn.functional.pooling.core_3d")
+_unpool_math = importlib.import_module("jittor.nn.functional.pooling.unpool")
 
 def _summarize(value):
     if isinstance(value, jt.Module):
@@ -32,22 +41,29 @@ def _summarize(value):
     return value
 
 
+def _canonical_fields(value):
+    if isinstance(value, tuple):
+        if value and all(isinstance(item, tuple) and len(item) == 2
+                         and isinstance(item[0], str) for item in value):
+            return tuple(sorted((key, _canonical_fields(item)) for key, item in value))
+        return tuple(_canonical_fields(item) for item in value)
+    return value
+
+
 class TestPoolStructure(unittest.TestCase):
     def test_public_surface_and_private_ownership(self):
         expected_public = {
             "AdaptiveAvgPool1d", "AdaptiveAvgPool2d", "AdaptiveAvgPool3d",
             "AdaptiveMaxPool2d", "AdaptiveMaxPool3d", "AvgPool1d",
             "AvgPool2d", "AvgPool3d", "MaxPool1d", "MaxPool2d",
-            "MaxPool3d", "MaxUnpool2d", "MaxUnpool3d", "Module", "Pool",
-            "Pool3d", "avg_pool2d", "init", "jt", "math", "max_pool2d",
-            "max_pool3d", "np", "pool", "pool2d", "pool3d", "argmax_pool",
+            "MaxPool3d", "MaxUnpool2d", "MaxUnpool3d", "Pool",
+            "Pool3d", "avg_pool2d", "max_pool2d",
+            "max_pool3d", "pool", "pool2d", "pool3d", "argmax_pool",
             "pool_use_code_op",
-            "adaptive", "core_2d", "core_3d", "layers", "pooling_1d",
-            "unpool",
         }
-        self.assertFalse(hasattr(pool_facade, "__all__"))
+        self.assertTrue(hasattr(pool_facade, "__all__"))
         self.assertEqual(
-            {name for name in vars(pool_facade) if not name.startswith("_")},
+            set(pool_facade.__all__),
             expected_public,
         )
         self.assertIs(jt.pool, pool_facade)
@@ -61,7 +77,7 @@ class TestPoolStructure(unittest.TestCase):
 
         implementations = tuple(
             symbol
-            for module in _IMPLEMENTATION_MODULES
+            for module in _LEGACY_MODULES
             for symbol in module._PUBLIC_SYMBOLS
         )
         self.assertEqual(len(implementations), 23)
@@ -91,13 +107,13 @@ class TestPoolStructure(unittest.TestCase):
             ),
         }
         expected_modules = {
-            "_triple": core_3d.__name__,
-            "pool": layers.__name__,
-            "pool3d": layers.__name__,
-            "avg_pool2d": layers.__name__,
-            "_no_dilation": layers.__name__,
-            "max_pool2d": layers.__name__,
-            "max_pool3d": layers.__name__,
+            "_triple": _core3d_math.__name__,
+            "pool": _entrypoints.__name__,
+            "pool3d": _entrypoints.__name__,
+            "avg_pool2d": _average.__name__,
+            "_no_dilation": _entrypoints.__name__,
+            "max_pool2d": _entrypoints.__name__,
+            "max_pool3d": _entrypoints.__name__,
         }
         for name, signature in signatures.items():
             function = getattr(pool_facade, name)
@@ -160,21 +176,21 @@ class TestPoolStructure(unittest.TestCase):
             "MaxUnpool3d": "(kernel_size, stride=None)",
         }
         expected_modules = {
-            "Pool": core_2d.__name__,
-            "Pool3d": core_3d.__name__,
-            "AdaptiveAvgPool2d": adaptive.__name__,
-            "AdaptiveMaxPool2d": adaptive.__name__,
-            "AdaptiveAvgPool3d": adaptive.__name__,
-            "AdaptiveMaxPool3d": adaptive.__name__,
-            "AdaptiveAvgPool1d": pooling_1d.__name__,
-            "MaxPool1d": pooling_1d.__name__,
-            "AvgPool1d": pooling_1d.__name__,
-            "AvgPool2d": layers.__name__,
-            "AvgPool3d": layers.__name__,
-            "MaxPool2d": layers.__name__,
-            "MaxPool3d": layers.__name__,
-            "MaxUnpool2d": unpool.__name__,
-            "MaxUnpool3d": unpool.__name__,
+            "Pool": _native_pooling.__name__,
+            "Pool3d": _native_pooling.__name__,
+            "AdaptiveAvgPool2d": _legacy_pooling.__name__,
+            "AdaptiveMaxPool2d": _native_pooling.__name__,
+            "AdaptiveAvgPool3d": _native_pooling.__name__,
+            "AdaptiveMaxPool3d": _native_pooling.__name__,
+            "AdaptiveAvgPool1d": _native_pooling.__name__,
+            "MaxPool1d": _native_pooling.__name__,
+            "AvgPool1d": _native_pooling.__name__,
+            "AvgPool2d": _legacy_pooling.__name__,
+            "AvgPool3d": _legacy_pooling.__name__,
+            "MaxPool2d": _native_pooling.__name__,
+            "MaxPool3d": _native_pooling.__name__,
+            "MaxUnpool2d": _native_pooling.__name__,
+            "MaxUnpool3d": _native_pooling.__name__,
         }
         for name, signature in signatures.items():
             cls = getattr(pool_facade, name)
@@ -305,9 +321,9 @@ class TestPoolStructure(unittest.TestCase):
         for instance, expected in cases:
             restored = pickle.loads(pickle.dumps(instance))
             with self.subTest(instance=type(instance).__name__):
-                self.assertEqual(_summarize(instance)[1], expected)
+                self.assertEqual(_canonical_fields(_summarize(instance)[1]), _canonical_fields(expected))
                 self.assertIs(type(restored), type(instance))
-                self.assertEqual(_summarize(restored)[1], expected)
+                self.assertEqual(_canonical_fields(_summarize(restored)[1]), _canonical_fields(expected))
                 self.assertEqual(tuple(instance.state_dict()), ())
                 self.assertEqual(tuple(restored.state_dict()), ())
 
@@ -315,7 +331,7 @@ class TestPoolStructure(unittest.TestCase):
         instance = pool_facade.Pool(2)
         current_pickle = pickle.dumps(instance, protocol=0)
         legacy_pickle = current_pickle.replace(
-            ("c" + core_2d.__name__ + "\n").encode(),
+            ("c" + _native_pooling.__name__ + "\n").encode(),
             b"cjittor.pool\n",
             1,
         )
@@ -323,52 +339,35 @@ class TestPoolStructure(unittest.TestCase):
         self.assertIs(type(restored), pool_facade.Pool)
         self.assertEqual(restored.__dict__, instance.__dict__)
 
-    def _assert_factory_dispatch(
-        self, attribute, invoke, expected_args, expected_kwargs,
-    ):
+    def _assert_function_dispatch(self, attribute, invoke, expected):
         marker = object()
-        calls = []
-
-        class FakeFactory:
-            def __init__(self, *args, **kwargs):
-                calls.append((args, kwargs))
-
-            def __call__(self, value):
-                calls.append(value)
-                return marker
-
-        with mock.patch.object(pool_facade, attribute, FakeFactory):
+        with mock.patch.object(_entrypoints, attribute, return_value=marker) as target:
             self.assertIs(invoke(), marker)
-        self.assertEqual(calls, [(expected_args, expected_kwargs), "input"])
+        target.assert_called_once_with("input", **expected)
 
-    def test_functionals_dispatch_through_public_facade(self):
-        self._assert_factory_dispatch(
-            "Pool",
-            lambda: pool_facade.pool("input", 2, "maximum", 1, 3),
-            (2, 3, 1), {"op": "maximum"},
+    def test_functionals_dispatch_through_canonical_owner(self):
+        common = dict(kernel_size=(2, 2), stride=(3, 3), padding=(1, 1),
+                      return_indices=None, ceil_mode=False, count_include_pad=True)
+        self._assert_function_dispatch(
+            "_pool2d", lambda: pool_facade.pool("input", 2, "maximum", 1, 3),
+            dict(common, op="maximum"),
         )
-        self._assert_factory_dispatch(
-            "Pool3d",
-            lambda: pool_facade.pool3d("input", 2, "minimum", 1, 3),
-            (2, 3, 1), {"op": "minimum"},
+        self._assert_function_dispatch(
+            "_pool3d", lambda: pool_facade.pool3d("input", 2, "minimum", 1, 3),
+            dict(common, kernel_size=(2, 2, 2), stride=(3, 3, 3),
+                 padding=(1, 1, 1), op="minimum"),
         )
-        # pool.avg_pool2d forwards to jt.nn.avg_pool2d -- late-bound through
-        # the nn facade rather than through pool's own AvgPool2d, because the
-        # implementation lives there now.
-        calls = []
-        with mock.patch.object(nn, "avg_pool2d",
-                               lambda *a, **k: calls.append((a, k))):
+        with mock.patch.object(_average, "_avg_pool_nd") as target:
             pool_facade.avg_pool2d("input", 2, 3, 1, True, False)
-        self.assertEqual(calls, [(("input", 2, 3, 1, True, False), {})])
-        self._assert_factory_dispatch(
-            "MaxPool2d",
-            lambda: pool_facade.max_pool2d(kernel_size=2, input="input"),
-            (2, None, 0, None, None, False), {},
+        target.assert_called_once_with("input", 2, 2, 3, 1, True, False, "avg_pool2d")
+        self._assert_function_dispatch(
+            "_pool2d", lambda: pool_facade.max_pool2d(kernel_size=2, input="input"),
+            dict(common, stride=(2, 2), padding=(0, 0), op="maximum"),
         )
-        self._assert_factory_dispatch(
-            "MaxPool3d",
-            lambda: pool_facade.max_pool3d("input", 2, 3, 1, 1, True, True),
-            (2, 3, 1, 1, True, True), {},
+        self._assert_function_dispatch(
+            "_pool3d", lambda: pool_facade.max_pool3d("input", 2, 3, 1, 1, True, True),
+            dict(common, kernel_size=(2, 2, 2), stride=(3, 3, 3),
+                 padding=(1, 1, 1), return_indices=True, ceil_mode=True, op="maximum"),
         )
 
     def test_wrapper_constructors_dispatch_through_public_facade(self):
@@ -378,16 +377,16 @@ class TestPoolStructure(unittest.TestCase):
             def __init__(self, *args, **kwargs):
                 calls.append((args, kwargs))
 
-        with mock.patch.object(nn, "AvgPool2d", FakeCore):
+        with mock.patch.object(_legacy_pooling, "_AvgPool2d", FakeCore):
             average = pool_facade.AvgPool2d(2, 3, 1, True, False)
         self.assertIsInstance(average.layer, FakeCore)
         self.assertEqual(calls.pop(), ((2, 3, 1, True, False), {}))
 
         dilation_calls = []
         with (
-            mock.patch.object(pool_facade, "Pool", FakeCore),
+            mock.patch.object(_native_pooling, "Pool", FakeCore),
             mock.patch.object(
-                pool_facade, "_no_dilation",
+                _native_pooling, "_no_dilation",
                 side_effect=lambda value: dilation_calls.append(value) or True,
             ),
         ):
@@ -400,14 +399,14 @@ class TestPoolStructure(unittest.TestCase):
             "op": "maximum",
         }))
 
-        with mock.patch.object(nn, "AvgPool3d", FakeCore):
+        with mock.patch.object(_legacy_pooling, "_AvgPool3d", FakeCore):
             average3d = pool_facade.AvgPool3d(2, 3, 1, True, False)
         self.assertIsInstance(average3d.layer, FakeCore)
         self.assertEqual(calls.pop(), ((2, 3, 1, True, False), {}))
 
         with (
-            mock.patch.object(pool_facade, "Pool3d", FakeCore),
-            mock.patch.object(pool_facade, "_no_dilation", return_value=True),
+            mock.patch.object(_native_pooling, "Pool3d", FakeCore),
+            mock.patch.object(_native_pooling, "_no_dilation", return_value=True),
         ):
             maximum3d = pool_facade.MaxPool3d(2, 3, 1, 1, True, True)
         self.assertIsInstance(maximum3d._layer, FakeCore)
@@ -420,45 +419,26 @@ class TestPoolStructure(unittest.TestCase):
 
     def test_adaptive_and_triple_dependencies_are_dynamic(self):
         marker = object()
-        calls = []
-
-        class FakeMax:
-            def __init__(self, *args, **kwargs):
-                calls.append((args, kwargs))
-
-            def __call__(self, value):
-                calls.append(value)
-                return marker
 
         class FakeTensor:
             shape = (1, 1, 4, 4)
 
-        with mock.patch.object(pool_facade, "MaxPool2d", FakeMax):
-            result = pool_facade.AdaptiveMaxPool2d(2, return_indices=True)(
-                FakeTensor(),
-            )
+        x = FakeTensor()
+        with mock.patch.object(_adaptive_math, "max_pool2d", return_value=marker) as target:
+            result = pool_facade.AdaptiveMaxPool2d(2, return_indices=True)(x)
         self.assertIs(result, marker)
-        self.assertEqual(calls, [
-            ((), {"kernel_size": (2, 2), "stride": (2, 2),
-                  "return_indices": True}),
-            mock.ANY,
-        ])
-
-        calls.clear()
+        target.assert_called_once_with(kernel_size=(2, 2), stride=(2, 2),
+                                       return_indices=True, x=x)
 
         class FakeTensor3d:
             shape = (1, 1, 4, 4, 4)
 
-        with mock.patch.object(pool_facade, "MaxPool3d", FakeMax):
-            result = pool_facade.AdaptiveMaxPool3d(2, return_indices=True)(
-                FakeTensor3d(),
-            )
+        x3 = FakeTensor3d()
+        with mock.patch.object(_adaptive_math, "max_pool3d", return_value=marker) as target:
+            result = pool_facade.AdaptiveMaxPool3d(2, return_indices=True)(x3)
         self.assertIs(result, marker)
-        self.assertEqual(calls, [
-            ((), {"kernel_size": (2, 2, 2), "stride": (2, 2, 2),
-                  "return_indices": True}),
-            mock.ANY,
-        ])
+        target.assert_called_once_with(kernel_size=(2, 2, 2), stride=(2, 2, 2),
+                                       return_indices=True, x=x3)
 
         triple_calls = []
         original_triple = pool_facade._triple
@@ -467,7 +447,11 @@ class TestPoolStructure(unittest.TestCase):
             triple_calls.append(value)
             return original_triple(value)
 
-        with mock.patch.object(pool_facade, "_triple", traced_triple):
+        with (
+            mock.patch.object(_core3d_math, "_triple", traced_triple),
+            mock.patch.object(_adaptive_math, "_triple", traced_triple),
+            mock.patch.object(_unpool_math, "_triple", traced_triple),
+        ):
             pool_facade.Pool3d(2)
             pool_facade.AdaptiveAvgPool3d(3)
             pool_facade.AdaptiveMaxPool3d(4)
@@ -506,30 +490,25 @@ class TestPoolStructure(unittest.TestCase):
             (
                 pool_facade.AdaptiveAvgPool2d(2), jt.ones((1, 1, 4, 4)),
                 (
-                    ("output_size", 2), ("sh", 2), ("sw", 2),
-                    ("ksh", 2), ("ksw", 2),
+                    ("output_size", 2),
                 ),
             ),
             (
                 pool_facade.AdaptiveMaxPool2d(2), jt.ones((1, 1, 4, 4)),
                 (
                     ("output_size", 2), ("return_indices", False),
-                    ("sh", 2), ("sw", 2), ("ksh", 2), ("ksw", 2),
                 ),
             ),
             (
                 pool_facade.AdaptiveAvgPool3d(2), jt.ones((1, 1, 4, 4, 4)),
                 (
-                    ("output_size", (2, 2, 2)), ("sd", 2), ("sh", 2),
-                    ("sw", 2), ("ksd", 2), ("ksh", 2), ("ksw", 2),
+                    ("output_size", (2, 2, 2)),
                 ),
             ),
             (
                 pool_facade.AdaptiveMaxPool3d(2), jt.ones((1, 1, 4, 4, 4)),
                 (
                     ("output_size", (2, 2, 2)), ("return_indices", False),
-                    ("sd", 2), ("sh", 2), ("sw", 2), ("ksd", 2),
-                    ("ksh", 2), ("ksw", 2),
                 ),
             ),
         )
@@ -565,7 +544,7 @@ class TestPoolStructure(unittest.TestCase):
         self.assertIsNot(nn.AvgPool2d, pool_facade.AvgPool2d)
         self.assertIsNot(nn.AvgPool3d, pool_facade.AvgPool3d)
         self.assertIsNot(nn.AdaptiveAvgPool2d, pool_facade.AdaptiveAvgPool2d)
-        self.assertIsNot(nn.avg_pool2d, pool_facade.avg_pool2d)
+        self.assertIs(nn.avg_pool2d, pool_facade.avg_pool2d)
         self.assertIs(nn.functional.avg_pool3d, nn.avg_pool3d)
         module_classes = (
             "Pool", "Pool3d", "AdaptiveAvgPool2d", "AdaptiveAvgPool1d",
@@ -592,35 +571,26 @@ class TestPoolStructure(unittest.TestCase):
             for node in facade_tree.body
         ))
 
-        for module in _IMPLEMENTATION_MODULES:
+        for module in _LEGACY_MODULES:
             path = Path(module.__file__).resolve()
             tree = ast.parse(path.read_text(encoding="utf-8"))
             with self.subTest(module=module.__name__):
-                imports = [
-                    node for node in tree.body
-                    if isinstance(node, (ast.Import, ast.ImportFrom))
-                ]
-                self.assertTrue(imports)
-                backend_builders = {
-                    "jittor.pool.core_2d": (
-                        "jittor.backends.cuda.kernels.pooling.pool2d", "pool2d_cuda_options"),
-                    "jittor.pool.core_3d": (
-                        "jittor.backends.cuda.kernels.pooling.pool3d", "pool3d_cuda_options"),
-                }
-                self.assertTrue(all(
-                    (isinstance(node, ast.Import)
-                     and all(alias.name == "jittor" for alias in node.names))
-                    or (isinstance(node, ast.ImportFrom) and node.level == 0
-                        and len(node.names) == 1
-                        and ((node.module, node.names[0].name)
-                             == backend_builders.get(module.__name__)
-                             or (module.__name__ == "jittor.pool.core_2d"
-                                 and (node.module, node.names[0].name)
-                                 == ("jittor._runtime.dispatch", "try_dispatch"))))
-                    for node in imports
-                ))
+                self.assertFalse(any(isinstance(node, (ast.FunctionDef, ast.ClassDef))
+                                     for node in tree.body))
+                self.assertTrue(any(isinstance(node, ast.ImportFrom)
+                                    and node.module.startswith("jittor.nn.")
+                                    for node in tree.body))
                 self.assertNotIn("preserve_facade_origins", path.read_text())
                 self.assertNotIn("_JittorRuntimeProxy", path.read_text())
+
+        for module in (_entrypoints, _average, _adaptive_math, _core3d_math, _unpool_math):
+            tree = ast.parse(Path(module.__file__).read_text())
+            self.assertFalse(any(isinstance(node, ast.ClassDef) for node in tree.body))
+            self.assertFalse(any(
+                isinstance(node, ast.ImportFrom)
+                and (node.module or "").startswith("jittor.pool")
+                for node in ast.walk(tree)
+            ))
 
         repo_root = facade_path.parents[3]
         if not (repo_root / "pyproject.toml").is_file():
@@ -629,6 +599,7 @@ class TestPoolStructure(unittest.TestCase):
 
         packages = find_packages(where=str(repo_root / "python"))
         self.assertIn("jittor.pool", packages)
+        self.assertIn("jittor.nn.functional.pooling", packages)
         self.assertNotIn("jittor._pool", packages)
 
 

@@ -6,7 +6,7 @@
 # ***************************************************************
 """Reference tests for ``Pool3d`` / ``MaxPool3d``.
 
-The 3D pooling kernels in ``jittor/pool/core_3d.py`` are C++ sources built by
+The 3D pooling kernels in ``jittor/nn/functional/pooling/core_3d.py`` are C++ sources built by
 f-string interpolation, with four independent copies of the loop nest (CPU and
 CUDA, forward and backward).  They are only exercised through
 ``jt.nn.MaxPool3d`` / ``jt.nn.AvgPool3d``, so this module pins each copy

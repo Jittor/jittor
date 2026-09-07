@@ -243,7 +243,7 @@ print("RESULT=" + json.dumps({
                 json.loads(native_line[len("RESULT="):]),
                 {
                     "torch_installed": False,
-                    "median_owner": "jittor.misc.tensor_ops",
+                    "median_owner": "jittor.ops.sorting",
                     "triton_is_shim": True,
                 },
             )

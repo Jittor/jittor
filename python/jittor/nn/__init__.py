@@ -15,27 +15,6 @@ import numpy as np
 
 from jittor.misc import CTCLoss
 from jittor.optim import *
-from jittor.pool import (
-    AdaptiveAvgPool1d,
-    AdaptiveAvgPool3d,
-    AdaptiveMaxPool2d,
-    AdaptiveMaxPool3d,
-    AvgPool1d,
-    AvgPool3d,
-    MaxPool1d,
-    MaxPool2d,
-    MaxPool3d,
-    MaxUnpool2d,
-    MaxUnpool3d,
-    Pool,
-    Pool3d,
-    max_pool2d,
-    max_pool3d,
-    pool,
-    pool2d,
-    pool3d,
-    pool_use_code_op,
-)
 from jittor_utils import LOG
 
 from . import backends as backends
@@ -77,3 +56,10 @@ del _record_install
 # implementation details used during facade construction, not facade exports.
 globals().pop("_bindings", None)
 globals().pop("_cuda_inference", None)
+
+# Keep the historical jt.pool namespace after its canonical NN owners are ready.
+from jittor import pool as _legacy_pool
+from .functional.pooling._state import PoolingStateView as _PoolingStateView
+import sys as _sys
+_sys.modules[__name__].__class__ = _PoolingStateView
+del _legacy_pool, _PoolingStateView, _sys

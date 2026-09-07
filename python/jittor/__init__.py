@@ -147,6 +147,8 @@ with _lock.lock_scope():
 from ._core import api as _core_api
 from ._core.flags import _core_flags
 _publish(globals(), _core_api, _core_api.__all__)
+import jittor.ops as ops
+from .backends.cuda.kernels.misc import tensor_ops as _cuda_tensor_kernels
 from .benchmarking import BenchmarkResult, benchmark
 
 # The runtime installs its monkeypatches from here on, in a fixed order that

@@ -5,7 +5,7 @@ import numpy as np
 
 from jittor._runtime.dispatch import optional_kernel, register_kernel
 from jittor._runtime.backend_libraries import get_library_ops
-from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
+from jittor._core.flags import _output_requires_grad, _stop_grad_outputs
 
 
 _CUDA_CODE_BACKENDS = ("cuda", "rocm_legacy", "corex_legacy")

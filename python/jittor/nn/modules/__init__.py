@@ -4,7 +4,7 @@
 
 from jittor import Module
 from jittor.misc import CTCLoss
-from jittor.pool import (
+from .pooling import (
     AdaptiveAvgPool1d,
     AdaptiveAvgPool3d,
     AdaptiveMaxPool2d,

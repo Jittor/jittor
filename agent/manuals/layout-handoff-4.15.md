@@ -40,7 +40,12 @@ JITTOR_HOME 使用独立 acl-move-cuda 缓存，不能与 CPU-only 的收集数�
 Module/Function/GradHooker 环通过调用期依赖解除，flags/var/hooks 不向包根发布同名
 对象。CPU/CUDA/shim 短运行通过，导入循环模块163；按用户最新要求，完整门禁与新
 wheel 留下一较大布局阶段统一验收，见 `agent/results/2026-09-07-native-core-packages.md`。
-其余 misc/pool/build/contrib 和根目录收缩尚未完成，不要因此把5.26标为已合并。
+misc/pool 后续也已迁代码：ops 包保留原生算子访问，misc 的六个子模块只做旧别名；
+tensor_ops 的127定义分到15个职责owner。pool数学归nn.functional.pooling，参数模块归
+nn.modules；旧AdaptiveAvgPool2d数值规则与类名保留，pool_use_code_op共用一份状态。
+CPU/CUDA/shim短检查通过，导入环158；完整门禁与wheel仍待较大阶段统一验收，见
+`agent/results/2026-09-07-ops-pooling-layout.md`。其余 build/contrib、根目录收缩及超长
+Python文件尚未完成，不要因此把5.26标为已合并。
 
 2026-09-07 后续执行记录：coord 已从 `4fbcaab64` 同步（实际落后 126 提交，无冲突）。
 正在修复本节前置：preflight 接收实际 BuildConfig，CPU/ACL/ROCm 不要求可选归档；

@@ -192,7 +192,7 @@ class TestCleanupStructure(unittest.TestCase):
         tuple_helpers = frozenset(
             {
                 ("backends/acl/kernels/ops/conv_op.py", "_ntuple"),
-                ("python/jittor/misc/tensor_ops.py", "_ntuple"),
+                ("python/jittor/ops/tuples.py", "_ntuple"),
             }
         )
         # StochasticDepth / _make_divisible / SqueezeExcitation /

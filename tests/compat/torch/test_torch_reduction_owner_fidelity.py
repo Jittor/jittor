@@ -52,7 +52,7 @@ TENSOR_OWNED_METHOD_ONLY = ("masked_scatter", "masked_scatter_", "unfold",
                             "addcmul", "addcdiv")
 #: Already had a final owner elsewhere; install only re-exports it.
 REEXPORTED = {
-    "diagonal": "jittor.misc.tensor_ops",
+    "diagonal": "jittor.ops.shape_ops",
     "masked_select": "jittor.compat.torch.installers.numerical",
     "softmax": "jittor.compat.torch.installers.numerical",
     "log_softmax": "jittor.compat.torch.installers.numerical",

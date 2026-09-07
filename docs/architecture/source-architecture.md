@@ -60,8 +60,9 @@ python/
 │   ├── linalg/                  # decompositions, solving, norms and contractions
 │   ├── distributions/           # probability families and shared constraints
 │   ├── init/                    # initialization families and shared fan/gain rules
-│   ├── misc/                    # general tensor and shape operations
-│   ├── pool/                    # pooling functions and modules
+│   ├── ops/                     # tensor, indexing, reduction and shape implementations
+│   ├── misc/                    # deprecated same-object tensor API facade
+│   ├── pool/                    # deprecated same-object pooling API facade
 │   ├── optim/                   # optimizer facade and algorithm modules
 │   ├── sparse/                  # COO tensors and sparse convolution
 │   ├── compat/
@@ -101,11 +102,32 @@ their toolchain is unavailable.
 
 ### Miscellaneous and pooling APIs
 
-`jittor.misc` groups tensor, shape, and composition operations. `jittor.pool`
-owns pooling functions and modules. New code is placed by semantic ownership,
-not by the size of the destination file. Circular imports are resolved by
-narrowing dependencies or moving shared primitives to the lower-level owner,
-not through mutable proxy objects.
+`jittor.ops` owns tensor, shape, indexing and composition operations. Historical
+`jittor.misc` imports remain deprecated same-object facades, including the old
+submodule paths. Public names and pickle globals resolve to the canonical
+implementations; there is no second editable mathematics tree under `misc`.
+
+Pooling mathematics and parameter validation live in the normal
+`nn.functional.pooling` package, separated into average, 2-D/3-D core,
+adaptive, 1-D and unpooling owners. `nn.modules.pooling` stores constructor
+parameters and calls these stateless implementations; functional calls do not
+construct a temporary Module. CPU/CUDA generated source remains single-source
+with backend launch builders at the existing registration boundaries.
+
+`jittor.pool` and its historical child modules are deprecated re-exports.
+`nn.modules.pooling_legacy` keeps the three historical classes with their
+original class names: `AvgPool2d` and `AvgPool3d` retain their forwarding layer
+state for old pickles, while `AdaptiveAvgPool2d` retains its fixed-window
+algorithm. The latter intentionally differs from the current NN overlapping-bin
+algorithm; a layout move does not silently change its numerical rule. Adaptive
+window intermediates are function locals, not persistent Module state.
+
+The legacy `pool_use_code_op` switch has one owner in
+`nn.functional.pooling._state`. `jt.pool`, `jt.nn` and the functional pooling
+package expose live reads/writes of that same value, including temporary
+attribute override/restore. Backend execution never reads a copied facade value.
+NN constructs its functional and module owners before loading the old facade,
+so the compatibility import does not create a bootstrap cycle.
 
 `jittor.sparse` owns both coordinate-format sparse tensors and sparse neural
 network kernels in separate child modules. The historical `jittor.nn.sparse`
@@ -115,7 +137,7 @@ name is a same-object alias of `jittor.sparse.convolution`; `jittor.nn` and
 `jittor.autograd` owns functional automatic differentiation. `jittor.fft` owns
 the differentiable FFT/shift/frequency namespace shared by native Jittor and
 Torch mode. Concatenation and
-indexing live in `jittor.misc`, pooling in `jittor.pool`, optimized softmax in
+indexing live in `jittor.ops`, pooling in `jittor.nn`, optimized softmax in
 `jittor.backends.cuda.kernels.nn`, and weight normalization in `jittor.nn.utils`. Historical
 root spellings are import aliases only; they do not retain physical source
 files or wrapper implementations.
