@@ -220,6 +220,25 @@ pool_size = min(16, max(int(mem_gib // 3), 1))
 三个文件属于别人永不提交：`agent/manuals/README.md`、`tests/core/test_setitem.py`、
 `agent/results/2026-08-12-repository-modernization-review.md`。
 
+## 7bis. 在哪个工作树做
+
+**`refactor/coord`。** 布局收尾是协调者性质的任务——它要独占整棵树、要停掉别的分区的
+活、要改看板与计划，这正是 `coord` 的角色；`pyops` 是普通功能分区，我 2026-09-07 在
+它里面做只是因为当时正在那儿修 `9.01`，不是因为它该在那儿。
+
+`AGENTS.md` 没有成文规定哪个分区做哪类任务（它只说 worktree 放在
+`$JITTOR_LAB_ROOT/worktrees/`，而实际这十二个在 `refactor/<分区名>/`），所以这一条是
+按角色判断的，不是照抄规范。
+
+第一步：`git fetch origin 2.0-refactor && git rebase origin/2.0-refactor`。
+`coord` 停在 2026-09-06 12:33，**落后 125 个提交**；本文档、
+`agent/scripts/check_core_includes.py` 与五刀搬动都在那之后，rebase 之后才会有。
+
+**不要因为「`pyops` 的缓存是热的」而留在 `pyops`。** 那个理由很弱：搬动全部已推到
+`2.0-refactor`，任何工作树 rebase 就能拿到；`coord` 只是要付一次全量重建来预热，
+而那本来就是第 0 节要做的事——**preflight 那条前置只能靠冷构建来验**，热缓存下
+`build_core` 整步跳过、它根本不跑。
+
 ## 8. 环境
 
 ```
