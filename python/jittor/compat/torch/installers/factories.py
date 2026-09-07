@@ -86,6 +86,8 @@ del _name, _api
 
 
 def _publish_factory(root, name, implementation):
+    from ..frontend import frontend_factory
+    implementation = frontend_factory(implementation, root.Var)
     api = FACTORY_APIS.get(name)
     if api is None:
         setattr(root, name, implementation)
@@ -248,6 +250,8 @@ def _wrap_constructors(g):
                     out._jittor_torch_force_cpu = True
                 except (AttributeError, TypeError) as exc:
                     swallowed("torch/installers/factories.py wrapped: out._jittor_torch_ext_mutable = True", exc)
+                if g is not jt:
+                    out.requires_grad_(_requires_grad)
                 if _requires_grad:
                     out.requires_grad_(True)
                     _torch_register_leaf(out)
@@ -265,6 +269,8 @@ def _wrap_constructors(g):
                 out._jittor_torch_ext_mutable = True
             except (AttributeError, TypeError) as exc:
                 swallowed("torch/installers/factories.py wrapped: out._jittor_torch_ext_mutable = True", exc)
+            if g is not jt:
+                out.requires_grad_(_requires_grad)
             if _requires_grad:
                 out.requires_grad_(True)
                 _torch_register_leaf(out)

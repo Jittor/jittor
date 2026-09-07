@@ -341,7 +341,7 @@ def _install_reductions(g):
     measurably different behaviour (``torch.var(x, axis=0)`` reduced over
     everything while ``x.var(axis=0)`` reduced over axis 0).
     """
-    Var = jt.Var
+    Var = g.Var
 
     # jittor's own argmax returns (index, value) and its max(dim) returns
     # values only, so torch's contract needs the compat objects on both sides.
@@ -443,7 +443,8 @@ def install(ctx):
     g.enable_grad = lambda func=None: _GradDecoratorCtx(_orig_enable_grad, func)
     g.inference_mode = lambda func=None: _GradDecoratorCtx(_orig_no_grad, func)
 
-    Var = jt.Var
+    Var = ctx.state["Var"]
+    from ...frontend import frontend_factory
     _native_index_select = g.index_select
     def _index_select(input, dim, index, *, out=None):
         result = _native_index_select(input, dim, index)
@@ -477,7 +478,7 @@ def install(ctx):
             return jt.array(data).float32()
     class Tensor(metaclass=_TensorMeta):
         pass
-    g.Tensor = Tensor
+    g.Tensor = Var if g is not ctx.native_backend else Tensor
     # torch's typed tensor classes (FloatTensor/LongTensor/...). jittor is dtype-typed
     # at the data level (no tensor subclasses), but we must NOT just alias them all to
     # Var: that makes isinstance(any_var, torch.LongTensor) always True, so libraries
@@ -505,6 +506,7 @@ def install(ctx):
             else:
                 v = jt.zeros(tuple(int(a) for a in args))  # from sizes
             return v.cast(cls._jdtype)
+    _TypedTensorMeta.__call__ = frontend_factory(_TypedTensorMeta.__call__, Var)
     for _tn, _dt in _TYPED_TENSOR_DTYPE.items():
         setattr(g, _tn, _TypedTensorMeta(_tn, (), {"_jdtype": _dt}))
 
@@ -568,11 +570,14 @@ def install(ctx):
         elif _device_is_cuda(device):
             _set_use_cuda()
             v = _make_cuda_resident(v, force=True)
+        if g is not ctx.native_backend:
+            v.requires_grad_(bool(requires_grad))
         if requires_grad:
             v.requires_grad_(True)
             _torch_register_leaf(v)
         v._jt_plain_tensor = True   # see _torch_style_registration (core_api)
         return v
+    tensor = frontend_factory(tensor, Var)
     g.tensor = tensor
 
     def as_tensor(data, dtype=None, device=None):
@@ -585,17 +590,19 @@ def install(ctx):
                 return _make_cuda_resident(r, force=True)
             return r
         return tensor(data, dtype=dtype, device=device)
-    g.as_tensor = as_tensor
+    g.as_tensor = frontend_factory(as_tensor, Var)
 
     def from_numpy(arr, *, device=None):
         v = _array_keep_dtype(arr)
+        if g is not ctx.native_backend:
+            v.requires_grad_(False)
         if _device_is_cpu(device):
             return _make_cpu_resident(v)
         if _device_is_cuda(device):
             _set_use_cuda()
             return _make_cuda_resident(v, force=True)
         return v
-    g.from_numpy = from_numpy
+    g.from_numpy = frontend_factory(from_numpy, Var)
 
     def frombuffer(buffer, *, dtype, count=-1, offset=0, requires_grad=False):
         import numpy as _np
@@ -621,7 +628,7 @@ def install(ctx):
             v.requires_grad_(True)
             _torch_register_leaf(v)
         return v
-    g.frombuffer = frombuffer
+    g.frombuffer = frontend_factory(frombuffer, Var)
 
     Size = _TorchSize
     g.Size = Size

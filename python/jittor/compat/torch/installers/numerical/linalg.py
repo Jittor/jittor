@@ -6,8 +6,16 @@ def eye(n, m=None, dtype=None, **kwargs):
         _dtype_to_str,
     )
     shape = (int(n), int(n)) if m is None else (int(n), int(m))
+    import jittor as jt
     import jittor.init as _init
-    return _init.eye(shape, _dtype_to_str(dtype) or "float32")
+    from ...frontend import tensor_frontend
+    from ...tensor_state import compatibility_owner
+    target = compatibility_owner(jt)
+    with tensor_frontend(target.Var):
+        result = _init.eye(shape, _dtype_to_str(dtype) or "float32")
+        if target is not jt:
+            result.requires_grad = False
+        return result
 
 
 def pairwise_distance(x1, x2, p=2.0, eps=1e-6, keepdim=False):

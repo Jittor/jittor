@@ -226,7 +226,13 @@ def install(ctx):
     except (AttributeError, TypeError) as exc:
         swallowed("torch/installers/core.py install: import jittor.nn as _jt_nn_top", exc)
     ctx.state["dtypes"] = _DTYPE_OBJS
-    ctx.state["Var"] = jt.Var
+    if g is ctx.native_backend:
+        ctx.state["Var"] = jt.Var
+    else:
+        from ..frontend import make_tensor_type
+        tensor_type = make_tensor_type(ctx.native_backend)
+        ctx.state["Var"] = tensor_type
+        g.Var = g.Tensor = tensor_type
 
 
 def install_misc(ctx):

@@ -60,6 +60,7 @@ def _poisson_nll(input, target, log_input=True, full=False, size_average=None,
     return loss.mean() if reduction == "mean" else (loss.sum() if reduction == "sum" else loss)
 
 def _install_functional(ctx):
+    nn = ctx.target_namespace.nn
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
     Var = ctx.state["Var"]

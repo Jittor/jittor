@@ -6,9 +6,18 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # (str subclass), so `t.dtype in {torch.float16, ...}` and dict keys work.
     from importlib import import_module as _import_module
     _owner = _import_module(__package__)
+    _NativeVar = _owner.jt.Var
+
+    def _type_attribute(name):
+        # A frontend subclass inherits C descriptors and numeric slots; reading
+        # only its own __dict__ silently misses the native implementation.
+        for base in Var.__mro__:
+            if name in vars(base):
+                return vars(base)[name]
+        return None
     if _DTYPE_OBJS is not None and not getattr(Var, "_dtype_wrapped", False):
         try:
-            _native_desc = Var.__dict__.get("dtype")  # C getset_descriptor
+            _native_desc = _type_attribute("dtype")  # C getset_descriptor
             if _native_desc is not None:
                 def _dtype_get(self, _d=_native_desc):
                     name = str(_d.__get__(self, type(self)))
@@ -19,13 +28,13 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             _owner.swallowed("torch/installers/tensor.py _install_tensor_methods: _native_desc = Var.__dict__.get('dtype') # C getset_des...", exc)
 
     if not hasattr(Var, "_vj_native_data_descriptor"):
-        native_data_descriptor = Var.__dict__.get("data")
+        native_data_descriptor = _type_attribute("data")
         if native_data_descriptor is not None:
             Var._vj_native_data_descriptor = native_data_descriptor
     _native_data_descriptor = getattr(Var, "_vj_native_data_descriptor", None)
 
     def _numpy_data_value(value):
-        if isinstance(value, Var):
+        if isinstance(value, _NativeVar):
             return value.numpy()
         if isinstance(value, tuple):
             return tuple(_numpy_data_value(item) for item in value)
@@ -35,7 +44,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     def _write_data_owner_numpy(view, value, slices):
         owner = getattr(view, "_torch_data_owner", None)
-        if not isinstance(owner, Var) or _native_data_descriptor is None:
+        if not isinstance(owner, _NativeVar) or _native_data_descriptor is None:
             return False
         target = _native_data_descriptor.__get__(owner, Var)
         for index in getattr(view, "_torch_data_path", ()):
@@ -76,7 +85,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         """Write a detached ``.data`` alias back without leaving the device."""
 
         owner = getattr(view, "_torch_data_owner", None)
-        if not isinstance(owner, Var):
+        if not isinstance(owner, _NativeVar):
             return False
 
         view_path = getattr(view, "_torch_data_path", ())
@@ -87,7 +96,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             bases.append((target, index))
             target = _orig_getitem(target, index)
 
-        updated = value if isinstance(value, Var) else _owner.jt.array(value)
+        updated = value if isinstance(value, _NativeVar) else _owner.jt.array(value)
         if updated.numel() == 1 and target.numel() != 1:
             updated = updated.broadcast(target.shape)
         for base, index in reversed(bases):
@@ -112,7 +121,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     def _set_data_owner(view, slices, value):
         owner = getattr(view, "_torch_data_owner", None)
-        if not isinstance(owner, Var):
+        if not isinstance(owner, _NativeVar):
             return False
         if _data_owner_uses_device(owner) and _is_basic_data_index(slices):
             return _assign_data_owner(view, value, (slices,))
@@ -133,8 +142,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 return self
             try:
                 mask = slices
-                if isinstance(mask, Var) and mask.dtype in ("bool", "uint8") \
-                        and isinstance(value, Var) \
+                if isinstance(mask, _NativeVar) and mask.dtype in ("bool", "uint8") \
+                        and isinstance(value, _NativeVar) \
                         and len(mask.shape) < len(self.shape):
                     # Region selected by a lower-rank bool mask has shape
                     # (N, *self.shape[mask.ndim:]). Drop only provably redundant
@@ -172,7 +181,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             target.stop_grad()
         return self
     def _copy_(self, other, non_blocking=False):
-        src = other if isinstance(other, Var) else _owner.jt.array(other)
+        src = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
         return _ip(self, src.cast(str(self.dtype)) if hasattr(self, "dtype") else src)
     if not hasattr(Var, "copy_"):
         Var.copy_ = _copy_
@@ -283,15 +292,15 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.clip_ = Var.clamp_
 
     def _torch_ne(input, other):
-        a = input if isinstance(input, Var) else _owner.jt.array(input)
-        b = other if isinstance(other, Var) else _owner.jt.array(other)
+        a = input if isinstance(input, _NativeVar) else _owner.jt.array(input)
+        b = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
         if str(a.dtype) == "bool":
             a = a.int32()
-        if isinstance(b, Var) and str(b.dtype) == "bool":
+        if isinstance(b, _NativeVar) and str(b.dtype) == "bool":
             b = b.int32()
         diff = (a - b).abs()
         out = diff > 0
-        if "float" in str(a.dtype) or (isinstance(b, Var) and "float" in str(b.dtype)):
+        if "float" in str(a.dtype) or (isinstance(b, _NativeVar) and "float" in str(b.dtype)):
             try:
                 out = out | _owner.jt.isnan(a) | _owner.jt.isnan(b)
             except _owner.EXPECTED as exc:
@@ -456,17 +465,17 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
         def _torch_getitem(self, slices):
             out = _orig_getitem(self, slices)
-            if isinstance(out, Var) and _owner._var_has_cpu_residency_hint(self):
+            if isinstance(out, _NativeVar) and _owner._var_has_cpu_residency_hint(self):
                 out = _owner._mark_cpu_like(out, self)
             # The core owns basic-index views and flattens them to their root.
             # Complete that record for Torch-only slice spellings; advanced
             # indexing stays a copy. No Python parent chain is needed.
-            if isinstance(out, Var) and _is_basic_index(slices):
+            if isinstance(out, _NativeVar) and _is_basic_index(slices):
                 if not out._is_view():
                     out._set_view_of(self, slices)
                 try:
                     data_owner = getattr(self, "_torch_data_owner", None)
-                    if isinstance(data_owner, Var):
+                    if isinstance(data_owner, _NativeVar):
                         out._torch_data_owner = data_owner
                         out._torch_data_path = getattr(
                             self, "_torch_data_path", ()
@@ -519,7 +528,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             view._torch_data_path = ()
             return view
         def _data_set(self, value):
-            src = value if isinstance(value, Var) else _owner.jt.array(value)
+            src = value if isinstance(value, _NativeVar) else _owner.jt.array(value)
             was_trainable = not self.is_stop_grad()
             self.assign(src)
             if was_trainable:
@@ -552,8 +561,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # stop_grad (identical semantics), but we additionally register the Var as a
     # leaf so the no-optimizer loss.backward() path (below) can find it. This is
     # behavior-preserving for the getter/setter; it only adds leaf bookkeeping.
-    if not isinstance(Var.__dict__.get("requires_grad"), property):
-        _native_requires_grad = Var.__dict__["requires_grad"]
+    if not isinstance(_type_attribute("requires_grad"), property):
+        _native_requires_grad = _type_attribute("requires_grad")
         def _rg_get(self):
             return bool(_native_requires_grad.__get__(self, Var))
         def _rg_set(self, v):
@@ -566,7 +575,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 fsdp_entry.requires_grad = v
                 for peer in (getattr(fsdp_entry, "shard", None),
                              getattr(fsdp_entry, "full_param", None)):
-                    if not isinstance(peer, Var) or peer is self:
+                    if not isinstance(peer, _NativeVar) or peer is self:
                         continue
                     _native_requires_grad.__set__(peer, v)
                     if v:
@@ -575,7 +584,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                     flat = getattr(fsdp_state, "true_fsdp_flat_shard", None)
                     any_trainable = any(getattr(entry, "requires_grad", True)
                                         for entry in fsdp_state.true_fsdp_params)
-                    if isinstance(flat, Var):
+                    if isinstance(flat, _NativeVar):
                         _native_requires_grad.__set__(flat, any_trainable)
                         if any_trainable:
                             _register_leaf(flat)
@@ -618,7 +627,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             if grads_list is None:
                 grads_list = pg["grads"] = [None] * len(pg["params"])
             for i, p in enumerate(pg["params"]):
-                if not isinstance(p, Var) or not p.requires_grad:
+                if not isinstance(p, _NativeVar) or not p.requires_grad:
                     continue
                 g = grad_by_id.get(id(p))
                 if g is None:
@@ -630,9 +639,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                     continue
                 g = g.stop_grad()
                 existing = grads_list[i] if i < len(grads_list) else None
-                if not isinstance(existing, Var):
+                if not isinstance(existing, _NativeVar):
                     existing = getattr(p, "_torch_grad", None)
-                if isinstance(existing, Var) and list(existing.shape) == list(g.shape):
+                if isinstance(existing, _NativeVar) and list(existing.shape) == list(g.shape):
                     if not zero:
                         g = g + existing
                     existing.update(g)
@@ -674,7 +683,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         # manual chain rule from a custom head -- silently computed the
         # UNWEIGHTED gradient d(sum(y))/dx and trained on the wrong numbers.
         if gradient is not None:
-            grad_var = gradient if isinstance(gradient, Var) else _owner.jt.array(gradient)
+            grad_var = gradient if isinstance(gradient, _NativeVar) else _owner.jt.array(gradient)
             if tuple(grad_var.shape) != tuple(self.shape):
                 try:
                     grad_var = grad_var.broadcast(self.shape)
@@ -731,7 +740,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         for o in opts:
             for pg in getattr(o, "param_groups", []):
                 for p in pg.get("params", []):
-                    if not isinstance(p, Var) or not p.requires_grad:
+                    if not isinstance(p, _NativeVar) or not p.requires_grad:
                         continue
                     if _fsdp2_backward is not None and _fsdp2_backward.is_fsdp_managed_param(p):
                         opt_ids.add(id(p))
@@ -740,7 +749,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                     opt_ids.add(id(p))
         if _fsdp2_backward is not None and fsdp_opts:
             for p in _fsdp2_backward.collect_fsdp_full_params_for_backward(fsdp_opts):
-                if isinstance(p, Var) and p.requires_grad:
+                if isinstance(p, _NativeVar) and p.requires_grad:
                     leaf_map.setdefault(id(p), p)
                     opt_ids.add(id(p))
         tensor_state = _owner.get_tensor_state(_owner.jt)
@@ -748,7 +757,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         retained_ids = set()
         if retained:
             for v in list(retained.values()):
-                if isinstance(v, Var) and v.requires_grad:
+                if isinstance(v, _NativeVar) and v.requires_grad:
                     leaf_map.setdefault(id(v), v)
                     retained_ids.add(id(v))
         if opts:
@@ -760,12 +769,12 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 keep_non_parameters=True,
             )
             for v in list(tensor_state.leaf_params.values()):
-                if isinstance(v, Var) and v.requires_grad:
+                if isinstance(v, _NativeVar) and v.requires_grad:
                     leaf_map.setdefault(id(v), v)
         else:
             _owner._torch_prune_leaf_registry()
             for v in list(tensor_state.leaf_params.values()):
-                if isinstance(v, Var) and v.requires_grad:
+                if isinstance(v, _NativeVar) and v.requires_grad:
                     leaf_map.setdefault(id(v), v)
         if not leaf_map:
             return None
@@ -953,7 +962,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 ds = a.name
             elif isinstance(a, _owner.device):
                 dev = a
-            elif isinstance(a, Var):
+            elif isinstance(a, _NativeVar):
                 # .to(other) copies other's dtype AND device.
                 ds = str(a.dtype)
                 dev = a.device
@@ -998,15 +1007,12 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         # EXPLICIT_REQUIRES_GRAD, so apply that policy at this API boundary;
         # native Jittor callers retain the native behavior.
         policy = getattr(getattr(_owner.jt, "autograd", None), "get_policy", None)
-        if policy is not None:
-            try:
-                if policy().stop_outputs_when_inputs_stopped:
-                    # stop_grad() returns the stopped view; retaining the
-                    # original result here leaves torch detach() reporting
-                    # requires_grad=True on runtimes where it is functional.
-                    out = out.stop_grad()
-            except (AttributeError, TypeError):
-                pass
+        if Var is not _NativeVar or (
+                policy is not None and policy().stop_outputs_when_inputs_stopped):
+            # This Python method runs after the native binding's policy scope
+            # has restored its caller. Its frontend owner determines detach's
+            # contract even when the surrounding native policy is unchanged.
+            out = out.stop_grad()
         if getattr(self, "_torch_0d", False):
             out._torch_0d = True
         return out
@@ -1112,13 +1118,13 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         return _owner.jt.array(_owner.np.asarray([value], dtype=_owner.np.complex64))
 
     def _make_promoting_op(opname, reflected):
-        native = Var.__dict__.get(opname)
+        native = _type_attribute(opname)
         if native is None:
             return None
         def _op(self, other):
             if isinstance(other, (complex, _owner.np.complexfloating)):
                 other = _complex_scalar_var(other)
-            if isinstance(other, Var):
+            if isinstance(other, _NativeVar):
                 da, db = str(self.dtype), str(other.dtype)
                 if da == db and not da.startswith("uint"):
                     return native(self, other)
@@ -1127,7 +1133,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 b = other if db == res else other.cast(res)
                 out = native(a, b)
                 # native may still mis-infer (unsigned -> signed); fix it up.
-                if isinstance(out, Var) and str(out.dtype) != res:
+                if isinstance(out, _NativeVar) and str(out.dtype) != res:
                     out = out.cast(res)
                 return out
             # torch defers numeric ops against a Python sequence to the sequence's
@@ -1139,7 +1145,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             if isinstance(other, (list, tuple)):
                 return NotImplemented
             out = native(self, other)
-            if isinstance(other, (bool, int, float)) and isinstance(out, Var):
+            if isinstance(other, (bool, int, float)) and isinstance(out, _NativeVar):
                 expected = _owner._dtype_to_str(g.result_type(self, other))
                 if expected is not None and str(out.dtype) != expected:
                     out = out.cast(expected)
@@ -1181,13 +1187,13 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             return "complex64"
         return None
     def _make_truediv(opname):
-        native = Var.__dict__.get(opname)
+        native = _type_attribute(opname)
         if native is None:
             return None
         def _op(self, other):
             if isinstance(other, (complex, _owner.np.complexfloating)):
                 other = _complex_scalar_var(other)
-            if isinstance(other, Var):
+            if isinstance(other, _NativeVar):
                 da, db = str(self.dtype), str(other.dtype)
                 if da == db and da.startswith(("float", "bfloat", "complex")):
                     return native(self, other)
@@ -1195,7 +1201,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 a = self if da == tgt else self.cast(tgt)
                 b = other if db == tgt else other.cast(tgt)
                 out = native(a, b)
-                if isinstance(out, Var) and str(out.dtype) != tgt:
+                if isinstance(out, _NativeVar) and str(out.dtype) != tgt:
                     out = out.cast(tgt)
                 return out
             # python sequence: defer to it (torch returns NotImplemented), matching
@@ -1215,7 +1221,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 a = self if src_dt == calc_dt else self.cast(calc_dt)
                 b = _owner.jt.array(other, dtype=calc_dt) if use_wide else other
                 out = native(a, b)
-                if isinstance(out, Var) and str(out.dtype) != tgt:
+                if isinstance(out, _NativeVar) and str(out.dtype) != tgt:
                     out = out.cast(tgt)
                 return out
             return native(self, other)

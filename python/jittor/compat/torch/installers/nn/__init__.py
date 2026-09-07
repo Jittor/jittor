@@ -68,9 +68,11 @@ from .parity import install_parity
 
 
 def install(ctx):
+    from ...nn_frontend import prepare_nn_namespace
+    target_nn = prepare_nn_namespace(ctx)
     _install_functional(ctx)
     install_attention(ctx)
-    _install_nn_extras(nn, ctx.registry)
-    ctx.registry.module_map["torch.nn"] = nn
-    if hasattr(nn, "functional"):
-        ctx.registry.module_map["torch.nn.functional"] = nn.functional
+    _install_nn_extras(target_nn, ctx.registry)
+    ctx.registry.module_map["torch.nn"] = target_nn
+    if hasattr(target_nn, "functional"):
+        ctx.registry.module_map["torch.nn.functional"] = target_nn.functional

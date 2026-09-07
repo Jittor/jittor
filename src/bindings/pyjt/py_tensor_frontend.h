@@ -18,9 +18,12 @@ void reset_tensor_frontend_type(PyObject* token);
 // A plain native Var never overrides its caller's explicit frontend choice.
 class PyTensorFrontendScope {
     PyObject* token_ = nullptr;
+    int previous_policy_ = -1;
+    void apply_policy(PyObject* type);
+    void restore() noexcept;
     void select(PyObject* self, PyObject** args, int64 count, bool scan_sequences);
 public:
-    PyTensorFrontendScope() noexcept = default;
+    PyTensorFrontendScope();
     explicit PyTensorFrontendScope(PyObject* candidate);
     explicit PyTensorFrontendScope(PyTypeObject* type);
     PyTensorFrontendScope(PyObject* self, PyObject** args, int64 count,

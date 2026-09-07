@@ -240,7 +240,9 @@ def install(torch, strict=True):
             raise RuntimeError(
                 "torch namespace changed after a failed compatibility install"
             )
-        _restore_namespace(pending["staged"])
+        # Required-step markers are rolled back, so retry reconstructs their
+        # modules and types. Republishing the abandoned graph here would make
+        # fresh owners collide with stale modules from the failed attempt.
         before = pending["before"]
     else:
         before = _torch_namespace_snapshot()
@@ -257,6 +259,7 @@ def install(torch, strict=True):
     tensor_state_before = None
     tensor_state = None
     markers_before = dict(context.markers)
+    published_before = dict(context.registry._published)
     try:
         try:
             tensor_state = bind_tensor_state(
@@ -281,14 +284,13 @@ def install(torch, strict=True):
         # A reverted step is not complete: retry must rebuild its bindings and
         # registrations instead of skipping work that the ledger just undid.
         transaction.record_mapping_diffs(context.markers, markers_before)
+        transaction.record_mapping_diffs(context.registry._published, published_before)
         transaction.record_object_diffs(torch, root_attrs_before)
         if var_attrs_before is not None:
             transaction.record_object_diffs(var_type, var_attrs_before)
-        staged = _torch_namespace_snapshot()
         _restore_namespace(before)
         context.state[_NAMESPACE_TRANSACTION] = {
             "before": before,
-            "staged": staged,
         }
         setattr(torch, InstallContext.COMPLETE_ATTR, False)
         try:

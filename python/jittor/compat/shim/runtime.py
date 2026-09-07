@@ -167,9 +167,10 @@ def _activate_once(
         if strict is None
         else bool(strict)
     )
-    jittor_root.autograd.set_policy(
-        jittor_root.autograd.EXPLICIT_REQUIRES_GRAD
-    )
+    if not independent_namespace:
+        jittor_root.autograd.set_policy(
+            jittor_root.autograd.EXPLICIT_REQUIRES_GRAD
+        )
     if _composition:
         jt = jittor_root
         configure_torch_math_flags(jt)

@@ -5,16 +5,29 @@ share one assignment helper and nothing else with the rest of the nn surface.
 """
 
 import jittor as jt
-from jittor import nn
 
 from ..context import registry_for
 from ...diagnostics import EXPECTED, swallowed
 
 
 def _install_init_aliases(registry=None):
-    _modules = registry_for(jt, registry).module_map
-    import jittor.init as _init
+    _registry = registry_for(jt, registry)
+    _modules = _registry.module_map
+    _tensor_type = _registry.target_namespace.Var
+    _target_nn = _registry.target_namespace.nn
+    import jittor.init as _native_init
     import jittor as _jt2
+    import types as _types_init
+    if _registry.target_namespace is _registry.native_backend:
+        _init = _native_init
+    else:
+        # Only the spelling/adaptation namespace is copied. Native initializer
+        # callables retain their physical owners and the single mathematics.
+        _init = _types_init.ModuleType("torch.nn.init")
+        _init.__package__ = "torch.nn"
+        for _name, _value in vars(_native_init).items():
+            if not _name.startswith("__"):
+                setattr(_init, _name, _value)
     from jittor.init.scaling import _kaiming_uniform_
     # torch-style in-place initializers, tolerant of torch kwargs (e.g.
     # `generator=`, which jittor ignores). Each writes into `tensor` in place.
@@ -99,8 +112,8 @@ def _install_init_aliases(registry=None):
                 "relu_invariant_gauss_", "invariant_uniform_"):
         if hasattr(_init, _nm):
             setattr(_init, _nm, _grad_preserving(getattr(_init, _nm)))
-            if hasattr(_jt2.Var, _nm):   # keep the Var-bound method spelling in sync
-                setattr(_jt2.Var, _nm, getattr(_init, _nm))
+            if hasattr(_tensor_type, _nm):
+                setattr(_tensor_type, _nm, getattr(_init, _nm))
     # keep jittor's good xavier/kaiming; add torch-name aliases for the rest
     aliases = {"xavier_normal_": "xavier_gauss_"}
     for tname, jname in aliases.items():
@@ -197,7 +210,6 @@ def _install_init_aliases(registry=None):
     # construction-time init functions with no-op stubs. torch.nn is jittor.nn
     # on the bare `import jittor as torch` path, and jittor.nn.Conv/Linear call
     # the same module-global init functions to allocate weights.
-    import types as _types_init
     class _GuardedInit(_types_init.ModuleType):
         _protected = set()
         def __setattr__(self, key, value):
@@ -218,5 +230,5 @@ def _install_init_aliases(registry=None):
             except EXPECTED as exc:
                 swallowed("torch/installers/nn_init.py _install_init_aliases: value = getattr(_init, key)", exc)
     object.__setattr__(guarded, "_protected", protected)
-    nn.init = guarded
+    _target_nn.init = guarded
     _modules["torch.nn.init"] = guarded

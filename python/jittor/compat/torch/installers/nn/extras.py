@@ -18,7 +18,9 @@ def _ddp_world_size():
 
 def _install_nn_extras(nn, registry=None):
     # Activation modules torch has that jittor.nn may lack.
-    _modules = registry_for(jt, registry).module_map
+    active_registry = registry_for(jt, registry)
+    _modules = active_registry.module_map
+    _torch_target = active_registry.target_namespace
     import jittor as _jt
     _install_init_aliases(registry)
     import types as _types_nn_private
@@ -977,7 +979,7 @@ def _install_nn_extras(nn, registry=None):
         def linear_init(self, in_features, out_features, bias=True,
                         device=None, dtype=None):
             native_linear_init(self, in_features, out_features, bias)
-            target_dtype = dtype if dtype is not None else _jt.get_default_dtype()
+            target_dtype = dtype if dtype is not None else _torch_target.get_default_dtype()
             self.to(device=device, dtype=target_dtype)
 
         linear_cls.__init__ = linear_init
@@ -992,7 +994,7 @@ def _install_nn_extras(nn, registry=None):
                            max_norm=None, norm_type=2.0,
                            scale_grad_by_freq=False, sparse=False,
                            _weight=None, _freeze=False, device=None, dtype=None):
-            target_dtype = dtype if dtype is not None else _jt.get_default_dtype()
+            target_dtype = dtype if dtype is not None else _torch_target.get_default_dtype()
             native_embedding_init(
                 self, num_embeddings, embedding_dim, padding_idx,
                 _dtype_to_str(target_dtype), max_norm, norm_type,

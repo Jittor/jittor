@@ -4,6 +4,7 @@ from jittor.nn.backends import hooks as _backend_hooks
 from ....diagnostics import EXPECTED, swallowed, sdpa_flash_stats
 
 def install_attention(ctx):
+    nn = ctx.target_namespace.nn
     g = ctx.jittor_module
     import os as _os
 
