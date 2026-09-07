@@ -3135,20 +3135,34 @@ warmup 之后、三次采样：
 | **2026-09-07 复核了上面三套里的两套**（这一波抢救未提交改动时重跑） | **CUDA 一套逐条重合**：同一提交 `1fe23fe2c`、同一命令，**5 failed / 274 passed / 35 skipped / 2 xfailed**（1837s，warm 缓存），5 条 nodeid 与下面列的完全一致。**structure 一套换了 build 就不是同一组数**：按派工单的环境（**带** `nvcc_path=/usr/local/cuda/bin/nvcc`）跑 `JITTOR_TORCH_SHIM=1 tests/structure`，同一提交上是 **14 failed / 914 passed / 0 skipped / 2 xfailed**（349s）。差异**正是上一行自己预言的**：第 15 条 `test_runtime_cuda_allow_tf32_is_a_live_writable_view_on_cpu` 只在 `nvcc_path=""` 的 CPU-only build 上红，带 CUDA 就绿；那 2 skipped 的 accelerator 用例同理变成执行。**但 collected 总数也从 907 涨到 930**，多出来的 23 条是随 CUDA 可用而多收的参数化用例——所以 **`nvcc_path=""` 与带 nvcc 的 structure 数字之间不能直接做 A/B**，引用时必须连 `nvcc_path` 一起抄。**`tests/core` 那一套这一波没有重跑**（要复现得再摆一次 `nvcc_path=""` 的 CPU-only build，且它是上一波给自己新增用例做的自证，不影响本节结论），按未复核对待。 |
 | **CUDA 基线要更正** | 上一波记的是 42 failed / 229 passed，本树实测只剩 **5 failed / 274 passed**——上游把两个大级联修掉了：看板 6.C33 那条 bf16 `@for` 死循环（一个人占 21 条红）与 cuTT 构建（`b16773533`）。剩下 5 条全是看板上已有的条目、与本波无关：`test_cublas_test_op.py` 三条（cublas/cudnn/cub 的库自检算子）、`test_cudnn_op.py::TestCudnnConvOp::test_backward_nhwc`（看板「Unexpected success」那条）、`test_shared_reduce.py::test_shared_reduce_helper_is_two_stage`（看板「按 locale 编码读生成源码」那条）。**引用 42 那个数字的地方都该重新量一遍。** |
 | CUDA 冒烟 | `import jittor` + 64×64 matmul：`has_cuda True`、`Found device architectures: [89,]`、nvcc 12.2.140、`matmul sum` 与 numpy 期望一致。 |
-| 未完成，交下一位 | **2.19 的 `op_compiler.cc`/`cache_compile.cc` 切片只完成了可达性分析与实测探针，一行产品代码未改**，因此这两个文件**没有**记为已闭合。结论见下节；它有一个会让整片迁移变成空操作的前提（`precompile` 那个 catch），必须先解决。 |
+| 未完成，交下一位 | **2.19 的 `op_compiler.cc`(55)/`cache_compile.cc`(40) 切片只完成了可达性分析与实测探针，一行产品代码未改**，因此这两个文件**没有**记为已闭合。结论见下节；它有一个会让整片迁移变成空操作的前提（`:815` 的 catch），必须先解决。 |
 
 ### 2.19 下一位必读：`op_compiler.cc` 的 `USER_CHECK` 迁移**当前是空操作**
 
 本波对这两个文件做完了静态可达性分析（未落地任何改动，因为发现了下面这个前提）。
 
-**先更正两个数字。** 看板 2.19 行记 `op_compiler.cc` 51、`cache_compile.cc` 38；本树实测
-（含 `USER_CHECK`/`LOGf`）分别是 **56** 与 **40**。更重要的是 `cache_compile.cc` 这 40 处里
-**约 28 处在 `#ifdef TEST` 块内**（该文件自带的 `test_main` 单测，由 `gen_jit_tests` 编成独立
-可执行文件），天然属内部档、与用户输入无关；真正在产品路径上的只有 **12 处左右**，其中 2 处
-还是 `_MSC_VER` only。**按文件总数派工会把这类自测计入工作量**，下一位应先按 `#ifdef TEST` 切分。
+**先更正两个数字，并且把口径写下来**——上一版只写了「56 / 40」而没写怎么数的，重数时对不上。
+口径：**致命错误点 = `ASSERT|ASSERTop|CHECK|CHECKop` 的调用 + `LOGf` 的调用**，命令是
+
+```
+grep -oE '\b(ASSERT|ASSERTop|CHECK|CHECKop)[[:space:]]*\(|\bLOGf\b' <file> | wc -l
+```
+
+按这个口径本树实测：`op_compiler.cc` **55**（50 个 ASSERT/CHECK + 5 个 `LOGf`）、
+`cache_compile.cc` **40**（38 + 2）。看板 2.19 行记的 51/38 里 `cache_compile` 那个数只是
+没算 `LOGf`；**上一版把 `op_compiler.cc` 记成 56 是多数了一个**——`:1019` 那行是 C++ 关键字
+表里的字符串字面量 `"ASSERT"`，不是检查点，按行数（而非调用数）数就会把它算进去。
+
+更重要的是 `cache_compile.cc` 这 40 处的分布：**25 处在 `#ifdef TEST` 块内**
+（`:478-591`，该文件自带的 `test_main` 单测，由 `gen_jit_tests` 编成独立可执行文件），
+天然属内部档、与用户输入无关；产品路径上是 **15 处**，其中 **2 处在 `#ifdef _MSC_VER` 里
+（`:94/:97`）**，所以 Linux 上真正要看的只有 **13 处**。
+（上一版写的「约 28 / 约 12」方向对、数字不准。）
+**按文件总数派工会把这类自测计入工作量**，下一位应先按 `#ifdef TEST` 切分。
 
 **阻塞前提：`precompile()` 整个循环体被一个 `catch (std::exception& e)` 包着
-（`op_compiler.cc:808-814`），处理方式是 `LOGf << e.what() << "\nJit compiler error:\n" << this_line`。**
+（`op_compiler.cc:815-821`，`LOGf` 在 `:820`），处理方式是
+`LOGf << e.what() >> "\nJit compiler error:\n" >> this_line`。**
 `UserError` 继承自 `JittorError : std::runtime_error`，所以它**会被这个 catch 接住并以 `LOGf`
 重新抛出**——而 `LOGf` 抛的是裸 `std::runtime_error`。也就是说：**把 `precompile` 里任何一处
 `CHECK`/`ASSERT` 改成 `USER_CHECK`，类型都会在离开这个函数时被抹平**，`catch (const UserError&)`
@@ -3157,22 +3171,81 @@ warmup 之后、三次采样：
 在 `catch (std::exception&)` 之前加一个 `catch (const UserError&)`，用 `USER_ERROR` 重新抛出
 并保留那段「指出源码行」的上下文（那段上下文是这个 catch 真正的价值，不要连它一起删）。
 
-**可达性结论（静态，未实测）。** `precompile` 处理的是**用户自己写的算子源码**——
+**可达性结论。** `precompile` 处理的是**用户自己写的算子源码**——
 `jt.code(cpu_src=...)`／`compile_custom_ops` 的内容，所以 `@` 系语法的报错基本全是用户错误：
-`@for` 参数不足（`:587`）、`@if`/`@is_def`/`@define` 参数个数（`:617/:628/:678`）、
-`@strcmp`/`@alias` 参数个数（`:708/:729`）、`@alias` 指向不存在的量（`:733`）、
-`@expand_macro` 找不到宏（`:655`）、`@xxx` 维度不匹配（`:780/:781`）、`@x` 未定义（`:796`）、
-花括号不匹配（`:507/:523/:555/:574`）、`@` 后语法非法（`:805`）。已经是用户档措辞的有
-`:321`（`expand_op` 找不到 kernel，消息里点名算子与 dtype）。`:607` 的 `total_step < 1000`
-**已知用户可达**——看板那条 `jt.bfloat16(math.inf)` 让 `@for` 展开成死循环走的就是它，
-所以它也不该带「Could you please report this issue?」。
+`@for` 参数不足（`:587`）、`@if`/`@is_def`/`@define` 参数个数（`:624/:635/:685`）、
+`@strcmp`/`@alias` 参数个数（`:715/:736`）、`@alias` 指向不存在的量（`:740`）、
+`@expand_macro` 找不到宏（`:662`）、`@xxx` 维度不匹配（`:787/:788`）、`@x` 未定义（`:803`）、
+花括号不匹配（`:507/:523/:555/:574`）、`@` 后语法非法（`:812`）。已经是用户档措辞的有
+`:321`（`expand_op` 找不到 kernel，消息里点名算子与 dtype）。
 反过来，`get_name_by_op_var`／`try_get_op_var_by_name`（`:132,:154-160`）、
-`fix_op_member`（`:926`）、`__get_fused_src` 里的 `defs` 一致性（`:1144`）、
-`:1265` 的 CPU/GPU 不可融合，都是融合器自身的不变量，应留内部档。
+`fix_op_member`（`:933`）、`__get_fused_src` 里的 `defs` 一致性（`:1151`）、
+`:1272` 的 CPU/GPU 不可融合，都是融合器自身的不变量，应留内部档。
 
-**每一条判成 user 档都要有一条负向测试真的走到它**——本波没有跑这些负向测试
-（需要编译 C++ 核心，而机器当时已不可用），所以上面这份清单是**待实测的假设，不是结论**。
-`jt.code(cpu_src=...)` 加一段坏 `@` 语法就是现成的探针，`tests/compiler/` 是它的落点。
+**`:614` 的 `total_step < 1000` 已经不是用户可达的了，别照抄旧结论。** 上一版这里写的是
+「看板那条 `jt.bfloat16(math.inf)` 让 `@for` 展开成死循环走的就是它，所以它也不该带
+『Could you please report this issue?』」——那是 `6.C33`（`68e8b97b2`，**不是**当时误记的
+`8607ea4c4`，后者是一个 `[8.20]` roofline 脚本提交）合并**之前**的状态。今天实测：
+`jt.code(cpu_src="@for(j, -2, -1, -1, ...)")` 这种反向步长的 `@for` **不抛任何异常**，
+按 `6.C33` 的意图展成空，`:614` 根本走不到。它现在只在「步长方向对但真要走一千步以上」时
+触发，那是模板自己算出来的步数，属内部档。**这一条是这一波唯一被推翻的旧判断。**
+
+**可达性已实测（7 条），不再是假设。** 探针就是 `jt.code([1],"float32",[],cpu_src=<坏 @ 语法>)`
+（CPU、warm cache，本树 `1fe23fe2c`）。七条各写一段坏源码，**7/7 从 Python 抛出可捕获的
+`RuntimeError`**，且 **7/7** 消息里含 `Jit compiler error:`——**这就是 `:815` 那个 catch 在
+路径上的直接证据**，前一段那个「迁了也会被抹平」的判断因此是实测过的，不是读代码猜的。
+
+**「落到哪一条」不是推断出来的**：jittor 的日志前缀自己会打出 `op_compiler.cc:<行号>`，
+下表第二列就是抄它打出来的行号，所以这张表不依赖任何人对着源码数行：
+
+| 探针 `cpu_src` | 日志打出的落点 | `Could you please report this issue?` |
+| --- | --- | --- |
+| `@for(i, 0) @out(0) = 1;` | `:587` CHECKop 参数不足 | 否 |
+| `@out(0) = @nosuchvar;` | `:803` **ASSERT** Jit var not found | **是** |
+| `@out(0) = @{ 1 + ;`（花括号不配对） | `:507` CHECK | 否 |
+| `@alias(a, nosuchthing)` | `:740` CHECK not exsit | 否 |
+| `@strcmp(a)` | `:715` CHECK 参数个数 | 否 |
+| `@!x`（`@` 后非法） | `:812` LOGf Invalid syntax | 否 |
+| `@expand_macro(nosuchmacro, 1)` | `:662` LOGf Macro not found | 否 |
+
+**写这几条负向测试时的两个坑（都是这一波踩出来的）：**
+
+1. **`@` 后非法这条要用 `@!x`，不能用行尾一个裸 `@`。** 先试的是 `"@out(0) = 1; @"`：
+   它**不抛**，那个 `@` 原样落进生成的源码，最后是 **g++** 报
+   `code_op.cc:357: stray '@' in program`。也就是说探针根本没走到 `:812`，
+   而错误照样出现了——**只断言「抛了」的负向测试会把这种情况判成通过**。
+   断言必须钉到 `op_compiler.cc:<行号>` 或该检查独有的措辞上。
+2. **消息里的行号会重复出现三次**（`:820` 连着三层），因为 `precompile` 是递归的，
+   每一层的 catch 都再包一次。所以别用「`:820` 出现几次」做断言。
+
+**所以「迁移」在这里买到的不是「变可捕获」**（它们本来就可捕获，`CHECK`/`LOGf` 抛的是
+`std::runtime_error`），**而是两件事**：(a) 类型可在 C++ 侧分档，(b) **消息不再叫用户去报 bug**。
+第二件今天就有真实受害者：上表第二行，用户把 `@` 变量名打错，jittor 回他
+「Something wrong... Could you please report this issue?」。这句不是谁写歪了措辞，是
+`ASSERT` 的定义就带着它（`utils/log.h:470`：`#define ASSERT(s) CHECK(s) << "Something
+wrong... Could you please report this issue?\n"`），所以**凡是用户可达的 `ASSERT` 都必然
+在叫用户去报 bug**。`precompile` 里用 `ASSERT` 而非 `CHECK` 的有
+`:198/:243/:255/:261/:408/:411/:479/:544/:614/:624/:635/:685/:706/:768/:803`，
+**这一档才是这个文件里真正该动的**（其中 `:614` 现已不可达，见上）。
+用 `CHECK` 的那些迁过去只改类型不改措辞，收益小得多，可以放到 catch 修好之后再谈。
+
+**类型分档的基础设施已经齐了**，不用自己搭：`utils/log.h:162-172` 有
+`JittorError : std::runtime_error`、`UserError : JittorError`、`InternalInvariantError : JittorError`，
+`:206-232` 有 `USER_ERROR`/`USER_CHECK`/`USER_CHECKop` 与 `INTERNAL_ERROR`/`INTERNAL_ASSERT`。
+`UserError` 经 `std::runtime_error` 派生这一条，就是「`catch (std::exception&)` 会把它接住」
+的全部理由——这是 C++ 的类型关系，不是猜测。
+
+**顺序建议**：先修 `:815` 的 catch（加一个 `catch (const UserError&)` 用 `USER_ERROR` 重抛并保留
+「指出源码行」的上下文），并加一条负向测试断言 `UserError` 真的能在 C++ 侧接到——否则后面
+每一处迁移都是空操作，而源码计数门禁会照样变绿。再迁上面那一档 ASSERT，每条配一个
+`jt.code` 负向节点，落点 `tests/compiler/`。
+
+**这一节的行号有保质期，引用前先自己重定位。** 上一版这里所有 `:604` 之后的行号都**整体偏 7**，
+因为 `6.C33`（`68e8b97b2`）给 `@for` 加了 6 行注释（`+8/-1`）而分析是在它落地前做的，
+写完没重数。更要紧的是 **`4.15` 会把 `python/jittor/src/` 整棵搬到顶层 `src/`**，
+那一下连路径都不对了。**所以下一位不要按行号找，按构造找**——
+上面每一条都写了它的措辞（`for missing arguments`、`Jit var ... not found` 等），
+`grep` 措辞是稳的，行号不是。
 
 ### 本波（pyops 分区）：2.22 闭合；10.20 只复核了数字，仍待领
 
