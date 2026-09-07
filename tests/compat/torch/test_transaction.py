@@ -56,6 +56,16 @@ def test_transaction_refuses_to_overwrite_an_external_attribute_change():
         tx.rollback()
     assert module.value == "external"
 
+    from jittor.compat.torch.namespace import TorchNamespace
+    namespace = TorchNamespace(types.SimpleNamespace(value="native"))
+    tx = InstallTransaction("namespace-owner")
+    tx.mutate_attr(namespace, "value", "transaction")
+    del namespace.value
+    with pytest.raises(TransactionConflict, match="owner lost"):
+        tx.rollback()
+    assert not hasattr(namespace, "value")
+    assert namespace.owner.value == "native"
+
 
 def test_conflicting_rollback_still_reverts_everything_it_still_owns():
     """One foreign write must not strand the transaction's other mutations.
@@ -103,17 +113,14 @@ def test_conflicting_rollback_names_every_entry_it_could_not_restore():
 def test_core_install_flag_mutation_rolls_back_on_failure():
     flags = types.SimpleNamespace(use_cuda=0)
     tx = InstallTransaction("core.install")
-    ctx = types.SimpleNamespace(state={"_install_transaction": tx})
-    original = __import__("jittor").flags
-    saved = original.use_cuda
-    try:
-        original.use_cuda = flags.use_cuda
-        _set_install_flag(ctx, "use_cuda", 1)
-        assert original.use_cuda == 1
-        tx.rollback()
-        assert original.use_cuda == 0
-    finally:
-        original.use_cuda = saved
+    ctx = types.SimpleNamespace(
+        state={"_install_transaction": tx},
+        native_backend=types.SimpleNamespace(flags=flags),
+    )
+    _set_install_flag(ctx, "use_cuda", 1)
+    assert flags.use_cuda == 1
+    tx.rollback()
+    assert flags.use_cuda == 0
 
 
 def test_utilities_import_hook_rolls_back_and_detects_external_replacement():
@@ -167,6 +174,25 @@ def test_shared_write_helpers_record_flag_env_and_attribute_mutations():
     assert flags.use_cuda == 0
     assert "JT_NCCL_RANK" not in env
     assert not hasattr(target, "__import__")
+
+    from jittor.compat.torch.namespace import TorchNamespace
+    owner = types.SimpleNamespace(value="native", hidden="native-hidden")
+    namespace = TorchNamespace(owner)
+    del namespace.hidden
+    tx = InstallTransaction("namespace-owner")
+    context = _context(tx)
+    set_attr(namespace, "value", "local", context=context)
+    set_attr(namespace, "hidden", "visible", context=context)
+    set_attr(namespace, "added", "temporary", context=context)
+    tx.rollback()
+    assert "value" not in vars(namespace)
+    assert namespace.value == "native"
+    owner.value = "updated-native"
+    assert namespace.value == "updated-native"
+    assert not hasattr(namespace, "hidden")
+    assert "added" not in vars(namespace)
+    owner.added = "new-native"
+    assert namespace.added == "new-native"
 
 
 @pytest.mark.parametrize("closed", ("committed", "rolled_back"))
@@ -422,6 +448,26 @@ def test_transaction_records_module_attribute_diffs_for_failure_rollback():
     tx.record_object_diffs(module, before)
     tx.rollback()
     assert vars(module) == {"existing": "old"}
+
+    from jittor.compat.torch.namespace import TorchNamespace
+    owner = types.SimpleNamespace(existing="native", hidden="native-hidden", deleted="native-deleted")
+    namespace = TorchNamespace(owner)
+    del namespace.hidden
+    before = dict(vars(namespace))
+    namespace.existing = "local"
+    namespace.hidden = "visible"
+    namespace.added = 7
+    del namespace.deleted
+    tx = InstallTransaction("namespace-diffs")
+    tx.record_object_diffs(namespace, before)
+    tx.rollback()
+    assert "existing" not in vars(namespace)
+    assert namespace.existing == "native"
+    assert not hasattr(namespace, "hidden")
+    assert namespace.deleted == "native-deleted"
+    assert "added" not in vars(namespace)
+    owner.added = "native-added"
+    assert namespace.added == "native-added"
 
 
 class _RaisesOnCompare:

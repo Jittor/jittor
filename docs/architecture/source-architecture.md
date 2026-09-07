@@ -594,6 +594,15 @@ a source move. Non-native cache artifacts are left alone.
 
 ### Compatibility APIs
 
+The optional TorchNamespace owns its public writes and deletions. Missing reads
+may still use its native owner; deletion masks that fallback locally. Transaction
+rollback restores the exact local binding and deletion state. InstallContext
+separates the installation target from its native backend and never inherits
+install markers through namespace fallback. Publication keeps the root self-alias
+consistent in the registry and import mapping. This is an ownership boundary;
+the default installers still patch native Var/NN classes, so independent Torch
+type semantics remain unfinished.
+
 The canonical Torch-style implementation is `jittor.compat.torch`. The legacy
 attribute/module spelling `jittor.torch_compat` is an alias created during Jittor
 initialization; it is not a second source file. Likewise, the canonical Triton

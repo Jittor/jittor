@@ -13,7 +13,9 @@ from jittor.compat.torch.context import (
     InstallContext,
     InstallStepError,
     ModuleRegistry,
+    registry_for,
 )
+from jittor.compat.torch.namespace import TorchNamespace
 from jittor.compat.transaction import TransactionConflict
 from jittor.compat.torch.installers import utilities
 
@@ -26,6 +28,70 @@ class TestInstallContext(unittest.TestCase):
         root = types.ModuleType("_stage7_context_root")
         modules = {root.__name__: root}
         return InstallContext(root, ModuleRegistry(root, modules))
+
+    def test_detached_namespace_owns_context_markers_and_completion(self):
+        native = types.ModuleType("_native_context_owner")
+        native_context = InstallContext.for_module(native)
+        native_context.markers["core"] = "complete"
+        native_context.mark_complete()
+        namespace = TorchNamespace(native)
+
+        context = InstallContext.for_module(namespace, strict=False)
+        self.assertIsNot(context, native_context)
+        self.assertIs(context.jittor_module, namespace)
+        self.assertIs(context.target_namespace, namespace)
+        self.assertIs(context.native_backend, native)
+        self.assertIs(context.registry.root_module, namespace)
+        self.assertIs(context.registry.target_namespace, namespace)
+        self.assertIs(context.registry.native_backend, native)
+        self.assertEqual(context.markers, {})
+        self.assertIsNot(context.markers, native_context.markers)
+        self.assertFalse(context.complete)
+        context.markers["local"] = "complete"
+        context.mark_complete()
+        self.assertEqual(native_context.markers, {"core": "complete"})
+        self.assertIs(InstallContext.for_module(namespace), context)
+        self.assertTrue(context.strict)
+        delattr(namespace, InstallContext.COMPLETE_ATTR)
+        self.assertFalse(context.complete)
+        self.assertTrue(native_context.complete)
+
+    def test_registry_lookup_is_local_but_explicit_registry_takes_priority(self):
+        native = types.ModuleType("_native_registry_owner")
+        native_context = InstallContext.for_module(native)
+        namespace = TorchNamespace(native)
+        fresh_registry = registry_for(namespace)
+        self.assertIsNot(fresh_registry, native_context.registry)
+        self.assertIs(fresh_registry.target_namespace, namespace)
+        self.assertIs(fresh_registry.native_backend, native)
+        context = InstallContext.for_module(namespace)
+        self.assertIs(registry_for(namespace), context.registry)
+        # Legacy installers pass their native helper owner alongside the
+        # explicit registry of the namespace being installed.
+        self.assertIs(registry_for(native, context.registry), context.registry)
+
+    def test_context_rejects_foreign_local_state_and_preserves_positional_arguments(self):
+        native = types.ModuleType("_native_context_identity")
+        other = types.ModuleType("_other_context_identity")
+        registry = ModuleRegistry(native, {})
+        reports, state = [], {"value": 1}
+        context = InstallContext(native, registry, False, reports, state)
+        self.assertIs(context.reports, reports)
+        self.assertIs(context.state, state)
+        self.assertIs(context.native_backend, native)
+        with self.assertRaisesRegex(ValueError, "target namespaces differ"):
+            InstallContext(other, registry)
+        namespace = TorchNamespace(native)
+        setattr(namespace, InstallContext.CONTEXT_ATTR, context)
+        with self.assertRaisesRegex(ValueError, "different target namespace"):
+            InstallContext.for_module(namespace)
+        with self.assertRaisesRegex(ValueError, "different target namespace"):
+            registry_for(namespace)
+        delattr(namespace, InstallContext.CONTEXT_ATTR)
+        local = InstallContext.for_module(namespace)
+        with self.assertRaisesRegex(ValueError, "different native backend"):
+            InstallContext.for_module(namespace, native_backend=other)
+        self.assertIs(vars(namespace)[InstallContext.CONTEXT_ATTR], local)
 
     def test_required_step_names_failure_and_does_not_mark_complete(self):
         context = self.context()

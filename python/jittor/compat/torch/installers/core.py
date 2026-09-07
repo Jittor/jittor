@@ -82,7 +82,7 @@ del _unary_api, _unary_impl
 
 def _set_install_flag(ctx, name, value):
     """Record install-time flag mutations when a transaction is active."""
-    set_flag(jt.flags, name, value, context=ctx)
+    set_flag(ctx.native_backend.flags, name, value, context=ctx)
 
 
 def install(ctx):

@@ -17,10 +17,9 @@ import types
 class TorchNamespace(types.ModuleType):
     """Module-shaped view over one Jittor compatibility owner.
 
-    Public reads and writes are delegated to ``owner`` so existing installers
-    can be migrated family by family.  Private bookkeeping stays on this
-    module, which prevents a future independent ``torch`` package from
-    leaking its install markers into the native Jittor namespace.
+    Missing reads may use the native owner while installers are migrated.
+    Writes and deletions belong to this namespace. Native capabilities remain
+    readable without making application patches mutate the native module.
     """
 
     _LOCAL_METADATA = frozenset({
@@ -33,6 +32,7 @@ class TorchNamespace(types.ModuleType):
             raise TypeError("TorchNamespace requires an owner module")
         super().__init__("torch")
         object.__setattr__(self, "_torch_owner", owner)
+        object.__setattr__(self, "_hidden_owner_names", frozenset())
         # Import metadata belongs to this detached module.  In particular,
         # assigning ``__spec__`` through the public delegation path would
         # silently write it onto the Jittor owner and make the package look
@@ -59,29 +59,42 @@ class TorchNamespace(types.ModuleType):
         # Import metadata is owned by this detached module.  Once a caller
         # removes a local metadata field, do not resurrect the owner's value
         # through the public delegation path (e.g. ``owner.__file__``).
-        if name in self._LOCAL_METADATA:
+        if name in self._LOCAL_METADATA or name in self._hidden_owner_names:
             raise AttributeError(name)
         return getattr(self.owner, name)
 
     def __setattr__(self, name, value):
-        if name.startswith("_") or name in self._LOCAL_METADATA:
-            return super().__setattr__(name, value)
-        setattr(self.owner, name, value)
+        super().__setattr__(name, value)
+        object.__setattr__(self, "_hidden_owner_names", self._hidden_owner_names - {name})
 
     def __delattr__(self, name):
-        """Keep public mutation symmetry with :meth:`__setattr__`.
-
-        Installer code occasionally removes an optional public binding.  A
-        detached namespace must remove that binding from its explicit owner;
-        deleting it only from the view would leave the owner unexpectedly
-        populated and make a later install observe stale state.
-        """
+        """Remove a local API without revealing a native fallback underneath."""
         if name.startswith("_") or name in self._LOCAL_METADATA:
             return super().__delattr__(name)
-        delattr(self.owner, name)
+        if name in vars(self):
+            super().__delattr__(name)
+        elif name in self._hidden_owner_names or not hasattr(self.owner, name):
+            raise AttributeError(name)
+        object.__setattr__(self, "_hidden_owner_names", self._hidden_owner_names | {name})
 
     def __dir__(self):
-        return sorted(set(super().__dir__()) | set(dir(self.owner)))
+        return sorted((set(super().__dir__()) | set(dir(self.owner))) - self._hidden_owner_names)
+
+    def _binding_state(self, name):
+        local = vars(self)
+        return name in local, local.get(name), name in self._hidden_owner_names
+
+    def _restore_binding(self, name, state):
+        """Restore exact local ownership without mutating a fallback owner."""
+        present, value, hidden = state
+        if present:
+            object.__setattr__(self, name, value)
+        elif name in vars(self):
+            object.__delattr__(self, name)
+        if hidden:
+            object.__setattr__(self, "_hidden_owner_names", self._hidden_owner_names | {name})
+        else:
+            object.__setattr__(self, "_hidden_owner_names", self._hidden_owner_names - {name})
 
 
 def independent_torch_namespace(owner):

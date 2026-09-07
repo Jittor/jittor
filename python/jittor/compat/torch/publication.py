@@ -73,6 +73,13 @@ def bind_published_namespace(namespace, published, transaction=None):
         parent = parents.get(parent_name)
         if parent is None:
             raise RuntimeError("published namespace parent disappeared: %r" % parent_name)
+        if isinstance(parent, TorchNamespace):
+            if transaction is not None:
+                transaction.mutate_attr(parent, attr, modules[name])
+            else:
+                setattr(parent, attr, modules[name])
+            parents[name] = modules[name]
+            continue
         had_attr = hasattr(parent, attr)
         old = getattr(parent, attr, None)
         if transaction is not None:
@@ -106,7 +113,23 @@ def publish_independent_namespace(namespace, registry, transaction=None):
     if published is None or not hasattr(published, "get"):
         raise TypeError("registry must expose a published module mapping")
 
+    imports = getattr(registry, "_modules", None)
+    self_alias = published.get("torch.torch")
+    if imports is not None and (self_alias is namespace.owner or self_alias is namespace):
+        imported_alias = imports.get("torch.torch", _MISSING)
+        if imported_alias is not namespace.owner and imported_alias is not namespace:
+            raise RuntimeError("torch.torch import alias differs from its registered owner")
     bind_published_namespace(namespace, published, transaction=transaction)
+    # The root self-alias is part of the import graph as well as the registry.
+    # Updating only the registry leaves torch.torch pointing at the native
+    # owner and makes the next ownership validation reject our own install.
+    if published.get("torch.torch") is namespace and imports is not None:
+        old_alias = imports.get("torch.torch", _MISSING)
+        if old_alias is not namespace.owner and old_alias is not namespace:
+            raise RuntimeError("torch.torch import alias differs from its registered owner")
+        if transaction is not None:
+            transaction.record(imports, "torch.torch", old_alias, namespace)
+        imports["torch.torch"] = namespace
     old = published.get("torch", _MISSING)
     if transaction is not None:
         transaction.record(published, "torch", old, namespace)

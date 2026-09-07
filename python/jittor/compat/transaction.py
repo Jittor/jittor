@@ -28,11 +28,38 @@ class InstallTransaction:
     def record_object_diffs(self, target, before):
         """Record shallow attribute changes on an object for failure rollback."""
         after = vars(target)
+        capture = getattr(type(target), "_binding_state", None)
+        restore = getattr(type(target), "_restore_binding", None)
+        if callable(capture) and callable(restore):
+            # Namespace masks are copy-on-write, so the shallow before snapshot
+            # retains the old visibility as well as the old local attributes.
+            hidden_name = "_hidden_owner_names"
+            old_hidden = before.get(hidden_name, ())
+            new_hidden = after.get(hidden_name, ())
+            names = set(before) | set(after) | set(old_hidden) | set(new_hidden)
+            for name in names - {hidden_name}:
+                old = (name in before, before.get(name), name in old_hidden)
+                new = capture(target, name)
+                if old[0] != new[0] or old[2] != new[2] or old[1] is not new[1]:
+                    self._record_binding(target, name, old, [new], capture, restore)
+            return
         for name in set(before) | set(after):
             old = before.get(name, _MISSING)
             new = after.get(name, _MISSING)
             if old is not new:
                 self.record(target, name, old, new)
+
+    def _record_binding(self, target, name, old, expected, capture, restore):
+        """Undo one local namespace slot without manufacturing a delete mask."""
+        def undo():
+            current = capture(target, name)
+            new = expected[0]
+            if (current[0] != new[0] or current[2] != new[2]
+                    or (current[0] and not _matches(current[1], new[1]))):
+                raise TransactionConflict(
+                    "transaction owner lost %r during rollback" % name)
+            restore(target, name, old)
+        self.record(target, name, old, expected, undo=undo)
 
     def mutate_env(self, key, value, environ=None):
         import os
@@ -48,6 +75,17 @@ class InstallTransaction:
         setattr(flags, name, value)
 
     def mutate_attr(self, target, name, value):
+        capture = getattr(type(target), "_binding_state", None)
+        restore = getattr(type(target), "_restore_binding", None)
+        if callable(capture) and callable(restore):
+            old = capture(target, name)
+            expected = [old]
+            self._record_binding(target, name, old, expected, capture, restore)
+            try:
+                setattr(target, name, value)
+            finally:
+                expected[0] = capture(target, name)
+            return
         old = getattr(target, name, _MISSING)
         self.record(target, name, old, value)
         setattr(target, name, value)

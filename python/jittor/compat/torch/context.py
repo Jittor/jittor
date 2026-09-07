@@ -11,6 +11,12 @@ from dataclasses import dataclass, field
 
 from .._aliases import _is_deployed_torch_placeholder
 from ..diagnostics import EXPECTED, swallowed
+from .namespace import TorchNamespace
+
+
+def _native_backend_for(target):
+    """Resolve explicit namespace ownership without delegated attribute reads."""
+    return target.owner if isinstance(target, TorchNamespace) else target
 
 
 class TransformGetItemToIndex:
@@ -99,11 +105,21 @@ class _RegistryModuleMap(MutableMapping):
 class ModuleRegistry:
     """Create and publish ``torch.*`` modules without changing object identity."""
 
-    def __init__(self, root_module, modules=None):
+    def __init__(self, root_module, modules=None, *, native_backend=None):
         self.root_module = root_module
+        self.native_backend = (
+            _native_backend_for(root_module) if native_backend is None else native_backend
+        )
+        if isinstance(root_module, TorchNamespace) and self.native_backend is not root_module.owner:
+            raise ValueError("registry native backend differs from namespace owner")
         self._modules = sys.modules if modules is None else modules
         self._published = {}
         self.module_map = _RegistryModuleMap(self)
+
+    @property
+    def target_namespace(self):
+        """The publication target; root_module remains its legacy spelling."""
+        return self.root_module
 
     @staticmethod
     def _ensure_import_metadata(name, module):
@@ -188,36 +204,56 @@ class InstallContext:
     strict: bool = True
     reports: list = field(default_factory=list)
     state: dict = field(default_factory=dict)
+    native_backend: object = None
 
     MARKERS_ATTR = "_torch_compat_install_steps"
     CONTEXT_ATTR = "_torch_compat_install_context"
     COMPLETE_ATTR = "_torch_compat_install_complete"
 
     def __post_init__(self):
-        if not hasattr(self.jittor_module, self.MARKERS_ATTR):
-            setattr(self.jittor_module, self.MARKERS_ATTR, {})
+        if self.native_backend is None:
+            self.native_backend = _native_backend_for(self.target_namespace)
+        if self.registry.target_namespace is not self.target_namespace:
+            raise ValueError("install context and registry target namespaces differ")
+        if self.registry.native_backend is not self.native_backend:
+            raise ValueError("install context and registry native backends differ")
+        if self.MARKERS_ATTR not in vars(self.target_namespace):
+            setattr(self.target_namespace, self.MARKERS_ATTR, {})
+
+    @property
+    def target_namespace(self):
+        """Installer write target, preserving the legacy jittor_module field."""
+        return self.jittor_module
 
     @classmethod
-    def for_module(cls, jittor_module, strict=True):
-        existing = getattr(jittor_module, cls.CONTEXT_ATTR, None)
+    def for_module(cls, jittor_module, strict=True, *, native_backend=None):
+        backend = _native_backend_for(jittor_module) if native_backend is None else native_backend
+        existing = vars(jittor_module).get(cls.CONTEXT_ATTR)
         if isinstance(existing, cls):
+            if (existing.target_namespace is not jittor_module
+                    or existing.registry.target_namespace is not jittor_module):
+                raise ValueError("existing install context belongs to a different target namespace")
+            if (existing.native_backend is not backend
+                    or existing.registry.native_backend is not backend):
+                raise ValueError("existing install context belongs to a different native backend")
             existing.strict = bool(strict)
             return existing
         context = cls(
             jittor_module=jittor_module,
-            registry=ModuleRegistry(jittor_module),
+            registry=ModuleRegistry(jittor_module, native_backend=backend),
             strict=bool(strict),
+            native_backend=backend,
         )
         setattr(jittor_module, cls.CONTEXT_ATTR, context)
         return context
 
     @property
     def markers(self):
-        return getattr(self.jittor_module, self.MARKERS_ATTR)
+        return vars(self.target_namespace)[self.MARKERS_ATTR]
 
     @property
     def complete(self):
-        return bool(getattr(self.jittor_module, self.COMPLETE_ATTR, False))
+        return bool(vars(self.target_namespace).get(self.COMPLETE_ATTR, False))
 
     def _record(self, step, required, status, error=""):
         report = InstallReport(step, required, status, error)
@@ -265,7 +301,7 @@ class InstallContext:
         return tuple(latest[name] for name in sorted(latest))
 
     def mark_complete(self):
-        setattr(self.jittor_module, self.COMPLETE_ATTR, True)
+        setattr(self.target_namespace, self.COMPLETE_ATTR, True)
 
 
 def registry_for(jittor_module, registry=None):
@@ -273,7 +309,12 @@ def registry_for(jittor_module, registry=None):
 
     if isinstance(registry, ModuleRegistry):
         return registry
-    context = getattr(jittor_module, InstallContext.CONTEXT_ATTR, None)
+    context = vars(jittor_module).get(InstallContext.CONTEXT_ATTR)
     if isinstance(context, InstallContext):
+        if (context.target_namespace is not jittor_module
+                or context.registry.target_namespace is not jittor_module):
+            raise ValueError("install registry belongs to a different target namespace")
+        if context.registry.native_backend is not context.native_backend:
+            raise ValueError("install registry belongs to a different native backend")
         return context.registry
     return ModuleRegistry(jittor_module)

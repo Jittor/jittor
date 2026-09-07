@@ -562,27 +562,34 @@ def test_namespace_keeps_import_metadata_off_the_owner():
     assert not hasattr(owner, "__file__")
 
 
-def test_namespace_writes_public_values_to_explicit_owner_only():
+def test_namespace_writes_public_values_locally():
     owner = types.ModuleType("jittor")
     namespace = TorchNamespace(owner)
 
     namespace.new_api = 42
     namespace._install_marker = "torch-only"
 
-    assert owner.new_api == 42
+    assert not hasattr(owner, "new_api")
+    assert namespace.new_api == 42
     assert not hasattr(owner, "_install_marker")
     assert namespace._install_marker == "torch-only"
     assert namespace.owner is owner
 
 
-def test_namespace_deletes_public_values_from_explicit_owner_only():
+def test_namespace_deletes_public_values_without_changing_native_owner():
     owner = types.ModuleType("jittor")
     owner.optional_api = object()
     namespace = TorchNamespace(owner)
 
     del namespace.optional_api
 
-    assert not hasattr(owner, "optional_api")
+    assert hasattr(owner, "optional_api")
+    assert not hasattr(namespace, "optional_api")
+    assert "optional_api" not in dir(namespace)
+    namespace.optional_api = 42
+    assert namespace.optional_api == 42
+    assert owner.optional_api != 42
+    del namespace.optional_api
     assert not hasattr(namespace, "optional_api")
 
 
@@ -684,6 +691,24 @@ def test_published_children_rollback_restores_owner_bindings():
     assert owner.nn is not None
     assert owner.nn.functional == "old"
     assert namespace.nn is owner.nn
+    assert "nn" not in vars(namespace)
+    replacement = object()
+    owner.nn = replacement
+    assert namespace.nn is replacement
+
+    del namespace.nn
+    hidden = namespace._binding_state("nn")
+    transaction = ActivationTransaction("hidden-namespace-binding")
+    transaction.acquire()
+    try:
+        bind_published_namespace(namespace, {"torch.nn": nn}, transaction=transaction)
+        assert namespace.nn is nn
+        transaction.rollback()
+    finally:
+        transaction.release()
+    assert namespace._binding_state("nn") == hidden
+    assert not hasattr(namespace, "nn")
+    assert owner.nn is replacement
 
 
 def test_independent_root_registry_binding_rolls_back_with_import_identity():
@@ -714,16 +739,21 @@ def test_publication_helper_binds_registry_and_root_as_one_operation():
     child = types.ModuleType("torch.nn")
     registry = types.SimpleNamespace(_published={"torch": owner, "torch.nn": child})
     transaction = ActivationTransaction("namespace-publication-boundary")
+    registry._published["torch.torch"] = owner
+    registry._modules = dict(registry._published)
     transaction.acquire()
     try:
         publish_independent_namespace(namespace, registry, transaction=transaction)
         assert registry._published["torch"] is namespace
         assert namespace.nn is child
+        assert registry._modules["torch.torch"] is namespace
         transaction.rollback()
     finally:
         transaction.release()
 
     assert registry._published["torch"] is owner
+    assert registry._published["torch.torch"] is owner
+    assert registry._modules["torch.torch"] is owner
     assert not hasattr(namespace, "nn")
 
 
