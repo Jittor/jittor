@@ -9,6 +9,7 @@
 // ***************************************************************
 #pragma once
 #include "bindings/pyjt/py_obj_holder.h"
+#include "bindings/pyjt/py_tensor_frontend.h"
 #include "bindings/pyjt/numpy.h"
 #include "core/common.h"
 #include "utils/hash.h"
@@ -447,7 +448,7 @@ vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh);
 EXTERN_LIB PyHeapTypeObject PyjtVarHolder;
 DEF_IS(ArrayArgs, bool) is_type(PyObject* obj) {
     return 
-        Py_TYPE(obj) == &PyjtVarHolder.ht_type ||
+        PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type) ||
         Py_TYPE(obj) == PyArray_Type || 
         PyFloat_CheckExact(obj) ||
         PyLong_CheckExact(obj) ||
@@ -514,7 +515,7 @@ DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
         _fill_scalar_array_args(args, (int8)(obj == Py_True), ns_bool);
         return args;
     }
-    if (Py_TYPE(obj) == &PyjtVarHolder.ht_type) {
+    if (PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type)) {
         auto ptr = GET_RAW_PTR(VarHolder, obj);
         return move(fetch_sync({ptr}).at(0));
     }
@@ -575,7 +576,7 @@ EXTERN_LIB VarHolder* array_(ArrayArgs&&);
 EXTERN_LIB VarHolder* array__(PyObject* obj);
 }
 DEF_IS(VarHolder*, bool) is_type(PyObject* obj) {
-    return Py_TYPE(obj) == &PyjtVarHolder.ht_type ||
+    return PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type) ||
         is_type<ArrayArgs>(obj);
 }
 
@@ -585,7 +586,8 @@ DEF_IS(VarHolder*, PyObject*) to_py_object(T a) {
     // header in front of them plus a place on the tracked list.  tp_alloc also
     // zeroes the storage, so the dict slot and the inited flag below start out
     // null even if a collection runs before they are filled in.
-    auto vh_type = &PyjtVarHolder.ht_type;
+    PyObjHolder frontend_type(current_tensor_frontend_type());
+    auto vh_type = reinterpret_cast<PyTypeObject*>(frontend_type.obj);
     PyObjHolder obj(vh_type->tp_alloc(vh_type, 0));
     auto ptr = GET_RAW_PTR(T, obj.obj);
     ((PyObject**)(((char*)obj.obj) + sizeof(PyObject) + sizeof(typename std::remove_pointer<T>::type)))[0] = PyDict_New();
@@ -600,12 +602,12 @@ DEF_IS(VarHolder*, PyObject*) to_py_object(T a) {
 
 
 DEF_IS(VarHolder*, T) from_py_object(PyObject* obj) {
-    CHECK(Py_TYPE(obj) == &PyjtVarHolder.ht_type);
+    CHECK(PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type));
     return GET_RAW_PTR(VarHolder, obj);
 }
 
 DEF_IS(VarHolder*, T) from_py_object(PyObject* obj, unique_ptr<VarHolder>& holder) {
-    if (Py_TYPE(obj) == &PyjtVarHolder.ht_type)
+    if (PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type))
         return GET_RAW_PTR(VarHolder, obj);
     holder.reset(jit_op_maker::array__(obj));
     return holder.get();
@@ -981,10 +983,13 @@ DEF_IS(GradCallback, bool) is_type(PyObject* obj) {
 
 DEF_IS(GradCallback, T) from_py_object(PyObject* obj) {
     // PyObject_Call
+    PyObjHolder frontend_owner(current_tensor_frontend_type());
+    auto frontend_type = reinterpret_cast<PyTypeObject*>(frontend_owner.obj);
     Py_INCREF(obj);
     T func(
         // callback
-        [obj](int n_o, typename T::Var** douts, int n_i, typename T::VarPtr* dins) {
+        [obj, frontend_type](int n_o, typename T::Var** douts, int n_i, typename T::VarPtr* dins) {
+            PyTensorFrontendScope frontend_scope(frontend_type);
             PyObjHolder list(PyTuple_New(n_o));
             for (int i=0; i<n_o; i++) {
                 if (douts[i]) {
@@ -1007,7 +1012,7 @@ DEF_IS(GradCallback, T) from_py_object(PyObject* obj) {
                 if (obj == Py_None) {
                     dins[i] = nullptr;
                 } else {
-                    USER_CHECK(Py_TYPE(obj) == &PyjtVarHolder.ht_type) << "returned grad("<<Py_TYPE(obj)->tp_name<<") is not jittor variable";
+                    USER_CHECK(PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type)) << "returned grad("<<Py_TYPE(obj)->tp_name<<") is not jittor variable";
                     auto vh = from_py_object<typename T::VarHolderPtr>(obj);
                     dins[i] = vh->var;
                 }
@@ -1026,10 +1031,12 @@ DEF_IS(GradCallback, T) from_py_object(PyObject* obj) {
             }
         },
         // deleter
-        [obj]() { 
+        [obj, frontend_type]() {
             Py_DECREF(obj); 
+            Py_DECREF(frontend_type);
         }
     );
+    frontend_owner.release();
     return func;
 }
 

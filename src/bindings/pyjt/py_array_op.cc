@@ -38,7 +38,7 @@ PyObject* make_pyjt_array(const vector<int64>& shape, const string& dtype, const
 }
 
 void get_pyjt_array(PyObject* obj, vector<int64>& shape, string& dtype, void*& data) {
-    CHECK(Py_TYPE(obj) == &PyjtVarHolder.ht_type) << "Not a jittor array" << Py_TYPE(obj);
+    CHECK(PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type)) << "Not a jittor array" << Py_TYPE(obj);
     auto vh = GET_RAW_PTR(VarHolder, obj);
     if (!vh->var->mem_ptr)
         vh->sync();
@@ -102,7 +102,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
         scalar.i8 = obj == Py_True;
         args = {&scalar, {}, ns_bool};
     } else
-    if (Py_TYPE(obj) == &PyjtVarHolder.ht_type) {
+    if (PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type)) {
         auto ptr = GET_RAW_PTR(VarHolder, obj);
         args = move(fetch_sync({ptr}).at(0));
     } else

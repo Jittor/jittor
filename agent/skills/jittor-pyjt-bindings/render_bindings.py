@@ -21,7 +21,7 @@ import sys
 
 def load_generator(python_dir):
     sys.path.insert(0, python_dir)
-    path = os.path.join(python_dir, "jittor", "pyjt_compiler.py")
+    path = os.path.join(python_dir, "jittor", "build", "pyjt_compiler.py")
     spec = importlib.util.spec_from_file_location("_pyjt_compiler", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -37,11 +37,11 @@ def main():
     gen_dir = os.path.abspath(sys.argv[3]) if len(sys.argv) > 3 else None
 
     pyjt_compiler = load_generator(python_dir)
-    src_root = os.path.join(python_dir, "jittor")
+    src_root = os.path.join(os.path.dirname(python_dir), "src")
     os.makedirs(out, exist_ok=True)
 
     headers = []
-    for dirpath, _, filenames in os.walk(os.path.join(src_root, "src")):
+    for dirpath, _, filenames in os.walk(src_root):
         for name in filenames:
             if name.endswith(".h"):
                 headers.append((os.path.join(dirpath, name), None))
@@ -50,7 +50,7 @@ def main():
         headers = [(h, p) for h, p in headers
                    if os.path.basename(h) != "var_holder.h"]
         headers.append((os.path.join(gen_dir, "jit_op_maker.h"),
-                        os.path.join(src_root, "src", "var_holder.h")))
+                        os.path.join(src_root, "core", "var_holder.h")))
 
     written = 0
     for header, prefix in sorted(headers):

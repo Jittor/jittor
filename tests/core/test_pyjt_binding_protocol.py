@@ -17,6 +17,7 @@ import gc
 import signal
 import textwrap
 import unittest
+import weakref
 
 import jittor as jt
 import jittor_core
@@ -196,6 +197,74 @@ class TestInstanceDictParticipatesInGC(unittest.TestCase):
         self.assertEqual(vars(v)["foo"], 42)
         del v.foo
         self.assertFalse(hasattr(v, "foo"))
+
+    def test_var_subtype_converts_and_releases_its_type_and_slots(self):
+        class Tensor(jt.Var):
+            __slots__ = ("peer", "__weakref__")
+
+        type_ref = weakref.ref(Tensor)
+        value = Tensor([1.0, 2.0])
+        value_ref = weakref.ref(value)
+        np.testing.assert_allclose(
+            jittor_core.ops.add(value, value).numpy(), [2.0, 4.0])
+        with self.assertRaises((TypeError, RuntimeError)):
+            Tensor(object())
+        value.peer = value
+        Tensor.instance = value
+        del value, Tensor
+        gc.collect()
+        jt.gc()
+        self.assertIsNone(value_ref())
+        self.assertIsNone(type_ref())
+
+    def test_frontend_result_type_and_scoped_factory_restore(self):
+        class Tensor(jt.Var):
+            pass
+
+        value = Tensor([1.0, 2.0])
+        for result in (value + 1, value.reshape((2, 1)),
+                       jittor_core.ops.add(value, value)):
+            self.assertIs(type(result), Tensor)
+        token = jittor_core._set_tensor_frontend_type(Tensor)
+        try:
+            self.assertIs(type(jt.array([3.0])), Tensor)
+            nested = jittor_core._set_tensor_frontend_type(jt.Var)
+            try:
+                self.assertIs(type(jt.array([4.0])), jt.Var)
+            finally:
+                jittor_core._reset_tensor_frontend_type(nested)
+            self.assertIs(type(jt.array([5.0])), Tensor)
+        finally:
+            jittor_core._reset_tensor_frontend_type(token)
+        self.assertIs(type(jt.array([6.0])), jt.Var)
+        with self.assertRaises((TypeError, RuntimeError)):
+            jittor_core._set_tensor_frontend_type(object)
+
+    def test_frontend_backward_callback_keeps_creation_type(self):
+        class Tensor(jt.Var):
+            pass
+
+        observed = []
+
+        class Double(jt.Function):
+            def execute(self, value):
+                return value * 2
+
+            def grad(self, output_grad):
+                observed.append(type(output_grad))
+                return output_grad * 2
+
+        token = jittor_core._set_tensor_frontend_type(Tensor)
+        try:
+            value = jt.array([1.0, 2.0])
+        finally:
+            jittor_core._reset_tensor_frontend_type(token)
+        # tape_together receives vectors of tensors, outside a factory scope.
+        result = Double()(value)
+        gradient = jt.grad(result.sum(), value)
+        np.testing.assert_allclose(gradient.numpy(), [2.0, 2.0])
+        self.assertEqual(observed, [Tensor])
+        self.assertIs(type(jt.array([0.0])), jt.Var)
 
 class TestScalarConversionBuffer(unittest.TestCase):
     """A converted Python scalar must survive until its consumer copies it.

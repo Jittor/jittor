@@ -741,6 +741,12 @@ def compile_src(src, h, basename):
             slot_name = "tp_dealloc"
             func_head = "(PyObject* self) -> void"
             before_return = "Py_TYPE(self)->tp_free((PyObject *) self);"
+            if class_name == "VarHolder":
+                # A Python subtype's deallocator delegates the type-reference
+                # release to a heap-type base. Save it before freeing self.
+                before_return = ("{ PyTypeObject* instance_type = Py_TYPE(self); "
+                                 "instance_type->tp_free((PyObject*) self); "
+                                 "Py_DECREF(instance_type); }")
             if has_attr_dict:
                 before_return = f"Py_XDECREF(((PyObject**)(((char*)self) + sizeof(PyObject) + sizeof({class_name})))[0]);" + before_return
             # tp_init returns -1 for an unmatched overload and CPython then
@@ -900,12 +906,31 @@ def compile_src(src, h, basename):
         # that asked for the counts, and a reset would not read back as clean.
         gbp_entry_scope = ("" if name.startswith("graph_build_profile")
                            else "JT_GBP_SCOPE(gbp_pyjt_entry);")
+        # A frontend subtype keeps the native VarHolder payload and graph.
+        # Carry its Python allocation type across the complete conversion and
+        # call, including tuple/vector results. Never enter a scope in dealloc.
+        frontend_scope = ""
+        frontend_arg_types = [arg[0] for df in dfs for arg in df["args"]]
+        if slot_name != "tp_dealloc" and (
+                class_name == "VarHolder" or
+                any("VarHolder" in df["return_t"] for df in dfs) or
+                any("VarHolder" in kind for kind in frontend_arg_types)):
+            has_args = "PyObject** args" in func_head or "args" in func_fill
+            count = ("n + (kw ? PyTuple_GET_SIZE(kw) : 0)"
+                     if "PyObject** args" in func_head else "n")
+            sequences = str(any("VarHolder" in kind and "vector" in kind
+                                for kind in frontend_arg_types)).lower()
+            frontend_scope = (
+                f"PyTensorFrontendScope tensor_frontend(self, args, {count}, {sequences});"
+                if has_args else
+                "PyTensorFrontendScope tensor_frontend(self);")
         func = f"""
         {func_cast}[]{func_head} {{
             {gbp_entry_scope}
             bool matched_overload=false;
             try {{
                 {func_fill};
+                {frontend_scope}
                 uint64 arg_filled=0;
                 (void)arg_filled;
                 {"".join([f'''
@@ -1084,6 +1109,7 @@ def compile_src(src, h, basename):
         tp.tp_flags |= Py_TPFLAGS_HAVE_GC;
         tp.tp_traverse = [](PyObject* self, visitproc visit, void* arg) -> int {{
             Py_VISIT({dict_slot});
+            {"if (Py_TYPE(self) != &PyjtVarHolder.ht_type) { Py_VISIT(Py_TYPE(self)); }" if class_name == "VarHolder" else ""}
             return 0;
         }};
         tp.tp_clear = [](PyObject* self) -> int {{
@@ -1143,6 +1169,7 @@ def compile_src(src, h, basename):
         {"tp.tp_basicsize += sizeof(uint64); // GET_INITED_FLAG slot" if has_dealloc else ""}
         tp.tp_new = PyType_GenericNew;
         tp.tp_flags = Py_TPFLAGS_DEFAULT;
+        {"tp.tp_flags |= Py_TPFLAGS_BASETYPE;" if class_name == "VarHolder" else ""}
         {gc_type_code}
         {"tp.tp_flags |= Py_TPFLAGS_HEAPTYPE; htp.ht_name = htp.ht_qualname = to_py_object<string>(tp.tp_name);"
         if "heaptype" in class_info["attrs"] else ""}

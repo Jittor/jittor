@@ -87,13 +87,13 @@ static void push_py_object(RingBuffer* rb, PyObject* obj, uint64& __restrict__ o
         }
         return;
     }
-    if (Py_TYPE(obj) == &PyjtVarHolder.ht_type ||
+    if (PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type) ||
         Py_TYPE(obj) == PyArray_Type) {
         ArrayArgs args;
         int64 size=0;
         uint8 protocol = Py_TYPE(obj) == PyArray_Type ? 5 : 7;
         rb->push_t<uint8>(protocol, offset);
-        if (Py_TYPE(obj) == &PyjtVarHolder.ht_type) {
+        if (PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type)) {
             auto ptr = GET_RAW_PTR(VarHolder, obj);
             args = move(fetch_sync({ptr}).at(0));
             size = ptr->var->size;

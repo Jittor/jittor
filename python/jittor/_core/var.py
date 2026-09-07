@@ -212,7 +212,7 @@ def array64(data, dtype=None):
         return array(data, dtype)
 
 def grad(loss, targets, retain_graph=True):
-    if type(targets) == core.Var:
+    if isinstance(targets, core.Var):
         return core.grad(loss, [targets], retain_graph)[0]
     return core.grad(loss, targets, retain_graph)
 
