@@ -118,6 +118,19 @@ optimizer/autograd 桥而不是 Module installer，已写进
 | 反向叶子是三个进程级 id 键强引用字典 | `jt._torch_leaf_params`（六处独立填充：`nested.py:254-256`、`tensor.py:944`、`nn.py:1228/1257/1399/1544`）、`jt._torch_retained`、`jt._active_optimizers` | 叶子集合取决于谁先调用过 parameters()（`nn.py:1399` 注释自承 bert 曾 0/39 个梯度）；Var 不可弱引用故强引用加手工 prune | 叶子由 requires_grad 加图连通性决定；内核需提供反向可达查询 | 主要 |
 | Parameter/buffer 语义实现在内核里，由全局模式位开关 | `compat/torch/__init__.py` 结尾 `_core_api._torch_registration_semantics = True`；`_runtime/core_api.py:1402-1405,2155-2173,2201-2207`；`nn/modules/parameter.py:44/136/143/166` | compat/ 不是边界：内核有 torch 分支且行为随全局布尔改变 | 统一注册规则，删除模式位 | 关键 |
 
+已修：5.02（`dc5f16a6d`）——「视图写回靠三条并行标记链递归回写」这一条要的
+「有存储模型前至少合并成一个 `_View(base, path)`」**已经在内核里落地**，而且是内核而不是
+compat：`VarHolder::view` 就是那个 `_View(base, path)`（`VarView{base, steps}`，链在创建时
+扁平化到根），写回挂在 `VarHolder::assign` 上，覆盖任意深度与任意基本索引。
+所以 `tensor.py:866-873` 建的 `_torch_index_parent`/`_torch_index_slices` 链与 `:517-536`
+的 `_write_index_parent` 递归**现在是重复的一份**：两者写同一个值，前向与反向都幂等
+（第二次 setitem 会把第一次对同一区域的梯度贡献置零），所以没有算错，代价是每次就地写在
+惰性图上多建一层节点。**删除它归 7.12**（那一条本来就要把 205 个 `_torch_*` 属性名并进
+一个 `TorchTensorState`），本波不动 compat 以免与 7.03 抢 `installers/tensor.py`。
+
+同表「`view()` 其实是 reshape，不共享存储」**未修**：那需要 stride-0 视图，即生成的 kernel
+从 Var 读 strides 而不是从 shape 推，见派生任务 5.02b。
+
 ## dtype 与 device 映射
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
 | --- | --- | --- | --- | --- |

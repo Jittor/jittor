@@ -33,6 +33,24 @@ nn.functional.conv2d 是两份独立抄写的 reindex 代码。这些并行路�
 | dtype 提升唯一规则是"字节宽度取 max"，无 promotion lattice | `src/misc/nano_string.h:259-279,217-227`。偏离 torch：`uint8 * (1/255.)` → **float16**；`int64 * 2.0` → float64（torch float32）；`float16+bfloat16` → bfloat16（torch float32）；`int32+uint32` → int32 | 视觉前处理精度直接崩；GPU 上 float64 掉进 1/32 吞吐。Python 层用一次性 cast 局部打补丁而不是修表，未打补丁处（rad2deg/deg2rad）仍中招 | 引入区分 kind 与 width 的提升表，删除局部 cast | 关键 |
 | 索引与计数类返回 int32 | `src/ops/where_op.h:30`(nonzero)、`misc/tensor_ops.py:1850`(randperm)、`:1265`(topk 空输入)、`pool/core_2d.py:108`(pool indices)，`:198` 显式 assert 不超过 2^31 | 与 torch int64 不匹配；超过 2^31 元素静默溢出 | 索引统一 int64 | 主要 |
 
+已修一半：5.02（`5044607d5` 把 `var.h` 里 storage 的契约写出来——一个 Var 的存储是
+(base, offset, shape)，strides 不存是因为每个生成的 kernel 都在 codegen 期从 shape
+推 istride；`dc5f16a6d` 把视图关系从「遍历算子图反推」改成「在产生的地方记录」：
+`VarHolder` 新增 `VarView{base, steps}`，由 `Var.__getitem__` 在基本索引时写入，
+`VarHolder::assign`（每个 `x.foo_()` 的必经之路）据此把根重新绑定到
+`setitem(根, steps, 值)`）。**「切片/view/expand 全部返回独立拷贝，写回不生效」这一条的
+写回半边已修**：`y=jt.arange(10); v=y[1:4]; v.assign(v+100)` 现在改到 y，任意深度、
+任意基本索引都成立，不再受 `cascade_setitem_root` 的「最多十层、每层单个整数」限制
+（那两个条件从来没写在任何地方，是两个 `if` 的副产品）。
+
+**未修的半边：expand 仍然物化，`Var.view` 仍然是 reshape。** 实测（4096×1 expand 到
+4096×4096）：被融合消费时增量分配为 0，但**一旦被当作执行输出**（`b.sync()`/`b.numpy()`）
+就分配完整的 64 MB，`b.raw_ptr != a.raw_ptr`。原因写在 `var.h` 的契约里——stride-0 视图
+要求生成的 kernel 从 Var 读 strides 而不是从 shape 推，这是 codegen 的改动而不是 Var 加
+一个字段，见新派生任务 5.02b。`tests/core/test_view_storage.py::test_expand_still_materializes`
+以 `xfail(strict=True)` 钉住它。`cascade_setitem_root` 仍活着，因为
+`jt.core.ops.getitem`（算子入口，故意不产生视图）与后端分派守卫还在用它，见 5.02c。
+
 ## Module 与参数模型
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
 | --- | --- | --- | --- | --- |

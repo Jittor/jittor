@@ -3283,6 +3283,60 @@ launcher ABI 断言 70 个（比上一波多 2 个，正是新增的 `aclnnProd`
 本波只在自己新加的合同里把「每个根非空」这个形状先立起来。剩下两个 family（`AclOpFunctions`
 类型擦除、`op_idx_map` 删除）的剩余面见看板 8.06 行。
 
+### 2026-09-06 5.02 视图与存储模型（跨分区，切了一半）
+
+| 分区 | 结果 |
+| --- | --- |
+| `build` | **两条验收达成一条，故 5.02 保持待领**，并派生 5.02b（stride-0 真视图）与 5.02c（退役 cascade 推断路径），计划与看板两侧各已加行。`5044607d5` 把 `var.h` 的 storage 契约写出来：一个 Var 的存储是 (base, offset, shape)，**strides 不存**，因为每个生成的 kernel 都在 codegen 期从 shape 推 `istride@i = istride@{i+1} * ishape@{i+1}`，所以共享只允许本身连续的子区间（这正是 `getitem_contiguous_inplace` 在给出别名前检查的），也因此 stride-0 的 expand 必然物化。`dc5f16a6d` 把视图关系从「遍历算子图反推」改成「在产生的地方记录」：`VarHolder` 新增 `VarView{base, steps}`，由 `Var.__getitem__`（张量 API，不是 getitem 算子绑定——视图是关于两个名字的断言）在基本索引时写入，高级索引不记录（与 torch 同规则，其结果是 gather 出来的拷贝）；链在创建时**扁平化到根**，所以 `y[1][2]` 的中间量可以随表达式死掉、写回时用 getitem 重建，base 因而可以是弱引用，不会拖着基张量改变 `tests/core` 那一簇存活 Var 计数；写回挂在 `VarHolder::assign`，即每个 `x.foo_()` 的必经之路。 |
+
+**核实到计划描述与现状不符，未硬改**：5.02 行写的「删 `var_holder.cc:406-441` 的十层下标链写回」，
+那段硬编码链**早已不存在**（11.01 已记过：换成了 `cascade_setitem_root` 的循环）。真正的缺陷不是
+硬编码而是**推断**：那个循环的规格是「最多十层、每层必须是单个整数」，这两个条件不写在任何注释里，
+是两个 `if` 的副产品，所以 `y[1:4]` 这类切片视图静默落在它外面，而且只有 `__setitem__` 会问它、
+`assign` 从来不问。本波用「记录」取代「推断」；旧入口没删，因为 `jt.core.ops.getitem`（算子入口，
+故意不产生视图）与 `misc/indexing.py:var_setitem` 的后端分派守卫还在用它——见 5.02c。
+
+**两条与 5.02 无关、需要 owner 的门禁破损（都是实测，不是引用文档）**：
+
+1. **原生 CPU 门禁自 `14e5920e5`（[4.14]，09-03）起收集即整体中断**：`tests/core/test_device_methods.py`
+   与 `tests/backends/cuda/test_device_methods.py` **同名**，pytest 报 `import file mismatch` 并
+   `Interrupted: 1 error during collection`，**一个用例都不跑**。在干净工作树上直接复现，与本波改动无关。
+   本波两侧都加 `--continue-on-collection-errors` 才拿到基线。修法是给其中一个改名（属 4.14 的 owner）。
+2. **CPU torch 门禁在 `tests/ops/test_ops.py::TestGradientsCPU::test_gradcheck_interpolate_bilinear`
+   整段死掉**：没有结果行、没有汇总行、`EXIT=1`，在基线树上连续复现两次、停在同一个用例。
+   用 `-v` 跑一遍才定到这个 nodeid（`-q` 只看得到停在 55%）。本波两侧都 `--deselect` 掉它，
+   其余部分才跑得完。
+
+**三套门禁 A/B（同一棵基线快照 vs 同一棵改后快照，各自独立 `JITTOR_HOME`，逐条比失败集合而不是比计数）**：
+
+| 门禁 | 基线 | 改后 | 判据 |
+| --- | --- | --- | --- |
+| 原生 CPU | 89 failed / 1754 passed / 1204 skipped / 3 xfailed / 1 error | 89 failed / **1763** passed / 1204 skipped / **4** xfailed / 1 error | **失败集合逐条相同**（`comm -3` 为空）。passed 涨 9、xfailed 涨 1 正是新增的 `tests/core/test_view_storage.py` |
+| CPU torch shim | 155 failed / 3025 passed / 587 skipped / 1 deselected / 8 xfailed | 155 failed / 3025 passed / 587 skipped / 1 deselected / 8 xfailed | **失败集合逐条相同**（两侧各 155 条，`comm` 双向为空）。该门禁不收 `tests/core` 下的新文件，所以计数不该变，也确实没变 |
+| CUDA（`tests/core` + `tests/backends/cuda` + `tests/backends/parity/test_dtype_coverage.py`） | 71 failed / 907 passed / 103 skipped / 3 xfailed / 9 errors | 71 failed / **916** passed / 103 skipped / **4** xfailed / 9 errors | **失败集合逐条相同**：`tests/core` 两侧同样 29 条、同样的 nodeid，`tests/backends/cuda` 两侧同样 42 条 + 9 errors，`test_dtype_coverage.py` 两侧 6 passed。passed 涨 9、xfailed 涨 1 同样只是新增的 `test_view_storage.py` |
+
+CUDA 门禁**不含 `tests/ops`**：基线那一跑超时被杀，没有可比的一侧，宁可标明缺口也不拿半份基线当判据。
+
+**存活 Var 那一簇串行跑**（`test_fuse_memopt`／`test_var_holder`／`test_no_grad`，并发下不是稳定量）：
+两侧各串行四轮，每轮结果集合取 md5，八轮**全部同一个 md5**（`fbf17ca1…`，`4 failed, 9 passed`），
+所以本波没有动这几条的存活计数——这正是 `VarView` 对 base 用弱引用换来的。
+
+改后树上整套 `tests/backends/cuda` 真跑过（222 passed），所以「带 CUDA 起得来、算得对」有门禁本身作证。
+
+**中途抓到并修掉的一条真回归**（值得记下，因为它不是行为错而是契约错）：第一轮原生 A/B 比出两条新
+失败，都在 `tests/core/test_acl_tensor_routing.py`——它用一个假 `Var` 类 `exec` 出 `misc/indexing.py`
+的函数来钉**后端路由**契约。除了替身缺方法之外，它暴露了一个我本不该顺手做的改动：我第一版把分派守卫
+写成 `not x._is_view() and x._needs_cascade_setitem()`，那会让整数视图**开始**走后端分派。那条守卫
+存在的理由是 `check_cascade_setitem` 要求结果必须是 native setitem 算子，与视图无关，而本机没有 ACL
+硬件去验证放宽的后果。`75442d3fe` 把守卫恢复成逐字原样，只在写回那一步分流。**「跑 A/B 才发现自己
+多改了一件事」这一点本身就是判据的价值**：两条失败里没有一条是数值错的。
+
+`tests/core/test_setitem.py` 的 `test_getitem` 与 `test_setitem_` 在**基线上同样失败**
+（同一条消息，基线单跑 2 failed / 21 passed / 4 skipped），不是本波引入。
+`node.h:263` 的 `backward liveness release without a matching owner` 也是既有的：两侧都出现在
+**同一个用例**（`tests/core/test_setitem.py`）的 teardown，条数随同进程里跑过什么而变
+（基线全量 6 条、改后全量 15 条、单跑 `tests/core` 2 条），不是稳定量，不作判据。
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
