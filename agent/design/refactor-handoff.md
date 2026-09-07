@@ -3589,6 +3589,80 @@ kernel 为了找三个 tensor 付 7 次 Python 调用加两次集合增删——
 静默的那个数**（整网分相），把同进程小尺度的 A/B 留到后面——交错 A/B 对负载的免疫力
 是设计出来的，整网单次墙钟没有。
 
+### 本波结果：`codegen` / 8.20 手写 GroupNorm 不再物化 `xhat`（2026-09-07）
+
+`group_norm_forward` 原来除了 `y` 还写一份全尺寸 `xhat` 给反向。改成只交出 `mean` 与
+`rstd`（每组两个 float）、反向从 `x` 重算——同目录的 LayerNorm 与 BatchNorm 本来就是
+这么写的，torch 的 `native_group_norm` 也是，GroupNorm 是唯一的例外。
+
+三类证据，都在 `large_diffusers_unet2d` 一步的真实形状组合上（12 种形状、35 个算子）：
+
+- **显存**（唯一与负载无关的精确量）：`use_stat_allocator=2`（挂在缓存分配器**之上**，
+  数的是图要走的字节，不是没命中设备缓存的部分），直接驱动 `Function.execute`/`grad`
+  而不经过 loss（`(y*cot).sum()` 自己就会分配全尺寸中间量，会把要测的东西埋掉）：
+  **583.6 MiB → 389.1 MiB**，即 **3.001 → 2.001 份**全尺寸副本（一份 194.5 MiB =
+  203,948,032 B）。分配**次数**不变（210 次），少的是尺寸。两次运行逐字节可复现。
+- **时间**：`classify.py --match group_norm`，**before/after 交替四对**（负载 1.82–3.65、
+  并发编译进程 0–4），合计 **1447.5 / 1449.1 / 1452.0 / 1476.2 → 1363.9 / 1366.0 /
+  1371.7 / 1372.5 us**，均值 1456.2 → 1368.5（**−87.7 us，−6.0%，区间不重叠**）。
+  拆开：forward 548.3 → 445.9（**−102.4 us，−18.7%**），backward 907.9 → 922.6
+  （**+14.7 us，+1.6%**）。**八次运行 calls 都是 70**，另外五个角色的 calls 也逐个相同。
+  四份 before / 四份 after 报告都用 jit key 里的 CUDA 源码原文验过是各自那一版
+  （before 12 条 `xhat[base + j] =`，after 0 条）。
+- **数值**：**36 个数组（9 种形状/分组 × y/dx/dweight/dbias）改前改后逐位相同**；
+  对 float64 NumPy 参考的最差相对误差改前改后同为 1.135e-3（退化的 `(1,4,1,1)`、
+  `num_groups=2`），其余 ≤ 2.15e-7，无一条变差。
+
+**四条值得记下来省得重测的结论：**
+
+1. **「`xhat` 占 3.22 缺口 75%」不成立，而且量级错了一个数量级。** 同场次 PyTorch
+   2.12.1+cu126 的 GroupNorm 同口径合计（八种 kernel、328 次发射、41 个算子）是
+   **1288.1 us**，Jittor 改前 1456.2 us，**差距只有 +168.1 us**。8.20 描述里的
+   「绝对量 1.5–1.8 ms」是 GroupNorm 的**总耗时**，不是**差距**，原描述把两者混了。
+   这一条值 87.7 us，即那个差距的 **52%**。**改后 1368.5 对 1288.1，仍慢 80.4 us
+   （+6.2%），8.20 的验收未达成**。已在计划、看板与审计三处写清实测。
+2. **少搬 222 us 的字节只快了 102 us，因为 L2。** profiler 自己的字节列说 DRAM 下界降了
+   222.5 us（正好一份 `xhat` ÷ 916.7 GB/s），但 forward 改前的屋顶线 ratio 只有 0.82
+   ——那份写有一大半根本没到 DRAM。改后 forward 的 ratio 是 **1.00，正好贴在屋顶线上**，
+   不再少搬字节就不可能更快。**下界降多少 ≠ 时间省多少，要看改前的 ratio。**
+3. **重算不是免费的。** backward 多了 **14.7 us（+1.6%）**，四对交替下区间不重叠，
+   是真的。它读 `x` 与原来读 `xhat` 的字节数一样，但每元素多两次浮点运算，而
+   `backward_x` 有两个循环要重算。净收益仍然是 −87.7 us，但「重算不要钱」这句是错的。
+4. **剩余面全在 backward**，922.6 us 对 667.6 us 的下界（ratio 1.38），forward 已无空间。
+   `group_norm_backward_x` 走三遍 `grad_y`、两遍 `x`，而头两个归约循环读的是同一份
+   `grad_y`，合成一趟即可；torch 的 `ComputeInternalGradientsCUDAKernel`（410.8 us）
+   就是一趟出两个统计量。已登记为 **8.21**（计划与看板两侧各一行）。
+
+**方法上最贵的一课：before/after 必须交替跑。** 先跑三次 before 再跑三次 after，
+期间一分钟负载从 4.29 单调涨到 7.02、并发编译从 7 涨到 20，after 里混进一个
+1575.3 us 的离群值，区间**重叠**，整轮白测。改成 B,A,B,A 四对、同一段时间窗，
+三项全部区间不重叠。**负载趋势落在一条臂上和落在两条臂上，是「有结论」与「没结论」的
+差别。**
+
+**`--match` 这个工具本波是第一个真实使用者，两处会安静报少的地方已修，两处都是真跑
+出来的。** `--match softmax` 在这个负载上返回一个格式完美的 `0 calls / 0.0 us` 且
+exit 0，而 `handwritten:code` 里剩下的 1592.4 us（3 种 13 次，其中 611.7 us 那种的
+CUDA 源码里带着 `expf` 与 `max`）正是手写 attention softmax——它的 kernel 叫 `kernel`，
+名字根本没进 jit key。现在挑不到会 **exit 1**。torch 那一侧原来按截断到 70 字的符号名
+匹配，`--match GroupNorm` **直接返回 0.0 us**，改为完整符号名后返回 474.6 us。
+**但 `GroupNorm` 即使修好也仍不是 torch 侧的正确 pattern：474.6 对真实的 1288.1，
+还是少报 2.7 倍**，因为 torch 把 GroupNorm 拆成八种 kernel、只有三种符号里带这个词。
+八种的完整 pattern 已写进技能。另外会打印子桶占所在角色的百分比：`group_norm` 是
+`handwritten:code` 的 40%，**占 100% 就说明挑的是整个角色而不是一个家族**。
+
+方法沉淀：`cuda-reduction-strategy-comparison` 加「手写 kernel 少存一个中间量」一节
+与可复用的 `group_norm_ab.py`（accuracy / memory / time 三种量法）；
+`cuda-elementwise-bandwidth-roofline` 加 `--match` 一节。
+
+**门禁**（同机自测基线，逐条 A/B）：`JITTOR_TORCH_SHIM=1 tests/structure`
+**14 failed / 888 passed，改前改后失败集合逐条相同**（注意：这与派活时给的
+15 failed / 892 passed 不同，我在**未改动的基线上**重跑也是 14/888，差异不在本波改动）；
+`tests/backends/cuda` **5 failed / 269 passed**，五条均为既有且与 GroupNorm 无关；
+`tests/nn/test_norm.py` 19 passed。新增的分配器用例**修前 3.00 份失败、修后 2.00 份
+通过**；边界用例把 `group = 0` 的变异体判红，证明它确实守着新的通道下标算术。
+
+<!-- 8.20 gate results -->
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
