@@ -90,9 +90,27 @@ void PyTensorFrontendScope::select(
     for (int64 i = 0; !candidate && args && i < count; ++i)
         candidate = frontend_candidate(args[i], scan_sequences);
     if (!candidate) return;
-    token_ = set_tensor_frontend_type(
-        reinterpret_cast<PyObject*>(Py_TYPE(candidate)));
-    apply_policy(reinterpret_cast<PyObject*>(Py_TYPE(candidate)));
+    PyObject* actual_type = reinterpret_cast<PyObject*>(Py_TYPE(candidate));
+    PyObject* result_type = PyObject_GetAttrString(actual_type, "_frontend_result_type");
+    if (!result_type) {
+        if (!PyErr_ExceptionMatches(PyExc_AttributeError))
+            throw std::runtime_error("cannot read tensor frontend result type");
+        PyErr_Clear();
+        result_type = actual_type;
+        Py_INCREF(result_type);
+    }
+    try {
+        // Parameters retain their Python identity when explicitly constructed,
+        // while their operations may request ordinary frontend Tensor results.
+        // The shared setter validates a marker just as strictly as an explicit
+        // frontend selection before changing the context.
+        token_ = set_tensor_frontend_type(result_type);
+        apply_policy(result_type);
+    } catch (...) {
+        Py_DECREF(result_type);
+        throw;
+    }
+    Py_DECREF(result_type);
 }
 
 void PyTensorFrontendScope::apply_policy(PyObject* type) {

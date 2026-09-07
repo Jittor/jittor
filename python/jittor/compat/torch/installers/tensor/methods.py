@@ -542,8 +542,14 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # Vars picklable by serializing through numpy + dtype (needed for Ray to
     # ship token tensors to reward actors, torch.multiprocessing, etc.).
     if not getattr(Var, "_reduce_wrapped", False):
-        Var.__reduce__ = lambda self: (
-            _owner._rebuild_var_from_numpy, (self.numpy(), str(self.dtype)))
+        if Var is not _NativeVar:
+            from ...frontend import deepcopy_tensor, reduce_tensor
+            Var.__reduce__ = reduce_tensor
+            Var.__reduce_ex__ = lambda self, protocol: reduce_tensor(self)
+            Var.__deepcopy__ = deepcopy_tensor
+        else:
+            Var.__reduce__ = lambda self: (
+                _owner._rebuild_var_from_numpy, (self.numpy(), str(self.dtype)))
         Var._reduce_wrapped = True
 
     # Leaf registry for the no-optimizer backward() path (below): torch's

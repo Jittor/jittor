@@ -4,7 +4,8 @@ import types
 import inspect
 from functools import wraps
 
-from .frontend import tensor_frontend
+from .frontend import make_parameter_type, tensor_frontend
+from .parameter_containers import make_parameter_containers
 
 
 def prepare_nn_namespace(context):
@@ -76,6 +77,7 @@ def prepare_nn_namespace(context):
 
     def adopt_owned_children(module, external, frozen=False):
         memo = {id(module): module}
+        protected = set(external)
 
         def adapt_value(value):
             if id(value) in external:
@@ -83,6 +85,10 @@ def prepare_nn_namespace(context):
             if id(value) in memo:
                 return memo[id(value)]
             if isinstance(value, native_module):
+                # A child may have come from shared global state. Its tensor
+                # references must not be turned into new Parameters by the
+                # enclosing constructor, even when also exposed on the parent.
+                protected.update(external_objects((value,), {}))
                 if isinstance(value, Module):
                     return value
                 native_type = type(value)
@@ -125,32 +131,66 @@ def prepare_nn_namespace(context):
             replacement = adapt_value(value)
             if replacement is not value:
                 setattr(module, name, replacement)
-        # Mark this constructor's direct Tensor parameters only. Parameters of
-        # copied native children keep their existing flags and object identity.
-        for _, parameter, role in module._var_roles():
-            if (role != "parameter" or id(parameter) in external
-                    or not isinstance(parameter, tensor_type)):
+        # Promote only this constructor's own parameters. Role names can denote
+        # ParameterList entries rather than attributes; replace by identity in
+        # the actual attribute/container graph, never setattr a dotted name.
+        roles = tuple(module._var_roles())
+        protected.update(id(value) for _, value, role in roles
+                         if role in ("buffer", "non_persistent_buffer"))
+        replacements = {}
+        for _, parameter, role in roles:
+            if (role != "parameter" or id(parameter) in protected
+                    or not isinstance(parameter, tensor_type)
+                    or isinstance(parameter, Parameter)):
                 continue
-            parameter._is_torch_parameter = True
-            parameter._torch_parameter_class = Parameter
-            if not frozen and str(parameter.dtype) in (
-                    "float16", "bfloat16", "float32", "float64",
-                    "complex64", "complex128"):
-                parameter.start_grad()
-                from .nested import _torch_register_leaf
-                _torch_register_leaf(parameter)
+            if id(parameter) not in replacements:
+                differentiable = str(parameter.dtype) in (
+                    "float16", "bfloat16", "float32", "float64", "complex64", "complex128")
+                replacements[id(parameter)] = Parameter(
+                    parameter, requires_grad=not frozen and differentiable)
+
+        rewritten = {}
+
+        def replace_parameters(value):
+            if id(value) in protected:
+                return value
+            if id(value) in replacements:
+                return replacements[id(value)]
+            if id(value) in rewritten:
+                return rewritten[id(value)]
+            if isinstance(value, dict):
+                result = value.copy()
+                rewritten[id(value)] = result
+                for key, item in value.items():
+                    result[key] = replace_parameters(item)
+                return result
+            if isinstance(value, list):
+                result = []
+                rewritten[id(value)] = result
+                result.extend(replace_parameters(item) for item in value)
+                return result
+            if isinstance(value, tuple):
+                items = tuple(replace_parameters(item) for item in value)
+                if all(item is old for item, old in zip(items, value)):
+                    return value
+                if type(value) is tuple:
+                    result = items
+                elif hasattr(value, "_fields"):
+                    result = type(value)(*items)
+                else:
+                    return value
+                rewritten[id(value)] = result
+                return result
+            return value
+
+        if replacements:
+            for name, value in tuple(vars(module).items()):
+                replacement = replace_parameters(value)
+                if replacement is not value:
+                    setattr(module, name, replacement)
 
     native_parameter = backend.nn.Parameter
-    parameter_meta = type(native_parameter)
-
-    class ParameterMeta(parameter_meta):
-        def __call__(cls, *args, **kwargs):
-            with tensor_frontend(tensor_type):
-                return super().__call__(*args, **kwargs)
-
-    Parameter = ParameterMeta("Parameter", (native_parameter,), {
-        "__module__": "torch.nn.parameter", "_torch_compat_type": True,
-    })
+    Parameter = make_parameter_type(backend, tensor_type)
 
     def copy_module(source, name):
         known = modules.get(id(source))
@@ -178,13 +218,26 @@ def prepare_nn_namespace(context):
 
     namespace = copy_module(backend.nn, "torch.nn")
     namespace.Module = Module
+    ParameterList, ParameterDict = make_parameter_containers(Module, Parameter, backend.Var)
+    namespace.ParameterList = ParameterList
+    namespace.ParameterDict = ParameterDict
+    namespace.modules.ParameterList = ParameterList
+    namespace.modules.ParameterDict = ParameterDict
+    namespace.modules.parameter.ParameterList = ParameterList
+    namespace.modules.parameter.ParameterDict = ParameterDict
     # Parameter's public module may not exist in the native tree yet.
     parameter_module = types.ModuleType("torch.nn.parameter")
     parameter_module.Parameter = Parameter
-    for name in ("UninitializedTensorMixin", "UninitializedParameter", "UninitializedBuffer"):
-        setattr(parameter_module, name, type(name, (), {"__module__": "torch.nn.parameter"}))
+    parameter_module.ParameterList = ParameterList
+    parameter_module.ParameterDict = ParameterDict
+    source_parameter_module = getattr(backend.nn, "parameter", None)
+    if source_parameter_module is not None:
+        for name in ("UninitializedTensorMixin", "UninitializedParameter", "UninitializedBuffer"):
+            if name in vars(source_parameter_module):
+                setattr(parameter_module, name, vars(source_parameter_module)[name])
     namespace.parameter = parameter_module
     context.state["Module"] = Module
+    context.state["Parameter"] = Parameter
     context.state["nn_frontend"] = namespace
     context.state["nn_frontend_tensor"] = tensor_type
     context.state["nn_layer_adapters"] = adapters

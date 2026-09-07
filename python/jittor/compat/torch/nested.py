@@ -232,6 +232,10 @@ def _rebuild_var_from_numpy(np_arr, dtype_str=None):
     (self.data,))`` -- into infinite recursion. Serializing via numpy + dtype
     keeps Vars picklable for Ray / multiprocessing (e.g. verl ships a DataProto
     of token tensors to a reward actor)."""
+    from .tensor_state import compatibility_owner
+    target = compatibility_owner(jt)
+    if target is not jt:
+        return target.tensor(np_arr, dtype=dtype_str)
     v = jt.array(np_arr)
     if dtype_str is not None and str(v.dtype) != dtype_str:
         # numpy can't represent bfloat16 (.numpy() upcasts to float32); restore
@@ -288,6 +292,10 @@ def _torch_make_parameter(data=None, requires_grad=True):
     Parameter(torch.cat(...)); carrying that history in the shim retains old
     densification graphs and quickly exhausts GPU memory.
     """
+    from .tensor_state import compatibility_owner
+    target = compatibility_owner(jt)
+    if target is not jt:
+        return target.nn.Parameter(data, requires_grad=requires_grad)
     v = data if isinstance(data, jt.Var) else jt.array(data)
     if isinstance(v, jt.Var):
         v = v.stop_grad()

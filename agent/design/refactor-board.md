@@ -1,6 +1,6 @@
 # 整改看板
 
-2026-09-08 最新：7.12 显式独立模式已使用真实 Tensor/Module 类型与独立 NN 模块树，原生类型安装前后不变；CPU 109 项及真实 CUDA 同链通过，含失败重试。默认模式、Parameter 层级及完整 API 收口仍未完成，详见任务行与[结果记录](../results/2026-09-08-independent-tensor-module-install.md)。
+2026-09-08 最新：7.12 显式独立模式已使用真实 Tensor/Module/Parameter 类型与独立 NN 模块树，原生类型安装前后不变；参数容器和类型保留的 pickle/deepcopy 已接通。CPU 109 项及真实 CUDA 同链通过，含失败重试。默认入口与完整 API 收口仍未完成，详见任务行与[参数迁移记录](../results/2026-09-08-independent-parameters.md)。
 
 下方早期波次记录为历史证据，当前关闭状态以任务表为准；Tensor 子类底层前置见 [类型边界记录](../results/2026-09-08-tensor-frontend-types.md)。
 
@@ -719,7 +719,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.09 | `torch.library` | 已合并 | compat | 99901e6c、d0a782a0。按张量真实驻留选择 CPU/CUDA 并排除 Meta，`register_autograd` 真正接入且模型特判移出通用注册层；线程局部 autocast dtype policy 进一步选择 AutocastCPU/CUDA，嵌套禁用与退出恢复普通路由。独立 PyTorch oracle 一致，CPU dispatch 8 passed、1 个未分配 CUDA 节点 skipped |
 | 7.10 | `torch.compile`/`jit.trace`/`jit.script` 保留 pass… | 已合并 | 兼容层分区 | 3d898ece。语义参数拒绝、permissive allowlist/audit 与 ShapeProp ImportError 验收均有测试 |
 | 7.11 | autograd 语义 | 已合并 | compat | `2ec34693`：`Var.is_leaf` 转发内核 `is_backward_leaf`，`Var.grad_fn` 对叶子返回 None、对非叶子返回 node/op/name 代理；shim autograd 语义 20 passed，core backward-leaf 查询 20 passed。requires_grad 策略差异仍归 7.12。 |
-| 7.12 | 独立 torch 包 | 待领 | compat | 2026-09-08：显式 independent 模式现在拥有真实 Tensor/Module 子类及独立 NN 模块树，安装不再 patch native Var/Module/Linear；工厂、Linear/Sequential 前反向、data 写回和作用域策略恢复已接通。真实失败后重试重建类型与发布图，CPU 定向109 passed，真实CUDA同链1 passed。默认部署仍legacy；Parameter真实继承关系、其余API/序列化/子类与混合线程边界仍未收口，不提前关闭。见 [本批结果](../results/2026-09-08-independent-tensor-module-install.md)、[底层类型边界](../results/2026-09-08-tensor-frontend-types.md)、[安装owner前置](../results/2026-09-08-torch-installation-target.md)。内核前置2.09/2.25及视图owner5.02已就位。 |
+| 7.12 | 独立 torch 包 | 待领 | compat | 2026-09-08：显式 independent 模式已拥有真实 Tensor/Module/Parameter 类型和独立 NN 模块树，不再 patch native Var/Module/Linear；参数运算返回Tensor，ParameterList/ParameterDict自动转换且不修改源Tensor，pickle/deepcopy恢复类型和属性。工厂、Linear/Sequential前反向、data写回、作用域策略恢复与真实失败重试均有证据：CPU定向109 passed，真实CUDA同链1 passed。默认部署仍legacy；完整API、序列化共享存储/stride、共享native child和混合线程边界未收口，不提前关闭。见 [参数迁移](../results/2026-09-08-independent-parameters.md)、[类型安装](../results/2026-09-08-independent-tensor-module-install.md)、[底层类型边界](../results/2026-09-08-tensor-frontend-types.md)。内核前置2.09/2.25及视图owner5.02已就位。 |
 | 7.13 | FSDP2 | 待领 | | 已合入 37c0aed4、c0e6e1ae、48da7360、873dd5cf；仍缺峰值显存达标、复用原生 optimizer 更新逻辑与 DeviceMesh 真实分组 |
 | 7.14 | vLLM 边界检查把 `torch` 视作 jittor 别名 | 已合并 | 兼容层分区 | 178be65a |
 | 7.15 | `_rebuild_tensor_v2` 按 stride 还原或报错 | 已合并 | | 7e7877c8 |
