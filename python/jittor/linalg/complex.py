@@ -26,7 +26,7 @@ def complex_inv(x:ComplexNumber):
     """
     import jittor as jt
     assert isinstance(x, ComplexNumber), "complex_inv is implemented for nn.ComplexNumber"
-    assert x.real.dtype == jt.float32 and x.imag.dtype == jt.float32, "real and imag in ComplexNumber should be jt.float32"
+    assert str(x.real.dtype) == "float32" and str(x.imag.dtype) == "float32", "real and imag in ComplexNumber should be jt.float32"
     assert x.shape[-2] == x.shape[-1], "only square matrix is supported for complex_inv"
 
     def forward_code(np, data):
@@ -67,7 +67,7 @@ def complex_eig(x:ComplexNumber):
     """
     import jittor as jt
     assert isinstance(x, ComplexNumber), "complex_eig is implemented for nn.ComplexNumber"
-    assert x.real.dtype == jt.float32 and x.imag.dtype == jt.float32, "real and imag in ComplexNumber should be jt.float32"
+    assert str(x.real.dtype) == "float32" and str(x.imag.dtype) == "float32", "real and imag in ComplexNumber should be jt.float32"
     assert x.shape[-2] == x.shape[-1], "only square matrix is supported for complex_eig"
     def forward_code(np, data):
         a = _stack_to_complex(data["inputs"][0])
@@ -105,7 +105,7 @@ def complex_eigh(x:ComplexNumber):
     """
     import jittor as jt
     assert isinstance(x, ComplexNumber), "complex_eigh is implemented for nn.ComplexNumber"
-    assert x.real.dtype == jt.float32 and x.imag.dtype == jt.float32, "real and imag in ComplexNumber should be jt.float32"
+    assert str(x.real.dtype) == "float32" and str(x.imag.dtype) == "float32", "real and imag in ComplexNumber should be jt.float32"
     assert x.shape[-2] == x.shape[-1], "only square matrix is supported for complex_eigh"
     def forward_code(np, data):
         a = _stack_to_complex(data["inputs"][0])
@@ -141,7 +141,7 @@ def complex_qr(x):
     """
     import jittor as jt
     assert isinstance(x, ComplexNumber), "linalg_qr is implemented for nn.ComplexNumber"
-    assert x.real.dtype == jt.float32 and x.imag.dtype == jt.float32, "real and imag in ComplexNumber should be jt.float32"
+    assert str(x.real.dtype) == "float32" and str(x.imag.dtype) == "float32", "real and imag in ComplexNumber should be jt.float32"
     assert x.shape[-2] == x.shape[-1], "only square matrix is supported for linalg_qr"
     def forward_code(np, data):
         a = _stack_to_complex(data["inputs"][0])
@@ -258,7 +258,7 @@ def complex_pinv(x:ComplexNumber):
     """
     import jittor as jt
     assert isinstance(x, ComplexNumber), "complex_pinv is implemented for nn.ComplexNumber"
-    assert x.real.dtype == jt.float32 and x.imag.dtype == jt.float32, "real and imag in ComplexNumber should be jt.float32"
+    assert str(x.real.dtype) == "float32" and str(x.imag.dtype) == "float32", "real and imag in ComplexNumber should be jt.float32"
     def forward_code(np, data):
         a = _stack_to_complex(data["inputs"][0])
         m_a = data["outputs"][0]

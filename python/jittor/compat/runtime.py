@@ -54,7 +54,8 @@ def compose(root_module, core_flags, strict=True, preflight=None):
             _preflight_result=preflight,
             _composition=True,
         )
-        context = getattr(root_module, "_torch_compat_install_context")
+        target = activation.get("torch", root_module) if isinstance(activation, dict) else root_module
+        context = vars(target)["_torch_compat_install_context"]
         torch_reports = tuple(context.reports)
         if isinstance(activation, dict):
             integrations = activation.get("integrations") or {}

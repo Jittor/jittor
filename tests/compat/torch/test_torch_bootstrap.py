@@ -70,14 +70,17 @@ class TestTorchBootstrap(unittest.TestCase):
         with mock.patch.dict(
             os.environ,
             {
+                "JT_BACKEND": "cpu",
+                "JT_BUILD_NVCC_FLAGS": "-lineinfo",
                 "nvcc_flags": "-lineinfo",
                 "JITTOR_TORCH_KEEP_FAST_MATH": "",
             },
-            clear=False,
+            clear=True,
         ):
             preflight.configure_torch_math_flags(root)
-            environment_flags = os.environ["nvcc_flags"]
-            self.assertEqual(os.environ["cuda_kernel_math"], "strict")
+            environment_flags = os.environ["JT_BUILD_NVCC_FLAGS"]
+            self.assertEqual(os.environ["JT_CUDA_KERNEL_MATH"], "strict")
+            self.assertEqual(os.environ["nvcc_flags"], "-lineinfo")
 
         self.assertEqual(environment_flags, "-lineinfo")
         self.assertEqual(runtime_flags.cuda_kernel_math, "strict")
@@ -96,18 +99,23 @@ class TestTorchBootstrap(unittest.TestCase):
         with mock.patch.dict(
             os.environ,
             {
-                "nvcc_flags": (
+                "JT_BACKEND": "acl",
+                "ASCEND_TOOLKIT_HOME": "/opt/ascend/toolkit",
+                "JT_BUILD_NVCC_FLAGS": (
                     "-lineinfo --fmad=false --prec-div=true --prec-sqrt=true"
                 ),
+                "nvcc_flags": "-legacy-only --fmad=false",
                 "JITTOR_TORCH_KEEP_FAST_MATH": "",
             },
-            clear=False,
+            clear=True,
         ):
             preflight.configure_torch_math_flags(root)
-            environment_flags = os.environ["nvcc_flags"]
+            environment_flags = os.environ["JT_BUILD_NVCC_FLAGS"]
+            self.assertEqual(os.environ["nvcc_flags"], "-legacy-only --fmad=false")
 
         for value in (environment_flags,):
             self.assertIn("-lineinfo", value)
+            self.assertNotIn("-legacy-only", value)
             self.assertNotIn("--fmad=false", value)
             self.assertNotIn("--prec-div=true", value)
             self.assertNotIn("--prec-sqrt=true", value)
@@ -120,10 +128,12 @@ class TestTorchBootstrap(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=_TEST_STATE_ROOT) as directory:
             environment = {
                 "HOME": directory,
+                "JT_BACKEND": "acl",
                 "ASCEND_TOOLKIT_HOME": "/opt/ascend/toolkit",
-                "nvcc_flags": (
+                "JT_BUILD_NVCC_FLAGS": (
                     "-lineinfo --fmad=false --prec-div=true --prec-sqrt=true"
                 ),
+                "nvcc_flags": "-legacy-only --fmad=false",
             }
             preflight.prepare_import_environment(
                 argv=[sys.argv[0]],
@@ -134,10 +144,13 @@ class TestTorchBootstrap(unittest.TestCase):
                 configure_cuda=False,
             )
 
-        self.assertIn("-lineinfo", environment["nvcc_flags"])
-        self.assertNotIn("--fmad=false", environment["nvcc_flags"])
-        self.assertNotIn("--prec-div=true", environment["nvcc_flags"])
-        self.assertNotIn("--prec-sqrt=true", environment["nvcc_flags"])
+        self.assertIn("-lineinfo", environment["JT_BUILD_NVCC_FLAGS"])
+        self.assertNotIn("--fmad=false", environment["JT_BUILD_NVCC_FLAGS"])
+        self.assertNotIn("--prec-div=true", environment["JT_BUILD_NVCC_FLAGS"])
+        self.assertNotIn("--prec-sqrt=true", environment["JT_BUILD_NVCC_FLAGS"])
+        self.assertNotIn("-legacy-only", environment["JT_BUILD_NVCC_FLAGS"])
+        self.assertEqual(environment["nvcc_flags"], "-legacy-only --fmad=false")
+        self.assertEqual(environment["JT_CUDA_KERNEL_MATH"], "backend")
 
     def test_preflight_leaves_onednn_enabled(self):
         """The shim must not switch off Jittor's CPU BLAS/convolution backend.
@@ -557,6 +570,12 @@ class TestTorchBootstrap(unittest.TestCase):
                 mock.patch.object(runtime, "configure_torch_math_flags"), \
                 mock.patch("jittor.compat.torch.install") as install, \
                 mock.patch.dict(sys.modules, {"jittor": root, "torch": root}, clear=False):
+            def install_target(target, **kwargs):
+                target._torch_compat_install_context = types.SimpleNamespace(
+                    registry=types.SimpleNamespace(_published={})
+                )
+                return target
+            install.side_effect = install_target
             result = runtime._activate_once(
                 _root_module=root,
                 _preflight_result=types.SimpleNamespace(active=True, runtime_root="/runtime"),
@@ -568,6 +587,8 @@ class TestTorchBootstrap(unittest.TestCase):
             assert result["torch"] is sys.modules["torch"]
             assert result["torch"].owner is root
             install.assert_called_once()
+            assert install.call_args[0][0] is result["torch"]
+            assert vars(result["torch"])["_torch_compat_install_context"] is not root._torch_compat_install_context
 
     def test_activation_failure_rolls_back_outer_path_and_module_mutations(self):
         from jittor.compat.shim import runtime

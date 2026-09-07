@@ -18,6 +18,45 @@ from jittor.compat.torch.installers.utilities import _mutate_import
 from _helpers.install_lock import install_lock_is_free
 
 
+def test_failed_target_install_replays_rolled_back_steps_with_same_state(monkeypatch):
+    from jittor.compat import torch as installer
+    from jittor.compat.torch.namespace import TorchNamespace
+    from jittor.compat.torch.tensor_state import get_tensor_state
+
+    backend = types.ModuleType("test-native-backend")
+    target = TorchNamespace(backend)
+    marker = object()
+    calls = []
+    fail = [True]
+
+    def first(ctx):
+        calls.append("first")
+        ctx.target_namespace.local_api = marker
+        get_tensor_state(ctx.native_backend).leaf_params[17] = marker
+
+    def second(ctx):
+        if fail[0]:
+            raise ValueError("injected target install failure")
+
+    monkeypatch.setattr(installer, "_REQUIRED_STEPS", (("first", first), ("second", second)))
+    monkeypatch.setattr(installer, "_OPTIONAL_STEPS", ())
+    with pytest.raises(installer.InstallStepError, match="injected target install failure"):
+        installer.install(target)
+    ctx = vars(target)["_torch_compat_install_context"]
+    state = ctx.state["_tensor_state"]
+    assert not state
+    assert "local_api" not in vars(target)
+    assert "_torch_compat_owner" not in vars(backend)
+    assert ctx.markers.get("first") != "complete"
+
+    fail[0] = False
+    assert installer.install(target) is target
+    assert calls == ["first", "first"]
+    assert get_tensor_state(backend) is state
+    assert state[17] is marker
+    assert target.local_api is marker
+
+
 def _context(transaction=None):
     """An install context stand-in carrying only the ledger handle."""
     state = {} if transaction is None else {"_install_transaction": transaction}

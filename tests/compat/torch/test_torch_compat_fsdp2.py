@@ -603,7 +603,9 @@ class TestFSDP2Compat(unittest.TestCase):
         )
         self.assertIs(settings.state_dict_type, StateDictType.FULL_STATE_DICT)
         self.assertIs(OptimStateKeyType.PARAM_NAME, OptimStateKeyType.PARAM_NAME)
-        self.assertIsNotNone(FlatParameter(torch.ones(1)))
+        flat_parameter = FlatParameter(torch.ones(1))
+        self.assertIsInstance(flat_parameter, torch.Tensor)
+        self.assertTrue(flat_parameter.requires_grad)
         FullyShardedDataParallel.set_state_dict_type(
             wrapped,
             StateDictType.LOCAL_STATE_DICT,
@@ -822,7 +824,9 @@ class TestFSDP2Compat(unittest.TestCase):
         )
         self.assertIs(all_gather(dt), dt)
         self.assertIs(reduce_scatter(dt), dt)
-        self.assertIsNotNone(PrivateFlatParameter(torch.ones(1)))
+        flat_parameter = PrivateFlatParameter(torch.ones(1))
+        self.assertIsInstance(flat_parameter, torch.Tensor)
+        self.assertTrue(flat_parameter.requires_grad)
 
 
 class TestTheTwoForwardHooksActAsOne(unittest.TestCase):

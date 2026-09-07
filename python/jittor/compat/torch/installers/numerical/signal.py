@@ -7,13 +7,15 @@ def hann_window(window_length, periodic=True, *, dtype=None, device=None,
         jt,
         np,
     )
+    from ...tensor_state import compatibility_owner
+    owner = compatibility_owner(jt)
     length = int(window_length)
     if length <= 1:
-        return jt.from_numpy(np.ones(max(length, 0), np.float32))
+        return owner.from_numpy(np.ones(max(length, 0), np.float32))
     denominator = length if periodic else (length - 1)
     index = np.arange(length, dtype=np.float64)
     window = 0.5 - 0.5 * np.cos(2.0 * np.pi * index / denominator)
-    return jt.from_numpy(window.astype(np.float32))
+    return owner.from_numpy(window.astype(np.float32))
 
 
 def stft(input, n_fft, hop_length=None, win_length=None, window=None,
@@ -24,6 +26,8 @@ def stft(input, n_fft, hop_length=None, win_length=None, window=None,
         jt,
         np,
     )
+    from ...tensor_state import compatibility_owner
+    owner = compatibility_owner(jt)
     samples = np.asarray(input.numpy() if hasattr(input, "numpy") else input)
     n_fft = int(n_fft)
     hop = int(hop_length) if hop_length else n_fft // 4
@@ -55,4 +59,4 @@ def stft(input, n_fft, hop_length=None, win_length=None, window=None,
     out = np.stack(spectra, axis=0)
     if squeeze:
         out = out[0]
-    return jt.from_numpy(np.ascontiguousarray(out.astype(np.complex64)))
+    return owner.from_numpy(np.ascontiguousarray(out.astype(np.complex64)))

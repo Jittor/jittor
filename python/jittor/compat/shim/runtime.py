@@ -54,6 +54,19 @@ def _runtime_state(root_module):
     return state
 
 
+def _installation_target(owner, independent):
+    if not independent:
+        return owner
+    state = _runtime_state(owner)
+    target = state.get("installation_target")
+    if target is None:
+        target = independent_torch_namespace(owner)
+        state["installation_target"] = target
+    elif getattr(target, "owner", None) is not owner:
+        raise RuntimeError("Torch installation target belongs to a different backend")
+    return target
+
+
 def _publish_torch_module(transaction, module, owner):
     """Publish an opt-in namespace while retaining transaction rollback."""
 
@@ -164,11 +177,11 @@ def _activate_once(
         transaction = ActivationTransaction("shim.composition")
         transaction.acquire()
         try:
-            torch_compat.install(jt, strict=strict_bootstrap)
-            published = independent_torch_namespace(jt) if independent_namespace else jt
+            published = _installation_target(jt, independent_namespace)
+            torch_compat.install(published, strict=strict_bootstrap)
             if independent_namespace:
                 publish_independent_namespace(
-                    published, jt._torch_compat_install_context.registry,
+                    published, published._torch_compat_install_context.registry,
                     transaction=transaction,
                 )
             _publish_torch_module(transaction, published, jt)
@@ -240,11 +253,11 @@ def _activate_once(
         else:
             _transaction.mutate_flag(jt.flags, "no_grad", 1)
     from jittor.compat import torch as torch_compat
-    torch_compat.install(jt, strict=strict_bootstrap)
-    published = independent_torch_namespace(jt) if independent_namespace else jt
+    published = _installation_target(jt, independent_namespace)
+    torch_compat.install(published, strict=strict_bootstrap)
     if independent_namespace:
         publish_independent_namespace(
-            published, jt._torch_compat_install_context.registry,
+            published, published._torch_compat_install_context.registry,
             transaction=_transaction,
         )
     if _transaction is None:
@@ -254,8 +267,8 @@ def _activate_once(
     try:
         from jittor.compat.shim.cpp_extension.torch_utils import install_cpp_extension
         install_cpp_extension(
-            getattr(jt, "utils", None),
-            registry=jt._torch_compat_install_context.registry,
+            getattr(published, "utils", None),
+            registry=published._torch_compat_install_context.registry,
         )
     except EXPECTED as exc:
         swallowed("shim/runtime.py enable: from jittor.compat.shim.cpp_extension.torch_utils impor...", exc)

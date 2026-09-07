@@ -2,9 +2,6 @@
 
 import enum
 
-import jittor as jt
-
-
 class StateDictType(enum.Enum):
     FULL_STATE_DICT = "full"
     LOCAL_STATE_DICT = "local"
@@ -86,9 +83,9 @@ class OptimStateKeyType(enum.Enum):
 
 class FlatParameter:
     def __new__(cls, data=None, requires_grad=True, *args, **kwargs):
-        maker = getattr(jt, "_torch_make_parameter", None)
-        if data is not None and callable(maker):
-            return maker(data, requires_grad=requires_grad)
+        if data is not None:
+            from ..torch.nested import _torch_make_parameter
+            return _torch_make_parameter(data, requires_grad=requires_grad)
         return object.__new__(cls)
 
     def __init__(self, data=None, requires_grad=True, *args, **kwargs):

@@ -495,6 +495,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # ndarray, breaking `param.data.to(...)`. Override to torch semantics.
     if not getattr(Var, "_data_wrapped", False):
         def _data_get(self):
+            from ...tensor_state import compatibility_owner
             # Only when this interpreter is actually serving the torch
             # namespace. Composition runs either way, and a plain
             # ``import jittor`` must keep Jittor's own contract, where ``.data``
@@ -504,7 +505,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             preflight = getattr(_owner.jt, "_compat_preflight_result", None)
             torch_mode = (
                 getattr(preflight, "active", False)
-                or bool(getattr(_owner.jt, "_torch_compat_install_complete", False))
+                or bool(vars(compatibility_owner(_owner.jt)).get(
+                    "_torch_compat_install_complete", False))
+                or compatibility_owner(_owner.jt) is not _owner.jt
             )
             if (
                 _native_data_descriptor is not None

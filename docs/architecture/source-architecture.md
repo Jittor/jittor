@@ -594,6 +594,12 @@ a source move. Non-native cache artifacts are left alone.
 
 ### Compatibility APIs
 
+Independent activation constructs its TorchNamespace before installation.
+Installers publish APIs and context on that target; a transactional backend-to-owner
+binding routes leaf, retained-gradient and optimizer bookkeeping to one state.
+Legacy native attributes alias that state, and rolled-back installation steps
+are replayed against the same state on retry.
+
 The optional TorchNamespace owns its public writes and deletions. Missing reads
 may still use its native owner; deletion masks that fallback locally. Transaction
 rollback restores the exact local binding and deletion state. InstallContext

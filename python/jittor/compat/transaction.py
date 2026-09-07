@@ -49,6 +49,12 @@ class InstallTransaction:
             if old is not new:
                 self.record(target, name, old, new)
 
+    def record_mapping_diffs(self, target, before):
+        for name in before.keys() | target.keys():
+            old, new = before.get(name, _MISSING), target.get(name, _MISSING)
+            if old is not new:
+                self.record(target, name, old, new)
+
     def _record_binding(self, target, name, old, expected, capture, restore):
         """Undo one local namespace slot without manufacturing a delete mask."""
         def undo():
@@ -188,7 +194,8 @@ def active_transaction(context=None):
     """
     if context is None:
         import jittor
-        context = getattr(jittor, "_torch_compat_install_context", None)
+        from .torch.tensor_state import compatibility_owner
+        context = vars(compatibility_owner(jittor)).get("_torch_compat_install_context")
     state = getattr(context, "state", None)
     if not isinstance(state, dict):
         return None

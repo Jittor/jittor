@@ -203,7 +203,13 @@ def _abandon(transaction, context):
 
 
 def install(torch, strict=True):
-    """Install the Torch surface once and return the canonical Jittor module."""
+    """Install once on the explicit Torch target and return that target."""
+
+    from .tensor_state import (
+        compatibility_owner, bind_tensor_state, snapshot_tensor_state,
+        record_tensor_state_changes,
+    )
+    torch = compatibility_owner(torch)
 
     if getattr(torch, "_compat_native_composition_in_progress", False):
         raise RuntimeError(
@@ -248,7 +254,21 @@ def install(torch, strict=True):
     )
     transaction.record_undo(lambda: _restore_namespace(before))
 
+    tensor_state_before = None
+    tensor_state = None
+    markers_before = dict(context.markers)
     try:
+        try:
+            tensor_state = bind_tensor_state(
+                context.native_backend, context.target_namespace, transaction,
+                state=context.state.get("_tensor_state"),
+            )
+            context.state["_tensor_state"] = tensor_state
+        finally:
+            # Binding owns its own attribute ledger. Do not record the same
+            # changes again when collecting subsequent installer mutations.
+            root_attrs_before = dict(vars(torch))
+        tensor_state_before = snapshot_tensor_state(tensor_state)
         for step, installer in _REQUIRED_STEPS:
             context.run_required(step, installer)
         for step, installer in _OPTIONAL_STEPS:
@@ -256,6 +276,11 @@ def install(torch, strict=True):
         context.mark_complete()
     except EXPECTED as exc:
         swallowed("torch/__init__.py install: for step, installer in _REQUIRED_STEPS:", exc)
+        if tensor_state_before is not None:
+            record_tensor_state_changes(transaction, tensor_state, tensor_state_before)
+        # A reverted step is not complete: retry must rebuild its bindings and
+        # registrations instead of skipping work that the ledger just undid.
+        transaction.record_mapping_diffs(context.markers, markers_before)
         transaction.record_object_diffs(torch, root_attrs_before)
         if var_attrs_before is not None:
             transaction.record_object_diffs(var_type, var_attrs_before)
