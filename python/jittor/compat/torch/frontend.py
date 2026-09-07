@@ -78,13 +78,15 @@ def make_tensor_type(backend):
     })
 
 
-def clone(input):
+def clone(input, *, memory_format=None):
     """Copy Tensor storage through the native copy op, preserving gradients."""
     import jittor as backend
     from .tensor_state import compatibility_owner
     from .types import _var_is_cpu_resident
     if not isinstance(input, backend.Var):
         raise TypeError("clone expects a tensor")
+    if memory_format not in (None, "preserve_format", "contiguous_format"):
+        raise NotImplementedError("clone supports preserve_format and contiguous_format")
     target = compatibility_owner(backend)
     with tensor_frontend(target.Var):
         if backend.flags.use_cuda and _var_is_cpu_resident(input):

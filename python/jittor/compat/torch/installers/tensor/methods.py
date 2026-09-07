@@ -962,6 +962,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         ds = None
         dev = None
         copy = bool(kwargs.get("copy", False))
+        if kwargs.get("memory_format") not in (None, "preserve_format", "contiguous_format"):
+            raise NotImplementedError("to supports preserve_format and contiguous_format")
         # device passed as a keyword (torch's .to(device=..., dtype=...))
         if "device" in kwargs:
             dev = kwargs["device"]
@@ -980,10 +982,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                     ds = bare
                 elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
                     dev = bare
+        if dev is None:
+            dev = self.device
+        out = self.clone() if copy else self
         if ds is not None:
-            out = self.cast(ds) if copy else _cast_if_needed(self, ds)
-        else:
-            out = self.clone() if copy else self
+            out = _cast_if_needed(out, ds)
         # Honor an explicit device= target by migrating residency. device=None
         # (the common .to(dtype) call) leaves placement on the global default.
         if _owner._device_is_cpu(dev):
