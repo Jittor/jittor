@@ -41,6 +41,10 @@ ROOT = Path(__file__).resolve().parents[2]
 #: the missing ROCm pair stayed invisible.
 SCAN_ROOTS = (
     "backends/acl",
+    # 4.15 moved the oneDNN operator sources here from
+    # python/jittor/extern/mkl/ops; without this root the manifest entry for
+    # MklBatchedMatmulOp reads as "no longer exists in the tree".
+    "backends/cpu",
     "backends/cuda",
     "backends/rocm",
     "python/jittor/extern",
@@ -136,7 +140,7 @@ BACKEND_GRAD_COVERAGE = (
      "cuda_exact_and_cpu"),
 
     # ---- CPU oneDNN. Runs everywhere. -------------------------------------
-    ("python/jittor/extern/mkl/ops/mkl_batched_matmul_op.cc",
+    ("backends/cpu/libraries/mkl/mkl_batched_matmul_op.cc",
      "MklBatchedMatmulOp",
      "tests/ops/test_mkl_batched_matmul.py::TestMklBatchedMatmul::test_three_dimensional_batch",
      "cpu_jittor"),

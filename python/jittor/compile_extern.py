@@ -288,7 +288,7 @@ def setup_mkl():
     # We do not link manualy, link in custom ops
     # ctypes.CDLL(mkl_lib_name, dlopen_flags)
 
-    mkl_op_dir = os.path.join(jittor_path, "extern", "mkl", "ops")
+    mkl_op_dir = os.path.join(backend_root(jittor_path, "cpu"), "libraries", "mkl")
     mkl_op_files = [os.path.join(mkl_op_dir, name) for name in os.listdir(mkl_op_dir)]
     mkl = compile_custom_ops(mkl_op_files, extra_flags=extra_flags,
                              backend="cpu", return_module=True)

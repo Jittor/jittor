@@ -57,7 +57,7 @@ rocm = "jittor.backends.rocm"
 corex = "jittor.backends.corex"
 
 [tool.setuptools]
-package-dir = { "" = "python", "jittor.backends.cuda" = "backends/cuda", "jittor.backends.acl" = "backends/acl", "jittor.backends.rocm" = "backends/rocm", "jittor.backends.corex" = "backends/corex" }
+package-dir = { "" = "python", "jittor.backends.cuda" = "backends/cuda", "jittor.backends.acl" = "backends/acl", "jittor.backends.rocm" = "backends/rocm", "jittor.backends.corex" = "backends/corex", "jittor.backends.cpu" = "backends/cpu" }
 include-package-data = true
 
 [tool.setuptools.dynamic]

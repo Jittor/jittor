@@ -38,7 +38,7 @@ def test_generator_rejects_unknown_backend_before_reading_headers():
 
 
 @pytest.mark.parametrize("relative", ["python/jittor/src/ops", "backends/cuda/kernels/cublas",
-                                      "python/jittor/extern/mkl/ops"])
+                                      "backends/cpu/libraries/mkl"])
 def test_generator_preserves_every_operator_definition(relative, tmp_path):
     headers = sorted((ROOT / relative).glob("*_op.h"))
     assert headers
