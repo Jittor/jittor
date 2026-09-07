@@ -64,12 +64,12 @@ import os
 import jittor
 import torch.distributed as dist
 import torch.distributed.distributed_c10d as c10d
-from jittor.compat.torch.installers import distributed as implementation
+from jittor.distributed import process_group as implementation
 
 rank = int(os.environ["STORE_RANK"])
-implementation._native_distributed_active = lambda: True
-implementation._distributed_rank = lambda: rank
-implementation._distributed_world_size = lambda: 2
+implementation.is_initialized = lambda: True
+implementation.get_rank = lambda: rank
+implementation.get_world_size = lambda: 2
 dist.init_process_group(
     backend="mpi",
     init_method=os.environ["STORE_INIT_METHOD"],
@@ -86,6 +86,37 @@ if rank == 0:
     assert store.get("ack") == b"1"
 print("DONE", rank, os.environ["STORE_INIT_METHOD"], flush=True)
 """
+
+
+class TestProcessGroupOwnership(unittest.TestCase):
+    def test_native_and_torch_share_classes_and_legacy_pickle(self):
+        source = r'''
+import importlib
+import pickle
+import torch.distributed as dist
+import torch.distributed.distributed_c10d as c10d
+
+native = importlib.import_module("jittor.distributed.process_group")
+legacy = importlib.import_module("jittor.compat.torch.installers.distributed")
+assert dist.ProcessGroup is native.ProcessGroup
+assert c10d.ProcessGroup is native.ProcessGroup
+assert c10d.Work is native.Work
+assert legacy._JittorProcessGroup is native.ProcessGroup
+assert legacy._JittorWork is native.Work
+assert native.ProcessGroup.__module__ == "jittor.distributed.process_group"
+for old_name, cls in (("_JittorProcessGroup", native.ProcessGroup),
+                      ("_JittorWork", native.Work)):
+    payload = ("cjittor.compat.torch.installers.distributed\n" + old_name + "\n.")
+    assert pickle.loads(payload.encode("ascii")) is cls
+    value = cls()
+    assert type(pickle.loads(pickle.dumps(value))) is cls
+print("native ProcessGroup ownership and legacy pickle passed")
+'''
+        result = run_python_child(
+            ["-c", source], env=_BASE_ENV, cwd=REPO_ROOT,
+            text=True, merge_stderr=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
 
 
 class TestCrossProcessStores(unittest.TestCase):
