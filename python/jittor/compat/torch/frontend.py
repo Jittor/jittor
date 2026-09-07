@@ -4,6 +4,15 @@ from contextlib import contextmanager
 from functools import wraps
 
 
+def _default_tensor_dtype(backend):
+    from .tensor_state import compatibility_owner
+    from .types import _dtype_to_str
+    owner = compatibility_owner(backend)
+    getter = getattr(owner, "get_default_dtype", None)
+    # Types are created before core.extended publishes the default-dtype API.
+    return _dtype_to_str(getter()) if getter is not None else "float32"
+
+
 @contextmanager
 def tensor_frontend(tensor_type):
     backend = getattr(tensor_type, "_frontend_backend", None)
@@ -38,17 +47,22 @@ class _TensorMeta(type):
         if kwargs:
             raise TypeError("Tensor constructor does not accept keyword arguments")
         from .nested import _TorchSize
+        dtype = _default_tensor_dtype(backend)
         with tensor_frontend(cls):
             if not args:
-                result = backend.empty((0,), dtype="float32")
+                result = backend.empty((0,), dtype=dtype)
             elif all(isinstance(arg, int) for arg in args):
-                result = backend.empty(tuple(args), dtype="float32")
+                result = backend.empty(tuple(args), dtype=dtype)
             elif len(args) != 1:
                 raise TypeError("Tensor expects data or integer dimensions")
             elif isinstance(args[0], (backend.NanoVector, _TorchSize)):
-                result = backend.empty(tuple(args[0]), dtype="float32")
+                result = backend.empty(tuple(args[0]), dtype=dtype)
+            elif isinstance(args[0], backend.Var):
+                result = args[0].clone()
+                result._set_view_of(args[0], Ellipsis)
+                return result
             else:
-                result = backend.array(args[0]).float32()
+                result = backend.array(args[0], dtype=dtype)
             result.requires_grad = False
             return result
 
@@ -73,7 +87,7 @@ def make_parameter_type(backend, tensor_type):
         def __new__(cls, data=None, requires_grad=True):
             with tensor_frontend(cls):
                 if data is None:
-                    value = backend.empty((0,), dtype="float32")
+                    value = backend.empty((0,), dtype=_default_tensor_dtype(backend))
                 else:
                     source = data if isinstance(data, backend.Var) else backend.array(data)
                     value = backend.Var.detach(source)

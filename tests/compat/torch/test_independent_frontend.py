@@ -310,6 +310,41 @@ def test_independent_tensor_installation_preserves_native_type():
         inverse = torch.linalg.inv(matrix)
         assert type(inverse) is torch.Tensor
         np.testing.assert_allclose(inverse.numpy(), [[0.5, 0.], [0., 0.25]])
+        precise = 1.0000000000000002
+        exact = torch.tensor([precise], dtype=torch.float64)
+        np.testing.assert_array_equal(exact.numpy(), np.array([precise], dtype=np.float64))
+        typed = torch.DoubleTensor([precise])
+        assert typed.dtype is torch.float64 and not typed.requires_grad
+        assert typed.item() == precise
+        numpy_scalar = torch.tensor(np.float64(precise))
+        assert numpy_scalar.dtype is torch.float64
+        assert numpy_scalar.item() == precise
+        previous_dtype = torch.get_default_dtype()
+        try:
+            torch.set_default_dtype(torch.float64)
+            for value in (torch.tensor([precise]), torch.Tensor([precise]),
+                          torch.Tensor(2), torch.nn.Parameter()):
+                assert value.dtype is torch.float64
+            assert torch.Tensor([precise]).item() == precise
+            try:
+                torch.set_default_dtype(torch.int64)
+            except TypeError:
+                pass
+            else:
+                raise AssertionError("integer default dtype was accepted")
+            assert torch.get_default_dtype() is torch.float64
+        finally:
+            torch.set_default_dtype(previous_dtype)
+        original = torch.tensor([1., 2.], dtype=torch.float64, requires_grad=True)
+        alias = torch.Tensor(original)
+        assert alias is not original and alias.dtype is torch.float64
+        assert alias.requires_grad and not alias.is_leaf
+        assert alias.data_ptr() == original.data_ptr()
+        if jt.flags.use_cuda:
+            assert alias.location() == original.location() == "device"
+        with torch.no_grad():
+            alias[0].fill_(3.)
+        np.testing.assert_array_equal(original.numpy(), [3., 2.])
         print("INDEPENDENT_TENSOR_OK")
     """)], without_torch_mode=True, merge_stderr=True)
     assert result.returncode == 0, result.stdout

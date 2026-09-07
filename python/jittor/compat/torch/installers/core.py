@@ -633,6 +633,9 @@ def install_misc(ctx):
     _state = {"dtype": getattr(g, "float32", "float32")}
     g.get_default_dtype = lambda: _state["dtype"]
     def set_default_dtype(d):
+        if not isinstance(d, dtype) or _dtype_to_str(d) not in (
+                "float16", "bfloat16", "float32", "float64"):
+            raise TypeError("only floating-point types are supported as the default type")
         _state["dtype"] = d
     g.set_default_dtype = set_default_dtype
     def get_default_device():

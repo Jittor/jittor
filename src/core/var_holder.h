@@ -434,6 +434,14 @@ struct VarHolder {
     // @pyjt(__get__raw_ptr)
     uint64 raw_ptr();
 
+    // @pyjt(__get___storage_address)
+    inline uint64 storage_address() {
+        // Materialize the tensor in its current placement without migrating
+        // it merely to observe the first element's address.
+        sync(true, false);
+        return (uint64)var->mem_ptr;
+    }
+
     // @pyjt(__get__device_raw_ptr)
     inline uint64 device_raw_ptr() {
         sync(true, false);

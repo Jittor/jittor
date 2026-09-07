@@ -497,15 +497,19 @@ def install(ctx):
         def __instancecheck__(cls, obj):
             return isinstance(obj, Var) and str(obj.dtype) == cls._jdtype
         def __call__(cls, *args, **kw):
-            if len(args) == 1 and isinstance(args[0], Var):
+            tensor_input = len(args) == 1 and isinstance(args[0], Var)
+            if tensor_input:
                 v = args[0]
             elif len(args) == 1 and not isinstance(args[0], int):
-                v = jt.array(args[0])           # from list/ndarray
+                v = jt.array(args[0], dtype=cls._jdtype)
             elif len(args) == 0:
-                v = jt.zeros((0,))
+                v = jt.zeros((0,), dtype=cls._jdtype)
             else:
-                v = jt.zeros(tuple(int(a) for a in args))  # from sizes
-            return v.cast(cls._jdtype)
+                v = jt.zeros(tuple(int(a) for a in args), dtype=cls._jdtype)
+            result = v.cast(cls._jdtype)
+            if not tensor_input:
+                result.requires_grad_(False)
+            return result
     _TypedTensorMeta.__call__ = frontend_factory(_TypedTensorMeta.__call__, Var)
     for _tn, _dt in _TYPED_TENSOR_DTYPE.items():
         setattr(g, _tn, _TypedTensorMeta(_tn, (), {"_jdtype": _dt}))
@@ -532,14 +536,16 @@ def install(ctx):
     def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
         import numpy as _np
         ds = _dtype_to_str(dtype)
+        numpy_dtypes = {"bool", "uint8", "int8", "int16", "int32", "int64",
+                        "uint16", "uint32", "uint64", "float16", "float32", "float64",
+                        "complex64", "complex128"}
+        storage_dtype = ds if ds in numpy_dtypes else "float32" if ds == "bfloat16" else None
         if isinstance(data, Var):
             v = data.clone()
-        elif isinstance(data, _np.ndarray):
-            # Respect an explicit complex64 request before constructing the Var.
-            # NumPy otherwise keeps complex literals as unsupported complex128,
-            # so casting only after jt.array() is too late.
-            if ds == "complex64" and data.dtype.name != "complex64":
-                data = _np.asarray(data, dtype=_np.complex64)
+        elif isinstance(data, (_np.ndarray, _np.generic)):
+            # NumPy input carries its own dtype; explicit conversion happens
+            # before the native array constructor can narrow it.
+            data = _np.asarray(data, dtype=storage_dtype)
             v = _array_keep_dtype(data)          # explicit numpy: preserve dtype (torch does too)
         else:
             # torch's tensor/as_tensor([t1, t2, ...]) flattens SCALAR tensors into a
@@ -550,16 +556,20 @@ def install(ctx):
             if isinstance(data, (list, tuple)) and any(isinstance(d, Var) for d in data):
                 data = [(d.item() if isinstance(d, Var) and d.numel() == 1 else d)
                         for d in data]
-            # Python scalar/list/tuple: numpy infers float64 from Python floats, but
-            # torch's default float dtype is float32. Match torch (and avoid float64,
-            # which Ascend/ACL does not support) by downcasting inferred float64.
-            arr = _np.asarray(data, dtype=_np.complex64 if ds == "complex64" else None)
-            if arr.dtype == _np.float64:
-                arr = arr.astype(_np.float32)
-            elif arr.dtype == _np.complex128 and ds != "complex128":
-                # torch's default complex dtype follows its default float dtype,
-                # so Python complex literals default to complex64.
-                arr = arr.astype(_np.complex64)
+            # Resolve Python defaults before constructing native storage. An
+            # explicit float64 value must never pass through float32 first.
+            arr = _np.asarray(data, dtype=storage_dtype)
+            if ds is None and arr.dtype.kind in ("f", "c"):
+                getter = getattr(g, "get_default_dtype", None)
+                default_dtype = _dtype_to_str(getter()) if getter is not None else "float32"
+                if arr.dtype.kind == "c":
+                    complex_dtype = {"float32": "complex64", "float64": "complex128"}.get(default_dtype)
+                    if complex_dtype is None:
+                        raise NotImplementedError("complex construction for default dtype %s" % default_dtype)
+                    ds = complex_dtype
+                else:
+                    ds = default_dtype
+                arr = arr.astype("float32" if ds == "bfloat16" else ds)
             v = _array_keep_dtype(arr)
         if ds is not None:
             v = v.cast(ds)

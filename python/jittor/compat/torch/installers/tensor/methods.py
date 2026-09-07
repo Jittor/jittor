@@ -394,7 +394,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     if not hasattr(Var, "untyped_storage"):
         Var.untyped_storage = lambda self: _Storage(self)
     if not hasattr(Var, "data_ptr"):
-        Var.data_ptr = lambda self: id(self)
+        # Tensor.data_ptr is the first element address, not Python object
+        # identity. The native accessor synchronizes without migrating it.
+        Var.data_ptr = lambda self: int(self._storage_address)
     # torch tensors expose is_contiguous()/contiguous(); jittor Vars are always
     # contiguous in the sense safetensors cares about.
     if not hasattr(Var, "is_contiguous"):
