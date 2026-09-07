@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import jittor as jt
 from jittor._runtime.dispatch import register_kernel
 
 
@@ -140,6 +139,7 @@ DIGAMMA_CUDA_SRC = '''
 
 
 def _gamma_cuda(owner, x):
+    import jittor as jt
     return jt.code(x.shape, x.dtype, [x],
                    cuda_header=owner.cuda_header, cuda_src=owner.cuda_src)
 
@@ -151,6 +151,7 @@ def _digamma_cuda(owner, x):
 
 
 def _polygamma_cuda(owner, x, n):
+    import jittor as jt
     source = f'''
         @alias(x, in0)
         @alias(px ,out0)
@@ -162,6 +163,7 @@ def _polygamma_cuda(owner, x, n):
 
 
 def gamma_grad(x, alpha):
+    import jittor as jt
     cuda_header = (Path(__file__).parent / "src" / "gamma_grad.h").read_text(encoding="utf8")
     cuda_src = '''
     @alias(x, in0)

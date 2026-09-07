@@ -1,12 +1,7 @@
-"""Incomplete gamma with shared mathematical source and a CUDA launch owner."""
+"""Deprecated same-object alias of :mod:`jittor.contrib.math_util.igamma`."""
 
-from pathlib import Path
+import importlib as _importlib
+import sys as _sys
 
-from jittor.backends.cuda.kernels.math.igamma import igamma as _igamma_cuda
-
-
-_SHARED_HEADER = (Path(__file__).parent / "src" / "igamma.h").read_text(encoding="utf8")
-
-
-def igamma(alpha, x):
-    return _igamma_cuda(alpha, x, _SHARED_HEADER)
+_canonical = _importlib.import_module("jittor.contrib.math_util.igamma")
+_sys.modules[__name__] = _canonical

@@ -17,23 +17,26 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from _helpers.op_registration_generator import compiler_state_free_ast
 
 
 REPO = Path(__file__).resolve().parents[2]
-SOURCES = str(REPO / "python" / "jittor" / "src")
+SOURCES = str(REPO / "src")
 DEFINE_FLAG = re.compile(r"DEFINE_(RUNTIME_)?FLAG(_WITH_SETTER)?\((.*?)\);", re.DOTALL)
 
 
 def _flag_functions(**environment):
     # These generators need source paths, not an imported/compiled Jittor core.
-    source = REPO / "python" / "jittor" / "compiler.py"
-    tree = ast.parse(source.read_text(encoding="utf8"))
+    source = REPO / "python" / "jittor" / "build" / "codegen.py"
+    tree = compiler_state_free_ast(ast.parse(source.read_text(encoding="utf8")))
     tree.body = [node for node in tree.body if isinstance(node, ast.FunctionDef)
                  and node.name in {"strip_cxx_comments", "gen_jit_flags"}]
     namespace = dict(glob=glob, os=os, re=re,
                      LOG=SimpleNamespace(vv=lambda *args: None,
                                          vvvv=lambda *args: None))
     namespace.update(environment)
+    namespace["core_root"] = runpy.run_path(
+        str(REPO / "python/jittor/build/utils/backend_resources.py"))["core_root"]
     namespace["flag_category"] = runpy.run_path(
         str(REPO / "python/jittor/_runtime/flag_policy.py"))["flag_category"]
     exec(compile(tree, str(source), "exec"), namespace)

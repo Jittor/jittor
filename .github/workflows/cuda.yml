@@ -79,7 +79,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
-          key: jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/compiler.py', 'requirements/dev-tools.txt') }}
+          key: jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
           restore-keys: |
             jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-
       - name: Run CUDA pytest gates
@@ -92,7 +92,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
-          key: jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/compiler.py', 'requirements/dev-tools.txt') }}
+          key: jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
 
   benchmark-cuda:
     needs: [baseline, cuda]
@@ -138,7 +138,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
-          key: jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/compiler.py', 'requirements/dev-tools.txt') }}
+          key: jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
           restore-keys: |
             jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-
       - name: Restore prior CUDA ASV results
@@ -158,7 +158,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
-          key: jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/compiler.py', 'requirements/dev-tools.txt') }}
+          key: jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
       - name: Save CUDA ASV results for the next commit
         if: success()
         uses: actions/cache/save@v4

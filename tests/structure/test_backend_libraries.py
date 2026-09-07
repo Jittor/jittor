@@ -13,7 +13,7 @@ from jittor_utils.env_config import build_flag
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "python/jittor/_runtime/backend_libraries.py"
-EXTERN = ROOT / "python/jittor/compile_extern.py"
+EXTERN = ROOT / "python/jittor/build/compile_extern.py"
 
 
 @pytest.fixture

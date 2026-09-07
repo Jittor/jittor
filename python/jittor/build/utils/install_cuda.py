@@ -1,6 +1,6 @@
 # ***************************************************************
-# Copyright (c) 2023 Jittor. All Rights Reserved. 
-# Maintainers: Dun Liang <randonlang@gmail.com>. 
+# Copyright (c) 2023 Jittor. All Rights Reserved.
+# Maintainers: Dun Liang <randonlang@gmail.com>.
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -170,7 +170,7 @@ def check_cuda_env():
         # loader honours in an already-running process. The corrected
         # environment is still exported for the child processes that read it.
         LOG.v("corrected CUDA paths in the environment for child processes")
-    
+
 
 #: Every published jtcuda archive is between one and a half and two and a half
 #: gigabytes; the exact figure is not worth a HEAD request on the import path.

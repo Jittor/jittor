@@ -20,7 +20,7 @@ import unittest
 from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[2] / "python/jittor"
-_ORDER_MODULE = PACKAGE / "_install_order.py"
+_ORDER_MODULE = PACKAGE / "_runtime" / "install_order.py"
 
 
 def _declared_steps():

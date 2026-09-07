@@ -137,8 +137,8 @@ def default_source_root():
     like a complete one.
     """
     from .backend_resources import core_root
-    return core_root(os.path.join(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))), "jittor"))
+    return core_root(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))))
 
 
 def entries(source_root=None):
@@ -177,8 +177,8 @@ def entries(source_root=None):
 
 
 def flag_policy_path():
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "jittor", "_runtime", "flag_policy.py")
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))), "_runtime", "flag_policy.py")
 
 
 def _startup_flags():

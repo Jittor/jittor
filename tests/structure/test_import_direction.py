@@ -23,7 +23,7 @@ import ast
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-TOOLS_ROOT = REPO_ROOT / "python" / "jittor_utils"
+TOOLS_ROOT = REPO_ROOT / "python" / "jittor" / "build" / "utils"
 
 #: Deferred imports that are allowed to name the framework, with the reason.
 #: A function-local import does not create an import-time cycle, but it still

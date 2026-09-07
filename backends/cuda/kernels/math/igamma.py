@@ -1,6 +1,5 @@
 """CUDA launch for the shared incomplete-gamma implementation."""
 
-import jittor as jt
 
 
 _IGAMMA_KERNEL = '''__global__ void igamma_kernel(float* __restrict__ x,
@@ -20,6 +19,7 @@ _IGAMMA_KERNEL = '''__global__ void igamma_kernel(float* __restrict__ x,
 
 
 def igamma(alpha, x, shared_header):
+    import jittor as jt
     cuda_header = "#define C10_DEVICE __host__ __device__\n" + shared_header + _IGAMMA_KERNEL
     cuda_src = '''
         @alias(x, in0)

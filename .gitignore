@@ -18,6 +18,8 @@ __pycache__/
 .coverage
 htmlcov/
 build/
+# The runtime build package contains maintained source, not build output.
+!/python/jittor/build/
 # This is a source-owned tool category, not a generated build directory.
 !/tools/build/
 !/tools/build/**

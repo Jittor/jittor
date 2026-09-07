@@ -36,7 +36,7 @@ def acl(monkeypatch):
 def setup(acl, monkeypatch, tmp_path):
     api = _load_module(
         monkeypatch, "acl_build_config_values_test",
-        ROOT / "python/jittor_utils/build_config.py",
+        ROOT / "python/jittor/build/utils/build_config.py",
     )
     toolkit = tmp_path / "toolkit"
     toolkit.mkdir()

@@ -4,6 +4,7 @@ import shlex
 import sys
 import jittor_utils
 from jittor_utils import LOG
+from jittor_utils.backend_resources import core_root
 
 
 def search_file(dirs, name):
@@ -26,7 +27,9 @@ if __name__ == "__main__":
     for arg in sys.argv[1:]:
         if arg == "--include-flags":
             s += jittor_utils.get_py3_include_path()
-            s += " -I"+os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "jittor", "src"))
+            package_root = os.path.dirname(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))))
+            s += " -I" + shlex.quote(core_root(package_root))
             s += " "
         elif arg == "--libs-flags":
             libext = {

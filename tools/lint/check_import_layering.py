@@ -218,7 +218,32 @@ def _absolute(node: ast.AST, module: str, is_package: bool) -> list[str]:
     return ["%s.%s" % (prefix, alias.name) for alias in node.names]
 
 
-def build_edges(modules: dict[str, Path]) -> dict[str, dict[str, set[str]]]:
+def _import_aliases(root: Path) -> dict[str, str]:
+    path = root / "python" / "jittor" / "compat" / "_aliases.py"
+    if not path.is_file():
+        return {}
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "ALIASES"
+            for target in node.targets
+        ):
+            return ast.literal_eval(node.value)
+    raise ValueError("the module alias registry has no explicit ALIASES mapping")
+
+
+def _canonical_import(target: str, aliases: dict[str, str]) -> str:
+    prefix = target
+    while prefix:
+        if prefix in aliases:
+            return aliases[prefix] + target[len(prefix):]
+        prefix = prefix.rpartition(".")[0]
+    return target
+
+
+def build_edges(
+    modules: dict[str, Path], aliases: dict[str, str] | None = None,
+) -> dict[str, dict[str, set[str]]]:
     """module -> imported module -> set of scopes that import it."""
     known = set(modules)
     edges: dict[str, dict[str, set[str]]] = {name: {} for name in modules}
@@ -228,6 +253,13 @@ def build_edges(modules: dict[str, Path]) -> dict[str, dict[str, set[str]]]:
         _visit(tree, MODULE, found)
         for node, scope in found:
             for target in _absolute(node, name, path.name == "__init__.py"):
+                target = _canonical_import(target, aliases or {})
+                # Follow the actual standalone-tools implementation, not only
+                # the small legacy loader at the old location.
+                if "jittor.build.utils" in known and (
+                    target == "jittor_utils" or target.startswith("jittor_utils.")
+                ):
+                    target = "jittor.build.utils" + target[len("jittor_utils"):]
                 resolved = _resolve(target, known) if target else None
                 if resolved is None or resolved == name:
                     continue
@@ -297,6 +329,9 @@ def owning_subpackage(module: str) -> str:
     Backends are split one level deeper than the rest because they are
     separately owned and separately migrated.
     """
+    if module == "jittor.build.utils" or module.startswith("jittor.build.utils."):
+        # Same independently imported tools layer, at its new physical owner.
+        return "jittor_utils"
     parts = module.split(".")
     if parts[0] != "jittor":
         return parts[0]
@@ -387,7 +422,7 @@ CONTRACTS = (
 def build_report(root: Path = REPO_ROOT) -> dict:
     roots = scan_roots(root)
     modules = discover_modules(roots)
-    edges = build_edges(modules)
+    edges = build_edges(modules, _import_aliases(root))
     at_import = graph_for(edges, {MODULE})
     cycles = strongly_connected(at_import)
     cyclic_modules = [m for component in cycles for m in component]
@@ -395,13 +430,18 @@ def build_report(root: Path = REPO_ROOT) -> dict:
     tool_imports: dict[str, str] = {}
     tool_deferred: dict[str, str] = {}
     for name, path in modules.items():
-        if not name.split(".")[0] == "jittor_utils":
+        if not (
+            name == "jittor_utils" or name.startswith("jittor_utils.")
+            or name == "jittor.build.utils" or name.startswith("jittor.build.utils.")
+        ):
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         found: list[tuple[ast.AST, str]] = []
         _visit(tree, MODULE, found)
         for node, scope in found:
             for target in _absolute(node, name, path.name == "__init__.py"):
+                if target == "jittor.build.utils" or target.startswith("jittor.build.utils."):
+                    continue
                 if target != "jittor" and not target.startswith("jittor."):
                     continue
                 site = "%s:%d" % (path.relative_to(root).as_posix(), node.lineno)

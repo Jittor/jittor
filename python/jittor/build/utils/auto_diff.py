@@ -171,13 +171,13 @@ class Hook:
                 pre_data = np.array([pre_data])
             if len(data.shape) == 0:
                 data = np.array([data])
-            if pre_data.shape != data.shape: 
+            if pre_data.shape != data.shape:
                 has_error += 1
                 LOG.e(f"Ndarray shape <{name}> not match {pre_data.shape} != {data.shape}")
                 return
             self.check_array(name, pre_data, data)
         elif isinstance(pre_data, dict):
-            if len(pre_data) != len(data): 
+            if len(pre_data) != len(data):
                 has_error += 1
                 LOG.w(f"Dict Name <{name}> len not match, {len(pre_data)} != {len(data)}")
             for k in pre_data:
@@ -192,7 +192,7 @@ class Hook:
                     continue
                 self.check(name+f".{k}", pre_data[k], data[k])
         else:
-            if pre_data != data: 
+            if pre_data != data:
                 has_error += 1
                 LOG.e(f"Type: {type(pre_data).__name__} Name <{name}> not match {pre_data} != {data}")
 
@@ -295,7 +295,7 @@ class Hook:
             mod_name = "<" + mod_name + ">"
         self.hooked_models[mod_name] = mod
         def forward_hook(self2, input, output, kw=None):
-            ex_name = '[' + self2.__class__.__name__ + ']' 
+            ex_name = '[' + self2.__class__.__name__ + ']'
             if "relu" not in self2.__class__.__name__.lower():
                 # not test relu, because input may be inplaced
                 self.record(self2.__ad_mod_name__+".input", input, ex_name)
@@ -382,7 +382,7 @@ class Hook:
             LOG.i(f"save input: ok")
         else:
             raise RuntimeError("save_input is invalid in [check] mode")
-    
+
     def load_input(self):
         '''
             for fake_input, fake_label in jittor_dataset:

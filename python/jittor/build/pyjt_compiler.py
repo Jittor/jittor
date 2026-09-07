@@ -1,6 +1,6 @@
 # ***************************************************************
-# Copyright (c) 2023 Jittor. All Rights Reserved. 
-# Maintainers: Dun Liang <randonlang@gmail.com>. 
+# Copyright (c) 2023 Jittor. All Rights Reserved.
+# Maintainers: Dun Liang <randonlang@gmail.com>.
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -328,10 +328,10 @@ def get_def_code(df, scope_name, pyname, self_as_arg0=False):
         fill_with_default = ""
         func_prepare = ""
     return (
-        func_quick_check_size + func_quick_check_runable, 
-        func_args_convert, 
-        fill_with_default, 
-        func_call, 
+        func_quick_check_size + func_quick_check_runable,
+        func_args_convert,
+        fill_with_default,
+        func_call,
         has_return,
         func_prepare
     )
@@ -682,7 +682,7 @@ def compile_src(src, h, basename):
             arr_func_call.append(res[3])
             arr_has_return.append(res[4])
             arr_func_prepare.append(res[5])
-            
+
         slot_name = None
         func_cast = ""
         func_fill = ""
@@ -754,7 +754,7 @@ def compile_src(src, h, basename):
             untrack = "PyObject_GC_UnTrack(self);\n" if has_attr_dict else ""
             func_fill = (f"int64 n = 0; (void)n;\n{untrack}"
                 f"if (!{inited_flag}) {{ {before_return} return; }}")
-        
+
         elif name in binary_number_slots:
             slot_name = "tp_as_number->"+binary_number_slots[name]
             func_head = "(PyObject* self, PyObject* b) -> PyObject*"
@@ -765,7 +765,7 @@ def compile_src(src, h, basename):
                 PyObject* args[] = {self, b};
                 (void)n, (void)args;
             """
-        
+
         elif name in unary_number_slots:
             slot_name = "tp_as_number->"+unary_number_slots[name]
             func_head = "(PyObject* self) -> PyObject*"
@@ -774,7 +774,7 @@ def compile_src(src, h, basename):
                 PyObject* args[] = {self};
                 (void)n, (void)args;
             """
-        
+
         elif name == "__str__":
             slot_name = "tp_str"
             func_head = "(PyObject* self) -> PyObject*"
@@ -792,7 +792,7 @@ def compile_src(src, h, basename):
                 PyObject* args[] = {self};
                 (void)n, (void)args;
             """
-        
+
         elif name == "__richcmp__":
             slot_name = "tp_richcompare"
             func_head = "(PyObject* self, PyObject* b, int op) -> PyObject*"
@@ -806,7 +806,7 @@ def compile_src(src, h, basename):
             slot_name = "tp_as_sequence->sq_length"
             func_head = "(PyObject* self) -> Py_ssize_t"
             func_fill = """
-                int64 n = 0;  
+                int64 n = 0;
                 (void)n;
             """
 
@@ -814,7 +814,7 @@ def compile_src(src, h, basename):
             slot_name = "tp_as_mapping->mp_length"
             func_head = "(PyObject* self) -> Py_ssize_t"
             func_fill = """
-                int64 n = 0;  
+                int64 n = 0;
                 (void)n;
             """
 
@@ -932,7 +932,7 @@ def compile_src(src, h, basename):
                 if (!PyErr_Occurred()) {{
                     std::stringstream ss;
                     if (check_async_executor_error(e, ss)) {{
-                        PyErr_Format(PyExc_RuntimeError, 
+                        PyErr_Format(PyExc_RuntimeError,
                             "%s",
                             ss.str().c_str()
                         );
@@ -1110,7 +1110,7 @@ def compile_src(src, h, basename):
     f"PyHeapTypeObject Pyjt{class_name};" if "heaptype" in class_info["attrs"] else
     f"PyTypeObject Pyjt{class_name};"
     }
-    
+
     void pyjt_def_{basename}(PyObject* m) {{
         static PyMethodDef defs[] = {{
             {",".join(code)}
@@ -1136,7 +1136,7 @@ def compile_src(src, h, basename):
 
         {f"static PySequenceMethods class_seq_defs = {{0}};" if has_seq else ""}
         {f"tp.tp_as_sequence = &class_seq_defs;" if has_seq else ""}
-        
+
         tp.tp_name = "{core_name}.{class_info["pynames"][0]}";
         tp.tp_basicsize = GET_OBJ_SIZE({class_name});
         {f"tp.tp_dictoffset = tp.tp_basicsize; tp.tp_basicsize += sizeof(PyObject*); " if has_attr_dict else ""}
@@ -1211,7 +1211,7 @@ def compile(cache_path, jittor_path):
 
         basenames.append(basename)
         pyjt_names.append(fname)
-    
+
     code = f"""
     #include "bindings/pyjt/py_converter.h"
     #include "core/common.h"

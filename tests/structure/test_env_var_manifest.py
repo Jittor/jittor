@@ -84,7 +84,7 @@ def test_the_core_refuses_exactly_the_flags_compiler_py_assigns():
     compiler's flags by ``compiler.py`` and replaced the native flag wholesale in
     ``log.h``, and which one you believed depended on which file you read.
     """
-    tree = ast.parse((SOURCE / "jittor/compiler.py").read_text())
+    tree = ast.parse((SOURCE / "jittor/build/compiler.py").read_text())
     assigned = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Assign):
@@ -129,8 +129,8 @@ def test_the_manifest_renders():
 #: Files allowed to name an unprefixed setting: the resolver itself and the
 #: generator.
 _RESOLVER_FILES = {
-    "jittor_utils/env_config.py",
-    "jittor_utils/env_manifest.py",
+    "jittor/build/utils/env_config.py",
+    "jittor/build/utils/env_manifest.py",
 }
 
 #: The one module that cannot go through the resolver, and the exact set of
@@ -199,8 +199,8 @@ def test_every_scan_root_matches_the_tree():
     """
     assert SOURCE.is_dir(), SOURCE
     modules = _module_paths(SOURCE)
-    assert "jittor_utils/env_config.py" in modules, SOURCE
-    assert "jittor/compiler.py" in modules, SOURCE
+    assert "jittor/build/utils/env_config.py" in modules, SOURCE
+    assert "jittor/build/compiler.py" in modules, SOURCE
 
     native_root = Path(env_manifest.default_source_root())
     assert native_root.is_dir(), native_root

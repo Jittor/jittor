@@ -28,7 +28,7 @@ def profile(frame, event, arg):
     if event != "call" or frame.f_code.co_name not in names:
         return
     filename = frame.f_code.co_filename.replace("\\", "/")
-    if filename.endswith("/jittor/compile_extern.py"):
+    if filename.endswith("/jittor/build/compile_extern.py"):
         calls.append(frame.f_code.co_name)
 
 import jittor_utils as jit_utils

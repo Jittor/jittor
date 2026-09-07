@@ -1,8 +1,8 @@
 # ***************************************************************
-# Copyright (c) 2023 Jittor. All Rights Reserved. 
+# Copyright (c) 2023 Jittor. All Rights Reserved.
 # Maintainers:
 #   Dun Liang <randonlang@gmail.com>.
-# 
+#
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -43,7 +43,7 @@ def handle_connect(req:socket.socket, c_addr, server):
                         print("queue size", len(queue))
                         break
                 break
-        
+
 
 def wait_queue():
     global s

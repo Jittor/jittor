@@ -61,7 +61,7 @@ def test_backend_entry_points_are_native_and_conversion_free():
     }
     entries = _entry_points()
     assert {name: entries.get(name) for name in expected} == expected
-    discovery = (ROOT / "python/jittor_utils/backend_discovery.py").read_text(
+    discovery = (ROOT / "python/jittor/build/utils/backend_discovery.py").read_text(
         encoding="utf8"
     )
     assert '"acl": "jittor.backends.acl"' in discovery

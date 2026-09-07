@@ -84,7 +84,7 @@ docstring-code-format = false
 [tool.mypy]
 python_version = "3.7"
 # Expanded one package at a time, each one left genuinely clean rather than
-# quieted with `# type: ignore`. `python/jittor_utils` (26 modules) is the
+# quieted with `# type: ignore`. `python/jittor/build/utils` is the
 # whole tools layer: it is the lowest layer in the tree and, as of the import
 # gate in tools/lint/check_import_layering.py, provably imports nothing from
 # `jittor`, so it type-checks without dragging the framework in.
@@ -94,6 +94,7 @@ files = [
     "noxfile.py",
     "agent/scripts/check_wheel_contents.py",
     "python/jittor_utils",
+    "python/jittor/build/utils",
     "python/jittor/compat/shim/deploy.py",
     "tools/lint/check_import_layering.py",
     "tools/release/pack_offline.py",
@@ -113,11 +114,12 @@ warn_unused_ignores = true
 show_error_codes = true
 pretty = true
 exclude = [
-    "(^|/)(build|dist|\\.nox|\\.mypy_cache|\\.ruff_cache)/",
+    "^build/",
+    "(^|/)(dist|\\.nox|\\.mypy_cache|\\.ruff_cache)/",
 ]
 
 [[tool.mypy.overrides]]
-module = ["cuda_wheel", "jittor_utils.cuda_wheel"]
+module = ["cuda_wheel", "jittor_utils.cuda_wheel", "jittor.build.utils.cuda_wheel"]
 disable_error_code = ["attr-defined"]
 
 [[tool.mypy.overrides]]

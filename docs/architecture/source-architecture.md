@@ -43,12 +43,25 @@ python/
 │   │   ├── function.py         # custom autograd contexts and gradient hooks
 │   │   ├── hooks.py            # removable handles and hook support
 │   │   ├── flags.py            # native scopes and the shared runtime state
+│   │   ├── arg_policy.py       # explicit unsupported/ignored argument policy
 │   │   └── diagnostics.py      # logs, profiling, process scopes and exit cleanup
 │   ├── _runtime/
 │   │   ├── core_api.py          # same-object legacy alias of _core.api
+│   │   ├── composition.py       # explicit namespace publication
+│   │   ├── install_order.py     # ordered installer registration and verification
 │   │   └── state.py             # injected native Flags views, no bootstrap imports
 │   ├── serialization/
 │   │   └── native.py            # native save/load and safe-pickle implementation
+│   ├── build/                   # compiler/bootstrap implementation ownership
+│   │   ├── compiler.py          # startup state and build orchestration
+│   │   ├── codegen.py           # native binding/registration source generation
+│   │   ├── compilation.py       # compilation and custom-extension operations
+│   │   └── utils/               # standalone utilities, imported as jittor_utils
+│   ├── contrib/                 # contributed algorithms and composition helpers
+│   │   ├── ccl/                 # connected-component labeling
+│   │   ├── loss3d/              # Chamfer and earth-mover losses
+│   │   ├── math_util/           # gamma functions and shared native resources
+│   │   └── einops/              # vendored tensor-expression algorithms
 │   ├── nn/                      # neural-network public API
 │   │   ├── modules/             # stateful Module implementations
 │   │   ├── functional/          # stateless tensor functions
@@ -74,9 +87,10 @@ python/
 │   │   ├── module_patcher.py
 │   │   └── external_backend.py
 │   ├── selftest.py              # installed smoke test
+│   ├── tools/                   # user tools, including benchmarking.py
 │   ├── backends/                # source-checkout package path bridge
 │   └── distributed/             # native launch, rendezvous and communication helpers
-└── jittor_utils/                # compiler, installation, and release helpers
+└── jittor_utils/                # standalone import bridge into jittor/build/utils
 ```
 
 ## Package composition contracts
@@ -144,7 +158,11 @@ files or wrapper implementations.
 
 ### Root module ownership
 
-The entries directly under `python/jittor/` are an exact reviewed set.
+The only Python files directly under `python/jittor/` are `__init__.py` and
+`selftest.py`; including `__init__.pyi`, the root has three source files.
+Argument policy lives in `_core.arg_policy`, namespace composition and installer
+ordering in `_runtime.composition` and `_runtime.install_order`, and timing APIs
+in `tools.benchmarking`. Historical imports remain explicit same-object aliases.
 `__init__.py` publishes the explicit `jittor._core.api.__all__` after compiled-core
 bootstrap. The composition module imports canonical objects from `_core.var`,
 `module`, `function`, `hooks`, `flags`, and `diagnostics`; implementations no
@@ -236,9 +254,9 @@ extensions using traversal internals must use the runtime header and rebuild.
 The `use_cuda`, `device_id` and `sync_run` data symbols are also removed.
 External native consumers must include `runtime/device.h` or
 `runtime/device_state.h` and rebuild; Python `jt.flags` names remain unchanged.
-`compiler.py`, `compile_extern.py`,
-`pyjt_compiler.py`, and `init_cupy.py` are compiler or device bootstrap
-boundaries; `distributions/`, `init/`, and `linalg/` are public native
+Compiler, external-library setup, binding generation and CuPy bootstrap
+implementations live under `build/`; historical root-module imports are
+same-object aliases. `distributions/`, `init/`, and `linalg/` are public native
 packages; `selftest.py` is the installed smoke-test entry point. New root files
 require an ownership review and a corresponding structure-gate update.
 
@@ -249,12 +267,42 @@ base contracts, constraints, helpers, discrete/continuous/relaxed/multivariate
 families and KL divergence. Initialization separates basic filling, fan/gain
 rules, scaled initializers and truncated normal; its facade retains the existing
 Var method bindings. Function metadata names the physical owner, while historical
-public pickle globals continue to resolve through the facades. These moves do
-not complete the remaining root, tensor-ops or build-package migration.
+public pickle globals continue to resolve through the facades. Native Python
+implementation files are now all below 1,500 lines; four compatibility files
+remain above that size. Native layout progress therefore does not establish
+completion of task 5.26 or the independent Torch distribution migration.
 Runtime-only framework imports are deferred to calls to keep the import-cycle
 surface from growing. The six legacy complex linalg functions are lazily
 re-exported as their original objects, preserving concrete ComplexNumber type
 annotations without making package bootstrap depend on the NN facade.
+
+Contributed algorithms physically live under `contrib/{ccl,loss3d,math_util,
+einops}`. Their historical packages and child-module paths are deprecated
+same-object aliases, resolved on demand rather than by eagerly importing all
+four domains. The `igamma.h` resource follows its owner into
+`contrib/math_util/src`; source checkout and installed resource lookup use the
+same module-relative path. The public `contrib` package also owns the historical
+composition helpers; `jittor.compat.contrib` now aliases it. Alias publication
+preserves same-named package functions such as `math_util.igamma` and
+`ccl.ccl_2d` instead of replacing them with child-module objects. Einops parsing
+and transformation share one `EinopsError` class in `einops._errors`, re-exported
+by the public package without an implementation-to-facade import cycle.
+
+Standalone build utilities physically live in `build/utils` while retaining the
+`jittor_utils` runtime namespace, so utility imports can run before Jittor core
+bootstrap. `jittor.build.utils` imports alias those same objects. This separates
+physical ownership from the standalone bootstrap namespace without introducing
+duplicate utility implementations or an eager inverse import of Jittor. Source
+and dependency scanners inspect the real `build/utils` tree, not just the
+standalone import bridge.
+
+The compiler is split by responsibility: `build/compiler.py` retains startup
+state and orchestration (1,472 lines at this migration), `build/codegen.py` owns
+source generation (626 lines), and `build/compilation.py` owns compilation and
+custom-extension operations (534 lines). Generator fingerprints include the
+extracted owners so a change cannot silently reuse an obsolete build stamp.
+Compatibility cleanup and independent Torch packaging remain separate work;
+these native moves alone do not close the entire Python layout task.
 
 Backend configuration is now a frozen `BuildConfig` returned by the selected
 provider, with explicit services in `BuildContext`. Providers do not mutate
@@ -604,7 +652,7 @@ paths and therefore require special review:
 - `src/` (installed as `jittor/src/`)
 - `backends/acl/{include,kernels/native,src}/`
 - `backends/comm/`
-- `python/jittor/math_util/src/`
+- `python/jittor/contrib/math_util/src/`
 - `python/jittor/compat/shim/cpp_extension/`
 
 A move is complete only when source checkouts, sdists, wheels, cold JIT builds,

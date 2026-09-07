@@ -32,7 +32,7 @@ def test_nano_type_references_use_the_canonical_include_path():
 
 
 def test_core_build_lists_nano_string_under_type():
-    compiler = (ROOT / "python" / "jittor" / "compiler.py").read_text(
+    compiler = (ROOT / "python" / "jittor" / "build" / "compiler.py").read_text(
         encoding="utf-8"
     )
     assert '"src/type/nano_string.cc"' in compiler

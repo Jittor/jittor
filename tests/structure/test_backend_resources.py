@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 @pytest.fixture
 def resolver():
     spec = importlib.util.spec_from_file_location(
-        "backend_resources_contract", ROOT / "python/jittor_utils/backend_resources.py")
+        "backend_resources_contract", ROOT / "python/jittor/build/utils/backend_resources.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.backend_root
@@ -56,7 +56,7 @@ def test_empty_or_cache_only_directory_is_not_a_backend(tmp_path, resolver):
 
 
 def test_cuda_library_inventory_includes_cutt_support_sources(resolver):
-    path = ROOT / "python/jittor/compile_extern.py"
+    path = ROOT / "python/jittor/build/compile_extern.py"
     function = next(node for node in ast.parse(path.read_text()).body
                     if isinstance(node, ast.FunctionDef) and node.name == "_cuda_library_sources")
     namespace = {"os": os, "backend_root": resolver,

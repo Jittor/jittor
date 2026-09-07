@@ -39,7 +39,11 @@ class TestRootDomainStructure(unittest.TestCase):
 
     def test_legacy_modules_are_same_object_aliases(self):
         aliases = {
-            "jittor.contrib": "jittor.compat.contrib",
+            "jittor.compat.contrib": "jittor.contrib",
+            "jittor.ccl": "jittor.contrib.ccl",
+            "jittor.loss3d": "jittor.contrib.loss3d",
+            "jittor.math_util": "jittor.contrib.math_util",
+            "jittor.einops": "jittor.contrib.einops",
             "jittor.gradfunctional": "jittor.autograd",
             "jittor.gradfunctional.functional": "jittor.autograd.functional",
             "jittor.lr_scheduler": "jittor.optim.legacy_schedulers",
@@ -167,8 +171,8 @@ class TestRootDomainStructure(unittest.TestCase):
             ("jittor.nn.backends.softmax_cuda", "softmax_v1",
              "jittor.backends.cuda.kernels.nn.softmax_cuda"),
             ("jittor.contrib", "concat", "jittor.ops.concatenation"),
-            ("jittor.contrib", "check", "jittor.compat.contrib"),
-            ("jittor.contrib", "slice_var_index", "jittor.compat.contrib"),
+            ("jittor.compat.contrib", "check", "jittor.contrib"),
+            ("jittor.compat.contrib", "slice_var_index", "jittor.contrib"),
             ("jittor.gradfunctional", "jvp", "jittor.autograd.functional"),
             (
                 "jittor.gradfunctional.functional",
@@ -222,7 +226,7 @@ class TestRootDomainStructure(unittest.TestCase):
                         actual[node.name].add(relative)
         self.assertEqual(actual, expected)
 
-        compatibility = self.runtime_root / "compat" / "contrib.py"
+        compatibility = self.runtime_root / "contrib" / "__init__.py"
         tree = ast.parse(
             compatibility.read_text(encoding="utf-8"), filename=str(compatibility)
         )
@@ -232,12 +236,12 @@ class TestRootDomainStructure(unittest.TestCase):
                 for node in tree.body
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
             },
-            {"check", "slice_var_index"},
+            {"check", "slice_var_index", "__getattr__", "__dir__"},
         )
 
     def test_production_imports_use_canonical_paths(self):
         retired = (
-            "jittor.contrib",
+            "jittor.compat.contrib",
             "jittor.gradfunctional",
             "jittor.other",
             "jittor.weightnorm",
@@ -264,7 +268,7 @@ class TestRootDomainStructure(unittest.TestCase):
         paths = (
             "autograd/__init__.py",
             "autograd/functional.py",
-            "compat/contrib.py",
+            "contrib/__init__.py",
             "ops/concatenation.py",
             "ops/indexing.py",
             "nn/utils/__init__.py",

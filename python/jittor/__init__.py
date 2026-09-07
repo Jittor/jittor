@@ -31,8 +31,8 @@ from jittor_utils import env_config as _env_config
 # The root composes; it does not define. Both helpers below used to be written
 # out here, which put them on ``jittor.`` as public-by-accident names and is
 # what tests/structure/test_runtime_composition_structure.py forbids.
-from ._composition import make_inplace_alias as _make_inplace_alias
-from ._composition import publish as _publish
+from ._runtime.composition import make_inplace_alias as _make_inplace_alias
+from ._runtime.composition import publish as _publish
 
 
 _NATIVE_CORE_EXPORTS = (
@@ -101,15 +101,15 @@ with _lock.lock_scope():
     ori_int = int
     ori_float = float
     ori_bool = bool
-    from . import compiler
-    from .compiler import LOG, has_cuda
-    from .compiler import compile_custom_ops, compile_custom_op
+    from .build import compiler
+    from .build.compiler import LOG, has_cuda
+    from .build.compiler import compile_custom_ops, compile_custom_op
     import jittor_core
     import jittor_core as core
     _publish(globals(), jittor_core, _NATIVE_CORE_EXPORTS)
     _publish(globals(), jittor_core.ops, _NATIVE_OP_EXPORTS)
     _core_profiler = core.profiler
-    from . import compile_extern
+    from .build import compile_extern
     # in_mpi / rank / world_size are deliberately NOT imported here. Importing
     # them bound a snapshot of compile_extern.rank taken at import time, and
     # anything that later corrected compile_extern.rank -- the torch NCCL
@@ -121,7 +121,7 @@ with _lock.lock_scope():
     # Assigning jt.rank / jt.world_size / jt.in_mpi anywhere would put an entry
     # in this module's __dict__, which shadows __getattr__ permanently and
     # brings the stale copy straight back. Write to compile_extern. 6.B15.
-    from .compile_extern import runtime_state_getattr as __getattr__
+    from .build.compile_extern import runtime_state_getattr as __getattr__
     from ._runtime.backend_libraries import (
         protect_library_attributes as _protect_library_attributes,
         ROOT_LIBRARY_NAMES as _root_library_names,
@@ -130,7 +130,7 @@ with _lock.lock_scope():
     if core.get_device_count() == 0:
         has_cuda = compile_extern.has_cuda = compiler.has_cuda = False
     if has_cuda:
-        from .init_cupy import numpy2cupy
+        from .build.init_cupy import numpy2cupy
     else:
         # No CUDA device visible (e.g. CUDA_VISIBLE_DEVICES="" in a CPU-only Ray
         # orchestrator). Skip CUDA-library / cupy init (they call into the CUDA
@@ -149,13 +149,13 @@ from ._core.flags import _core_flags
 _publish(globals(), _core_api, _core_api.__all__)
 import jittor.ops as ops
 from .backends.cuda.kernels.misc import tensor_ops as _cuda_tensor_kernels
-from .benchmarking import BenchmarkResult, benchmark
+from .tools.benchmarking import BenchmarkResult, benchmark
 
 # The runtime installs its monkeypatches from here on, in a fixed order that
 # used to exist only as the physical arrangement of the statements below.
-# jittor/_install_order.py declares that order and checks it.
-from . import _install_order as _install_order
-from ._install_order import record as _record_install
+# jittor/_runtime/install_order.py declares that order and checks it.
+from ._runtime import install_order as _install_order
+from ._runtime.install_order import record as _record_install
 
 from . import nn
 from . import fft
@@ -183,7 +183,7 @@ _install_full_reduce()
 _record_install("nn.full_reduce_fast_path")
 del _install_full_reduce
 
-from .compat import contrib as contrib
+from . import contrib as contrib
 from . import misc as misc
 _MISC_EXPORTS = tuple(misc.tensor_ops.__all__) + (
     "amax", "amin", "cat", "concat", "count_nonzero",
@@ -245,7 +245,7 @@ del _alias_name
 del _operation
 _record_install("root.inplace_aliases")
 
-from . import math_util
+from .contrib import math_util
 _publish(globals(), math_util, math_util.__all__)
 from . import distributions
 

@@ -1,8 +1,7 @@
-class EinopsError(RuntimeError):
-    """ Runtime error thrown by einops """
-    pass
+"""Deprecated same-object alias of :mod:`jittor.contrib.einops`."""
 
+import importlib as _importlib
+import sys as _sys
 
-__all__ = ['rearrange', 'reduce', 'repeat', 'parse_shape', 'asnumpy', 'EinopsError']
-
-from jittor.einops.einops import rearrange, reduce, repeat, parse_shape, asnumpy
+_canonical = _importlib.import_module("jittor.contrib.einops")
+_sys.modules[__name__] = _canonical

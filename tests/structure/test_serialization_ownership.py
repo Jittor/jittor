@@ -26,7 +26,7 @@ class TestSerializationOwnership(unittest.TestCase):
                     ("jittor.", "jittor_utils.")):
                 del sys.modules[name]
         utils = ModuleType("jittor_utils")
-        utils.__path__ = [str(PYTHON_ROOT / "jittor_utils")]
+        utils.__path__ = [str(PYTHON_ROOT / "jittor" / "build" / "utils")]
         sys.modules[utils.__name__] = utils
         self.services = importlib.import_module("jittor_utils.runtime_services")
 
@@ -101,7 +101,7 @@ class TestSerializationOwnership(unittest.TestCase):
 
     def test_utility_endpoints_contain_no_runtime_import_or_algorithms(self):
         for name in MODULES + ("runtime_services",):
-            tree = ast.parse((PYTHON_ROOT / "jittor_utils" / (name + ".py")).read_text())
+            tree = ast.parse((PYTHON_ROOT / "jittor" / "build" / "utils" / (name + ".py")).read_text())
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     self.assertFalse(any(a.name == "jittor" or a.name.startswith("jittor.")

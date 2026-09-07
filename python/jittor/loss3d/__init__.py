@@ -1,2 +1,7 @@
-from .chamfer import chamfer_loss, ChamferLoss
-from .emd import earth_mover_distance, EarthMoverDistance
+"""Deprecated same-object alias of :mod:`jittor.contrib.loss3d`."""
+
+import importlib as _importlib
+import sys as _sys
+
+_canonical = _importlib.import_module("jittor.contrib.loss3d")
+_sys.modules[__name__] = _canonical

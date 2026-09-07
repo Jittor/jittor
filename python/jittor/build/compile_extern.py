@@ -1,6 +1,6 @@
 # ***************************************************************
-# Copyright (c) 2023 Jittor. All Rights Reserved. 
-# Maintainers: Dun Liang <randonlang@gmail.com>. 
+# Copyright (c) 2023 Jittor. All Rights Reserved.
+# Maintainers: Dun Liang <randonlang@gmail.com>.
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -13,7 +13,7 @@ from jittor_utils import manifest
 from jittor_utils.env_config import build_env, build_flag
 import jittor_utils as jit_utils
 from jittor_utils.backend_resources import backend_root
-from ._runtime.backend_libraries import (
+from .._runtime.backend_libraries import (
     get_library, get_library_ops, library_resource, register_library,
     register_library_loader, register_library_resources, library_attribute,
     protect_library_attributes, ROOT_LIBRARY_NAMES,
@@ -247,13 +247,13 @@ def setup_mkl():
 
     mkl_include_path = build_env("mkl_include_path", environ=os.environ)
     mkl_lib_path = build_env("mkl_lib_path", environ=os.environ)
-    
+
     if mkl_lib_path is None or mkl_include_path is None:
         LOG.v("setup mkl...")
         # mkl_path = os.path.join(cache_path, "mkl")
         # mkl_path decouple with cc_path
         mkl_path = os.path.join(jit_utils.home(), ".cache", "jittor", "mkl")
-        
+
         make_cache_dir(mkl_path)
         install_mkl(mkl_path)
         mkl_home = ""
@@ -302,12 +302,12 @@ def install_cub(root_folder):
     md5 = manifest.digest_of(asset)[1]
     fullname = os.path.join(root_folder, filename)
     dirname = os.path.join(root_folder, filename.replace(".tgz",""))
-    
+
     if not os.path.isfile(os.path.join(dirname, "examples", "device/example_device_radix_sort.cu")):
         LOG.i("Downloading cub...")
         download_url_to_local(url, filename, root_folder, md5)
         import tarfile
-    
+
         with tarfile.open(fullname, "r") as tar:
             safe_tar_extractall(tar, root_folder)
         # assert 0 == os.system(f"cd {dirname}/examples && "
@@ -391,11 +391,11 @@ def setup_cuda_extern():
         except Exception as e:
             msg = f"CUDA found but {lib_name} is not loaded:\n"
             if lib_name == "cudnn":
-                msg += """Develop version of CUDNN not found, 
-please refer to CUDA offical tar file installation: 
+                msg += """Develop version of CUDNN not found,
+please refer to CUDA offical tar file installation:
 https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar"""
             if lib_name == "cusparse":
-                msg += """CUSPARSE library is not loaded, 
+                msg += """CUSPARSE library is not loaded,
 please ensure it is installed along with the CUDA toolkit."""
             if platform.machine() in ["x86_64", "AMD64"]:
                 msg += f"""
@@ -604,12 +604,12 @@ def setup_cutt():
     if not use_cutt: return
     cutt_include_path = build_env("cutt_include_path", environ=os.environ)
     cutt_lib_path = build_env("cutt_lib_path", environ=os.environ)
-    
+
     if cutt_lib_path is None or cutt_include_path is None:
         LOG.v("setup cutt...")
         # cutt_path decouple with cc_path
         cutt_path = os.path.join(jit_utils.home(), ".cache", "jittor", "cutt")
-        
+
         make_cache_dir(cutt_path)
         install_cutt(cutt_path)
         cutt_home = os.path.join(cutt_path, "cutt-1.2")
@@ -830,7 +830,7 @@ def setup_nccl(store=None):
     nccl_include_path = build_env("nccl_include_path", environ=os.environ)
     nccl_lib_path = build_env("nccl_lib_path", environ=os.environ)
     nccl_lib_name = None
-    
+
     if nccl_lib_path is None or nccl_include_path is None:
         if cuda_wheel_stack:
             nccl_include_path = cuda_wheel_stack.include_dirs("nccl")[0]
@@ -846,7 +846,7 @@ def setup_nccl(store=None):
             if nccl_home is None: return
             nccl_include_path = os.path.join(nccl_home, "build", "include")
             nccl_lib_path = os.path.join(nccl_home, "build", "lib")
-        
+
     # MPI-free env/file rendezvous: build NCCL ops even without MPI (compile the
     # MPI bootstrap branch out via -DJT_NCCL_NO_MPI). This is the no-mpirun path.
     _nccl_envfile = os.environ.get("JT_NCCL_WORLD_SIZE") is not None
@@ -1302,7 +1302,7 @@ def check_distributed_backend_ready():
 # -- the device IPs are available via `hccn_tool -i N -ip -g`). For now they are
 # kept as distinct, separately-compiled modules so neither can regress the
 # other. The MPI path's behavior is unchanged when JT_HCCL_WORLD_SIZE is unset.
-import jittor.compiler as compiler
+from . import compiler
 _want_hccl = (getattr(compiler, "has_acl", 0) and
               (_jt_hccl_no_mpi or (in_mpi and has_mpi)))
 if _want_hccl:

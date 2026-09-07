@@ -131,7 +131,7 @@ class TestSelftestStructure(unittest.TestCase):
             self.repo_root / "tools" / "install" / "legacy" / "install.sh",
             self.repo_root / "tests" / "compiler" / "test_lock.py",
             self.repo_root / "tools" / "release" / "legacy" / "polish_centos.py",
-            self.repo_root / "python" / "jittor_utils" / "class" / "setup_env.py",
+            self.repo_root / "python" / "jittor" / "build" / "utils" / "class" / "setup_env.py",
         ]
         expected_callers.extend(
             sorted((self.repo_root / "tests" / "system" / "legacy").glob("test_*ubuntu*.sh"))

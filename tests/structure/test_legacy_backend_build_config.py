@@ -38,10 +38,10 @@ def providers(monkeypatch):
     misc.safe_tar_extractall = Mock()
     monkeypatch.setitem(sys.modules, "jittor_utils", utils)
     monkeypatch.setitem(sys.modules, "jittor_utils.misc", misc)
-    _load(monkeypatch, "jittor_utils.compiler_flags", PYTHON / "jittor_utils/compiler_flags.py")
-    _load(monkeypatch, "jittor_utils.backend_resources", PYTHON / "jittor_utils/backend_resources.py")
+    _load(monkeypatch, "jittor_utils.compiler_flags", PYTHON / "jittor/build/utils/compiler_flags.py")
+    _load(monkeypatch, "jittor_utils.backend_resources", PYTHON / "jittor/build/utils/backend_resources.py")
     config = _load(monkeypatch, "jittor_utils.build_config",
-                   PYTHON / "jittor_utils/build_config.py")
+                   PYTHON / "jittor/build/utils/build_config.py")
     # 4.15 moved the provider to the top-level backend tree; the contract is
     # about the provider's behaviour, not about where the file sits.
     corex = _load(monkeypatch, "legacy_corex_contract",

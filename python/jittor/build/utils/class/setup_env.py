@@ -1,10 +1,10 @@
 # ***************************************************************
-# Copyright (c) 2023 Jittor. All Rights Reserved. 
+# Copyright (c) 2023 Jittor. All Rights Reserved.
 # Maintainers:
 #     Guoye Yang <498731903@qq.com>
 #     Dun Liang <randonlang@gmail.com>.
 #
-# 
+#
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -27,7 +27,7 @@ python3.7 -m jittor_utils.class.setup_env stop
 # stop               // stop n docker CONTAINERs
 # restart [n_gpu]    // restart n docker CONTAINERs with n_gpu GPUs.
 import sys
-import os 
+import os
 import json as js
 import random
 

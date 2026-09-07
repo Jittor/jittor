@@ -18,7 +18,7 @@ from unittest import mock
 # Load the leaf module directly: importing ``jittor`` would initialize the
 # compiler and turn these filesystem-only tests into CUDA integration tests.
 _MODULE_PATH = (
-    Path(__file__).resolve().parents[2] / "python" / "jittor_utils" / "cuda_wheel.py"
+    Path(__file__).resolve().parents[2] / "python" / "jittor" / "build" / "utils" / "cuda_wheel.py"
 )
 _CACHE_ROOT = Path(
     os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")

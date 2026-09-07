@@ -30,10 +30,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 #: Production trees.  Tests legitimately build fake checkouts in ``tmp_path``.
-PRODUCTION = ("python/jittor", "python/jittor_utils", "backends")
+PRODUCTION = ("python/jittor", "backends")
 
 #: Only the bootstrap may say where the sources are.
-SOURCE_ROOT_OWNER = "python/jittor/compiler.py"
+SOURCE_ROOT_OWNER = "python/jittor/build/compiler.py"
 
 #: A rewriting port has to enumerate a tree...
 _WALKS = {"walk", "rglob", "iglob", "glob"}
@@ -105,7 +105,7 @@ def test_the_provider_contract_offers_no_source_rewriting_service():
     documented, supported thing for a provider to do.  Removing the field is
     what makes the port unavailable rather than merely unused.
     """
-    source = (ROOT / "python/jittor_utils/build_config.py").read_text(encoding="utf8")
+    source = (ROOT / "python/jittor/build/utils/build_config.py").read_text(encoding="utf8")
     context = next(node for node in ast.parse(source).body
                    if isinstance(node, ast.ClassDef) and node.name == "BuildContext")
     fields = [node.target.id for node in context.body

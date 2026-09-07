@@ -1,4 +1,7 @@
-from .gamma import digamma, lgamma
-from .igamma import igamma
+"""Deprecated same-object alias of :mod:`jittor.contrib.math_util`."""
 
-__all__ = ("digamma", "igamma", "lgamma")
+import importlib as _importlib
+import sys as _sys
+
+_canonical = _importlib.import_module("jittor.contrib.math_util")
+_sys.modules[__name__] = _canonical

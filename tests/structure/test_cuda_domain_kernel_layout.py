@@ -35,15 +35,15 @@ def test_cuda_domain_frontends_keep_cpu_and_shared_definitions():
     for domain, names in (("ccl", ("ccl_2d", "ccl_3d", "ccl_link")),
                           ("loss3d", ("chamfer", "emd"))):
         for name in names:
-            source = (ROOT / "python/jittor" / domain / (name + ".py")).read_text()
+            source = (ROOT / "python/jittor/contrib" / domain / (name + ".py")).read_text()
             assert "__global__" not in source
             assert "jittor.backends.cuda.kernels." in source
             tree = ast.parse(source)
             assert any(isinstance(node, ast.FunctionDef) for node in tree.body)
-    chamfer = (ROOT / "python/jittor/loss3d/chamfer.py").read_text()
+    chamfer = (ROOT / "python/jittor/contrib/loss3d/chamfer.py").read_text()
     assert "cpu_src =" in chamfer
-    assert "class ChamferLoss(nn.Module):" in chamfer
-    emd = (ROOT / "python/jittor/loss3d/emd.py").read_text()
+    assert "class ChamferLoss(Module):" in chamfer
+    emd = (ROOT / "python/jittor/contrib/loss3d/emd.py").read_text()
     assert "class EarthMoverDistance(Function):" in emd
     assert "self.saved_vars = (pc1, pc2, match, reduction)" in emd
 

@@ -16,14 +16,14 @@ import urllib.request
 
 
 def _manifest():
-    """Load jittor_utils/manifest.py by path.
+    """Load the build utilities manifest by path.
 
     Importing ``jittor_utils`` would run its package __init__, which looks for
     a C++ compiler and computes a cache path -- neither of which this script
     needs, and both of which would make packaging require a build toolchain.
     """
     import importlib.util
-    path = _repo_root() / "python" / "jittor_utils" / "manifest.py"
+    path = _repo_root() / "python" / "jittor" / "build" / "utils" / "manifest.py"
     spec = importlib.util.spec_from_file_location("jittor_manifest", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

@@ -23,7 +23,7 @@ def _backend_reads(tree):
 def test_operator_domains_use_registered_device_selection():
     source = RUNTIME.parent
     offenders = []
-    for directory in ("nn", "ops", "math_util", "fft", "optim"):
+    for directory in ("nn", "ops", "contrib/math_util", "fft", "optim"):
         for path in (source / directory).rglob("*.py"):
             tree = ast.parse(path.read_text())
             # These are explicit user device-transfer commands, not kernel

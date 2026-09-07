@@ -72,10 +72,10 @@ class TestPackagingStructure(unittest.TestCase):
             "recursive-include python/jittor/compat/shim/cpp_extension/src *",
             "recursive-include python/jittor/compat/shim/resources *",
             "recursive-include backends *",
-            "recursive-include python/jittor/math_util/src *",
+            "recursive-include python/jittor/contrib/math_util/src *",
             "recursive-include src *.cc *.h",
             "recursive-include python/jittor/tools *.py",
-            "recursive-include python/jittor_utils/class *",
+            "recursive-include python/jittor/build/utils/class *",
         }
         self.assertTrue(runtime_resources.issubset(directives))
         self.assertNotIn("recursive-include python/jittor/extern *", directives)

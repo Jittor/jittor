@@ -175,7 +175,7 @@ class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
         # package rather than the repository-only tools tree or utils drawer.
         self._pinned_by(
             "dumpdef.py",
-            ("compiler.py",
+            ("build/compiler.py",
              'os.path.join(jittor_path, "build", "dumpdef.py")'),
             source=PACKAGE / "build" / "dumpdef.py")
 

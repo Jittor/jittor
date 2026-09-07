@@ -85,7 +85,7 @@ def test_op_registry_storage_is_lazily_initialized():
 def test_op_constructors_are_not_erased_through_void_pointer_rtti():
     header = (REPO_ROOT / "src/ops/op_register.h").read_text(
         encoding="utf-8")
-    compiler = (REPO_ROOT / "python/jittor/compiler.py").read_text(
+    compiler = (REPO_ROOT / "python/jittor/build/codegen.py").read_text(
         encoding="utf-8")
     utils = (REPO_ROOT / "src/ops/op_utils.cc").read_text(
         encoding="utf-8")

@@ -206,13 +206,13 @@ class TestCutlassIsGone(unittest.TestCase):
                      "cutlass_ops"):
             self.assertFalse(hasattr(compile_extern, name),
                              f"compile_extern.{name} is back")
-        source = (REPO / "python" / "jittor" / "compile_extern.py").read_text(
+        source = (REPO / "python" / "jittor" / "build" / "compile_extern.py").read_text(
             encoding="utf8")
         self.assertNotIn("cutlass", source.lower())
 
     def test_nccl_is_not_fetched_before_the_conditions_are_checked(self):
         """The device-count and MPI checks used to come after the download."""
-        source = (REPO / "python" / "jittor" / "compile_extern.py").read_text(
+        source = (REPO / "python" / "jittor" / "build" / "compile_extern.py").read_text(
             encoding="utf8")
         body = source[source.index("def install_nccl("):]
         body = body[:body.index("\ndef ")]

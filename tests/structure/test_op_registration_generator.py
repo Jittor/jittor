@@ -7,6 +7,7 @@ import re
 import pytest
 
 from _helpers.op_registration_generator import load_op_registration_generator as _load_generator
+from _helpers.op_registration_generator import compiler_state_free_ast
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -50,7 +51,8 @@ def test_generator_preserves_every_operator_definition(relative, tmp_path):
 
 
 def test_custom_library_forwards_backend_into_registration_generator():
-    tree = ast.parse((JITTOR / "compiler.py").read_text(encoding="utf8"))
+    tree = compiler_state_free_ast(ast.parse(
+        (JITTOR / "build" / "compilation.py").read_text(encoding="utf8")))
     custom = next(node for node in tree.body
                   if isinstance(node, ast.FunctionDef) and node.name == "compile_custom_ops")
     assert custom.args.args[-1].arg == "backend"
@@ -64,7 +66,7 @@ def test_custom_library_forwards_backend_into_registration_generator():
 
 
 @pytest.mark.parametrize("relative,expected", [
-    ("compile_extern.py", {"mkl": "cpu", "culib": "accelerator", "cutt": "accelerator",
+    ("build/compile_extern.py", {"mkl": "cpu", "culib": "accelerator", "cutt": "accelerator",
                            "nccl": "accelerator", "hccl": "accelerator", "mpi": None}),
 ])
 def test_optional_libraries_declare_their_actual_backend_family(relative, expected):

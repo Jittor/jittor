@@ -63,7 +63,7 @@ def _positive_count(name, value):
 def _collect_vars(value):
     # Import lazily: benchmarking is published while jittor itself is still
     # initializing, after the native Var type has become available.
-    from . import Var
+    from .. import Var
 
     variables = []
     seen_vars = set()
@@ -101,7 +101,7 @@ def _collect_vars(value):
 def _sync_vars(variables):
     if not variables:
         return
-    from . import sync
+    from .. import sync
 
     sync(variables, device_sync=True, weak_sync=False)
 

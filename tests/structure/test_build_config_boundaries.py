@@ -16,7 +16,7 @@ from jittor_utils.env_config import build_env, build_flag
 
 
 ROOT = Path(__file__).resolve().parents[2]
-UTILS = ROOT / "python/jittor_utils"
+UTILS = ROOT / "python/jittor/build/utils"
 
 
 def _load(name):
@@ -171,7 +171,7 @@ def test_default_cache_config_stays_unchanged_and_explicit_backend_isolated(monk
 
 
 def test_explicit_cpu_skips_every_cuda_discovery_and_installation_service():
-    path = ROOT / "python/jittor/compiler.py"
+    path = ROOT / "python/jittor/build/compiler.py"
     tree = ast.parse(path.read_text())
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                     and node.name == "_discover_cuda_compiler")
@@ -191,7 +191,7 @@ def test_explicit_cpu_skips_every_cuda_discovery_and_installation_service():
 @pytest.mark.parametrize("name", ["setup_cuda_extern", "setup_cuda_lib", "setup_cub",
                                   "setup_cutt", "_load_cuda_library"])
 def test_compatible_library_loaders_keep_corex_but_not_acl_or_rocm(name):
-    path = ROOT / "python/jittor/compile_extern.py"
+    path = ROOT / "python/jittor/build/compile_extern.py"
     function = next(node for node in ast.parse(path.read_text()).body
                     if isinstance(node, ast.FunctionDef) and node.name == name)
     class EnteredLoader(Exception):
@@ -215,7 +215,7 @@ def test_compatible_library_loaders_keep_corex_but_not_acl_or_rocm(name):
 
 
 def test_nccl_loader_does_not_probe_nvidia_for_non_nvidia_build():
-    path = ROOT / "python/jittor/compile_extern.py"
+    path = ROOT / "python/jittor/build/compile_extern.py"
     function = next(node for node in ast.parse(path.read_text()).body
                     if isinstance(node, ast.FunctionDef) and node.name == "setup_nccl")
     namespace = {"os": SimpleNamespace(environ={"JT_NCCL_WORLD_SIZE": "2"}),

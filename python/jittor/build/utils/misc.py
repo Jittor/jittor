@@ -1,9 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2023 Jittor. All Rights Reserved. 
+# Copyright (c) 2023 Jittor. All Rights Reserved.
 # Maintainers:
 #     Meng-Hao Guo <guomenghao1997@gmail.com>
 #     Dun Liang <randonlang@gmail.com>.
-# 
+#
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************

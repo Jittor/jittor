@@ -39,7 +39,7 @@ def generator():
     """
     global _generator
     if _generator is None:
-        path = os.path.join(REPO_ROOT, "python", "jittor", "pyjt_compiler.py")
+        path = os.path.join(REPO_ROOT, "python", "jittor", "build", "pyjt_compiler.py")
         spec = importlib.util.spec_from_file_location(
             "_pyjt_compiler_under_test", path)
         module = importlib.util.module_from_spec(spec)

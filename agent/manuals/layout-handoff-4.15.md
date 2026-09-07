@@ -44,8 +44,17 @@ misc/pool 后续也已迁代码：ops 包保留原生算子访问，misc 的六�
 tensor_ops 的127定义分到15个职责owner。pool数学归nn.functional.pooling，参数模块归
 nn.modules；旧AdaptiveAvgPool2d数值规则与类名保留，pool_use_code_op共用一份状态。
 CPU/CUDA/shim短检查通过，导入环158；完整门禁与wheel仍待较大阶段统一验收，见
-`agent/results/2026-09-07-ops-pooling-layout.md`。其余 build/contrib、根目录收缩及超长
-Python文件尚未完成，不要因此把5.26标为已合并。
+`agent/results/2026-09-07-ops-pooling-layout.md`。
+build/contrib 和根目录收缩代码也已完成：包根仅三个目标文件，native Python 文件均
+低于1500行。utils独立入口不启动框架，build.utils别名共用同一状态；compiler拆为
+启动state、codegen和compilation，生成器指纹覆盖三者。四个领域归contrib，旧import/
+pickle保留，igamma与class资源清单同步。CPU/CUDA/shim和真实自定义算子短验通过。
+汇总见 `agent/results/2026-09-07-build-contrib-layout.md`。还剩compat四个超长文件及
+独立Torch架构，完整门禁按用户要求留阶段收口，不要因此把5.26标为已合并。
+最终native打包检查：1111生产文件源码/sdist/wheel/install逐字节一致，隔离CPU冷构建
+205 TU及3步训练selftest通过。新wheel SHA-256为
+`b0bd4ecc36203b0de4bdc264a39a0908a8c2ec8ac1e58009339fe205d3ef980d`；
+此前两个仅含部分Python迁移的wheel不再代表当前源树。
 
 2026-09-07 后续执行记录：coord 已从 `4fbcaab64` 同步（实际落后 126 提交，无冲突）。
 正在修复本节前置：preflight 接收实际 BuildConfig，CPU/ACL/ROCm 不要求可选归档；

@@ -89,7 +89,8 @@ def main(argv=None):
     # whichever jittor the bare interpreter resolves -- usually the editable
     # install, i.e. some other working tree -- and report success for a cache
     # the caller will never use.
-    tree = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    tree = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))))
     existing = [part for part in environment.get("PYTHONPATH", "").split(
         os.pathsep) if part and part != tree]
     environment["PYTHONPATH"] = os.pathsep.join([tree] + existing)
