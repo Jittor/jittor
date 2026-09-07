@@ -3413,6 +3413,27 @@ CUDA 门禁**不含 `tests/ops`**：基线那一跑超时被杀，没有可比�
 **同一个用例**（`tests/core/test_setitem.py`）的 teardown，条数随同进程里跑过什么而变
 （基线全量 6 条、改后全量 15 条、单跑 `tests/core` 2 条），不是稳定量，不作判据。
 
+### 2026-09-07 `bindings`：抢救上一波被硬取消时留在工作树里的未提交改动
+
+上一波（`2.19` 剩余面）2026-09-07 03:32 被硬取消、工作区与 Cursor 断开，工作树里留下
+**未提交的两份文档改动 + 一个 `SALVAGE-FIRST-DO-NOT-DISCARD.md`**，基线 `1fe23fe2c`。
+本波只做一件事：判断这批改动成立多少，成立的按 family 提交，不成立的写明理由丢弃。
+**没有继续推进 `2.19`**，`op_compiler.cc`/`cache_compile.cc` 依然一行产品代码未改。
+
+| 项 | 结果 |
+| --- | --- |
+| 工作树里其实**没有代码改动** | `git status --short` 只有 `M agent/design/refactor-board.md`、`M agent/design/refactor-handoff.md`、`?? SALVAGE-FIRST-DO-NOT-DISCARD.md`；`git diff --numstat` 是 `2/0` 与 `31/5`。**没有 `D`、没有别的 `??`**，所以「未跟踪文件的删除不在 `git diff` 里」这个坑这次不涉及。这批改动全是**测量结果与分析结论的记录**，判据因此是「这些数字与结论能不能重现」，而不是「代码改对没有」。 |
+| **成立：CUDA 基线那一组，逐条重现** | 同一提交 `1fe23fe2c`、同一命令重跑 `tests/backends/cuda`：**5 failed / 274 passed / 35 skipped / 2 xfailed**，5 条 nodeid 与它记的完全一致。两次独立测量互证，已提交。 |
+| **成立：`precompile` 的可达性与「catch 会抹平迁移」** | 7 条 `jt.code(cpu_src=<坏 @ 语法>)` 探针重跑：**7/7 抛可捕获 `RuntimeError`、7/7 消息含 `Jit compiler error:`**，即那个 `catch (std::exception&)` 确实在路径上；而 `UserError : JittorError : std::runtime_error`（`log.h:162-172`）会被它接住是 C++ 类型关系。两半都有据，结论成立，已提交。 |
+| **不成立，已推翻：`:614` 是 bf16 死循环的路径** | 上一版写它「已知用户可达」。实测反向步长 `@for`（`@for(j,-2,-1,-1,...)`）**不抛任何异常**、按 `6.C33` 的意图展成空。`6.C33`（真实哈希 `68e8b97b2`）已经修掉病根，这条判断是它落地前的状态。**这是这一波唯一被推翻的结论。** |
+| **数字不准，已更正：`op_compiler.cc` 56 → 55** | 上一版只写「56 / 40」没写口径，重数对不上。定成可复跑的口径（`ASSERT|ASSERTop|CHECK|CHECKop` 调用数 + `LOGf` 调用数）后：`op_compiler.cc` **55**、`cache_compile.cc` **40**。56 那个数多算了 `:1019`——那行是 C++ 关键字表里的字符串字面量 `"ASSERT"`，按行数而非调用数数就会算进去。`cache_compile.cc` 的 `#ifdef TEST` 分布也从「约 28 / 约 12」改成实测 **25 / 15（Linux 13）**。 |
+| **行号整体偏 7，已逐条重定位** | 上一版 `:604` 之后的**每一个**行号都错，因为分析做在 `6.C33`（`+8/-1`，给 `@for` 加了注释）落地前、写完没重数：`:607→:614`、`:708→:715`、`:733→:740`、`:796→:803`、`:805→:812`、`:808→:815`、`:926→:933`、`:1144→:1151`、`:1265→:1272` 等。**这次的行号不是数出来的**，是抄 jittor 日志前缀自己打的 `op_compiler.cc:<行号>`。并在文中写明 `4.15` 会搬走整棵 `python/jittor/src/`，下一位**按措辞 grep、不要按行号找**。 |
+| 未复核，已标注而非当成跑过 | (1) `tests/core` 那一套（`21 failed / 665 passed`，`nvcc_path=""` 的 CPU-only build）本波没重跑。(2)「bf16 那一个根因占 21 条红」的拆分没有回到旧提交重跑去核。两条都在文中标为未核。 |
+| 写负向测试的坑（这一波踩出来的） | 「`@` 后非法」用行尾一个裸 `@` **不抛**：那个 `@` 原样落进生成源码，最后由 **g++** 报 `stray '@' in program`——探针没走到 `:812`，而错误照样出现。**只断言「抛了」的负向测试会把这种情况判成通过**，断言必须钉到 `op_compiler.cc:<行号>` 或该检查独有的措辞。改用 `@!x` 才命中。 |
+| 三套门禁 | CUDA `tests/backends/cuda`：**5 failed / 274 passed / 35 skipped / 2 xfailed**（1837s）。CPU torch 模式 `JITTOR_TORCH_SHIM=1 tests/structure`：rebase 前 **14 failed / 914 passed / 2 xfailed**（349s）。原生 CPU `tests/core` 未跑（见上一行）。本波改动全是文档，三套门禁对它只起「没碰坏别人」的作用。 |
+| CUDA 冒烟 | `import jittor` + `use_cuda=1` + 64×64 matmul：`has_cuda True`、`Found device architectures: [89,]`、nvcc 12.2.140、`matmul sum = 262144.0` 与 numpy 一致。 |
+| 环境 | 期间 shell 反复「无退出状态」（与上一波末期同一症状，另有分区在跑重活），几条命令重试了三四次才回。**这不是改动的问题，但它会让人误判某步没做**——重试前先确认上一次是不是已经落地了。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
