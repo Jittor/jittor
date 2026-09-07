@@ -79,6 +79,29 @@ export nvcc_path=/usr/local/cuda/bin/nvcc PATH=/usr/local/cuda/bin:$PATH
 1. **用例数对得上**。设备过滤配置错一个字符就静默收集到零个用例，`0 passed` 照样 EXIT=0。
    passed 只许涨不许跌；passed 不变而 skipped 掉了一大截，说明用例被删了而不是被修好了。
    两个数都要记进看板，只记 passed 看不出后一种。
+
+   **1bis. 单条规则也会静默收集到零个用例，而运行级的计数抓不到。**
+   `@pytest.mark.parametrize` 的参数列表如果是**算出来的**（`rglob` 出来的文件、注册表里的条目、
+   AST 扫出来的写入口），扫描根一失配列表就是空的，**这一条规则贡献零个用例**——而同文件其他
+   测试照样报 passed，上面那条「passed 只许涨不许跌」在同时新增了别的用例时完全看不出来。
+   2026-09-07 的 `2.22` 正是这个形状：清单门禁的主力规则在根失配时展开成零个用例、静默报绿。
+
+   两个动作必须同时做。**每个扫描根各自断言非空**，用「它必须包含的某个文件」来断，
+   不要写「总数 > N」——总数在一个根空掉、另一个足够大时照样通过。**给参数列表放哨兵**：
+   列表为空时塞一个必定失败的条目，让「零个用例」变成「一个红」。
+
+       _EMPTY_SCAN = "<scan matched nothing>"
+
+       def _scanned_modules():
+           found = sorted(str(p.relative_to(SOURCE)) for p in SOURCE.rglob("*.py"))
+           return found or [_EMPTY_SCAN]      # 空列表会让这条规则整体消失
+
+       @pytest.mark.parametrize("path", _scanned_modules())
+       def test_every_module_obeys_the_rule(path):
+           assert path != _EMPTY_SCAN, "扫描根不再匹配这棵树"
+
+   还要一条**反向**用例：拿一个不存在的根去调同一个扫描函数，断言它返回空。
+   否则你只证明了「今天能扫到」，没证明「扫不到时会报」。
 2. **哨兵文件在**。没有 `.done` 说明脚本没跑完（被 timeout 杀了、或者被别的东西打断），
    这时候日志里可能已经有一段漂亮的 passed，但那只是中途快照。**超时按「未完成」报，不要按通过报。**
 3. **日志尾部有 pytest 的汇总行**。段错误会让进程死在半路，日志停在一串点上，没有汇总行。
