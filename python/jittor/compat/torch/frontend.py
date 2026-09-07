@@ -69,12 +69,14 @@ class _TensorMeta(type):
 
 def make_tensor_type(backend):
     """Create the installation's real type without writing to native Var."""
+    from .tensor_object_state import tensor_object_properties
     return _TensorMeta("Tensor", (backend.Var,), {
         "__module__": "torch",
         "__slots__": ("__weakref__",),
         "_frontend_backend": backend,
         "_frontend_autograd_policy": 3,
         "clone": clone,
+        **tensor_object_properties(),
     })
 
 

@@ -83,19 +83,6 @@ def _acl_assignment_value(x, value, reduce=None):
     return value
 
 
-def _is_torch_0d(value):
-    import jittor as jt
-    return isinstance(value, jt.Var) and getattr(value, "_torch_0d", False)
-
-
-def _mark_0d(value):
-    try:
-        value._torch_0d = True
-    except Exception:
-        pass
-    return value
-
-
 def _dispatch_slices(slices):
     import jittor as jt
     if isinstance(slices, range):
@@ -104,12 +91,9 @@ def _dispatch_slices(slices):
         return tuple(
             (item != 0) if isinstance(item, jt.Var) and item.dtype == "uint8"
             else jt.array(list(item)) if isinstance(item, range)
-            else int(item.item()) if _is_torch_0d(item)
             else item
             for item in slices
         )
-    if _is_torch_0d(slices):
-        return int(slices.item())
     return slices
 
 
@@ -164,13 +148,6 @@ def _getitem_result(x, slices):
     if constant_gather is not None:
         return constant_gather
 
-    if (
-        isinstance(slices, int)
-        and not isinstance(slices, bool)
-        and x.ndim == 1
-    ):
-        return _mark_0d(x.getitem(slices))
-
     if isinstance(slices, tuple):
         normalized = []
         for item in slices:
@@ -180,13 +157,9 @@ def _getitem_result(x, slices):
                 normalized.extend(item.where())
             elif isinstance(item, range):
                 normalized.append(jt.array(list(item)))
-            elif _is_torch_0d(item):
-                normalized.append(int(item.item()))
             else:
                 normalized.append(item)
         slices = tuple(normalized)
-    elif _is_torch_0d(slices):
-        slices = int(slices.item())
     return x.getitem(slices)
 
 

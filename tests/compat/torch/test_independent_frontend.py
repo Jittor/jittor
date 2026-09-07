@@ -377,6 +377,28 @@ def test_independent_tensor_installation_preserves_native_type():
         with torch.no_grad():
             alias[0].fill_(3.)
         np.testing.assert_array_equal(original.numpy(), [3., 2.])
+        from jittor.compat.torch.tensor_object_state import get_tensor_object_state
+        import gc
+        import weakref
+        fresh = torch.tensor([1., 2.])
+        assert get_tensor_object_state(fresh) is None
+        assert fresh.grad is None and get_tensor_object_state(fresh) is None
+        fresh.grad = torch.ones_like(fresh)
+        object_state = get_tensor_object_state(fresh)
+        assert object_state.grad is fresh.grad
+        assert "_torch_grad" not in vars(fresh)
+        fresh._torch_data_owner = fresh
+        assert get_tensor_object_state(fresh) is object_state
+        assert "_torch_data_owner" not in vars(fresh)
+        copied_state = copy.deepcopy(fresh)
+        assert copied_state._torch_data_owner is copied_state
+        restored_state = pickle.loads(pickle.dumps(fresh))
+        assert restored_state._torch_data_owner is restored_state
+        np.testing.assert_array_equal(restored_state.grad.numpy(), [1., 1.])
+        reference = weakref.ref(fresh)
+        del fresh, object_state
+        gc.collect()
+        assert reference() is None
         print("INDEPENDENT_TENSOR_OK")
     """)], without_torch_mode=True, merge_stderr=True)
     assert result.returncode == 0, result.stdout

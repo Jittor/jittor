@@ -53,8 +53,30 @@ pickle保留，igamma与class资源清单同步。CPU/CUDA/shim和真实自定�
 2026-09-08 已将最后四个超长compat文件拆成职责包，整个python/jittor不再有超过
 1500行的.py，5.26布局正式收口。一次CPU结构门禁1407项中的7个新问题已修，8个
 定向节点通过；原有8个失败保留记录。新安装包1139生产文件逐字节核对、Torch视图/
-数据别名/反向短验通过。7.12仍需真正隔离Torch namespace与native Tensor/Module类，
-不能将本次布局与冗余状态清理当成独立Torch完成；下一步沿该边界推进。
+数据别名/反向短验通过。这是当时的布局证据；截至2026-09-08，默认Torch入口已使用
+独立namespace及Tensor/Parameter/Module/optimizer/Function类型，见
+`agent/results/2026-09-08-independent-default-entry.md`及后续看板记录。
+7.12不能因此关闭。按refactor-plan.md原条目，下一步必须推进：
+
+- 每个Tensor的显式状态归并：现有`TorchTensorState`仍是安装级leaf/retained/optimizer
+  容器，不等于原计划要求的单Tensor字段owner。本批新增真正每对象的
+  `TensorObjectState`，已承载grad/data owner/data path/scalar marker；其余对象字段与
+  运行期registry仍需继续迁移，不能把第一组状态当成整项已交付。
+- 原生边界：索引的`_torch_0d`标记链已由真实0-D内核取代，本批删除；模块注册和
+  legacy Parameter仍直接依赖Torch角色标记，需迁到明确协议/兼容owner，不能只改名。
+- 物理分包：target-layout.md要求compat进入顶层独立distribution，目前代码仍在
+  `python/jittor/compat`；需要完成包归属、导入边界和打包入口，而非仅修改模块身份。
+
+存储/stride与完整API验证仍保留，但不能用笼统“继续API收口”替代上述具体前置。
+
+物理拆包的下一批实施边界（已只读核对，尚未实现）：先把`build/__init__.py`依赖的
+纯native别名表和loader从`compat._aliases`迁到`_runtime/import_aliases.py`；再把
+`jittor/__init__.py`的无条件compat preflight/compose改成显式请求时才加载的桥，
+plain native import不再无条件导入Triton兼容域。随后整树移动
+`python/jittor/compat`到顶层`compat`，独立项目独占`jittor.compat`包、shim资源和
+torch/triton部署命令，core wheel排除这些文件。两个distribution不得共同拥有
+`jittor/compat/__init__.py`。Torch入口保留一个源文件供打包和deploy复用。
+验收需包含未安装compat的native导入，以及两包安装后的torch-first/原生-first入口。
 最终兼容布局wheel SHA-256：
 `ddb76df749952bf7becfc31c8b0cab05f35c35cbd50833233d4a7d9f1b937244`。
 证据见 `agent/results/2026-09-08-compat-layout-and-view-ownership.md`。
