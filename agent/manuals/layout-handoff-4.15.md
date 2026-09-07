@@ -136,7 +136,45 @@ name)`）加一个 `_source_path()`，把开头为 `src/` 的名字路由到 `co
 标记跟着内容一起移，而 `isdir` 会在一个空的遗留目录上通过、然后交给你一个 `-I` 什么都
 找不到的根。我在 `1.05` 之后确实撞了这一下（`core_root` 抛 `FileNotFoundError`）。
 
-## 5. 两个操作层面的教训
+## 4bis. 先改这一个常量，后面每一步都受益
+
+`jittor_utils/__init__.py:437`：
+
+```python
+pool_size = min(16, max(int(mem_gib // 3), 1))
+```
+
+这台机器 **128 核、1007 GB 内存**（算出来是 335），却被 `min(16, ...)` 硬顶在 16 个
+编译进程。178 个翻译单元的全量重建因此要 5–9 分钟，而那正是布局验证的单位成本。
+放开这个上限之前，别指望验证快起来——整个会话里机器负载最高 8.15、多数时候 1–3，
+**利用率约 6%**，慢的从来不是机器。
+
+（改它要小心的是内存而不是核数：并行编译的峰值内存按进程数线性涨，`mem_gib // 3`
+就是为这个留的。128 核 / 1007 GB 上取 64 是安全的；真要取满 128 先量一次峰值。）
+
+## 5. 验证口径：只报 passed 是看不出问题的
+
+**同一棵树、同一条命令，`tests/structure` 在两种配置下不是同一组用例**：
+
+| 配置 | collected | 结果 |
+| --- | --- | --- |
+| `nvcc_path=""` | 907 | 15 failed / 888 passed |
+| 带 `nvcc_path` | 930 | 14 failed / 914 passed |
+
+差的 23 条是随 CUDA 可用性参数化出来的。所以**这两组之间不能直接 A/B**，passed 差 26
+不代表修好了 26 条。报数字的最小口径：命令、`nvcc_path` 取值、`JITTOR_TORCH_SHIM`
+取值、`collected`、failed/passed/skipped/xfailed 五个数、**以及失败的 nodeid 集合**。
+判据是失败集合**逐条相同**，不是数目相同。
+
+三套门禁（原生 CPU、CPU torch 模式、CUDA）加带 CUDA 的 `import jittor` + matmul 冒烟，
+缺一不可。`tests/structure` 必须带 `JITTOR_TORCH_SHIM=1`，不带会 collect 0 个、
+读起来像全过。
+
+每搬一刀顺手跑一次 `tests/structure/test_refactor_board_contract.py`（秒级），它会抓住
+看板写坏。**备注里不能出现裸竖线**——那在 Markdown 表格里是列分隔符，会把行撑破、
+让这条合同报红从而挡住所有人的 `tests/structure`。我自己踩过一次（写了 `"src"|"extern"`）。
+
+## 5bis. 两个操作层面的教训
 
 **`git commit <路径列表>` 只提交列出的路径。** `git mv` 会把 rename 两侧都暂存，但带路径
 的 commit 只带你列的那些，旧位置的删除会留在暂存区。我在四刀里**每刀都要补一个「删除侧」
@@ -147,3 +185,56 @@ name)`）加一个 `_source_path()`，把开头为 `src/` 的名字路由到 `co
 `setup_cub` 里 abort，造出一批假失败。要并行就给第二个进程另一个 `JITTOR_HOME`——但
 **新建的空 `JITTOR_HOME` 现在会因为第 0 节那个 preflight 直接失败**，所以在那条修掉之前，
 验证只能串行复用热缓存。
+
+## 6. 剩下的顺序，以及每条的边界
+
+| 序 | 任务 | 边界（能划掉的那个终态） |
+| --- | --- | --- |
+| 0 | preflight | CPU-only 冷构建（空 `JITTOR_HOME`）能起来；CUDA 冷构建缺 cub 且无网时**仍然明确失败**并给出离线办法（别把这条一起放过） |
+| 1 | `4.15` acl | `python/jittor/extern/{acl 非 hccl}` 不存在；entry point 改 `jittor.backends.acl`；**provider 与源码同一次提交** |
+| 2 | `8.19` | 三个通信后端（`extern/cuda/nccl`、`extern/mpi`、`extern/acl/hccl`）进 `backends/comm/`；`extern/` 清空后删 `compiler.py:1724` 的 `-I{jittor_path}/extern` 与 `MANIFEST.in:8` 那行 |
+| 3 | `5.26` | 包根下只剩 `__init__.py`/`__init__.pyi`/`selftest.py`；无 > 1500 行的 `.py` |
+| 4 | `0.20` | 仓库只有一棵文档树。**要等没有别的 agent 在写看板**，否则每次 rebase 都撞 |
+| 5 | `9.19` | `tools/` 与 `python/jittor/tools/` 职责不重叠 |
+| — | `10.23` | **不在这一波**：卡 `7.18`，`7.18` 卡 `7.12`（实测 `torch is jittor` 仍是 True，模块身份那层没开始） |
+
+`4.15` 的两条验收按字面都达不到，已记在看板：`python/jittor/` 下无 `.cc/.cu` 还需
+`7.18`（compat 的 15 个）与 `5.26`（`math_util` 的 1 个）；`grep cuda_src == 0` 不可能，
+因为它是 `jt.code()` 的公开参数名（24 处在 `__init__.pyi`、25 处在 `code_op.{cc,h}`）。
+
+## 7. git 约定（这一条我犯了四次）
+
+**`git mv` 会把 rename 两侧都暂存，但 `git commit <路径列表>` 只提交你列出的路径**——
+旧位置的删除留在暂存区。四刀里我每刀都要补一个「删除侧」提交，最后一次还漏了
+`backends/` 侧 166 个文件的 include 重写（分家会让树在两个提交之间是坏的）。
+用不带路径的 `git commit`，并先看 `git diff --cached --stat`。
+
+禁止 `git add -A`、force-push、`git stash`、碰 `2.0` 分支。**rebase 冲突逐块解，禁整
+文件取一侧**——2026-09-03 真发生过整文件取一侧把另一分区已合并的 `7.16` 整段还原，
+40 个 handler 变回 `except: pass`，提交是绿的、diff 看起来只是「我的文件」，没有任何
+东西报警。解完必须跑 `JITTOR_TORCH_SHIM=1 pytest tests/structure -q`。
+
+13 个工作树共用一个 `.git`，push 可能撞 `cannot lock ref`：**重试，绝不 force-push**，
+重试前先 `git log --oneline origin/2.0-refactor -3` 确认自己那次是不是已经落地了。
+
+三个文件属于别人永不提交：`agent/manuals/README.md`、`tests/core/test_setitem.py`、
+`agent/results/2026-08-12-repository-modernization-review.md`。
+
+## 8. 环境
+
+```
+JITTOR_HOME=/home/zy/jittor-lab/refactor/_home/pyops \
+TMPDIR=/home/zy/jittor-lab/refactor/_tmp/pyops \
+CUDA_VISIBLE_DEVICES=6 nvcc_path=/usr/local/cuda/bin/nvcc \
+PATH=/usr/local/cuda/bin:$PATH \
+taskset -c 64-79 /home/zy/miniconda3/envs/jt311/bin/python -m pytest <路径> -q
+```
+
+手写 python 命令必须显式加 `PYTHONPATH=.../pyops/python`（pytest 不需要）。
+CPU-only 加 `JITTOR_TEST_DEVICES=cpu nvcc_path=""`，但加了之后 `jt.has_cuda` 就是 0，
+**不要因此得出「本机无 CUDA」**——这台机器有 8 张 RTX 4090、nvcc 12.2.140、sm_89。
+
+rebase 之后第一次 `import jittor` 会重建 `jit_utils` 然后按设计 `sys.exit(3)`，pytest
+报成 `SystemExit: 3` 的 collection error，**那不是真失败**：先单独跑一次
+`python -c "import jittor"` 消化掉。同一分区一次只跑一个 pytest——并发两个会把
+`$JITTOR_HOME` 搞坏，`import jittor` 在 `setup_cub` 里 abort，造出一批假失败。
