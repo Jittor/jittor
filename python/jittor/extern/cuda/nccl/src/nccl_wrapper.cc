@@ -9,7 +9,7 @@
 // ***************************************************************
 #include "runtime/device.h"
 #include "nccl_wrapper.h"
-#include "var.h"
+#include "core/var.h"
 #include "mem/allocator.h"
 #include "runtime/collective_dtype.h"
 #include "runtime/file_rendezvous.h"

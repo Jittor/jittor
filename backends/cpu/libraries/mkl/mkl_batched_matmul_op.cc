@@ -8,7 +8,7 @@
 // ***************************************************************
 #include <dnnl.hpp>
 
-#include "var.h"
+#include "core/var.h"
 #include "mkl_batched_matmul_op.h"
 
 using namespace dnnl;

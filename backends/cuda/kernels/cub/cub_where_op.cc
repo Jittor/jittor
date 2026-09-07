@@ -7,10 +7,10 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "var.h"
+#include "core/var.h"
 #include "cub_where_op.h"
 #ifdef JIT_cuda
-#include "executor.h"
+#include "core/executor.h"
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
 #include <assert.h>

@@ -5,12 +5,12 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "var.h"
+#include "core/var.h"
 #include "cudnn_rnn_descriptor.h"
 #include "cudnn_descriptor.h"
 #include "cudnn_rnn_op.h"
 #include "cudnn_wrapper.h"
-#include "executor.h"
+#include "core/executor.h"
 #include "ops/op_register.h"
 
 using namespace std;

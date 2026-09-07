@@ -6,7 +6,7 @@
 // ***************************************************************
 #include <random>
 
-#include "var.h"
+#include "core/var.h"
 #include "cublas_test_op.h"
 
 int cublas_test_entry(int);

@@ -21,8 +21,8 @@
 #include <stdio.h>
 
 #include "mpi_wrapper.h"
-#include "common.h"
-#include "ops/array_op.h"
+#include "core/common.h"
+#include "ops/composite/array_op.h"
 #include "runtime/collective_dtype.h"
 
 char jt_mpi_err_buffer[MPI_MAX_ERROR_STRING];

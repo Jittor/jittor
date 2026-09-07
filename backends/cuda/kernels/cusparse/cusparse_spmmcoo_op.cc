@@ -4,10 +4,10 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "var.h"
+#include "core/var.h"
 #include "cusparse_spmmcoo_op.h"
 #include "cusparse_wrapper.h"
-#include "executor.h"
+#include "core/executor.h"
 using namespace std;
 
 namespace jittor {

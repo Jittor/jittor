@@ -11,7 +11,7 @@
 #define OMPI_SKIP_MPICXX
 #include <common.h>
 #include <mpi.h>
-#include "var_holder.h"
+#include "core/var_holder.h"
 #include "type/nano_string.h"
 
 extern void throw_mpi_error(int result, 

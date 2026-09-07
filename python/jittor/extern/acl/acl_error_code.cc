@@ -5,7 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 
-#include "common.h"
+#include "core/common.h"
 using std::string;
 using std::unordered_map;
 

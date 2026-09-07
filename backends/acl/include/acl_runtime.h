@@ -1,5 +1,5 @@
 #pragma once
-#include "common.h"
+#include "core/common.h"
 #include <acl/acl.h>
 
 namespace jittor {

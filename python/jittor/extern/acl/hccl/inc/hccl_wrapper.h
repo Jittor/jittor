@@ -16,7 +16,7 @@
 // rendezvous only). On Ascend the conda-OpenMPI + CANN combo crashes, so the
 // default multi-card path avoids libmpi entirely.
 #ifdef JT_HCCL_NO_MPI
-#include "common.h"
+#include "core/common.h"
 namespace jittor {
     // Minimal stand-ins for the few MPI globals the ops reference, so we don't
     // pull in mpi_wrapper.h / libmpi. These are unused in env/file mode.

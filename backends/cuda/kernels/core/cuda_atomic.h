@@ -9,7 +9,7 @@
 #ifndef IS_ROCM
 #include <cuda_bf16.h>
 #endif
-#include "common.h"
+#include "core/common.h"
 
 // CUDA has no atomicAdd(long long*, long long) (only int / unsigned int /
 // unsigned long long int). int64 reduce.add / scatter-add over an int64 Var

@@ -9,7 +9,7 @@
 // ***************************************************************
 
 #include "hccl_wrapper.h"
-#include "event_queue.h"
+#include "core/event_queue.h"
 #include "acl_jittor.h"
 #include "runtime/collective_dtype.h"
 #include "runtime/file_rendezvous.h"

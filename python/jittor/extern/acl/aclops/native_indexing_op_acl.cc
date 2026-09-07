@@ -1,7 +1,7 @@
 #include "native_indexing_op_acl.h"
 #include "acl_jittor.h"
-#include "ops/getitem_op.h"
-#include "ops/setitem_op.h"
+#include "ops/composite/getitem_op.h"
+#include "ops/composite/setitem_op.h"
 #include "runtime/backend.h"
 #include "runtime/device_state.h"
 

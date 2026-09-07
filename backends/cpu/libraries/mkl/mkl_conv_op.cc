@@ -9,7 +9,7 @@
 // ***************************************************************
 #include <dnnl.hpp>
 
-#include "var.h"
+#include "core/var.h"
 #include "mkl_conv_op.h"
 
 using namespace dnnl;

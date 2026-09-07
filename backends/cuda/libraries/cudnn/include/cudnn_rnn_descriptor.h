@@ -6,11 +6,11 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
-#include "op.h"
+#include "core/op.h"
 #include "cudnn_wrapper.h"
 #include "cudnn_descriptor.h"
-#include "executor.h"
-#include "init.h"
+#include "core/executor.h"
+#include "runtime/init.h"
 
 
 namespace jittor {

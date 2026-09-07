@@ -8,7 +8,7 @@
 // registered aclops translation units. Source-to-source CUDA rewriting was
 // intentionally removed: unsupported generated kernels are rejected by the
 // ACL backend instead of being silently rewritten here.
-#include "common.h"
+#include "core/common.h"
 #include "acl_jittor.h"
 
 namespace jittor {

@@ -20,7 +20,7 @@
 #include <cudnn.h>
 #include <vector>
 #include "cudnn_wrapper.h"
-#include "executor.h"
+#include "core/executor.h"
 #include "mem/allocator.h"
 
 namespace jittor {

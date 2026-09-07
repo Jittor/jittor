@@ -6,14 +6,14 @@
 // ***************************************************************
 #include <random>
 
-#include "var.h"
-#include "init.h"
+#include "core/var.h"
+#include "runtime/init.h"
 #include <cuda_runtime.h>
 #include <curand.h>
 #include "helper_cuda.h"
 #include "curand_random_op.h"
 #include "curand_wrapper.h"
-#include "executor.h"
+#include "core/executor.h"
 
 namespace jittor {
 

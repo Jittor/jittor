@@ -1,6 +1,6 @@
-#include "ops/where_op.h"
-#include "var.h"
-#include "executor.h"
+#include "ops/composite/where_op.h"
+#include "core/var.h"
+#include "core/executor.h"
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
 

@@ -9,7 +9,7 @@
 // ***************************************************************
 #include "stream_compat.h"
 #include "curand_wrapper.h"
-#include "init.h"
+#include "runtime/init.h"
 #include "runtime/device.h"
 #include "runtime/cuda_streams.h"
 

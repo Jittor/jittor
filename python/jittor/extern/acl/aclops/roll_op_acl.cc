@@ -1,7 +1,7 @@
 #pragma once
 #include <acl/acl.h>
 #include <acl/acl_op_compiler.h>
-#include "common.h"
+#include "core/common.h"
 #include "acl_jittor.h"
 #include "mem/allocator.h"
 #include "aclnnop/aclnn_roll.h"

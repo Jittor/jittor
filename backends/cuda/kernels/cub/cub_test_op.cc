@@ -6,7 +6,7 @@
 // ***************************************************************
 #include <random>
 
-#include "var.h"
+#include "core/var.h"
 #include "cub_test_op.h"
 #include "utils/str_utils.h"
 

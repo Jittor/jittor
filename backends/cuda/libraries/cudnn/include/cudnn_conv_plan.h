@@ -23,7 +23,7 @@
 #include <unordered_map>
 #include <vector>
 #include "cudnn_wrapper.h"
-#include "executor.h"
+#include "core/executor.h"
 #include "mem/mem_info.h"
 
 namespace jittor {

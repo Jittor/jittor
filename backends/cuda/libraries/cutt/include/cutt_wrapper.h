@@ -8,7 +8,7 @@
 // ***************************************************************
 #pragma once
 #include <cstring>
-#include "executor.h"
+#include "core/executor.h"
 #include "cutt.h"
 #include "CudaUtils.h"
 

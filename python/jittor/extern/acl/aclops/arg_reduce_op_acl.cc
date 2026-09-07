@@ -3,7 +3,7 @@
 #include "acl_jittor.h"
 #include "aclnn/aclnn.h"
 #include "arg_reduce_op_acl.h"
-#include "var.h"
+#include "core/var.h"
 
 namespace jittor
 {

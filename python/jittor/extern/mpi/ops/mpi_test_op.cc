@@ -5,7 +5,7 @@
 // ***************************************************************
 #include "mpi_wrapper.h"
 
-#include "var.h"
+#include "core/var.h"
 #include "mpi_test_op.h"
 #include "utils/str_utils.h"
 

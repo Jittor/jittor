@@ -8,11 +8,11 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <algorithm>
-#include "var.h"
+#include "core/var.h"
 #include "cub_argsort_op.h"
 #include <vector>
-#include "executor.h"
-#include "ops/argsort_op.h"
+#include "core/executor.h"
+#include "ops/composite/argsort_op.h"
 #ifdef JIT_cuda
 #include <cub/device/device_segmented_radix_sort.cuh>
 #endif

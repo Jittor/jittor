@@ -8,13 +8,13 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "mem/allocator.h"
-#include "var.h"
+#include "core/var.h"
 #include "cudnn_conv_backward_x_op.h"
 #include "cudnn_descriptor.h"
 #include "cudnn_wrapper.h"
 #include "cudnn_conv_plan.h"
 #include "cudnn_conv_algo_key.h"
-#include "executor.h"
+#include "core/executor.h"
 #include "ops/op_register.h"
 #include "mem/mem_info.h"
 

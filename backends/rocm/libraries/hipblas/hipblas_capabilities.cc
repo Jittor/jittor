@@ -1,5 +1,5 @@
-#include "var.h"
-#include "ops/op_capability.h"
+#include "core/var.h"
+#include "ops/composite/op_capability.h"
 
 namespace jittor {
 namespace {

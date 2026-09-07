@@ -6,7 +6,7 @@
 // ***************************************************************
 #include <random>
 
-#include "var.h"
+#include "core/var.h"
 #include "mkl_test_op.h"
 
 int mkl_test_entry();

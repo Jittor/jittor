@@ -8,7 +8,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 
-#include "var.h"
+#include "core/var.h"
 #include "cublas_acc_matmul_op.h"
 #include "cublas_wrapper.h"
 #include "cublas_compute_type.h"

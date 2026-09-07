@@ -1,4 +1,4 @@
-#include "var.h"
+#include "core/var.h"
 #include "hccl_reduce_op.h"
 #include "ops/op_register.h"
 #include "utils/str_utils.h"

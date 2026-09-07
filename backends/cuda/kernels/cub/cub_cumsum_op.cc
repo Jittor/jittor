@@ -8,10 +8,10 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <algorithm>
-#include "var.h"
+#include "core/var.h"
 #include "cub_cumsum_op.h"
 #include <vector>
-#include "executor.h"
+#include "core/executor.h"
 #include "ops/op_register.h"
 #ifdef JIT_cuda
 #include <cub/cub.cuh>

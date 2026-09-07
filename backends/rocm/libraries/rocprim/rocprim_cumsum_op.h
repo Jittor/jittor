@@ -1,6 +1,6 @@
 #pragma once
 
-#include "op.h"
+#include "core/op.h"
 
 namespace jittor {
 

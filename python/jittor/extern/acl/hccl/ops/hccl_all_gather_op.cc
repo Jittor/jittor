@@ -8,7 +8,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 
-#include "var.h"
+#include "core/var.h"
 #include "hccl_all_gather_op.h"
 #include "ops/op_register.h"
 #include "utils/str_utils.h"

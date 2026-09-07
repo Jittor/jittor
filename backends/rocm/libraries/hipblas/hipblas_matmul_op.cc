@@ -1,7 +1,7 @@
 #include "hipblas_matmul_op.h"
 #include "hipblas_wrapper.h"
 #include "gemm_layout.h"
-#include "var.h"
+#include "core/var.h"
 #include "ops/op_register.h"
 #include "runtime/backend.h"
 

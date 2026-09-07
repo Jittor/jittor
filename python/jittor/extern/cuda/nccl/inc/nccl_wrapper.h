@@ -13,7 +13,7 @@
 // declare the few MPI globals the wrapper references directly (mirrors the HCCL
 // no-mpi build) and never pull in libmpi.
 #ifdef JT_NCCL_NO_MPI
-#include "common.h"
+#include "core/common.h"
 namespace jittor {
     EXTERN_LIB int mpi_world_size;
     EXTERN_LIB int mpi_world_rank;

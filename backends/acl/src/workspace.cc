@@ -1,6 +1,6 @@
 #include "acl_workspace.h"
 #include "acl_runtime.h"
-#include "executor.h"
+#include "core/executor.h"
 #include "mem/allocator.h"
 
 #include <cstdio>

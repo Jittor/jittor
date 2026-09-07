@@ -8,8 +8,8 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 
-#include "var.h"
-#include "init.h"
+#include "core/var.h"
+#include "runtime/init.h"
 #include <cuda_runtime.h>
 #include <cufft.h>
 #include "helper_cuda.h"

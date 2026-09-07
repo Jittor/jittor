@@ -11,9 +11,9 @@
 
 // cublas_batched_matmul_op.h
 #pragma once
-#include "op.h"
+#include "core/op.h"
 #include "ops/op_register.h"
-#include "var.h"
+#include "core/var.h"
 
 namespace jittor {
 

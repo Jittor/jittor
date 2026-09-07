@@ -3,7 +3,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "var.h"
+#include "core/var.h"
 #include "nccl_test_op.h"
 #include "utils/str_utils.h"
 

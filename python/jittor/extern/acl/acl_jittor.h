@@ -5,7 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
-#include "common.h"
+#include "core/common.h"
 #include "aclnn/aclnn.h"
 #include <acl/acl.h>
 #include "acl_runtime.h"

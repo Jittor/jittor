@@ -13,7 +13,7 @@
 
 #include "helper_cuda.h"
 #include "fp16_emu.h"
-#include "common.h"
+#include "core/common.h"
 
 namespace jittor {
 

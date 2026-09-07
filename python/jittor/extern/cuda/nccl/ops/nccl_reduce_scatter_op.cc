@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Jittor.
 // All Rights Reserved.
 // ***************************************************************
-#include "var.h"
+#include "core/var.h"
 #include "nccl_reduce_scatter_op.h"
 #include "utils/str_utils.h"
 

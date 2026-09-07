@@ -1,7 +1,7 @@
 #include "indexing_codegen.h"
-#include "ops/getitem_op.h"
-#include "ops/setitem_op.h"
-#include "opt/kernel_ir.h"
+#include "ops/composite/getitem_op.h"
+#include "ops/composite/setitem_op.h"
+#include "codegen/opt/kernel_ir.h"
 #include "utils/str_utils.h"
 
 namespace jittor {

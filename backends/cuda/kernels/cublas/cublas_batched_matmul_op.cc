@@ -10,7 +10,7 @@
 
 
 // cublas_batched_matmul_op.cc
-#include "var.h"
+#include "core/var.h"
 
 #include "cublas_batched_matmul_op.h"
 #include "cublas_wrapper.h"

@@ -10,7 +10,7 @@
 // ***************************************************************
 #include <random>
 
-#include "var.h"
+#include "core/var.h"
 #include "mkl_conv_backward_x_op.h"
 
 #include <dnnl.hpp>
