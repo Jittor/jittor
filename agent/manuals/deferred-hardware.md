@@ -169,7 +169,7 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 
 **硬件日要跑的**（本机无 Corex/Iluvatar 卡）：
 
-1. `COREX_HOME=<真实安装路径> python -c "from jittor.extern.corex import corex_compiler as c; print(c.discover())"`
+1. `COREX_HOME=<真实安装路径> python -c "from jittor.backends import corex as c; print(c.discover())"`
    ——判据：`available=True`、`reason == "ready"`、`compiler_path` 指向真实 `bin/clang++`。
 2. 带 `COREX_HOME` 的 `import jittor`，判据：`jt.flags.backend == "corex"`、`has_corex=True`、
    `has_cuda=False`（`configure()` 明确把 CUDA 标记置假而只在设备编译上保留 CUDA ABI 标记）。

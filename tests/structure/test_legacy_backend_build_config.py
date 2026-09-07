@@ -42,8 +42,10 @@ def providers(monkeypatch):
     _load(monkeypatch, "jittor_utils.backend_resources", PYTHON / "jittor_utils/backend_resources.py")
     config = _load(monkeypatch, "jittor_utils.build_config",
                    PYTHON / "jittor_utils/build_config.py")
+    # 4.15 moved the provider to the top-level backend tree; the contract is
+    # about the provider's behaviour, not about where the file sits.
     corex = _load(monkeypatch, "legacy_corex_contract",
-                  PYTHON / "jittor/extern/corex/corex_compiler.py")
+                  ROOT / "backends/corex/__init__.py")
     return SimpleNamespace(utils=utils, misc=misc, config=config, corex=corex)
 
 

@@ -23,7 +23,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-SOURCE = Path(__file__).parents[3] / "python/jittor/extern/corex/corex_compiler.py"
+SOURCE = Path(__file__).parents[3] / "backends/corex/__init__.py"
 
 
 def load_corex_module(source=SOURCE, name="corex_compiler_probe"):
