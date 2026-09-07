@@ -16,9 +16,39 @@ import unittest
 from unittest import mock
 
 from jittor_utils import preflight
+from jittor_utils import manifest
+from jittor_utils.build_config import BuildConfig
 
 
 class TestPreflightChecks(unittest.TestCase):
+    def test_cpu_build_needs_no_optional_archives_or_network(self):
+        config = BuildConfig(backend="cpu", cc_path="/usr/bin/g++", cc_type="g++")
+        with mock.patch.object(preflight, "_asset_present", return_value=False) as probe:
+            with mock.patch("socket.create_connection", side_effect=AssertionError("network used")):
+                results = preflight.run_all(config=config)
+        probe.assert_not_called()
+        self.assertEqual(next(r for r in results if r.name == "network").status, "ok")
+
+    def test_archive_requirements_follow_sdk_cub_install_boundary(self):
+        for backend in ("cpu", "acl", "rocm"):
+            self.assertEqual(preflight.required_build_assets(BuildConfig(backend=backend)), ())
+        for version, expected in (("(10.2.0)", (manifest.CUB,)), ("(12.2.140)", ())):
+            with mock.patch("jittor_utils.get_version", return_value=version):
+                config = BuildConfig(backend="cuda", nvcc_path="/sdk/nvcc")
+                self.assertEqual(preflight.required_build_assets(config), expected)
+
+    def test_required_cuda_archive_missing_offline_still_fails(self):
+        config = BuildConfig(backend="cuda", nvcc_path="/sdk/nvcc")
+        with mock.patch("jittor_utils.get_version", return_value="(10.2.0)"):
+            with mock.patch.object(preflight, "_asset_present", return_value=False):
+                archive = preflight.check_third_party(config=config)
+        self.assertEqual(archive.status, "warn")
+        self.assertIn(manifest.CUB.filename, archive.detail)
+        with mock.patch("socket.create_connection", side_effect=OSError("offline")):
+            result = preflight.check_network(needed=archive.status != "ok")
+        self.assertEqual(result.status, "fail")
+        self.assertIn("JITTOR_OFFLINE_PATH", result.remedy)
+
     def test_a_missing_compiler_names_what_to_install(self):
         with mock.patch.object(preflight.shutil, "which", return_value=None):
             with mock.patch.dict(os.environ, {"cc_path": ""}, clear=False):

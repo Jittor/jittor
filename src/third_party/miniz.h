@@ -160,10 +160,10 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "common.h"
+#include "core/common.h"
 #include "ops/op_register.h"
-#include "var_holder.h"
-#include "profiler/simple_profiler.h"
+#include "core/var_holder.h"
+#include "runtime/profiler/simple_profiler.h"
 
 #if !defined(MINIZ_NO_TIME) && !defined(MINIZ_NO_ARCHIVE_APIS)
 #include <time.h>
@@ -1317,7 +1317,7 @@ void *mz_zip_extract_archive_file_to_heap_v2(const char *pZip_filename, const ch
 
 } // namespace jittor
 
-#include "common.h"
+#include "core/common.h"
 #include "runtime/device.h"
 #include "mem/allocator.h"
 

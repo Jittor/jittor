@@ -1094,12 +1094,12 @@ def compile_src(src, h, basename):
         """
     src_code = ""
     if include_name.endswith("var_slices.h"):
-        src_code += '#include "var_holder.h"\n' 
+        src_code += '#include "core/var_holder.h"\n'
     src_code += f"""
     #include "utils/seh.h"
-    #include "pyjt/py_converter.h"
-    #include "pyjt/py_arg_printer.h"
-    #include "common.h"
+    #include "bindings/pyjt/py_converter.h"
+    #include "bindings/pyjt/py_arg_printer.h"
+    #include "core/common.h"
     #include "utils/graph_build_profile.h"
     #include "{include_name}"
 
@@ -1213,8 +1213,8 @@ def compile(cache_path, jittor_path):
         pyjt_names.append(fname)
     
     code = f"""
-    #include "pyjt/py_converter.h"
-    #include "common.h"
+    #include "bindings/pyjt/py_converter.h"
+    #include "core/common.h"
 
     namespace jittor {{
 

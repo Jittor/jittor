@@ -1077,7 +1077,7 @@ string OpCompiler::__get_fused_src(
 
 
 
-            fused_includes += "#include \"ops/array_op.h\"\n";
+            fused_includes += "#include \"ops/composite/array_op.h\"\n";
             op_members[oi].push_back(arg_name);
             // auto opi = (ArrayOp*)(ops[i]);
             // auto opi_output = opi->output;
@@ -1277,7 +1277,7 @@ string OpCompiler::__get_fused_src(
     
     auto fused_src = fused_begin + fused_includes +
         "\n#include <assert.h>\n" + 
-        "\n#include \"fused_op.h\"\n" + 
+        "\n#include \"core/fused_op.h\"\n" +
         fused_defines + '\n' +
         "void jittor::FusedOp::jit_run() {\n" + fused_kernel + "\n}\n";
         

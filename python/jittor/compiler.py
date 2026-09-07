@@ -250,7 +250,7 @@ def gen_jit_tests():
     jit_declares = "\n    ".join(jit_declares)
     jit_src = f"""
     #pragma once
-    #include "common.h"
+    #include "core/common.h"
 
     void expect_error(std::function<void()> func) {{
         try {{ func(); }}
@@ -808,10 +808,10 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
 
     jit_src = f"""
     #pragma once
-    #include "pyjt/py_obj_holder.h"
-    #include "var.h"
-    #include "var_holder.h"
-    #include "ops/op_registration.h"
+    #include "bindings/pyjt/py_obj_holder.h"
+    #include "core/var.h"
+    #include "core/var_holder.h"
+    #include "ops/composite/op_registration.h"
     #include "utils/graph_build_profile.h"
     {jit_headers}
     
@@ -861,8 +861,8 @@ def compile_custom_op(header, source, op_name, warp=True):
     if warp:
         header = f"""
         #pragma once
-        #include "op.h"
-        #include "var.h"
+        #include "core/op.h"
+        #include "core/var.h"
         namespace jittor {{
         {header}
         }}
@@ -1901,8 +1901,9 @@ def core_source_signature(root=None):
     """
     tree = jittor_path if root is None else root
     signature = {}
-    roots = [(top, os.path.join(tree, top)) for top in ("src", "extern")]
-    for backend in ("cuda", "acl", "rocm", "corex"):
+    roots = [("src", core_root(tree) if root is None else os.path.join(tree, "src")),
+             ("extern", os.path.join(tree, "extern"))]
+    for backend in ("cpu", "cuda", "acl", "rocm", "corex"):
         try:
             backend_directory = backend_root(tree, backend)
         except FileNotFoundError:
@@ -2446,7 +2447,7 @@ def build_core(force=False):
     # cold build between each.
     if not os.path.isfile(core_output_path):
         from jittor_utils import preflight as _preflight
-        _preflight.assert_ready()
+        _preflight.assert_ready(config=build_config)
 
     try:
         provider_objects = compile_backend_sources(build_config, core_cc_flags+opt_flags+lto_flags)
@@ -2458,7 +2459,7 @@ def build_core(force=False):
         # compiler diagnostic and nothing to act on.
         from jittor_utils import preflight as _preflight
         try:
-            _report = _preflight.format_report(_preflight.run_all(),
+            _report = _preflight.format_report(_preflight.run_all(config=build_config),
                                                only_problems=True)
         except Exception:
             raise error

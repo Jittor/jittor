@@ -5,6 +5,23 @@
 
 ## 0. 你第一件事：解掉 preflight 对冷构建的拒绝
 
+2026-09-07 后续执行记录：coord 已从 `4fbcaab64` 同步（实际落后 126 提交，无冲突）。
+正在修复本节前置：preflight 接收实际 BuildConfig，CPU/ACL/ROCm 不要求可选归档；
+`setup_cub()` 实际仅 CUDA 版本小于 11 时下载 CUB，11+ 使用 SDK 自带 CUB，
+并非所有 CUDA 冷构建都需要该 tgz。MKL/cuTT 惰性库不应阻止核心构建。
+CPU-only 空缓存启动（网络连接函数强制拒绝）已穿过 preflight，发现并修复旧布局的
+生成绑定 include、miniz 自有 include 和 JIT fused include 残留；平方与梯度实际通过。
+核心构建戳也改查顶层 core_root，避免目录搬动后漏记真实源变更。
+定向 18 passed；完整第 5 节门禁与最终打包尚待继续，不将下文布局链标为完成。
+当前 CPU-only 结构门禁实际收集 1285 项：123 failed / 1156 passed / 4 skipped /
+2 xfailed（0 error）。命令为 `PYTHONPATH=python JT_BACKEND=cpu nvcc_path=""`
+`CUDA_VISIBLE_DEVICES="" JITTOR_TORCH_SHIM=1 JITTOR_TORCH_KEEP_HOME=1`
+`use_mkl=0 use_mpi=0 use_nccl=0 DISABLE_MULTIPROCESSING=0 python -m pytest -q --tb=short`
+`tests/structure --junitxml=<state>/structure-cpu.xml`，JITTOR_HOME 指向独立的 layout-cold 目录。
+失败 nodeid 集合保存在该 JUnit；大量旧测试仍引用 `python/jittor/src`，不能用旧文档的
+907 collected / 15 failed 口径声称本次无回归。未完成同配置 baseline A/B、CPU shim 数值
+和真实 CUDA 验收；下一步先同步这些真实路径合同，再做 ACL/provider 原子迁移。
+
 **现状：本机上任何冷构建都会被 preflight 拒掉，与本次搬动无关，但会挡住你的验证。**
 
 ```

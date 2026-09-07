@@ -1277,7 +1277,7 @@ def compile_module(source, flags, *, services=None):
 
 
         mod = jittor_utils.compile_module('''
-        #include "common.h"
+        #include "core/common.h"
         namespace jittor {
         // @pyjt(hello)
         string hello(const string& src) {
@@ -1314,7 +1314,7 @@ static void init_module(PyModuleDef* mdef, PyObject* m) {{
 PYJT_MODULE_INIT({hash});
 // Keep one translation unit: a shared -MF file for two compiler inputs
 // otherwise contains only the last input's headers.
-#include "pyjt/py_arg_printer.cc"
+#include "bindings/pyjt/py_arg_printer.cc"
     '''
     with open(source_name, "r", encoding="utf8") as f:
         src = f.read()

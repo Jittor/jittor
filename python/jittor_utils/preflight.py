@@ -187,23 +187,37 @@ def _digest_of(asset):
     return manifest.digest_of(asset)
 
 
-def check_third_party(cache=None, mirror=None):
+def required_build_assets(config=None):
+    """Archives used by the selected bootstrap, not optional lazy libraries."""
+    from jittor_utils import manifest, get_version
+    if config is not None:
+        backend = config.backend
+        nvcc = config.nvcc_path
+    else:
+        backend = os.environ.get("JT_BACKEND")
+        nvcc = build_env("nvcc_path")
+        if backend is None:
+            nvcc = shutil.which("nvcc") if nvcc is None else nvcc
+            backend = "cuda" if nvcc else "cpu"
+    if backend not in ("cuda", "corex"):
+        return ()
+    # Matches compile_extern.setup_cub: newer SDKs supply CUB themselves.
+    if not nvcc:
+        nvcc = shutil.which("nvcc")
+    if not nvcc:
+        return (manifest.CUB,)
+    version = get_version(nvcc).strip("()").split(".", 1)[0]
+    return (manifest.CUB,) if int(version) < 11 else ()
+
+
+def check_third_party(cache=None, mirror=None, assets=None, config=None):
     """Which downloads a cold build still needs, if any."""
-    from jittor_utils import manifest
     if cache is None:
         from jittor_utils import cache_root
         cache = cache_root()
     if mirror is None:
         mirror = os.environ.get("JITTOR_OFFLINE_PATH") or None
-    system = platform.system()
-    machine = platform.machine()
-    wanted = []
-    try:
-        wanted.append(manifest.mkl_asset(system, machine))
-    except Exception:
-        pass
-    for asset in (manifest.CUB, manifest.CUTT):
-        wanted.append(asset)
+    wanted = required_build_assets(config) if assets is None else tuple(assets)
     missing = [asset.filename for asset in wanted
                if not _asset_present(asset, cache, mirror)]
     if not missing:
@@ -296,17 +310,19 @@ def check_cache_isolation():
                "concurrent runs from each other")
 
 
-def run_all():
+def run_all(config=None):
     """Every check, in the order a build would hit them."""
     results = []
-    results.append(check_compiler())
+    results.append(check_compiler(config.cc_path if config is not None else None))
     results.append(check_python_headers())
-    results.append(check_openmp())
+    results.append(check_openmp(config.cc_type if config is not None else None))
     results.append(check_disk_space())
-    third_party = check_third_party()
+    third_party = check_third_party(config=config)
     results.append(third_party)
     results.append(check_network(needed=third_party.status != "ok"))
-    cuda = check_cuda()
+    cuda = (check_cuda(config.nvcc_path) if config is not None and config.backend == "cuda"
+            else _ok("cuda", "not required by selected backend") if config is not None
+            else check_cuda())
     results.extend(cuda if isinstance(cuda, list) else [cuda])
     results.append(check_cache_isolation())
     return results
@@ -334,14 +350,14 @@ def format_report(results, only_problems=False):
     return "\n".join(lines)
 
 
-def assert_ready():
+def assert_ready(config=None):
     """Raise once, naming every unmet precondition.
 
     The point is the *once*. Checking these in the order the module-level code
     happens to run means a user missing three of them pays three cold builds to
     find out.
     """
-    results = run_all()
+    results = run_all(config=config)
     bad = failures(results)
     if bad:
         raise RuntimeError(
