@@ -1,7 +1,7 @@
 # Jittor Project Context
 
 - Status: Current index, not a history log
-- Last reviewed: 2026-09-06
+- Last reviewed: 2026-09-07
 - Baseline reviewed: `508b0118` plus the Transformers text-core L4 follow-up
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
@@ -81,6 +81,7 @@ diffusion UNet forward/backward parity passes on CPU and CUDA. ROCm, most
 optional downstream dependencies, full training, and performance remain
 separate gates. On a real 910B3, the maintained Ascend gate passes `397 passed, 9 skipped`; float16/float32 `arg_reduce` backward and float32/integer `prod` execute without CPU fallback.
 Transformers 4.56.2 FP32 text core matrix reaches strict cumulative L4 for 17/17 implementations on CPU and real A800 CUDA, covering loss, all actual gradients, lifecycle/AdamW, serialization, true-PyTorch CUDA round-trip, fixed public checkpoints/tokenizers, generation cache/beam/EOS/sampling, and MoE; eight non-text core models, mixed precision, long context, ecosystem workflows, and L5 remain open. See the [strict L4 report](../results/transformers/2026-09-06-transformers-text-core-l4-cuda.md) and [earlier matrix](../results/transformers/2026-09-03-transformers-text-core-matrix-cuda.md).
+2026-09-07 also has a bounded six-A800 BF16 Llama 3.1 70B short-SFT result (full 80-layer forward, 11 trainable tensors, step-0 full gradient/update presence, descending five-step curves, steady-state timing/throughput/memory); it is not full-parameter BF16 exact parity or overall L5. See the [Llama 70B SFT report](../results/transformers/2026-09-07-transformers-llama31-70b-sft-cuda.md).
 Qwen3-8B float32 loads all 8,190,735,360 parameters; SDPA, greedy `arg_reduce`, and mask `all` run on ACL without CPU fallback. A native-shape `empty`
 fast path brings 0.6B decode to 15.90 token/s versus native `torch_npu` 16.19 token/s.
 Qwen3-0.6B BF16 SDPA passes zero-fallback generation at 14.92 token/s versus native 15.31 token/s.
@@ -173,8 +174,7 @@ owner, executable evidence, workaround, and exit condition.
   `agent/results/YYYY-MM-DD-topic.md` report.
 - Keep raw logs, generated source, caches, wheels, profiles, and large benchmark
   data under `$JITTOR_LAB_ROOT/_state/`.
-- A report names the exact commit, environment, commands, results, limitations,
-  and any unversioned artifact hashes.
+- A report names the exact commit, environment, commands, results, limitations, and any unversioned artifact hashes.
 
 The Git history is the completed-work ledger. Do not rebuild a chronological
 commit diary in this file.

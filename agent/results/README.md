@@ -6,6 +6,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-09-07 Llama 3.1 70B 真实 BF16 六卡短 SFT 对拍](transformers/2026-09-07-transformers-llama31-70b-sft-cuda.md)
 - [2026-09-06 Transformers 4.56.2 文本核心 17 模型严格累计 L4 验证](transformers/2026-09-06-transformers-text-core-l4-cuda.md)
 - [2026-09-03 Transformers 4.56.2 文本核心 17 模型 CUDA 扩展验证](transformers/2026-09-03-transformers-text-core-matrix-cuda.md)
 - [2026-09-03 Transformers 4.56.2 三类文本架构 CUDA 兼容验证](transformers/2026-09-03-transformers-text-architectures-cuda.md)
