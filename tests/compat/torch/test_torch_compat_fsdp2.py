@@ -112,6 +112,7 @@ class TestFSDP2Compat(unittest.TestCase):
                 assert full.to_local() is shard
                 assert full.full_tensor() is full
                 assert "to_local" not in getattr(full, "__dict__", {})
+                assert "_local_tensor" not in getattr(full, "__dict__", {})
                 fsdp_shard._reshard_module_params(
                     types.SimpleNamespace(_fsdp_state=state))
                 del full
@@ -126,6 +127,7 @@ class TestFSDP2Compat(unittest.TestCase):
                 assert owner.weight is shard
                 assert live_delta < 8 * 1024 * 1024, live_delta
                 assert "to_local" not in getattr(shard, "__dict__", {})
+                assert "_local_tensor" not in getattr(shard, "__dict__", {})
                 print("FSDP_TEMP_FULL_RELEASE_OK", live_delta)
             """
         )
@@ -139,6 +141,67 @@ class TestFSDP2Compat(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stdout)
         self.assertIn("FSDP_TEMP_FULL_RELEASE_OK", completed.stdout)
+
+    def test_fsdp_var_metadata_does_not_accumulate_replaced_vars(self):
+        # Replacing a full/shard/gradient triple models one FSDP reshard cycle.
+        # Keep the state alive while replacing its entries, just as the runtime
+        # does, so stale Var metadata is the only possible retention root.
+        code = textwrap.dedent(
+            """
+            import gc
+            import types
+            import jittor as jt
+            import jittor.compat.torch
+            from jittor.compat.fsdp2 import shard as fsdp_shard
+
+            with jt.flag_scope(
+                    use_cuda=0, use_stat_allocator=1, use_sfrl_allocator=0):
+                owner = types.SimpleNamespace()
+                entry = types.SimpleNamespace(
+                    owner=owner, attr="weight", shard=None, full_param=None,
+                    requires_grad=True)
+                state = types.SimpleNamespace(
+                    true_fsdp_initialized=True, true_fsdp_flat=False,
+                    true_fsdp_unsharded=True, true_fsdp_params=(entry,),
+                    true_fsdp_module=None)
+                live = []
+                for _ in range(12):
+                    current = jt.ones((128,), dtype="float32").stop_grad()
+                    entry.shard = current
+                    owner.weight = current
+                    fsdp_shard._mark_fsdp_param_var(
+                        current, state, entry, "shard")
+                    full = jt.ones((128,), dtype="float32").stop_grad()
+                    entry.full_param = full
+                    owner.weight = full
+                    fsdp_shard._mark_fsdp_param_var(
+                        full, state, entry, "full")
+                    gradient = jt.ones((128,), dtype="float32").stop_grad()
+                    fsdp_shard._mark_fsdp_param_var(
+                        gradient, state, entry, "grad_shard")
+                    entry.full_param = None
+                    owner.weight = entry.shard
+                    del current, full, gradient
+                    gc.collect()
+                    jt.gc()
+                    jt.sync_all(True)
+                    live.append(jt.liveness_info()["lived_vars"])
+                assert len(set(live[4:])) == 1, live
+                assert "_local_tensor" not in getattr(
+                    entry.shard, "__dict__", {})
+                print("FSDP_METADATA_REPLACEMENT_OK", live)
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            env=os.environ.copy(),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout)
+        self.assertIn("FSDP_METADATA_REPLACEMENT_OK", completed.stdout)
 
     def test_reshard_releases_only_frozen_full_parameters(self):
         _, state, entries, full = self._fake_fsdp_state(
@@ -429,6 +492,7 @@ class TestFSDP2Compat(unittest.TestCase):
                 self.assertEqual(tuple(grad.shape), tuple(entry.shard.shape))
                 self.assertIs(grad.to_local(), grad)
                 self.assertEqual(tuple(grad.full_tensor().shape), entry.shape)
+                self.assertNotIn("_local_tensor", getattr(grad, "__dict__", {}))
                 np.testing.assert_array_equal(
                     grad.numpy(), np.ones(entry.shard.shape, dtype="float32"))
 

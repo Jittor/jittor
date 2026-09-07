@@ -97,8 +97,8 @@ def _mark_fsdp_param_var(var, state, entry, role):
         object.__setattr__(var, "_spec", types.SimpleNamespace(
             mesh=getattr(var, "_dtensor_device_mesh"),
             placements=getattr(var, "_dtensor_placements")))
-        local = var if role == "grad_shard" else entry.shard if entry is not None else var
-        object.__setattr__(var, "_local_tensor", local)
+        # Derive local values dynamically; caching them creates Var cycles and stale shards.
+        getattr(var, "__dict__", {}).pop("_local_tensor", None)
     except Exception:
         pass
     return var
