@@ -164,7 +164,7 @@ MIGRATED_CUSPARSE_SPMMCOO_SHAPE_USER_BOUNDARIES = {
 }
 
 MIGRATED_NCCL_REDUCE_SCATTER_SHAPE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/nccl/ops/nccl_reduce_scatter_op.cc": 2,
+    "backends/comm/nccl/ops/nccl_reduce_scatter_op.cc": 2,
 }
 
 MIGRATED_CUB_CUMSUM_RANK_USER_BOUNDARIES = {
@@ -671,10 +671,10 @@ def test_cusparse_spmmcoo_shape_is_a_catchable_user_error():
 
 
 def test_nccl_reduce_scatter_shape_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/extern/cuda/nccl/ops/nccl_reduce_scatter_op.cc").read_text()
+    source = (ROOT / "backends/comm/nccl/ops/nccl_reduce_scatter_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_NCCL_REDUCE_SCATTER_SHAPE_USER_BOUNDARIES[
-        "python/jittor/extern/cuda/nccl/ops/nccl_reduce_scatter_op.cc"]
+        "backends/comm/nccl/ops/nccl_reduce_scatter_op.cc"]
     assert "nccl_reduce_scatter expects dim0 divisible by process-group size" in source
 
 

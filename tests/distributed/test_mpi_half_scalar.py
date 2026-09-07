@@ -29,8 +29,8 @@ import numpy as np
 
 import jittor as jt
 
-_WRAPPER_SRC = (Path(__file__).resolve().parents[2] / "python" / "jittor"
-                / "extern" / "mpi" / "src" / "mpi_wrapper.cc")
+_WRAPPER_SRC = (Path(__file__).resolve().parents[2] / "backends" / "comm"
+                / "mpi" / "src" / "mpi_wrapper.cc")
 
 _HARNESS = r"""
 #include <cstdint>

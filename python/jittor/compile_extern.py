@@ -869,7 +869,7 @@ def setup_nccl(store=None):
     else:
         ctypes.CDLL(nccl_lib_name, dlopen_flags)
 
-    nccl_src_dir = os.path.join(jittor_path, "extern", "cuda", "nccl")
+    nccl_src_dir = os.path.join(backend_root(jittor_path, "comm"), "nccl")
     nccl_src_files = []
     for r, _, f in os.walk(nccl_src_dir):
         for fname in f:
@@ -880,14 +880,15 @@ def setup_nccl(store=None):
     # #else) and the <mpi.h> it includes; add their dirs + a stub mpi.h WITHOUT
     # any libmpi link, so no MPI install is required (#15).
     if _nccl_envfile and not inside_mpi():
-        _mpi_inc = os.path.join(jittor_path, "extern", "mpi", "inc")
-        _stub_inc = os.path.join(jittor_path, "extern", "cuda", "nccl", "nompi_inc")
+        _mpi_inc = os.path.join(backend_root(jittor_path, "comm"), "mpi", "inc")
+        _stub_inc = os.path.join(backend_root(jittor_path, "comm"), "nccl", "nompi_inc")
         _mpi_flags = f' -DJT_NCCL_NO_MPI -I"{_mpi_inc}" -I"{_stub_inc}" '
     else:
         _mpi_flags = mpi_compile_flags
     nccl = compile_custom_ops(nccl_src_files, backend="accelerator",
         extra_flags=(
             f" -I\"{nccl_include_path}\" {_mpi_flags} "
+            + cuda_sdk_flags + cuda_link_flags
             + cuda_library_link_flags("nccl", nccl_lib_name)
         ),
         return_module=True, dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW,
@@ -933,7 +934,7 @@ def setup_hccl(no_mpi=False):
         MPI build's cache/symbols.
     '''
 
-    hccl_src_dir = os.path.join(jittor_path, "extern", "acl", "hccl")
+    hccl_src_dir = os.path.join(backend_root(jittor_path, "comm"), "hccl")
     hccl_src_files = []
     for r, _, f in os.walk(hccl_src_dir):
         for fname in f:
@@ -966,7 +967,7 @@ def setup_hccl(no_mpi=False):
         # <mpi.h> it pulls in. Add the include dirs only -- NOT the link flags --
         # so nothing from libmpi is actually compiled in or linked.
         extra += " -DJT_HCCL_NO_MPI "
-        mpi_inc = os.path.join(jittor_path, "extern", "mpi", "inc")
+        mpi_inc = os.path.join(backend_root(jittor_path, "comm"), "mpi", "inc")
         extra += f" -I\"{mpi_inc}\" "
         if 'mpi_compile_flags' in globals() and mpi_compile_flags:
             # reuse just the -I parts of the mpi compile flags (for <mpi.h>)
@@ -1010,7 +1011,7 @@ def manual_link(flags):
                 break
 
 # Which environment variables mean "this process was started by an MPI
-# launcher". Mirrored by detect_inside_mpi() in extern/mpi/src/mpi_wrapper.cc,
+# launcher". Mirrored by detect_inside_mpi() in backends/comm/mpi/src/mpi_wrapper.cc,
 # which must answer the same question in C++ before MPI_Init; both lists are
 # pinned together by tests/distributed/test_mpi_launcher_env.py.
 #
@@ -1073,7 +1074,7 @@ def setup_mpi():
     LOG.v("mpi_flags: "+mpi_flags)
 
     # find all source files
-    mpi_src_dir = os.path.join(jittor_path, "extern", "mpi")
+    mpi_src_dir = os.path.join(backend_root(jittor_path, "comm"), "mpi")
     mpi_src_files = []
     for r, _, f in os.walk(mpi_src_dir):
         for fname in f:
@@ -1250,7 +1251,7 @@ def check_rank_agrees_with_cxx():
             "distributed state is inconsistent: the C++ MPI layer is {} while "
             "Python believes in_mpi={}. The launcher-detection lists in "
             "compile_extern.inside_mpi() and detect_inside_mpi() in "
-            "extern/mpi/src/mpi_wrapper.cc have drifted apart.".format(
+            "backends/comm/mpi/src/mpi_wrapper.cc have drifted apart.".format(
                 "enabled" if cxx_enabled else "disabled", in_mpi))
     if not in_mpi:
         return

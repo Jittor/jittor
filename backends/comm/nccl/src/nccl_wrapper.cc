@@ -9,6 +9,7 @@
 // ***************************************************************
 #include "runtime/device.h"
 #include "nccl_wrapper.h"
+#include "stream_compat.h"
 #include "core/var.h"
 #include "mem/allocator.h"
 #include "runtime/collective_dtype.h"

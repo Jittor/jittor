@@ -1741,7 +1741,6 @@ make_cache_dir(ck_path)
 
 # build cache_compile
 cc_flags += f" -I\"{core_root(jittor_path)}\" "
-cc_flags += f" -I\"{os.path.join(jittor_path, 'extern')}\" "
 cc_flags += f" -I\"{backend_root(jittor_path, 'cuda')}\" "
 
 cc_flags += py_include
@@ -1889,7 +1888,7 @@ def core_source_signature(root=None):
     walk that can only ever look at the real checkout cannot be shown to
     notice a new or same-size-edited file.
 
-    A walk of ``src/`` and ``extern/`` rather than the individual globs the
+    A walk of ``src/`` and ``backends/`` rather than the individual globs the
     generators use, so that a source or header that did not exist at the last
     build shows up too -- a dependency list recorded from that build can only
     name files that were already there.
@@ -1903,9 +1902,8 @@ def core_source_signature(root=None):
     """
     tree = jittor_path if root is None else root
     signature = {}
-    roots = [("src", core_root(tree) if root is None else os.path.join(tree, "src")),
-             ("extern", os.path.join(tree, "extern"))]
-    for backend in ("cpu", "cuda", "acl", "rocm", "corex"):
+    roots = [("src", core_root(tree) if root is None else os.path.join(tree, "src"))]
+    for backend in ("cpu", "cuda", "acl", "rocm", "corex", "comm"):
         try:
             backend_directory = backend_root(tree, backend)
         except FileNotFoundError:
@@ -1927,7 +1925,7 @@ def core_source_signature(root=None):
 def core_generator_signature():
     """Describe Python code that generates the core translation units.
 
-    These files live outside ``src/`` and ``extern/``, so the source walk used
+    These files live outside ``src/`` and ``backends/``, so the source walk used
     by the core stamp cannot see edits to them.  Keep both a cheap stat record
     and a content digest: an editor or checkout normally changes mtime, while
     the digest also catches an in-place same-size/same-mtime replacement.

@@ -33,7 +33,7 @@ def test_native_support_files_have_physical_domain_owners():
 
 def test_native_sources_do_not_include_the_removed_misc_directory():
     obsolete = []
-    for root in (SRC, ROOT / "python/jittor/extern", ROOT / "backends"):
+    for root in (SRC, ROOT / "backends"):
         for path in root.rglob("*"):
             if path.suffix not in (".cc", ".cu", ".h", ".py"):
                 continue

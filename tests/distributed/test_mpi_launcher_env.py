@@ -30,7 +30,7 @@ from jittor import compile_extern
 from _helpers.child_process import run_python_child
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_WRAPPER_SRC = (_REPO_ROOT / "python" / "jittor" / "extern" / "mpi" / "src"
+_WRAPPER_SRC = (_REPO_ROOT / "backends" / "comm" / "mpi" / "src"
                 / "mpi_wrapper.cc")
 
 _LAUNCHER_ENV_KEYS = (

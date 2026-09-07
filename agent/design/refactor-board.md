@@ -1,5 +1,7 @@
 # 整改看板
 
+2026-09-07 通信物理布局已迁：35 个 MPI/NCCL/HCCL 文件进 backends/comm，python/jittor/{src,extern} 均不存在，构建/打包路径同步。真实双 rank NCCL 各7 passed；CPU-only/shim structure 1284 collected、8 failed、1272 passed、4 skipped，失败集合不变。8.19 仍缺 Python ProcessGroup 实现归属，4.15 仍需 canonical backend 命名及完整 CUDA structure 验收，不按目录数量提前关闭；详见 layout-handoff-4.15 第3节。
+
 2026-09-07 ACL 布局完成代码迁移：provider 与 90 个 native 文件同批归 backends/acl，45 TU 顺序/分类保持；CPU-only/shim structure 1285 collected、8 failed、1273 passed、4 skipped，无新增失败 nodeid。CPU/CPU Torch/CUDA 冒烟及 sdist 资源核验通过，NPU 未实测、CUDA 全 structure 未跑；4.15 仍待 8.19 清空通信 extern，不提前关闭。详见 layout-handoff-4.15 第 2 节。
 
 2026-09-07 布局路径/打包复验：360 个顶层核心文件进入 sdist/wheel，安装后 CPU 自检、CPU Torch backward、真实 CUDA matmul/切片梯度通过；CUDA 注册补 composite 目录。相同 CPU-only/shim structure：1286 collected，8 failed、1272 passed、4 skipped、2 xfailed，无新增失败 nodeid；相对上一轮 1285 collected 的节点变动与剩余失败清单见 layout-handoff-4.15 第 1 节。4.15/8.19 未关闭。

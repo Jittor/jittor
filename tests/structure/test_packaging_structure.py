@@ -46,7 +46,7 @@ class TestPackagingStructure(unittest.TestCase):
             config = tomllib.load(stream)
         package_dirs = config["tool"]["setuptools"]["package-dir"]
         self.assertEqual(package_dirs[""], "python")
-        for backend in ("cuda", "acl"):
+        for backend in ("cuda", "acl", "comm"):
             self.assertEqual(package_dirs["jittor.backends." + backend], "backends/" + backend)
         setup_tree = ast.parse((self.repo_root / "setup.py").read_text())
         discovery_roots = {ast.literal_eval(node.args[0]) for node in ast.walk(setup_tree)
@@ -71,7 +71,6 @@ class TestPackagingStructure(unittest.TestCase):
             "recursive-include python/jittor/compat/shim/cpp_extension/include *",
             "recursive-include python/jittor/compat/shim/cpp_extension/src *",
             "recursive-include python/jittor/compat/shim/resources *",
-            "recursive-include python/jittor/extern *",
             "recursive-include backends *",
             "recursive-include python/jittor/math_util/src *",
             "recursive-include src *.cc *.h",
@@ -79,6 +78,7 @@ class TestPackagingStructure(unittest.TestCase):
             "recursive-include python/jittor_utils/class *",
         }
         self.assertTrue(runtime_resources.issubset(directives))
+        self.assertNotIn("recursive-include python/jittor/extern *", directives)
         self.assertNotIn("recursive-include python/jittor *", directives)
         self.assertNotIn("recursive-include python/jittor_utils *", directives)
         self.assertIn("recursive-include examples *", directives)

@@ -35,8 +35,7 @@ import unittest
 
 import jittor as jt
 
-_HCCL = (Path(__file__).resolve().parents[2] / "python" / "jittor" / "extern"
-         / "acl" / "hccl")
+_HCCL = (Path(__file__).resolve().parents[2] / "backends" / "comm" / "hccl")
 _HEADER = _HCCL / "inc" / "hccl_wrapper.h"
 _OPS = ["hccl_all_reduce_op.cc", "hccl_all_gather_op.cc", "hccl_reduce_op.cc",
         "hccl_broadcast_op.cc"]

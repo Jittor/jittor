@@ -24,7 +24,7 @@ def test_acl_code_and_collectives_declare_their_source_backend():
     text = SOURCE.read_text(encoding="utf-8")
     assert 'if (code->backend != "acl")' in text
     assert 'strncmp(op->name(), "hccl"' not in text
-    for header in (ROOT / "python/jittor/extern/acl/hccl/ops").glob("*_op.h"):
+    for header in (ROOT / "backends/comm/hccl/ops").glob("*_op.h"):
         assert "kernel.compile = compile_registered_source" in header.read_text()
     compiler = (ROOT / "src/codegen/op_compiler.cc").read_text()
     assert "op->implementation().kernel.compile" in compiler

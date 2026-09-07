@@ -163,6 +163,36 @@ wheel 历史 allowlist 比较仍因旧路径/内容审批 metadata 失败，未�
 
 ## 3. 工具：别再为每刀付一次全量重建
 
+2026-09-07 通信物理迁移记录：MPI 10/NCCL 15/HCCL 10 个 native 文件进入
+`backends/comm/{mpi,nccl,hccl}`，保留 inc/src/ops（NCCL 另有 nompi_inc）形状。
+`compile_extern` 六处资源路径统一经 backend_root，comm 进入 package 映射与构建戳。
+`python/jittor/{src,extern}` 在工作树中均不存在，旧字节码归档于仓库外，删除 extern
+include 与 MANIFEST 行。35 个文件原样搬迁后，真实构建补修两处旧遗漏：MPI 的
+`<common.h>` 改为 `core/common.h`；NCCL 包装器包含 stream_compat.h 且其编译参数
+显式带 CUDA SDK include/link flags。算法和 collective 定序不变。
+
+实际验证：MPI 扩展编译通过；单 rank 显式 setup_nccl 预热后，
+`mpirun -np 2 python -m pytest -q --tb=short`
+`tests/distributed/test_nccl_comm_stream.py::TestNcclCommunicationStream`
+双 rank 各 7 passed，0 skipped；包括五类 collective、event 精确计数和跨步定序。
+环境为 PYTHONPATH=python、nvcc_path=/usr/local/cuda/bin/nvcc、CUDA_VISIBLE_DEVICES=6,7、
+use_mpi=1、use_nccl=1、use_mkl=0、独立 JITTOR_HOME；源码 CPU selftest 与 CPU Torch
+反向也通过。HCCL 无实机；没有声称多机验收。
+
+同第 0 节 CPU-only/shim structure：1284 collected，8 failed / 1272 passed /
+4 skipped / 0 xfailed / 0 error；`structure-comm-move.xml` 的失败集合与
+`structure-acl-move.xml` 完全相同。仅删除旧 extern/__init__.py 对应空模块扫描节点；
+随后新增两个 comm 路径/SDK依赖合同定点通过（不混入上述完整收集数）。
+sdist官方检查通过；360 core + 35 comm + 全部1027生产文件源码/产物/安装结果逐字节
+一致，wheel无旧extern成员。SHA-256：
+`e28093bca479acc80b853fa0b8f302afb1a45bb5717a13ac481ef6d620fc500c`。
+历史wheel审批清单仍有跨此前多个提交的路径/内容漂移，未刷新冒充通过。
+
+**仍不可把 8.19 整项划掉**：Python `_JittorProcessGroup` 等实现还在
+`compat/torch/installers/distributed.py`，需收进原生 distributed，兼容层仅留委托。
+4.15 的物理目录目标已达，但 ACL canonical backend 命名和完整 CUDA structure
+验收仍需确认。不要把本记录当作所有剩余任务完成。
+
 `agent/scripts/check_core_includes.py`，**0.4 秒**，解析核心里每条 quoted include 并对着
 `-I` 根求解。它不是编译器（模型不了每个后端自带的 `-I`），所以在能编过的树上仍报约 280
 处盲点——**所以只能用差分模式**：

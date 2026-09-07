@@ -29,8 +29,8 @@ import unittest
 
 import jittor as jt
 
-_HCCL_HEADER = (Path(__file__).resolve().parents[2] / "python" / "jittor"
-                / "extern" / "acl" / "hccl" / "inc" / "hccl_wrapper.h")
+_HCCL_HEADER = (Path(__file__).resolve().parents[2] / "backends" / "comm"
+                / "hccl" / "inc" / "hccl_wrapper.h")
 
 _HARNESS = r"""
 #include <sstream>

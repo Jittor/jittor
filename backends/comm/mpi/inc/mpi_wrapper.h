@@ -9,7 +9,7 @@
 // ***************************************************************
 #pragma once
 #define OMPI_SKIP_MPICXX
-#include <common.h>
+#include "core/common.h"
 #include <mpi.h>
 #include "core/var_holder.h"
 #include "type/nano_string.h"

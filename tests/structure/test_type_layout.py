@@ -21,7 +21,6 @@ def test_nano_type_references_use_the_canonical_include_path():
         *(SRC.rglob("*.h")),
         *(SRC.rglob("*.cc")),
         *(SRC.rglob("*.cu")),
-        *(ROOT / "python" / "jittor" / "extern").rglob("*.h"),
         *(ROOT / "backends").rglob("*.h"),
     ]
     stale = []

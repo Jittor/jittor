@@ -10,7 +10,7 @@ Two things a collective could not do before 8.02, both needed by DDP (7.02):
   impossible by construction. ``defer_join`` leaves that join outstanding
   until :func:`comm_wait`.
 
-The C++ side is in ``extern/cuda/nccl/src/nccl_wrapper.cc``; the docstring on
+The C++ side is in ``backends/comm/nccl/src/nccl_wrapper.cc``; the docstring on
 ``nccl_bucket_begin`` there carries the full contract. The part callers have to
 respect:
 

@@ -61,8 +61,7 @@ python/
 │   │   └── external_backend.py
 │   ├── selftest.py              # installed smoke test
 │   ├── backends/                # source-checkout package path bridge
-│   ├── src/                     # shared/CPU operators and core/compiler sources
-│   └── extern/                  # remaining legacy SDK, CPU and communication resources
+│   └── distributed/             # native launch, rendezvous and communication helpers
 └── jittor_utils/                # compiler, installation, and release helpers
 ```
 
@@ -361,7 +360,10 @@ an explicit 45-file build inventory (42 core, 3 registration), preserving the
 previous ordering without accidentally globbing the independent backend and
 workspace runtime sources. Source builders include `aclops/aclops.h` through
 the backend include root; actual SDK `acl/acl.h` references are unchanged.
-Only the communication backend HCCL remains temporarily under `extern/acl`.
+MPI, NCCL and HCCL resources live under `backends/comm/{mpi,nccl,hccl}` with
+matching `inc`, `src` and `ops` directories. NCCL also owns its no-MPI header.
+Compiler lookup uses `backend_root(..., "comm")` in both checkouts and wheels;
+the removed `python/jittor/extern` path is not an include root or package input.
 
 `backends/acl/kernels/install.py` publishes module-level tensor, neural-network
 and normalization implementations in the existing Python dispatch table.
@@ -524,7 +526,7 @@ paths and therefore require special review:
 
 - `src/` (installed as `jittor/src/`)
 - `backends/acl/{include,kernels/native,src}/`
-- `python/jittor/extern/`
+- `backends/comm/`
 - `python/jittor/math_util/src/`
 - `python/jittor/compat/shim/cpp_extension/`
 

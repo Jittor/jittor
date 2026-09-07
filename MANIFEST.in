@@ -5,7 +5,6 @@ include python/jittor/__init__.pyi
 recursive-include python/jittor/compat/shim/cpp_extension/include *
 recursive-include python/jittor/compat/shim/cpp_extension/src *
 recursive-include python/jittor/compat/shim/resources *
-recursive-include python/jittor/extern *
 recursive-include backends *
 recursive-include python/jittor/math_util/src *
 recursive-include src *.cc *.h

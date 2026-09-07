@@ -20,8 +20,8 @@ covering less than it claimed:
   the hand-written CUDA kernels add 9 more in ``backends/cuda/kernels/nn``;
   none were counted.
 
-ACL and ROCm currently have sources under ``backends/`` *and* under
-``python/jittor/extern`` -- the move is half done -- so both are scanned.
+Device kernels and communication gradients have distinct owners under
+``backends/``; each owner is scanned independently.
 
 Hardware honesty: this machine has CUDA and nothing else. Entries whose kind
 ends in ``_hardware`` cannot be executed here, and they are not pretended to
@@ -47,7 +47,9 @@ SCAN_ROOTS = (
     "backends/cpu",
     "backends/cuda",
     "backends/rocm",
-    "python/jittor/extern",
+    "backends/comm/mpi",
+    "backends/comm/nccl",
+    "backends/comm/hccl",
 )
 
 #: Scanned too, and expected to yield nothing. Corex is a runtime and a header
@@ -225,51 +227,51 @@ BACKEND_GRAD_COVERAGE = (
      "npu_hardware"),
 
     # ---- ACL / HCCL collectives. Needs >=2 Ascend cards. ------------------
-    ("python/jittor/extern/acl/hccl/ops/hccl_all_gather_op.cc",
+    ("backends/comm/hccl/ops/hccl_all_gather_op.cc",
      "HcclAllGatherOp",
      "tests/distributed/test_hccl_check_macros.py::TestHcclCheckMacros::test_finalizer_does_not_use_the_throwing_macro",
      "unsupported_hardware"),
-    ("python/jittor/extern/acl/hccl/ops/hccl_all_reduce_op.cc",
+    ("backends/comm/hccl/ops/hccl_all_reduce_op.cc",
      "HcclAllReduceOp",
      "tests/backends/npu/test_acl.py::TestACL::test_product_reduction_forward_backward",
      "npu_hardware"),
-    ("python/jittor/extern/acl/hccl/ops/hccl_broadcast_op.cc",
+    ("backends/comm/hccl/ops/hccl_broadcast_op.cc",
      "HcclBroadcastOp",
      "tests/backends/npu/test_acl.py::TestACL::test_broadcast",
      "npu_hardware"),
-    ("python/jittor/extern/acl/hccl/ops/hccl_reduce_op.cc", "HcclReduceOp",
+    ("backends/comm/hccl/ops/hccl_reduce_op.cc", "HcclReduceOp",
      "tests/backends/npu/test_acl.py::TestACL::test_all_reduction",
      "npu_hardware"),
 
     # ---- CUDA / NCCL collectives. Needs a multi-GPU launcher. -------------
-    ("python/jittor/extern/cuda/nccl/ops/nccl_all_gather_op.cc",
+    ("backends/comm/nccl/ops/nccl_all_gather_op.cc",
      "NcclAllGatherOp",
      "tests/distributed/test_fsdp2_nccl.py::TestFSDP2Nccl::test_nccl_all_gather_autograd",
      "nccl_hardware"),
-    ("python/jittor/extern/cuda/nccl/ops/nccl_all_reduce_op.cc",
+    ("backends/comm/nccl/ops/nccl_all_reduce_op.cc",
      "NcclAllReduceOp",
      "tests/distributed/test_nccl_ops.py::TestNcclOps::test_all_reduce",
      "nccl_hardware"),
-    ("python/jittor/extern/cuda/nccl/ops/nccl_broadcast_op.cc",
+    ("backends/comm/nccl/ops/nccl_broadcast_op.cc",
      "NcclBroadcastOp",
      "tests/distributed/test_nccl_ops.py::TestNcclOps::test_broadcast",
      "nccl_hardware"),
-    ("python/jittor/extern/cuda/nccl/ops/nccl_reduce_op.cc", "NcclReduceOp",
+    ("backends/comm/nccl/ops/nccl_reduce_op.cc", "NcclReduceOp",
      "tests/distributed/test_nccl_ops.py::TestNcclOps::test_reduce",
      "nccl_hardware"),
-    ("python/jittor/extern/cuda/nccl/ops/nccl_reduce_scatter_op.cc",
+    ("backends/comm/nccl/ops/nccl_reduce_scatter_op.cc",
      "NcclReduceScatterOp",
      "tests/distributed/test_fsdp2_nccl.py::TestFSDP2Nccl::test_nccl_all_gather_autograd",
      "nccl_hardware"),
 
     # ---- MPI collectives. Needs an mpirun launcher. -----------------------
-    ("python/jittor/extern/mpi/ops/mpi_all_reduce_op.cc", "MpiAllReduceOp",
+    ("backends/comm/mpi/ops/mpi_all_reduce_op.cc", "MpiAllReduceOp",
      "tests/distributed/test_mpi_op.py::TestMpiOps::test_all_reduce",
      "mpi_hardware"),
-    ("python/jittor/extern/mpi/ops/mpi_broadcast_op.cc", "MpiBroadcastOp",
+    ("backends/comm/mpi/ops/mpi_broadcast_op.cc", "MpiBroadcastOp",
      "tests/distributed/test_mpi_op.py::TestMpiOps::test_broadcast",
      "mpi_hardware"),
-    ("python/jittor/extern/mpi/ops/mpi_reduce_op.cc", "MpiReduceOp",
+    ("backends/comm/mpi/ops/mpi_reduce_op.cc", "MpiReduceOp",
      "tests/distributed/test_mpi_op.py::TestMpiOps::test_reduce",
      "mpi_hardware"),
 )
@@ -497,7 +499,7 @@ def test_no_deferred_entry_claims_to_run_here():
     relabelling an Ascend route as an executed one.
     """
     for source, symbol, _, kind in BACKEND_GRAD_COVERAGE:
-        on_cuda = source.startswith(("backends/cuda", "python/jittor/extern/cuda"))
+        on_cuda = source.startswith(("backends/cuda", "backends/comm/nccl"))
         if kind in EXECUTABLE_KINDS and kind != "cpu_jittor":
             assert on_cuda, (
                 "%s is not a CUDA source but claims an executed CUDA "

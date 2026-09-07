@@ -16,4 +16,4 @@ def test_cuda_jobs_restore_and_save_a_configuration_partitioned_jittor_cache():
     assert "nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}" in workflow
     assert "src/**" in workflow
     assert "backends/**" in workflow
-    assert "python/jittor/extern/**" in workflow
+    assert "python/jittor/extern/**" not in workflow

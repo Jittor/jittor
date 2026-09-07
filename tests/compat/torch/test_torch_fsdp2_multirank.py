@@ -6,7 +6,7 @@ anything and the whole true-FSDP path never runs. Everything below therefore
 runs under ``mpirun -np 2``.
 
 CUDA is required, not a preference: jittor's MPI extern provides all_reduce,
-broadcast and reduce but **no all_gather** (``extern/mpi/ops/``), so the shard
+broadcast and reduce but **no all_gather** (``backends/comm/mpi/ops/``), so the shard
 gather has no CPU implementation at all and FSDP2 multi-rank only exists on
 NCCL.
 

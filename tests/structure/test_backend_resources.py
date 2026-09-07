@@ -78,6 +78,7 @@ def test_source_bridge_resolves_canonical_kernel_modules_without_bootstrap():
         package.__path__ = [str(ROOT / "python/jittor")]
         sys.modules["jittor"] = package
         expected = {
+            "jittor.backends.comm": "comm/__init__.py",
             "jittor.backends.cuda.kernels.nn.softmax_cuda": "cuda/kernels/nn/softmax_cuda.py",
             "jittor.backends.cuda.kernels.math.gamma": "cuda/kernels/math/gamma.py",
             "jittor.backends.cuda.kernels.pooling.pool2d": "cuda/kernels/pooling/pool2d.py",

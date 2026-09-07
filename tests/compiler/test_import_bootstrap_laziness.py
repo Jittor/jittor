@@ -327,7 +327,6 @@ class TestCoreBuildStamp(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tree:
             os.makedirs(os.path.join(tree, "src", "ops"))
-            os.makedirs(os.path.join(tree, "extern"))
             source = Path(tree, "src", "ops", "a.cc")
             source.write_text("// one\n")
             # Passed rather than patched: this module's startup configuration
@@ -348,6 +347,18 @@ class TestCoreBuildStamp(unittest.TestCase):
             third = self.compiler.core_source_signature(root=tree)
             self.assertIn(os.path.join("src", "b.h"), third)
             self.assertNotEqual(second, third)
+
+            comm = Path(tree, "backends", "comm")
+            comm.mkdir(parents=True)
+            (comm / "__init__.py").write_text("")
+            wrapper = comm / "mpi_wrapper.cc"
+            wrapper.write_text("// one\n")
+            fourth = self.compiler.core_source_signature(root=tree)
+            key = os.path.join("backends", "comm", "mpi_wrapper.cc")
+            self.assertIn(key, fourth)
+            wrapper.write_text("// two\n")
+            os.utime(wrapper, ns=(1_000_000_000, 1_000_000_000))
+            self.assertNotEqual(fourth, self.compiler.core_source_signature(root=tree))
 
 
 _CUSTOM_OP_MARKER = "CUSTOM_OP_RESULT "

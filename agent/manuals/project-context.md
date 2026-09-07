@@ -44,8 +44,8 @@ current tree has:
 - Python 3.7-3.13 packaging, with real 3.12/3.13 wheel gates and NumPy 2.x on 3.13.
 
 Follow [source architecture](../../docs/architecture/source-architecture.md): CUDA resources
-live in top-level `backends/cuda/`, packaged as `jittor.backends.cuda`; shared core and
-remaining legacy resources still use `python/jittor/src/` and `python/jittor/extern/`.
+live under top-level `backends/`, including `comm/{mpi,nccl,hccl}`; shared core
+lives in `src/` and is packaged as `jittor/src`. Package-local `src/extern` are removed.
 
 ## Active work areas
 
