@@ -36,9 +36,19 @@ python/
 ├── jittor/
 │   ├── __init__.py              # root composition and runtime initialization
 │   ├── __init__.pyi             # public root typing surface
+│   ├── _core/                  # native Python API implementation domains
+│   │   ├── api.py              # explicit composition after compiled-core bootstrap
+│   │   ├── var.py              # tensor construction, operations and Var bindings
+│   │   ├── module.py           # Module and parameter/buffer ownership
+│   │   ├── function.py         # custom autograd contexts and gradient hooks
+│   │   ├── hooks.py            # removable handles and hook support
+│   │   ├── flags.py            # native scopes and the shared runtime state
+│   │   └── diagnostics.py      # logs, profiling, process scopes and exit cleanup
 │   ├── _runtime/
-│   │   ├── core_api.py          # native Python API after core bootstrap
+│   │   ├── core_api.py          # same-object legacy alias of _core.api
 │   │   └── state.py             # injected native Flags views, no bootstrap imports
+│   ├── serialization/
+│   │   └── native.py            # native save/load and safe-pickle implementation
 │   ├── nn/                      # neural-network public API
 │   │   ├── modules/             # stateful Module implementations
 │   │   ├── functional/          # stateless tensor functions
@@ -113,10 +123,24 @@ files or wrapper implementations.
 ### Root module ownership
 
 The entries directly under `python/jittor/` are an exact reviewed set.
-`__init__.py` composes the runtime, while `jittor._runtime.core_api` is the one
-large native Python API implementation loaded after the compiled core. Public
-root exports retain object identity with that implementation, and legacy root
-pickle paths remain loadable. `__init__.pyi` owns the public root typing surface.
+`__init__.py` publishes the explicit `jittor._core.api.__all__` after compiled-core
+bootstrap. The composition module imports canonical objects from `_core.var`,
+`module`, `function`, `hooks`, `flags`, and `diagnostics`; implementations no
+longer share one large `core_api.py` namespace. Native save/load and safe-pickle
+algorithms belong to `serialization.native` and are re-exported by the same
+composition layer. Public root exports retain implementation identity and
+legacy root pickle paths remain loadable. The historical
+`jittor._runtime.core_api` import resolves to the same module object as
+`jittor._core.api`, with no second implementation.
+
+`_core/__init__.py` does not export callable or state objects named `var`,
+`flags`, or `hooks`: those package attributes must continue to resolve to their
+modules. Object-level exports belong to `_core.api` and the public Jittor root.
+The API composition installs exit hooks after importing its implementation
+domains, preserving the existing registration order. `__init__.pyi` owns the
+public root typing surface. `_core.flags` constructs the single native Flags
+object, its runtime context and runtime scope API; native and Torch composition
+retain that same object.
 `_runtime.flag_policy` classifies native flags for both binding generation and
 the Python API. `_runtime.state` provides immutable `jt.config`, writable
 `jt.runtime` switches and read-only `jt.runtime.context` diagnostics. Runtime
@@ -204,7 +228,7 @@ families and KL divergence. Initialization separates basic filling, fan/gain
 rules, scaled initializers and truncated normal; its facade retains the existing
 Var method bindings. Function metadata names the physical owner, while historical
 public pickle globals continue to resolve through the facades. These moves do
-not complete the remaining root, core API, tensor-ops or build-package migration.
+not complete the remaining root, tensor-ops or build-package migration.
 Runtime-only framework imports are deferred to calls to keep the import-cycle
 surface from growing. The six legacy complex linalg functions are lazily
 re-exported as their original objects, preserving concrete ComplexNumber type
@@ -216,7 +240,8 @@ compiler globals or append to its source list; bootstrap publishes compatibility
 attributes centrally. Entry points are loaded only for the selected backend,
 and explicit CPU selection bypasses CUDA discovery. The build utilities receive
 their binding/compiler services by injection and no longer import Jittor.
-Tensor checkpoint algorithms live in `jittor.serialization`; legacy utility
+Tensor checkpoint algorithms live in `jittor.serialization`, with native
+save/load and safe-pickle code in `serialization.native`; legacy utility
 paths query runtime-injected loaders after bootstrap. See
 [backend build configuration](backend-build-configuration.md) for the service
 protocol, cache compatibility and pre-bootstrap/hardware limits.

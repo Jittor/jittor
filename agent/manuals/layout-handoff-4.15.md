@@ -36,9 +36,11 @@ JITTOR_HOME 使用独立 acl-move-cuda 缓存，不能与 CPU-only 的收集数�
 旧 pickle 路径保留。Torch Kaiming 保持兼容抽样方式，调用期依赖与复数接口延迟
 导出避免增加导入环；循环模块仍为原上限164，未放宽门禁。源码 CPU/CUDA 与
 最终 wheel 安装自检证据见 `agent/results/2026-09-07-python-domain-packages.md`。
-其余 `_runtime/core_api.py`、misc/pool/build/contrib 和根目录收缩尚未完成，
-不要因此把5.26标为已合并。下一批先拆原生 `_core`，注意 Module/Function/GradHooker
-的依赖环和 flags/var/hooks 的模块名与公开对象名冲突。
+后续原生 `_core` 也已拆分接线：`_runtime/core_api.py` 只保留同对象旧别名，
+Module/Function/GradHooker 环通过调用期依赖解除，flags/var/hooks 不向包根发布同名
+对象。CPU/CUDA/shim 短运行通过，导入循环模块163；按用户最新要求，完整门禁与新
+wheel 留下一较大布局阶段统一验收，见 `agent/results/2026-09-07-native-core-packages.md`。
+其余 misc/pool/build/contrib 和根目录收缩尚未完成，不要因此把5.26标为已合并。
 
 2026-09-07 后续执行记录：coord 已从 `4fbcaab64` 同步（实际落后 126 提交，无冲突）。
 正在修复本节前置：preflight 接收实际 BuildConfig，CPU/ACL/ROCm 不要求可选归档；

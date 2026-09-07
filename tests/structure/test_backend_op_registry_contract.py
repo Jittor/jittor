@@ -89,10 +89,10 @@ def test_python_dispatch_queries_native_placement_without_fake_backend_capabilit
 
 
 def test_core_api_registers_and_calls_the_same_python_dispatch_table():
-    tree = _parse("core_api.py")
+    tree = ast.parse((RUNTIME.parent / "_core/var.py").read_text())
     imports = {alias.name: alias.asname or alias.name
                for node in tree.body if isinstance(node, ast.ImportFrom)
-               and node.module == "dispatch" for alias in node.names}
+               and node.module == "_runtime.dispatch" for alias in node.names}
     register = imports["register_kernel"]
     dispatch = imports["try_dispatch"]
     registrations = {

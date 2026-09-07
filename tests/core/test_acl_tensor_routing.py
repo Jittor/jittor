@@ -233,7 +233,7 @@ class DomainRouting(unittest.TestCase):
             return "native"
 
         names = {"index", "arg_reduce", "where", "floor_int", "sigmoid"}
-        owner = definitions("_runtime/core_api.py", names, _try_dispatch=dispatch,
+        owner = definitions("_core/var.py", names, _try_dispatch=dispatch,
                             NanoString=type("NanoString", (), {}), np=np,
                             **{"_native_" + name: fallback for name in names})
         self.assertIs(owner.index(shape=[2, 2], dtype="int64"), result)

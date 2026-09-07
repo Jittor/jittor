@@ -1931,7 +1931,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")
         owners = {
-            "outer": "jittor._runtime.core_api",
+            "outer": "jittor._core.var",
             "tensordot": "jittor.nn.functional.tensor",
             "repeat_interleave": "jittor.misc.tensor_ops",
         }

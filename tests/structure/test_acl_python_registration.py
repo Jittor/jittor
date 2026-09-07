@@ -300,7 +300,7 @@ def test_acl_transpose_preserves_argument_forms_with_real_shape_builder(
     providers.install.install()
     call = providers.tensor.transpose_acl
     if entry == "public":
-        source = (ROOT / "python/jittor/_runtime/core_api.py").read_text(encoding="utf-8")
+        source = (ROOT / "python/jittor/_core/var.py").read_text(encoding="utf-8")
         adapter = next(
             node
             for node in ast.parse(source).body

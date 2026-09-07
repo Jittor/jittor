@@ -57,7 +57,7 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
 
         preflight = step("_prepare_compat_import(argv=", "runs the compat preflight")
         build_lock = step("from jittor_utils import lock", "takes the build lock")
-        core_api = step("_runtime import core_api", "publishes the core API")
+        core_api = step("_core import api", "publishes the core API")
         facade = step("from . import nn", "imports the nn facade")
         compose = step("_compose_compat_runtime(", "composes the compat runtime")
 
@@ -76,8 +76,10 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
 
     def test_core_api_identity_and_legacy_pickle_paths_are_stable(self):
         import jittor
+        from jittor._core import api
         from jittor._runtime import core_api
 
+        self.assertIs(core_api, api)
         for name in (
             "Module",
             "Function",
@@ -91,12 +93,10 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
         for name in ("Module", "Function"):
             implementation = getattr(jittor, name)
             current = pickle.dumps(implementation, protocol=0)
-            legacy = current.replace(
-                b"cjittor._runtime.core_api\n",
-                b"cjittor\n",
-                1,
-            )
-            self.assertIs(pickle.loads(legacy), implementation)
+            self.assertIs(pickle.loads(current), implementation)
+            for old_module in ("jittor", "jittor._runtime.core_api"):
+                legacy = ("c%s\n%s\n." % (old_module, name)).encode("ascii")
+                self.assertIs(pickle.loads(legacy), implementation)
 
     def test_compat_composition_keeps_native_core_implementations_available(self):
         import jittor
@@ -354,6 +354,7 @@ print("RESULT=" + json.dumps({
             core_api.compile_extern.in_mpi = old_compile_in_mpi
 
     def test_core_api_is_the_only_large_python_api_implementation(self):
+        # The old monolith is now a same-object alias; each domain has one owner.
         path = self.jittor / "_runtime" / "core_api.py"
         self.assertTrue(path.is_file())
         source = path.read_text(encoding="utf-8")
@@ -361,18 +362,36 @@ print("RESULT=" + json.dumps({
         definitions = {
             node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))
         }
-        self.assertIn("Module", definitions)
-        self.assertIn("Function", definitions)
-        self.assertIn("array", definitions)
-        self.assertIn("flag_scope", definitions)
-        self.assertNotIn("compose", definitions)
+        self.assertFalse(definitions)
+        self.assertIn("sys.modules[__name__] = api", source)
+        expected_owners = {
+            "Module": "module.py", "make_module": "module.py",
+            "Function": "function.py", "GradHooker": "function.py",
+            "array": "var.py", "flag_scope": "flags.py",
+            "register_hook": "hooks.py", "log_capture_scope": "diagnostics.py",
+        }
+        actual_owners = {}
+        for owner in (self.jittor / "_core").glob("*.py"):
+            owner_tree = ast.parse(owner.read_text(encoding="utf-8"))
+            for node in owner_tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in expected_owners:
+                    self.assertNotIn(node.name, actual_owners)
+                    actual_owners[node.name] = owner.name
+        self.assertEqual(actual_owners, expected_owners)
+        facade = ast.parse((self.jittor / "_core/api.py").read_text(encoding="utf-8"))
+        facade_definitions = {
+            node.name for node in facade.body
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+        }
+        self.assertEqual(facade_definitions, {"__getattr__"})
 
     def test_source_architecture_names_the_core_api_owner(self):
         source = (
             self.repo / "docs" / "architecture" / "source-architecture.md"
         ).read_text(encoding="utf-8")
         normalized = " ".join(source.split())
-        self.assertIn("`jittor._runtime.core_api`", normalized)
+        self.assertIn("`jittor._core.api`", normalized)
+        self.assertIn("`jittor._core.module`", normalized)
         self.assertIn("Public root exports retain object identity", normalized)
 
     def test_preflight_and_lazy_shim_are_stdlib_only(self):
@@ -490,6 +509,8 @@ print("RESULT=" + json.dumps({
         ]
         paths.extend((self.compat / "torch" / "installers").glob("*.py"))
         paths.extend((self.compat / "shim").glob("*.py"))
+        paths.extend((self.jittor / "_core").glob("*.py"))
+        paths.append(self.jittor / "serialization/native.py")
         for path in paths:
             with self.subTest(path=str(path.relative_to(self.repo))):
                 ast.parse(

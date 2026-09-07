@@ -144,8 +144,8 @@ with _lock.lock_scope():
             pass
 
 
-from ._runtime import core_api as _core_api
-from ._runtime.core_api import _core_flags
+from ._core import api as _core_api
+from ._core.flags import _core_flags
 _publish(globals(), _core_api, _core_api.__all__)
 from .benchmarking import BenchmarkResult, benchmark
 
@@ -311,9 +311,7 @@ _record_install("compat.runtime_composition")
 optim._refresh_public_exports()
 _record_install("optim.public_exports")
 
-# Moved core API functions resolve globals in ``core_api``. Compatibility mode
-# deliberately retains this same native flags object.
-_core_api.flags = flags
+# Compatibility composition retains the native flags object owned by _core.
 
 # Every installer has run. Fail loudly here rather than let a half-patched
 # runtime import cleanly and then behave like a different version of jittor.

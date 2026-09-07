@@ -5,7 +5,7 @@ import unittest
 import numpy as np
 
 import jittor as jt
-from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
+from jittor._core.flags import _output_requires_grad, _stop_grad_outputs
 from jittor.nn.backends.cudnn import _try_cudnn_conv2d
 from jittor.backends.cuda.kernels.nn.rms_norm_cuda import multihead_rms_norm_cuda
 from jittor.backends.cuda.kernels.nn.swiglu_cuda import _silu_and_mul_cuda
