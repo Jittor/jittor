@@ -3363,3 +3363,26 @@ CUDA 门禁**不含 `tests/ops`**：基线那一跑超时被杀，没有可比�
   `tests/core/test_setitem.py`、`agent/results/2026-08-12-repository-modernization-review.md`。
 - 停 agent 时清掉了 19 个超时的 python/pytest 残留进程。若发现构建整体变慢而非失败，先查有没有进程
   卡在编译锁上（ptrace 停住的 gdb、`futex_wait_queue` 里的 pytest 都出现过），症状是「所有人都变慢」。
+
+**2026-09-07（compat，7.03 复核）：补上一条「被注释当证据引用、但仓库里并不存在」的测试，
+并测出 `tests/backends/cuda` 有一个会伪造 33 条红的错配置。** `b64639ae5`。
+一、`installers/nn.py` 的注释写着 `test_the_captured_module_methods_are_still_native`
+「pins that rather than leaving it assumed」，但**这个名字的测试从来没有被写出来**。它要钉的
+不变量是真的：提升把七个 `_ORIG_MODULE_*` 的捕获从 install 期挪到 import 期，只有在此前没有
+任何 installer 替换过 `nn.Module` 这些方法时才成立；若捕获到本文件自己的包装器，包装器就会
+委托给自己，第一次调用即无限递归。补的测试逐个断言捕获对象不属本文件模块级包装器、
+`__module__` 不在 `jittor.compat.torch` 下。**反例先造再信**：把 `_ORIG_MODULE_EXECUTE` 换成
+本文件的 `_execute` 后确实报「captured this file's own `_execute`」；未篡改时捕获到的是
+`jittor._runtime.core_api` 的 `Module.execute`（顺带说明这个捕获点与 `build` 的 5.02 有重叠面）。
+整文件带真实 CUDA 112 passed（此前 105，本次 +7）。形状值得记：**注释里引用一个测试名当证据，
+和「绿不等于跑过」是同一类问题的两面**——前者连测试都没有，却读起来像已经验证过。
+二、`tests/backends/cuda` 必须在 `JITTOR_TORCH_SHIM=0` 下跑，否则**伪造 33 条红**。
+实测：`JITTOR_TORCH_SHIM=0` 是 **5 failed / 269 passed**（与看板既有基线一致）；同一棵树同一
+commit 只把 `JITTOR_TORCH_SHIM` 改成 `1`，变成 **33 failed / 232 passed**，多出来的那 28 条里
+有 20 条是同一个断言 `Check failed: (is_type<string>(_slots[7]))`，位置在
+`cudnn_rnn_weight_offset(..., string dtype)` 的生成 caller —— `_slots[7]` 正是那个 `string dtype`。
+**不是本波引入**：把 `nn.py` 退回提升前（`796b8e43c` 那版，nested=40）在 shim=1 下同样 20 条红，
+逐条相同。我一开始按提交时间把它误挂到 `3.03`（`0ad6c7504` 改了 kernel 缓存键的 `string`），
+是错的——变量是 shim 而不是那个提交，**下一位不要沿用这个误判**。
+底下是一条真实的 shim 缺口（torch 模式下 `dtype` 到了 C++ 边界不再是 `string`），但它属后端
+绑定而非 7.03，没有自行改；**要派的话记得计划与看板两侧各加一行**。

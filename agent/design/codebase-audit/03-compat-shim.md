@@ -231,6 +231,16 @@ compat：`VarHolder::view` 就是那个 `_View(base, path)`（`VarView{base, ste
 | 结构测试钉死实现细节而非契约 | `tests/structure/` 8071 行 23 文件；`test_torch_compat_structure.py:37-100` 用 AST 校验 sys.modules 赋值写法；`test_vllm_compat_structure.py:66-68` 断言每文件不超过 300 行、`:57-62` 断言文件名集合 | 改文件名、拆超过 300 行的文件都会红；同时那 14 条静默空操作无一被覆盖 | 保留边界类断言，删除行数与文件名断言，预算移到与真 PyTorch 的行为对拍 | 主要 |
 | 真正缺失的测试类别 | `tests/compat/torch/` 20k 行里没有针对空操作的负向测试：无 autocast 生效性、无 `load_state_dict(strict=True)` 报错、无 `backward(gradient=)` 数值、无 dispatch key 路由测试 | 已修复的缺陷（vmap 曾是空操作，`numerical.py:245-246` 有记录）说明这类缺陷反复发生 | 每个未实现 API 都要有断言它抛异常的测试 | 关键 |
 
+已修：提交 `b64639ae5`（一条被注释引用、却从未写出来的测试）。`installers/nn.py`
+的注释称 `test_the_captured_module_methods_are_still_native` 已把「七个 `_ORIG_MODULE_*`
+捕获到的是 jittor 原生方法而非本文件的包装器」钉住，实际仓库里**没有这个名字的测试**。
+不变量本身是真的且必要：捕获从 install 期挪到 import 期后，若捕获到本文件的包装器，
+包装器即委托给自己、首次调用无限递归。已补齐并先造反例确认会红（篡改
+`_ORIG_MODULE_EXECUTE` 后报「captured this file's own `_execute`」；未篡改时捕获到
+`jittor._runtime.core_api` 的 `Module.execute`）。**这条形状值得单列**：注释引用一个
+不存在的测试名当证据，与「绿不等于跑过」是同一问题的两面——后者测试跑了但没观察到
+它声称的东西，前者连测试都不存在，而读代码的人两种都会当成「已验证」。
+
 已修（7.03，逐 cohort 推进，任务未完）：`16333333` amax/amin/count_nonzero 收回
 `jittor/misc/reductions.py` 原生 owner；`9cba7d68` cumsum/cumprod；`50876abf`
 sort/argsort/topk/median；`d94c5cbd` sign/trunc/frac/exp2/log10 归一到单一 owner；
