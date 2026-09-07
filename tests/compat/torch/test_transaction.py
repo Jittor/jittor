@@ -1,4 +1,5 @@
 import sys
+import os
 import threading
 import types
 
@@ -16,6 +17,20 @@ from jittor.compat.torch.installers.core import _set_install_flag
 from jittor.compat.torch.installers.utilities import _mutate_import
 
 from _helpers.install_lock import install_lock_is_free
+
+
+def test_real_process_environment_rolls_back_added_and_existing_keys(monkeypatch):
+    key = "JITTOR_TEST_TRANSACTION_MODE"
+    monkeypatch.delenv(key, raising=False)
+    transaction = InstallTransaction("process-environment")
+    transaction.mutate_env(key, "independent")
+    transaction.rollback()
+    assert key not in os.environ
+    monkeypatch.setenv(key, "legacy")
+    transaction = InstallTransaction("existing-process-environment")
+    transaction.mutate_env(key, "independent")
+    transaction.rollback()
+    assert os.environ[key] == "legacy"
 
 
 def test_failed_target_install_replays_rolled_back_steps_with_same_state(monkeypatch):

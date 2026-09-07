@@ -22,6 +22,12 @@ it does not activate compatibility. `jittor.compat.shim` re-exports the
 compatibility API as the `torch` package so third-party libraries' internal
 imports work too.
 
+The default `activate()` and deployed package use independent Tensor, Parameter,
+Module and NN types. The native and Torch frontends share the Var/Op runtime,
+but `torch is not jittor`. The legacy alias installation remains available via
+`activate(independent_namespace=False)` or `JITTOR_TORCH_SHIM=1` without
+`JITTOR_TORCH_INDEPENDENT=1`; select one mode before creating application state.
+
 This separation is observable for APIs whose native and Torch contracts differ.
 In particular, native `Var.data` remains a shared NumPy view, while Torch mode
 returns a detached Tensor alias whose in-place writes update the owner without

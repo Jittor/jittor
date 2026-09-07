@@ -37,6 +37,14 @@ assert activation_status().active
 import torch
 ```
 
+The default activation and deployed `import torch` publish independent Tensor,
+Parameter and Module types: `torch is not jittor`. Native Var methods retain
+their own contracts. For the legacy Jittor-alias mode, explicitly pass
+`independent_namespace=False`; an already activated process cannot change modes.
+The deployed entry sets `JITTOR_TORCH_INDEPENDENT=1` alongside its activation
+flag so child interpreters select the same mode. `JITTOR_TORCH_SHIM=1` alone
+continues to select the legacy import-time path.
+
 `activate()` is process-wide and idempotent; repeated calls return the original
 activation result without rescanning extensions or reapplying patches. It creates a runtime below
 `${XDG_CACHE_HOME:-~/.cache}/jittor/torch-shim/` unless

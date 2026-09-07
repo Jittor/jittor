@@ -498,6 +498,7 @@ class TestTorchBootstrap(unittest.TestCase):
             self.assertIs(runtime.activate(_root_module=root), expected)
             self.assertIs(runtime.activate(_root_module=root), expected)
         activate_once.assert_called_once()
+        self.assertTrue(activate_once.call_args.kwargs["independent_namespace"])
         status = runtime.activation_status(root)
         self.assertTrue(status.active)
         self.assertEqual(status.phase, "active")
@@ -510,7 +511,7 @@ class TestTorchBootstrap(unittest.TestCase):
         expected = {"torch": root}
         with mock.patch.object(runtime, "_activate_once", return_value=expected), \
                 mock.patch.object(runtime, "torch_namespace_owned", return_value=True):
-            self.assertIs(runtime.activate(_root_module=root), expected)
+            self.assertIs(runtime.activate(_root_module=root, independent_namespace=False), expected)
             with self.assertRaisesRegex(RuntimeError, "namespace mode"):
                 runtime.activate(_root_module=root, independent_namespace=True)
 
@@ -526,7 +527,7 @@ class TestTorchBootstrap(unittest.TestCase):
                 expected,
             )
             with self.assertRaisesRegex(RuntimeError, "namespace mode"):
-                runtime.activate(_root_module=root)
+                runtime.activate(_root_module=root, independent_namespace=False)
 
     def test_activation_selects_explicit_requires_grad_policy(self):
         from jittor.compat.shim import runtime
@@ -545,13 +546,14 @@ class TestTorchBootstrap(unittest.TestCase):
             "jittor.compat.torch.install"
         ), mock.patch.dict(
             sys.modules, {"jittor": root, "torch": root}, clear=False
-        ):
+        ), mock.patch.dict(os.environ, {}, clear=False):
             runtime._activate_once(
                 _root_module=root,
                 _preflight_result=types.SimpleNamespace(
                     active=True, runtime_root="/runtime"
                 ),
                 _composition=True,
+                independent_namespace=False,
             )
         autograd.set_policy.assert_called_once_with(policy)
 
@@ -569,7 +571,8 @@ class TestTorchBootstrap(unittest.TestCase):
         with mock.patch.object(runtime, "torch_namespace_claimable", return_value=True), \
                 mock.patch.object(runtime, "configure_torch_math_flags"), \
                 mock.patch("jittor.compat.torch.install") as install, \
-                mock.patch.dict(sys.modules, {"jittor": root, "torch": root}, clear=False):
+                mock.patch.dict(sys.modules, {"jittor": root, "torch": root}, clear=False), \
+                mock.patch.dict(os.environ, {}, clear=False):
             def install_target(target, **kwargs):
                 target._torch_compat_install_context = types.SimpleNamespace(
                     registry=types.SimpleNamespace(_published={})
@@ -909,13 +912,15 @@ class TestTorchBootstrap(unittest.TestCase):
                     import sys
                     os.environ.setdefault("JITTOR_TORCH_STRICT_BOOTSTRAP", "1")
                     from jittor.compat.shim import activate
-                    import jittor as torch
-                    activate()
                     import jittor as jt
+                    activated = activate()
+                    import torch
 
                     print("RESULT=" + json.dumps({
                         "same_module": torch is jt,
-                        "torch_module": sys.modules["torch"] is jt,
+                        "torch_module": sys.modules["torch"] is torch,
+                        "published_result": activated["torch"] is torch,
+                        "native_owner": torch.owner is jt,
                         "runtime_root": os.environ["JITTOR_TORCH_RUNTIME_ROOT"],
                         "jittor_home": os.environ["JITTOR_HOME"],
                         "extensions_dir": os.environ["JITTOR_TORCH_EXTENSIONS_DIR"],
@@ -933,12 +938,12 @@ class TestTorchBootstrap(unittest.TestCase):
             from jittor_utils import home as jittor_home
             env["JITTOR_HOME"] = jittor_home()
             env["CUDA_VISIBLE_DEVICES"] = ""
-            env["JITTOR_TORCH_SHIM"] = "1"
             env["JITTOR_TORCH_SKIP_EXT_BUILD"] = "1"
             env.pop("JITTOR_TORCH_CACHE_ROOT", None)
             env["XDG_CACHE_HOME"] = os.path.join(d, "xdg-cache")
             output = run_python_child(
-                [entry], cwd=d, env=env, inherit=False, check=True).stdout
+                [entry], cwd=d, env=env, inherit=False, check=True,
+                without_torch_mode=True).stdout
             line = next(line for line in output.splitlines() if line.startswith("RESULT="))
             import json
             result = json.loads(line[len("RESULT="):])
@@ -953,8 +958,10 @@ class TestTorchBootstrap(unittest.TestCase):
                 from jittor.compat.shim.preflight import project_runtime_root
 
                 runtime = os.fspath(project_runtime_root(d))
-            self.assertTrue(result["same_module"])
+            self.assertFalse(result["same_module"])
             self.assertTrue(result["torch_module"])
+            self.assertTrue(result["published_result"])
+            self.assertTrue(result["native_owner"])
             self.assertEqual(result["runtime_root"], runtime)
             self.assertEqual(result["jittor_home"], env["JITTOR_HOME"])
             self.assertEqual(
@@ -972,6 +979,7 @@ class TestTorchBootstrap(unittest.TestCase):
                     with self.subTest(strict=strict), mock.patch.dict(os.environ, {
                         "JITTOR_TORCH_STRICT_BOOTSTRAP": str(int(not strict)),
                         "JITTOR_TORCH_SKIP_EXT_BUILD": "1",
+                        "JITTOR_TORCH_INDEPENDENT": "0",
                     }), mock.patch(
                         "jittor.compat.torch.install",
                         side_effect=RuntimeError("install failed"),
@@ -988,6 +996,7 @@ class TestTorchBootstrap(unittest.TestCase):
                                 local_home=False,
                                 verbose=False,
                                 strict=strict,
+                                independent_namespace=False,
                             )
             finally:
                 sys.path[:] = old_sys_path
@@ -1096,7 +1105,8 @@ class TestShimSysPathOwnership(unittest.TestCase):
             paths.insert(0 if prepend else len(paths), path)
             return True
 
-        with mock.patch.object(
+        with mock.patch.dict(os.environ, {"JITTOR_TORCH_INDEPENDENT": "0"}), \
+                mock.patch.object(
                 ActivationTransaction, "mutate_path", record_path), \
                 mock.patch.object(shim_runtime, "prepare_import_environment") as prepare, \
                 mock.patch.object(shim_runtime, "_deploy_torch_shim"), \
@@ -1113,7 +1123,8 @@ class TestShimSysPathOwnership(unittest.TestCase):
                                     build_extensions=False,
                                     auto_scan_extensions=False,
                                     configure_cuda=False,
-                                    verbose=False)
+                                    verbose=False,
+                                    independent_namespace=False)
             except Exception:
                 # enable() goes on to install the whole torch surface; the
                 # ordering decision has already been recorded by then.

@@ -5,6 +5,40 @@ import textwrap
 from _helpers.child_process import run_python_child
 
 
+def test_deployed_torch_entry_defaults_to_independent_types(tmp_path):
+    from jittor.compat.shim.deploy import deploy
+    site = tmp_path / "site-packages"
+    deploy(str(site))
+    result = run_python_child(["-c", textwrap.dedent("""
+        import os
+        import sys
+        import subprocess
+        sys.path.insert(0, sys.argv[1])
+        os.environ["JITTOR_TORCH_PROJECT_ROOT"] = sys.argv[2]
+        os.environ["JITTOR_TORCH_RUNTIME_ROOT"] = sys.argv[2] + "/runtime"
+        os.environ["JITTOR_TORCH_KEEP_HOME"] = "1"
+        import torch
+        import jittor as jt
+        assert torch is not jt and torch.Tensor is not jt.Var
+        assert torch.nn.Module is not jt.Module
+        assert issubclass(torch.nn.Parameter, torch.Tensor)
+        model = torch.nn.Linear(2, 1)
+        value = model(torch.ones((2, 2)))
+        assert type(value) is torch.Tensor
+        value.sum().backward()
+        assert all(p.grad is not None for p in model.parameters())
+        assert os.environ["JITTOR_TORCH_INDEPENDENT"] == "1"
+        subprocess.run([sys.executable, "-c",
+            "import jittor as jt; import torch; "
+            "assert torch is not jt; assert torch.Tensor is not jt.Var"],
+            check=True, timeout=60)
+        print("DEPLOYED_INDEPENDENT_OK")
+    """), str(site), str(tmp_path)], cwd=str(tmp_path),
+        without_torch_mode=True, merge_stderr=True)
+    assert result.returncode == 0, result.stdout
+    assert "DEPLOYED_INDEPENDENT_OK" in result.stdout
+
+
 def test_independent_tensor_installation_preserves_native_type():
     result = run_python_child(["-c", textwrap.dedent("""
         import os

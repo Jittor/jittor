@@ -126,7 +126,7 @@ def _activate_once(
     _preflight_result=None,
     _composition=False,
     _transaction=None,
-    independent_namespace=False,
+    independent_namespace=True,
 ):
     """Enable Jittor-backed ``import torch`` for the current Python process.
 
@@ -167,6 +167,13 @@ def _activate_once(
         if strict is None
         else bool(strict)
     )
+    # Spawned Python processes must select the same frontend when importing
+    # Jittor through the shim environment prepared by this explicit activation.
+    namespace_mode = "1" if independent_namespace else "0"
+    if _transaction is None:
+        os.environ["JITTOR_TORCH_INDEPENDENT"] = namespace_mode
+    else:
+        _transaction.mutate_env("JITTOR_TORCH_INDEPENDENT", namespace_mode)
     if not independent_namespace:
         jittor_root.autograd.set_policy(
             jittor_root.autograd.EXPLICIT_REQUIRES_GRAD
@@ -358,12 +365,14 @@ def activate(
     _root_module: Any = None,
     _preflight_result: Any = None,
     _composition: bool = False,
-    independent_namespace: bool = False,
+    independent_namespace: bool = True,
 ):
     """Activate Torch compatibility exactly once for this process.
 
     Repeated calls return the original result and never rescan extensions or
     reapply integration patches. Use :func:`activation_status` for inspection.
+    The default publishes independent Torch types; pass independent_namespace=False
+    explicitly for the legacy Jittor-alias mode.
     """
 
     root = _root_module or sys.modules.get("jittor")

@@ -2,6 +2,7 @@
 from __future__ import absolute_import
 
 import threading
+from collections.abc import MutableMapping
 
 from .diagnostics import EXPECTED, swallowed
 
@@ -153,9 +154,9 @@ class InstallTransaction:
             raise TransactionConflict(
                 "transaction owner lost %r during rollback" % name
             )
-        if isinstance(target, (dict, list)):
+        if isinstance(target, (MutableMapping, list)):
             if old is _MISSING:
-                if isinstance(target, dict):
+                if isinstance(target, MutableMapping):
                     target.pop(name, None)
                 else:
                     raise TransactionConflict(
@@ -259,7 +260,7 @@ class ActivationTransaction(InstallTransaction):
 
 
 def _read(target, name):
-    if isinstance(target, (dict, list)):
+    if isinstance(target, (MutableMapping, list)):
         try:
             return target[name]
         except (KeyError, IndexError):

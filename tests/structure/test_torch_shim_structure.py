@@ -71,7 +71,7 @@ class TestTorchShimStructure(unittest.TestCase):
         self.assertTrue(required.issubset(paths))
 
     def test_deployed_torch_template_is_an_identity_only_entrypoint(self):
-        """It activates the shim, then publishes jittor's identity, and no more.
+        """Activate the shim and publish its returned independent namespace.
 
         The activation used to be pinned by spelling
         (``_torch_compat.install(_jittor)``), which went stale the moment 7.04
@@ -86,7 +86,7 @@ class TestTorchShimStructure(unittest.TestCase):
         self.assertFalse(
             any(isinstance(node, (ast.FunctionDef, ast.ClassDef)) for node in body)
         )
-        self.assertEqual(ast.unparse(body[-1]), "_sys.modules[__name__] = _jittor")
+        self.assertEqual(ast.unparse(body[-1]), "_sys.modules[__name__] = _activation['torch']")
         from_compat = {
             alias.asname or alias.name
             for node in body
@@ -95,7 +95,8 @@ class TestTorchShimStructure(unittest.TestCase):
             for alias in node.names
         }
         called = [ast.unparse(node.value.func) for node in body
-                  if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)]
+                  if isinstance(node, (ast.Expr, ast.Assign))
+                  and isinstance(node.value, ast.Call)]
         self.assertTrue(called, "the template never activates the shim")
         self.assertEqual(sorted(set(called) - from_compat), [])
 
