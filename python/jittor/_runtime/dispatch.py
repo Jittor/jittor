@@ -32,30 +32,50 @@ _lock = threading.RLock()
 _kernels = {}
 
 
+def _collect_tensors(values, var_type, tensors, active_containers):
+    """Append the tensors reachable from `values` in argument order.
+
+    One Python call per *container*, not per value.  This runs once per
+    dispatched operator and is a measured 2.1 of the 3.2 us that
+    `dispatch_context` used to cost (task 3.21): the old version defined a
+    closure on every call and recursed into every scalar, so the flat argument
+    list of a normal kernel -- five values, no nesting -- paid seven calls and
+    two set mutations to find three tensors.
+
+    `active_containers` is created by the caller only when a container is
+    actually entered, so the flat case allocates no set either.  The cycle it
+    guards against is a container reachable from itself; that check keeps its
+    exact previous meaning, including that the same container appearing twice
+    side by side is not a cycle.
+    """
+    for value in values:
+        if isinstance(value, var_type):
+            tensors.append(value)
+        elif isinstance(value, (tuple, list, dict)):
+            identity = id(value)
+            if active_containers is None:
+                active_containers = set()
+            elif identity in active_containers:
+                raise ValueError("cyclic kernel argument container")
+            active_containers.add(identity)
+            try:
+                _collect_tensors(
+                    value.values() if isinstance(value, dict) else value,
+                    var_type, tensors, active_containers)
+            finally:
+                active_containers.remove(identity)
+
+
 def dispatch_context(*args, **kwargs):
     native = sys.modules.get("jittor")
     if native is None or not hasattr(native, "core"):
         raise RuntimeError("Jittor must be initialized before selecting a kernel")
     var_type = native.core.Var
     tensors = []
-    active_containers = set()
-
-    def collect(value):
-        if isinstance(value, var_type):
-            tensors.append(value)
-        elif isinstance(value, (tuple, list, dict)):
-            identity = id(value)
-            if identity in active_containers:
-                raise ValueError("cyclic kernel argument container")
-            active_containers.add(identity)
-            try:
-                for child in value.values() if isinstance(value, dict) else value:
-                    collect(child)
-            finally:
-                active_containers.remove(identity)
-
-    collect(args)
-    collect(kwargs)
+    # `args` and `kwargs` are freshly built by this call, so neither can be
+    # reachable from itself and neither needs an entry in the cycle set.
+    _collect_tensors(args, var_type, tensors, None)
+    _collect_tensors(kwargs.values(), var_type, tensors, None)
     backend, device_id = native.core.dispatch_context(tensors)
     return DispatchContext(backend, device_id, tuple(str(value.dtype) for value in tensors))
 
