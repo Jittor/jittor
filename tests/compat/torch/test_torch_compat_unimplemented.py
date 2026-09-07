@@ -345,6 +345,31 @@ class TestDataLoaderWorkers(StubPolicyBase):
         it = iter(loader)
         self.assertEqual(type(it).__name__, "_SingleProcessDataLoaderIter")
 
+    def test_default_collate_preserves_target_tensor_and_input_dtype(self):
+        from jittor.compat.torch.tensor_state import compatibility_owner
+        owner = compatibility_owner(jt)
+        collate = owner.utils.data.default_collate
+        cases = (
+            ([2 ** 45, 2 ** 45 + 1], "int64"),
+            ([1.25, 2.5], "float64"),
+            ([True, False], "bool"),
+            ([np.int64(2 ** 45), np.int64(2 ** 45 + 1)], "int64"),
+            ([np.array([1.25], dtype=np.float32),
+              np.array([2.5], dtype=np.float32)], "float32"),
+        )
+        for batch, dtype in cases:
+            with self.subTest(dtype=dtype, source=type(batch[0]).__name__):
+                result = collate(batch)
+                self.assertIsInstance(result, owner.Tensor)
+                self.assertEqual(str(result.dtype), dtype)
+                self.assertFalse(result.requires_grad)
+                np.testing.assert_array_equal(result.numpy(), np.stack(batch))
+        result = collate([jt.array([1.0]).requires_grad_(False),
+                          jt.array([2.0]).requires_grad_(False)])
+        self.assertIsInstance(result, owner.Tensor)
+        self.assertFalse(result.requires_grad)
+        np.testing.assert_array_equal(result.numpy(), [[1.0], [2.0]])
+
     def test_num_workers_selects_the_worker_iterator(self):
         loader = self._loader(num_workers=2)
         with warnings.catch_warnings():

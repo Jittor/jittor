@@ -194,11 +194,21 @@ def install(ctx):
             import numpy as _np
             elem = batch[0]
             if isinstance(elem, jt.Var):
-                return jt.stack(list(batch), dim=0)
-            if isinstance(elem, _np.ndarray):
-                return jt.array(_np.stack(batch))
-            if isinstance(elem, (type(0), type(0.0), _np.number)):
-                return jt.array(_np.array(batch))
+                from ..frontend import tensor_frontend
+                with tensor_frontend(g.Var):
+                    result = jt.stack(list(batch), dim=0)
+                    if not any(value.requires_grad for value in batch):
+                        result.requires_grad_(False)
+                    return result
+            if isinstance(elem, (_np.ndarray, _np.generic)):
+                values = _np.stack(batch)
+                return g.as_tensor(values, dtype=str(values.dtype)).requires_grad_(False)
+            if isinstance(elem, bool):
+                return g.as_tensor(batch, dtype=g.bool).requires_grad_(False)
+            if isinstance(elem, type(0)):
+                return g.as_tensor(batch, dtype=g.int64).requires_grad_(False)
+            if isinstance(elem, type(0.0)):
+                return g.as_tensor(batch, dtype=g.float64).requires_grad_(False)
             if isinstance(elem, (tuple, list)):
                 return [_default_collate(list(items)) for items in zip(*batch)]
             if isinstance(elem, dict):

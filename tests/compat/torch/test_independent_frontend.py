@@ -53,6 +53,8 @@ def test_independent_tensor_installation_preserves_native_type():
         linear_before = dict(vars(jt.nn.Linear))
         optimizer_types = (jt.optim.Optimizer, jt.optim.SGD, jt.optim.Adam, jt.optim.AdamW)
         optimizer_before = [(cls, dict(vars(cls))) for cls in optimizer_types]
+        function_before = dict(vars(jt.Function))
+        autograd_before = dict(vars(jt.autograd))
         native_nn = jt.nn
         native_init = jt.nn.init
         policy_before = jt.autograd.get_policy()
@@ -95,6 +97,12 @@ def test_independent_tensor_installation_preserves_native_type():
             assert all(value is vars(cls)[key] for key, value in original.items())
         assert torch.optim is not jt.optim
         assert issubclass(torch.optim.SGD, torch.optim.Optimizer)
+        assert torch.autograd is not jt.autograd
+        assert torch.autograd.Function is not jt.Function
+        assert function_before.keys() == vars(jt.Function).keys()
+        assert all(value is vars(jt.Function)[key] for key, value in function_before.items())
+        assert autograd_before.keys() == vars(jt.autograd).keys()
+        assert all(value is vars(jt.autograd)[key] for key, value in autograd_before.items())
         assert torch.nn is not native_nn
         assert torch.nn.init is not native_init
         assert torch.nn.Module is not jt.Module
@@ -208,6 +216,30 @@ def test_independent_tensor_installation_preserves_native_type():
             optimizer.zero_grad(set_to_none=True)
             assert trainable.grad is None
         assert "_current_optimizer" not in vars(jt)
+        class Square(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, value):
+                ctx.save_for_backward(value)
+                return value * value
+            @staticmethod
+            def backward(ctx, gradient):
+                value, = ctx.saved_tensors
+                return gradient * value * 2
+        custom_input = torch.tensor([2., 3.], requires_grad=True)
+        gradient, = torch.autograd.grad(Square.apply(custom_input).sum(), custom_input)
+        assert type(gradient) is torch.Tensor
+        np.testing.assert_allclose(gradient.numpy(), [4., 6.])
+        collate = torch.utils.data.default_collate
+        batch = collate([{"index": 2**45, "value": np.float32(1.25)},
+                         {"index": 2**45 + 1, "value": np.float32(2.5)}])
+        assert type(batch["index"]) is torch.Tensor
+        assert batch["index"].dtype is torch.int64
+        assert batch["value"].dtype is torch.float32
+        np.testing.assert_array_equal(batch["index"].numpy(), [2**45, 2**45 + 1])
+        assert collate([1.25, 2.5]).dtype is torch.float64
+        differentiable_batch = collate([custom_input, custom_input])
+        batch_gradient, = torch.autograd.grad(differentiable_batch.sum(), custom_input)
+        np.testing.assert_allclose(batch_gradient.numpy(), [2., 2.])
         assert jt.autograd.get_policy() is policy_before
         print("INDEPENDENT_TENSOR_OK")
     """)], without_torch_mode=True, merge_stderr=True)

@@ -1,6 +1,6 @@
 # 整改看板
 
-2026-09-08 最新：默认独立 Torch 已分离 Tensor/Module/Parameter、NN、optim/scheduler owner；Module转换保留Parameter身份、叶子状态及梯度。训练批CPU25项及真实CUDA2项通过，包含SGD/Adam/AdamW更新、state往返和scheduler。完整API收口仍未完成，详见任务行与[训练owner记录](../results/2026-09-08-independent-training-owners.md)。
+2026-09-08 最新：独立 autograd/Function 已脱离原生字典，default_collate 保留 target 类型、宽 dtype 和输入梯度。自定义 Function 与数据边界 CPU7项、真实CUDA2项通过。之前的独立类型、NN、optim/scheduler 和默认入口迁移已保留；完整API收口仍未完成，详见任务行与[本批记录](../results/2026-09-08-independent-autograd-data.md)。
 
 下方早期波次记录为历史证据，当前关闭状态以任务表为准；Tensor 子类底层前置见 [类型边界记录](../results/2026-09-08-tensor-frontend-types.md)。
 
@@ -719,7 +719,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.09 | `torch.library` | 已合并 | compat | 99901e6c、d0a782a0。按张量真实驻留选择 CPU/CUDA 并排除 Meta，`register_autograd` 真正接入且模型特判移出通用注册层；线程局部 autocast dtype policy 进一步选择 AutocastCPU/CUDA，嵌套禁用与退出恢复普通路由。独立 PyTorch oracle 一致，CPU dispatch 8 passed、1 个未分配 CUDA 节点 skipped |
 | 7.10 | `torch.compile`/`jit.trace`/`jit.script` 保留 pass… | 已合并 | 兼容层分区 | 3d898ece。语义参数拒绝、permissive allowlist/audit 与 ShapeProp ImportError 验收均有测试 |
 | 7.11 | autograd 语义 | 已合并 | compat | `2ec34693`：`Var.is_leaf` 转发内核 `is_backward_leaf`，`Var.grad_fn` 对叶子返回 None、对非叶子返回 node/op/name 代理；shim autograd 语义 20 passed，core backward-leaf 查询 20 passed。requires_grad 策略差异仍归 7.12。 |
-| 7.12 | 独立 torch 包 | 待领 | compat | 2026-09-08：默认activate及部署import torch已使用独立模式，拥有真实 Tensor/Module/Parameter 类型和独立 NN 模块树，独立optim/scheduler也已分离，不再 patch native Var/Module/Linear/Optimizer；参数运算返回Tensor，ParameterList/ParameterDict自动转换且不修改源Tensor，pickle/deepcopy恢复类型和属性。工厂、Linear/Sequential前反向、data写回、作用域策略恢复与真实失败重试均有证据：训练批CPU25 passed，真实CUDA2 passed，含三种优化器数值/state往返与Module转换保参数身份。显式legacy选项保留，模式传播到子进程；完整API、序列化共享存储/stride、共享native child和混合线程边界未收口，不提前关闭。见 [训练owner迁移](../results/2026-09-08-independent-training-owners.md)、[默认入口迁移](../results/2026-09-08-independent-default-entry.md)、[参数迁移](../results/2026-09-08-independent-parameters.md)、[类型安装](../results/2026-09-08-independent-tensor-module-install.md)、[底层类型边界](../results/2026-09-08-tensor-frontend-types.md)。内核前置2.09/2.25及视图owner5.02已就位。 |
+| 7.12 | 独立 torch 包 | 待领 | compat | 2026-09-08：默认activate及部署import torch已使用独立模式，拥有真实 Tensor/Module/Parameter 类型和独立 NN 模块树，autograd/Function与optim/scheduler也已分离，不再 patch native Var/Module/Linear/Optimizer/Function；参数运算返回Tensor，ParameterList/ParameterDict自动转换且不修改源Tensor，pickle/deepcopy恢复类型和属性。工厂、Linear/Sequential前反向、data写回、作用域策略恢复与真实失败重试均有证据：训练批CPU25 passed，真实CUDA2 passed，含三种优化器数值/state往返与Module转换保参数身份。显式legacy选项保留，模式传播到子进程；完整API、序列化共享存储/stride、共享native child和混合线程边界未收口，不提前关闭。本批补default_collate的target类型/宽dtype及梯度传播，CPU7项和真实CUDA2项通过。见 [autograd与数据边界](../results/2026-09-08-independent-autograd-data.md)、[训练owner迁移](../results/2026-09-08-independent-training-owners.md)、[默认入口迁移](../results/2026-09-08-independent-default-entry.md)、[参数迁移](../results/2026-09-08-independent-parameters.md)、[类型安装](../results/2026-09-08-independent-tensor-module-install.md)、[底层类型边界](../results/2026-09-08-tensor-frontend-types.md)。内核前置2.09/2.25及视图owner5.02已就位。 |
 | 7.13 | FSDP2 | 待领 | | 已合入 37c0aed4、c0e6e1ae、48da7360、873dd5cf；仍缺峰值显存达标、复用原生 optimizer 更新逻辑与 DeviceMesh 真实分组 |
 | 7.14 | vLLM 边界检查把 `torch` 视作 jittor 别名 | 已合并 | 兼容层分区 | 178be65a |
 | 7.15 | `_rebuild_tensor_v2` 按 stride 还原或报错 | 已合并 | | 7e7877c8 |

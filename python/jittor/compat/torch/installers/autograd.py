@@ -276,7 +276,7 @@ def _install_autograd(g, registry=None):
         autograd = _types.ModuleType("torch.autograd")
     # carry over the symbols other layers expect on torch.autograd
     if not hasattr(autograd, "Function"):
-        autograd.Function = getattr(_jt, "Function", object)
+        autograd.Function = getattr(g, "Function", object)
     if not hasattr(autograd, "no_grad"):
         autograd.no_grad = getattr(g, "no_grad", _jt.no_grad)
     if not hasattr(autograd, "enable_grad"):
@@ -374,7 +374,13 @@ def _install_autograd(g, registry=None):
     g.autograd = autograd
     _modules["torch.autograd"] = autograd
     autograd.__path__ = getattr(autograd, "__path__", [])
-    from jittor.autograd import functional
+    from jittor.autograd import functional as native_functional
+    if g is jt:
+        functional = native_functional
+    else:
+        functional = _types.ModuleType("torch.autograd.functional")
+        functional.__dict__.update({name: value for name, value in vars(native_functional).items()
+                                    if not name.startswith("__")})
 
     _modules["torch.autograd.functional"] = functional
     autograd.functional = functional
@@ -411,6 +417,21 @@ def _install_autograd(g, registry=None):
 
 def install(ctx):
     g = ctx.jittor_module
+    if g is not ctx.native_backend:
+        from types import ModuleType
+        def execute_forward(self, *args, **kwargs):
+            return type(self).forward(self, *args, **kwargs)
+        g.Function = type("Function", (ctx.native_backend.Function,), {
+            "__module__": "torch.autograd",
+            "execute": execute_forward,
+        })
+        autograd = ModuleType("torch.autograd")
+        autograd.__dict__.update({
+            name: value for name, value in vars(ctx.native_backend.autograd).items()
+            if not name.startswith("__")
+        })
+        autograd.Function = g.Function
+        g.autograd = autograd
     _install_autograd_function(g)
     _install_autograd(g, ctx.registry)
 
