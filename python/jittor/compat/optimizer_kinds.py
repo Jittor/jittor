@@ -57,11 +57,19 @@ def _known_classes():
     optim = getattr(jt, "optim", None)
     if optim is None:
         return ()
+    namespaces = [optim]
+    from .torch.tensor_state import compatibility_owner
+    owner = compatibility_owner(jt)
+    frontend = vars(owner).get("optim") if owner is not jt else None
+    if (frontend is not None
+            and getattr(frontend, "_native_optimizer_module", None) is optim):
+        namespaces.insert(0, frontend)
     found = []
-    for kind, attr in _KIND_ATTRS:
-        cls = getattr(optim, attr, None)
-        if isinstance(cls, type):
-            found.append((kind, cls))
+    for namespace in namespaces:
+        for kind, attr in _KIND_ATTRS:
+            cls = getattr(namespace, attr, None)
+            if isinstance(cls, type):
+                found.append((kind, cls))
     return tuple(found)
 
 

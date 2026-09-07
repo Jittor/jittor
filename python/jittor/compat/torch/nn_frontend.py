@@ -25,6 +25,7 @@ def prepare_nn_namespace(context):
 
     class Module(native_module):
         __slots__ = ()
+        _frontend_tensor_type = tensor_type
 
         def __call__(self, *args, **kwargs):
             with tensor_frontend(tensor_type):

@@ -18,9 +18,18 @@ def _install_optimizers(g, registry=None):
     construction, and mirror lr into each param_group. This makes the
     `loss.backward()` bridge (Var.backward) and torch-style LR schedulers work
     even when using `import jittor as torch` directly (no torch_shim wrapper)."""
-    _modules = registry_for(g, registry).module_map
+    _registry = registry_for(g, registry)
+    _modules = _registry.module_map
     import math as _math
     from jittor import optim as _optim
+    if g is not _registry.native_backend:
+        from .optim_frontend import make_optimizer_frontend
+        existing = vars(g).get("optim")
+        if (existing is None or
+                vars(existing).get("_native_optimizer_module") is not _optim):
+            existing = make_optimizer_frontend(_optim, g.Var)
+            g.optim = existing
+        _optim = existing
     Base = getattr(_optim, "Optimizer", None)
     if Base is None:
         raise RuntimeError("jittor.optim has no Optimizer owner")
@@ -39,7 +48,7 @@ def _install_optimizers(g, registry=None):
     _orig_init = Base.__init__
     def _init(self, *a, **k):
         _orig_init(self, *a, **k)
-        jt._current_optimizer = self
+        g._current_optimizer = self
         # Maintain a registry of ALL live optimizers (not just the last). torch
         # supports several optimizers active at once (3DGS has a Gaussian Adam +
         # an exposure Adam); loss.backward() must fill grads for every one. Hold
@@ -312,7 +321,7 @@ def _install_optimizers(g, registry=None):
                                 entry[target] = values[i]
                     if entry:
                         if kind != "sgd":
-                            entry["step"] = jt.array(float(steps[i])).float32()
+                            entry["step"] = g.tensor(float(steps[i]), dtype=g.float32)
                         state[pid] = entry
             return {"state": state, "param_groups": param_groups}
         def _load_state_dict_torch(self, state_dict):
@@ -737,6 +746,9 @@ def _install_optimizers(g, registry=None):
             def step(self, closure=None):
                 raise NotImplementedError("torch.optim.LBFGS is not implemented by the jittor torch shim")
         _optim.LBFGS = LBFGS
+    if g is not _registry.native_backend:
+        _optim.__all__ = sorted(name for name in vars(_optim)
+                               if not name.startswith("_"))
 
     import types as _types_optim
     _optim_mod = _modules.get("torch.optim")

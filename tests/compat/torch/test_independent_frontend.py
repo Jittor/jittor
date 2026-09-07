@@ -51,6 +51,8 @@ def test_independent_tensor_installation_preserves_native_type():
         before = dict(vars(jt.Var))
         module_before = dict(vars(jt.Module))
         linear_before = dict(vars(jt.nn.Linear))
+        optimizer_types = (jt.optim.Optimizer, jt.optim.SGD, jt.optim.Adam, jt.optim.AdamW)
+        optimizer_before = [(cls, dict(vars(cls))) for cls in optimizer_types]
         native_nn = jt.nn
         native_init = jt.nn.init
         policy_before = jt.autograd.get_policy()
@@ -88,6 +90,11 @@ def test_independent_tensor_installation_preserves_native_type():
         assert linear_before.keys() == vars(jt.nn.Linear).keys()
         assert all(value is vars(jt.nn.Linear)[key]
                    for key, value in linear_before.items())
+        for cls, original in optimizer_before:
+            assert original.keys() == vars(cls).keys()
+            assert all(value is vars(cls)[key] for key, value in original.items())
+        assert torch.optim is not jt.optim
+        assert issubclass(torch.optim.SGD, torch.optim.Optimizer)
         assert torch.nn is not native_nn
         assert torch.nn.init is not native_init
         assert torch.nn.Module is not jt.Module
@@ -164,6 +171,43 @@ def test_independent_tensor_installation_preserves_native_type():
         assert all(type(p) is torch.nn.Parameter for p in model.parameters())
         output.sum().backward()
         assert all(p.grad is not None for p in model.parameters())
+        weight = model[0].weight
+        model[0].alias = weight
+        model.register_buffer("floating", torch.ones(2))
+        model.register_buffer("integer", torch.ones(2, dtype=torch.int64))
+        model.to(dtype=torch.float64)
+        assert model[0].weight is weight and model[0].alias is weight
+        assert type(weight) is torch.nn.Parameter and weight.is_leaf
+        assert weight.dtype is torch.float64 and weight.grad.dtype is torch.float64
+        assert model.floating.dtype is torch.float64
+        assert model.integer.dtype is torch.int64
+        parameters.double()
+        assert all(p.dtype is torch.float64 for p in parameters)
+        for algorithm, options, expected in (
+            (torch.optim.SGD, {}, [0.8, 1.6]),
+            (torch.optim.Adam, {}, [0.9, 1.9]),
+            (torch.optim.AdamW, {"weight_decay": 0.1}, [0.89, 1.88]),
+        ):
+            trainable = torch.nn.Parameter(torch.tensor([1., 2.]))
+            optimizer = algorithm((p for p in [trainable]), lr=0.1, **options)
+            (trainable * trainable).sum().backward()
+            optimizer.step()
+            np.testing.assert_allclose(trainable.numpy(), expected, atol=1e-6)
+            assert type(trainable) is torch.nn.Parameter
+            state = optimizer.state_dict()
+            for values in state["state"].values():
+                assert all(isinstance(value, torch.Tensor) for value in values.values()
+                           if isinstance(value, jt.Var))
+            from jittor.compat.optimizer_kinds import kind_of
+            assert kind_of(optimizer, require_unmodified_step=True) is not None
+            optimizer.load_state_dict(state)
+            assert optimizer.param_groups[0]["params"][0] is trainable
+            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
+            scheduler.step()
+            assert abs(optimizer.param_groups[0]["lr"] - 0.05) < 1e-12
+            optimizer.zero_grad(set_to_none=True)
+            assert trainable.grad is None
+        assert "_current_optimizer" not in vars(jt)
         assert jt.autograd.get_policy() is policy_before
         print("INDEPENDENT_TENSOR_OK")
     """)], without_torch_mode=True, merge_stderr=True)

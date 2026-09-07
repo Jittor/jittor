@@ -15,7 +15,7 @@ def _install_lr_scheduler(g, registry=None):
     LlamaFactory / torch users actually use (the warmup helpers wrap LambdaLR)."""
     _modules = registry_for(g, registry).module_map
     import types as _types, math as _math
-    from jittor import optim as _optim
+    _optim = g.optim
     if getattr(_optim, "Optimizer", None) is None:
         raise RuntimeError("jittor.optim has no Optimizer owner")
     if getattr(_optim, "_torch_lr_installed", False):

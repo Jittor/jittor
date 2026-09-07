@@ -592,6 +592,9 @@ def _module_cast_var_if_needed(v, ds, copy=False):
 
 def _module_cast_float_dtype(self, ds):
     """Cast every floating parameter of this module in place."""
+    if getattr(type(self), "_frontend_tensor_type", None) is not None:
+        return _module_replace_vars(
+            self, _functools.partial(_module_to_conversion, ds, None, False))
     if ds is not None and ds in _MODULE_FLOAT_DTYPES:
         for p in self.parameters():
             if p.dtype.is_float() if hasattr(p.dtype, "is_float") else ("float" in str(p.dtype)):
@@ -611,6 +614,36 @@ def _module_replace_vars(self, convert):
         modules = [self]
     if not modules or modules[0] is not self:
         modules.insert(0, self)
+    if getattr(type(self), "_frontend_tensor_type", None) is not None:
+        for module in modules:
+            # The role accessor also covers ParameterList/ParameterDict, whose
+            # values do not live as ordinary public instance attributes.
+            for name, value, role in tuple(module._var_roles()):
+                if role not in ("parameter", "buffer", "non_persistent_buffer"):
+                    continue
+                identity = id(value)
+                if identity not in converted:
+                    replacement = convert(value)
+                    if role == "parameter":
+                        if replacement is not value:
+                            # Module conversion changes parameter storage, not
+                            # its identity or its position as a graph leaf.
+                            value.assign(replacement.detach())
+                        replacement = value
+                        gradient = getattr(value, "_torch_grad", None)
+                        if isinstance(gradient, jt.Var):
+                            new_gradient = convert(gradient)
+                            if new_gradient is not gradient:
+                                gradient.assign(new_gradient)
+                    elif replacement is not value:
+                        for attribute in ("is_buffer", "persistent"):
+                            if hasattr(value, attribute):
+                                setattr(replacement, attribute, getattr(value, attribute))
+                    converted[identity] = replacement
+                replacement = converted[identity]
+                if replacement is not value:
+                    setattr(module, str(name), replacement)
+        return self
     seen = set()
     for module in modules:
         mid = id(module)
@@ -792,7 +825,8 @@ def _zero_grad(self, set_to_none=True):
     # The bridged optimizer runs first: its zero_grad clears the torch-visible
     # .grad as a side effect, so doing it afterwards would undo the zero tensors
     # that set_to_none=False is required to leave behind.
-    opt = getattr(jt, "_current_optimizer", None)
+    from ...tensor_state import compatibility_owner
+    opt = getattr(compatibility_owner(jt), "_current_optimizer", None)
     if opt is not None:
         try:
             opt.zero_grad()

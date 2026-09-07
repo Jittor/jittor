@@ -265,7 +265,7 @@ def _install_nn_extras(nn, registry=None):
         _u = getattr(nn, "utils", None) or _t.ModuleType("torch.nn.utils")
         def _grads_of(params):
             params = list(params)
-            opt = getattr(_jt, "_current_optimizer", None)
+            opt = getattr(_torch_target, "_current_optimizer", None)
             out = []
             for p in params:
                 gg = None
