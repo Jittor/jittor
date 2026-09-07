@@ -9,6 +9,7 @@
 #include "common.h"
 #include "type/nano_string.h"
 #include "type/nano_vector.h"
+#include "utils/graph_build_profile.h"
 
 namespace jittor {
 
@@ -88,12 +89,19 @@ struct JitKey {
     // half of `reserve`, which sits under every `<<` in this file.
     void grow(size_t n);
     inline void reserve(size_t n) {
+        // One count per store into the key, i.e. per `<<`. Compiled out
+        // without -DJT_GRAPH_BUILD_PROFILE; see utils/graph_build_profile.h
+        // for why a probe here may not cost even a branch.
+        JT_GBP_COUNT(gbp_jit_key_write, 1);
         if (PREDICT_BRANCH_NOT_TAKEN(
                 (size_t)size + n + tail_slack > check_at))
             grow(n);
     }
 
     inline void clear() {
+        // Every key ends at the `clear()` that starts the next one, so this is
+        // where the finished key's length can be charged to it.
+        JT_GBP_COUNT(gbp_jit_key_bytes, size);
         size = flags = 0;
         check_at = effective_check_at();
     }

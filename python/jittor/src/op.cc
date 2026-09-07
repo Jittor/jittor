@@ -21,6 +21,7 @@
 #include "graph.h"
 #include "grad.h"
 #include "ops/op_register.h"
+#include "utils/graph_build_profile.h"
 
 namespace jittor {
 
@@ -150,6 +151,7 @@ void Op::grads(Var** douts, VarPtr* dins) {
 }
 
 Var* Op::create_output(NanoVector shape, NanoString dtype) {
+    JT_GBP_SCOPE(gbp_var_create);
     VarPtr vp(shape, dtype);
     Var* output = vp.ptr;
     outputs_holder.emplace_back(move(vp));
@@ -242,6 +244,7 @@ void Op::propagate_device() {
 }
 
 void Op::init() {
+    JT_GBP_SCOPE(gbp_op_init);
     // Graph-only diagnostic Ops may deliberately be unregistered. Execution
     // still requires a definition; registered instances pin one coherent
     // constructor/codegen/kernel generation for their entire lifetime.
@@ -322,6 +325,7 @@ string Op::name_ex() const {
 }
 
 string Op::get_jit_key(JK& jk) {
+    JT_GBP_SCOPE(gbp_jit_key);
     jk.clear();
     do_jit_prepare(jk);
     return jk.to_string();
@@ -332,6 +336,7 @@ vector<pair<string,string>> Op::get_jit_define() {
 }
 
 string Op::get_hash_name() {
+    JT_GBP_SCOPE(gbp_jit_key);
     string hash_name;
     std::stringstream ss;
     JK& jk = get_jk();
@@ -342,6 +347,7 @@ string Op::get_hash_name() {
 }
 
 void Op::prepare_codegen_key(JK& jk) {
+    JT_GBP_SCOPE(gbp_jit_key);
     memcheck_all_exist();
     jk << name();
     auto pre_size = jk.size;
@@ -396,6 +402,7 @@ void Op::prepare_codegen_key(JK& jk) {
 }
 
 void Op::prepare_execution(JK& jk) {
+    JT_GBP_SCOPE(gbp_jit_key);
     jk.clear();
     auto callback = codegen().prepare;
     USER_CHECK(callback) << "Missing codegen preparation for" << name();

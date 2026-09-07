@@ -890,8 +890,18 @@ def compile_src(src, h, basename):
                     func_return_failed = f"{before_return}return"
         # generate error msg when not a valid call
         error_log_code = generate_error_code_from_func_header(func_head, target_scope_name, name, dfs, basename ,h, class_info)
+        # Task 3.21: with -DJT_GRAPH_BUILD_PROFILE every entry point is the
+        # boundary between "time in the core" and "time in Python", which is
+        # what makes the two shares add up; without it the scope expands to
+        # nothing.  The probe's own accessors are the exception: they are pyjt
+        # entries too, so a scope there would mean that reading the table
+        # changes it -- `graph_build_profile_counts()` would report the call
+        # that asked for the counts, and a reset would not read back as clean.
+        gbp_entry_scope = ("" if name.startswith("graph_build_profile")
+                           else "JT_GBP_SCOPE(gbp_pyjt_entry);")
         func = f"""
         {func_cast}[]{func_head} {{
+            {gbp_entry_scope}
             bool matched_overload=false;
             try {{
                 {func_fill};
@@ -1089,6 +1099,7 @@ def compile_src(src, h, basename):
     #include "pyjt/py_converter.h"
     #include "pyjt/py_arg_printer.h"
     #include "common.h"
+    #include "utils/graph_build_profile.h"
     #include "{include_name}"
 
     namespace jittor {{

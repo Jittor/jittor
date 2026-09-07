@@ -165,6 +165,23 @@ class TestBuildConfigFingerprint(unittest.TestCase):
         self.assertEqual(plain[1], swapping[1])
         self.assertEqual(plain, _cache_path_for({"JT_SAVE_MEM": "0"}))
 
+    def test_a_graph_build_profile_build_gets_its_own_directory(self):
+        """`JT_GRAPH_BUILD_PROFILE` compiles the task-3.21 phase probes in.
+
+        Sharing a directory would not just be wasteful. The probes reach into
+        `JitKey::reserve`, which is inlined into every JIT-compiled kernel, so
+        a cached kernel from a probed build refers to counters that a core
+        built without them does not export -- and the failure would arrive as
+        dlopen of a stale kernel, not as a compile error. A build with the
+        probes off keeps the directory it always had.
+        """
+        plain = _cache_path_for({})
+        probed = _cache_path_for({"JT_GRAPH_BUILD_PROFILE": "1"})
+        self.assertNotEqual(plain[0], probed[0])
+        # ...but still one lock, and so one download area
+        self.assertEqual(plain[1], probed[1])
+        self.assertEqual(plain, _cache_path_for({"JT_GRAPH_BUILD_PROFILE": "0"}))
+
     def test_fingerprint_is_stable_and_short(self):
         config = {"nvcc_flags": " --fmad=false "}
         first = jit_utils.build_config_fingerprint(config)

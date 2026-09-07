@@ -39,6 +39,7 @@ JitKey::~JitKey() {
 }
 
 void JitKey::grow(size_t n) {
+    JT_GBP_SCOPE(gbp_jit_key_grow);
     size_t limit = size_limit();
     size_t need = (size_t)size + n;
     // The key selects which compiled kernel runs, so a key that does not fit

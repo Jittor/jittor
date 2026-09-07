@@ -522,9 +522,15 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
                     delete _op;
                     return _out;
                 }}
-                _op->outputs_holder[0]->set_inputs({{_op}});
+                {{
+                    JT_GBP_SCOPE(gbp_edge_table);
+                    _op->outputs_holder[0]->set_inputs({{_op}});
+                }}
                 VarPtr _out(move(_op->outputs_holder[0]));
-                {src.replace("->var","")};
+                {{
+                    JT_GBP_SCOPE(gbp_edge_table);
+                    {src.replace("->var","")};
+                }}
                 _op->init();
                 return _out;
             }}
@@ -539,9 +545,12 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
                     return _outs;
                 }}
                 vector<VarPtr> _outs = move(_op->outputs_holder);
-                for (uint i=0; i<_outs.size(); i++)
-                    _outs[i]->set_inputs({{_op}});
-                {src.replace("->var","")};
+                {{
+                    JT_GBP_SCOPE(gbp_edge_table);
+                    for (uint i=0; i<_outs.size(); i++)
+                        _outs[i]->set_inputs({{_op}});
+                    {src.replace("->var","")};
+                }}
                 _op->init();
                 return _outs;
             }}
@@ -785,6 +794,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
     #include "var.h"
     #include "var_holder.h"
     #include "ops/op_registration.h"
+    #include "utils/graph_build_profile.h"
     {jit_headers}
     
     namespace jittor {{
@@ -1515,6 +1525,7 @@ cc_flags += " -fdiagnostics-color=always "
 #: separates them (task 9.21).
 JT_CONFIG_MACROS = (
     "JT_CHECK_NAN",
+    "JT_GRAPH_BUILD_PROFILE",
     "JT_HAS_HALF_SIMD",
     "JT_HCCL_NO_MPI",
     "JT_NCCL_NO_MPI",

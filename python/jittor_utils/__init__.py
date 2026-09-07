@@ -629,6 +629,12 @@ def get_build_config():
     save_mem = save_mem_build_flags()
     if save_mem:
         config["JT_SAVE_MEM"] = save_mem
+    # Same reasoning for the graph-build probes of task 3.21, and here sharing
+    # a directory would not merely be wasteful: a JIT kernel compiled with the
+    # probes on refers to the counters in the core, which a core built without
+    # them does not export, so dlopen of a cached kernel would fail.
+    if (os.environ.get("JT_GRAPH_BUILD_PROFILE") or "").strip() not in ("", "0"):
+        config["JT_GRAPH_BUILD_PROFILE"] = "1"
     return config
 
 

@@ -12,6 +12,7 @@
 #include "runtime/device.h"
 #include "runtime/jit_policy.h"
 #include "ops/op_register.h"
+#include "utils/graph_build_profile.h"
 
 namespace jittor {
 
@@ -35,6 +36,7 @@ loop_options_t& FusedOp::get_loop_options_tuned() {
 }
 
 void FusedOp::update_jit_key() {
+    JT_GBP_SCOPE(gbp_jit_key);
     JK& jk = get_jk();
     jk.clear();
     do_jit_prepare(jk);
@@ -157,6 +159,7 @@ void FusedOp::statistics(uint64_t& in, uint64_t& out, uint64_t& compute) {
 }
 
 void FusedOp::prepare_fused_key(JK& jk) {
+    JT_GBP_SCOPE(gbp_jit_key);
     jk.clear();
     for (uint i=0; i<ops.size(); i++) {
         Op* op = ops[i];
