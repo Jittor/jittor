@@ -1,15 +1,10 @@
 """4.12 contract: backend providers must not rewrite shared sources.
 
-The legacy providers are intentionally still present during the staged
-migration.  The strict xfail below keeps that debt visible without making
-the current branch look green; once entry points point at the native
-providers the same assertions become a normal, blocking contract.
+The selected providers and their native resources must share one owner.
 """
 
 import ast
 from pathlib import Path
-
-import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -58,10 +53,6 @@ def test_native_provider_sources_are_complete_and_do_not_rewrite_sources():
     assert (ROOT / "backends/corex/runtime/corex_backend.cc").is_file()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="4.12 migration pending: ACL/Corex entry points still target legacy providers",
-)
 def test_backend_entry_points_are_native_and_conversion_free():
     expected = {
         "acl": "jittor.backends.acl",
@@ -77,10 +68,6 @@ def test_backend_entry_points_are_native_and_conversion_free():
     assert '"corex": "jittor.backends.corex"' in discovery
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="4.12 migration pending: ACL native provider is not wired yet",
-)
 def test_native_provider_configure_is_conversion_free():
     for name, path in NATIVE_PROVIDERS.items():
         functions = {

@@ -52,7 +52,7 @@ jittor-triton-shim = "jittor.compat.triton.deploy:main"
 jittor-torch-shim = "jittor.compat.shim.deploy:main"
 
 [project.entry-points."jittor.backends"]
-acl = "jittor.extern.acl.acl_compiler"
+acl = "jittor.backends.acl"
 rocm = "jittor.backends.rocm"
 corex = "jittor.backends.corex"
 

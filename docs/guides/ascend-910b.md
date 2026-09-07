@@ -800,7 +800,7 @@ device copies and has not been optimized or performance-validated.
 ## ACL attribute data-channel owner
 
 The host-only attribute channel is defined by
-`python/jittor/extern/acl/aclops/acl_data_channel.h`. It is intentionally
+`backends/acl/include/aclops/acl_data_channel.h`. It is intentionally
 compiled before any CANN probe: the header owns the versioned record, typed
 scalar/vector values, schema defaults, and deterministic cache key, but it does
 not call ACL or construct an `aclTensor`. The corresponding source contract is

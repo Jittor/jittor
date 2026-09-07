@@ -9,42 +9,42 @@ if str(ROOT / "tests") not in sys.path:
 
 from _helpers import acl_launch_tails  # noqa: E402
 
-BASE_HEADER = ROOT / "python/jittor/extern/acl/aclops/base_op.h"
-BASE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/base_op_acl.cc"
-UNARY_SOURCE = ROOT / "python/jittor/extern/acl/aclops/unary_op_acl.cc"
-BINARY_SOURCE = ROOT / "python/jittor/extern/acl/aclops/binary_op_acl.cc"
-TERNARY_SOURCE = ROOT / "python/jittor/extern/acl/aclops/ternary_op_acl.cc"
-REDUCE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/reduce_op_acl.cc"
-CUMSUM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/cumsum_op_acl.cc"
-MATMUL_SOURCE = ROOT / "python/jittor/extern/acl/aclops/matmul_op_acl.cc"
-EXPAND_SOURCE = ROOT / "python/jittor/extern/acl/aclops/expand_op_acl.cc"
-FLOOR_SOURCE = ROOT / "python/jittor/extern/acl/aclops/floor_op_acl.cc"
-NANTONUM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/nantonum_op_acl.cc"
-TRIU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/triu_op_acl.cc"
-SIGMOID_SOURCE = ROOT / "python/jittor/extern/acl/aclops/sigmoid_op_acl.cc"
-TRANSPOSE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/transpose_op_acl.cc"
-SOFTMAX_SOURCE = ROOT / "python/jittor/extern/acl/aclops/softmax_op_acl.cc"
-EMBEDDING_SOURCE = ROOT / "python/jittor/extern/acl/aclops/embedding_op_acl.cc"
-ROLL_SOURCE = ROOT / "python/jittor/extern/acl/aclops/roll_op_acl.cc"
-CLAMP_SOURCE = ROOT / "python/jittor/extern/acl/aclops/clamp_op_acl.cc"
-STACK_SOURCE = ROOT / "python/jittor/extern/acl/aclops/stack_op_acl.cc"
-FLIP_SOURCE = ROOT / "python/jittor/extern/acl/aclops/flip_op_acl.cc"
-CONCAT_SOURCE = ROOT / "python/jittor/extern/acl/aclops/concat_op_acl.cc"
-WHERE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/where_op_acl.cc"
-RANGE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/index_op_acl.cc"
-DROPOUT_SOURCE = ROOT / "python/jittor/extern/acl/aclops/dropout_op_acl.cc"
-RELU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/relu_op_acl.cc"
-ARG_REDUCE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/arg_reduce_op_acl.cc"
-SILU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/silu_op_acl.cc"
-BMM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/bmm_op_acl.cc"
-TRUTH_REDUCE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/truth_reduce_op_acl.cc"
-CONV_SOURCE = ROOT / "python/jittor/extern/acl/aclops/conv_op_acl.cc"
-NORMS_SOURCE = ROOT / "python/jittor/extern/acl/aclops/norms_op_acl.cc"
-ROPE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/rope_op_acl.cc"
-POOL_SOURCE = ROOT / "python/jittor/extern/acl/aclops/pool_op_acl.cc"
-RANDOM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/random_op_acl.cc"
-UPSAMPLE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/upsample_op_acl.cc"
-GATHER_SOURCE = ROOT / "python/jittor/extern/acl/aclops/gather_scatter_op_acl.cc"
+BASE_HEADER = ROOT / "backends/acl/include/aclops/base_op.h"
+BASE_SOURCE = ROOT / "backends/acl/kernels/native/base_op_acl.cc"
+UNARY_SOURCE = ROOT / "backends/acl/kernels/native/unary_op_acl.cc"
+BINARY_SOURCE = ROOT / "backends/acl/kernels/native/binary_op_acl.cc"
+TERNARY_SOURCE = ROOT / "backends/acl/kernels/native/ternary_op_acl.cc"
+REDUCE_SOURCE = ROOT / "backends/acl/kernels/native/reduce_op_acl.cc"
+CUMSUM_SOURCE = ROOT / "backends/acl/kernels/native/cumsum_op_acl.cc"
+MATMUL_SOURCE = ROOT / "backends/acl/kernels/native/matmul_op_acl.cc"
+EXPAND_SOURCE = ROOT / "backends/acl/kernels/native/expand_op_acl.cc"
+FLOOR_SOURCE = ROOT / "backends/acl/kernels/native/floor_op_acl.cc"
+NANTONUM_SOURCE = ROOT / "backends/acl/kernels/native/nantonum_op_acl.cc"
+TRIU_SOURCE = ROOT / "backends/acl/kernels/native/triu_op_acl.cc"
+SIGMOID_SOURCE = ROOT / "backends/acl/kernels/native/sigmoid_op_acl.cc"
+TRANSPOSE_SOURCE = ROOT / "backends/acl/kernels/native/transpose_op_acl.cc"
+SOFTMAX_SOURCE = ROOT / "backends/acl/kernels/native/softmax_op_acl.cc"
+EMBEDDING_SOURCE = ROOT / "backends/acl/kernels/native/embedding_op_acl.cc"
+ROLL_SOURCE = ROOT / "backends/acl/kernels/native/roll_op_acl.cc"
+CLAMP_SOURCE = ROOT / "backends/acl/kernels/native/clamp_op_acl.cc"
+STACK_SOURCE = ROOT / "backends/acl/kernels/native/stack_op_acl.cc"
+FLIP_SOURCE = ROOT / "backends/acl/kernels/native/flip_op_acl.cc"
+CONCAT_SOURCE = ROOT / "backends/acl/kernels/native/concat_op_acl.cc"
+WHERE_SOURCE = ROOT / "backends/acl/kernels/native/where_op_acl.cc"
+RANGE_SOURCE = ROOT / "backends/acl/kernels/native/index_op_acl.cc"
+DROPOUT_SOURCE = ROOT / "backends/acl/kernels/native/dropout_op_acl.cc"
+RELU_SOURCE = ROOT / "backends/acl/kernels/native/relu_op_acl.cc"
+ARG_REDUCE_SOURCE = ROOT / "backends/acl/kernels/native/arg_reduce_op_acl.cc"
+SILU_SOURCE = ROOT / "backends/acl/kernels/native/silu_op_acl.cc"
+BMM_SOURCE = ROOT / "backends/acl/kernels/native/bmm_op_acl.cc"
+TRUTH_REDUCE_SOURCE = ROOT / "backends/acl/kernels/native/truth_reduce_op_acl.cc"
+CONV_SOURCE = ROOT / "backends/acl/kernels/native/conv_op_acl.cc"
+NORMS_SOURCE = ROOT / "backends/acl/kernels/native/norms_op_acl.cc"
+ROPE_SOURCE = ROOT / "backends/acl/kernels/native/rope_op_acl.cc"
+POOL_SOURCE = ROOT / "backends/acl/kernels/native/pool_op_acl.cc"
+RANDOM_SOURCE = ROOT / "backends/acl/kernels/native/random_op_acl.cc"
+UPSAMPLE_SOURCE = ROOT / "backends/acl/kernels/native/upsample_op_acl.cc"
+GATHER_SOURCE = ROOT / "backends/acl/kernels/native/gather_scatter_op_acl.cc"
 
 
 def test_acl_launcher_tail_has_one_auditable_contract():
@@ -59,9 +59,9 @@ def test_acl_launcher_tail_has_one_auditable_contract():
 
 
 def test_acl_op_idx_map_is_removed_without_touching_reduce_dispatch():
-    utils = (ROOT / "python/jittor/extern/acl/aclops/utils.cc").read_text()
-    header = (ROOT / "python/jittor/extern/acl/aclops/utils.h").read_text()
-    dispatch = (ROOT / "python/jittor/extern/acl/acl_op_exec.cc").read_text()
+    utils = (ROOT / "backends/acl/kernels/native/utils.cc").read_text()
+    header = (ROOT / "backends/acl/include/aclops/utils.h").read_text()
+    dispatch = (ROOT / "backends/acl/src/acl_op_exec.cc").read_text()
     assert "op_idx_map" not in utils
     assert "op_idx_map" not in header
     assert "op.op_idx = 9" in dispatch
@@ -157,8 +157,8 @@ def test_no_execute_op_owner_keeps_a_hand_rolled_launch_tail():
     owners, tails = acl_launch_tails.survey(ROOT)
     assert not tails, tails
     # An empty scan passes every assertion above it, which is how a gate ends up
-    # green while measuring nothing. ACL is mid-migration between two roots, so
-    # require each root to be populated rather than a healthy-looking total.
+    # green while measuring nothing. Require the canonical backend root and
+    # the operator survey to be populated.
     roots = acl_launch_tails.populated_roots(ROOT)
     for root, count in roots.items():
         assert count > 0, f"{root} is empty; the scan below it proves nothing"
@@ -607,7 +607,7 @@ def test_group_norm_backward_uses_launcher_and_keeps_output_mask():
 
 
 def test_masked_select_uses_launcher_and_keeps_two_inputs():
-    source = (ROOT / "python/jittor/extern/acl/aclops/getitem_op_acl.cc").read_text()
+    source = (ROOT / "backends/acl/kernels/native/getitem_op_acl.cc").read_text()
     masked = source[source.index("void MaskedSelectOpRunner::executeOp"):source.index("IndexOpRunner::IndexOpRunner")]
     assert masked.count("inputTensors[") >= 2
     assert "launch(ret, aclnnMaskedSelect, true);" in masked
@@ -616,7 +616,7 @@ def test_masked_select_uses_launcher_and_keeps_two_inputs():
 
 
 def test_index_uses_launcher_and_slice_remains_present():
-    source = (ROOT / "python/jittor/extern/acl/aclops/getitem_op_acl.cc").read_text()
+    source = (ROOT / "backends/acl/kernels/native/getitem_op_acl.cc").read_text()
     index = source[source.index("void IndexOpRunner::executeOp"):source.index("SliceV2OpRunner::SliceV2OpRunner")]
     assert "launch(ret, aclnnIndex, true);" in index
     assert "mallocWorkSpace(workspaceSize)" not in index
@@ -625,7 +625,7 @@ def test_index_uses_launcher_and_slice_remains_present():
 
 
 def test_slice_v2_uses_launcher_and_keeps_four_descriptors():
-    source = (ROOT / "python/jittor/extern/acl/aclops/getitem_op_acl.cc").read_text()
+    source = (ROOT / "backends/acl/kernels/native/getitem_op_acl.cc").read_text()
     slice_source = source[source.index("void SliceV2OpRunner::executeOp"):source.index("IndexPutImplAccumulateOpRunner::IndexPutImplAccumulateOpRunner")]
     for name in ("begins", "ends", "steps", "axes"):
         assert name in slice_source
@@ -635,7 +635,7 @@ def test_slice_v2_uses_launcher_and_keeps_four_descriptors():
 
 
 def test_strided_slice_assign_uses_launcher_and_keeps_gradient_memset():
-    source = (ROOT / "python/jittor/extern/acl/aclops/getitem_op_acl.cc").read_text()
+    source = (ROOT / "backends/acl/kernels/native/getitem_op_acl.cc").read_text()
     owner = source[source.index("void StridedSliceAssignV2OpRunner::executeOp"):]
     assert "jt_name == \"stridedsliceassignv2_grad\"" in owner
     assert "aclrtMemsetAsync" in owner
@@ -645,7 +645,7 @@ def test_strided_slice_assign_uses_launcher_and_keeps_gradient_memset():
 
 
 def test_inplace_masked_scatter_uses_launcher_and_keeps_copy_dependency():
-    source = (ROOT / "python/jittor/extern/acl/aclops/setitem_op_acl.cc").read_text()
+    source = (ROOT / "backends/acl/kernels/native/setitem_op_acl.cc").read_text()
     owner = source[source.index("void InplaceMaskedScatterOpRunner::executeOp"):source.index("IndexPutImplOpRunner::IndexPutImplOpRunner")]
     assert "aclrtMemcpyAsync" in owner
     assert "launch(ret, aclnnInplaceMaskedScatter, true);" in owner
@@ -654,7 +654,7 @@ def test_inplace_masked_scatter_uses_launcher_and_keeps_copy_dependency():
 
 
 def test_index_put_uses_launcher_and_accumulate_owner_remains_present():
-    source = (ROOT / "python/jittor/extern/acl/aclops/setitem_op_acl.cc").read_text()
+    source = (ROOT / "backends/acl/kernels/native/setitem_op_acl.cc").read_text()
     owner = source[source.index("void IndexPutImplOpRunner::executeOp"):]
     assert "indexTensorListInput" in owner
     assert "launch(ret, aclnnIndexPutImpl, true);" in owner
@@ -663,7 +663,7 @@ def test_index_put_uses_launcher_and_accumulate_owner_remains_present():
 
 
 def test_index_put_accumulate_uses_launcher_and_keeps_zero_dependency():
-    source = (ROOT / "python/jittor/extern/acl/aclops/getitem_op_acl.cc").read_text()
+    source = (ROOT / "backends/acl/kernels/native/getitem_op_acl.cc").read_text()
     owner = source[source.index("void IndexPutImplAccumulateOpRunner::executeOp"):source.index("StridedSliceAssignV2OpRunner::StridedSliceAssignV2OpRunner")]
     assert "aclrtMemsetAsync" in owner
     assert "indexTensorListInput" in owner
@@ -673,7 +673,7 @@ def test_index_put_accumulate_uses_launcher_and_keeps_zero_dependency():
 
 
 def test_flash_attention_forward_uses_launcher_and_keeps_raii_descriptors():
-    source = (ROOT / "python/jittor/extern/acl/aclops/flashattention_op_acl.cc").read_text()
+    source = (ROOT / "backends/acl/kernels/native/flashattention_op_acl.cc").read_text()
     forward = source[source.index("void FlashAttentionOpRunner::executeOp"):source.index("FlashAttentionBackwardOpRunner::FlashAttentionBackwardOpRunner")]
     for name in ("prefix", "qstart", "kvstart"):
         assert name in forward
@@ -684,7 +684,7 @@ def test_flash_attention_forward_uses_launcher_and_keeps_raii_descriptors():
 
 
 def test_flash_attention_backward_uses_launcher_and_keeps_gradient_outputs():
-    source = (ROOT / "python/jittor/extern/acl/aclops/flashattention_op_acl.cc").read_text()
+    source = (ROOT / "backends/acl/kernels/native/flashattention_op_acl.cc").read_text()
     backward = source[source.index("void FlashAttentionBackwardOpRunner::executeOp"):source.index("IncreFlashAttentionOpRunner::IncreFlashAttentionOpRunner")]
     assert "prefix" in backward
     assert "outputTensors[2]" in backward
@@ -694,7 +694,7 @@ def test_flash_attention_backward_uses_launcher_and_keeps_gradient_outputs():
 
 
 def test_incremental_flash_attention_uses_launcher_and_keeps_cache_cleanup():
-    source = (ROOT / "python/jittor/extern/acl/aclops/flashattention_op_acl.cc").read_text()
+    source = (ROOT / "backends/acl/kernels/native/flashattention_op_acl.cc").read_text()
     forward = source[source.index("void IncreFlashAttentionOpRunner::executeOp"):source.index("KVCacheMemcpyOpRunner::KVCacheMemcpyOpRunner")]
     assert "actualSeqLengths" in forward
     assert "blockTable" in forward
@@ -705,7 +705,7 @@ def test_incremental_flash_attention_uses_launcher_and_keeps_cache_cleanup():
 
 
 def test_adamw_list_uses_async_launcher_and_keeps_loop_sync_point():
-    source = (ROOT / "python/jittor/extern/acl/aclops/adamw_op_acl.cc").read_text()
+    source = (ROOT / "backends/acl/kernels/native/adamw_op_acl.cc").read_text()
     assert "aclnnApplyAdamWV2GetWorkspaceSize" in source
     assert "launch(ret, aclnnApplyAdamWV2, false);" in source
     assert source.count("syncRun();") == 1

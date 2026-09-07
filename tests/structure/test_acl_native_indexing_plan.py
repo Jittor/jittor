@@ -9,7 +9,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-HEADER = ROOT / "python/jittor/extern/acl/aclops/native_indexing_op_acl.h"
+HEADER = ROOT / "backends/acl/include/aclops/native_indexing_op_acl.h"
 HARNESS = r'''
 #include "native_indexing_op_acl.h"
 #include <cstring>

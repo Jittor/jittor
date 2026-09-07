@@ -116,6 +116,7 @@ def _expected_source_paths(repo_root):
         "requirements/examples.txt",
         "python",
         "backends",
+        "src",
     )
     try:
         result = subprocess.run(

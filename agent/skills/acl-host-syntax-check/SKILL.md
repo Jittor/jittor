@@ -1,12 +1,12 @@
 ---
 name: acl-host-syntax-check
-description: 在没有 CANN/NPU 的开发机上对 python/jittor/extern/acl/** 的 C++ 改动做真实的 TU 语法检查。改了任何 ACL 后端代码（executeOp 尾部迁移、BaseOpRunner、aclops/*_acl.cc、acl_jittor.h）在提交前都要用它；也用于判断「这个 ACL 改动在本机能验到什么、验不到什么」，避免把只跑过静态字符串合同的改动说成验证过。
+description: 在没有 CANN/NPU 的开发机上对 backends/acl/** 的 C++ 改动做真实的 TU 语法检查。改了任何 ACL 后端代码（executeOp 尾部迁移、BaseOpRunner、kernels/native/*_acl.cc、acl_jittor.h）在提交前都要用它；也用于判断「这个 ACL 改动在本机能验到什么、验不到什么」，避免把只跑过静态字符串合同的改动说成验证过。
 ---
 
 # 在无 CANN 的机器上语法检查 ACL 后端
 
 ACL 后端在开发机上**编译不到**：没有 CANN，`acl/acl.h` 与 180 多个 `aclnnop/*.h` 都不存在。
-后果是 `python/jittor/extern/acl/**` 的 C++ 改动一直**没有任何东西解析过它**——静态合同只是对源码做
+后果是 `backends/acl/**` 的 C++ 改动一直**没有任何东西解析过它**——静态合同只是对源码做
 字符串匹配，一个拼错的标识符、一个少写的括号、一个传错的 launcher 都能一路绿到实机。
 
 本 skill 用**生成的 CANN 桩头文件**加真实的 Jittor 核心头文件跑 `g++ -fsyntax-only`，把这一层补上。
@@ -18,18 +18,19 @@ ACL 后端在开发机上**编译不到**：没有 CANN，`acl/acl.h` 与 180 �
 CFG=$(PYTHONPATH=<worktree>/python JITTOR_HOME=<你的 JITTOR_HOME> \
       python -c "import jittor.compiler as c; print(c.cache_path)")
 
-cd <worktree>/agent/skills/acl-host-syntax-check
-python syntax_check.py \
+cd <worktree>
+python agent/skills/acl-host-syntax-check/syntax_check.py \
   --repo <worktree> \
   --jittor-cache "$CFG" \
   --python-include <env>/include/python3.11 \
   --stub <你的 TMPDIR>/cann-stub \
   --check-launchers \
-  python/jittor/extern/acl/aclops/*_acl.cc python/jittor/extern/acl/*.cc
+  backends/acl/kernels/native/*.cc backends/acl/src/*.cc
 ```
 
 退出码 0 表示全过。每个源文件打一行 `ok` 或 `FAIL` 加具体诊断。
-全树（43 个源文件）约 40 秒。
+当前全树为 47 个源文件（41 个 native 与 6 个 src），另检查 70 个 launcher ABI 站点。
+使用 `*.cc` 而不是 `*_acl.cc`，后者会漏掉 `utils.cc`。HCCL 属通信后端，不在此扫描范围。
 
 `cache_path` 只在 `import jittor` 成功后才有；**第一次会重编核心**，而且 jittor 常会要求
 「rerun the same command」——照做，第二次就有了。手写命令记得带 `PYTHONPATH=<worktree>/python`，
@@ -69,7 +70,7 @@ variadic 桩对每个重载都可转换，于是 `aclOpFuncMap` 那张表每一�
 ```bash
 # 对照 1：把查询函数传给 launch（--check-launchers 才挡得住）
 sed -i 's/launch(ret, aclnnSWhere, true);/launch(ret, aclnnSWhereGetWorkspaceSize, true);/' \
-  python/jittor/extern/acl/aclops/where_op_acl.cc
+  backends/acl/kernels/native/where_op_acl.cc
 # 期望：FAIL launcher ABI check，退出码 1
 
 # 对照 2：文件里加一个不存在的符号
@@ -88,7 +89,7 @@ sed -i 's/launch(ret, aclnnSWhere, true);/launch(ret, aclnnSWhereGetWorkspaceSiz
 
 ## 桩是怎么来的
 
-`make_cann_stub.py` 扫 `python/jittor/extern/acl/**` 自动生成，不需要手工维护清单：
+`make_cann_stub.py` 扫 `backends/acl/**` 自动生成，不需要手工维护清单：
 
 - 所有 `aclnn*` 标识符（**不只是调用点**——注册表里 `AclOpFunctions(aclnnAbsGetWorkspaceSize, aclnnAbs)`
   是当值用的，只匹配 `aclnnX(` 会漏掉一半）；`*GetWorkspaceSize` 声明成 variadic，

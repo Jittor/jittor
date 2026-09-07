@@ -74,7 +74,7 @@ def test_op_registry_storage_is_lazily_initialized():
         encoding="utf-8")
     header = (REPO_ROOT / "src/ops/op_register.h").read_text(
         encoding="utf-8")
-    acl = (REPO_ROOT / "python/jittor/extern/acl/acl_op_exec.cc").read_text(
+    acl = (REPO_ROOT / "backends/acl/src/acl_op_exec.cc").read_text(
         encoding="utf-8")
     assert "unordered_map<string, OpInfo> op_info_map;" not in source
     assert "static OpId next_op_id = 1;" not in source

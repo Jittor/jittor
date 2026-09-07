@@ -220,7 +220,7 @@ class GroupedAddRmsNormACL:
             inputs=[x, residual, weight],
             cuda_header='''
 namespace jittor {}
-#include "acl/aclops/aclops.h"
+#include "aclops/aclops.h"
 ''',
             cuda_src=f'''
 // aclop
@@ -262,7 +262,7 @@ class GroupedBFloat16RmsNormACL:
             inputs=[x, unit_weight, weight],
             cuda_header='''
 namespace jittor {}
-#include "acl/aclops/aclops.h"
+#include "aclops/aclops.h"
 ''',
             cuda_src=f'''
 // aclop
@@ -313,7 +313,7 @@ class GroupedDualBFloat16RmsNormACL:
             ],
             cuda_header='''
 namespace jittor {}
-#include "acl/aclops/aclops.h"
+#include "aclops/aclops.h"
 ''',
             cuda_src=f'''
 // aclop

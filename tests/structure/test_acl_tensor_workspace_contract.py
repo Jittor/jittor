@@ -4,11 +4,11 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ACL_ROOT = REPO_ROOT / "python" / "jittor" / "extern" / "acl"
-UTILS_H = ACL_ROOT / "aclops" / "utils.h"
-UTILS_CC = ACL_ROOT / "aclops" / "utils.cc"
-ACL_H = ACL_ROOT / "acl_jittor.h"
-ACL_CC = ACL_ROOT / "acl_jittor.cc"
+ACL_ROOT = REPO_ROOT / "backends" / "acl"
+UTILS_H = ACL_ROOT / "include" / "aclops" / "utils.h"
+UTILS_CC = ACL_ROOT / "kernels" / "native" / "utils.cc"
+ACL_H = ACL_ROOT / "include" / "acl_jittor.h"
+ACL_CC = ACL_ROOT / "src" / "acl_jittor.cc"
 GUIDE = REPO_ROOT / "docs" / "guides" / "ascend-910b.md"
 
 

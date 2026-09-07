@@ -117,6 +117,28 @@ src/{bindings,codegen,core,debug,mem,ops,runtime,tests,third_party,type,utils}
 
 ## 2. 还没做的
 
+2026-09-07 ACL/provider 原子迁移已落地：非 HCCL 的 92 个旧文件完成处理，
+90 个 native 文件归入 `backends/acl/{src,include,kernels/native}`，provider 成为
+`backends/acl/__init__.py`，旧空 initializer 删除。真实旧 TU 数为 45（42 core、3
+registration），不是历史 43；显式清单保留排序及分类，排除已有 backend/workspace。
+25 个 Python builder include 同步，入口与 fallback discovery 都指 `jittor.backends.acl`；
+同时修复 Corex fallback discovery 指向已删除旧模块的问题。
+
+同第 0 节 CPU-only/shim 配置 structure：1285 collected，8 failed / 1273 passed /
+4 skipped / 0 xfailed / 0 error（`structure-acl-move.xml`）；失败 nodeid 集合与上次
+`structure-cpu-after.xml` 完全相同。两个旧 provider 文件扫描节点随文件删除，增加一个
+显式源清单节点；两个 entrypoint/configure strict-xfail 已真实 XPASS 后解除。
+原生 CPU 三步 selftest、CPU Torch backward、真实 CUDA import/matmul/切片梯度通过；
+ACL 194 个定向 host 合同、47 TU 与 70 launcher ABI 检查、两项反向对照通过。
+NPU 无实机；完整 CUDA structure 尚未跑，不据此声称第 5 节全部验收完成。
+
+sdist 官方检查通过；360 core、90 ACL native、全部 312 backend 生产文件在产物中
+无缺失/重复且与源码逐字节一致。wheel SHA-256：
+`7e10ff2bbf86d42df4465a8d9d5881faa704331f465b9e14ab2ed3f17a1976c7`。
+wheel 历史 allowlist 比较仍因旧路径/内容审批 metadata 失败，未刷新规避。
+旧 ACL 字节码已移到仓库外 retired-layout-cache 目录保存，旧 package/src 空目录已清理。
+下一步仍需 8.19 迁移三个通信后端，清空 extern 后再判 4.15 完成；以下原交接描述作对照。
+
 **`4.15` 剩最后一刀：`extern/acl` 的 92 个（102 减 hccl 10）。**
 
 ⚠ **这一刀有一个会静默出错的陷阱，别分刀做。** `python/jittor/extern/acl/acl_compiler.py:51`

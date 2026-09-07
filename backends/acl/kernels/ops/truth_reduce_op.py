@@ -36,7 +36,7 @@ def _truth_reduce_cmd(input, dims, reduce_all):
         backend="acl",
         outputs=[output],
         inputs=[input],
-        cuda_header='#include "acl/aclops/aclops.h"',
+        cuda_header='#include "aclops/aclops.h"',
         cuda_src=f"""
         // aclop
         TruthReduceOpRunner op({str(reduce_all).lower()});

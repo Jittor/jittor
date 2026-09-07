@@ -2,7 +2,7 @@
 """Generate a stub CANN include tree so ACL sources can be syntax-checked.
 
 The ACL backend cannot be compiled on a host without CANN, so an edit to
-``python/jittor/extern/acl/**`` normally reaches review with nothing having
+``backends/acl/**`` normally reaches review with nothing having
 parsed it. This emits just enough of the CANN surface for ``g++ -fsyntax-only``
 to accept the real sources: opaque handle types, the ``aclnn`` status/enum
 vocabulary, and one declaration per ``aclnn`` entry point referenced by the
@@ -124,7 +124,7 @@ aclError aclFinalize();
 ENTRY_HEADER = """#pragma once
 #include "acl/acl.h"
 
-// Every aclnn entry point referenced by python/jittor/extern/acl. Execute
+// Every aclnn entry point referenced by backends/acl. Execute
 // entry points get the real four-argument ABI; workspace queries are variadic
 // because their per-operator signatures need the SDK.
 """
@@ -218,7 +218,7 @@ def build(acl_root, out):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--acl-root", required=True,
-                        help="path to python/jittor/extern/acl")
+                        help="path to backends/acl")
     parser.add_argument("--out", required=True, help="stub include tree to create")
     args = parser.parse_args()
 

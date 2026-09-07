@@ -235,7 +235,7 @@ cannot mask the real source owner. Packaging tests check every backend file in
 the sdist, wheel and isolated installation.
 
 This does not complete task 4.15: the shared C++ core remains under
-`python/jittor/src`, NCCL wrappers remain with the pending communication layout,
+the top-level `src` tree (packaged as `jittor/src`), NCCL wrappers remain with the pending communication layout,
 and the external FlashAttention integration retains its separate migration.
 Remaining ACL/ROCm/Corex source conversion is not removed. `fused_adamw` has no
 CUDA algorithm to relocate; its existing ACL implementation and shared error
@@ -353,6 +353,15 @@ assignment is rejected. The ACL source converter remains a separate migration;
 Python kernel publication no longer replaces the native public API.
 
 ### ACL Kernel Registration
+
+The ACL build entry point is `jittor.backends.acl`. SDK support translation
+units live in `backends/acl/src`, SDK-facing headers in `include/{aclops,aclnn}`,
+and native operator translation units in `kernels/native`. The provider uses
+an explicit 45-file build inventory (42 core, 3 registration), preserving the
+previous ordering without accidentally globbing the independent backend and
+workspace runtime sources. Source builders include `aclops/aclops.h` through
+the backend include root; actual SDK `acl/acl.h` references are unchanged.
+Only the communication backend HCCL remains temporarily under `extern/acl`.
 
 `backends/acl/kernels/install.py` publishes module-level tensor, neural-network
 and normalization implementations in the existing Python dispatch table.
@@ -513,7 +522,8 @@ behavioral decision rules.
 The following trees are consumed by compiler or packaging code using physical
 paths and therefore require special review:
 
-- `python/jittor/src/`
+- `src/` (installed as `jittor/src/`)
+- `backends/acl/{include,kernels/native,src}/`
 - `python/jittor/extern/`
 - `python/jittor/math_util/src/`
 - `python/jittor/compat/shim/cpp_extension/`

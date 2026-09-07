@@ -4,10 +4,10 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ACL_ROOT = REPO_ROOT / "python" / "jittor" / "extern" / "acl"
-BASE_OP = ACL_ROOT / "aclops" / "base_op_acl.cc"
-ACLOPS = ACL_ROOT / "aclops"
-EXEC = ACL_ROOT / "acl_op_exec.cc"
+ACL_ROOT = REPO_ROOT / "backends" / "acl"
+BASE_OP = ACL_ROOT / "kernels" / "native" / "base_op_acl.cc"
+ACLOPS = ACL_ROOT / "kernels" / "native"
+EXEC = ACL_ROOT / "src" / "acl_op_exec.cc"
 GUIDE = REPO_ROOT / "docs" / "guides" / "ascend-910b.md"
 
 # The aclnn execute call takes exactly these four arguments, so its presence is

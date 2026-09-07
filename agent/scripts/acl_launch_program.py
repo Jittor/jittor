@@ -36,7 +36,7 @@ import re
 import sys
 from pathlib import Path
 
-ACLOPS = "python/jittor/extern/acl/aclops"
+ACLOPS = "backends/acl/kernels/native"
 
 OWNER = re.compile(r"void\s+(\w+)::executeOp\b")
 QUERY = re.compile(r"\b(aclnn\w*GetWorkspaceSize)\s*\(")

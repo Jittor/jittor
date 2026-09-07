@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-BASE_OP = REPO_ROOT / "python" / "jittor" / "extern" / "acl" / "aclops" / "base_op_acl.cc"
+BASE_OP = REPO_ROOT / "backends" / "acl" / "kernels" / "native" / "base_op_acl.cc"
 GUIDE = REPO_ROOT / "docs" / "guides" / "ascend-910b.md"
 
 

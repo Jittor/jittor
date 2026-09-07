@@ -9,7 +9,7 @@ def _upsample_cmd(name, inputs, output_dtype, output_shape, attr_code,
         inputs,
         backend="acl",
         cuda_header='''
-#include "acl/aclops/aclops.h"
+#include "aclops/aclops.h"
 ''',
         cuda_grad_src=cuda_grad_src or [],
         cuda_src=f'''

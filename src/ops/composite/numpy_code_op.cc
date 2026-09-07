@@ -130,7 +130,7 @@ void NumpyCodeOp::run() {
 #ifdef IS_ACL
     // On Ascend ACL the numpy callback runs on the HOST, but a Var's mem_ptr is a device
     // address the host cannot dereference -> migrate every operand to host first (mirrors
-    // fallback_cpu in extern/acl/acl_op_exec.cc). Outputs then live in host (cpu) memory
+    // fallback_cpu in backends/acl/src/acl_op_exec.cc). Outputs then live in host (cpu) memory
     // and jittor re-migrates them to device for downstream ACL ops. Gated #ifdef IS_ACL so
     // the CUDA build (host-accessible managed memory) is unchanged. Unblocks all
     // jt.numpy_code consumers on NPU (linalg cholesky/inv/svd/eigh/solve/det, MVN, ...).

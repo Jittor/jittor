@@ -38,7 +38,7 @@ def acl_code(name,
              multi_grad_input_count=None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
     cuda_header = '''
-    #include "acl/aclops/aclops.h"
+    #include "aclops/aclops.h"
     '''
     if outputs is not None:
         output_count = len(outputs)

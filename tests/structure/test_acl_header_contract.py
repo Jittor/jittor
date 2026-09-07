@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-ACLNN_HEADER = ROOT / "python/jittor/extern/acl/aclnn/aclnn.h"
+ACLNN_HEADER = ROOT / "backends/acl/include/aclnn/aclnn.h"
 
 
 def test_aclnn_header_has_include_guard_before_declarations():

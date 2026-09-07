@@ -14,8 +14,8 @@ fail() {
 # refactors belong to Git history and structure tests, not to this script.
 required_paths=(
   python/jittor/selftest.py tests examples tools docs/conf.py docs/index.md
-  python/jittor/extern/__init__.py python/jittor/extern/acl/aclops
-  python/jittor/extern/acl/aclnn python/jittor/extern/acl/hccl
+  python/jittor/extern/__init__.py backends/acl/include/aclops
+  backends/acl/include/aclnn backends/acl/kernels/native python/jittor/extern/acl/hccl
   backends/corex/__init__.py backends/cuda/include
   backends/cuda/src backends/cuda/kernels/cub
   backends/cuda/kernels/cublas backends/cuda/kernels/cudnn
@@ -23,7 +23,7 @@ required_paths=(
   backends/cuda/kernels/cusparse backends/cuda/libraries/cutt
   python/jittor/extern/cuda/nccl backends/cpu/libraries/mkl
   python/jittor/extern/mpi/inc python/jittor/extern/mpi/ops
-  python/jittor/extern/mpi/src python/jittor/extern/rocm
+  python/jittor/extern/mpi/src backends/rocm
 )
 for path in "${required_paths[@]}"; do
   [[ -e "$REPO_ROOT/$path" ]] || fail "missing required repository path: $path"

@@ -6,7 +6,7 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "python/jittor/extern/acl/acl_op_exec.cc"
+SOURCE = ROOT / "backends/acl/src/acl_op_exec.cc"
 
 
 def _declaration(source, marker, suffix=""):
@@ -214,5 +214,5 @@ def test_preflight_and_execution_share_launcher_keys_before_any_fallback_migrati
     assert "AclExecutionRunner<AdamWListOpRunner, false>" in source
     for variant in ("ReduceSum", "ReduceMean", "ReduceMax", "ReduceMin", "ReduceProd", "Select", "Expand"):
         assert 'return "' + variant + '"' in source
-    registration = (ROOT / "python/jittor/extern/acl/acl_jittor.h").read_text()
+    registration = (ROOT / "backends/acl/include/acl_jittor.h").read_text()
     assert '{"ReduceProd", AclOpFunctions(aclnnProdGetWorkspaceSize, aclnnProd)}' in registration

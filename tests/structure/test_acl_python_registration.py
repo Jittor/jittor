@@ -333,7 +333,7 @@ def test_acl_transpose_preserves_argument_forms_with_real_shape_builder(
 
 
 def test_acl_compiler_no_longer_contains_python_replacement_installer():
-    source = (ROOT / "python/jittor/extern/acl/acl_compiler.py").read_text(encoding="utf-8")
+    source = (ROOT / "backends/acl/__init__.py").read_text(encoding="utf-8")
     assert "def change_function" not in source
     assert "def warp" not in source
     assert "jt.nn." not in source

@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "python/jittor/extern/acl/acl_op_exec.cc"
+SOURCE = ROOT / "backends/acl/src/acl_op_exec.cc"
 
 
 def test_acl_publishes_backend_kernels_without_removing_operator_definitions():

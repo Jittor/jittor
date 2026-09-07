@@ -24,7 +24,7 @@ def sigmoid_cmd(name: str,
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
-    #include "acl/aclops/aclops.h"
+    #include "aclops/aclops.h"
     '''
     outputs_ = []
     if outputs is not None:

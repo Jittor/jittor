@@ -23,10 +23,9 @@ contract. What it cannot see is registered in
 import re
 from pathlib import Path
 
-# ACL is mid-migration: both roots hold live code, so a scan of either one
-# alone looks healthy while covering half the backend.
-ACL_ROOTS = ("python/jittor/extern/acl", "backends/acl")
-ACLOPS = "python/jittor/extern/acl/aclops"
+# Native ACL operators have one physical owner; HCCL moves separately.
+ACL_ROOTS = ("backends/acl",)
+ACLOPS = "backends/acl/kernels/native"
 # The one file allowed to own the tail.
 SHARED_TAIL = "base_op_acl.cc"
 

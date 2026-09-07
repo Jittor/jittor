@@ -24,7 +24,7 @@ def matmul_forward(name: str,
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
-    #include "acl/aclops/aclops.h"
+    #include "aclops/aclops.h"
     '''
     if outputs is None:
         assert output_dtypes is not None

@@ -4,7 +4,7 @@
 Usage:
 
     python syntax_check.py --repo <worktree> --jittor-cache <cfg dir> \\
-        python/jittor/extern/acl/aclops/where_op_acl.cc ...
+        backends/acl/kernels/native/where_op_acl.cc ...
 
 What it does and does not prove
 -------------------------------
@@ -61,7 +61,7 @@ typedef aclnnStatus (*AclExecuteAbi)(void *, uint64_t, aclOpExecutor *, aclrtStr
 
 
 def compile_flags(repo, cache, stub):
-    acl = repo / "python" / "jittor" / "extern" / "acl"
+    acl = repo / "backends" / "acl"
     extra = []
     if platform.machine() != "aarch64":
         # __fp16 is an aarch64 builtin and CANN hosts are aarch64. On an x86_64
@@ -75,12 +75,12 @@ def compile_flags(repo, cache, stub):
         "-fsyntax-only", "-std=c++14", "-fPIC",
         "-DHAS_CUDA", "-DIS_CUDA", "-DIS_ACL", "-w",
         "-I", str(stub), "-I", str(stub / "acl"),
-        "-I", str(repo / "python" / "jittor" / "src"),
-        "-I", str(repo / "python" / "jittor" / "extern"),
-        "-I", str(acl), "-I", str(acl / "aclnn"), "-I", str(acl / "aclops"),
+        "-I", str(repo / "src"),
+        "-I", str(acl / "include"),
+        "-I", str(acl / "include" / "aclnn"),
+        "-I", str(acl / "include" / "aclops"),
         "-I", str(repo / "backends" / "cuda" / "include"),
         "-I", str(repo / "backends" / "cuda"),
-        "-I", str(repo / "backends" / "acl" / "include"),
         "-I", "/usr/local/cuda/include",
         "-I", str(cache),
     ]
@@ -101,7 +101,7 @@ def main():
 
     repo = pathlib.Path(args.repo).resolve()
     stub = pathlib.Path(args.stub).resolve()
-    acl_root = repo / "python" / "jittor" / "extern" / "acl"
+    acl_root = repo / "backends" / "acl"
 
     make_cann_stub.build(acl_root, stub)
 

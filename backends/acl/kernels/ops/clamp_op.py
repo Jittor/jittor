@@ -13,7 +13,7 @@ class ClampACL(jt.Function):
             inputs=[input, min_value, max_value],
             cuda_header='''
 namespace jittor {}
-#include "acl/aclops/aclops.h"
+#include "aclops/aclops.h"
 ''',
             cuda_src='''
 // aclop

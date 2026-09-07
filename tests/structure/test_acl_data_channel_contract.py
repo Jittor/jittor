@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-HEADER = ROOT / "python/jittor/extern/acl/aclops/acl_data_channel.h"
+HEADER = ROOT / "backends/acl/include/aclops/acl_data_channel.h"
 SRC_INCLUDE = ROOT / "src"
 
 
@@ -40,12 +40,12 @@ def test_acl_data_channel_header_is_cann_free_and_compilable():
     assert "void consume(const AclDataRecord& record" in text
     assert "const AclAttrSchema& schema() const" in text
     assert "ACL data owner name must be non-empty" in text
-    _compile('#include "python/jittor/extern/acl/aclops/acl_data_channel.h"\n')
+    _compile('#include "backends/acl/include/aclops/acl_data_channel.h"\n')
 
 
 def test_acl_descriptor_release_does_not_delete_rebuilt_entry():
     source = r'''
-#include "python/jittor/extern/acl/aclops/acl_data_channel.h"
+#include "backends/acl/include/aclops/acl_data_channel.h"
 int main() {
     using namespace jittor::acl_data;
     AclAttrSchema schema;
@@ -78,7 +78,7 @@ int main() {
 
 def test_acl_data_view_is_borrowed_and_noncopyable():
     source = r'''
-#include "python/jittor/extern/acl/aclops/acl_data_channel.h"
+#include "backends/acl/include/aclops/acl_data_channel.h"
 #include <type_traits>
 static_assert(!std::is_copy_constructible<jittor::acl_data::AclDataView>::value,
               "ACL consumer views must not escape their consume callback");
@@ -91,7 +91,7 @@ int main() { return 0; }
 
 def test_acl_data_channel_decodes_defaults_and_has_stable_key():
     source = r'''
-#include "python/jittor/extern/acl/aclops/acl_data_channel.h"
+#include "backends/acl/include/aclops/acl_data_channel.h"
 #include <string>
 int main() {
     using namespace jittor::acl_data;
@@ -130,7 +130,7 @@ int main() {
 
 def test_acl_data_channel_cache_key_ignores_process_numeric_locale():
     source = r'''
-#include "python/jittor/extern/acl/aclops/acl_data_channel.h"
+#include "backends/acl/include/aclops/acl_data_channel.h"
 #include <locale>
 #include <string>
 
@@ -166,7 +166,7 @@ int main() {
 
 def test_acl_descriptor_key_separates_shape_layout_and_device_without_cann():
     source = r'''
-#include "python/jittor/extern/acl/aclops/acl_data_channel.h"
+#include "backends/acl/include/aclops/acl_data_channel.h"
 #include <string>
 int main() {
     using namespace jittor::acl_data;
@@ -239,7 +239,7 @@ int main() {
 
 def test_acl_descriptor_handle_lifecycle_rejects_stale_entries_without_cann():
     source = r'''
-#include "python/jittor/extern/acl/aclops/acl_data_channel.h"
+#include "backends/acl/include/aclops/acl_data_channel.h"
 #include <string>
 int main() {
     using namespace jittor::acl_data;
@@ -289,7 +289,7 @@ int main() {
 
 def test_acl_data_owner_binds_identity_and_schema_for_future_registry():
     source = r'''
-#include "python/jittor/extern/acl/aclops/acl_data_channel.h"
+#include "backends/acl/include/aclops/acl_data_channel.h"
 int main() {
     using namespace jittor::acl_data;
     AclAttrSchema schema;
@@ -333,7 +333,7 @@ int main() {
 
 def test_acl_data_owner_exposes_validated_read_only_consumer_view():
     source = r'''
-#include "python/jittor/extern/acl/aclops/acl_data_channel.h"
+#include "backends/acl/include/aclops/acl_data_channel.h"
 #include <vector>
 int main() {
     using namespace jittor::acl_data;
@@ -382,7 +382,7 @@ int main() {
 
 def test_acl_attr_runner_contract_freezes_bindings_before_consumer():
     source = r'''
-#include "python/jittor/extern/acl/aclops/acl_data_channel.h"
+#include "backends/acl/include/aclops/acl_data_channel.h"
 int main() {
     using namespace jittor::acl_data;
     AclAttrSchema schema;
@@ -456,7 +456,7 @@ int main() {
 
 def test_acl_schema_rejects_invalid_type_without_default():
     source = r'''
-#include "python/jittor/extern/acl/aclops/acl_data_channel.h"
+#include "backends/acl/include/aclops/acl_data_channel.h"
 int main() {
     using namespace jittor::acl_data;
     AclAttrSchema schema;

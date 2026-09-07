@@ -12,7 +12,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "python/jittor/extern/acl/acl_compiler.py"
+SOURCE = ROOT / "backends/acl/__init__.py"
 
 
 def _load_module(monkeypatch, name, path):
@@ -80,16 +80,13 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
     assert config.resources["acl_library"] is setup.library
     assert config.resources["existing_resource"] == 3
     assert config.extra_core_files[0] == "existing.cc"
-    expected_extra = []
-    converter_sources = []
-    for path in sorted(SOURCE.parent.rglob("*.cc")):
-        name = str(path)
-        if "hccl" in name:
-            continue
-        if "acl_op_exec" in name or "_op_acl.cc" in name or "utils.cc" in name:
-            expected_extra.append(name)
-        else:
-            converter_sources.append(name)
+    expected_extra = [str(SOURCE.parent / "src/acl_op_exec.cc")]
+    expected_extra.extend(str(path) for path in sorted(
+        (SOURCE.parent / "kernels/native").glob("*.cc")))
+    converter_sources = [str(SOURCE.parent / "src" / name) for name in (
+        "acl_error_code.cc", "acl_jittor.cc", "aclnn.cc")]
+    assert len(expected_extra) == 42
+    assert len(converter_sources) == 3
     assert config.extra_core_files == ("existing.cc", *expected_extra)
     assert [call[0] for call in setup.calls] == ["load", "compile"]
     assert setup.calls[0][1:] == ("libascendcl.so", os.RTLD_NOW | os.RTLD_GLOBAL)
@@ -97,6 +94,11 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
     assert "-I/source/src" in converter_flags
     assert all(name in converter_flags for name in converter_sources)
     assert all(name not in converter_flags for name in expected_extra)
+    for name in ("backend.cc", "workspace.cc"):
+        assert str(SOURCE.parent / "src" / name) not in converter_flags
+        assert str(SOURCE.parent / "src" / name) not in config.extra_core_files
+    for directory in ("include", "include/aclnn", "include/aclops"):
+        assert "-I" + str(SOURCE.parent / directory) in config.cc_flags
     assert setup.base.extra_core_files == ("existing.cc",)
     assert setup.base.cc_flags == "-std=c++14 -I/source/src"
     assert setup.base.environment == {"existing_env": "yes"}
@@ -185,3 +187,13 @@ def test_backend_has_no_mutable_configuration_or_compiler_imports(acl):
         elif isinstance(node, ast.ImportFrom):
             assert node.module != "jittor.compiler"
     assert not any(isinstance(node, ast.Global) for node in ast.walk(tree))
+
+
+def test_provider_source_inventory_is_explicit_and_complete(acl):
+    sources = acl.REGISTRATION_SOURCES + acl.CORE_SOURCES
+    assert len(sources) == len(set(sources)) == 45
+    assert all((SOURCE.parent / name).is_file() for name in sources)
+    actual = {str(path.relative_to(SOURCE.parent))
+              for path in SOURCE.parent.rglob("*.cc")}
+    assert actual == set(sources) | {"src/backend.cc", "src/workspace.cc"}
+    assert "glob" not in vars(acl)
