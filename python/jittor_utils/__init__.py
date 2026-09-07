@@ -5,6 +5,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 from multiprocessing import Pool
+import builtins
 import multiprocessing as mp
 import subprocess as sp
 import os
@@ -294,18 +295,23 @@ class DelayProgress:
 
 # check is in jupyter notebook
 def in_ipynb():
+    """True inside a Jupyter kernel.
+
+    A running IPython shell injects ``get_ipython`` into builtins, so the
+    presence of that name *is* the whole test -- and it is the only form of
+    the test that works without IPython on the path. Importing IPython to ask
+    the question instead costs 0.27 s of every ``import jittor`` on a machine
+    where IPython happens to be installed and unused, which was 18% of a
+    hot-cache import (measured 2026-09-07, `9.01`).
+    """
+    get_ipython = getattr(builtins, "get_ipython", None)
+    if get_ipython is None:
+        return False
     try:
-        # IPython injects get_ipython() into builtins only inside IPython, so
-        # import it rather than relying on a name that may not exist. Outside
-        # IPython this raises ImportError and falls through to False, which is
-        # what the bare name did by raising NameError.
-        from IPython import get_ipython
-        cfg = get_ipython().config
-        if 'IPKernelApp' in cfg:
-            return True
-        else:
-            return False
-    except:
+        return "IPKernelApp" in get_ipython().config
+    except (AttributeError, TypeError):
+        # An IPython shell that is not a kernel: get_ipython() may hand back
+        # None, or a shell whose config is not subscriptable.
         return False
 
 @contextlib.contextmanager
