@@ -116,6 +116,15 @@ class TestLoadHonoursSavedStrides(unittest.TestCase):
         got = self._load(0, (2, 3), (3, 1))
         np.testing.assert_array_equal(got.numpy(), self.base.reshape(2, 3))
 
+    def test_wide_dtype_survives_strided_rebuild(self):
+        for dtype, storage_type in ((np.int64, "LongStorage"), (np.float64, "DoubleStorage")):
+            with self.subTest(dtype=dtype):
+                self.base = np.array([2**45+i for i in range(6)], dtype=dtype)
+                self.storage = _StorageRef("0", self.base, storage_type)
+                got = self._load(0, (3, 2), (1, 3))
+                self.assertEqual(str(got.dtype), np.dtype(dtype).name)
+                np.testing.assert_array_equal(got.numpy(), self.base.reshape(2, 3).T)
+
     def test_a_transposed_view_loads_transposed(self):
         # base.reshape(2, 3).T: size (3, 2), stride (1, 3), offset 0.
         # Dropping the stride reshapes to [[0,1],[2,3],[4,5]] -- same shape,

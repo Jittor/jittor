@@ -240,6 +240,20 @@ def test_independent_tensor_installation_preserves_native_type():
         differentiable_batch = collate([custom_input, custom_input])
         batch_gradient, = torch.autograd.grad(differentiable_batch.sum(), custom_input)
         np.testing.assert_allclose(batch_gradient.numpy(), [2., 2.])
+        import io
+        checkpoint = io.BytesIO()
+        saved = {"wide": torch.tensor([2**45, 2**45+1], dtype=torch.int64),
+                 "bf16": torch.tensor([1.25, 2.5], dtype=torch.bfloat16),
+                 "parameter": torch.nn.Parameter(torch.tensor([3., 4.]))}
+        torch.save(saved, checkpoint)
+        checkpoint.seek(0)
+        loaded = torch.load(checkpoint, map_location="cpu")
+        assert type(loaded["wide"]) is torch.Tensor
+        assert loaded["wide"].dtype is torch.int64
+        np.testing.assert_array_equal(loaded["wide"].numpy(), [2**45, 2**45+1])
+        assert loaded["bf16"].dtype is torch.bfloat16
+        assert type(loaded["parameter"]) is torch.nn.Parameter
+        assert loaded["parameter"].requires_grad and loaded["parameter"].is_leaf
         assert jt.autograd.get_policy() is policy_before
         print("INDEPENDENT_TENSOR_OK")
     """)], without_torch_mode=True, merge_stderr=True)

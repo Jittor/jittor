@@ -10,7 +10,9 @@ from ..diagnostics import EXPECTED, swallowed
 
 def _install_safetensors_shim(registry=None):
     """Patch safetensors.torch to load tensors without real torch storage."""
-    _modules = registry_for(jt, registry).module_map
+    _registry = registry_for(jt, registry)
+    _modules = _registry.module_map
+    g = _registry.target_namespace
     try:
         import json
         import struct
@@ -20,6 +22,7 @@ def _install_safetensors_shim(registry=None):
         return
     if getattr(_st, "_jittor_torch_compat", False):
         return
+    _original_safe_open = _st.safe_open
 
     _ST = {
         "F64": (np.float64, 8), "F32": (np.float32, 4), "F16": (np.float16, 2),
@@ -30,20 +33,33 @@ def _install_safetensors_shim(registry=None):
     }
 
     def _bytes_to_np(raw, st_dtype, shape):
+        if st_dtype.startswith("F8_"):
+            raise NotImplementedError(
+                "safetensors dtype %s has no supported Jittor decoder" % st_dtype)
         npd, _itemsize = _ST[st_dtype]
         shape = tuple(shape)
         if st_dtype == "BF16":
             u16 = np.frombuffer(raw, dtype=np.uint16).astype(np.uint32)
             return (u16 << 16).view(np.float32).reshape(shape)
-        if st_dtype in ("F8_E4M3", "F8_E5M2"):
-            return np.frombuffer(raw, dtype=np.uint8).astype(np.float32).reshape(shape)
         return np.frombuffer(raw, dtype=npd).reshape(shape)
 
+    def _to_tensor(array, st_dtype, device):
+        array = np.asarray(array)
+        if not array.flags.c_contiguous:
+            array = np.ascontiguousarray(array)
+        dtype = "bfloat16" if st_dtype == "BF16" else array.dtype.name
+        tensor = g.tensor(array, dtype=dtype, device="cpu", requires_grad=False)
+        target_device = "cpu" if device is None else device
+        if isinstance(target_device, (int, np.integer)) and not isinstance(target_device, bool):
+            target_device = "cuda:%d" % int(target_device)
+        return tensor.to(device=target_device)
+
     class _PySafeSlice:
-        def __init__(self, raw, st_dtype, shape):
+        def __init__(self, raw, st_dtype, shape, device="cpu"):
             self._raw = raw
             self._dtype = st_dtype
             self._shape = shape
+            self._device = device
 
         def get_shape(self):
             return list(self._shape)
@@ -53,9 +69,9 @@ def _install_safetensors_shim(registry=None):
 
         def __getitem__(self, idx):
             arr = _bytes_to_np(self._raw, self._dtype, self._shape)
-            if idx is not Ellipsis and idx != slice(None):
+            if idx is not Ellipsis:
                 arr = arr[idx]
-            return jt.array(np.ascontiguousarray(arr))
+            return _to_tensor(arr, self._dtype, self._device)
 
     class _PySafeOpen:
         def __init__(self, filename, framework="pt", device="cpu", backend="mmap"):
@@ -79,11 +95,11 @@ def _install_safetensors_shim(registry=None):
 
         def get_slice(self, key):
             st_dtype, shape, raw = self._entry(key)
-            return _PySafeSlice(raw, st_dtype, shape)
+            return _PySafeSlice(raw, st_dtype, shape, self._device)
 
         def get_tensor(self, key):
             st_dtype, shape, raw = self._entry(key)
-            return jt.array(np.ascontiguousarray(_bytes_to_np(raw, st_dtype, shape)))
+            return _to_tensor(_bytes_to_np(raw, st_dtype, shape), st_dtype, self._device)
 
         def get_dtype(self, key):
             return self._header[key]["dtype"]
@@ -103,7 +119,7 @@ def _install_safetensors_shim(registry=None):
         for key, entry in header.items():
             start, end = entry["data_offsets"]
             arr = _bytes_to_np(data[base + start:base + end], entry["dtype"], entry["shape"])
-            out[key] = jt.array(np.ascontiguousarray(arr))
+            out[key] = _to_tensor(arr, entry["dtype"], "cpu")
         return out
 
     def _load_file(filename, device="cpu"):
@@ -113,7 +129,8 @@ def _install_safetensors_shim(registry=None):
     _NP_TO_ST = {
         "float64": "F64", "float32": "F32", "float16": "F16",
         "int64": "I64", "int32": "I32", "int16": "I16", "int8": "I8",
-        "uint8": "U8", "bool": "BOOL", "bfloat16": "BF16",
+        "uint8": "U8", "uint16": "U16", "uint32": "U32", "uint64": "U64",
+        "bool": "BOOL", "bfloat16": "BF16",
     }
 
     def _save_dict(tensors, metadata=None):
@@ -121,16 +138,24 @@ def _install_safetensors_shim(registry=None):
         blobs = []
         offset = 0
         for key, value in tensors.items():
+            tensor_dtype = str(value.dtype) if isinstance(value, jt.Var) else None
             arr = value.numpy() if hasattr(value, "numpy") else np.asarray(value)
-            arr = np.ascontiguousarray(arr)
-            st_dtype = _NP_TO_ST.get(str(arr.dtype), "F32")
-            if st_dtype not in _ST or _ST[st_dtype][0] is None:
-                arr = arr.astype(np.float32)
-                st_dtype = "F32"
-            blob = arr.tobytes()
+            arr = np.asarray(arr)
+            shape = list(arr.shape)
+            dtype = tensor_dtype or arr.dtype.name
+            if dtype not in _NP_TO_ST:
+                raise NotImplementedError("safetensors cannot save dtype %s" % dtype)
+            st_dtype = _NP_TO_ST[dtype]
+            if st_dtype == "BF16":
+                # Native BF16 numpy() exposes exact values in float32. Encode
+                # their upper 16 bits, not a float32 payload with a BF16 label.
+                bits = arr.astype(np.float32, copy=False).view(np.uint32)
+                blob = (bits >> 16).astype(np.uint16).tobytes(order="C")
+            else:
+                blob = arr.astype(_ST[st_dtype][0], copy=False).tobytes(order="C")
             header[key] = {
                 "dtype": st_dtype,
-                "shape": list(arr.shape),
+                "shape": shape,
                 "data_offsets": [offset, offset + len(blob)],
             }
             blobs.append(blob)
@@ -144,12 +169,19 @@ def _install_safetensors_shim(registry=None):
         with open(filename, "wb") as fh:
             fh.write(_save_dict(tensors, metadata))
 
-    _st.safe_open = _PySafeOpen
+    def _safe_open(filename, framework="pt", device="cpu", backend="mmap"):
+        if framework in ("pt", "pytorch"):
+            return _PySafeOpen(filename, framework, device, backend)
+        # NumPy and other frameworks keep their original loader and return
+        # types. In particular, do not route safetensors.numpy through Tensor.
+        return _original_safe_open(filename, framework=framework, device=device)
+
+    _st.safe_open = _safe_open
     _st._jittor_torch_compat = True
-    _modules["safetensors"].safe_open = _PySafeOpen
+    _modules["safetensors"].safe_open = _safe_open
     try:
         import safetensors.torch as _stt
-        _stt.safe_open = _PySafeOpen
+        _stt.safe_open = _safe_open
         _stt.load = _load_bytes
         _stt.load_file = _load_file
         _save = lambda tensors, metadata=None: _save_dict(tensors, metadata)
@@ -157,12 +189,6 @@ def _install_safetensors_shim(registry=None):
         _stt.save_file = _save_file
     except EXPECTED as exc:
         swallowed("torch/serialization.py _install_safetensors_shim: import safetensors.torch as _stt", exc)
-    try:
-        import safetensors.numpy as _stn
-        _stn.load_file = _load_file
-        _stn.save_file = _save_file
-    except (AttributeError, TypeError) as exc:
-        swallowed("torch/serialization.py _install_safetensors_shim: import safetensors.numpy as _stn", exc)
 
 
 def install(ctx):
@@ -185,7 +211,9 @@ def install(ctx):
             # name so a checkpoint carries no importable global at all.
             return {_VAR_TAG: True, "data": obj.clone().numpy(),
                     "dtype": str.__str__(obj.dtype) if isinstance(obj.dtype, str)
-                             else str(obj.dtype)}
+                             else str(obj.dtype),
+                    "requires_grad": bool(obj.requires_grad),
+                    "parameter": isinstance(obj, g.nn.Parameter)}
         # Drop non-picklable callables (e.g. an LR scheduler's local lr_lambda
         # closure in an extra/scheduler state_dict). torch's LambdaLR.state_dict
         # does the same -- the lambda is rebuilt on load, not restored.
@@ -214,7 +242,11 @@ def install(ctx):
             if obj.get(_VAR_TAG):
                 # from_numpy preserves wide dtypes (float64/int64); jt.array narrows
                 # them to float32/int32 -> torch.save/load silently downcast checkpoints.
-                return g.from_numpy(obj["data"])
+                value = g.tensor(obj["data"], dtype=obj.get("dtype"),
+                                 requires_grad=bool(obj.get("requires_grad", False)))
+                if obj.get("parameter", False):
+                    value = g.nn.Parameter(value, requires_grad=value.requires_grad)
+                return value
             return {k: _from_portable(v) for k, v in obj.items()}
         if isinstance(obj, (list, tuple)):
             t = type(obj)
@@ -348,10 +380,15 @@ def install(ctx):
             return type(obj)(built) if type(obj) is not list else built
         if not isinstance(obj, jt.Var):
             return obj
+        def preserve_parameter(moved):
+            if moved is not obj and isinstance(obj, g.nn.Parameter):
+                obj.assign(moved.detach())
+                return obj
+            return moved
         target = map_location
         if callable(target) and not isinstance(target, (str, dict)):
             moved = target(obj, "cpu")
-            return moved if isinstance(moved, jt.Var) else obj
+            return preserve_parameter(moved) if isinstance(moved, jt.Var) else obj
         if isinstance(target, dict):
             target = target.get("cpu", target.get("cuda:0"))
             if target is None:
@@ -359,14 +396,14 @@ def install(ctx):
         name = getattr(target, "type", None) or str(target)
         name = str(name).split(":")[0]
         if name == "cpu":
-            return _make_cpu_resident(obj)
+            return preserve_parameter(_make_cpu_resident(obj))
         if name in ("cuda", "npu", "gpu"):
             if not jt.flags.use_cuda:
                 raise RuntimeError(
                     "torch.load(map_location=%r) asks for an accelerator, but "
                     "no CUDA/NPU device is in use. Load with "
                     "map_location='cpu'." % (map_location,))
-            return _make_cuda_resident(obj, force=True)
+            return preserve_parameter(_make_cuda_resident(obj, force=True))
         from ..stub_policy import unimplemented
         return unimplemented(
             "torch.load(map_location=%r)" % (name,),
@@ -454,9 +491,14 @@ def install(ctx):
             size = tuple(int(s) for s in size)
             stride = None if stride is None else tuple(int(s) for s in stride)
             sub = _restore_strided(arr, int(storage_offset), size, stride, key)
-            return jt.array(sub)
+            return g.tensor(sub, dtype=dtype_str, requires_grad=bool(requires_grad))
         def _rebuild_parameter(data, requires_grad=True, backward_hooks=None, *a, **k):
-            return data
+            parameter = g.nn.Parameter(data, requires_grad=requires_grad)
+            if a:
+                if not isinstance(a[0], dict):
+                    raise _pickle.UnpicklingError("parameter state must be a dictionary")
+                parameter.__dict__.update(a[0])
+            return parameter
         class _Unpick(_pickle.Unpickler):
             def persistent_load(self, pid):
                 return _persistent_load(pid)
