@@ -341,3 +341,37 @@ Jittor 手写的 attention softmax（1.59 ms）在 PyTorch 侧没有对应的独
 配对表、脚本与「为什么整网梯度 diff 判不出归约改动」在
 `agent/skills/cuda-reduction-strategy-comparison/`。
 
+## 补充：每算子建图成本的分相实测（2026-09-07，3.21）
+
+本节两条既有条目现在有了实测的量，条目本身都保留：
+
+**「jit key 是……字符缓冲」那一族属于执行器，不属于建图。** 计划 `3.21` 把「jit key
+拼接」列为三项每算子建图成本之一，实测**建图期一个键都不拼**：探针在整个前向建图
+窗口里 `jit_key` 相 count = 0（合成负载）／12（diffusers UNet2D，且这 12 次来自
+下一段说的嵌套执行器运行），占墙钟 **0.04%**。键由执行器在运行时按融合段拼装
+（`Op::jit_run`、`FusedOp::update_jit_key`），所以它的成本归系统审计 **A4**（执行器
+每次运行重做全部调度工作），不归 `3.21`。把执行也放进窗口后，`jit_key` 相立刻变成
+整步的 7.5–7.9%，单键拼装时间随键长线性增长（键长 ×16 → 3.18→24.2 µs/键）。
+
+**「算子构造期回调执行器」（本文件 §节点模型／执行器那条）在真实负载上量到了触发
+频次**：`large_diffusers_unet2d` 一次前向建图里 `exec_called` 增量恒为 **2**，即
+`Op::init()` 的 `v->num < 0` → `runtime_executor().run_sync(...)` 每次前向被走两次。
+用原生 jittor `nn.Module` 写的同类 UNet（`tests/models/_parity_networks.py`）这个数是
+**0**，所以触发点在 diffusers 侧某个动态形状算子上，不是所有网络共有。这两次很小
+（整个 `jit_key` 相只有 7.2 µs），但它意味着「建图」在今天并不是无执行的——任何声称
+只量建图的 harness 必须把这个计数打出来，`tools/benchmarks/graph_build_phases.py`
+在它非 0 时打印 `<-- NOT a build-only measurement`。归 `3.05`。
+
+**建图成本的真实分布**（CUDA、`auto_flush_ops=0`、只计 Python 侧创建算子；墙钟
+中位 16.2 ms／1292 个算子）：pyjt 绑定层 self 14.7%、边表 2.2%、jit key 0.04%、
+`Op::init()` 2.5%、`create_output` 1.9%，**核心合计 21.3%，剩下 78.7% 的 Python 层
+一次核心调用都不算在内**（cProfile 独立交叉校验 77.4%）。1292 个算子对应 13258 次
+Python→核心调用，**每算子 10.3 次**。全套数字、反例与命令在
+`agent/results/2026-09-07-3.21-per-operator-graph-build-cost.md`；探针在
+`src/utils/graph_build_profile.h`，由 `JT_GRAPH_BUILD_PROFILE=1` 编入，关掉时把探针宏
+就地置空重编，`op.cc`/`jit_key.cc`/`fused_op.cc` 的 `.text` 逐字节相同。
+
+上面这组占比在一个静默窗口里复核过第二遍（核心合计 19.9%／Python 层 80.1%，算子数
+1292 与执行器运行次数 2 两次逐字相同，`jit_key` 相 count 6），两次测量的对照表在报告
+§0.1。**所以「三项合计」的实测区间是 15.3%–16.9%，两次都不到总量两成**。
+
