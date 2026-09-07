@@ -117,7 +117,7 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 | --- | --- |
 | 命令 | `nox -s rocm` |
 | 覆盖 | `tests/backends/rocm/test_rocm.py` 与 `tests/distributed/` 的 MPI 组 |
-| 静态侧 | `tests/structure/test_rocm_blob_provenance.py`、`tests/structure/test_rocm_library_provider.py`、`tests/structure/test_rocm_native_provider.py` |
+| 静态侧 | `tests/structure/test_no_unexplained_binaries.py`、`tests/structure/test_rocm_library_provider.py`、`tests/structure/test_rocm_native_provider.py` |
 
 等它的看板项：**`4.12`** 的 ROCm 那半。**代码半已闭合并标已合并**，这里只剩真卡确认。
 

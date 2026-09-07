@@ -15,7 +15,7 @@ PROVIDER = ROOT / "backends" / "rocm" / "__init__.py"
 
 
 def test_legacy_entrypoint_is_only_a_compatibility_forwarder():
-    source = (ROOT / "python/jittor/extern/rocm/rocm_compiler.py").read_text()
+    source = (ROOT / "backends/rocm/__init__.py").read_text()
     tree = ast.parse(source)
     assert "rocm_cache" not in source
     assert "transform_sources" not in source
