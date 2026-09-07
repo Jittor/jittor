@@ -10,6 +10,7 @@
 #include "cudnn_descriptor.h"
 #include "cudnn_wrapper.h"
 #include "cudnn_conv_plan.h"
+#include "cudnn_conv_algo_key.h"
 #include "executor.h"
 #include "ops/op_register.h"
 #include "mem/mem_info.h"
@@ -97,14 +98,14 @@ VarPtr CudnnConvOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
 }
 
-unordered_map<string, cudnnConvolutionFwdAlgo_t> fwd_algo_cache;
+ConvAlgoCache<cudnnConvolutionFwdAlgo_t> fwd_algo_cache;
 
 #else // JIT
 #ifdef JIT_cuda
 
 #pragma clang diagnostic ignored "-Wtautological-compare"
 
-EXTERN_LIB unordered_map<string, cudnnConvolutionFwdAlgo_t> fwd_algo_cache;
+EXTERN_LIB ConvAlgoCache<cudnnConvolutionFwdAlgo_t> fwd_algo_cache;
 EXTERN_LIB int cudnn_benchmark;
 
 void CudnnConvOp::jit_run() {
@@ -244,25 +245,22 @@ void CudnnConvOp::jit_run() {
     // benchmark=0 still forces the heuristic.
     bool benchmark = cudnn_benchmark != 0;
 
-    JK& jk = get_jk();
-    jk.clear();
-    jk << "x=" << x->dtype() << ":";
-    jk << dimX[0] << "," << dimX[1] << "," << dimX[2] << "," << dimX[3] << ":";
-    jk << strideX[0] << "," << strideX[1] << "," << strideX[2] << "," << strideX[3] << ";";
-    jk << "w=" << w->dtype() << ":";
-    jk << dimW[0] << "," << dimW[1] << "," << dimW[2] << "," << dimW[3] << ":";
-    jk << static_cast<int>(filterFormat_@WFORMAT) << ";";
-    jk << "y=" << y->dtype() << ":";
-    jk << dimY[0] << "," << dimY[1] << "," << dimY[2] << "," << dimY[3] << ":";
-    jk << strideY[0] << "," << strideY[1] << "," << strideY[2] << "," << strideY[3] << ";";
-    jk << "conv=" << paddingh << "," << paddingw << ":";
-    jk << strideh << "," << stridew << ":";
-    jk << dilationh << "," << dilationw << ":" << groups << ";";
-    jk << "compute=" << static_cast<int>(conv_compute_type) << ":";
-    jk << "math=" << conv_math_key << ":";
-    // A cached algorithm must still honor a workspace limit changed at runtime.
-    jk << "workspace_ratio=" << max_workspace_ratio << ".";
-    auto iter = fwd_algo_cache.find(jk.to_string());
+    // The key is a POD struct hashed as its bytes; see cudnn_conv_algo_key.h,
+    // and tests/compiler/test_cudnn_conv_algo_key.py for what keeps two
+    // configurations that need different algorithms from sharing an entry.
+    // This used to be decimal and hexadecimal text written into the shared jit
+    // key buffer -- which the executor had already filled with the key of the
+    // kernel running right now -- plus a `std::string` off it per convolution.
+    // A cached algorithm must still honor a workspace limit changed at runtime,
+    // so `max_workspace_ratio` is part of the key.
+    ConvAlgoKey algo_key = conv_algo_key(
+        CONV_ALGO_FWD, 2,
+        getDataType<Tx>(), getDataType<Tw>(), getDataType<Ty>(),
+        conv_compute_type, conv_math_key,
+        filterFormat_@WFORMAT, groups, max_workspace_ratio,
+        dimX, strideX, dimW, dimY, strideY,
+        padA, convstrideA, dilationA);
+    auto iter = fwd_algo_cache.find(algo_key);
     
     if (iter!=fwd_algo_cache.end()) algo = iter->second;
     else {
@@ -318,7 +316,7 @@ void CudnnConvOp::jit_run() {
         // diffusers UNet step made 663 of these queries where 27 would do, and
         // that query, not the algorithm it returned, was the cost.
         if (fwd_algo_cache.size() < (size_t)max_cache_size) {
-            fwd_algo_cache[jk.to_string()] = algo;
+            fwd_algo_cache[algo_key] = algo;
             if (fwd_algo_cache.size()==(size_t)max_cache_size)
                 LOGw << "forward_ algorithm cache is full";
         }

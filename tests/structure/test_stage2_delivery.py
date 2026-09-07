@@ -274,7 +274,12 @@ class TestStage2Delivery(unittest.TestCase):
                 # both come from the shared helper.
                 self.assertIn("cudnn_conv_math_type(", source)
                 self.assertIn("cudnn_conv_compute_type(", source)
-                self.assertIn('jk << "math=" << conv_math_key', source)
+                # Both reach the algorithm cache key, or a convolution would
+                # take the algorithm measured under another math type. 8.12
+                # moved that key from text written into the shared jit key
+                # buffer -- where this read `jk << "math=" << conv_math_key` --
+                # into a POD struct; the two are now arguments to it.
+                self.assertIn("conv_compute_type, conv_math_key,", source)
 
         wrapper = (cuda / "libraries" / "cudnn" / "include" / "cudnn_wrapper.h").read_text(encoding="utf-8")
         self.assertIn("cudnnMathType_t cudnn_conv_math_type(", wrapper)

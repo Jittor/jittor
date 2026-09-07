@@ -16,6 +16,7 @@ algorithm, a 2-D key could collide with a 3-D one, and changing
 This is the interim fix -- a fuller one moves conv3d onto the backend-API plan
 cache -- so the test asserts on the key itself.
 """
+import re
 import unittest
 
 import numpy as np
@@ -26,6 +27,23 @@ from _helpers.logs import find_log_with_re
 
 
 _KEY_RE = r"(cudnn_conv3d \w+ algo cache key: .*)"
+
+#: The hash of the ``ConvAlgoKey`` the table was actually consulted with.
+#:
+#: 8.12 replaced the text key with a POD struct, so the logged line is now a
+#: *description* of the key rather than the key itself.  The description spells
+#: the dtypes by name, which it reads from the operands rather than from the
+#: key -- so two descriptions differing is no longer evidence that the two keys
+#: differ.  This is, and it covers every field of the key rather than only the
+#: ones the description happens to mention: dropping the dtypes from
+#: ``conv_algo_key`` leaves the descriptions distinct but makes these equal.
+_HASH_RE = re.compile(r";hash=(\d+)")
+
+
+def _hashes(keys):
+    found = [_HASH_RE.search(key) for key in keys]
+    assert all(found), "a logged key carries no hash=:\n%s" % "\n".join(keys)
+    return {match.group(1) for match in found}
 
 
 def _forward_keys(x, w):
@@ -80,6 +98,8 @@ class TestCudnnConv3dAlgoCache(unittest.TestCase):
             self.assertIn("conv3d.", key)
             self.assertIn("x=float32", key)
             self.assertIn("workspace_ratio=", key)
+            # Pins the format the disjointness check above relies on.
+            self.assertRegex(key, _HASH_RE.pattern)
 
     def test_float32_and_float16_do_not_share_an_entry(self):
         fp32 = _all_pass_keys(*self._inputs("float32"))
@@ -88,6 +108,13 @@ class TestCudnnConv3dAlgoCache(unittest.TestCase):
         # Same shapes, different dtypes: every key must differ.
         self.assertFalse(set(fp32) & set(fp16),
                          "fp32 and fp16 conv3d share a cache key:\n%s\n%s"
+                         % ("\n".join(sorted(set(fp32))),
+                            "\n".join(sorted(set(fp16)))))
+        # And the keys themselves differ, not merely their descriptions --
+        # the assertion above would hold on a key that had dropped the dtypes,
+        # because the description reads them off the operands.
+        self.assertFalse(_hashes(fp32) & _hashes(fp16),
+                         "fp32 and fp16 conv3d hash to the same entry:\n%s\n%s"
                          % ("\n".join(sorted(set(fp32))),
                             "\n".join(sorted(set(fp16)))))
         for key in fp16:

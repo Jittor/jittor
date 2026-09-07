@@ -12,6 +12,7 @@
 #include "cudnn_conv3d_backward_w_op.h"
 #include "cudnn_descriptor.h"
 #include "cudnn_wrapper.h"
+#include "cudnn_conv_algo_key.h"
 #include "executor.h"
 #include "ops/op_register.h"
 #include "mem/mem_info.h"
@@ -89,7 +90,7 @@ VarPtr CudnnConv3dBackwardWOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 
 #pragma clang diagnostic ignored "-Wtautological-compare"
 
-EXTERN_LIB unordered_map<string, cudnnConvolutionBwdFilterAlgo_t> bwdw_algo_cache;
+EXTERN_LIB ConvAlgoCache<cudnnConvolutionBwdFilterAlgo_t> bwdw_algo_cache;
 EXTERN_LIB int cudnn_benchmark;
 
 template <typename T_ELEM> __inline__  cudnnDataType_t getDataType();
@@ -217,26 +218,37 @@ void CudnnConv3dBackwardWOp::jit_run() {
     // backward at all.
     bool benchmark = cudnn_benchmark != 0;
 
-    JK& jk = get_jk();
-    jk.clear();
-    // conv3d shares this cache with conv2d, so the key needs a namespace of
-    // its own; and it has to carry the dtypes, the output extent, the compute
-    // type and the workspace budget, or an fp32 and an fp16 convolution of the
-    // same shape get one another's algorithm and a changed
-    // max_workspace_ratio never invalidates anything.
-    jk << "conv3d.bwdw;";
-    jk << "x=" << x->dtype() << ":";
-    jk << dimX[0] << "," << dimX[1] << "," << dimX[2] << "," << dimX[3] << "," << dimX[4] << ";";
-    jk << "w=" << w->dtype() << ":";
-    jk << dimW[0] << "," << dimW[1] << "," << dimW[2] << "," << dimW[3] << "," << dimW[4] << ";";
-    jk << "y=" << y->dtype() << ":";
-    jk << dimY[0] << "," << dimY[1] << "," << dimY[2] << "," << dimY[3] << "," << dimY[4] << ";";
-    jk << "conv=" << paddingd << paddingh << paddingw << "," << strided << strideh <<stridew << "," << dilationd << dilationh << dilationw << "," << groups << ";";
-    jk << "compute=" << static_cast<int>(conv_compute_type) << ":";
-    jk << "math=" << conv_math_key << ":";
-    jk << "workspace_ratio=" << max_workspace_ratio << ".";
-    LOGvvv << "cudnn_conv3d bwdw algo cache key:" << jk.to_string();
-    auto iter = bwdw_algo_cache.find(jk.to_string());
+    // The key is a POD struct hashed as its bytes; see cudnn_conv_algo_key.h,
+    // and tests/compiler/test_cudnn_conv_algo_key.py for what keeps two
+    // configurations that need different algorithms from sharing an entry.
+    //
+    // conv3d shares this table with conv2d, which `spatial_dims` is what
+    // separates -- the text this replaced spelled that as a "conv3d.bwdw;"
+    // prefix. The text also ran the three padding values together with nothing
+    // between them into variable-length hex, so (1,1,17), (1,17,1) and (17,1,1)
+    // all wrote "1111"; and it carried no strides, so a channels-last
+    // convolution took the algorithm measured for the contiguous one.
+    ConvAlgoKey algo_key = conv_algo_key(
+        CONV_ALGO_BWD_FILTER, 3,
+        getDataType<Tx>(), getDataType<Tw>(), getDataType<Ty>(),
+        conv_compute_type, conv_math_key,
+        filterFormat_oihw, groups, max_workspace_ratio,
+        dimX, strideX, dimW, dimY, strideY,
+        padA, convstrideA, dilationA);
+    // A description of that key, for debugging. LOGvvv does not evaluate its
+    // operands unless the level asks for them, so this is free when off.
+    // The hash is in the line because
+    // tests/backends/cuda/test_cudnn_conv3d_algo_cache.py reads these lines to
+    // check that an fp32 and an fp16 convolution of the same shape do not
+    // share an entry; without it that check would be measuring this text
+    // rather than the key the table is actually consulted with.
+    LOGvvv << "cudnn_conv3d bwdw algo cache key:"
+        << "conv3d.bwdw;x=" >> x->dtype().to_cstring()
+        >> ";w=" >> w->dtype().to_cstring()
+        >> ";y=" >> y->dtype().to_cstring()
+        >> ";workspace_ratio=" >> max_workspace_ratio
+        >> ";hash=" >> ConvAlgoKeyHash()(algo_key);
+    auto iter = bwdw_algo_cache.find(algo_key);
     
     if (iter!=bwdw_algo_cache.end()) algo = iter->second;
     else {
@@ -283,7 +295,7 @@ void CudnnConv3dBackwardWOp::jit_run() {
         ASSERT(best_algo_idx!=-1);
         algo=perf_results[best_algo_idx].algo;
         if (cache_algo) {
-            bwdw_algo_cache[jk.to_string()] = algo;
+            bwdw_algo_cache[algo_key] = algo;
             if (bwdw_algo_cache.size()==max_cache_size)
                 LOGw << "backward w algorithm cache is full";
         }

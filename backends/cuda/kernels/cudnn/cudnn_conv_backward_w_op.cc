@@ -13,6 +13,7 @@
 #include "cudnn_descriptor.h"
 #include "cudnn_wrapper.h"
 #include "cudnn_conv_plan.h"
+#include "cudnn_conv_algo_key.h"
 #include "executor.h"
 #include "ops/op_register.h"
 #include "mem/mem_info.h"
@@ -95,14 +96,14 @@ VarPtr CudnnConvBackwardWOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
 }
 
-unordered_map<string, cudnnConvolutionBwdFilterAlgo_t> bwdw_algo_cache;
+ConvAlgoCache<cudnnConvolutionBwdFilterAlgo_t> bwdw_algo_cache;
 
 #else // JIT
 #ifdef JIT_cuda
 
 #pragma clang diagnostic ignored "-Wtautological-compare"
 
-EXTERN_LIB unordered_map<string, cudnnConvolutionBwdFilterAlgo_t> bwdw_algo_cache;
+EXTERN_LIB ConvAlgoCache<cudnnConvolutionBwdFilterAlgo_t> bwdw_algo_cache;
 
 void CudnnConvBackwardWOp::jit_run() {
     auto w = dw;
@@ -229,13 +230,28 @@ void CudnnConvBackwardWOp::jit_run() {
     cudnnConvolutionBwdFilterAlgo_t algo;
     bool benchmark=true;
 
-    JK& jk = get_jk();
-    jk.clear();
-    jk << dimX[0] << "," << dimX[1] << "," << dimX[2] << "," << dimX[3] << ",";
-    jk << dimW[0] << "," << dimW[1] << "," << dimW[2] << "," << dimW[3] << ",";
-    jk << paddingh << paddingw << "," <<strideh <<stridew << "," << dilationh << dilationw << "," << groups << ".";
-    jk << "math=" << conv_math_key << ".";
-    auto iter = bwdw_algo_cache.find(jk.to_string());
+    // The key is a POD struct hashed as its bytes; see cudnn_conv_algo_key.h,
+    // and tests/compiler/test_cudnn_conv_algo_key.py for what keeps two
+    // configurations that need different algorithms from sharing an entry.
+    //
+    // The text this replaced was written into the shared jit key buffer, which
+    // the executor had already filled with the key of the kernel running right
+    // now. It also carried strictly less than the configuration it stood for:
+    // no operand dtypes, no strides, no output extent and no workspace budget.
+    // So an fp16 convolution took the algorithm measured for the fp32 one of
+    // the same shape, and an NHWC one took the NCHW one's -- `dimX` is read
+    // through the layout string and is identical for both, only the strides
+    // differ. And `paddingh` and `paddingw` were concatenated with nothing
+    // between them into variable-length hex, so padding (1,17) and (17,1) both
+    // wrote "111".
+    ConvAlgoKey algo_key = conv_algo_key(
+        CONV_ALGO_BWD_FILTER, 2,
+        getDataType<Tx>(), getDataType<Tw>(), getDataType<Ty>(),
+        conv_compute_type, conv_math_key,
+        filterFormat_@WFORMAT, groups, max_workspace_ratio,
+        dimX, strideX, dimW, dimY, strideY,
+        padA, convstrideA, dilationA);
+    auto iter = bwdw_algo_cache.find(algo_key);
     
     if (iter!=bwdw_algo_cache.end()) algo = iter->second;
     else {
@@ -288,7 +304,7 @@ void CudnnConvBackwardWOp::jit_run() {
         // diffusers UNet step made 663 of these queries where 27 would do, and
         // that query, not the algorithm it returned, was the cost.
         if (bwdw_algo_cache.size() < (size_t)max_cache_size) {
-            bwdw_algo_cache[jk.to_string()] = algo;
+            bwdw_algo_cache[algo_key] = algo;
             if (bwdw_algo_cache.size()==(size_t)max_cache_size)
                 LOGw << "backward w algorithm cache is full";
         }
