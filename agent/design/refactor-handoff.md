@@ -3435,6 +3435,28 @@ CUDA 门禁**不含 `tests/ops`**：基线那一跑超时被杀，没有可比�
 `node.h:263` 的 `backward liveness release without a matching owner` 也是既有的：两侧都出现在
 **同一个用例**（`tests/core/test_setitem.py`）的 teardown，条数随同进程里跑过什么而变
 （基线全量 6 条、改后全量 15 条、单跑 `tests/core` 2 条），不是稳定量，不作判据。
+### 本波（`cudabk` 分区，8.12 抢救未提交改动并收口）
+
+上一位 2026-09-07 05:36 被硬取消，留下 482 行未提交改动 + 4 个未跟踪文件，基线 `e5e353644`。**成立 464 行，丢弃 18 行**，落成 `dfed37996`（代码）与本条（记账）两个提交。
+
+| 项 | 结果 |
+| --- | --- |
+| 成立 | `ConvAlgoKey` 头 + 六个 cuDNN 卷积算子调用点 + 两个新测试文件（`tests/compiler/test_cudnn_conv_algo_key.py`、`tests/structure/test_op_execution_jit_key_use.py`），全部落地 |
+| 丢弃 | `jit_key.h` 里的 `// @pyjt(jit_key_buffer)` + `inline string jit_key_buffer()`（18 行）。**零消费者**（全树 grep 只有它自己），而它注释里点名的动态证据测试 `tests/backends/cuda/test_conv_algo_key_execution.py` **从未写出来**——这是验收三样里「动态证据」那一样，上一位只写了读取器没写测试。给 `@pyjt` 加一个没人用的公开 API 且本波无法验证，按「无法验证就不提交」丢弃；补丁在 `_tmp/salvage3/cudabk-tracked.patch` |
+| 我自己踩的坑 | 六条 cuDNN 表**不能只改一半**：三个 conv3d 算子 `EXTERN_LIB` 声明的正是三个 2-D 算子定义的同名全局表，只改 2-D 会在同一符号上撞类型（ODR）。所以「先落 2-D、conv3d 下一波」这个看起来保守的方案是错的，必须六条一起 |
+| 修好的两处既有门禁 | 都是**逐条改断言、不是删断言**。`test_stage2_delivery` 原用 `jk << "math=" << conv_math_key` 字面量断言 math key 进了缓存键，改成断言它进了 `conv_algo_key(` 的实参。`test_cudnn_conv3d_algo_cache` 三条靠抓 `LOGvvv` 文本键证明 fp32/fp16 不共用条目，那行日志随文本键消失，故在三个 conv3d 算子补回一行 `LOGvvv` 描述并把键的 hash 放进去，测试里加断言比 hash |
+| 一条差点漏掉的「通过得毫无意义」 | 补回的描述里 dtype 名是从**操作数**读的、不是从键读的，所以只比描述的话，一个丢掉 dtype 的键也能通过。反例证实：把这行 hash 换成常量，新断言报红并点名 fp32/fp16 的 fwd 都是 `hash=1`，而原来的文本比较**仍然通过**。另有一条实测教训：**改头文件不会让 jittor 重编 JIT 算子**，第一次把反例做在 `cudnn_conv_algo_key.h` 里，测试 1.87s 就「通过」了——反例根本没进二进制。反例必须做在算子源码里 |
+| 反例（静态合同） | 把 `cudnn_conv_op.cc` 一个文件退回旧 `jk` 写法：3 条报红，含扫全部 27 个源码那条，报 `{'...cudnn_conv_op.cc': ['JK', 'get_jk', 'jk']}`。恢复后 md5 逐字节比对回原值 |
+| 反例（撞键） | 同一 40 组配置过旧文本编码 **52 处撞键**（逐条点名，含 `base-2d == dtype_x=half`、`base-2d == x-nhwc`、`pad=(1,17) == pad=(17,1)` 与三条 3-D padding）；把 `ConvAlgoKeyHash` 改成常量返回，hash 半边 **780 处**（= C(40,2)）报红，而 `bytes=0`、`misplaced=0` 仍成立——相等性是 `memcmp`，携带身份的是字节，这一点测试自己也断言了 |
+| 结构门禁 | 15 failed / 904 passed / 2 xfailed。**同树改前基线自己重跑过**：15 failed / 889 passed / 2 xfailed，失败清单逐条相同，多出的 15 正是新增那个文件。交接里写的「892 passed」比实测多 3，已按实测记 |
+| CUDA 门禁 | 5 failed / 269 passed / 35 skipped，与交接所记基线一致；剩余 5 条为 `test_cublas_test_op` 3 条、`test_cudnn_op::test_backward_nhwc`、`test_shared_reduce_helper_is_two_stage`，与本条无关且早在 |
+| compiler 门禁 | 19 failed / 438 passed。**这套没有可引用的改前基线**（交接只给了结构与 CUDA 两套），新增文件不在失败清单里；19 条均为 CPU 路径（conv tuner 两条走的是 `use_cuda=0`）、profiler、log、jit_tests 等既有失败，走 cuDNN 的 `*_cuda` 卷积变体全部通过 |
+| CUDA 冒烟 | `import jittor` 自检 `os.path.dirname(jittor.__file__)` 为本树；六个 `jit_run` 全部编译并执行（conv2d 前向加两个梯度、conv3d 前向加两个梯度）；旧键撞在一起的 pad=(1,17) 与 (17,1) 两次卷积与 CPU 参考 maxerr 均为 **0**，且两者输出形状分别为 16×48 与 48×16——合并成一条目会拿到另一个输出尺寸的 plan |
+| 没引入淘汰 | 三张表仍是 `size() < max_cache_size` 只增不减，所以 3.03 那个 `t[a] = t[b] = v` 的 C++17 UB 陷阱不适用，已 grep 确认无同形写法 |
+
+**环境不稳定，值得下一位知道**：这一波 shell 反复返回「no exit status」（约七八次），其中一次发生在 `cp` 备份与 `git show > 文件` 之间——**如果那条链跑了一半，工作树就会只剩旧写法而备份还没建好**。实测那次整条没执行，工作树完好。之后改成「小步 + 每步用 md5 自证」。另外 **Grep 工具给过一次陈旧缓存结果**：它报告六个算子里都有 `conv_algo_key(`，而 `git diff` 是空的，shell 里 grep 实测为 0——文件状态只信 shell。
+
+**per-device 生命周期仍未做**，看板 8.12 已按此改状态：六张表仍是进程全局。是否改用 `3.03` 的 `utils/jit_cache_map.h` 也留给下一位——那张表的键是自有 `string`，与本波的 POD 键形状不同，所以本波另做了 POD 表而没有复用它。
 
 ### 2026-09-07 `bindings`：抢救上一波被硬取消时留在工作树里的未提交改动
 
