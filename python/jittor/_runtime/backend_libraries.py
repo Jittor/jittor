@@ -65,6 +65,87 @@ class BackendLibraries:
         with self._lock:
             return self._resources.get(name, {}).get(key)
 
+    def probe_library(self, name, *, load=False):
+        """Report why ``get_library`` would answer as it does, without raising.
+
+        ``get_library`` returns ``None`` for "switched off", for "not loaded
+        yet" and for "no loader", and *raises* when the loader fails. A caller
+        that only looks at the return value therefore cannot tell a library
+        that is absent from one whose build is broken -- which is how the cuTT
+        build stayed broken while its six tests reported "skipped".
+
+        Returns ``(state, reason, evidence)`` where ``state`` is one of the
+        ``CapabilityState`` values as a plain string, so this module stays
+        free of the capability layer that consumes it.
+        """
+        with self._lock:
+            enabled = self._enabled.get(name)
+            module = self._modules.get(name)
+            loader = self._loaders.get(name)
+        evidence = {
+            "has_loader": loader is not None,
+            "has_enabled_policy": enabled is not None,
+            "module_loaded": module is not None,
+        }
+
+        if enabled is not None:
+            try:
+                permitted = bool(enabled())
+            except Exception as exc:
+                return "failed", (
+                    "the enabled-policy for %s raised %s: %s"
+                    % (name, type(exc).__name__, exc)), evidence
+            evidence["enabled_policy"] = permitted
+            if not permitted:
+                return "disabled", (
+                    "%s has an enabled-policy and it currently says no, so "
+                    "get_library(%r) reports None even if the library is "
+                    "installed" % (name, name)), evidence
+
+        if module is not None:
+            ops = getattr(module, "ops", None)
+            evidence["has_ops"] = ops is not None
+            if ops is None:
+                return "failed", (
+                    "%s is loaded but exposes no ops module; something built "
+                    "it half-way" % name), evidence
+            return "available", "%s is loaded and exposes its ops" % name, evidence
+
+        if loader is None:
+            return "absent", (
+                "no loader is registered for %s, so nothing in this build can "
+                "ever produce it" % name), evidence
+
+        if not load:
+            return "unprobed", (
+                "%s is built on first use and nothing has asked for it yet; "
+                "ask again with load=True to find out (that may compile)"
+                % name), evidence
+
+        try:
+            self.get_library(name, load=True)
+        except BaseException as exc:
+            evidence["load_error"] = "%s: %s" % (type(exc).__name__, exc)
+            return "failed", (
+                "%s was requested and its loader raised %s: %s -- this is a "
+                "broken build, not a missing library"
+                % (name, type(exc).__name__, exc)), evidence
+
+        with self._lock:
+            module = self._modules.get(name)
+        evidence["module_loaded"] = module is not None
+        if module is None:
+            return "failed", (
+                "%s was requested with load=True, its loader returned without "
+                "raising, and no module was published: the loader bailed out "
+                "silently" % name), evidence
+        ops = getattr(module, "ops", None)
+        evidence["has_ops"] = ops is not None
+        if ops is None:
+            return "failed", (
+                "%s loaded but exposes no ops module" % name), evidence
+        return "available", "%s loaded on request and exposes its ops" % name, evidence
+
 
 _libraries = BackendLibraries()
 
@@ -91,6 +172,10 @@ def get_library_ops(name, *, load=False):
 
 def library_resource(name, key):
     return _libraries.library_resource(name, key)
+
+
+def probe_library(name, *, load=False):
+    return _libraries.probe_library(name, load=load)
 
 
 LIBRARY_NAMES = (

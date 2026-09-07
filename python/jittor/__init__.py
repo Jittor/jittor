@@ -327,6 +327,18 @@ from ._runtime.state import StartupConfig as _StartupConfig, freeze_compiler_con
 config = _StartupConfig(flags)
 _freeze_compiler_config(compiler)
 
+# Capability queries, on top of config/runtime. `config` and `runtime` report
+# policy -- what this process is set to do; neither can say whether the machine
+# could run an accelerator at all, nor whether a backend library is absent,
+# switched off, or broken. `has_cuda` above is exactly the conflation this
+# replaces: it is 0 both on a CPU-only build and on a machine with no GPU, and
+# `compiler.has_cuda` was overwritten a few lines up, so the frozen
+# `build_config` is the only surviving record of what the build compiled.
+from ._runtime.capability import Capabilities as _Capabilities
+from ._runtime import backend_libraries as _backend_libraries
+capability = _Capabilities(compiler.build_config, compiler, core,
+                           compile_extern, _backend_libraries)
+
 # Say, once, what the environment configured. Every static initializer and every
 # build variable has been read by now, which is why this cannot live in the
 # files that do the reading. See _runtime/env_report.py for what was silent
@@ -344,7 +356,7 @@ _ROOT_EXPORTS = (
     "init", "jittor_core", "kron", "linalg", "logsumexp", "lr_scheduler",
     "math_util", "matmul", "misc", "mkl_ops", "mpi", "mpi_ops", "nn",
     "numpy2cupy", "optim", "ops", "rank", "sparse", "tensordot",
-    "world_size", "config",
+    "world_size", "config", "capability",
 )
 
 __all__ = tuple(sorted(set(
