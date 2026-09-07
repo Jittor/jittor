@@ -20,10 +20,6 @@ namespace jittor
         ret = aclnnUpsampleNearest2dGetWorkspaceSize(
             inputTensors[0], outputSize.get(), outputTensors[0],
             &workspaceSize, &executor);
-        checkRet(ret);
-        if (ret != ACL_SUCCESS)
-            return;
-
         launch(ret, aclnnUpsampleNearest2d, true);
     }
 
@@ -48,10 +44,6 @@ namespace jittor
         ret = aclnnUpsampleNearest2dBackwardGetWorkspaceSize(
             inputTensors[0], outputSize.get(), inputSize.get(), 0.0, 0.0,
             outputTensors[0], &workspaceSize, &executor);
-        checkRet(ret);
-        if (ret != ACL_SUCCESS)
-            return;
-
         launch(ret, aclnnUpsampleNearest2dBackward, true);
     }
 }

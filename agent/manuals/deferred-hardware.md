@@ -21,6 +21,13 @@ HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md
 2. **行为形状的静态合同。** 断言「每个 family 都不自己发 execute 调用」这类**不变量**，而不是
    「共有 65 处调用 `checkRet`」这类**计数**。计数式合同挡不住合法重构：`test_acl_runner_failure_contract`
    曾断言 65 处，8.06 的第一个提交把样板收进共享 launcher 后它就作废，然后红了约 40 个提交没人看见。
+   不变量式合同还要**自证扫到了东西**：ACL 正处在 `python/jittor/extern/acl` 与 `backends/acl`
+   两处都有内容的半途搬迁状态，按「总数 > N」断言会在只扫到一侧时仍然发绿，所以要求**每个根各自非空**。
+2b. **去样板前后的静态等价性。** 把每个 owner 归约成 (workspace 查询, execute 入口, 同步策略)
+   的有序 token 流，逐 owner 对比改前改后。`agent/scripts/acl_launch_program.py` 做这件事，两个树
+   当参数、退出码非 0 即有差异。它把「样板删对了」和「顺手改了行为」分开：前者 token 流不动，
+   后者会以具体 owner 的具体 token 出现，必须逐条解释。**这比字符串合同强**，因为它比较的是
+   设备会观察到的东西，而不是源码长什么样。
 3. **桩后端跑通编译与注册。** `setup_fake_cuda_lib` / `tests/backends/corex/test_corex_discovery.py`
    的离线 fake compiler 属这一类：证明发现与注册路径不依赖真设备。
 4. **只写上机文档。** 最弱的一档。可以，但**必须同时给出精确的 nodeid 或命令**，否则硬件到手那天
@@ -42,10 +49,55 @@ HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md
 | 覆盖 | `tests/backends/npu/test_acl.py`、`test_acl_torch_compat.py`、`test_aclop.py`、`test_acl_indexing.py`、`tests/ops/test_ops.py`、`tests/core/test_floor_divide.py::TestFloorDivideNPU` 等 |
 | 步骤 | [`docs/guides/ascend-910b.md`](../../docs/guides/ascend-910b.md) |
 
-绿了之后可以判定的看板项：**`6.B02`**（65 处 executeOp 失败都抛；静态侧已由
+绿了之后可以判定的看板项：**`6.B02`**（executeOp 失败都抛；静态侧已由
 `test_acl_runner_failure_contract` 与 `test_acl_tensor_workspace_contract` 钉住）、**`6.B16`**
 （`sync_run=1/0` 两条路径；精确 nodeid 在 Ascend 指南里）、**`8.06`** 的已迁 family（静态合同
-88 passed，逐 family 的设备行为要在这里过一遍）、**`4.11`/`4.12`** 的 ACL 注册路径。
+102 passed，逐 family 的设备行为要在这里过一遍）、**`4.11`/`4.12`** 的 ACL 注册路径。
+
+#### 8.06 的 launch 尾部归零，还差什么
+
+本机做到的是三档里的第 1、2 档：桩 SDK 过 TU（44 个源文件 `-fsyntax-only` 全过、70 个
+launcher ABI 断言全过，反向对照见下）、以及不变量式静态合同。**一条设备指令都没执行过**，
+`tests/backends/npu` 在本机是 `164 skipped, 0 executed -- explained: skipped: no acl found`。
+
+前置：Ascend 910B3 + CANN，`CANN_SET_ENV` 指向 `set_env.sh`。四条按顺序跑，前一条不过不要往下走。
+
+1. **能编。** 这一层桩 SDK 挡不住（`aclnnXxxGetWorkspaceSize` 的实参无从校验），必须真 SDK：
+
+   ```bash
+   source "$CANN_SET_ENV" && npu-smi info
+   JITTOR_TEST_REQUIRE_ACL=1 python -c "import jittor; jittor.flags.use_acl = 1"
+   ```
+
+   判据：`aclops/*_acl.cc` 全部编过。特别看本波改的 6 个文件——`reduce_op_acl.cc`、
+   `arg_reduce_op_acl.cc`、`truth_reduce_op_acl.cc`、`norms_op_acl.cc`、`upsample_op_acl.cc`。
+   `launch(ret, aclnnProd, true)` / `launch(ret, aclnnProdDim, false)` 是本波新增的两个
+   launcher 站点，`aclnnProd` 与 `aclnnProdDim` 的真实 execute ABI 只有这里能确认。
+
+2. **算得对，且与迁移前逐算子一致。** 本波声称的等价性是**源码级**的：
+   `python agent/scripts/acl_launch_program.py <迁移前树> <当前树>` 证明 69/71 个 owner 的
+   (workspace 查询, execute 入口, 同步策略) token 流逐字相同。设备侧要把它变成数值对拍：
+
+   ```bash
+   nox -s npu   # JITTOR_TEST_REQUIRE_ACL=1 JITTOR_TEST_ACCELERATOR_MIN_EXECUTED=1
+   ```
+
+   判据：`tests/backends/npu/test_aclop.py`（114 条）、`test_acl.py`（43 条）、
+   `test_acl_indexing.py`（7 条）全部**执行**而非 skip——本机这 164 条一条都没执行。
+   重点算子：`prod`（三条路径都要覆盖：整张量归约、单轴、多轴分步）、`argmax`/`argmin`、
+   `all`/`any`、`GroupNorm` 前反向、`UpsampleNearest2d` 前反向。
+
+3. **失败真的抛，而不是静默给出未初始化输出。** 本波把三处「打印后 return / 根本不检查」
+   改成 `launch()` 的 `LOGf`。设备侧的判据是**负向**的：构造一个会让 workspace 查询失败的
+   调用（例如给 `prod` 一个 ACL 不接受的 dtype 组合），确认得到带算子名与解码后 ACL 状态的
+   异常，而**不是**一个数值错误的结果。`docs/guides/ascend-910b.md` 的
+   `forbid_backend_fallbacks()` / `backend_fallback=error` 一节是配套开关。
+   在此之前不得声称这三处已验证：静态合同只能证明源码里没有那条 return。
+
+4. **`sync_run` 两条路径。** `launch()` 的第三个参数就是这个策略。
+   `sync_run=1` 与 `sync_run=0` 各跑一遍第 2 步的清单，判据是数值一致且
+   `AdamWList` 与 reduce prod 分步路径不因少了逐步同步而出错——这两个 owner 是唯一
+   自己放 `syncRun()` 的，见 `test_the_two_owners_that_keep_their_own_sync_are_the_documented_ones`。
 
 ### Ascend 910B3，≥2 卡（HCCL）
 

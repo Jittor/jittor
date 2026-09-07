@@ -162,10 +162,6 @@ namespace jittor
             attr->batch, attr->channels, attr->spatialSize, attr->groups,
             attr->eps, outputTensors[0], outputTensors[1], outputTensors[2],
             &workspaceSize, &executor);
-        checkRet(ret);
-        if (ret != ACL_SUCCESS)
-            return;
-
         launch(ret, aclnnGroupNorm, true);
     }
 
@@ -187,10 +183,6 @@ namespace jittor
             inputTensors[4], attr->batch, attr->channels, attr->spatialSize,
             attr->groups, outputMask.get(), outputTensors[0], outputTensors[1],
             outputTensors[2], &workspaceSize, &executor);
-        checkRet(ret);
-        if (ret != ACL_SUCCESS)
-            return;
-
         launch(ret, aclnnGroupNormBackward, true);
     }
 

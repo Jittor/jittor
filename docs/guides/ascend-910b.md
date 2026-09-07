@@ -680,10 +680,21 @@ This matters beyond tidiness. Those four were the last places where a failed
 undefined while the graph continued. Routing them through `launch` makes the
 failure raise with the operator name and decoded ACL status.
 
-Exactly two hand-rolled tails remain, both deliberately: reduce prod runs a
-two-step reduction over an intermediate tensor with its own synchronisation
-between steps, and KVCacheMemcpy is a per-token `aclrtMemcpyAsync` path with no
-aclnn workspace executor.
+No hand-rolled tail remains: all 71 `executeOp` owners are tail-free. The last
+holdout was reduce prod, whose three paths -- whole tensor, one axis, and a
+staged multi-axis reduction over intermediate tensors -- now each call `launch`,
+the staged one asynchronously so its unconditional barrier still lands before
+the intermediates are freed. Two owners keep a `syncRun()` of their own for a
+reason the shared tail cannot express: the AdamW loop synchronises once after
+its last step rather than once per tensor, and the staged product path after
+freeing its intermediates. KVCacheMemcpy never had a tail; it is a per-token
+`aclrtMemcpyAsync` path with no aclnn workspace executor.
+
+The prod conversion also closed a silent failure: `ret = aclnnProd(...)` was
+assigned and never read, so a failed product returned the untouched output
+buffer as the reduction with nothing logged. The same shape applied to a failed
+`aclnnMaxDim`/`aclnnMinDim` workspace query, which printed a line and returned
+with both the values and the indices output left uninitialised. Both raise now.
 
 Validate on an Ascend 910B3 after sourcing CANN and confirming the device:
 

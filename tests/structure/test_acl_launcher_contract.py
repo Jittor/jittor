@@ -1,7 +1,14 @@
 from pathlib import Path
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+if str(ROOT / "tests") not in sys.path:
+    sys.path.insert(0, str(ROOT / "tests"))
+
+from _helpers import acl_launch_tails  # noqa: E402
+
 BASE_HEADER = ROOT / "python/jittor/extern/acl/aclops/base_op.h"
 BASE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/base_op_acl.cc"
 UNARY_SOURCE = ROOT / "python/jittor/extern/acl/aclops/unary_op_acl.cc"
@@ -83,15 +90,92 @@ def test_ternary_family_uses_launcher_and_keeps_async_policy():
     assert "syncRun();" not in source
 
 
-def test_reduce_single_step_families_use_launcher_and_prod_stays_special():
+def test_reduce_single_step_families_use_launcher_and_prod_joins_them():
     source = REDUCE_SOURCE.read_text()
     for name in ("aclnnReduceSum", "aclnnMean", "aclnnAmax", "aclnnAmin"):
         assert f"launch(ret, {name}, true);" in source
     fixed = source[source.index("case 9:"):source.index("case 13:")]
     assert "mallocWorkSpace(workspaceSize)" not in fixed
+    # The single-step cases used to sync twice: once inside launch() and once
+    # more through a syncRun() shared with the product case at the end of the
+    # switch. The product case owns its own policy now, so that one is gone.
+    assert source.count("syncRun();") == 1
     prod = source[source.index("case 13:"):source.index("default:")]
-    assert "mallocWorkSpace(workspaceSize)" in prod
+    # All three product paths -- whole-tensor, one axis, staged multi-axis.
+    assert "launch(ret, aclnnProd, true);" in prod
+    assert "launch(ret, aclnnProdDim, true);" in prod
+    assert "launch(ret, aclnnProdDim, false);" in prod
+    assert "mallocWorkSpace(workspaceSize)" not in prod
+    # The staged path's sync is a correctness barrier before the intermediate
+    # buffers are freed, not the diagnostic policy, so it is unconditional and
+    # stays at the call site.
     assert "aclrtSynchronizeStream(aclstream)" in prod
+    assert prod.index("aclrtSynchronizeStream(aclstream)") < prod.index("aclrtFree(buffer)")
+
+
+def test_prod_execute_result_is_no_longer_dropped_on_the_floor():
+    """The whole-tensor and single-axis product paths ignored their result.
+
+    ``ret = aclnnProd(workspaceAddr, ...)`` was assigned and never read, so a
+    failed product left the freshly allocated output buffer untouched and Jittor
+    returned it as the reduction. Nothing was logged. Routing both paths through
+    ``launch()`` is what makes the failure loud.
+    """
+    source = REDUCE_SOURCE.read_text()
+    prod = source[source.index("case 13:"):source.index("default:")]
+    for name in ("aclnnProd", "aclnnProdDim"):
+        assert f"{name}(workspaceAddr" not in prod
+
+
+def test_arg_reduce_workspace_failure_is_fatal_instead_of_silent():
+    """A failed MaxDim/MinDim query used to print and return.
+
+    Both outputs -- values and indices -- stayed uninitialised and the reduction
+    result was whatever the allocator handed over. ``launch()`` fails loudly.
+    """
+    source = ARG_REDUCE_SOURCE.read_text()
+    body = source[source.index("void ArgReduceOpRunner::executeOp"):]
+    assert "GetWorkspaceSize failed" not in body
+    assert "CHECK_RET(ret == ACL_SUCCESS" not in body
+    assert "launch(ret, launcher, true);" in body
+
+
+def test_truth_reduce_workspace_failure_goes_through_the_shared_tail():
+    source = TRUTH_REDUCE_SOURCE.read_text()
+    assert "GetWorkspaceSize failed" not in source
+    assert "launch(ret, launcher, true);" in source
+
+
+def test_no_execute_op_owner_keeps_a_hand_rolled_launch_tail():
+    """The whole point of 8.06's first family, as an invariant.
+
+    Not "N sites were converted": that shape of contract went stale the moment
+    the shared tail landed and then sat red for about 40 commits. This asks
+    instead whether any operator still allocates its own workspace, issues its
+    own execute call, or handles its own workspace-query failure.
+    """
+    owners, tails = acl_launch_tails.survey(ROOT)
+    assert not tails, tails
+    # An empty scan passes every assertion above it, which is how a gate ends up
+    # green while measuring nothing. ACL is mid-migration between two roots, so
+    # require each root to be populated rather than a healthy-looking total.
+    roots = acl_launch_tails.populated_roots(ROOT)
+    for root, count in roots.items():
+        assert count > 0, f"{root} is empty; the scan below it proves nothing"
+    assert len(owners) >= 60, owners
+
+
+def test_the_two_owners_that_keep_their_own_sync_are_the_documented_ones():
+    """``syncRun()`` at a call site is allowed but has to be accounted for.
+
+    The AdamW loop synchronises once after its last step instead of once per
+    tensor, and the staged product path after freeing its intermediates. Any
+    third owner is a tail growing back.
+    """
+    assert acl_launch_tails.caller_side_syncs(ROOT) == {
+        "adamw_op_acl.cc:AdamWListOpRunner": 1,
+        "reduce_op_acl.cc:ReduceOpRunner": 1,
+    }
 
 
 def test_cumsum_family_uses_launcher_and_keeps_sync_policy():

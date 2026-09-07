@@ -3197,6 +3197,47 @@ rebase**，所以冲突是在提交之间解的，不是在工作树里丢的。
 **能力查询**而不是策略读取，`2.13` 的 `jt.config`/`jt.runtime` 答不了），**未实现，仍待领**，
 详见看板该行与 `codebase-audit/07-architecture.md`。
 
+### 本波（device 分区）：8.06 的 launch 尾部归零
+
+**登记的「65 处」实测是 70 处。** 在引入共享尾部之前的 `5be5fa15~1` 上按「executeOp 体内自己处理
+workspace 查询失败 / 自己 `mallocWorkSpace` / 自己发 `(workspaceAddr, workspaceSize, executor, aclstream)`」
+清点，71 个 owner 里 70 个带尾巴，唯一例外 KVCacheMemcpy 根本没有 aclnn dispatch。按片段数则是
+76（`mallocWorkSpace`）或 69（`syncRun();`）。**归零后 71/71**：本波收完最后 9 个 owner（Upsample
+前反向、GroupNorm 前反向、ArgReduce、TruthReduce、reduce prod 的三条路径）。此前被记为「有意保留」
+的 reduce prod 其实不需要自己的尾巴——分步只要求异步，`launch(ret, f, false)` 就能表达。
+
+**等价性是这一波最重要的产出，方法值得抄。** `agent/scripts/acl_launch_program.py` 把每个 owner 归约成
+(workspace 查询, execute 入口, 同步策略, 失败处理) 的有序 token 流，两个树当参数直接 diff。结论：
+迁移前后 **69/71 个 owner 的 execute 入口序列与同步策略逐字相同**，另 2 个（Random、reduce）是同一组
+入口的重新分组；唯一系统性差异是失败处理全部收敛到 `LOGf`（`execfail return`×70、`unchecked`×3、
+`throw`×2 → `fatal`；`queryfail return`×20、`unchecked`×2、`throw`×1 → `fatal`）。本波自己那 3 处
+不一样的：ArgReduce 的查询失败由「打印后 return，留下未初始化的值与下标」变成抛；reduce prod 的
+`ret = aclnnProd(...)` **本来赋值了却从不读**（失败就把未动过的输出缓冲当归约结果返回，什么都不打）；
+TruthReduce 的查询失败由 `throw std::runtime_error` 统一成 `LOGf`。另 6 处（Upsample×2、GroupNorm×2）
+token 流**零差异**——删掉的是 `launch()` 已经做过一遍的死代码。
+
+**没有 Ascend 卡，所以分档说清。** 第 1 档桩 SDK 过 TU：44 个源文件 `-fsyntax-only` 全过、
+launcher ABI 断言 70 个（比上一波多 2 个，正是新增的 `aclnnProd`/`aclnnProdDim` 站点）。反向对照做了
+5 个，全部报红：把老样板写回 unary（不变量合同报出 `direct_execute`/`query_handler`/`workspace_malloc`
+三项）、把 ArgReduce 的静默 return 放回、把 prod 的未检查 execute 放回、把 `backends/acl` 清空
+（每根非空断言触发）、把 `launch(ret, aclnnProd, …)` 换成 `aclnnProdGetWorkspaceSize`（`-fsyntax-only`
+仍报 `ok`，**只有 `--check-launchers` 挡住**——skill 里那条坑是真的）。第 2 档合同换成不变量式并
+要求两个 ACL 根各自非空，机制在 `tests/_helpers/acl_launch_tails.py`。**设备侧一条指令都没跑**：
+`tests/backends/npu` 在本机是 `164 skipped, 0 executed -- explained: skipped: no acl found`，
+四条上机确认项与精确命令写进 [`../manuals/deferred-hardware.md`](../manuals/deferred-hardware.md)
+的 Ascend/CANN 一节，**未声称硬件验证完成**。
+
+三套门禁与改前同集合：CPU torch 模式 `tests/structure` 改前 15 failed / 887 passed，改后
+15 failed / 902 passed（新增 15 条全在 ACL 合同里，失败集合逐条相同）；原生 CPU `tests/ops`
+21 failed / 268 passed / 221 skipped，其中被点名的五个文件在 `HEAD` 的只读 worktree 与本树上
+**同为 9 failed / 62 passed**；CUDA `tests/backends/cuda` 与改前同集合。推之前带 CUDA 跑过
+`import jittor` 加 matmul。
+
+**另外注意**：`test_destructor_and_handler_contract.py` 只扫 `python/jittor/{src,extern}` 这条
+（后端搬进 `backends/` 之后 ACL/ROCm/CUDA 的析构一条都没扫到）**本波没修**，它不属这一族；
+本波只在自己新加的合同里把「每个根非空」这个形状先立起来。剩下两个 family（`AclOpFunctions`
+类型擦除、`op_idx_map` 删除）的剩余面见看板 8.06 行。
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。

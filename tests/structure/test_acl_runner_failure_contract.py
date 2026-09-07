@@ -15,13 +15,14 @@ GUIDE = REPO_ROOT / "docs" / "guides" / "ascend-910b.md"
 # through BaseOpRunner::launch.
 EXECUTE_CALL = "workspaceAddr, workspaceSize, executor, aclstream"
 
-# reduce prod is the one maintained owner that keeps a hand-rolled tail: it runs
-# a two-step reduction over an intermediate tensor with its own stream
-# synchronisation between the steps, which the shared single-launch tail cannot
-# express. KVCacheMemcpy is excluded for a different reason -- it is a plain
-# aclrtMemcpyAsync path with no aclnn workspace executor at all -- so it never
-# shows up here in the first place.
-HAND_ROLLED_TAIL_OWNERS = {"reduce_op_acl.cc"}
+# Nothing is exempt any more. reduce prod was the last holdout: its staged
+# multi-axis path was thought to need its own tail for the synchronisation
+# between steps, but those steps only need to be asynchronous, which
+# launch(ret, f, false) expresses, and the barrier before the intermediates are
+# freed is a separate unconditional aclrtSynchronizeStream that stays at the
+# call site. KVCacheMemcpy never appeared here -- it is a plain
+# aclrtMemcpyAsync path with no aclnn workspace executor at all.
+HAND_ROLLED_TAIL_OWNERS = set()
 
 
 def _block_body(source, marker):
@@ -110,18 +111,19 @@ def test_ascend_guide_records_runner_failure_attribution():
 
 
 def test_ascend_guide_states_the_launcher_migration_is_closed():
-    """The two remaining hand-rolled tails must stay named and justified.
+    """The claim of zero remaining tails must be written down, with the caveats.
 
     Ten board waves recorded the launcher owners as "exhausted" while four
-    standard owners still drove the execute call, so the exclusion list is
-    pinned here rather than left to prose.
+    standard owners still drove the execute call, so what is and is not covered
+    is pinned here rather than left to prose.
     """
     guide = GUIDE.read_text(encoding="utf-8")
     for required in (
         "Shared launcher migration is closed for the standard owners",
         "SWhere, Sigmoid backward, BatchNorm",
-        "reduce prod runs a\ntwo-step reduction",
-        "KVCacheMemcpy is a per-token",
+        "all 71 `executeOp` owners are tail-free",
+        "AdamW loop synchronises once after",
+        "KVCacheMemcpy never had a tail",
         "npu-smi info",
         "Fallback attempts are NOT NPU validation",
         "must not report hardware validation",

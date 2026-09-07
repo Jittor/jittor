@@ -151,7 +151,7 @@ namespace jittor
                 ret = aclnnProdGetWorkspaceSize(
                     inputTensors[0], get_dtype(out_[0]->dtype()),
                     outputTensors[0], &workspaceSize, &executor);
-                CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnProdGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
+                launch(ret, aclnnProd, true);
             }
             else if (shifted_axes_.size() == 1)
             {
@@ -159,7 +159,7 @@ namespace jittor
                     inputTensors[0], shifted_axes_[0], keepdims,
                     get_dtype(out_[0]->dtype()), outputTensors[0],
                     &workspaceSize, &executor);
-                CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnProdDimGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
+                launch(ret, aclnnProdDim, true);
             }
             else
             {
@@ -207,12 +207,7 @@ namespace jittor
                         current_tensor, axis, keepdims,
                         get_dtype(out_[0]->dtype()), next_tensor,
                         &workspaceSize, &executor);
-                    CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnProdDimGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
-                    if (workspaceSize > 0)
-                        mallocWorkSpace(workspaceSize);
-                    ret = aclnnProdDim(
-                        workspaceAddr, workspaceSize, executor, aclstream);
-                    CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnProdDim failed. ERROR: %d\n", name.c_str(), ret); return);
+                    launch(ret, aclnnProdDim, false);
 
                     current_shape = std::move(next_shape);
                     current_tensor = next_tensor;
@@ -224,15 +219,11 @@ namespace jittor
                     aclDestroyTensor(tensor);
                 for (void *buffer : intermediate_buffers)
                     aclrtFree(buffer);
-                break;
+                // The staged path already synchronised unconditionally above,
+                // before the intermediates were freed. This keeps the extra
+                // diagnostic synchronisation the hand-rolled tail also ran here.
+                syncRun();
             }
-            if (workspaceSize > 0)
-            {
-                mallocWorkSpace(workspaceSize);
-            }
-            ret = input_padded_1d || reduce_all
-                ? aclnnProd(workspaceAddr, workspaceSize, executor, aclstream)
-                : aclnnProdDim(workspaceAddr, workspaceSize, executor, aclstream);
             break;
         }
         default:
@@ -241,7 +232,6 @@ namespace jittor
             exit(-1);
         }
         }
-        syncRun();
         return;
     }
 }

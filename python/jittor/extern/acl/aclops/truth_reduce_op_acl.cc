@@ -62,11 +62,6 @@ namespace jittor
             : aclnnAnyGetWorkspaceSize(
                   inputTensors[0], dim.get(), attr->keepdims, outputTensors[0],
                   &workspaceSize, &executor);
-        if (ret != ACL_SUCCESS)
-            throw std::runtime_error(
-                reduce_all ? "aclnnAllGetWorkspaceSize failed"
-                           : "aclnnAnyGetWorkspaceSize failed");
-
         AclExecuteLauncher launcher = reduce_all ? aclnnAll : aclnnAny;
         launch(ret, launcher, true);
     }

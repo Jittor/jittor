@@ -59,7 +59,6 @@ namespace jittor
                 outputTensors[0],
                 &workspaceSize,
                 &executor);
-            CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnMaxDimGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
         }
         else
         {
@@ -71,7 +70,6 @@ namespace jittor
                 outputTensors[0],
                 &workspaceSize,
                 &executor);
-            CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnMinDimGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
         }
 
         AclExecuteLauncher launcher = is_max ? aclnnMaxDim : aclnnMinDim;
