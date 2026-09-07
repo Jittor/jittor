@@ -1,6 +1,6 @@
 # 整改看板
 
-2026-09-08 最新：Tensor构造不再提前窄化显式float64，默认dtype和NumPy标量dtype得到保留；Tensor(existing)保别名/梯度，data_ptr使用不迁设备的真实地址。CPU11项、真实CUDA2项通过。完整API和Storage基址/共享语义仍未收口，详见7.12与[构造记录](../results/2026-09-08-tensor-construction-dtypes.md)。
+2026-09-08 最新：独立clone与tensor(existing)改为真正复制，Tensor(existing)/as_tensor保留别名或身份；梯度、叶子状态及CPU驻留经CPU11项/CUDA2项定向验证。完整API和Storage基址/共享语义仍未收口，详见7.12与[复制边界记录](../results/2026-09-08-tensor-copy-boundaries.md)。
 
 下方早期波次记录为历史证据，当前关闭状态以任务表为准；Tensor 子类底层前置见 [类型边界记录](../results/2026-09-08-tensor-frontend-types.md)。
 
@@ -719,7 +719,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.09 | `torch.library` | 已合并 | compat | 99901e6c、d0a782a0。按张量真实驻留选择 CPU/CUDA 并排除 Meta，`register_autograd` 真正接入且模型特判移出通用注册层；线程局部 autocast dtype policy 进一步选择 AutocastCPU/CUDA，嵌套禁用与退出恢复普通路由。独立 PyTorch oracle 一致，CPU dispatch 8 passed、1 个未分配 CUDA 节点 skipped |
 | 7.10 | `torch.compile`/`jit.trace`/`jit.script` 保留 pass… | 已合并 | 兼容层分区 | 3d898ece。语义参数拒绝、permissive allowlist/audit 与 ShapeProp ImportError 验收均有测试 |
 | 7.11 | autograd 语义 | 已合并 | compat | `2ec34693`：`Var.is_leaf` 转发内核 `is_backward_leaf`，`Var.grad_fn` 对叶子返回 None、对非叶子返回 node/op/name 代理；shim autograd 语义 20 passed，core backward-leaf 查询 20 passed。requires_grad 策略差异仍归 7.12。 |
-| 7.12 | 独立 torch 包 | 待领 | compat | 默认activate/部署入口已使用独立Tensor/Parameter/Module，NN、optim/scheduler、autograd/Function、distributions/linalg/sparse可写owner已分离；保留统一Var/Op图。参数容器、基础训练、checkpoint宽dtype/设备映射已接通，CPU/CUDA定向链有证据。构造已保显式/默认dtype及Tensor别名，data_ptr返回非迁移真实地址（CPU11项/CUDA2项）。当前仍缺完整API/模型覆盖、分布类边界、共享storage/stride及混合线程收口，不提前关闭。见[构造边界](../results/2026-09-08-tensor-construction-dtypes.md)、[命名空间记录](../results/2026-09-08-independent-numerical-namespaces.md)、[训练owner](../results/2026-09-08-independent-training-owners.md)、[checkpoint设备映射](../results/2026-09-08-checkpoint-device-mapping.md)、[默认入口](../results/2026-09-08-independent-default-entry.md)。 |
+| 7.12 | 独立 torch 包 | 待领 | compat | 默认activate/部署入口已使用独立Tensor/Parameter/Module，NN、optim/scheduler、autograd/Function、distributions/linalg/sparse可写owner已分离；保留统一Var/Op图。参数容器、基础训练、checkpoint宽dtype/设备映射已接通，CPU/CUDA定向链有证据。构造已保显式/默认dtype及Tensor别名，data_ptr返回非迁移真实地址（CPU11项/CUDA2项）。clone/tensor复制与Tensor/as_tensor别名路径已区分，保梯度/叶子/设备（CPU11项/CUDA2项）。当前仍缺完整API/模型覆盖、分布类边界、共享storage/stride及混合线程收口，不提前关闭。见[复制边界](../results/2026-09-08-tensor-copy-boundaries.md)、[构造边界](../results/2026-09-08-tensor-construction-dtypes.md)、[命名空间记录](../results/2026-09-08-independent-numerical-namespaces.md)、[训练owner](../results/2026-09-08-independent-training-owners.md)、[checkpoint设备映射](../results/2026-09-08-checkpoint-device-mapping.md)、[默认入口](../results/2026-09-08-independent-default-entry.md)。 |
 | 7.13 | FSDP2 | 待领 | | 已合入 37c0aed4、c0e6e1ae、48da7360、873dd5cf；仍缺峰值显存达标、复用原生 optimizer 更新逻辑与 DeviceMesh 真实分组 |
 | 7.14 | vLLM 边界检查把 `torch` 视作 jittor 别名 | 已合并 | 兼容层分区 | 178be65a |
 | 7.15 | `_rebuild_tensor_v2` 按 stride 还原或报错 | 已合并 | | 7e7877c8 |

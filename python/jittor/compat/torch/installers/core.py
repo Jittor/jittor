@@ -233,6 +233,7 @@ def install(ctx):
         tensor_type = make_tensor_type(ctx.native_backend)
         ctx.state["Var"] = tensor_type
         g.Var = g.Tensor = tensor_type
+        g.clone = tensor_type.clone
 
 
 def install_misc(ctx):

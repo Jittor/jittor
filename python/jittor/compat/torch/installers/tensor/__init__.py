@@ -540,8 +540,8 @@ def install(ctx):
                         "uint16", "uint32", "uint64", "float16", "float32", "float64",
                         "complex64", "complex128"}
         storage_dtype = ds if ds in numpy_dtypes else "float32" if ds == "bfloat16" else None
-        if isinstance(data, Var):
-            v = data.clone()
+        if isinstance(data, ctx.native_backend.Var):
+            v = ctx.native_backend.Var.copy(data).detach()
         elif isinstance(data, (_np.ndarray, _np.generic)):
             # NumPy input carries its own dtype; explicit conversion happens
             # before the native array constructor can narrow it.
@@ -592,8 +592,10 @@ def install(ctx):
     g.tensor = tensor
 
     def as_tensor(data, dtype=None, device=None):
-        if isinstance(data, Var):
-            r = data if dtype is None else data.cast(_dtype_to_str(dtype))
+        if isinstance(data, ctx.native_backend.Var):
+            r = data if isinstance(data, Var) else g.Tensor(data)
+            if dtype is not None and str(r.dtype) != _dtype_to_str(dtype):
+                r = r.cast(_dtype_to_str(dtype))
             if _device_is_cpu(device):
                 return _make_cpu_resident(r)
             if _device_is_cuda(device):

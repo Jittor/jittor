@@ -337,6 +337,28 @@ def test_independent_tensor_installation_preserves_native_type():
             torch.set_default_dtype(previous_dtype)
         original = torch.tensor([1., 2.], dtype=torch.float64, requires_grad=True)
         alias = torch.Tensor(original)
+        clone = original.clone()
+        assert clone.data_ptr() != original.data_ptr()
+        assert clone.requires_grad and not clone.is_leaf
+        clone_gradient, = torch.autograd.grad(clone.sum(), original)
+        np.testing.assert_array_equal(clone_gradient.numpy(), [1., 1.])
+        copied = torch.tensor(original, requires_grad=True)
+        assert copied.data_ptr() != original.data_ptr()
+        assert copied.requires_grad and copied.is_leaf
+        assert torch.clone(original).data_ptr() != original.data_ptr()
+        assert torch.as_tensor(original, dtype=torch.float64) is original
+        native_value = jt.array([9., 10.], dtype="float64")
+        native_alias = torch.as_tensor(native_value)
+        native_copy = torch.tensor(native_value)
+        assert type(native_alias) is type(native_copy) is torch.Tensor
+        assert native_alias.dtype is native_copy.dtype is torch.float64
+        assert native_alias.data_ptr() == native_value._storage_address
+        assert native_copy.data_ptr() != native_value._storage_address
+        cpu_original = torch.tensor([7., 8.], device="cpu")
+        cpu_copy = cpu_original.clone()
+        assert cpu_copy.is_cpu and cpu_original.is_cpu
+        assert cpu_copy.data_ptr() != cpu_original.data_ptr()
+        assert cpu_copy.location() == "cpu"
         assert alias is not original and alias.dtype is torch.float64
         assert alias.requires_grad and not alias.is_leaf
         assert alias.data_ptr() == original.data_ptr()

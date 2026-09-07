@@ -58,7 +58,7 @@ class _TensorMeta(type):
             elif isinstance(args[0], (backend.NanoVector, _TorchSize)):
                 result = backend.empty(tuple(args[0]), dtype=dtype)
             elif isinstance(args[0], backend.Var):
-                result = args[0].clone()
+                result = backend.Var.clone(args[0])
                 result._set_view_of(args[0], Ellipsis)
                 return result
             else:
@@ -74,7 +74,26 @@ def make_tensor_type(backend):
         "__slots__": ("__weakref__",),
         "_frontend_backend": backend,
         "_frontend_autograd_policy": 3,
+        "clone": clone,
     })
+
+
+def clone(input):
+    """Copy Tensor storage through the native copy op, preserving gradients."""
+    import jittor as backend
+    from .tensor_state import compatibility_owner
+    from .types import _var_is_cpu_resident
+    if not isinstance(input, backend.Var):
+        raise TypeError("clone expects a tensor")
+    target = compatibility_owner(backend)
+    with tensor_frontend(target.Var):
+        if backend.flags.use_cuda and _var_is_cpu_resident(input):
+            with backend.flag_scope(use_cuda=0):
+                result = backend.Var.copy(input)
+                result.sync()
+            result._jittor_torch_force_cpu = True
+            return result
+        return backend.Var.copy(input)
 
 
 def make_parameter_type(backend, tensor_type):
