@@ -31,7 +31,10 @@ from jittor.backends.cuda.kernels.nn.batch_norm_training_cuda import (
     _batch_norm_eval_cuda,
 )
 from jittor.backends.cuda.kernels.nn.channel_bias_cuda import _channel_bias_add_cuda
-from jittor.backends.cuda.kernels.nn.group_norm_cuda import _group_norm_cuda
+from jittor.backends.cuda.kernels.nn.group_norm_cuda import (
+    _group_norm_cuda,
+    _group_norm_cuda_cls,
+)
 from jittor.backends.cuda.kernels.nn.layer_norm_training_cuda import _layer_norm_cuda
 from jittor.backends.cuda.kernels.nn.rms_norm_training_cuda import _rms_norm_training_cuda
 
@@ -231,6 +234,113 @@ class TestGroupNorm(_NormBase):
             lambda v: F.group_norm(v, G, jt.array(w.astype(str(v.dtype))),
                                    jt.array(b.astype(str(v.dtype))), 1e-5),
             x, "GroupNorm grad @ var~1e-6")
+
+    @unittest.skipUnless(jt.has_cuda, "CUDA GroupNorm fast path needs CUDA")
+    def test_cuda_forward_hands_statistics_not_a_full_size_intermediate(self):
+        """The forward must not stash a whole normalized feature map (8.20).
+
+        Carrying ``xhat`` to the backward costs an extra full-size write in the
+        forward and an extra full-size allocation for the whole forward-backward
+        interval; ``mean`` and ``rstd`` are two floats per group, and the
+        backward recomputes ``xhat`` from ``x`` at the same memory traffic.
+        LayerNorm and BatchNorm here, and torch's ``native_group_norm``, all
+        already hand over the statistics.
+
+        Counted with ``use_stat_allocator=2``, which sits *above* the caching
+        allocator and therefore sees every var the operators ask for rather
+        than only the requests that missed the device cache. The two
+        ``jt.code`` operators are driven through the ``Function`` directly: a
+        loss like ``(y * cotangent).sum()`` would allocate full-size
+        intermediates of its own and bury the quantity under test.
+        """
+        shape, groups = (2, 32, 16, 16), 8
+        full_size = 4 * int(np.prod(shape))
+        rng = np.random.RandomState(20260906)
+
+        with jt.flag_scope(use_cuda=1):
+            x = jt.array(rng.randn(*shape).astype("float32"))
+            weight = jt.array(rng.randn(shape[1]).astype("float32"))
+            bias = jt.array(rng.randn(shape[1]).astype("float32"))
+            cotangent = jt.array(rng.randn(*shape).astype("float32"))
+            cls = _group_norm_cuda_cls(shape, groups, 1e-5)
+
+            def forward_and_backward():
+                function = cls()
+                output = function.execute(x, weight, bias)
+                grads = function.grad(cotangent)
+                jt.sync([output] + list(grads), device_sync=True)
+
+            forward_and_backward()          # compile outside the measurement
+            jt.sync_all(True)
+            jt.flags.use_stat_allocator = 2  # enabling resets the counters
+            try:
+                forward_and_backward()
+                allocated = int(jt.flags.stat_allocator_total_alloc_byte)
+            finally:
+                jt.flags.use_stat_allocator = 0
+
+        # y and grad_x are unavoidable, so anything below 1.5 copies means the
+        # counter did not see the operators at all and this assertion would be
+        # passing for the wrong reason.
+        self.assertGreater(
+            allocated, 1.5 * full_size,
+            "the allocator counter saw %d B, less than the output and the "
+            "input gradient together -- the measurement, not the kernel, is "
+            "what changed" % allocated)
+        self.assertLess(
+            allocated, 2.5 * full_size,
+            "GroupNorm forward+backward asked for %.2f full-size copies of "
+            "%s; two (y and grad_x) is all it needs. A third means the "
+            "forward is materializing xhat for the backward again"
+            % (allocated / float(full_size), shape))
+
+    @unittest.skipUnless(jt.has_cuda, "CUDA GroupNorm fast path needs CUDA")
+    def test_cuda_fast_path_at_the_num_groups_boundaries(self):
+        """num_groups of 1 and of C, and the shape the fast path must refuse.
+
+        num_groups == C makes group_size == H*W, which is below one warp for
+        the small spatial sizes here, and num_groups == 1 makes a single group
+        spanning every channel: both exercise the channel index arithmetic the
+        backward uses to recompute xhat.
+        """
+        shape = (3, 6, 5, 7)
+        rng = np.random.RandomState(20260907)
+        x_np = rng.randn(*shape).astype("float32")
+        weight_np = rng.randn(shape[1]).astype("float32")
+        bias_np = rng.randn(shape[1]).astype("float32")
+        cot_np = rng.randn(*shape).astype("float32")
+
+        for groups in (1, shape[1]):
+            with self.subTest(num_groups=groups):
+                def run(use_cuda):
+                    with jt.flag_scope(use_cuda=use_cuda):
+                        x = jt.array(x_np)
+                        weight = jt.array(weight_np)
+                        bias = jt.array(bias_np)
+                        if use_cuda:
+                            self.assertIsNotNone(
+                                _group_norm_cuda(x, groups, weight, bias, 1e-5),
+                                "the fast path refused num_groups=%d" % groups)
+                        output = F.group_norm(x, groups, weight, bias, 1e-5)
+                        grads = jt.grad((output * jt.array(cot_np)).sum(),
+                                        [x, weight, bias])
+                        return jt.fetch_sync([output] + grads)
+
+                reference = run(0)
+                actual = run(1)
+                for name, got, expected in zip(
+                        ("output", "grad_x", "grad_weight", "grad_bias"),
+                        actual, reference):
+                    np.testing.assert_allclose(
+                        got, expected, rtol=2e-3, atol=2e-3,
+                        err_msg="CUDA GroupNorm %s at num_groups=%d"
+                                % (name, groups))
+
+        with jt.flag_scope(use_cuda=1):
+            # C % num_groups != 0: the kernel indexes with a compile-time
+            # channels_per_group, so it must decline rather than read past a row
+            self.assertIsNone(_group_norm_cuda(
+                jt.array(x_np), 4, jt.array(weight_np), jt.array(bias_np), 1e-5))
 
 
 class TestInstanceNorm(_NormBase):
