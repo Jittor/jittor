@@ -3092,6 +3092,29 @@ warmup 之后、三次采样：
 **静默窗口怎么取**：`uptime` 的 1 分钟负载回到 5 以下（128 核，空载基线约 3–4），且
 `ps -eo pcpu,args | rg "cc1plus|nvcc"` 无命中。测量前后各取一次，两次不一致就重测。
 
+## 6quinquies. `tests/structure` 的 failed/passed 数不写配置就没意义
+
+2026-09-07，`bindings` 分区在核对我发下去的基线时发现：**同一棵树、同一条命令，`tests/structure`
+在两种配置下不是同一组用例。**
+
+| 配置 | collected | 结果 |
+| --- | --- | --- |
+| `nvcc_path=""`（CPU-only build） | 907 | 15 failed / 888 passed |
+| 带 `nvcc_path=/usr/local/cuda/bin/nvcc` | 930 | 14 failed / 914 passed |
+
+差的 23 条是**随 CUDA 可用性参数化出来的用例**。所以：
+
+- **这两组之间不能直接 A/B**，passed 差 26 不代表修好了 26 条；
+- 我此前反复分发的「15 failed / 892 passed」**没写配置，是个不可比的数**，各分区据此做的
+  before/after 对照都要看它两侧是不是同一配置；
+- 同理，`tests/backends/cuda` 我记的 269 passed 在 `bindings` 与 `device` 两次独立测量里都是
+  **274 passed**（5 failed / 35 skipped / 2 xfailed 一致），269 是旧数。
+
+**今后报门禁数字的最小口径**：命令、`nvcc_path` 取值、`JITTOR_TORCH_SHIM` 取值、`collected`、
+failed/passed/skipped/xfailed 五个数、以及失败的 nodeid 集合。**只报 passed 看不出用例集合变了。**
+这与 §6bis 是同一个毛病的另一面——那里是「测试没观察到它声称观察的东西」，这里是
+「两次测量的对象根本不是同一批」。
+
 ## 6ter. 布局收尾那 10 条为什么现在不能派
 
 `0.20`、`1.05`、`2.23`、`3.24`、`4.15`、`5.26`、`7.18`、`8.19`、`9.19`、`10.23` 全是
