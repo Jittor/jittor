@@ -32,6 +32,14 @@ JITTOR_HOME 使用独立 acl-move-cuda 缓存，不能与 CPU-only 的收集数�
 4.15 按本交接修正后的布局范围收口；8.19 的通信资源与Python owner收口。
 后续从5.26继续；5.26/7.18负责剩余compat/math_util原生资源，不应重复迁移已不存在的extern。
 
+5.26 后续三域代码已迁为 `linalg/`、`distributions/`、`init/`，显式公开导出与
+旧 pickle 路径保留。Torch Kaiming 保持兼容抽样方式，调用期依赖与复数接口延迟
+导出避免增加导入环；循环模块仍为原上限164，未放宽门禁。源码 CPU/CUDA 与
+最终 wheel 安装自检证据见 `agent/results/2026-09-07-python-domain-packages.md`。
+其余 `_runtime/core_api.py`、misc/pool/build/contrib 和根目录收缩尚未完成，
+不要因此把5.26标为已合并。下一批先拆原生 `_core`，注意 Module/Function/GradHooker
+的依赖环和 flags/var/hooks 的模块名与公开对象名冲突。
+
 2026-09-07 后续执行记录：coord 已从 `4fbcaab64` 同步（实际落后 126 提交，无冲突）。
 正在修复本节前置：preflight 接收实际 BuildConfig，CPU/ACL/ROCm 不要求可选归档；
 `setup_cub()` 实际仅 CUDA 版本小于 11 时下载 CUB，11+ 使用 SDK 自带 CUB，

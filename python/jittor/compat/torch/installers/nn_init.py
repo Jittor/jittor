@@ -15,6 +15,7 @@ def _install_init_aliases(registry=None):
     _modules = registry_for(jt, registry).module_map
     import jittor.init as _init
     import jittor as _jt2
+    from jittor.init.scaling import _kaiming_uniform_
     # torch-style in-place initializers, tolerant of torch kwargs (e.g.
     # `generator=`, which jittor ignores). Each writes into `tensor` in place.
     def _assign(tensor, value):
@@ -59,6 +60,9 @@ def _install_init_aliases(registry=None):
     def zeros_(tensor):
         if _not_var(tensor): return tensor
         return _assign(tensor, _jt2.zeros(tensor.shape, tensor.dtype))
+    def kaiming_uniform_(tensor, a=0, mode='fan_in',
+                         nonlinearity='leaky_relu', generator=None):
+        return _kaiming_uniform_(tensor, uniform_, a, mode, nonlinearity, generator)
     def ones_(tensor):
         if _not_var(tensor): return tensor
         return _assign(tensor, _jt2.ones(tensor.shape, tensor.dtype))
@@ -78,6 +82,7 @@ def _install_init_aliases(registry=None):
         return _assign(tensor, _jt2.array(x).cast(str(tensor.dtype)))
     # override with the tolerant versions (also covers jittor's own names)
     for name, fn in [("normal_", normal_), ("uniform_", uniform_),
+                     ("kaiming_uniform_", kaiming_uniform_),
                      ("zeros_", zeros_), ("ones_", ones_), ("constant_", constant_),
                      ("trunc_normal_", trunc_normal_)]:
         setattr(_init, name, fn)

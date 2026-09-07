@@ -47,6 +47,9 @@ python/
 │   │   └── attention.py
 │   ├── autograd/                # functional automatic differentiation
 │   ├── fft/                     # differentiable native FFT namespace
+│   ├── linalg/                  # decompositions, solving, norms and contractions
+│   ├── distributions/           # probability families and shared constraints
+│   ├── init/                    # initialization families and shared fan/gain rules
 │   ├── misc/                    # general tensor and shape operations
 │   ├── pool/                    # pooling functions and modules
 │   ├── optim/                   # optimizer facade and algorithm modules
@@ -189,9 +192,23 @@ External native consumers must include `runtime/device.h` or
 `runtime/device_state.h` and rebuild; Python `jt.flags` names remain unchanged.
 `compiler.py`, `compile_extern.py`,
 `pyjt_compiler.py`, and `init_cupy.py` are compiler or device bootstrap
-boundaries; `distributions.py`, `init.py`, and `linalg.py` are public native
-domains; `selftest.py` is the installed smoke-test entry point. New root files
+boundaries; `distributions/`, `init/`, and `linalg/` are public native
+packages; `selftest.py` is the installed smoke-test entry point. New root files
 require an ownership review and a corresponding structure-gate update.
+
+The three domain initializers explicitly re-export their implementation objects.
+Linear algebra separates complex routines, decompositions, solving, norms and
+contractions, with shared array helpers and result types. Distributions separate
+base contracts, constraints, helpers, discrete/continuous/relaxed/multivariate
+families and KL divergence. Initialization separates basic filling, fan/gain
+rules, scaled initializers and truncated normal; its facade retains the existing
+Var method bindings. Function metadata names the physical owner, while historical
+public pickle globals continue to resolve through the facades. These moves do
+not complete the remaining root, core API, tensor-ops or build-package migration.
+Runtime-only framework imports are deferred to calls to keep the import-cycle
+surface from growing. The six legacy complex linalg functions are lazily
+re-exported as their original objects, preserving concrete ComplexNumber type
+annotations without making package bootstrap depend on the NN facade.
 
 Backend configuration is now a frozen `BuildConfig` returned by the selected
 provider, with explicit services in `BuildContext`. Providers do not mutate
