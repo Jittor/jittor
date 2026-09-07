@@ -12,7 +12,7 @@
 #include <exception>
 #include "runtime/device.h"
 #include "runtime/backend.h"
-#include "var.h"
+#include "core/var.h"
 #include "mem/allocator.h"
 #include "mem/allocator/sfrl_allocator.h"
 

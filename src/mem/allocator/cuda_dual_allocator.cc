@@ -7,7 +7,7 @@
 #ifdef HAS_ACCELERATOR
 #include "runtime/device.h"
 #include "mem/allocator/cuda_dual_allocator.h"
-#include "event_queue.h"
+#include "core/event_queue.h"
 
 namespace jittor {
 

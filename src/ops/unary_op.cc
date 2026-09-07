@@ -6,7 +6,7 @@
 // ***************************************************************
 #include <cmath>
 #include "type/cpu_math.h"
-#include "var.h"
+#include "core/var.h"
 #include "ops/unary_op.h"
 #include "ops/op_register.h"
 

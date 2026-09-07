@@ -13,8 +13,8 @@
 #include <cstring>
 #include <ctime>
 
-#include "common.h"
-#include "lock.h"
+#include "core/common.h"
+#include "runtime/lock.h"
 
 /**
 The shared-file rendezvous used by the MPI-free NCCL and HCCL bootstraps.

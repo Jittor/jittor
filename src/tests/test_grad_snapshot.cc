@@ -3,9 +3,9 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "grad.h"
-#include "op.h"
-#include "var.h"
+#include "core/grad.h"
+#include "core/op.h"
+#include "core/var.h"
 
 namespace jittor {
 

@@ -4,10 +4,10 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "common.h"
+#include "core/common.h"
 #include "utils/str_utils.h"
 #include "ops/op_register.h"
-#include "op_compiler.h"
+#include "codegen/op_compiler.h"
 
 namespace jittor {
 

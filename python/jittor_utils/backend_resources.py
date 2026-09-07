@@ -28,20 +28,22 @@ def core_root(jittor_path):
     ``jittor/``. Same two-location shape as :func:`backend_root`, and the same
     reason: one place answers "where is it" so a layout change is one edit.
 
-    The marker file is ``common.h``. It is the header every other core
+    The marker file is ``core/common.h``. It is the header every other core
     translation unit includes, so a directory that has it is the core and a
     directory that does not is not -- unlike a bare ``isdir``, which would
     happily accept an empty leftover directory and hand back a root whose
-    ``-I`` finds nothing.
+    ``-I`` finds nothing. (`1.05` moved it from the root into ``core/``; the
+    marker moved with it, which is the whole reason to name a file rather than
+    trust the directory.)
     """
     package = os.path.abspath(os.fspath(jittor_path))
     parent = os.path.dirname(package)
     if os.path.basename(parent) == "python" and os.path.basename(package) == "jittor":
         checkout = os.path.join(os.path.dirname(parent), "src")
-        if os.path.isfile(os.path.join(checkout, "common.h")):
+        if os.path.isfile(os.path.join(checkout, "core", "common.h")):
             return checkout
     installed = os.path.join(package, "src")
-    if os.path.isfile(os.path.join(installed, "common.h")):
+    if os.path.isfile(os.path.join(installed, "core", "common.h")):
         return installed
     raise FileNotFoundError(
         "the C++ core sources are missing from %s; check the source layout or "

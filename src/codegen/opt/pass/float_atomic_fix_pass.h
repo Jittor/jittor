@@ -1,0 +1,22 @@
+// ***************************************************************
+// Copyright (c) 2023 Jittor. All Rights Reserved. 
+// Maintainers: 
+//     Dun Liang <randonlang@gmail.com>. 
+// 
+// This file is subject to the terms and conditions defined in
+// file 'LICENSE.txt', which is part of this source code package.
+// ***************************************************************
+#pragma once
+#include "codegen/opt/pass/pass.h"
+
+namespace jittor {
+
+struct FloatAtomicFixPass : Pass {
+    FloatAtomicFixPass() : Pass("float_atomic_fix") {
+        reads = {kir::code};
+        writes = {kir::code};
+    };
+    void run() override;
+};
+
+} // jittor

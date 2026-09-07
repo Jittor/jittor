@@ -3,8 +3,8 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "var.h"
-#include "node.h"
+#include "core/var.h"
+#include "core/node.h"
 #include "runtime/node_index.h"
 #include "runtime/traversal_epoch.h"
 #include "runtime/runtime.h"

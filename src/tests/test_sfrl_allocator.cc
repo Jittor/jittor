@@ -5,7 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
     
-#include "opt/kernel_ir.h"
+#include "codegen/opt/kernel_ir.h"
 #include "mem/allocator/sfrl_allocator.h"
 #include <chrono>
 #include <vector>

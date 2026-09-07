@@ -1,7 +1,7 @@
 #include "runtime/dispatch_context.h"
 #include "runtime/backend.h"
 #include "runtime/device.h"
-#include "var.h"
+#include "core/var.h"
 
 namespace jittor {
 namespace {

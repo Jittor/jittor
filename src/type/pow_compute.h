@@ -5,7 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
-#include "common.h"
+#include "core/common.h"
 
 // Sign-aware pow for the CUDA backend. CUDA's ::pow (especially under
 // --use_fast_math) returns NaN for a negative base x even when the exponent y

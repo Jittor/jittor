@@ -5,7 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <cstdio>
-#include "jit_key.h"
+#include "codegen/jit_key.h"
 
 namespace jittor {
 

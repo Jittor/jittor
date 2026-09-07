@@ -3,11 +3,11 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "grad.h"
-#include "graph.h"
-#include "node.h"
-#include "op.h"
-#include "var.h"
+#include "core/grad.h"
+#include "core/graph.h"
+#include "core/node.h"
+#include "core/op.h"
+#include "core/var.h"
 #include "runtime/traversal_epoch.h"
 
 namespace jittor {

@@ -5,7 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
-#include "common.h"
+#include "core/common.h"
 #include <functional>
 
 namespace jittor {

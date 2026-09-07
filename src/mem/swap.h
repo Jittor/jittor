@@ -73,9 +73,9 @@ code change:
 
 */
 #pragma once
-#include "common.h"
+#include "core/common.h"
 #include "mem/allocator.h"
-#include "var.h"
+#include "core/var.h"
 
 namespace jittor {
 

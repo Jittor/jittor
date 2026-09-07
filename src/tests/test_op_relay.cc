@@ -4,15 +4,15 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "op.h"
-#include "var.h"
-#include "opt/var_relay.h"
+#include "core/op.h"
+#include "core/var.h"
+#include "codegen/opt/var_relay.h"
 #include "ops/op_register.h"
-#include "fused_op.h"
-#include "graph.h"
-#include "op_compiler.h"
+#include "core/fused_op.h"
+#include "core/graph.h"
+#include "codegen/op_compiler.h"
 #include "mem/allocator.h"
-#include "executor.h"
+#include "core/executor.h"
 
 namespace jittor {
 

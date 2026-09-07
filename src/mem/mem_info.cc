@@ -20,10 +20,10 @@
 #include <unistd.h>
 #endif
 
-#include "var.h"
-#include "op.h"
-#include "var_holder.h"
-#include "graph.h"
+#include "core/var.h"
+#include "core/op.h"
+#include "core/var_holder.h"
+#include "core/graph.h"
 #include "runtime/device.h"
 #include "runtime/backend.h"
 #include "mem/allocator/sfrl_allocator.h"
@@ -31,8 +31,8 @@
 #include "mem/allocator/temp_allocator.h"
 #include "mem/mem_info.h"
 #include "mem/swap.h"
-#include "executor.h"
-#include "pybind/py_var_tracer.h"
+#include "core/executor.h"
+#include "bindings/pybind/py_var_tracer.h"
 
 namespace jittor {
 

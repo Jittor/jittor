@@ -18,7 +18,7 @@
 #include "mem/swap.h"
 #include "runtime/executor_entry.h"
 #include "runtime/traversal_epoch.h"
-#include "var.h"
+#include "core/var.h"
 
 namespace jittor {
 

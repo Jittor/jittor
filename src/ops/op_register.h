@@ -8,8 +8,8 @@
 #include <mutex>
 #include <type_traits>
 #include <utility>
-#include "common.h"
-#include "ops/op_dispatch.h"
+#include "core/common.h"
+#include "ops/composite/op_dispatch.h"
 
 namespace jittor {
 

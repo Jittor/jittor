@@ -6,7 +6,7 @@
 // ***************************************************************
 #include <stdexcept>
 #include "mem/allocator/aligned_allocator.h"
-#include "var.h"
+#include "core/var.h"
 
 namespace jittor {
 

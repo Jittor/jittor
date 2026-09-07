@@ -5,7 +5,7 @@
 #include <exception>
 #include <eh.h>
 #include <sstream>
-#include "common.h"
+#include "core/common.h"
 
 namespace jittor {
 

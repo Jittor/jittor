@@ -8,7 +8,7 @@
 #include <sched.h>
 #endif
 
-#include "parallel_compiler.h"
+#include "core/parallel_compiler.h"
 
 namespace jittor {
 

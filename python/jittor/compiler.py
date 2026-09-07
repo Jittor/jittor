@@ -2412,15 +2412,15 @@ def build_core(force=False):
     at_beginning = [
         "src/ops/op_utils.cc",
         "src/ops/op_register.cc",
-        "src/init.cc",
-        "src/event_queue.cc",
+        "src/runtime/init.cc",
+        "src/core/event_queue.cc",
         "src/mem/allocator/sfrl_allocator.cc",
         "src/mem/allocator.cc",
         "src/type/nano_string.cc",
     ]
     at_last = [
-        "src/profiler/profiler.cc",
-        "src/executor.cc",
+        "src/runtime/profiler/profiler.cc",
+        "src/core/executor.cc",
     ]
     if os.name == 'nt':
         at_beginning = [ x.replace('/','\\') for x in at_beginning ]

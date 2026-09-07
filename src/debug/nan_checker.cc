@@ -10,7 +10,7 @@
 #include "ops/op_register.h"
 #include "runtime/backend.h"
 #include "mem/allocator.h"
-#include "op.h"
+#include "core/op.h"
 
 namespace jittor {
 

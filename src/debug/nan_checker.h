@@ -4,8 +4,8 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
-#include "op.h"
-#include "var.h"
+#include "core/op.h"
+#include "core/var.h"
 
 namespace jittor {
 

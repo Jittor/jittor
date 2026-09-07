@@ -23,7 +23,7 @@
 
 #include <limits>
 
-#include "node.h"
+#include "core/node.h"
 
 namespace jittor {
 

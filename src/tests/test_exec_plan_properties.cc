@@ -29,10 +29,10 @@
 #include <set>
 #include <map>
 
-#include "exec_plan.h"
-#include "op.h"
-#include "var.h"
-#include "var_holder.h"
+#include "core/exec_plan.h"
+#include "core/op.h"
+#include "core/var.h"
+#include "core/var_holder.h"
 
 namespace jittor {
 

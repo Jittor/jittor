@@ -4,8 +4,8 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
-#include "common.h"
-#include "node.h"
+#include "core/common.h"
+#include "core/node.h"
 #include "runtime/traversal_state.h"
 
 namespace jittor {

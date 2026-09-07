@@ -5,7 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "ops/op_register.h"
-#include "var.h"
+#include "core/var.h"
 
 namespace jittor {
 

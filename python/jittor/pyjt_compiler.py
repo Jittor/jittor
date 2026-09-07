@@ -1200,7 +1200,7 @@ def compile(cache_path, jittor_path):
         # jit_op_maker.h merge compile with var_holder.h
         if bh == "var_holder.h": continue
         if bh == "jit_op_maker.h":
-            with open(os.path.join(core_root(jittor_path), "var_holder.h"), "r", encoding='utf8') as f:
+            with open(os.path.join(core_root(jittor_path), "core", "var_holder.h"), "r", encoding='utf8') as f:
                 src = f.read() + src
         basename = bh.split(".")[0]
         fname = "pyjt_"+basename+".cc"

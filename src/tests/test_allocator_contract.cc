@@ -9,7 +9,7 @@
 #include "mem/allocator/aligned_allocator.h"
 #include "mem/allocator/nfef_allocator.h"
 #include "mem/allocator/sfrl_allocator.h"
-#include "var.h"
+#include "core/var.h"
 
 namespace jittor {
 

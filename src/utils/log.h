@@ -14,7 +14,7 @@
 #include <cstdlib>
 #include <cerrno>
 #include <cctype>
-#include "types.h"
+#include "core/types.h"
 
 namespace jittor {
 

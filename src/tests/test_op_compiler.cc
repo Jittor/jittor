@@ -5,7 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <regex>
-#include "op_compiler.h"
+#include "codegen/op_compiler.h"
 
 namespace jittor {
 

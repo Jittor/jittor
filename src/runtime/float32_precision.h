@@ -33,7 +33,7 @@
 // accumulate in float32 -- that was already the default for two of the three
 // cuBLAS ops, it is what torch does, and it is the one place where a "faster"
 // tier used to silently cost accuracy that nobody asked to spend.
-#include "common.h"
+#include "core/common.h"
 #include "utils/log.h"
 
 namespace jittor {

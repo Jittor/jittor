@@ -1,0 +1,20 @@
+// ***************************************************************
+// Copyright (c) 2023 Jittor. All Rights Reserved. 
+// Maintainers: Zheng-Ning Liu <lzhengning@gmail.com>. 
+// This file is subject to the terms and conditions defined in
+// file 'LICENSE.txt', which is part of this source code package.
+// ***************************************************************
+#pragma once
+#include "codegen/opt/pass/pass.h"
+
+namespace jittor {
+
+struct SharedReducePass : Pass {
+    SharedReducePass() : Pass("shared_reduce") {
+        reads = {kir::code, kir::dtype, kir::lvalue, kir::rvalue};
+        writes = {kir::code};
+    };
+    void run() override;
+};
+
+} // jittor

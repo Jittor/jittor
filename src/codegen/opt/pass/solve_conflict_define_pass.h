@@ -1,0 +1,20 @@
+// ***************************************************************
+// Copyright (c) 2023 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
+// This file is subject to the terms and conditions defined in
+// file 'LICENSE.txt', which is part of this source code package.
+// ***************************************************************
+#pragma once
+#include "codegen/opt/pass/pass.h"
+
+namespace jittor {
+
+struct SolveConflictDefinePass : Pass {
+    SolveConflictDefinePass() : Pass("solve_conflict_define") {
+        reads = {kir::lvalue};
+        writes = {kir::lvalue};
+    };
+    void run() override;
+};
+
+} // jittor

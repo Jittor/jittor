@@ -11,7 +11,7 @@
 #ifndef _WIN32
 #include <sys/mman.h>
 #endif
-#include "common.h"
+#include "core/common.h"
 #include "runtime/ring_buffer.h"
 
 namespace jittor {

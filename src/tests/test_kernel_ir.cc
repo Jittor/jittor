@@ -4,7 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "opt/kernel_ir.h"
+#include "codegen/opt/kernel_ir.h"
 
 namespace jittor {
 

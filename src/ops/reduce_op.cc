@@ -6,10 +6,10 @@
 // ***************************************************************
 #include <cmath>
 #include <limits>
-#include "var.h"
+#include "core/var.h"
 #include "ops/reduce_op.h"
 #include "ops/op_register.h"
-#include "executor.h"
+#include "core/executor.h"
 #include "runtime/backend.h"
 #include "runtime/device.h"
 

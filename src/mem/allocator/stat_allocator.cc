@@ -5,7 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "mem/allocator/stat_allocator.h"
-#include "var.h"
+#include "core/var.h"
 
 namespace jittor {
 

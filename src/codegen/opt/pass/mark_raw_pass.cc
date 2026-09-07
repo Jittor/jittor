@@ -1,0 +1,38 @@
+// ***************************************************************
+// Copyright (c) 2023 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
+// This file is subject to the terms and conditions defined in
+// file 'LICENSE.txt', which is part of this source code package.
+// ***************************************************************
+#include <sstream>
+#include "core/var.h"
+#include "codegen/opt/pass_manager.h"
+#include "codegen/opt/pass/mark_raw_pass.h"
+
+namespace jittor {
+
+void MarkRawPass::run() {
+    vector<string> raws = {"relay_groups"};
+    for (auto& c : ir->children) {
+        string* check = nullptr;
+        bool found = false;
+        if (c->type == KernelIRType::define) {
+            check = &c->get_attr(kir::rvalue);
+        } else if (c->has_attr(kir::code))
+            check = &c->get_attr(kir::code);
+        if (check) {
+            for (auto& s : raws)
+                if (check->find(s) != string::npos) {
+                    found = true;
+                    break;
+                }
+            if (found) {
+                c->attrs[kir::raw] = "1";
+                if (c->type == KernelIRType::define)
+                    raws.push_back(c->get_attr(kir::lvalue));
+            }
+        }
+    }
+}
+
+} // jittor

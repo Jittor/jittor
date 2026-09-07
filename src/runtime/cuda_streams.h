@@ -5,7 +5,7 @@
 // ***************************************************************
 #pragma once
 
-#include "common.h"
+#include "core/common.h"
 #include "runtime/backend_streams.h"
 
 namespace jittor {

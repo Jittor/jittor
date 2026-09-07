@@ -6,7 +6,7 @@
 // ***************************************************************
 #pragma once
 #include <cstring>
-#include "common.h"
+#include "core/common.h"
 
 namespace jittor {
 

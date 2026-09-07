@@ -11,7 +11,7 @@
 #include <unordered_map>
 #include <utility>
 
-#include "common.h"
+#include "core/common.h"
 
 namespace jittor {
 

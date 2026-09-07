@@ -1,6 +1,6 @@
 #pragma once
-#include "common.h"
-#include "jit_key.h"
+#include "core/common.h"
+#include "codegen/jit_key.h"
 
 namespace jittor {
 

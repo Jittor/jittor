@@ -13,7 +13,7 @@
 #ifndef _MSC_VER
 #include <unistd.h>
 #endif
-#include "var.h"
+#include "core/var.h"
 #include "mem/swap.h"
 #include "mem/mem_info.h"
 #include "runtime/backend.h"

@@ -14,7 +14,7 @@
 #include <cstring>
 #include <ctime>
 #include <cerrno>
-#include "common.h"
+#include "core/common.h"
 
 namespace jittor {
 
