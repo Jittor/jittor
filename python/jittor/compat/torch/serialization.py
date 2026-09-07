@@ -4,7 +4,7 @@ import numpy as np
 import jittor as jt
 
 from .context import registry_for
-from .types import _make_cpu_resident, _make_cuda_resident
+from .types import _make_cpu_resident, _make_cuda_resident, _move_to_cuda_index
 from ..diagnostics import EXPECTED, swallowed
 
 
@@ -202,18 +202,18 @@ def install(ctx):
     # Vars converted to a portable (numpy) form and restored on load.
     import os as _os_pickle, pickle as _pickle
     _VAR_TAG = "__jt_var__"
-    def _to_portable(obj, _seen=None):
+    def _to_portable(obj, snapshots):
         if isinstance(obj, jt.Var):
-            # Var.numpy() can materialize a CUDA Var on CPU in-place. Checkpoint
-            # serialization must not change the live module/optimizer tensors.
+            # Batched fetch supplies a host copy without moving live tensors.
             # `str(obj.dtype)` returns the torch-compat dtype OBJECT (a str
             # subclass), which pickles as a class reference. Store the bare
             # name so a checkpoint carries no importable global at all.
-            return {_VAR_TAG: True, "data": obj.clone().numpy(),
+            return {_VAR_TAG: True, "data": snapshots[id(obj)],
                     "dtype": str.__str__(obj.dtype) if isinstance(obj.dtype, str)
                              else str(obj.dtype),
                     "requires_grad": bool(obj.requires_grad),
-                    "parameter": isinstance(obj, g.nn.Parameter)}
+                    "parameter": isinstance(obj, g.nn.Parameter),
+                    "device": str(getattr(obj, "device", "cpu"))}
         # Drop non-picklable callables (e.g. an LR scheduler's local lr_lambda
         # closure in an extra/scheduler state_dict). torch's LambdaLR.state_dict
         # does the same -- the lambda is rebuilt on load, not restored.
@@ -221,9 +221,9 @@ def install(ctx):
         if isinstance(obj, (_t.FunctionType, _t.LambdaType, _t.MethodType, _t.BuiltinFunctionType)):
             return None
         if isinstance(obj, dict):
-            return {k: _to_portable(v) for k, v in obj.items()}
+            return {k: _to_portable(v, snapshots) for k, v in obj.items()}
         if isinstance(obj, (list, tuple)):
-            items = [_to_portable(v) for v in obj]
+            items = [_to_portable(v, snapshots) for v in obj]
             # Coerce list/tuple SUBCLASSES (e.g. the shim's local _ParamList in
             # an optimizer state_dict) to plain list/tuple -- local classes are
             # not picklable. Preserve namedtuples.
@@ -237,7 +237,7 @@ def install(ctx):
                 return tuple(items)
             return list(items)
         return obj
-    def _from_portable(obj):
+    def _from_portable(obj, source_devices):
         if isinstance(obj, dict):
             if obj.get(_VAR_TAG):
                 # from_numpy preserves wide dtypes (float64/int64); jt.array narrows
@@ -246,18 +246,41 @@ def install(ctx):
                                  requires_grad=bool(obj.get("requires_grad", False)))
                 if obj.get("parameter", False):
                     value = g.nn.Parameter(value, requires_grad=value.requires_grad)
+                source_devices[id(value)] = obj.get("device", "cpu")
                 return value
-            return {k: _from_portable(v) for k, v in obj.items()}
+            return {k: _from_portable(v, source_devices) for k, v in obj.items()}
         if isinstance(obj, (list, tuple)):
             t = type(obj)
-            return t(_from_portable(v) for v in obj)
+            values = [_from_portable(v, source_devices) for v in obj]
+            return t(*values) if hasattr(obj, "_fields") else t(values)
         return obj
     def save(obj, f, *a, **k):
-        try:
-            jt.sync_all(True)
-        except EXPECTED as exc:
-            swallowed("torch/serialization.py save: jt.sync_all(True)", exc)
-        portable = _to_portable(obj)
+        tensors, seen = [], set()
+        def collect(value):
+            if id(value) in seen:
+                return
+            seen.add(id(value))
+            if isinstance(value, jt.Var):
+                tensors.append(value)
+            elif isinstance(value, dict):
+                for item in value.values():
+                    collect(item)
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    collect(item)
+        collect(obj)
+        snapshots = {}
+        if tensors:
+            def capture(*arrays):
+                snapshots.update((id(value), np.array(array, copy=True))
+                                 for value, array in zip(tensors, arrays))
+            # Fetch copies to host without migrating the source allocation's
+            # sharing group. A clone followed by numpy() still moved that group.
+            jt.fetch(*tensors, capture)
+        jt.sync_all(True)
+        if len(snapshots) != len(tensors):
+            raise RuntimeError("checkpoint tensor fetch did not complete")
+        portable = _to_portable(obj, snapshots)
         if hasattr(f, "write"):
             _pickle.dump(portable, f)
             return
@@ -360,7 +383,7 @@ def install(ctx):
         return up.load()
 
     # ---- map_location -----------------------------------------------------
-    def _apply_map_location(obj, map_location, _depth=0):
+    def _apply_map_location(obj, map_location, _depth=0, source_devices=None):
         """Move every loaded Var to the requested device.
 
         `map_location` was documented as "(ignored)": a checkpoint saved from
@@ -368,13 +391,13 @@ def install(ctx):
         `torch.load(p, map_location="cpu")` -- the standard way to read a GPU
         checkpoint on a CPU-only box -- did nothing.
         """
-        if map_location is None:
+        if map_location is None and not source_devices:
             return obj
         if isinstance(obj, dict):
-            return {k: _apply_map_location(v, map_location, _depth + 1)
+            return {k: _apply_map_location(v, map_location, _depth + 1, source_devices)
                     for k, v in obj.items()}
         if isinstance(obj, (list, tuple)):
-            built = [_apply_map_location(v, map_location, _depth + 1) for v in obj]
+            built = [_apply_map_location(v, map_location, _depth + 1, source_devices) for v in obj]
             if isinstance(obj, tuple):
                 return type(obj)(*built) if hasattr(obj, "_fields") else tuple(built)
             return type(obj)(built) if type(obj) is not list else built
@@ -382,28 +405,46 @@ def install(ctx):
             return obj
         def preserve_parameter(moved):
             if moved is not obj and isinstance(obj, g.nn.Parameter):
+                on_cpu = moved.location() == "cpu"
                 obj.assign(moved.detach())
+                if on_cpu:
+                    return _make_cpu_resident(obj, inplace=True)
                 return obj
             return moved
-        target = map_location
+        source = (source_devices or {}).get(id(obj), "cpu")
+        target = map_location if map_location is not None else source
         if callable(target) and not isinstance(target, (str, dict)):
-            moved = target(obj, "cpu")
-            return preserve_parameter(moved) if isinstance(moved, jt.Var) else obj
+            moved = target(obj, source)
+            if isinstance(moved, jt.Var):
+                return preserve_parameter(moved)
+            target = source
         if isinstance(target, dict):
-            target = target.get("cpu", target.get("cuda:0"))
-            if target is None:
-                return obj
+            target = target.get(source, source)
         name = getattr(target, "type", None) or str(target)
         name = str(name).split(":")[0]
         if name == "cpu":
-            return preserve_parameter(_make_cpu_resident(obj))
+            return preserve_parameter(_make_cpu_resident(
+                obj, inplace=isinstance(obj, g.nn.Parameter)))
         if name in ("cuda", "npu", "gpu"):
             if not jt.flags.use_cuda:
-                raise RuntimeError(
-                    "torch.load(map_location=%r) asks for an accelerator, but "
-                    "no CUDA/NPU device is in use. Load with "
-                    "map_location='cpu'." % (map_location,))
-            return preserve_parameter(_make_cuda_resident(obj, force=True))
+                if not jt.has_cuda and not getattr(jt.flags, "use_acl", False):
+                    raise RuntimeError(
+                        "torch.load(map_location=%r) asks for an accelerator, but "
+                        "no CUDA/NPU device is available. Load with "
+                        "map_location='cpu'." % (map_location,))
+                jt.flags.use_cuda = 1
+            if name == "gpu":
+                target = "cuda" + str(target)[3:]
+            destination = g.device(target)
+            if destination.index is not None:
+                with jt.flag_scope(device_id=destination.index):
+                    moved = _make_cuda_resident(obj, force=True,
+                                                inplace=isinstance(obj, g.nn.Parameter))
+                    moved = _move_to_cuda_index(moved, destination)
+            else:
+                moved = _make_cuda_resident(obj, force=True,
+                                            inplace=isinstance(obj, g.nn.Parameter))
+            return preserve_parameter(moved)
         from ..stub_policy import unimplemented
         return unimplemented(
             "torch.load(map_location=%r)" % (name,),
@@ -412,7 +453,7 @@ def install(ctx):
             "Only 'cpu' and 'cuda' map_location targets are supported.",
             stub_result=obj)
 
-    def _load_torch_pt(path_or_file, weights_only=True):
+    def _load_torch_pt(path_or_file, weights_only=True, source_devices=None):
         zf = _zipfile.ZipFile(path_or_file, "r")
         names = zf.namelist()
         pkl_name = next(n for n in names if n.endswith("data.pkl"))
@@ -425,7 +466,7 @@ def install(ctx):
                 # The key travels with the payload so a rebuild that cannot be
                 # honoured can name the archive record it was reading.
                 cache[key] = (zf.read(data_dir + key), marker.dtype_str,
-                              numel, key)
+                              numel, key, str(pid[3]))
             return cache[key]
         def _contiguous_stride(size):
             """The stride torch gives a freshly allocated tensor of this size."""
@@ -486,14 +527,19 @@ def install(ctx):
 
         def _rebuild_tensor_v2(storage, storage_offset, size, stride,
                                requires_grad=False, backward_hooks=None, metadata=None):
-            raw, dtype_str, numel, key = storage
+            raw, dtype_str, numel, key, source_device = storage
             arr = _np_from_storage(raw, dtype_str, numel)
             size = tuple(int(s) for s in size)
             stride = None if stride is None else tuple(int(s) for s in stride)
             sub = _restore_strided(arr, int(storage_offset), size, stride, key)
-            return g.tensor(sub, dtype=dtype_str, requires_grad=bool(requires_grad))
+            value = g.tensor(sub, dtype=dtype_str, requires_grad=bool(requires_grad))
+            if source_devices is not None:
+                source_devices[id(value)] = source_device
+            return value
         def _rebuild_parameter(data, requires_grad=True, backward_hooks=None, *a, **k):
             parameter = g.nn.Parameter(data, requires_grad=requires_grad)
+            if source_devices is not None:
+                source_devices[id(parameter)] = source_devices.get(id(data), "cpu")
             if a:
                 if not isinstance(a[0], dict):
                     raise _pickle.UnpicklingError("parameter state must be a dictionary")
@@ -557,8 +603,10 @@ def install(ctx):
             swallowed("torch/serialization.py load: _zip = _is_zip(f)", exc)
             _zip = False
         if _zip:
+            source_devices = {}
             return _apply_map_location(
-                _load_torch_pt(f, weights_only=weights_only), map_location)
+                _load_torch_pt(f, weights_only=weights_only, source_devices=source_devices),
+                map_location, source_devices=source_devices)
         if path is not None and path.lower().endswith((".pth", ".pt", ".bin")) and _is_legacy_torch_pickle(path):
             from jittor.serialization.load_pytorch import load_pytorch as _load_pytorch
             return _apply_map_location(_load_pytorch(path), map_location)
@@ -576,7 +624,9 @@ def install(ctx):
             if native_load is not None and path is not None and path.lower().endswith(".pkl"):
                 return _apply_map_location(native_load(path), map_location)
             raise
-        return _apply_map_location(_from_portable(obj), map_location)
+        source_devices = {}
+        restored = _from_portable(obj, source_devices)
+        return _apply_map_location(restored, map_location, source_devices=source_devices)
     g.save = save
     g.load = load
     # Stash the real pickle loader so adapters can restore it if torch.load gets

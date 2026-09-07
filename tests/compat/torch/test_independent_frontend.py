@@ -254,6 +254,30 @@ def test_independent_tensor_installation_preserves_native_type():
         assert loaded["bf16"].dtype is torch.bfloat16
         assert type(loaded["parameter"]) is torch.nn.Parameter
         assert loaded["parameter"].requires_grad and loaded["parameter"].is_leaf
+        if jt.flags.use_cuda and torch.cuda.device_count() >= 2:
+            on_second = torch.nn.Parameter(torch.tensor([5., 6.], device="cuda:1"))
+            on_second.sync()
+            assert on_second.device_id == 1
+            archive = io.BytesIO()
+            torch.save(on_second, archive)
+            assert on_second.device_id == 1 and on_second.location() == "device"
+            archive.seek(0)
+            restored = torch.load(archive, map_location="cuda:1")
+            restored.sync()
+            assert type(restored) is torch.nn.Parameter and restored.device_id == 1
+            np.testing.assert_array_equal(restored.numpy(), [5., 6.])
+            archive.seek(0)
+            restored_default = torch.load(archive)
+            restored_default.sync()
+            assert restored_default.device_id == 1
+            archive.seek(0)
+            remapped = torch.load(archive, map_location={"cuda:1": "cpu"})
+            assert type(remapped) is torch.nn.Parameter and remapped.is_cpu
+            converted_model = torch.nn.Linear(2, 1)
+            original_weight = converted_model.weight
+            converted_model.to(device="cpu", dtype=torch.float64)
+            assert converted_model.weight is original_weight and original_weight.is_cpu
+            assert original_weight.dtype is torch.float64 and original_weight.is_leaf
         assert jt.autograd.get_policy() is policy_before
         print("INDEPENDENT_TENSOR_OK")
     """)], without_torch_mode=True, merge_stderr=True)

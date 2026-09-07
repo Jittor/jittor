@@ -570,6 +570,7 @@ def install(ctx):
         elif _device_is_cuda(device):
             _set_use_cuda()
             v = _make_cuda_resident(v, force=True)
+            v = _move_to_cuda_index(v, g.device(device))
         if g is not ctx.native_backend:
             v.requires_grad_(bool(requires_grad))
         if requires_grad:
@@ -587,7 +588,7 @@ def install(ctx):
                 return _make_cpu_resident(r)
             if _device_is_cuda(device):
                 _set_use_cuda()
-                return _make_cuda_resident(r, force=True)
+                return _move_to_cuda_index(_make_cuda_resident(r, force=True), g.device(device))
             return r
         return tensor(data, dtype=dtype, device=device)
     g.as_tensor = frontend_factory(as_tensor, Var)
@@ -600,7 +601,7 @@ def install(ctx):
             return _make_cpu_resident(v)
         if _device_is_cuda(device):
             _set_use_cuda()
-            return _make_cuda_resident(v, force=True)
+            return _move_to_cuda_index(_make_cuda_resident(v, force=True), g.device(device))
         return v
     g.from_numpy = frontend_factory(from_numpy, Var)
 

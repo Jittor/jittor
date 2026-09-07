@@ -628,7 +628,10 @@ def _module_replace_vars(self, convert):
                         if replacement is not value:
                             # Module conversion changes parameter storage, not
                             # its identity or its position as a graph leaf.
+                            on_cpu = replacement.location() == "cpu"
                             value.assign(replacement.detach())
+                            if on_cpu:
+                                _make_cpu_resident(value, inplace=True)
                         replacement = value
                         gradient = getattr(value, "_torch_grad", None)
                         if isinstance(gradient, jt.Var):

@@ -52,6 +52,7 @@ class _StorageRef(object):
         self.key = key
         self.array = array
         self.storage_type = storage_type
+        self.location = "cpu"
 
 
 class _Rebuild(object):
@@ -72,7 +73,7 @@ class _Pickler(pickle._Pickler):
     def persistent_id(self, obj):
         if isinstance(obj, _StorageRef):
             return ("storage", _Global("torch", obj.storage_type), obj.key,
-                    "cpu", obj.array.size)
+                    obj.location, obj.array.size)
         return None
 
     def save(self, obj, save_persistent_id=True):
@@ -104,12 +105,24 @@ class TestLoadHonoursSavedStrides(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def _load(self, offset, size, stride):
+    def _load(self, offset, size, stride, map_location=None):
         path = os.path.join(self.tmp, "ckpt.pt")
         _write_archive(path,
                        {"w": _Rebuild(self.storage, offset, size, stride)},
                        [self.storage])
-        return torch.load(path)["w"]
+        return torch.load(path, map_location=map_location)["w"]
+
+    def test_mapping_uses_the_saved_storage_device(self):
+        self.storage.location = "cuda:7"
+        seen = []
+        def remap(value, location):
+            seen.append(location)
+            return value.cpu()
+        got = self._load(0, (2, 3), (3, 1), remap)
+        self.assertEqual(seen, ["cuda:7"])
+        np.testing.assert_array_equal(got.numpy(), self.base.reshape(2, 3))
+        got = self._load(0, (2, 3), (3, 1), {"cuda:7": "cpu"})
+        self.assertTrue(got.is_cpu)
 
     def test_a_contiguous_tensor_still_loads(self):
         # base.reshape(2, 3): offset 0, stride (3, 1)
