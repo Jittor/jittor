@@ -4,13 +4,6 @@ import math
 import jittor as jt
 
 
-def _adaptive_avg_pool1d_parameters(output_size):
-    p_output_size = output_size
-    return {
-        "output_size": p_output_size,
-    }
-
-
 def _adaptive_avg_pool1d(x, *, output_size):
     # x: (N, C, L) -> (N, C, output_size); mirrors AdaptiveAvgPool2d for 1d.
     ol = output_size[0] if isinstance(output_size, (tuple, list)) else output_size

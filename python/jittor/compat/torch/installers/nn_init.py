@@ -24,15 +24,8 @@ def _install_init_aliases(registry=None):
         # stop_grad, which would silently freeze the parameter. Re-enable grad
         # unless the param was explicitly stop-grad before.
         was_trainable = not tensor.is_stop_grad()
-        parent = getattr(tensor, "_torch_index_parent", None)
-        parent_slices = getattr(tensor, "_torch_index_slices", None)
+        # Native assign owns retained-view writeback at every depth.
         tensor.assign(value)
-        # Basic indexing materializes a Var in Jittor, while torch initializers
-        # mutate a view's underlying storage. Write the initialized value back
-        # through the recorded parent chain (TorchQuantum initializes U3 columns
-        # via init.constant_(parameter[:, k], value)).
-        if isinstance(parent, _jt2.Var):
-            parent[parent_slices] = value
         if was_trainable:
             tensor.start_grad()
         return tensor

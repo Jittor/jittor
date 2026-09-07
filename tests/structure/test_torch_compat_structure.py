@@ -434,15 +434,16 @@ class TestTorchCompatStructure(unittest.TestCase):
                 )
         installers = package_root / "installers"
         expected = {
-            "core.py", "tensor.py", "factories.py", "autograd.py", "nn.py",
+            "core.py", "tensor", "factories.py", "autograd.py", "nn",
             "nn_init.py", "cuda.py", "distributed.py", "data.py",
-            "distributions.py", "numerical.py", "compiler.py", "utilities.py",
+            "distributions.py", "numerical", "compiler.py", "utilities.py",
         }
         self.assertEqual(
-            {path.name for path in installers.glob("*.py") if path.name != "__init__.py"},
+            {path.name for path in installers.iterdir()
+             if path.name != "__init__.py" and (path.suffix == ".py" or path.name in ("numerical", "nn", "tensor"))},
             expected,
         )
-        for path in installers.glob("*.py"):
+        for path in installers.rglob("*.py"):
             source = path.read_text(encoding="utf-8")
             with self.subTest(installer=path.name):
                 # No line budget: it fails on growth, not on a boundary violation.

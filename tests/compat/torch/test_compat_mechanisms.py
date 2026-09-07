@@ -479,11 +479,10 @@ class TestExternalBackend(unittest.TestCase):
         discovery = Path(
             jittor_root, "compat", "shim", "discovery.py"
         ).read_text(encoding="utf-8")
-        flash = Path(
-            jittor_root, "compat", "shim", "backends", "flash_attention.py"
-        ).read_text(
-            encoding="utf-8"
-        )
+        flash_root = Path(jittor_root, "compat", "shim", "backends", "flash_attention")
+        flash_paths = list(flash_root.glob("*.py"))
+        self.assertTrue(flash_paths)
+        flash = "\n".join(path.read_text(encoding="utf-8") for path in flash_paths)
         self.assertNotIn("_is_official_flash_attention_root", runtime)
         self.assertNotIn("_is_official_flash_attention_root", discovery)
         self.assertNotIn("TRELLIS_ROOT", flash)

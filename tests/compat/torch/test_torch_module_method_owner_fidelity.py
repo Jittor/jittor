@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 
 from jittor.compat.torch import fidelity as fidelity_mod
-from jittor.compat.torch.installers import nn as nn_installer
+from jittor.compat.torch.installers.nn import module_methods as nn_installer
 
 from _helpers.device_types import instantiate_device_type_tests
 

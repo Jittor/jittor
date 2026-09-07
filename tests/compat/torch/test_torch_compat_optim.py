@@ -266,7 +266,9 @@ class TestAdam(Base):
                 self.assertGreater(float(np.abs(grad.numpy()).max()), 0.0,
                                    f"{name} gradient flows {dev}")
 
-            parent = jt.ones((2, 3))
+            # Torch factories default to requires_grad=False; this part checks
+            # that mutating a parameter data view preserves an enabled flag.
+            parent = jt.ones((2, 3)).start_grad()
             with torch.no_grad():
                 parent.data[0].zero_()
             assert_stays_on_device(parent, "data view zero_")
@@ -309,7 +311,11 @@ class TestAdam(Base):
                     msg=f"chained direct setitem writes root parent {dev}")
 
             deep = jt.zeros((2, 3, 4, 5))
-            deep[1][2][3].fill_(9.0)
+            deep_view = deep[1][2][3]
+            self.assertTrue(deep_view._is_view())
+            self.assertNotIn("_torch_index_parent", deep_view.__dict__)
+            self.assertNotIn("_torch_index_slices", deep_view.__dict__)
+            deep_view.fill_(9.0)
             self.ac(deep.numpy()[1, 2, 3], np.full(5, 9.0, dtype=np.float32),
                     atol=0.0, rtol=0.0,
                     msg=f"deep chained view writes root parent {dev}")

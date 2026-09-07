@@ -1,7 +1,11 @@
-# SHA-256 and canonical path for the 36-file Torch shim resource inventory.
+# SHA-256 and canonical paths for the maintained Torch shim resource inventory.
 d6299726f316eecf066ce96858fc1447693a40cb5bc36813c6f4cbf4d8d5abe8  docs/compatibility/torch-shim.md
 21075a1ff179af7be1829d33d9ddafe2c44d42cf9fe98616a00329dfd8bba873  python/jittor/compat/shim/__init__.py
-a315c6424e2c033e333a86625b0e6cb21a29650b063986ce1726da491ca63be1  python/jittor/compat/shim/backends/flash_attention.py
+59b78000b08a464c45fcf2abdaeb200a775106d65ae798aaf6a4b8a62c08f68a  python/jittor/compat/shim/backends/flash_attention/__init__.py
+0a6365485373e35eb985f7b4ce35201441164a8610ea6c7450b10e3207234c29  python/jittor/compat/shim/backends/flash_attention/adapter.py
+9dfe79ab5075eddc1a643603bfa1440902a0a1fc93f61d23c4655265624c1760  python/jittor/compat/shim/backends/flash_attention/official_build.py
+0145ae7fc4c567178a5f09271f7b99bae28d7f16326af9583b03094ff55559c6  python/jittor/compat/shim/backends/flash_attention/official_codegen.py
+cefbfba0c628229fa1ca0bc7f379a5313a90bac83b737f4b6c2f388ac9da62bd  python/jittor/compat/shim/backends/flash_attention/packed.py
 541ed12b94cb189038ca72cdbd9e923d444261173f4a4b79c8d6d3271ef75557  python/jittor/compat/shim/cpp_extension/__init__.py
 dde7fd22077b424af188e05542cc0ae1c0538cb0ec8685ce84245aed485247f8  python/jittor/compat/shim/cpp_extension/include/ATen/ATen.h
 563db649e679c45865c0685d4d8048e477077d234d4fe855e7e736f66ee9208e  python/jittor/compat/shim/cpp_extension/include/ATen/cuda/CUDAContext.h

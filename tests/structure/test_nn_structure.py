@@ -402,8 +402,19 @@ class TestModuleBoundaries(unittest.TestCase):
         for path in _nn_sources():
             source = path.read_text(encoding="utf-8")
             with self.subTest(module=_relative(path)):
-                if "jt." in source:
-                    self.assertIn("import jittor as jt", source)
+                tree = ast.parse(source, filename=str(path))
+                uses_jt = any(
+                    isinstance(node, ast.Name) and node.id == "jt"
+                    and isinstance(node.ctx, ast.Load)
+                    for node in ast.walk(tree)
+                )
+                if uses_jt:
+                    self.assertTrue(any(
+                        isinstance(node, ast.Import)
+                        and any(alias.name == "jittor" and alias.asname == "jt"
+                                for alias in node.names)
+                        for node in ast.walk(tree)
+                    ), "runtime jt references require an explicit Jittor import")
                 for forbidden in ("preserve_facade_origins", "_JittorRuntimeProxy",
                                   ".runtime import"):
                     self.assertNotIn(forbidden, source)

@@ -63,6 +63,11 @@ class TestTorchShimStructure(unittest.TestCase):
             "python/jittor/compat/shim/resources/torch_dist_info/METADATA",
             "python/jittor/compat/shim/resources/torch_init.py",
         }
+        flash_root = self.shim_root / "backends" / "flash_attention"
+        flash_sources = set(flash_root.glob("*.py"))
+        self.assertTrue(flash_sources)
+        required.update(path.relative_to(self.repo_root).as_posix()
+                        for path in flash_sources)
         self.assertTrue(required.issubset(paths))
 
     def test_deployed_torch_template_is_an_identity_only_entrypoint(self):
@@ -135,9 +140,10 @@ class TestTorchShimStructure(unittest.TestCase):
             self.repo_root / "python" / "jittor" / "compat" / "torch" / "__init__.py",
             self.shim_root / "runtime.py",
             self.shim_root / "cpp_extension" / "torch_utils.py",
-            self.shim_root / "backends" / "flash_attention.py",
+            self.shim_root / "backends" / "flash_attention" / "__init__.py",
             self.shim_root / "resources" / "stubs" / "flash_attn" / "__init__.py",
         )
+        production += tuple((self.shim_root / "backends" / "flash_attention").glob("*.py"))
         for path in production:
             with self.subTest(path=str(path.relative_to(self.repo_root))):
                 self.assertNotIn("from jittor.torch_shim", path.read_text(encoding="utf-8"))

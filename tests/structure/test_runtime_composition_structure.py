@@ -76,6 +76,7 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
 
     def test_core_api_identity_and_legacy_pickle_paths_are_stable(self):
         import jittor
+        import jittor_utils
         from jittor._core import api
         from jittor._runtime import core_api
 
@@ -86,11 +87,16 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
             "flag_scope",
             "array",
             "make_module",
+            "dirty_fix_pytorch_runtime_error",
         ):
             with self.subTest(name=name):
                 self.assertIs(getattr(jittor, name), getattr(core_api, name))
         self.assertIs(jittor.flags, core_api.flags)
-        for name in ("Module", "Function"):
+        self.assertIs(core_api.dirty_fix_pytorch_runtime_error,
+                      jittor_utils.dirty_fix_pytorch_runtime_error)
+        self.assertEqual(core_api.dirty_fix_pytorch_runtime_error.__module__,
+                         jittor_utils.__name__)
+        for name in ("Module", "Function", "dirty_fix_pytorch_runtime_error"):
             implementation = getattr(jittor, name)
             current = pickle.dumps(implementation, protocol=0)
             self.assertIs(pickle.loads(current), implementation)

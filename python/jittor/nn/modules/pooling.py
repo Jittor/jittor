@@ -7,7 +7,7 @@ from ..functional.pooling.core_3d import _pool3d, _pool3d_parameters
 from ..functional.pooling.adaptive import _adaptive_max_pool2d, _adaptive_max_pool2d_parameters
 from ..functional.pooling.adaptive import _adaptive_avg_pool3d, _adaptive_avg_pool3d_parameters
 from ..functional.pooling.adaptive import _adaptive_max_pool3d, _adaptive_max_pool3d_parameters
-from ..functional.pooling.pooling_1d import _adaptive_avg_pool1d, _adaptive_avg_pool1d_parameters
+from ..functional.pooling.pooling_1d import _adaptive_avg_pool1d
 from ..functional.pooling.pooling_1d import _max_pool1d, _max_pool1d_parameters
 from ..functional.pooling.pooling_1d import _avg_pool1d, _avg_pool1d_parameters
 from ..functional.pooling.unpool import _max_unpool2d, _max_unpool2d_parameters
@@ -100,8 +100,7 @@ class AdaptiveMaxPool3d(Module):
 
 class AdaptiveAvgPool1d(Module):
     def __init__(self, output_size):
-        parameters = _adaptive_avg_pool1d_parameters(output_size)
-        self.output_size = parameters["output_size"]
+        self.output_size = output_size
 
     def execute(self, x):
         return _adaptive_avg_pool1d(x,

@@ -194,7 +194,7 @@ CLASSIFIED = {
     (C + "torch/installers/cuda.py", "_tf32_set", "flags"): "runtime",
     # Module.to(device="cuda") turns CUDA on because the caller asked, after the
     # install has finished.
-    (C + "torch/installers/nn.py", "_module_to", "flags"): "runtime",
+    (C + "torch/installers/nn/module_methods.py", "_module_to", "flags"): "runtime",
     # Scoped: __enter__/__exit__ restore the entry value themselves.
     (C + "torch/grad.py", "__enter__", "flags"): "runtime",
     (C + "torch/grad.py", "__exit__", "flags"): "runtime",
@@ -205,7 +205,7 @@ CLASSIFIED = {
     # Scoped environment overrides around one borrow/copy region.
     (C + "shim/extensions/readonly.py", "_borrow_scope", "env"): "runtime",
     (C + "shim/extensions/readonly.py", "_copy_scope", "env"): "runtime",
-    (C + "shim/backends/flash_attention.py",
+    (C + "shim/backends/flash_attention/__init__.py",
      "_merge_capability_env_list", "env"): "runtime",
     # A collective asking for NCCL on a job the preflight did not see; setdefault,
     # so it never overwrites a decision someone else made.

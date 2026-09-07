@@ -20,7 +20,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             with self.subTest(name=name):
                 implementation = getattr(numerical, name)
                 self.assertIs(getattr(torch, name), implementation)
-                self.assertEqual(implementation.__module__, numerical.__name__)
+                self.assertEqual(implementation.__module__, numerical.__name__ + '.complex')
                 record = fidelity.fidelity_of("torch." + name)
                 self.assertIs(record.implementation, implementation)
                 self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
@@ -43,7 +43,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         fidelity = importlib.import_module("jittor.compat.torch.fidelity")
         self.assertIs(torch.polar, numerical.polar)
-        self.assertEqual(numerical.polar.__module__, numerical.__name__)
+        self.assertEqual(numerical.polar.__module__, numerical.__name__ + '.complex')
         record = fidelity.fidelity_of("torch.polar")
         self.assertIs(record.implementation, numerical.polar)
         self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
@@ -122,7 +122,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         fidelity = importlib.import_module("jittor.compat.torch.fidelity")
         self.assertIs(torch.equal, numerical.equal)
-        self.assertEqual(numerical.equal.__module__, numerical.__name__)
+        self.assertEqual(numerical.equal.__module__, numerical.__name__ + '.indexing')
         record = fidelity.fidelity_of("torch.equal")
         self.assertIs(record.implementation, numerical.equal)
         self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
@@ -322,7 +322,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 self.assertTrue(callable(implementation))
                 self.assertIs(getattr(torch, name), implementation)
                 self.assertIs(getattr(torch.Var, name), implementation)
-                self.assertEqual(implementation.__module__, tensor_owner.__name__)
+                self.assertEqual(implementation.__module__, tensor_owner.__name__ + ".reductions")
                 self.assertEqual(implementation.__name__, name)
 
     def test_reduction_extras_fidelity_is_queryable_and_conservative(self):
@@ -374,7 +374,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 self.assertTrue(callable(implementation))
                 self.assertIs(getattr(torch, name), implementation)
                 self.assertIs(getattr(torch.Var, name), implementation)
-                self.assertEqual(implementation.__module__, tensor_owner.__name__)
+                self.assertEqual(implementation.__module__, tensor_owner.__name__ + ".arithmetic")
                 self.assertEqual(implementation.__name__, name)
 
     def test_nan_family_fidelity_is_queryable_and_conservative(self):
@@ -551,7 +551,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 implementation = getattr(numerical, name)
                 self.assertTrue(callable(implementation))
                 self.assertIs(getattr(torch, name), implementation)
-                self.assertEqual(implementation.__module__, numerical.__name__)
+                self.assertEqual(implementation.__module__, numerical.__name__ + '.shape')
                 self.assertEqual(implementation.__name__, name)
 
     def test_stacking_fidelity_is_queryable_and_conservative(self):
@@ -613,7 +613,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 implementation = getattr(numerical, name)
                 self.assertTrue(callable(implementation))
                 self.assertIs(getattr(torch, name), implementation)
-                self.assertEqual(implementation.__module__, numerical.__name__)
+                self.assertEqual(implementation.__module__, numerical.__name__ + '.shape')
                 self.assertEqual(implementation.__name__, name)
 
     def test_movedim_and_moveaxis_fidelity_is_queryable(self):
@@ -661,7 +661,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 implementation = getattr(numerical, name)
                 self.assertTrue(callable(implementation))
                 self.assertIs(getattr(torch, name), implementation)
-                self.assertEqual(implementation.__module__, numerical.__name__)
+                self.assertEqual(implementation.__module__, numerical.__name__ + '.shape')
                 self.assertEqual(implementation.__name__, name)
 
     def test_shape_helpers_fidelity_is_queryable_and_conservative(self):
@@ -706,7 +706,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 implementation = getattr(numerical, name)
                 self.assertTrue(callable(implementation))
                 self.assertIs(getattr(torch, name), implementation)
-                self.assertEqual(implementation.__module__, numerical.__name__)
+                self.assertEqual(implementation.__module__, numerical.__name__ + '.elementwise')
                 self.assertEqual(implementation.__name__, name)
 
     def test_elementwise_sign_family_fidelity_is_queryable(self):
@@ -761,7 +761,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 implementation = getattr(numerical, name)
                 self.assertTrue(callable(implementation))
                 self.assertIs(getattr(torch, name), implementation)
-                self.assertEqual(implementation.__module__, numerical.__name__)
+                self.assertEqual(implementation.__module__, numerical.__name__ + '.linalg')
                 self.assertEqual(implementation.__name__, name)
 
     def test_matrix_family_fidelity_is_queryable(self):
@@ -804,7 +804,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.float_power))
         self.assertIs(torch.float_power, numerical.float_power)
-        self.assertEqual(numerical.float_power.__module__, numerical.__name__)
+        self.assertEqual(numerical.float_power.__module__, numerical.__name__ + '.elementwise')
         self.assertEqual(numerical.float_power.__name__, "float_power")
 
     def test_float_power_fidelity_is_queryable_and_conservative(self):
@@ -842,7 +842,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 implementation = getattr(numerical, name)
                 self.assertTrue(callable(implementation))
                 self.assertIs(getattr(torch, name), implementation)
-                self.assertEqual(implementation.__module__, numerical.__name__)
+                self.assertEqual(implementation.__module__, numerical.__name__ + '.elementwise')
                 self.assertEqual(implementation.__name__, name)
 
     def test_close_family_fidelity_is_queryable_and_conservative(self):
@@ -881,7 +881,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 implementation = getattr(numerical, name)
                 self.assertTrue(callable(implementation))
                 self.assertIs(getattr(torch, name), implementation)
-                self.assertEqual(implementation.__module__, numerical.__name__)
+                self.assertEqual(implementation.__module__, numerical.__name__ + '.distance')
                 self.assertEqual(implementation.__name__, name)
 
     def test_pairwise_search_family_fidelity_is_queryable(self):
@@ -934,7 +934,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 implementation = getattr(numerical, name)
                 self.assertTrue(callable(implementation))
                 self.assertIs(getattr(torch, name), implementation)
-                self.assertEqual(implementation.__module__, numerical.__name__)
+                self.assertEqual(implementation.__module__, numerical.__name__ + '.reductions')
                 self.assertEqual(implementation.__name__, name)
 
     def test_nan_reduction_family_fidelity_is_queryable(self):
@@ -980,7 +980,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.aminmax))
         self.assertIs(torch.aminmax, numerical.aminmax)
-        self.assertEqual(numerical.aminmax.__module__, numerical.__name__)
+        self.assertEqual(numerical.aminmax.__module__, numerical.__name__ + '.reductions')
         self.assertEqual(numerical.aminmax.__name__, "aminmax")
 
     def test_aminmax_fidelity_is_queryable_and_conservative(self):
@@ -1016,7 +1016,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.pdist))
         self.assertIs(torch.pdist, numerical.pdist)
-        self.assertEqual(numerical.pdist.__module__, numerical.__name__)
+        self.assertEqual(numerical.pdist.__module__, numerical.__name__ + '.distance')
         self.assertEqual(numerical.pdist.__name__, "pdist")
 
     def test_pdist_fidelity_is_queryable_and_conservative(self):
@@ -1055,7 +1055,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertTrue(callable(numerical.logcumsumexp))
         self.assertIs(torch.logcumsumexp, numerical.logcumsumexp)
         self.assertEqual(
-            numerical.logcumsumexp.__module__, numerical.__name__)
+            numerical.logcumsumexp.__module__, numerical.__name__ + '.reductions')
         self.assertEqual(numerical.logcumsumexp.__name__, "logcumsumexp")
 
     def test_logcumsumexp_fidelity_is_queryable_and_conservative(self):
@@ -1088,7 +1088,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.quantile))
         self.assertIs(torch.quantile, numerical.quantile)
-        self.assertEqual(numerical.quantile.__module__, numerical.__name__)
+        self.assertEqual(numerical.quantile.__module__, numerical.__name__ + '.reductions')
         self.assertEqual(numerical.quantile.__name__, "quantile")
 
     def test_quantile_fidelity_is_queryable_and_cpu_only(self):
@@ -1123,7 +1123,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.nanquantile))
         self.assertIs(torch.nanquantile, numerical.nanquantile)
-        self.assertEqual(numerical.nanquantile.__module__, numerical.__name__)
+        self.assertEqual(numerical.nanquantile.__module__, numerical.__name__ + '.reductions')
         self.assertEqual(numerical.nanquantile.__name__, "nanquantile")
 
     def test_nanquantile_fidelity_is_queryable_and_cpu_only(self):
@@ -1168,8 +1168,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_allclose(
             nanquantile.numpy(),
             np.nanquantile(values, 0.5, axis=1, keepdims=True), rtol=1e-6)
-        self.assertEqual(numerical.quantile.__module__, numerical.__name__)
-        self.assertEqual(numerical.nanquantile.__module__, numerical.__name__)
+        self.assertEqual(numerical.quantile.__module__, numerical.__name__ + '.reductions')
+        self.assertEqual(numerical.nanquantile.__module__, numerical.__name__ + '.reductions')
         self.assertIs(torch.quantile, numerical.quantile)
         self.assertIs(torch.nanquantile, numerical.nanquantile)
 
@@ -1181,7 +1181,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 implementation = getattr(numerical, name)
                 self.assertTrue(callable(implementation))
                 self.assertIs(getattr(torch, name), implementation)
-                self.assertEqual(implementation.__module__, numerical.__name__)
+                self.assertEqual(implementation.__module__, numerical.__name__ + '.reductions')
                 self.assertEqual(implementation.__name__, name)
 
     def test_std_mean_family_fidelity_records_current_limitations(self):
@@ -1224,7 +1224,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.mv))
         self.assertIs(torch.mv, numerical.mv)
-        self.assertEqual(numerical.mv.__module__, numerical.__name__)
+        self.assertEqual(numerical.mv.__module__, numerical.__name__ + '.linalg')
         self.assertEqual(numerical.mv.__name__, "mv")
 
     def test_mv_fidelity_is_queryable_and_conservative(self):
@@ -1265,7 +1265,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.addmm))
         self.assertIs(torch.addmm, numerical.addmm)
-        self.assertEqual(numerical.addmm.__module__, numerical.__name__)
+        self.assertEqual(numerical.addmm.__module__, numerical.__name__ + '.linalg')
         self.assertEqual(numerical.addmm.__name__, "addmm")
 
     def test_addmm_fidelity_is_queryable_and_conservative(self):
@@ -1307,7 +1307,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.mm))
         self.assertIs(torch.mm, numerical.mm)
-        self.assertEqual(numerical.mm.__module__, numerical.__name__)
+        self.assertEqual(numerical.mm.__module__, numerical.__name__ + '.linalg')
         self.assertEqual(numerical.mm.__name__, "mm")
 
     def test_mm_fidelity_is_queryable_and_conservative(self):
@@ -1340,8 +1340,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertTrue(callable(numerical.trapezoid))
         self.assertIs(torch.trapz, numerical.trapz)
         self.assertIs(torch.trapezoid, numerical.trapezoid)
-        self.assertEqual(numerical.trapz.__module__, numerical.__name__)
-        self.assertEqual(numerical.trapezoid.__module__, numerical.__name__)
+        self.assertEqual(numerical.trapz.__module__, numerical.__name__ + '.integration')
+        self.assertEqual(numerical.trapezoid.__module__, numerical.__name__ + '.integration')
 
     def test_trapz_fidelity_is_queryable_and_conservative(self):
         numerical = importlib.import_module(
@@ -1385,7 +1385,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.masked_select))
         self.assertIs(torch.masked_select, numerical.masked_select)
-        self.assertEqual(numerical.masked_select.__module__, numerical.__name__)
+        self.assertEqual(numerical.masked_select.__module__, numerical.__name__ + '.indexing')
         self.assertEqual(numerical.masked_select.__name__, "masked_select")
 
     def test_masked_select_fidelity_is_queryable_and_conservative(self):
@@ -1415,7 +1415,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.narrow))
         self.assertIs(torch.narrow, numerical.narrow)
-        self.assertEqual(numerical.narrow.__module__, numerical.__name__)
+        self.assertEqual(numerical.narrow.__module__, numerical.__name__ + '.shape')
         self.assertEqual(numerical.narrow.__name__, "narrow")
 
     def test_narrow_fidelity_is_queryable_and_conservative(self):
@@ -1444,7 +1444,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.tile))
         self.assertIs(torch.tile, numerical.tile)
-        self.assertEqual(numerical.tile.__module__, numerical.__name__)
+        self.assertEqual(numerical.tile.__module__, numerical.__name__ + '.shape')
         self.assertEqual(numerical.tile.__name__, "tile")
 
     def test_tile_fidelity_is_queryable_and_conservative(self):
@@ -1473,7 +1473,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.diff))
         self.assertIs(torch.diff, numerical.diff)
-        self.assertEqual(numerical.diff.__module__, numerical.__name__)
+        self.assertEqual(numerical.diff.__module__, numerical.__name__ + '.elementwise')
         self.assertEqual(numerical.diff.__name__, "diff")
 
     def test_diff_fidelity_is_queryable_and_conservative(self):
@@ -1508,7 +1508,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.square))
         self.assertIs(torch.square, numerical.square)
-        self.assertEqual(numerical.square.__module__, numerical.__name__)
+        self.assertEqual(numerical.square.__module__, numerical.__name__ + '.elementwise')
         self.assertEqual(numerical.square.__name__, "square")
 
     def test_square_fidelity_is_queryable_and_conservative(self):
@@ -1536,7 +1536,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.pairwise_distance))
         self.assertIs(torch.pairwise_distance, numerical.pairwise_distance)
-        self.assertEqual(numerical.pairwise_distance.__module__, numerical.__name__)
+        self.assertEqual(numerical.pairwise_distance.__module__, numerical.__name__ + '.linalg')
         self.assertEqual(numerical.pairwise_distance.__name__, "pairwise_distance")
 
     def test_pairwise_distance_fidelity_is_queryable_and_conservative(self):
@@ -1568,7 +1568,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.split_with_sizes))
         self.assertIs(torch.split_with_sizes, numerical.split_with_sizes)
-        self.assertEqual(numerical.split_with_sizes.__module__, numerical.__name__)
+        self.assertEqual(numerical.split_with_sizes.__module__, numerical.__name__ + '.indexing')
         self.assertEqual(numerical.split_with_sizes.__name__, "split_with_sizes")
 
     def test_split_with_sizes_fidelity_is_queryable_and_conservative(self):
@@ -1601,7 +1601,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.cosine_similarity))
         self.assertIs(torch.cosine_similarity, numerical.cosine_similarity)
-        self.assertEqual(numerical.cosine_similarity.__module__, numerical.__name__)
+        self.assertEqual(numerical.cosine_similarity.__module__, numerical.__name__ + '.linalg')
         self.assertEqual(numerical.cosine_similarity.__name__, "cosine_similarity")
 
     def test_cosine_similarity_fidelity_is_queryable_and_conservative(self):
@@ -1630,7 +1630,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.svd))
         self.assertIs(torch.svd, numerical.svd)
-        self.assertEqual(numerical.svd.__module__, numerical.__name__)
+        self.assertEqual(numerical.svd.__module__, numerical.__name__ + '.linalg')
         self.assertEqual(numerical.svd.__name__, "svd")
 
     def test_svd_fidelity_is_queryable_and_conservative(self):
@@ -1655,7 +1655,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.svd_lowrank))
         self.assertIs(torch.svd_lowrank, numerical.svd_lowrank)
-        self.assertEqual(numerical.svd_lowrank.__module__, numerical.__name__)
+        self.assertEqual(numerical.svd_lowrank.__module__, numerical.__name__ + '.linalg')
         self.assertEqual(numerical.svd_lowrank.__name__, "svd_lowrank")
 
     def test_svd_lowrank_fidelity_is_queryable_and_conservative(self):
@@ -1673,7 +1673,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.pca_lowrank))
         self.assertIs(torch.pca_lowrank, numerical.pca_lowrank)
-        self.assertEqual(numerical.pca_lowrank.__module__, numerical.__name__)
+        self.assertEqual(numerical.pca_lowrank.__module__, numerical.__name__ + '.linalg')
         self.assertEqual(numerical.pca_lowrank.__name__, "pca_lowrank")
 
     def test_pca_lowrank_fidelity_is_queryable_and_conservative(self):
@@ -1691,7 +1691,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.nan_to_num_))
         self.assertIs(torch.nan_to_num_, numerical.nan_to_num_)
-        self.assertEqual(numerical.nan_to_num_.__module__, numerical.__name__)
+        self.assertEqual(numerical.nan_to_num_.__module__, numerical.__name__ + '.elementwise')
         self.assertEqual(numerical.nan_to_num_.__name__, "nan_to_num_")
 
     def test_nan_to_num_inplace_fidelity_is_queryable_and_conservative(self):
@@ -1709,7 +1709,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.sparse_coo_tensor))
         self.assertIs(torch.sparse_coo_tensor, numerical.sparse_coo_tensor)
-        self.assertEqual(numerical.sparse_coo_tensor.__module__, numerical.__name__)
+        self.assertEqual(numerical.sparse_coo_tensor.__module__, numerical.__name__ + '.sparse')
         self.assertEqual(numerical.sparse_coo_tensor.__name__, "sparse_coo_tensor")
 
     def test_sparse_coo_tensor_fidelity_is_queryable_and_conservative(self):
@@ -1727,7 +1727,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.randint_like))
         self.assertIs(torch.randint_like, numerical.randint_like)
-        self.assertEqual(numerical.randint_like.__module__, numerical.__name__)
+        self.assertEqual(numerical.randint_like.__module__, numerical.__name__ + '.factories')
         self.assertEqual(numerical.randint_like.__name__, "randint_like")
 
     def test_randint_like_fidelity_is_queryable_and_conservative(self):
@@ -1745,7 +1745,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.det))
         self.assertIs(torch.det, numerical.det)
-        self.assertEqual(numerical.det.__module__, numerical.__name__)
+        self.assertEqual(numerical.det.__module__, numerical.__name__ + '.linalg')
         self.assertEqual(numerical.det.__name__, "det")
 
     def test_det_fidelity_is_queryable_and_conservative(self):
@@ -1763,7 +1763,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.inverse))
         self.assertIs(torch.inverse, numerical.inverse)
-        self.assertEqual(numerical.inverse.__module__, numerical.__name__)
+        self.assertEqual(numerical.inverse.__module__, numerical.__name__ + '.linalg')
         self.assertEqual(numerical.inverse.__name__, "inverse")
 
     def test_inverse_fidelity_is_queryable_and_conservative(self):
@@ -1781,7 +1781,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.take_along_dim))
         self.assertIs(torch.take_along_dim, numerical.take_along_dim)
-        self.assertEqual(numerical.take_along_dim.__module__, numerical.__name__)
+        self.assertEqual(numerical.take_along_dim.__module__, numerical.__name__ + '.indexing')
         self.assertEqual(numerical.take_along_dim.__name__, "take_along_dim")
 
     def test_take_along_dim_fidelity_is_queryable_and_conservative(self):
@@ -1799,7 +1799,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.log1p))
         self.assertIs(torch.log1p, numerical.log1p)
-        self.assertEqual(numerical.log1p.__module__, numerical.__name__)
+        self.assertEqual(numerical.log1p.__module__, numerical.__name__ + '.elementwise')
         self.assertEqual(numerical.log1p.__name__, "log1p")
 
     def test_log1p_fidelity_is_queryable_and_conservative(self):
@@ -1817,7 +1817,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.reciprocal))
         self.assertIs(torch.reciprocal, numerical.reciprocal)
-        self.assertEqual(numerical.reciprocal.__module__, numerical.__name__)
+        self.assertEqual(numerical.reciprocal.__module__, numerical.__name__ + '.elementwise')
         self.assertEqual(numerical.reciprocal.__name__, "reciprocal")
 
     def test_reciprocal_fidelity_is_queryable_and_conservative(self):
@@ -1835,7 +1835,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.lerp))
         self.assertIs(torch.lerp, numerical.lerp)
-        self.assertEqual(numerical.lerp.__module__, numerical.__name__)
+        self.assertEqual(numerical.lerp.__module__, numerical.__name__ + '.elementwise')
         self.assertEqual(numerical.lerp.__name__, "lerp")
 
     def test_lerp_fidelity_is_queryable_and_conservative(self):
@@ -1853,7 +1853,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.softmax))
         self.assertIs(torch.softmax, numerical.softmax)
-        self.assertEqual(numerical.softmax.__module__, numerical.__name__)
+        self.assertEqual(numerical.softmax.__module__, numerical.__name__ + '.elementwise')
         self.assertEqual(numerical.softmax.__name__, "softmax")
 
     def test_softmax_fidelity_is_queryable_and_conservative(self):
@@ -1871,7 +1871,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.log_softmax))
         self.assertIs(torch.log_softmax, numerical.log_softmax)
-        self.assertEqual(numerical.log_softmax.__module__, numerical.__name__)
+        self.assertEqual(numerical.log_softmax.__module__, numerical.__name__ + '.elementwise')
         self.assertEqual(numerical.log_softmax.__name__, "log_softmax")
 
     def test_log_softmax_fidelity_is_queryable_and_conservative(self):
@@ -1889,7 +1889,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.relu))
         self.assertIs(torch.relu, numerical.relu)
-        self.assertEqual(numerical.relu.__module__, numerical.__name__)
+        self.assertEqual(numerical.relu.__module__, numerical.__name__ + '.elementwise')
         self.assertEqual(numerical.relu.__name__, "relu")
 
     def test_relu_fidelity_is_queryable_and_conservative(self):
@@ -1907,7 +1907,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical._shape_as_tensor))
         self.assertIs(torch._shape_as_tensor, numerical._shape_as_tensor)
-        self.assertEqual(numerical._shape_as_tensor.__module__, numerical.__name__)
+        self.assertEqual(numerical._shape_as_tensor.__module__, numerical.__name__ + '.elementwise')
         self.assertEqual(numerical._shape_as_tensor.__name__, "_shape_as_tensor")
 
     def test_shape_as_tensor_fidelity_is_queryable_and_conservative(self):
@@ -1973,7 +1973,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.isin))
         self.assertIs(torch.isin, numerical.isin)
-        self.assertEqual(numerical.isin.__module__, numerical.__name__)
+        self.assertEqual(numerical.isin.__module__, numerical.__name__ + '.elementwise')
         self.assertEqual(numerical.isin.__name__, "isin")
 
     def test_isin_fidelity_is_queryable_and_conservative(self):

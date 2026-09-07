@@ -6,13 +6,6 @@ from .core_3d import _triple
 from .entrypoints import max_pool2d, max_pool3d
 
 
-def _legacy_adaptive_avg_pool2d_parameters(output_size):
-    p_output_size = output_size
-    return {
-        "output_size": p_output_size,
-    }
-
-
 def _legacy_adaptive_avg_pool2d(x, *, output_size):
     if isinstance(output_size, int):
         oh = output_size

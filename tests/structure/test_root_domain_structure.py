@@ -292,7 +292,7 @@ class TestRootDomainStructure(unittest.TestCase):
         source = (self.runtime_root / "__init__.pyi").read_text(encoding="utf-8")
         self.assertIn("gradfunctional = autograd", source)
         self.assertIn("from .optim import legacy_schedulers as lr_scheduler", source)
-        self.assertIn("from .compat import contrib as contrib", source)
+        self.assertIn("from . import contrib as contrib", source)
         self.assertNotIn("functional as gradfunctional", source)
 
     def test_native_cold_start_preserves_legacy_module_surfaces(self):
@@ -326,8 +326,10 @@ import json
 expected = json.loads(__import__("os").environ["JITTOR_LEGACY_SURFACES"])
 for module_name, required in expected.items():
     module = importlib.import_module(module_name)
-    visible = {name for name in vars(module) if not name.startswith("_")}
+    visible = {name for name in dir(module) if not name.startswith("_")}
     assert set(required) <= visible, (module_name, sorted(set(required) - visible))
+    for name in required:
+        getattr(module, name)
     namespace = {}
     exec("from {} import *".format(module_name), namespace)
 functional = importlib.import_module("jittor.gradfunctional.functional")

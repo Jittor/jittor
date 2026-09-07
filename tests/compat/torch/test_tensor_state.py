@@ -1,4 +1,6 @@
 from types import SimpleNamespace
+import gc
+import weakref
 
 from jittor.compat.torch.tensor_state import TorchTensorState, get_tensor_state
 
@@ -52,27 +54,32 @@ def test_tensor_state_reuses_explicit_owner_over_legacy_alias():
     assert "stale" not in state
 
 
-def test_tensor_state_owns_requires_grad_lifetime():
+def test_tensor_state_does_not_duplicate_native_requires_grad_state():
     module = SimpleNamespace()
     state = get_tensor_state(module)
+    assert not hasattr(state, "requires_grad")
     tensor = object()
+    state.leaf_params[id(tensor)] = tensor
+    state.retained[id(tensor)] = tensor
+    assert get_tensor_state(module) is state
+    assert module._torch_leaf_params[id(tensor)] is tensor
+    assert module._torch_retained[id(tensor)] is tensor
 
-    assert state.set_requires_grad(tensor, True) is True
-    assert state.requires_grad_tensors() == (tensor,)
 
-    assert state.set_requires_grad(tensor, False) is False
-    assert state.requires_grad_tensors() == ()
-
-
-def test_tensor_state_requires_grad_snapshot_isolated_from_registry():
+def test_tensor_state_releases_values_removed_from_backward_registries():
     module = SimpleNamespace()
     state = get_tensor_state(module)
-    first = object()
-    second = object()
-    state.set_requires_grad(first, True)
-    state.set_requires_grad(second, True)
-
-    snapshot = state.requires_grad_tensors()
-    state.set_requires_grad(first, False)
-    assert snapshot == (first, second)
-    assert state.requires_grad_tensors() == (second,)
+    class Tensor:
+        pass
+    tensor = Tensor()
+    key = id(tensor)
+    reference = weakref.ref(tensor)
+    state.leaf_params[key] = tensor
+    state.retained[key] = tensor
+    del tensor
+    state.leaf_params.pop(key)
+    gc.collect()
+    assert reference() is state.retained[key]
+    state.retained.pop(key)
+    gc.collect()
+    assert reference() is None

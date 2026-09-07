@@ -170,13 +170,13 @@ class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
                     % (relative, needle, name))
 
     def test_dumpdef_is_reached_from_the_installed_build_package(self):
-        # compiler.py builds the .def file during an *extension build on
+        # compilation.py builds the .def file during an *extension build on
         # Windows*, from jittor_path. Keep this resource in the wheel's build
         # package rather than the repository-only tools tree or utils drawer.
         self._pinned_by(
             "dumpdef.py",
-            ("build/compiler.py",
-             'os.path.join(jittor_path, "build", "dumpdef.py")'),
+            ("build/compilation.py",
+             '_compiler_state.os.path.join(_compiler_state.jittor_path, "build", "dumpdef.py")'),
             source=PACKAGE / "build" / "dumpdef.py")
 
     def test_tracer_is_pinned_by_a_module_name_baked_into_the_core(self):

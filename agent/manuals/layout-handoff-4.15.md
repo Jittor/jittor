@@ -49,8 +49,15 @@ build/contrib 和根目录收缩代码也已完成：包根仅三个目标文件
 低于1500行。utils独立入口不启动框架，build.utils别名共用同一状态；compiler拆为
 启动state、codegen和compilation，生成器指纹覆盖三者。四个领域归contrib，旧import/
 pickle保留，igamma与class资源清单同步。CPU/CUDA/shim和真实自定义算子短验通过。
-汇总见 `agent/results/2026-09-07-build-contrib-layout.md`。还剩compat四个超长文件及
-独立Torch架构，完整门禁按用户要求留阶段收口，不要因此把5.26标为已合并。
+原生阶段汇总见 `agent/results/2026-09-07-build-contrib-layout.md`。
+2026-09-08 已将最后四个超长compat文件拆成职责包，整个python/jittor不再有超过
+1500行的.py，5.26布局正式收口。一次CPU结构门禁1407项中的7个新问题已修，8个
+定向节点通过；原有8个失败保留记录。新安装包1139生产文件逐字节核对、Torch视图/
+数据别名/反向短验通过。7.12仍需真正隔离Torch namespace与native Tensor/Module类，
+不能将本次布局与冗余状态清理当成独立Torch完成；下一步沿该边界推进。
+最终兼容布局wheel SHA-256：
+`ddb76df749952bf7becfc31c8b0cab05f35c35cbd50833233d4a7d9f1b937244`。
+证据见 `agent/results/2026-09-08-compat-layout-and-view-ownership.md`。
 最终native打包检查：1111生产文件源码/sdist/wheel/install逐字节一致，隔离CPU冷构建
 205 TU及3步训练selftest通过。新wheel SHA-256为
 `b0bd4ecc36203b0de4bdc264a39a0908a8c2ec8ac1e58009339fe205d3ef980d`；

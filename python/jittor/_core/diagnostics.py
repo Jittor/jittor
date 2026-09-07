@@ -5,6 +5,7 @@ import traceback
 
 import jittor_core as core
 from jittor_core import sync_all
+from jittor_utils import dirty_fix_pytorch_runtime_error
 
 from . import flags as _flag_state
 from .flags import _call_no_record_scope, flag_scope
@@ -211,25 +212,6 @@ def display_memory_info():
     fileline = inspect.getframeinfo(f.f_back)
     fileline = f"{os.path.basename(fileline.filename)}:{fileline.lineno}"
     core.display_memory_info(fileline)
-
-def dirty_fix_pytorch_runtime_error():
-    ''' This funtion should be called before pytorch.
-
-    Example::
-
-        import jittor as jt
-        jt.dirty_fix_pytorch_runtime_error()
-        import torch
-    '''
-    import os, platform
-
-    if platform.system() == 'Linux':
-        import jittor_utils
-        flags = os.RTLD_GLOBAL | os.RTLD_NOW | \
-            getattr(os, "RTLD_DEEPBIND", 0)
-        with jittor_utils.import_scope(flags):
-            import torch
-
 
 class ExitHooks(object):
     def __init__(self):

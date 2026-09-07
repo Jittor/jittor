@@ -48,7 +48,7 @@ class TestTorchOrderingFidelityMetadata(unittest.TestCase):
                 self.assertTrue(callable(implementation))
                 self.assertIs(getattr(torch, name), implementation)
                 self.assertIs(getattr(torch.Var, name), implementation)
-                self.assertEqual(implementation.__module__, owner.__name__)
+                self.assertEqual(implementation.__module__, owner.__name__ + ".ordering")
                 self.assertEqual(implementation.__name__, name)
 
     def test_ordering_family_fidelity_records_the_tie_behaviour(self):

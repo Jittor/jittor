@@ -53,9 +53,9 @@ TENSOR_OWNED_METHOD_ONLY = ("masked_scatter", "masked_scatter_", "unfold",
 #: Already had a final owner elsewhere; install only re-exports it.
 REEXPORTED = {
     "diagonal": "jittor.ops.shape_ops",
-    "masked_select": "jittor.compat.torch.installers.numerical",
-    "softmax": "jittor.compat.torch.installers.numerical",
-    "log_softmax": "jittor.compat.torch.installers.numerical",
+    "masked_select": "jittor.compat.torch.installers.numerical.indexing",
+    "softmax": "jittor.compat.torch.installers.numerical.elementwise",
+    "log_softmax": "jittor.compat.torch.installers.numerical.elementwise",
 }
 
 MATRIX = np.arange(12, dtype="float32").reshape(3, 4)
@@ -85,7 +85,8 @@ class TestReductionOwnerMetadata(unittest.TestCase):
                 self.assertTrue(callable(implementation))
                 self.assertIs(getattr(torch, name), implementation)
                 self.assertIs(getattr(torch.Var, name), implementation)
-                self.assertEqual(implementation.__module__, owner.__name__)
+                family = ".indexing" if name == "broadcast_to" else ".reductions"
+                self.assertEqual(implementation.__module__, owner.__name__ + family)
                 self.assertEqual(implementation.__name__, name)
 
     def test_method_only_apis_are_module_level_objects_too(self):
@@ -95,7 +96,7 @@ class TestReductionOwnerMetadata(unittest.TestCase):
                 implementation = getattr(owner, name)
                 self.assertTrue(callable(implementation))
                 self.assertIs(getattr(torch.Var, name), implementation)
-                self.assertEqual(implementation.__module__, owner.__name__)
+                self.assertEqual(implementation.__module__, owner.__name__ + ".indexing")
                 self.assertEqual(implementation.__name__, name)
 
     def test_reexported_apis_point_at_their_existing_owner(self):

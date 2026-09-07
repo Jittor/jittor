@@ -168,7 +168,8 @@ bootstrap. The composition module imports canonical objects from `_core.var`,
 `module`, `function`, `hooks`, `flags`, and `diagnostics`; implementations no
 longer share one large `core_api.py` namespace. Native save/load and safe-pickle
 algorithms belong to `serialization.native` and are re-exported by the same
-composition layer. Public root exports retain implementation identity and
+composition layer. `jittor._core.module` owns the native Module implementation.
+Public root exports retain object identity and
 legacy root pickle paths remain loadable. The historical
 `jittor._runtime.core_api` import resolves to the same module object as
 `jittor._core.api`, with no second implementation.
@@ -267,10 +268,11 @@ base contracts, constraints, helpers, discrete/continuous/relaxed/multivariate
 families and KL divergence. Initialization separates basic filling, fan/gain
 rules, scaled initializers and truncated normal; its facade retains the existing
 Var method bindings. Function metadata names the physical owner, while historical
-public pickle globals continue to resolve through the facades. Native Python
-implementation files are now all below 1,500 lines; four compatibility files
-remain above that size. Native layout progress therefore does not establish
-completion of task 5.26 or the independent Torch distribution migration.
+public pickle globals continue to resolve through the facades. All `.py` files
+under `python/jittor` are now below 1,500 lines. The former large compatibility
+NN, numerical, tensor and FlashAttention modules are normal packages with
+separate implementation owners. This source decomposition does not establish
+completion of the independent Torch architecture migration.
 Runtime-only framework imports are deferred to calls to keep the import-cycle
 surface from growing. The six legacy complex linalg functions are lazily
 re-exported as their original objects, preserving concrete ComplexNumber type
@@ -518,8 +520,9 @@ this entry. Existing Python ACL builders retain their separate variants.
 Scalar broadcast copies are conservative and are not a performance claim.
 Native integer views retain the producer needed for chained writeback; basic
 index gradients make assignment casts explicit without changing indexed-add
-accumulation. The retained ten-level writeback model is still a separate
-view/storage redesign, not solved by this backend migration.
+accumulation. Basic indexed assignment now follows native `VarView` records;
+the former Python parent-chain writeback is removed. This does not imply that
+every advanced indexing or cross-backend view variant has hardware coverage.
 
 ACL post-processing only publishes its native implementations. Its pinned-host,
 compiler-concurrency and reduction requirements belong to the backend descriptor
@@ -596,6 +599,24 @@ attribute/module spelling `jittor.torch_compat` is an alias created during Jitto
 initialization; it is not a second source file. Likewise, the canonical Triton
 implementation is `jittor.compat.triton`, with `jittor.triton_shim` retained as
 an object-identity alias.
+
+Compatibility installers for NN, numerical and tensor APIs, and the
+FlashAttention adapter, are normal packages split by implementation family.
+Public callables without installation-state captures can retain module-level
+identity; stateful installation paths keep explicit context and their original
+registration order. The namespace still forwards to native objects and the
+installer still patches native classes. Consequently, task 7.12 remains open:
+package layout alone is not an independent Torch object model or implementation.
+
+Basic indexing uses native `VarView` tracking instead of a parallel Python
+`_torch_index_parent`/slice chain. Torch-specific slice forms that do not yet
+have a native view record explicitly attach one with `_set_view_of`. The
+detached `.data` API retains its separate owner/path bookkeeping; assignment
+uses a detached right-hand-side node so stopping the data alias does not freeze
+its trainable owner. The write-only strong-reference table for `requires_grad`
+has been removed. Leaf registration, retained-gradient tracking and optimizer
+registration remain because they have actual consumers; they are not replaced
+by the view migration.
 
 `jittor.compat.shim` owns the runtime and deployment code for the optional
 top-level `torch` surface used by applications that import Torch directly. The

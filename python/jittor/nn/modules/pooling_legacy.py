@@ -2,13 +2,12 @@
 
 from jittor._core.module import Module
 from .pooling import AvgPool2d as _AvgPool2d, AvgPool3d as _AvgPool3d
-from ..functional.pooling.adaptive import _legacy_adaptive_avg_pool2d, _legacy_adaptive_avg_pool2d_parameters
+from ..functional.pooling.adaptive import _legacy_adaptive_avg_pool2d
 
 
 class AdaptiveAvgPool2d(Module):
     def __init__(self, output_size):
-        parameters = _legacy_adaptive_avg_pool2d_parameters(output_size)
-        self.output_size = parameters["output_size"]
+        self.output_size = output_size
 
     def execute(self, x):
         return _legacy_adaptive_avg_pool2d(x,

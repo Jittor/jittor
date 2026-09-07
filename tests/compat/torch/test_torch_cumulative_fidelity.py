@@ -52,7 +52,7 @@ class TestTorchCumulativeFidelityMetadata(unittest.TestCase):
                 self.assertTrue(callable(implementation))
                 self.assertIs(getattr(torch, name), implementation)
                 self.assertIs(getattr(torch.Var, name), implementation)
-                self.assertEqual(implementation.__module__, owner.__name__)
+                self.assertEqual(implementation.__module__, owner.__name__ + ".scans")
                 self.assertEqual(implementation.__name__, name)
 
     def test_cumulative_family_fidelity_records_the_backend_order(self):
