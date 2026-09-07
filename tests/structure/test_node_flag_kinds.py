@@ -46,7 +46,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-NODE_H = REPO_ROOT / "python" / "jittor" / "src" / "node.h"
+NODE_H = REPO_ROOT / "src" / "core/node.h"
 
 #: Where C++ that names these flags lives.
 #:
@@ -57,7 +57,8 @@ NODE_H = REPO_ROOT / "python" / "jittor" / "src" / "node.h"
 #: Op-only bits and missed three such strings (``tests/backends/cuda/test_cuda.py``
 #: twice, ``tests/backends/rocm/test_rocm.py`` once); they only surfaced as
 #: ``'_cpu' is not a member of 'jittor::NodeFlags'`` when those tests ran.
-SOURCE_ROOTS = (REPO_ROOT / "python" / "jittor", REPO_ROOT / "tests")
+SOURCE_ROOTS = (REPO_ROOT / "python" / "jittor", REPO_ROOT / "tests",
+                REPO_ROOT / "src", REPO_ROOT / "backends")
 
 #: Files that quote the *old* spelling on purpose, to explain the rule.
 QUOTES_THE_OLD_SPELLING = {
@@ -70,8 +71,8 @@ QUOTES_THE_OLD_SPELLING = {
 #: because neither reads a *bit*: one hands the opaque word to Python, the other
 #: writes it back verbatim into generated code.
 RAW_WORD_ALLOWED = {
-    "python/jittor/src/var_holder.h": "exposes the whole word to Python as an opaque int",
-    "python/jittor/src/opt/pass/fake_main_pass.cc": "round-trips the whole word into generated source",
+    "src/core/var_holder.h": "exposes the whole word to Python as an opaque int",
+    "src/codegen/opt/pass/fake_main_pass.cc": "round-trips the whole word into generated source",
 }
 
 TORCH_AUTOGRAD_NAMES = ("th_mode", "_th_require_grad", "jtorch_grad_vars")
@@ -114,7 +115,7 @@ def _enumerators(body):
 
 def test_core_does_not_name_torch_autograd_state():
     """The core exposes generic mechanisms; compatibility selects a policy."""
-    core_root = REPO_ROOT / "python" / "jittor" / "src"
+    core_root = REPO_ROOT / "src"
     offenders = []
     for path in core_root.rglob("*"):
         if not path.is_file():

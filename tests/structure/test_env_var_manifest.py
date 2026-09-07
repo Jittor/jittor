@@ -50,7 +50,7 @@ def _flag_policy():
 
 def _cxx_string_list(name):
     """The C++ ``static const char* <name>[] = { ... }`` initializer, as a set."""
-    text = (SOURCE / "jittor/src/utils/log.cc").read_text()
+    text = (REPO / "src/utils/log.cc").read_text()
     match = re.search(r"static const char\* " + name + r"\[\] = \{(.*?)\};",
                       text, re.DOTALL)
     assert match, name + " is no longer a string list in log.cc"

@@ -4,18 +4,16 @@
 ``attrs[s]``, so a key reached with a string literal has no spelling check
 anywhere: a typo inserts an empty value and reads back as "this node does not
 have that attribute".  Nothing fails; the pass that asked just quietly does
-nothing.  The names live in ``namespace kir`` in ``opt/kernel_ir.h``, where a
+nothing.  The names live in ``namespace kir`` in ``codegen/opt/kernel_ir.h``, where a
 typo is a compile error -- this test is what stops literals coming back.
 """
 import re
 import unittest
 from pathlib import Path
 
-import jittor
-
-
-_SRC = Path(jittor.__file__).resolve().parent / "src"
-_KERNEL_IR_H = _SRC / "opt" / "kernel_ir.h"
+_ROOT = Path(__file__).resolve().parents[2]
+_SRC = _ROOT / "src"
+_KERNEL_IR_H = _SRC / "codegen/opt" / "kernel_ir.h"
 
 #: where a KernelIR attribute name can appear
 _LITERAL = re.compile(
@@ -23,7 +21,10 @@ _LITERAL = re.compile(
     r'\b(?:get_attr|has_attr|check_attr)\s*\(\s*)"(\w+)"')
 
 #: the files that reach into KernelIR::attrs
-_SCANNED = ["opt", "test", "ops/getitem_op.cc"]
+_SCANNED = [
+    _SRC / "codegen/opt", _SRC / "tests", _SRC / "ops/composite/getitem_op.cc",
+    _ROOT / "backends/cuda/kernels/core/indexing_codegen.cc",
+]
 
 
 def _declared_names():
@@ -34,8 +35,8 @@ def _declared_names():
 
 def _scanned_files():
     files = []
-    for entry in _SCANNED:
-        path = _SRC / entry
+    for path in _SCANNED:
+        assert path.exists(), path
         if path.is_dir():
             files += sorted(path.rglob("*.cc")) + sorted(path.rglob("*.h"))
         elif path.exists():
@@ -59,11 +60,11 @@ class TestKernelIRAttrNames(unittest.TestCase):
                 line = text[:match.start()].count("\n") + 1
                 violations.append(
                     "{}:{} uses \"{}\" instead of kir::{}".format(
-                        path.relative_to(_SRC), line,
+                        path.relative_to(_ROOT), line,
                         match.group(1), match.group(1)))
         assert not violations, (
             "KernelIR attribute names must come from namespace kir in "
-            "opt/kernel_ir.h, so that a typo is a compile error:\n  " +
+            "codegen/opt/kernel_ir.h, so that a typo is a compile error:\n  " +
             "\n  ".join(violations))
 
 

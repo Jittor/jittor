@@ -4,13 +4,14 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "python/jittor/src"
+SRC = ROOT / "src"
 
 
 def test_acl_descriptor_declares_execution_requirements():
-    source = (SRC / "runtime/backends/accelerator.cc").read_text()
-    start = source.index("if (ops.id == BackendId::Acl)")
-    policy_block = source[start:source.index("\n    }", start)]
+    source = (ROOT / "backends/acl/src/backend.cc").read_text()
+    start = source.index("BackendOps make_acl_backend() {")
+    policy_block = source[start:source.index("\n}", start)]
+    assert "ops.id = BackendId::Acl;" in policy_block
     for field, value in (("supports_parallel_compile", "false"),
                          ("requires_pinned_host_storage", "true"),
                          ("preserve_reduction_dtype", "true"),
@@ -19,7 +20,7 @@ def test_acl_descriptor_declares_execution_requirements():
 
 
 def test_backend_compile_constraint_precedes_user_parallel_request():
-    source = (SRC / "parallel_compiler.cc").read_text()
+    source = (SRC / "core/parallel_compiler.cc").read_text()
     function = source[source.index("void parallel_compile_all_ops("):]
     assert function.index("execution.supports_parallel_compile") < function.index("if (!force_compile)")
     assert "use_parallel_op_compiler =" not in function
@@ -30,7 +31,7 @@ def test_array_staging_uses_actual_backend_host_allocator():
     assert "execution.requires_pinned_host_storage" in allocator
     assert "return get_allocator(-1, false);" in allocator
     assert "use_pinned_host_memory() ? BackendMemoryKind::Pinned" in allocator
-    for path in (SRC / "ops/array_op.cc", SRC / "pyjt/py_array_op.cc"):
+    for path in (SRC / "ops/composite/array_op.cc", SRC / "bindings/pyjt/py_array_op.cc"):
         source = path.read_text()
         assert "!save_mem && !use_pinned_host_memory()" in source
         assert "Allocation(get_array_host_allocator(), output->size)" in source

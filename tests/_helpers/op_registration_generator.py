@@ -38,7 +38,7 @@ def load_op_registration_generator(cache_path=None):
     resource_path = ROOT / "python/jittor_utils/backend_resources.py"
     resource_tree = ast.parse(resource_path.read_text(encoding="utf8"))
     resource_functions = [node for node in resource_tree.body
-                          if isinstance(node, ast.FunctionDef) and node.name == "backend_root"]
+                          if isinstance(node, ast.FunctionDef) and node.name in {"backend_root", "core_root"}]
     exec(compile(ast.Module(body=resource_functions, type_ignores=[]),
                  str(resource_path), "exec"), namespace)
     exec(compile(ast.Module(body=selected, type_ignores=[]), str(compiler_path), "exec"), namespace)

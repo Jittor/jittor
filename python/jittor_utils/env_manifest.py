@@ -136,8 +136,9 @@ def default_source_root():
     tree yields no flags, and a manifest generated from nothing looks exactly
     like a complete one.
     """
-    return os.path.join(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))), "jittor", "src")
+    from .backend_resources import core_root
+    return core_root(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "jittor"))
 
 
 def entries(source_root=None):

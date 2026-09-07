@@ -667,7 +667,9 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
         mask_arg = f", {backend_mask}" if backend_mask is not None else ""
         # Optional backend sources are composed into the first definition, not
         # registered as a replacement (which would invalidate persistent JIT keys).
-        if os.path.realpath(os.path.dirname(header)) == os.path.realpath(os.path.join(core_root(jittor_path), "ops")):
+        builtin_directories = (os.path.join(core_root(jittor_path), "ops"),
+                               os.path.join(core_root(jittor_path), "ops", "composite"))
+        if os.path.realpath(os.path.dirname(header)) in tuple(map(os.path.realpath, builtin_directories)):
             kernel_directory = os.path.join(backend_root(jittor_path, "cuda"), "kernels", "core")
             accelerator_source = os.path.join(kernel_directory, func_name + "_op.cc")
             prefix_source = os.path.join(kernel_directory, func_name + "_prefix.cc")

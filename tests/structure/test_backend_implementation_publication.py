@@ -5,13 +5,13 @@ from pathlib import Path
 import subprocess
 
 
-SRC = Path(__file__).resolve().parents[2] / "python/jittor/src"
+SRC = Path(__file__).resolve().parents[2] / "src"
 
 
 def test_publishing_one_backend_preserves_identity_other_backends_and_old_pins(tmp_path):
     source = tmp_path / "implementation_publication.cc"
     source.write_text(r'''
-#include "op.h"
+#include "core/op.h"
 #include "ops/op_register.h"
 #include "runtime/configuration.h"
 #include <cassert>

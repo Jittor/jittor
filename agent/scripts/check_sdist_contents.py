@@ -12,6 +12,9 @@ import tarfile
 
 
 REQUIRED_SOURCE_PATHS = (
+    "src/core/common.h",
+    "src/bindings/pyjt/py_converter.h",
+    "src/codegen/op_compiler.cc",
     "docs/conf.py",
     "docs/index.md",
     "docs/locales/zh_CN/LC_MESSAGES/index.po",

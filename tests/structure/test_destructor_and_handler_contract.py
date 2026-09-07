@@ -35,7 +35,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 #: seeing every destructor in them, including the ones that release device
 #: handles from a static destructor at exit.
 SOURCE_ROOTS = (
-    REPO_ROOT / "python" / "jittor" / "src",
+    REPO_ROOT / "src",
     REPO_ROOT / "python" / "jittor" / "extern",
     REPO_ROOT / "backends",
 )
@@ -153,7 +153,7 @@ EXIT_NOT_UNDERSCORE_EXIT = re.compile(r"(?<![_\w])exit\s*\(")
 
 
 def test_the_signal_handler_only_writes_and_exits():
-    path = REPO_ROOT / "python" / "jittor" / "src" / "utils" / "log.cc"
+    path = REPO_ROOT / "src" / "utils" / "log.cc"
     text = strip_comments_and_strings(path.read_text(encoding="utf8"))
     marker = "void segfault_sigaction("
     assert marker in text, "the handler was renamed; this test now checks nothing"

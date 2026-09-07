@@ -1,5 +1,7 @@
 # 整改看板
 
+2026-09-07 布局路径/打包复验：360 个顶层核心文件进入 sdist/wheel，安装后 CPU 自检、CPU Torch backward、真实 CUDA matmul/切片梯度通过；CUDA 注册补 composite 目录。相同 CPU-only/shim structure：1286 collected，8 failed、1272 passed、4 skipped、2 xfailed，无新增失败 nodeid；相对上一轮 1285 collected 的节点变动与剩余失败清单见 layout-handoff-4.15 第 1 节。4.15/8.19 未关闭。
+
 2026-09-07 布局冷构建前置：preflight 按实际 BuildConfig 选择归档（CUDA <11 才需独立 CUB），修复生成绑定/miniz/JIT include 的旧路径和顶层 core 构建戳扫描。离线 CPU 冷构建前向/梯度通过；定向 18 passed。CPU-only shim structure 1285 collected：123 failed、1156 passed、4 skipped、2 xfailed；旧路径合同尚待同步，未与旧 907 collected 口径混算。4.15/8.19 状态不变，具体命令见 layout-handoff-4.15 第 0 节。
 
 当前进度以任务表为准。2026-09-06：2.13 完成原生状态与配置分层，2.14 清空原生 misc，4.03/4.04 接通原生设备与算子执行链，4.05 完成 Python 真实分派迁移；

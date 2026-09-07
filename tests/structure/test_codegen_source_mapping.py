@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_jit_annotation_respects_existing_source_line_directives(tmp_path):
-    source = (ROOT / "python/jittor/src/op_compiler.cc").read_text()
+    source = (ROOT / "src/codegen/op_compiler.cc").read_text()
     helpers = source[source.index("static string line_directive_path("):
                      source.index("DECLARE_FLAG(string, jittor_path);")]
     harness = r'''

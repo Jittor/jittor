@@ -225,7 +225,7 @@ def test_field_directories_cover_the_native_partition_and_aliases():
     assert fields <= set(dir(context))
     assert fields <= set(dir(state))
     assert not module.STARTUP_FLAGS & set(dir(state))
-    source_root = RUNTIME_SOURCE.parent / "src"
+    source_root = Path(__file__).resolve().parents[2] / "src"
     declarations = set()
     pattern = re.compile(r"^DEFINE_(?:RUNTIME_)?FLAG(?:_WITH_SETTER)?\([^,]+,\s*(\w+),", re.M)
     for source in source_root.rglob("*.cc"):

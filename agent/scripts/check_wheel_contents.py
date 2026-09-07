@@ -32,6 +32,9 @@ DEFAULT_ADDITION_ALLOWLIST = AGENT_ROOT / "baselines" / "wheel-additions-final.t
 DEFAULT_CONTENT_CHANGE_ALLOWLIST = AGENT_ROOT / "baselines" / "wheel-content-changes-final.txt"
 
 REQUIRED_MEMBERS = (
+    "jittor/src/core/common.h",
+    "jittor/src/bindings/pyjt/py_converter.h",
+    "jittor/src/codegen/op_compiler.cc",
     "jittor/compat/shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
     "jittor/compat/shim/resources/stubs/flash_attn/flash_attn_interface.py",
     "jittor/compat/shim/resources/torch_init.py",

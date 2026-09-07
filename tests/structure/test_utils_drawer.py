@@ -161,8 +161,7 @@ class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
         resource = source or (DRAWER / name)
         self.assertTrue(resource.is_file(), resource)
         for relative, needle in references:
-            path = (PACKAGE / relative) if relative != "compiler.py" \
-                else (PACKAGE / "compiler.py")
+            path = (REPO_ROOT if relative.startswith("src/") else PACKAGE) / relative
             with self.subTest(reference=relative):
                 self.assertTrue(
                     needle in _text(path),
@@ -185,7 +184,7 @@ class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
         # name, so the binding-layer reference moves with tracer.py.
         self._pinned_by(
             "tracer.py",
-            ("src/pybind/py_var_tracer.cc",
+            ("src/bindings/pybind/py_var_tracer.cc",
              'my_import("jittor.tools.tracer", "fill_module_name")'),
             source=PACKAGE / "tools" / "tracer.py")
 
@@ -209,7 +208,7 @@ class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
         self.assertTrue(path.is_file())
         self.assertIn(
             'jittor_path+"/build/dlink_compiler.py',
-            _text(REPO_ROOT / "python" / "jittor" / "src" / "jit_compiler.cc"))
+            _text(REPO_ROOT / "src" / "codegen/jit_compiler.cc"))
 
 
 if __name__ == "__main__":

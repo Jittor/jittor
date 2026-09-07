@@ -17,10 +17,7 @@ import re
 import unittest
 from pathlib import Path
 
-import jittor
-
-
-_OPT_DIR = Path(jittor.__file__).resolve().parent / "src" / "opt"
+_OPT_DIR = Path(__file__).resolve().parents[2] / "src/codegen/opt"
 _PASS_DIR = _OPT_DIR / "pass"
 _PASS_MANAGER = _OPT_DIR / "pass_manager.cc"
 

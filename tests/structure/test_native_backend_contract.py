@@ -7,7 +7,7 @@ import subprocess
 import pytest
 
 
-SRC = Path(__file__).resolve().parents[2] / "python/jittor/src"
+SRC = Path(__file__).resolve().parents[2] / "src"
 
 
 @pytest.mark.parametrize("legacy_define", [[], ["-DCUDA=ACL"]])
@@ -43,6 +43,21 @@ BackendOps complete() {
     ops.synchronize = sync;
     ops.stream = stream;
     ops.enable_peer = peer;
+    ops.memory_allocate = [](int, BackendMemoryKind, size_t) -> void* { ++calls; return nullptr; };
+    ops.memory_free = [](int, BackendMemoryKind, void*) { ++calls; };
+    ops.memory_info = [](int, size_t&, size_t&) { ++calls; };
+    ops.check_error = [] { ++calls; };
+    ops.compute_stream = [](int) -> void* { ++calls; return nullptr; };
+    ops.stream_create = [](int, bool) -> void* { ++calls; return nullptr; };
+    ops.stream_destroy = [](BackendStream) { ++calls; };
+    ops.stream_synchronize = [](BackendStream) { ++calls; };
+    ops.event_create = [](int, bool) -> void* { ++calls; return nullptr; };
+    ops.event_destroy = [](BackendEvent) { ++calls; };
+    ops.event_record = [](BackendEvent, BackendStream) { ++calls; };
+    ops.event_synchronize = [](BackendEvent) { ++calls; };
+    ops.event_elapsed = [](BackendEvent, BackendEvent) { ++calls; return 0.f; };
+    ops.stream_wait_event = [](BackendStream, BackendEvent) { ++calls; };
+    ops.host_callback = [](BackendStream, void (*)(void*), void*) { ++calls; };
     return ops;
 }
 template<class F> void invalid(F action) {
@@ -79,6 +94,21 @@ int main() {
     bad = complete(); bad.synchronize = nullptr; reject(bad);
     bad = complete(); bad.stream = nullptr; reject(bad);
     bad = complete(); bad.enable_peer = nullptr; reject(bad);
+    bad = complete(); bad.memory_allocate = nullptr; reject(bad);
+    bad = complete(); bad.memory_free = nullptr; reject(bad);
+    bad = complete(); bad.memory_info = nullptr; reject(bad);
+    bad = complete(); bad.check_error = nullptr; reject(bad);
+    bad = complete(); bad.compute_stream = nullptr; reject(bad);
+    bad = complete(); bad.stream_create = nullptr; reject(bad);
+    bad = complete(); bad.stream_destroy = nullptr; reject(bad);
+    bad = complete(); bad.stream_synchronize = nullptr; reject(bad);
+    bad = complete(); bad.event_create = nullptr; reject(bad);
+    bad = complete(); bad.event_destroy = nullptr; reject(bad);
+    bad = complete(); bad.event_record = nullptr; reject(bad);
+    bad = complete(); bad.event_synchronize = nullptr; reject(bad);
+    bad = complete(); bad.event_elapsed = nullptr; reject(bad);
+    bad = complete(); bad.stream_wait_event = nullptr; reject(bad);
+    bad = complete(); bad.host_callback = nullptr; reject(bad);
     BackendRegistry registry;
     char mutable_name[] = "cpu";
     auto ops = complete();

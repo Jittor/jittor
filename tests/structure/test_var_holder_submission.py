@@ -19,7 +19,7 @@ def _function_body(source, signature):
 
 
 def test_var_holder_registration_does_not_execute_the_graph():
-    source = (ROOT / "python/jittor/src/var_holder.cc").read_text()
+    source = (ROOT / "src/core/var_holder.cc").read_text()
     bodies = [_function_body(source, "void add_hold_vars(VarHolder* self)")]
     bodies.extend(_function_body(source, signature) for signature in (
         "VarHolder::VarHolder(Var* v)",
@@ -31,8 +31,8 @@ def test_var_holder_registration_does_not_execute_the_graph():
 
 
 def test_python_var_conversion_is_the_submission_boundary():
-    converter = (ROOT / "python/jittor/src/pyjt/py_converter.h").read_text()
-    executor = (ROOT / "python/jittor/src/executor.h").read_text()
+    converter = (ROOT / "src/bindings/pyjt/py_converter.h").read_text()
+    executor = (ROOT / "src/core/executor.h").read_text()
     assert "schedule_pending_from_python(" in converter
     assert "void submit_pending(Var* target, bool force=false);" in executor
     assert "flush_suspended" not in executor

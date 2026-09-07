@@ -15,7 +15,7 @@ def test_acl_workspace_is_device_owned_and_retryable(tmp_path):
     if compiler is None:
         pytest.skip("g++ is required for the ACL workspace host contract")
     headers = {
-        "common.h": r'''
+        "core/common.h": r'''
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -34,7 +34,7 @@ struct ThrowingLog {
 ''',
         "acl_runtime.h": r'''
 #pragma once
-#include "common.h"
+#include "core/common.h"
 using aclrtStream = void*;
 constexpr int ACL_SUCCESS = 0;
 int aclrtGetDevice(int32_t*);
@@ -47,7 +47,7 @@ int acl_runtime_current_device();
 ''',
         "mem/allocator.h": r'''
 #pragma once
-#include "common.h"
+#include "core/common.h"
 namespace jittor {
 struct Allocator {
     virtual int device() const = 0;
@@ -60,7 +60,7 @@ struct Allocator {
 Allocator* get_allocator(int, bool);
 }
 ''',
-        "executor.h": r'''
+        "core/executor.h": r'''
 #pragma once
 #include "mem/allocator.h"
 namespace jittor {
@@ -77,7 +77,7 @@ Executor& runtime_executor();
     probe.write_text(r'''
 #include "acl_workspace.h"
 #include "acl_runtime.h"
-#include "executor.h"
+#include "core/executor.h"
 #include <cassert>
 #include <cstdlib>
 #include <functional>

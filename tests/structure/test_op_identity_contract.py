@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SRC = REPO_ROOT / "python" / "jittor" / "src"
+SRC = REPO_ROOT / "src"
 
 
 def test_operator_identity_does_not_use_base_name_strings():

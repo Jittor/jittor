@@ -6,7 +6,7 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "python/jittor/src"
+SRC = ROOT / "src"
 
 
 def test_native_holder_state_cursor_lifecycle(tmp_path):
@@ -93,8 +93,8 @@ int main() {
 
 
 def test_holder_globals_are_no_longer_exported():
-    header = (SRC / "var_holder.h").read_text(encoding="utf-8")
-    source = (SRC / "var_holder.cc").read_text(encoding="utf-8")
+    header = (SRC / "core/var_holder.h").read_text(encoding="utf-8")
+    source = (SRC / "core/var_holder.cc").read_text(encoding="utf-8")
     assert "EXTERN_LIB list<VarHolder*> hold_vars" not in header
     assert "EXTERN_LIB list<VarHolder*>::iterator sync_ptr" not in header
     assert "list<VarHolder*> hold_vars;" not in source
@@ -102,8 +102,8 @@ def test_holder_globals_are_no_longer_exported():
 
 
 def test_executor_instance_is_owned_by_native_runtime():
-    executor_header = (SRC / "executor.h").read_text(encoding="utf-8")
-    executor_source = (SRC / "executor.cc").read_text(encoding="utf-8")
+    executor_header = (SRC / "core/executor.h").read_text(encoding="utf-8")
+    executor_source = (SRC / "core/executor.cc").read_text(encoding="utf-8")
     assert "EXTERN_LIB Executor exe;" not in executor_header
     assert "Executor exe;" not in executor_source
     assert "EXTERN_LIB Executor& runtime_executor();" in executor_header
@@ -117,7 +117,7 @@ def test_executor_header_carries_no_submission_pipeline_state():
     of `executor.h` could not tell them apart from the allocators `run_sync`
     actually uses, and each new scheduling heuristic added another such field.
     """
-    executor_header = (SRC / "executor.h").read_text(encoding="utf-8")
+    executor_header = (SRC / "core/executor.h").read_text(encoding="utf-8")
     pipeline_header = (SRC / "runtime/submission_pipeline.h").read_text(encoding="utf-8")
     for field in ("last_run_ops", "flush_active"):
         assert field not in executor_header, field
@@ -129,25 +129,27 @@ def test_executor_header_carries_no_submission_pipeline_state():
 def test_traversal_storage_and_implementation_belong_to_runtime():
     assert not (SRC / "misc/traversal_epoch.h").exists()
     assert not (SRC / "misc/traversal_epoch.cc").exists()
-    node = (SRC / "node.h").read_text(encoding="utf-8")
+    node = (SRC / "core/node.h").read_text(encoding="utf-8")
     epoch = (SRC / "runtime/traversal_epoch.cc").read_text(encoding="utf-8")
     assert "EXTERN_LIB int64 tflag_count" not in node
     assert "TraversalEpoch::live_count" not in epoch
     assert "runtime_traversal_state()" in epoch
 
 
-def test_device_header_selects_rocm_callback_without_filename_rewriting(tmp_path):
-    (tmp_path / "cuda_runtime.h").write_text("#define CUDART_VERSION 12000\n")
-    for defines, expected in (([], "cudaLaunchHostFunc"),
-                              (["-DIS_ROCM"], "cudaStreamAddCallback")):
+def test_device_header_is_sdk_free_and_callbacks_belong_to_native_providers():
+    for defines in ([], ["-DIS_ROCM"]):
         result = subprocess.run(
-            [os.environ.get("CXX", "g++"), "-std=c++14", "-DHAS_CUDA",
-             *defines, "-I", str(tmp_path), "-I", str(SRC),
-             "-dM", "-E", "-x", "c++", "-"],
+            [os.environ.get("CXX", "g++"), "-std=c++14", "-DHAS_ACCELERATOR",
+             *defines, "-I", str(SRC), "-fsyntax-only", "-x", "c++", "-"],
             input='#include "runtime/device.h"\n',
             capture_output=True, text=True, timeout=30,
         )
         assert result.returncode == 0, result.stderr
-        macro = next(line for line in result.stdout.splitlines()
-                     if line.startswith("#define _cudaLaunchHostFunc("))
-        assert expected in macro
+    device_header = (SRC / "runtime/device.h").read_text(encoding="utf-8")
+    assert "_cudaLaunchHostFunc" not in device_header
+    for backend, expected in (("cuda", "cudaLaunchHostFunc"), ("rocm", "hipLaunchHostFunc")):
+        driver = (ROOT / "backends" / backend / "runtime/driver.cc").read_text(encoding="utf-8")
+        callback = driver[driver.index("void host_callback("):]
+        callback = callback[:callback.index("\n}") + 2] if "\n}" in callback else callback
+        assert expected in callback
+        assert "ops.host_callback = host_callback" in driver

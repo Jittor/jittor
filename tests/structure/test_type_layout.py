@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "python" / "jittor" / "src"
+SRC = ROOT / "src"
 
 
 def test_nano_types_have_a_single_canonical_source_location():
@@ -22,6 +22,7 @@ def test_nano_type_references_use_the_canonical_include_path():
         *(SRC.rglob("*.cc")),
         *(SRC.rglob("*.cu")),
         *(ROOT / "python" / "jittor" / "extern").rglob("*.h"),
+        *(ROOT / "backends").rglob("*.h"),
     ]
     stale = []
     for path in candidates:

@@ -7,13 +7,13 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "python/jittor/src"
+SRC = ROOT / "src"
 
 
 def test_capability_registration_is_lazy_typed_and_observes_late_operators(tmp_path):
     source = tmp_path / "capability_contract.cc"
     source.write_text(r'''
-#include "ops/op_capability.h"
+#include "ops/composite/op_capability.h"
 #include <cassert>
 #include <map>
 using namespace jittor;
@@ -99,7 +99,7 @@ int main() {
     executable = tmp_path / "capability_contract"
     result = subprocess.run(
         [os.environ.get("CXX", "g++"), "-std=c++14", "-I", str(SRC),
-         str(source), str(SRC / "ops/op_capability.cc"), "-o", str(executable)],
+         str(source), str(SRC / "ops/composite/op_capability.cc"), "-o", str(executable)],
         capture_output=True, text=True, timeout=60,
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -107,9 +107,9 @@ int main() {
 
 
 def test_core_optional_replacements_do_not_name_implementing_libraries():
-    paths = [SRC / "ops" / (name + "_op.cc") for name in
+    paths = [SRC / "ops/composite" / (name + "_op.cc") for name in
              ("arg_reduce", "argsort", "where", "random", "transpose")]
-    paths += [SRC / "opt/tuner" / (name + "_tuner.cc") for name in ("conv", "matmul")]
+    paths += [SRC / "codegen/opt/tuner" / (name + "_tuner.cc") for name in ("conv", "matmul")]
     for path in paths:
         source = path.read_text(encoding="utf-8")
         assert not re.search(r"\b(?:cub|cublas|cudnn|curand|cutt|mkl)_", source), path

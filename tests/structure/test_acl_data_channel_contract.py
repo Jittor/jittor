@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 HEADER = ROOT / "python/jittor/extern/acl/aclops/acl_data_channel.h"
-SRC_INCLUDE = ROOT / "python/jittor/src"
+SRC_INCLUDE = ROOT / "src"
 
 
 def _compile(source, output=None):

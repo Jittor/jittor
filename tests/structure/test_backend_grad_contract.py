@@ -57,7 +57,7 @@ EMPTY_SCAN_ROOTS = ("backends/corex",)
 
 #: The core ops. Not backend gradients, but scanned so that a backend moving
 #: in here cannot escape the inventory by changing address.
-CORE_ROOT = "python/jittor/src"
+CORE_ROOT = "src"
 
 _CPP_GRAD = re.compile(r"^VarPtr\s+(\w+)::grad\(", re.M)
 
@@ -436,7 +436,7 @@ def test_every_kind_is_declared():
 def test_the_core_ops_are_scanned_but_hold_no_backend_gradient():
     """A backend cannot escape the inventory by moving into the core tree.
 
-    ``python/jittor/src`` is where the generic ops live; their gradients are
+    ``src`` is where the generic ops live; their gradients are
     not backend gradients and are not listed here. But the directory is
     scanned, and if a symbol whose name marks it as backend-owned turns up,
     this fails rather than letting it through unlisted.

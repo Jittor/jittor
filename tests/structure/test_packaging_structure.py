@@ -74,7 +74,7 @@ class TestPackagingStructure(unittest.TestCase):
             "recursive-include python/jittor/extern *",
             "recursive-include backends *",
             "recursive-include python/jittor/math_util/src *",
-            "recursive-include python/jittor/src *",
+            "recursive-include src *.cc *.h",
             "recursive-include python/jittor/tools *.py",
             "recursive-include python/jittor_utils/class *",
         }

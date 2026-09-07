@@ -38,7 +38,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SRC = REPO_ROOT / "python" / "jittor" / "src"
+SRC = REPO_ROOT / "src"
 
 def _sources():
     for path in sorted(SRC.rglob("*")):
@@ -80,7 +80,7 @@ def _code_lines(path):
 
 
 def test_custom_data_is_removed_from_node():
-    node_h = (SRC / "node.h").read_text(encoding="utf-8")
+    node_h = (SRC / "core/node.h").read_text(encoding="utf-8")
     assert "int custom_data;" not in node_h
 
 
@@ -97,7 +97,7 @@ def test_only_the_fused_op_pipeline_touches_custom_data():
 
 def test_the_executor_batch_index_is_stamped_and_read_checked():
     """It may live on the node, but not as a bare int anybody can read."""
-    node_h = (SRC / "node.h").read_text(encoding="utf-8")
+    node_h = (SRC / "core/node.h").read_text(encoding="utf-8")
     struct = node_h[node_h.index("struct Node {"):]
     for required in ("int64 batch_stamp", "set_batch_index", "batch_index_at"):
         assert required in struct, (

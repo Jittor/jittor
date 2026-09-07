@@ -20,9 +20,9 @@ JITTOR = ROOT / "python/jittor"
     ("both", "OpBackendAny"),
 ])
 def test_generator_registers_typed_definition_with_explicit_or_class_backend(backend, mask, tmp_path):
-    header = JITTOR / "src/ops/array_op.h"
+    header = ROOT / "src/ops/composite/array_op.h"
     source = _load_generator(tmp_path)([str(header)], backend=backend)
-    assert '#include "ops/op_registration.h"' in source
+    assert '#include "ops/composite/op_registration.h"' in source
     registration = next(line.strip() for line in source.splitlines()
                         if "register_op_definition<ArrayOp>" in line)
     assert f'R"({header.with_suffix(".cc")})"' in registration
@@ -37,7 +37,7 @@ def test_generator_rejects_unknown_backend_before_reading_headers():
         _load_generator()(["missing_op.h"], backend="typo")
 
 
-@pytest.mark.parametrize("relative", ["python/jittor/src/ops", "backends/cuda/kernels/cublas",
+@pytest.mark.parametrize("relative", ["src/ops", "src/ops/composite", "backends/cuda/kernels/cublas",
                                       "backends/cpu/libraries/mkl"])
 def test_generator_preserves_every_operator_definition(relative, tmp_path):
     headers = sorted((ROOT / relative).glob("*_op.h"))

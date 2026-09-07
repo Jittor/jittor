@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "python" / "jittor" / "src"
+SRC = ROOT / "src"
 
 
 def test_miniz_is_classified_as_third_party_source():
@@ -23,4 +23,4 @@ def test_miniz_is_classified_as_third_party_source():
     # The core builder discovers sources recursively, so this move must not
     # require a second source manifest or a path-specific compiler exception.
     compiler = (ROOT / "python" / "jittor" / "compiler.py").read_text()
-    assert 'glob.glob(jittor_path+"/src/**/*."+ext_args, recursive=True)' in compiler
+    assert 'glob.glob(core_root(jittor_path)+"/**/*.cc", recursive=True)' in compiler

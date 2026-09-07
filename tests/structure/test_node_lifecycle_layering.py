@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-NODE_HEADER = REPO_ROOT / "python" / "jittor" / "src" / "node.h"
+NODE_HEADER = REPO_ROOT / "src" / "core/node.h"
 
 
 def test_node_header_does_not_depend_on_python_tracing():

@@ -5,8 +5,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_event_queue_only_exposes_async_queue_and_worker_lifecycle():
-    header = (ROOT / "python/jittor/src/event_queue.h").read_text()
-    implementation = (ROOT / "python/jittor/src/event_queue.cc").read_text()
+    header = (ROOT / "src/core/event_queue.h").read_text()
+    implementation = (ROOT / "src/core/event_queue.cc").read_text()
     for dead in ("run_sync", "run_sync_done", "worker_caller", "volatile int"):
         assert dead not in header
         assert dead not in implementation

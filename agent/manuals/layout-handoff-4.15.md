@@ -63,6 +63,35 @@ WARN third-party archives 1 still to download: cub-1.11.0.tgz
 
 ## 1. 已经做完并推上 `2.0-refactor` 的
 
+2026-09-07 路径/打包补验（继 `97a0aff0c`）：测试实际读顶层 `src`，绑定与
+算子目录同步到 `core/bindings/codegen/ops/composite`；注册扫描同时覆盖元算子和
+composite，编译器已修复仅识别旧 ops 目录导致 CUDA overrides 丢失的问题。
+环境变量清单改用 core_root，CUDA workflow 指纹包含 src/backends。
+sdist 包含顶层 360 个核心文件；wheel 在 build 阶段映射到 jittor/src，全部逐字节一致。
+隔离安装后 CPU 冷编译三步训练 selftest、CPU Torch backward、真实 CUDA matmul
+与切片梯度均通过。wheel SHA-256：
+`9a318c7434c840e184bbcbd52b92387fbcb54e485d2b96c909ba85082ac54068`。
+该包构建后只额外修了 env_manifest 的扫描入口，未重复打包；最终发布仍需重建。
+
+与第 0 节完全相同 CPU-only/shim 配置的 structure 复跑：1286 collected，
+8 failed / 1272 passed / 4 skipped / 2 xfailed，0 error；JUnit 为同目录的
+`structure-cpu-after.xml`。逐 nodeid 对比没有新增失败，113 个原失败现通过；
+旧 ops 参数节点换成 src/ops 与 src/ops/composite 两个，旧设备回调宏合同换为
+真实 SDK-free header 和 provider callback 合同，故新增 3、移除 2 个旧 nodeid。
+剩余失败（均在原失败集合中）：
+
+- `test_compat_exception_policy.py::TestCompatExceptionPolicy::test_no_handler_body_is_only_pass`
+- `test_flag_scope_contract.py::test_no_test_leaves_a_jittor_flag_changed`
+- `test_process_mode_contract.py::test_naming_a_torch_path_alongside_a_native_one_does_not_change_its_meaning`
+- `test_pytest_contract.py::test_legacy_numeric_selection_fails_loudly`
+- `test_pytest_contract.py::test_test_modules_do_not_import_other_test_modules`
+- `test_pytest_contract.py::test_test_modules_avoid_collection_time_backend_side_effects`
+- `test_runtime_sync_state.py::test_runtime_cuda_allow_tf32_is_a_live_writable_view_on_cpu`
+- `test_torch_compat_structure.py::TestTorchCompatStructure::test_sys_modules_publication_has_an_exact_owner_whitelist`
+
+上述均相对于 `tests/structure/`。这不代替 CUDA 配置的完整 structure 或全部数值门禁；
+下一步仍是第 2 节 ACL/provider 原子迁移及 8.19，不能据此关闭 4.15。
+
 | 提交 | 内容 |
 | --- | --- |
 | `592433ef7` | corex provider 进 `backends/corex/__init__.py`，entry point 改指 `jittor.backends.corex` |

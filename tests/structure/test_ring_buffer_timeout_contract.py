@@ -2,8 +2,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-HEADER = ROOT / "python/jittor/src/pyjt/py_ring_buffer.h"
-SOURCE = ROOT / "python/jittor/src/pyjt/py_ring_buffer.cc"
+HEADER = ROOT / "src/bindings/pyjt/py_ring_buffer.h"
+SOURCE = ROOT / "src/bindings/pyjt/py_ring_buffer.cc"
 
 
 def test_pop_remains_unbounded_and_pop_for_is_explicit():

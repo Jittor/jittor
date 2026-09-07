@@ -27,15 +27,16 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_ROOTS = (
-    REPO_ROOT / "python" / "jittor" / "src",
+    REPO_ROOT / "src",
     REPO_ROOT / "python" / "jittor" / "extern",
+    REPO_ROOT / "backends",
 )
 
 #: The registry's own implementation and its unit test name these on purpose.
 ALLOWED = {
-    Path("python/jittor/src/ops/op_register.cc"),
-    Path("python/jittor/src/ops/op_register.h"),
-    Path("python/jittor/src/tests/test_op_register.cc"),
+    Path("src/ops/op_register.cc"),
+    Path("src/ops/op_register.h"),
+    Path("src/tests/test_op_register.cc"),
 }
 
 
@@ -69,9 +70,9 @@ def test_no_op_is_looked_up_at_namespace_scope():
 
 
 def test_op_registry_storage_is_lazily_initialized():
-    source = (REPO_ROOT / "python/jittor/src/ops/op_register.cc").read_text(
+    source = (REPO_ROOT / "src/ops/op_register.cc").read_text(
         encoding="utf-8")
-    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+    header = (REPO_ROOT / "src/ops/op_register.h").read_text(
         encoding="utf-8")
     acl = (REPO_ROOT / "python/jittor/extern/acl/acl_op_exec.cc").read_text(
         encoding="utf-8")
@@ -83,11 +84,11 @@ def test_op_registry_storage_is_lazily_initialized():
 
 
 def test_op_constructors_are_not_erased_through_void_pointer_rtti():
-    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+    header = (REPO_ROOT / "src/ops/op_register.h").read_text(
         encoding="utf-8")
     compiler = (REPO_ROOT / "python/jittor/compiler.py").read_text(
         encoding="utf-8")
-    utils = (REPO_ROOT / "python/jittor/src/ops/op_utils.cc").read_text(
+    utils = (REPO_ROOT / "src/ops/op_utils.cc").read_text(
         encoding="utf-8")
     assert "pair<const std::type_info*, void*>" not in header
     assert "typeid(func_t)" not in header
@@ -96,11 +97,11 @@ def test_op_constructors_are_not_erased_through_void_pointer_rtti():
 
 
 def test_native_provider_lifecycle_consumer_is_value_only_and_non_owning():
-    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+    header = (REPO_ROOT / "src/ops/op_register.h").read_text(
         encoding="utf-8")
-    source = (REPO_ROOT / "python/jittor/src/ops/op_register.cc").read_text(
+    source = (REPO_ROOT / "src/ops/op_register.cc").read_text(
         encoding="utf-8")
-    jit_test = (REPO_ROOT / "python/jittor/src/tests/test_op_register.cc").read_text(
+    jit_test = (REPO_ROOT / "src/tests/test_op_register.cc").read_text(
         encoding="utf-8")
     assert "struct NativeProviderLifecycleObserver" in header
     for method in (
@@ -126,9 +127,9 @@ def test_native_provider_lifecycle_consumer_is_value_only_and_non_owning():
 
 
 def test_native_provider_observer_scope_is_identity_checked_and_non_owning():
-    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+    header = (REPO_ROOT / "src/ops/op_register.h").read_text(
         encoding="utf-8")
-    jit_test = (REPO_ROOT / "python/jittor/src/tests/test_op_register.cc").read_text(
+    jit_test = (REPO_ROOT / "src/tests/test_op_register.cc").read_text(
         encoding="utf-8")
     scope = header[header.index("class NativeProviderLifecycleObserverScope"):
                    header.index("// Intentionally process-lived")]
@@ -143,11 +144,11 @@ def test_native_provider_observer_scope_is_identity_checked_and_non_owning():
 
 
 def test_native_provider_registration_scope_teardown_is_identity_checked():
-    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+    header = (REPO_ROOT / "src/ops/op_register.h").read_text(
         encoding="utf-8")
-    source = (REPO_ROOT / "python/jittor/src/ops/op_register.cc").read_text(
+    source = (REPO_ROOT / "src/ops/op_register.cc").read_text(
         encoding="utf-8")
-    jit_test = (REPO_ROOT / "python/jittor/src/tests/test_op_register.cc").read_text(
+    jit_test = (REPO_ROOT / "src/tests/test_op_register.cc").read_text(
         encoding="utf-8")
     assert "class NativeProviderRegistrationScope" in header
     assert "unregister_provider_if_current" in header
@@ -160,11 +161,11 @@ def test_native_provider_registration_scope_teardown_is_identity_checked():
 
 
 def test_native_provider_metadata_is_a_value_only_host_consumer_contract():
-    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+    header = (REPO_ROOT / "src/ops/op_register.h").read_text(
         encoding="utf-8")
-    source = (REPO_ROOT / "python/jittor/src/ops/op_register.cc").read_text(
+    source = (REPO_ROOT / "src/ops/op_register.cc").read_text(
         encoding="utf-8")
-    jit_test = (REPO_ROOT / "python/jittor/src/tests/test_op_register.cc").read_text(
+    jit_test = (REPO_ROOT / "src/tests/test_op_register.cc").read_text(
         encoding="utf-8")
     assert "struct NativeProviderMetadata" in header
     assert "NativeProviderMetadata provider_metadata(const string& provider) const" in header
@@ -181,9 +182,9 @@ def test_native_provider_metadata_is_a_value_only_host_consumer_contract():
 
 
 def test_native_provider_consumer_contract_is_value_only_and_fail_closed():
-    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+    header = (REPO_ROOT / "src/ops/op_register.h").read_text(
         encoding="utf-8")
-    jit_test = (REPO_ROOT / "python/jittor/src/tests/test_op_register.cc").read_text(
+    jit_test = (REPO_ROOT / "src/tests/test_op_register.cc").read_text(
         encoding="utf-8")
     contract = header[header.index("struct NativeProviderConsumerContract"):
                       header.index("struct NativeProviderLifecycleObserver")]
@@ -200,11 +201,11 @@ def test_native_provider_consumer_contract_is_value_only_and_fail_closed():
 
 
 def test_native_provider_consumer_dispatch_is_atomic_and_value_only():
-    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+    header = (REPO_ROOT / "src/ops/op_register.h").read_text(
         encoding="utf-8")
-    source = (REPO_ROOT / "python/jittor/src/ops/op_register.cc").read_text(
+    source = (REPO_ROOT / "src/ops/op_register.cc").read_text(
         encoding="utf-8")
-    jit_test = (REPO_ROOT / "python/jittor/src/tests/test_op_register.cc").read_text(
+    jit_test = (REPO_ROOT / "src/tests/test_op_register.cc").read_text(
         encoding="utf-8")
     assert "struct NativeProviderConsumerDispatch" in header
     assert "NativeProviderConsumerDispatch provider_consumer_dispatch(" in header
@@ -229,9 +230,9 @@ def test_native_provider_consumer_dispatch_is_atomic_and_value_only():
 
 
 def test_native_provider_consumer_lease_is_generation_checked_and_non_owning():
-    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+    header = (REPO_ROOT / "src/ops/op_register.h").read_text(
         encoding="utf-8")
-    jit_test = (REPO_ROOT / "python/jittor/src/tests/test_op_register.cc").read_text(
+    jit_test = (REPO_ROOT / "src/tests/test_op_register.cc").read_text(
         encoding="utf-8")
     view = header[header.index("class NativeProviderConsumerLease"):
                   header.index("class NativeProviderLifecycleObserverScope")]
@@ -248,9 +249,9 @@ def test_native_provider_consumer_lease_is_generation_checked_and_non_owning():
 
 
 def test_native_provider_abi_admission_has_one_host_contract():
-    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+    header = (REPO_ROOT / "src/ops/op_register.h").read_text(
         encoding="utf-8")
-    jit_test = (REPO_ROOT / "python/jittor/src/tests/test_op_register.cc").read_text(
+    jit_test = (REPO_ROOT / "src/tests/test_op_register.cc").read_text(
         encoding="utf-8")
     contract = header[header.index("struct NativeProviderAbiContract"):
                       header.index("struct NativeProviderRegistration")]
@@ -264,9 +265,9 @@ def test_native_provider_abi_admission_has_one_host_contract():
 
 
 def test_native_provider_lifecycle_event_descriptor_is_host_jit_compatible():
-    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+    header = (REPO_ROOT / "src/ops/op_register.h").read_text(
         encoding="utf-8")
-    jit_test = (REPO_ROOT / "python/jittor/src/tests/test_op_register.cc").read_text(
+    jit_test = (REPO_ROOT / "src/tests/test_op_register.cc").read_text(
         encoding="utf-8")
     event = header[header.index("enum NativeProviderLifecycleEventKind"):
                    header.index("struct NativeProviderLifecycleObserver")]

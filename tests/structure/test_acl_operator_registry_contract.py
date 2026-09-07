@@ -26,6 +26,6 @@ def test_acl_code_and_collectives_declare_their_source_backend():
     assert 'strncmp(op->name(), "hccl"' not in text
     for header in (ROOT / "python/jittor/extern/acl/hccl/ops").glob("*_op.h"):
         assert "kernel.compile = compile_registered_source" in header.read_text()
-    compiler = (ROOT / "python/jittor/src/op_compiler.cc").read_text()
+    compiler = (ROOT / "src/codegen/op_compiler.cc").read_text()
     assert "op->implementation().kernel.compile" in compiler
     assert "do_compile_hook" not in compiler

@@ -211,7 +211,7 @@ int main() {
 ''')
     binary = tmp_path / "corex_factory"
     subprocess.run([
-        compiler, "-std=c++14", "-I" + str(PYTHON / "jittor/src"), str(probe),
+        compiler, "-std=c++14", "-I" + str(ROOT / "src"), str(probe),
         str(ROOT / "backends/corex/runtime/corex_backend.cc"), "-o", str(binary),
     ], check=True, capture_output=True, text=True)
     subprocess.run([str(binary)], check=True, capture_output=True, text=True)

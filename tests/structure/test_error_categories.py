@@ -3,80 +3,80 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATED_DIMENSION_BOUNDARIES = {
-    "python/jittor/src/ops/arg_reduce_op.cc": 2,
-    "python/jittor/src/ops/argsort_op.cc": 2,
-    "python/jittor/src/ops/reduce_op.cc": 1,
-    "python/jittor/src/ops/broadcast_to_op.cc": 2,
+    "src/ops/composite/arg_reduce_op.cc": 2,
+    "src/ops/composite/argsort_op.cc": 2,
+    "src/ops/reduce_op.cc": 1,
+    "src/ops/broadcast_to_op.cc": 2,
 }
 
 MIGRATED_SHAPE_CARDINALITY_BOUNDARIES = {
-    "python/jittor/src/ops/code_op.cc": 5,
-    "python/jittor/src/ops/numpy_code_op.cc": 4,
-    "python/jittor/src/ops/reindex_op.cc": 2,
-    "python/jittor/src/ops/reindex_reduce_op.cc": 3,
+    "src/ops/composite/code_op.cc": 5,
+    "src/ops/composite/numpy_code_op.cc": 4,
+    "src/ops/reindex_op.cc": 2,
+    "src/ops/reindex_reduce_op.cc": 3,
 }
 
 MIGRATED_VIEW_SHAPE_BOUNDARIES = {
-    "python/jittor/src/ops/transpose_op.cc": 3,
-    "python/jittor/src/ops/fuse_transpose_op.cc": 3,
-    "python/jittor/src/ops/reshape_op.cc": 3,
+    "src/ops/composite/transpose_op.cc": 3,
+    "src/ops/composite/fuse_transpose_op.cc": 3,
+    "src/ops/composite/reshape_op.cc": 3,
 }
 
 MIGRATED_BROADCAST_SHAPE_BOUNDARIES = {
-    "python/jittor/src/ops/broadcast_to_op.cc": 5,
+    "src/ops/broadcast_to_op.cc": 5,
 }
 
 MIGRATED_REINTERPRET_VIEW_BOUNDARIES = {
-    "python/jittor/src/ops/reinterpret_view_op.cc": 6,
+    "src/ops/composite/reinterpret_view_op.cc": 6,
 }
 
 MIGRATED_BINARY_SHAPE_BOUNDARIES = {
-    "python/jittor/src/ops/binary_op.cc": 1,
+    "src/ops/binary_op.cc": 1,
 }
 
 MIGRATED_SETITEM_SHAPE_BOUNDARIES = {
-    "python/jittor/src/ops/setitem_op.cc": 2,
+    "src/ops/composite/setitem_op.cc": 2,
 }
 
 MIGRATED_GETITEM_SHAPE_BOUNDARIES = {
-    "python/jittor/src/ops/getitem_op.cc": 3,
+    "src/ops/composite/getitem_op.cc": 3,
 }
 
 MIGRATED_PY_CONVERTER_USER_BOUNDARIES = {
     # 1 bool-slice input + 3 on the value Function.grad hands back.
-    "python/jittor/src/pyjt/py_converter.h": 4,
+    "src/bindings/pyjt/py_converter.h": 4,
 }
 
 MIGRATED_DEVICE_COPY_USER_BOUNDARIES = {
-    "python/jittor/src/ops/device_copy_op.cc": 1,
+    "src/ops/composite/device_copy_op.cc": 1,
 }
 
 MIGRATED_NUMPY_TYPE_BOUNDARIES = {
-    "python/jittor/src/pyjt/numpy.h": 1,
+    "src/bindings/pyjt/numpy.h": 1,
 }
 
 MIGRATED_VAR_SLICES_USER_BOUNDARIES = {
-    "python/jittor/src/var_slices.h": 1,
+    "src/core/var_slices.h": 1,
 }
 
 MIGRATED_SET_DATA_USER_BOUNDARIES = {
-    "python/jittor/src/var_holder.cc": 2,
+    "src/core/var_holder.cc": 2,
 }
 
 MIGRATED_PY_ARRAY_USER_BOUNDARIES = {
-    "python/jittor/src/pyjt/py_array_op.cc": 2,
+    "src/bindings/pyjt/py_array_op.cc": 2,
 }
 
 MIGRATED_RANDOM_TYPE_USER_BOUNDARIES = {
-    "python/jittor/src/ops/random_op.cc": 1,
+    "src/ops/composite/random_op.cc": 1,
 }
 
 MIGRATED_PY_CALLER_USER_BOUNDARIES = {
-    "python/jittor/src/pyjt/py_caller.cc": 1,
+    "src/bindings/pyjt/py_caller.cc": 1,
 }
 
 MIGRATED_UNARY_OP_USER_BOUNDARIES = {
-    "python/jittor/src/ops/unary_op.cc": 1,
+    "src/ops/unary_op.cc": 1,
 }
 
 MIGRATED_CURAND_USER_BOUNDARIES = {
@@ -228,24 +228,24 @@ MIGRATED_CUDNN_CONV3D_BWD_W_X_RANK_USER_BOUNDARIES = {
 }
 
 MIGRATED_FUSED_ADAMW_CARDINALITY_BOUNDARIES = {
-    "python/jittor/src/ops/fused_adamw_op.cc": 4,
+    "src/ops/composite/fused_adamw_op.cc": 4,
 }
 
 MIGRATED_TERNARY_SHAPE_BOUNDARIES = {
-    "python/jittor/src/ops/ternary_op.cc": 2,
+    "src/ops/ternary_op.cc": 2,
 }
 
 MIGRATED_ITEM_USER_BOUNDARIES = {
-    "python/jittor/src/var_holder.cc": 1,
+    "src/core/var_holder.cc": 1,
 }
 
 MIGRATED_GRAD_DTYPE_USER_BOUNDARIES = {
-    "python/jittor/src/grad.cc": 2,
+    "src/core/grad.cc": 2,
 }
 
 
 def test_typed_error_entry_points_are_distinct():
-    source = (ROOT / "python/jittor/src/utils/log.h").read_text()
+    source = (ROOT / "src/utils/log.h").read_text()
     assert "struct UserError : JittorError" in source
     assert "struct InternalInvariantError : JittorError" in source
     for entry in ("USER_CHECK", "USER_CHECKop", "INTERNAL_ASSERT",
@@ -254,23 +254,23 @@ def test_typed_error_entry_points_are_distinct():
 
 
 def test_item_size_boundary_is_a_user_error():
-    source = (ROOT / "python/jittor/src/var_holder.cc").read_text()
+    source = (ROOT / "src/core/var_holder.cc").read_text()
     assert "USER_CHECK(var->num==1)" in source
     assert "\n    CHECK(var->num==1)" not in source
     actual = source.count("USER_CHECK(var->num==1)")
     assert actual == MIGRATED_ITEM_USER_BOUNDARIES[
-        "python/jittor/src/var_holder.cc"]
+        "src/core/var_holder.cc"]
 
 
 def test_grad_dtype_boundaries_are_user_errors():
-    source = (ROOT / "python/jittor/src/grad.cc").read_text()
+    source = (ROOT / "src/core/grad.cc").read_text()
     assert 'USER_CHECK(loss->is_float())' in source
     assert 'USER_CHECK(var->is_float() || var->dtype().is_complex())' in source
     assert '\n    CHECK(loss->is_float())' not in source
     assert '\n        CHECK(var->is_float() || var->dtype().is_complex())' not in source
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_GRAD_DTYPE_USER_BOUNDARIES[
-        "python/jittor/src/grad.cc"]
+        "src/core/grad.cc"]
 
 
 def test_public_dimension_boundary_migration_is_explicit_and_bounded():
@@ -280,7 +280,7 @@ def test_public_dimension_boundary_migration_is_explicit_and_bounded():
         # ``broadcast_to_op.cc`` also owns the five shape checks asserted by
         # ``MIGRATED_BROADCAST_SHAPE_BOUNDARIES``.  Count its two dimension
         # checks by their diagnostic so the independent ledgers do not overlap.
-        if relative == "python/jittor/src/ops/broadcast_to_op.cc":
+        if relative == "src/ops/broadcast_to_op.cc":
             actual = source.count('USER_CHECK(dim>=0 && dim<ydim)')
         else:
             actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
@@ -294,7 +294,7 @@ def test_public_shape_cardinality_migration_is_explicit_and_bounded():
     for relative, expected in MIGRATED_SHAPE_CARDINALITY_BOUNDARIES.items():
         source = (ROOT / relative).read_text()
         actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
-        if relative == "python/jittor/src/ops/code_op.cc":
+        if relative == "src/ops/composite/code_op.cc":
             # Backend provenance is independent of the shape/cardinality ledger.
             for guard in ("USER_CHECK(backend.empty()", "USER_CHECK(execution_backend() == expected)"):
                 assert source.count(guard) == 1
@@ -315,45 +315,45 @@ def test_public_view_shape_migration_is_explicit_and_bounded():
 
 
 def test_broadcast_shape_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/src/ops/broadcast_to_op.cc").read_text()
+    source = (ROOT / "src/ops/broadcast_to_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_BROADCAST_SHAPE_BOUNDARIES[
-        "python/jittor/src/ops/broadcast_to_op.cc"]
+        "src/ops/broadcast_to_op.cc"]
 
 
 def test_reinterpret_view_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/src/ops/reinterpret_view_op.cc").read_text()
+    source = (ROOT / "src/ops/composite/reinterpret_view_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_REINTERPRET_VIEW_BOUNDARIES[
-        "python/jittor/src/ops/reinterpret_view_op.cc"]
+        "src/ops/composite/reinterpret_view_op.cc"]
 
 
 def test_binary_shape_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/src/ops/binary_op.cc").read_text()
+    source = (ROOT / "src/ops/binary_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_BINARY_SHAPE_BOUNDARIES[
-        "python/jittor/src/ops/binary_op.cc"]
+        "src/ops/binary_op.cc"]
 
 
 def test_setitem_shape_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/src/ops/setitem_op.cc").read_text()
+    source = (ROOT / "src/ops/composite/setitem_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_SETITEM_SHAPE_BOUNDARIES[
-        "python/jittor/src/ops/setitem_op.cc"]
+        "src/ops/composite/setitem_op.cc"]
 
 
 def test_getitem_shape_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/src/ops/getitem_op.cc").read_text()
+    source = (ROOT / "src/ops/composite/getitem_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_GETITEM_SHAPE_BOUNDARIES[
-        "python/jittor/src/ops/getitem_op.cc"]
+        "src/ops/composite/getitem_op.cc"]
 
 
 def test_py_converter_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/src/pyjt/py_converter.h").read_text()
+    source = (ROOT / "src/bindings/pyjt/py_converter.h").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_PY_CONVERTER_USER_BOUNDARIES[
-        "python/jittor/src/pyjt/py_converter.h"]
+        "src/bindings/pyjt/py_converter.h"]
     negative = (ROOT / "tests/core/test_function.py").read_text()
     assert "test_returning_the_wrong_number_of_grads_is_a_catchable_user_error" in negative
     assert "test_returning_a_non_var_grad_is_a_catchable_user_error" in negative
@@ -368,69 +368,69 @@ def test_py_converter_conversion_checks_stay_internal_invariants():
     itself, not bad input. Bad input is rejected earlier, by the parser, with
     a catchable RuntimeError that names the op and the types it was given.
     """
-    source = (ROOT / "python/jittor/src/pyjt/py_converter.h").read_text()
+    source = (ROOT / "src/bindings/pyjt/py_converter.h").read_text()
     conversion_guards = source.count("CHECK(is_type<")
     assert conversion_guards >= 3, source.count("CHECK(is_type<")
     assert "USER_CHECK(is_type<" not in source
 
 
 def test_device_copy_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/src/ops/device_copy_op.cc").read_text()
+    source = (ROOT / "src/ops/composite/device_copy_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_DEVICE_COPY_USER_BOUNDARIES[
-        "python/jittor/src/ops/device_copy_op.cc"]
+        "src/ops/composite/device_copy_op.cc"]
 
 
 def test_numpy_type_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/src/pyjt/numpy.h").read_text()
+    source = (ROOT / "src/bindings/pyjt/numpy.h").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_NUMPY_TYPE_BOUNDARIES[
-        "python/jittor/src/pyjt/numpy.h"]
+        "src/bindings/pyjt/numpy.h"]
 
 
 def test_var_slices_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/src/var_slices.h").read_text()
+    source = (ROOT / "src/core/var_slices.h").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_VAR_SLICES_USER_BOUNDARIES[
-        "python/jittor/src/var_slices.h"]
+        "src/core/var_slices.h"]
 
 
 def test_set_data_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/src/var_holder.cc").read_text()
+    source = (ROOT / "src/core/var_holder.cc").read_text()
     # ``item()`` has an independent user boundary in the same translation
     # unit; count only the two set_data predicates here.
     actual = source.count("USER_CHECK(array.dtype.dsize()")
     actual += source.count("USER_CHECK(size==var->size)")
     assert actual == MIGRATED_SET_DATA_USER_BOUNDARIES[
-        "python/jittor/src/var_holder.cc"]
+        "src/core/var_holder.cc"]
 
 
 def test_py_array_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/src/pyjt/py_array_op.cc").read_text()
+    source = (ROOT / "src/bindings/pyjt/py_array_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_PY_ARRAY_USER_BOUNDARIES[
-        "python/jittor/src/pyjt/py_array_op.cc"]
+        "src/bindings/pyjt/py_array_op.cc"]
 
 
 def test_random_type_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/src/ops/random_op.cc").read_text()
+    source = (ROOT / "src/ops/composite/random_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_RANDOM_TYPE_USER_BOUNDARIES[
-        "python/jittor/src/ops/random_op.cc"]
+        "src/ops/composite/random_op.cc"]
 
 
 def test_py_caller_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/src/pyjt/py_caller.cc").read_text()
+    source = (ROOT / "src/bindings/pyjt/py_caller.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_PY_CALLER_USER_BOUNDARIES[
-        "python/jittor/src/pyjt/py_caller.cc"]
+        "src/bindings/pyjt/py_caller.cc"]
 
 
 def test_unary_op_user_boundary_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/src/ops/unary_op.cc").read_text()
+    source = (ROOT / "src/ops/unary_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_UNARY_OP_USER_BOUNDARIES[
-        "python/jittor/src/ops/unary_op.cc"]
+        "src/ops/unary_op.cc"]
 
 
 def test_curand_user_boundary_migration_is_explicit_and_bounded():
@@ -798,10 +798,10 @@ def test_cudnn_conv3d_bwd_w_x_rank_user_boundary_migration_is_explicit_and_bound
 
 
 def test_fused_adamw_cardinality_migration_is_explicit_and_bounded():
-    source = (ROOT / "python/jittor/src/ops/fused_adamw_op.cc").read_text()
+    source = (ROOT / "src/ops/composite/fused_adamw_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_FUSED_ADAMW_CARDINALITY_BOUNDARIES[
-        "python/jittor/src/ops/fused_adamw_op.cc"]
+        "src/ops/composite/fused_adamw_op.cc"]
 
 
 def test_public_ternary_shape_migration_is_explicit_and_bounded():

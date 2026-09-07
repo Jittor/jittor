@@ -8,21 +8,21 @@ import sysconfig
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "python/jittor/src"
+SRC = ROOT / "src"
 CONSUMERS = (
-    "executor.cc", "exec_plan.cc", "exec_runner.cc",
-    "init.cc", "event_queue.cc", "profiler/profiler.cc",
-    "debug/nan_checker.cc", "utils/log.cc", "pyjt/py_converter.h",
+    "core/executor.cc", "core/exec_plan.cc", "core/exec_runner.cc",
+    "runtime/init.cc", "core/event_queue.cc", "runtime/profiler/profiler.cc",
+    "debug/nan_checker.cc", "utils/log.cc", "bindings/pyjt/py_converter.h",
 )
 
 
 def test_shared_device_consumers_have_no_vendor_sdk_dependency():
-    for relative in CONSUMERS + ("executor.h", "exec_plan.h", "exec_runner.h",
-                                 "event_queue.h", "debug/nan_checker.h"):
+    for relative in CONSUMERS + ("core/executor.h", "core/exec_plan.h", "core/exec_runner.h",
+                                 "core/event_queue.h", "debug/nan_checker.h"):
         source = (SRC / relative).read_text(encoding="utf-8")
         assert not re.search(r"#\s*include\s*[<\"](?:cuda|hip|acl/|helper_cuda)", source), relative
         assert not re.search(r"\b(?:cuda|hip)[A-Z]\w*\s*\(", source), relative
-        if relative == "pyjt/py_converter.h":
+        if relative == "bindings/pyjt/py_converter.h":
             assert "#ifdef IS_CUDA" not in source
             assert "accelerator_backend_id() == BackendId::Cuda" in source
     command = [os.environ.get("CXX", "g++"), "-std=c++14", "-fsyntax-only",
@@ -34,7 +34,7 @@ def test_shared_device_consumers_have_no_vendor_sdk_dependency():
 
 
 def test_auto_flush_requires_backend_support_and_nan_diagnostics_dispatch():
-    executor = (SRC / "executor.cc").read_text(encoding="utf-8")
+    executor = (SRC / "core/executor.cc").read_text(encoding="utf-8")
     diagnostics = (SRC / "debug/nan_checker.cc").read_text(encoding="utf-8")
     assert "execution.supports_auto_flush" in executor
     assert "CHECK(backend.check_nan)" in diagnostics

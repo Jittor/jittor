@@ -147,7 +147,7 @@ def test_compile_module_consumes_injected_generator_and_formatter(tmp_path):
     assert command.startswith('formatted "/chosen/compiler" ')
     assert " -DLOCAL=1 " in command
     assert cache == str(tmp_path) and source == "/chosen/source"
-    assert '#include "pyjt/py_arg_printer.cc"' in (tmp_path / "tmp/hash_probe.cc").read_text()
+    assert '#include "bindings/pyjt/py_arg_printer.cc"' in (tmp_path / "tmp/hash_probe.cc").read_text()
 
 
 def test_default_cache_config_stays_unchanged_and_explicit_backend_isolated(monkeypatch):

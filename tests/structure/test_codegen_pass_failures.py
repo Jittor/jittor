@@ -15,10 +15,7 @@ import re
 import unittest
 from pathlib import Path
 
-import jittor
-
-
-_OPT = Path(jittor.__file__).resolve().parent / "src" / "opt"
+_OPT = Path(__file__).resolve().parents[2] / "src/codegen/opt"
 
 _CATCH_ALL = re.compile(r"catch\s*\(\s*\.\.\.\s*\)")
 
@@ -36,6 +33,7 @@ def _without_comments(text):
 
 class TestCodegenPassFailures(unittest.TestCase):
     def test_no_pass_catches_everything(self):
+        assert (_OPT / "kernel_ir.h").is_file(), _OPT
         violations = []
         for path in sorted(_OPT.rglob("*.cc")) + sorted(_OPT.rglob("*.h")):
             text = _without_comments(path.read_text(encoding="utf8"))
