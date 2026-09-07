@@ -194,11 +194,23 @@ def report_match(entries, pattern):
               any(regex.search(name) for name in e["ops"])]
     print()
     print("== --match %r" % pattern)
+    if not picked:
+        # A pattern that matches nothing used to print a perfectly formatted
+        # 0 calls / 0.0 us, which reads like "this family costs nothing". It
+        # is not hypothetical: `--match softmax` scores 0 on this workload
+        # even though the hand-written attention softmax costs 1.59 ms/step,
+        # because that kernel is called `kernel` and the name never reaches
+        # the jit key. Report zero loudly and fail.
+        raise SystemExit(
+            "--match %r selected no kernel out of %d. A sub-bucket that is "
+            "really absent and a pattern that cannot see it look identical "
+            "in the sum, so this is an error, not a 0.0 us result."
+            % (pattern, len(entries)))
     print("%-42s %7s %10s" % ("kernel", "calls", "step_us"))
     for entry in sorted(picked, key=lambda e: -e["step_us"]):
         label = ",".join(entry["ops"][:3])
-        symbols = sorted(set(re.findall(r"[A-Za-z_][A-Za-z_0-9]*_(?:forward|backward"
-                                        r"|backward_x|backward_affine)",
+        symbols = sorted(set(re.findall(r"[A-Za-z_][A-Za-z_0-9]*_(?:forward"
+                                        r"|backward_x|backward_affine|backward)",
                                         entry.get("key", ""))))
         if symbols:
             label = ",".join(symbols[:3])
@@ -206,6 +218,19 @@ def report_match(entries, pattern):
     print("%-42s %7.0f %10.1f"
           % ("MATCHED TOTAL", sum(e["calls"] for e in picked),
              sum(e["step_us"] for e in picked)))
+    # Which roles the sub-bucket came out of, and how much of each it is. A
+    # share of 100% means the pattern picked the whole role and is not
+    # actually isolating one family.
+    shares = {}
+    for entry in picked:
+        shares.setdefault(entry["role"], [0.0, 0.0])[0] += entry["step_us"]
+    for entry in entries:
+        if entry["role"] in shares:
+            shares[entry["role"]][1] += entry["step_us"]
+    for role in sorted(shares, key=lambda r: -shares[r][0]):
+        matched, whole = shares[role]
+        print("  %-30s %8.1f of %8.1f us in role  (%.0f%%)"
+              % (role, matched, whole, 100.0 * matched / whole if whole else 0.0))
 
 
 def report(entries, top, header):
@@ -264,7 +289,12 @@ def main():
     if options.kind == "torch":
         with open(options.report) as handle:
             payload = json.load(handle)
-        entries = [{"ops": [r["name"][:70]], "role": classify_torch(r["name"]),
+        # ``ops`` is truncated for the table; ``key`` keeps the whole symbol so
+        # --match greps the full name. Torch's GroupNorm symbols carry the word
+        # "GroupNorm" past column 70 (`(anonymous namespace)::GroupNorm...`),
+        # so matching the truncated label silently selects a subset.
+        entries = [{"ops": [r["name"][:70]], "key": r["name"],
+                    "role": classify_torch(r["name"]),
                     "calls": r["calls"], "step_us": r["step_us"],
                     "step_mb": 0.0, "gbps": 0.0, "step_floor_us": 0.0,
                     "ratio": 0.0}

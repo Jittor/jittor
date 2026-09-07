@@ -130,6 +130,51 @@ GPU 时间必须小于墙钟。实测 22.0 ms 对 31.9 ms，合理；如果 GPU 
 
 `fuse_transpose` **算 elementwise**（它是融合进逐元素链的），裸 `transpose` 算 indexing。
 
+### 角色太粗时用 `--match`，但先证明它挑得到
+
+`handwritten:code` 一个桶里同时装着 GroupNorm、attention softmax 和卷积偏置梯度，
+改其中一个，角色合计里看不出来。`--match <正则>` 按 **jit key**（Jittor：key 里带
+`jt.code` 的 CUDA 源码原文）或**符号名**（nsys / torch）挑出一个子桶，并打印它的
+每步调用次数。**调用次数是判据**：两次运行的次数不一样，比的就不是同一批工作。
+
+```bash
+python classify.py jittor base.json --achievable-gbps 916.7 --top 0 --match group_norm
+```
+
+它还会打印这个子桶占所在角色的百分比。**占 100% 说明你挑的是整个角色，不是一个家族。**
+本机实测 `--match group_norm` 是 `handwritten:code` 的 **40%**（1363.0 of 3410.3 us）；
+`group_norm` 1363.0 + `channel_bias` 455.0 + 剩下的 1592.4 = 3410.4，与该角色合计
+3410.3 相符，说明这个划分是完备的、没有第四块躲在里面。
+
+**这个工具会以两种方式安静地报少。两种都是这一波真跑出来的，不是假想：**
+
+1. **挑不到任何东西时会打印一个格式完美的 `0 calls / 0.0 us`。**
+   `--match softmax` 在这个负载上就是 `MATCHED TOTAL 0 0.0` 且 exit 0，而
+   `handwritten:code` 里剩下的那 1592.4 us（3 种、13 次）确实在跑，其中 611.7 us 那种
+   的 CUDA 源码里带着 `expf` 与 `max`——正是手写 attention softmax。它的 kernel
+   叫 `kernel`，名字根本没进 jit key。现在挑不到会**报错退出（exit 1）**而不是给 0。
+   **每次用一个新 pattern，先拿一个你知道存在的家族对一遍。**
+2. **torch 那一侧曾按截断到 70 字的符号名匹配。** torch 的 GroupNorm 符号形如
+   `void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native::(anonymous namespace)::GroupNorm...`，
+   关键词远在第 70 字之后，于是**旧版 `--match GroupNorm` 在 torch 报告上返回 0.0 us**
+   ——和上一条同一个坑，只是这次连一个 kernel 都没挑中。改为匹配完整符号名后返回
+   474.6 us（八种里的三种）。
+
+**但 `--match GroupNorm` 即使修好也仍然不是 torch 侧的正确 pattern**：474.6 对
+真实的 1288.1 us，**还是少报 2.7 倍**，因为 torch 把 GroupNorm 拆成八种 kernel、
+只有三种的符号里带 `GroupNorm` 这个词。Jittor 侧 GroupNorm 这一族的正确 pattern 是
+`group_norm`（35 个算子 = 70 条记录：forward 与 backward 各一条）；torch 侧同一语义
+必须写全八种：
+
+```
+GroupNorm|RowwiseMoments|GammaBetaBackward|ComputeInternalGradients|ComputeFusedParams|ComputeBackwardFusedParams
+```
+
+实测 8 种 kernel、41 : 41 个算子、**328 次 kernel 发射、合计 1288.1 us**
+（torch 2.12.1+cu126，`large_diffusers_unet2d` 一步）。**跨运行时比一个家族时，
+两边的 pattern 都要先各自证明是完备的**，否则比的是「Jittor 的全部」对
+「PyTorch 的三分之一」。
+
 PyTorch 侧同口径：
 
 ```bash
