@@ -29,10 +29,16 @@ WARN third-party archives 1 still to download: cub-1.11.0.tgz
 
 三条可走的路，按我建议的顺序：
 
-1. **让 `check_third_party` 只要这次构建真需要的东西**。cub 是头文件库，而树里
-   **已经内置了** `backends/cuda/libraries/cub/include`，编译命令里一直带着
-   `-I .../libraries/cub/include`——所以对已内置的情形要归档是错的，不只是严。
-   这条最正确，也最能一并解决离线安装。
+1. **让 `check_third_party` 只要这次构建真需要的东西**。cub 确实要下载
+   （`install_cub` 从 `manifest.CUB` 取 tgz 解压，`-I` 指向解压出来的那份），
+   但**只有 CUDA 路径用得到它**；`backends/cuda/libraries/cub/include/` 下只有一个
+   `cub_test.h`（从 cub 抠出来的片段），不是内置的完整库。问题因此不在「已内置还要」，
+   而在**对 CPU-only 构建也无条件要**：`nvcc_path=""` 的构建从头到尾不碰 cub，却被它
+   拦住。判据应当跟着「这次构建选了哪个后端」走。这条最正确，也一并解决离线安装。
+
+   （**更正**：本文档第一版写的是「树里已内置 cub 头，所以要归档是错的」。那是错的，
+   我把 `libraries/cub/include` 里那一个 `cub_test.h` 当成了完整库；实测
+   `find -name "*.cuh"` 在该目录下零命中。结论方向不变，理由换成上面这条。）
 2. 用文档给的 `JITTOR_OFFLINE_PATH` 指向一个装着三个归档的目录。**本机没有 cub 归档**，
    要先在能联网的机器上 `nox -s prefetch`。
 3. 只在 CUDA 配置下验证（CUDA 侧的库都在缓存里）。**不推荐**：CPU-only 那一路就不会被
