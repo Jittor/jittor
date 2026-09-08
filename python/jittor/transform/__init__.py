@@ -1022,7 +1022,8 @@ class FiveCrop(object):
         if isinstance(size, numbers.Number):
             self.size = (int(size), int(size))
         else:
-            assert len(size) == 2, "Please provide only two dimensions (h, w) for size."
+            if len(size) != 2:
+                raise ValueError("Please provide only two dimensions (h, w) for size.")
             self.size = size
 
     def __call__(self, img:Image.Image):
@@ -1066,7 +1067,8 @@ class TenCrop(object):
         if isinstance(size, numbers.Number):
             self.size = (int(size), int(size))
         else:
-            assert len(size) == 2, "Please provide only two dimensions (h, w) for size."
+            if len(size) != 2:
+                raise ValueError("Please provide only two dimensions (h, w) for size.")
             self.size = size
         self.vertical_flip = vertical_flip
 
