@@ -505,7 +505,7 @@ class TestTorchBootstrap(unittest.TestCase):
             self.assertIs(runtime.activate(_root_module=root), expected)
             self.assertIs(runtime.activate(_root_module=root), expected)
         activate_once.assert_called_once()
-        self.assertTrue(activate_once.call_args.kwargs["independent_namespace"])
+        self.assertNotIn("independent_namespace", activate_once.call_args.kwargs)
         status = runtime.activation_status(root)
         self.assertTrue(status.active)
         self.assertEqual(status.phase, "active")
@@ -573,12 +573,12 @@ class TestTorchBootstrap(unittest.TestCase):
         from jittor.compat.shim import runtime
 
         root = _runtime_root("_stage7_namespace_mode_native")
-        expected = {"torch": root}
-        with mock.patch.object(runtime, "_activate_once", return_value=expected), \
+        with mock.patch.object(runtime, "_activate_once") as activate_once, \
                 mock.patch.object(runtime, "torch_namespace_owned", return_value=True):
-            self.assertIs(runtime.activate(_root_module=root, independent_namespace=False), expected)
-            with self.assertRaisesRegex(RuntimeError, "namespace mode"):
-                runtime.activate(_root_module=root, independent_namespace=True)
+            with self.assertRaisesRegex(RuntimeError, "legacy.*removed"):
+                runtime.activate(_root_module=root, independent_namespace=False)
+            activate_once.assert_not_called()
+            self.assertEqual(runtime.activation_status(root).phase, "inactive")
 
     def test_activation_rejects_switching_from_independent_to_native_namespace(self):
         from jittor.compat.shim import runtime
@@ -591,7 +591,7 @@ class TestTorchBootstrap(unittest.TestCase):
                 runtime.activate(_root_module=root, independent_namespace=True),
                 expected,
             )
-            with self.assertRaisesRegex(RuntimeError, "namespace mode"):
+            with self.assertRaisesRegex(RuntimeError, "legacy.*removed"):
                 runtime.activate(_root_module=root, independent_namespace=False)
 
     def test_activation_selects_explicit_requires_grad_policy(self):
@@ -612,15 +612,9 @@ class TestTorchBootstrap(unittest.TestCase):
         ), mock.patch.dict(
             sys.modules, {"jittor": root, "torch": root}, clear=False
         ), mock.patch.dict(os.environ, {}, clear=False):
-            runtime._activate_once(
-                _root_module=root,
-                _preflight_result=types.SimpleNamespace(
-                    active=True, runtime_root="/runtime"
-                ),
-                _composition=True,
-                independent_namespace=False,
-            )
-        autograd.set_policy.assert_called_once_with(policy)
+            with self.assertRaisesRegex(RuntimeError, "legacy.*removed"):
+                runtime.activate(_root_module=root, independent_namespace=False)
+        autograd.set_policy.assert_not_called()
 
     def test_composition_can_publish_an_independent_torch_namespace(self):
         from jittor.compat.shim import runtime
@@ -648,7 +642,6 @@ class TestTorchBootstrap(unittest.TestCase):
                 _root_module=root,
                 _preflight_result=types.SimpleNamespace(active=True, runtime_root="/runtime"),
                 _composition=True,
-                independent_namespace=True,
             )
 
             assert isinstance(result["torch"], TorchNamespace)
@@ -909,7 +902,7 @@ class TestTorchBootstrap(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as directory:
             entry = pathlib.Path(directory, "native.py")
-            entry.write_text("# example: import jittor as torch\n", encoding="utf-8")
+            entry.write_text("# example: import torch\n", encoding="utf-8")
             environment = {"HOME": directory}
             with mock.patch("builtins.open") as open_file:
                 result = preflight.prepare_import_environment(
@@ -1044,7 +1037,7 @@ class TestTorchBootstrap(unittest.TestCase):
                     with self.subTest(strict=strict), mock.patch.dict(os.environ, {
                         "JITTOR_TORCH_STRICT_BOOTSTRAP": str(int(not strict)),
                         "JITTOR_TORCH_SKIP_EXT_BUILD": "1",
-                        "JITTOR_TORCH_INDEPENDENT": "0",
+                        "JITTOR_TORCH_INDEPENDENT": "1",
                     }), mock.patch(
                         "jittor.compat.torch.install",
                         side_effect=RuntimeError("install failed"),
@@ -1061,7 +1054,6 @@ class TestTorchBootstrap(unittest.TestCase):
                                 local_home=False,
                                 verbose=False,
                                 strict=strict,
-                                independent_namespace=False,
                             )
             finally:
                 sys.path[:] = old_sys_path
@@ -1079,7 +1071,7 @@ class TestTorchBootstrap(unittest.TestCase):
     def test_torch_utils_unknown_submodule_fails_fast(self):
         import importlib
         import time
-        import jittor as torch
+        import torch
 
         start = time.time()
         with self.assertRaises(ModuleNotFoundError):
@@ -1170,7 +1162,7 @@ class TestShimSysPathOwnership(unittest.TestCase):
             paths.insert(0 if prepend else len(paths), path)
             return True
 
-        with mock.patch.dict(os.environ, {"JITTOR_TORCH_INDEPENDENT": "0"}), \
+        with mock.patch.dict(os.environ, {"JITTOR_TORCH_INDEPENDENT": "1"}), \
                 mock.patch.object(
                 ActivationTransaction, "mutate_path", record_path), \
                 mock.patch.object(shim_runtime, "prepare_import_environment") as prepare, \
@@ -1188,8 +1180,7 @@ class TestShimSysPathOwnership(unittest.TestCase):
                                     build_extensions=False,
                                     auto_scan_extensions=False,
                                     configure_cuda=False,
-                                    verbose=False,
-                                    independent_namespace=False)
+                                    verbose=False)
             except Exception:
                 # enable() goes on to install the whole torch surface; the
                 # ordering decision has already been recorded by then.

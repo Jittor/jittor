@@ -5,7 +5,8 @@ import unittest
 
 import numpy as np
 
-import jittor as torch
+import torch
+import jittor as _native_jittor
 
 
 _HAS_FLASH_ATTN = importlib.util.find_spec("flash_attn") is not None
@@ -21,7 +22,7 @@ def _sdpa_reference(query, key, value, scale=None):
 
 
 @unittest.skipUnless(_HAS_FLASH_ATTN, "flash_attn adapter is not installed")
-@unittest.skipUnless(torch.compiler.has_cuda, "CUDA is required")
+@unittest.skipUnless(_native_jittor.compiler.has_cuda, "CUDA is required")
 class TestFlashAttnCompat(unittest.TestCase):
     def setUp(self):
         self.random = np.random.RandomState(20260824)
@@ -35,7 +36,7 @@ class TestFlashAttnCompat(unittest.TestCase):
         q_array = self.random.randn(2, 3, 2, 4).astype("float32")
         k_array = self.random.randn(2, 3, 2, 4).astype("float32")
         v_array = self.random.randn(2, 3, 2, 4).astype("float32")
-        with torch.flag_scope(use_cuda=1):
+        with _native_jittor.flag_scope(use_cuda=1):
             q, k, v = (self._tensor(value) for value in (q_array, k_array, v_array))
             output = flash_attn.flash_attn_func(q, k, v)
             self.assertTrue(output.is_cuda)
@@ -58,7 +59,7 @@ class TestFlashAttnCompat(unittest.TestCase):
         q_array = self.random.randn(5, 2, 4).astype("float32")
         k_array = self.random.randn(5, 2, 4).astype("float32")
         v_array = self.random.randn(5, 2, 4).astype("float32")
-        with torch.flag_scope(use_cuda=1):
+        with _native_jittor.flag_scope(use_cuda=1):
             cu_seqlens = torch.tensor([0, 2, 5], dtype=torch.int32, device="cuda")
             output = flash_attn.flash_attn_varlen_func(
                 self._tensor(q_array),
@@ -85,7 +86,7 @@ class TestFlashAttnCompat(unittest.TestCase):
         import flash_attn
 
         value = np.ones((1, 3, 1, 4), dtype="float32")
-        with torch.flag_scope(use_cuda=1):
+        with _native_jittor.flag_scope(use_cuda=1):
             output = flash_attn.flash_attn_func(
                 self._tensor(value),
                 self._tensor(value),

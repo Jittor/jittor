@@ -13,8 +13,7 @@ def eye(n, m=None, dtype=None, **kwargs):
     target = compatibility_owner(jt)
     with tensor_frontend(target.Var):
         result = _init.eye(shape, _dtype_to_str(dtype) or "float32")
-        if target is not jt:
-            result.requires_grad = False
+        result.requires_grad = False
         return result
 
 

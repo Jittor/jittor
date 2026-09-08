@@ -1,7 +1,7 @@
 # ***************************************************************
 # CUDA device regression for transformers through the direct alias path:
 #
-#     import jittor as torch
+#     import torch
 #
 # No transformers source files are modified. This test focuses on the PyTorch
 # style device API used by real HF code: torch.device("cuda"), tensor(...,
@@ -19,7 +19,7 @@ os.environ.setdefault("HF_DEACTIVATE_ASYNC_LOAD", "1")
 os.environ.setdefault("DISABLE_VERSION_CHECK", "1")
 
 try:
-    import jittor as torch
+    import torch
     import jittor as jt
 
     _ALIAS_REGISTERED = sys.modules.get("torch") is torch

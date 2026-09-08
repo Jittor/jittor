@@ -22,7 +22,7 @@ import jittor as jt
 
 class TestTorchCppExtensionArchFlags(unittest.TestCase):
     def test_reports_the_builder_cxx11_abi(self):
-        import jittor as torch
+        import torch
         from jittor.compat.shim import cpp_extension
 
         expected = bool(cpp_extension.CXX11_ABI)
@@ -291,7 +291,7 @@ torch::Tensor zeros_like_with_options(torch::Tensor x) {
         self.assertEqual(ext.extra_compile_args["nvcc"], ["-O3", "--use_fast_math"])
 
     def test_import_jittor_as_torch_exposes_cpp_extension(self):
-        import jittor as torch
+        import torch
         from torch.utils.checkpoint import checkpoint
 
         self.assertTrue(hasattr(torch, "utils"))

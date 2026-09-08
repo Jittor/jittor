@@ -29,7 +29,7 @@ Writing it::
 
 Reading it back::
 
-    import jittor as torch
+    import torch
     torch.compat_swallowed()            # every record, in order
     torch.compat_swallowed("dtype")     # only records whose label matches
     torch.compat_swallowed_counts()     # {(label, exception): times}

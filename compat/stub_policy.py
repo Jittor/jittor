@@ -22,7 +22,7 @@ user who knowingly wants the old behaviour opts in explicitly::
 
 or programmatically::
 
-    import jittor as torch
+    import torch
     torch.compat_allow_stub(True)
 
 With the escape hatch on, ``unimplemented`` warns once per API and returns the

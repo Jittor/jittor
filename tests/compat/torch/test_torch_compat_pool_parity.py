@@ -1,6 +1,6 @@
 """Torch-parity regression tests for the average-pooling family (bug #11).
 
-Locks two PyTorch-documented behaviours that ``import jittor as torch`` must match,
+Locks two PyTorch-documented behaviours that ``import torch`` must match,
 each checked against an INDEPENDENT numpy reference computed from torch's *documented*
 formula (no scipy / no real torch assumed), on BOTH CPU and CUDA:
 
@@ -25,7 +25,7 @@ Run:  python -m pytest tests/compat/torch/test_torch_compat_pool_parity.py
 import math
 import unittest
 import numpy as np
-import jittor as torch          # the whole point: jittor IS torch here
+import torch
 import jittor as jt
 import jittor.nn as nn
 

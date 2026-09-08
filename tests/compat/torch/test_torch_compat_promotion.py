@@ -1,5 +1,5 @@
 """Torch-grade DTYPE-PROMOTION + integer-dtype-method regression tests for
-``import jittor as torch``.
+``import torch``.
 
 Part of the torch-grade test-suite (bug #10). Like the other ``test_torch_compat_*``
 modules this is a structured ``unittest`` module: every check compares jittor-as-torch
@@ -38,7 +38,7 @@ Run:  python -m pytest tests/compat/torch/test_torch_compat_promotion.py
 """
 import unittest
 import numpy as np
-import jittor as torch          # the whole point: jittor IS torch here
+import torch
 import jittor as jt
 
 # Exercise CPU always; add CUDA when the build has it. NPU(ACL) reports has_cuda too.

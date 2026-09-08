@@ -1,4 +1,4 @@
-"""Torch-grade elementwise-math parity for ``import jittor as torch``.
+"""Torch-grade elementwise-math parity for ``import torch``.
 
 Part of the torch-grade test-suite rewrite. CPU+CUDA vs numpy. Covers the elementwise
 math surface (trig / exp-log / rounding / clamp / sign) not exercised elsewhere.
@@ -7,7 +7,7 @@ Run:  python -m pytest tests/compat/torch/test_torch_compat_math.py
 """
 import unittest
 import numpy as np
-import jittor as torch
+import torch
 import jittor as jt
 
 _DEVICES = [("cpu", 0)] + ([("cuda", 1)] if jt.has_cuda else [])

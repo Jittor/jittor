@@ -1,5 +1,5 @@
 """Torch-grade parity tests for the linalg SVD family on the
-``import jittor as torch`` path: ``torch.linalg.svd`` (full_matrices=True/False
+``import torch`` path: ``torch.linalg.svd`` (full_matrices=True/False
 shape semantics + named (U, S, Vh) tuple), ``torch.linalg.svdvals`` (singular
 values only), and ``torch.linalg.eigvalsh`` (symmetric/Hermitian eigenvalues).
 
@@ -14,7 +14,7 @@ Run:  python -m pytest tests/compat/torch/test_torch_compat_svd.py
 """
 import unittest
 import numpy as np
-import jittor as torch
+import torch
 import jittor as jt
 
 _DEVICES = [("cpu", 0)] + ([("cuda", 1)] if jt.has_cuda else [])

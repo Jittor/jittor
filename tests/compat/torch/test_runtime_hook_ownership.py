@@ -110,7 +110,12 @@ class RuntimeHookOwnership(unittest.TestCase):
             self.assertIs(target.version, before["version"])
 
     def test_actual_install_adopts_complete_markers_classes_and_namespace(self):
-        target = types.ModuleType(self.name())
+        module_name = _PACKAGE + ".torch.namespace"
+        spec = importlib.util.spec_from_file_location(
+            module_name, pathlib.Path(package.__path__[0]) / "torch/namespace.py")
+        namespace_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(namespace_module)
+        target = namespace_module.TorchNamespace(types.ModuleType(self.name()))
         target.Var = type("Tensor", (), {})
         target.runtime = types.SimpleNamespace(service_state=lambda name: {})
         published_name = "torch." + self.name()
@@ -120,7 +125,8 @@ class RuntimeHookOwnership(unittest.TestCase):
             def __init__(self):
                 self.state, self.markers = {}, {}
                 self.registry = types.SimpleNamespace(_published={})
-                self.native_backend = self.target_namespace = target
+                self.native_backend = target.owner
+                self.target_namespace = target
             @property
             def complete(self):
                 return getattr(target, self.COMPLETE_ATTR, False)
@@ -143,6 +149,10 @@ class RuntimeHookOwnership(unittest.TestCase):
         tensor_state.bind_tensor_state = lambda *args, **kwargs: {}
         tensor_state.snapshot_tensor_state = lambda state: {}
         tensor_state.record_tensor_state_changes = lambda *args: None
+        native_api = types.ModuleType(_PACKAGE + ".torch.native_api")
+        native_api.install = lambda context: None
+        api_manifest = types.ModuleType(_PACKAGE + ".torch.api_manifest")
+        api_manifest.register_public_apis = lambda context: None
         namespace = dict(__package__=_PACKAGE + ".torch", sys=sys,
                          InstallTransaction=tx.InstallTransaction, InstallContext=Context,
                          _MISSING=tx._MISSING, _NAMESPACE_TRANSACTION="_namespace",
@@ -153,7 +163,10 @@ class RuntimeHookOwnership(unittest.TestCase):
                              if name == "torch" or name.startswith("torch.")})
         for name in ("_restore_namespace", "_abandon", "install"):
             self.source_function("torch/__init__.py", name, namespace)
-        with mock.patch.dict(sys.modules, {tensor_state.__name__: tensor_state}):
+        with mock.patch.dict(sys.modules, {
+                tensor_state.__name__: tensor_state,
+                module_name: namespace_module, native_api.__name__: native_api,
+                api_manifest.__name__: api_manifest}):
             for _ in range(2):
                 parent = tx.InstallTransaction("activation")
                 namespace["install"](target, parent_transaction=parent)

@@ -18,8 +18,8 @@ remain the execution/differentiation owners. Input shapes, saved tensors and out
 metadata live on the one-shot context, not on a reusable Function instance.
 `InstallContext.state["autograd_api"]` captures the original native Function call
 delegate and any optional TensorDict indexing delegates before installation.
-Legacy native-as-Torch activation still patches the native Function using the same
-module-level helpers; it is not evidence that the legacy mutation boundary is gone.
+The native-as-Torch activation path and native Function monkeypatch helper have
+been removed. Installation only publishes the independent module-level Function.
 
 `compat/torch/library.py` owns `Library`, registration functions, schema inference,
 operator/namespace objects and the native `_LibraryAutograd` bridge.

@@ -67,8 +67,8 @@ share an object while declaring different supported behavior. Metadata must not
 mutate shared native Python classes/functions. Neither coverage registration nor
 namespace sealing proves full Torch semantics. Native explicit placement now
 preserves CPU/CUDA residency through execution; see the
-[placement contract](tensor-backend-placement.md). Removal of the explicitly
-selected legacy native-as-Torch activation still belongs to 7.12.
+[placement contract](tensor-backend-placement.md). Activation now accepts only
+an independent frontend; the native-as-Torch installation path is removed.
 
 Serialization owners separate portable values, restricted pickle loading, Torch
 archives and safetensors. Restricted mode rejects native-only fallback paths that
@@ -93,8 +93,7 @@ queryable failed state.
 
 Tensor bookkeeping uses `jittor.torch.tensor_states`, a Runtime-owned weak
 owner table. `get_tensor_state()` resolves an explicit frontend binding;
-`latest_optimizer()` resolves weak optimizer references. This applies to both
-independent and legacy activation. Historical leaf, retained and optimizer
+`latest_optimizer()` resolves weak optimizer references. Historical leaf, retained and optimizer
 root aliases are adopted once and removed, with installation rollback restoring
 their previous ownership if installation fails.
 
@@ -103,9 +102,10 @@ The vmap getitem lowering hint is context-local and owner-scoped. Use
 module attribute. Nested uses of the same scope and exception exits restore
 the entry state; another execution context does not inherit active mutations.
 
-Legacy native-as-Torch activation still mutates native API types outside these
-state boundaries. Its remaining removal is tracked in 7.12; this contract does
-not declare the entire independent frontend migration complete.
+`compat.torch.install` rejects native module targets before creating an installation
+context. `activate` and import-time composition always select the independent
+namespace. Old false mode arguments/environment settings are explicit errors;
+native API classes are never an alternative installation target.
 
 ## Distribution boundaries
 

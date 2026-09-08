@@ -20,7 +20,7 @@ import unittest
 import warnings
 
 import jittor as jt
-import jittor as torch
+import torch
 from jittor.compat import permissive, stub_policy
 
 

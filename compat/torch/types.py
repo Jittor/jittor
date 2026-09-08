@@ -7,9 +7,6 @@ import typing
 import jittor as jt
 from ..diagnostics import EXPECTED, swallowed
 
-_NATIVE_DTYPE_CONVERTERS = {}
-
-
 class dtype:
     """Immutable Torch dtype identity, independent of Python strings."""
     __slots__ = ("name", "_is_fp")
@@ -102,15 +99,6 @@ class dtype:
                 % self.name)
         return self.name
 
-    def __call__(self, *args, **kwargs):
-        # The explicit legacy jittor-as-torch path retains dtype cast spelling.
-        name = self._jittor_compute_name
-        converter = _NATIVE_DTYPE_CONVERTERS.get(name)
-        if converter is None:
-            raise TypeError("dtype %s has no Jittor tensor constructor" % name)
-        return converter(*args, **kwargs)
-
-
 def _restore_dtype(name, is_floating_point):
     return dtype(name, is_floating_point)
 
@@ -140,9 +128,6 @@ def _make_dtypes(ns):
     ]
     objs = {}
     for name, is_fp in specs:
-        converter = getattr(ns, name, None)
-        if callable(converter) and not isinstance(converter, dtype):
-            _NATIVE_DTYPE_CONVERTERS.setdefault(name, converter)
         objs[name] = dtype(name, is_fp)
     objs["float"] = objs["float32"]
     objs["double"] = objs["float64"]

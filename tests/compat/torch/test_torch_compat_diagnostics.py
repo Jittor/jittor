@@ -11,7 +11,7 @@ import io
 import unittest
 from contextlib import redirect_stderr
 
-import jittor as torch
+import torch
 
 from jittor.compat import diagnostics
 

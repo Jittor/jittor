@@ -19,6 +19,7 @@ from .discovery import (
 from .preflight import (
     _ensure_dir, append_sys_path, configure_torch_math_flags, is_truthy,
     jittor_python_root, prepare_import_environment, prepend_sys_path,
+    require_independent_frontend as _require_independent_frontend,
 )
 from jittor.compat._aliases import torch_namespace_claimable, torch_namespace_owned
 from jittor.compat.torch.publication import (
@@ -45,7 +46,6 @@ def _new_runtime_state():
         "external_patches": None,
         "error": None,
         "runtime_configured": False,
-        "independent_namespace": False,
     }
 
 
@@ -60,9 +60,7 @@ def _runtime_state(root_module, create=True):
         "jittor.torch.activation", factory=_new_runtime_state if create else None)
 
 
-def _installation_target(owner, independent):
-    if not independent:
-        return owner
+def _installation_target(owner):
     state = _runtime_state(owner)
     target = state.get("installation_target")
     if target is None:
@@ -132,7 +130,6 @@ def _activate_once(
     _preflight_result=None,
     _composition=False,
     _transaction=None,
-    independent_namespace=True,
 ):
     """Enable Jittor-backed ``import torch`` for the current Python process.
 
@@ -173,17 +170,7 @@ def _activate_once(
         if strict is None
         else bool(strict)
     )
-    # Spawned Python processes must select the same frontend when importing
-    # Jittor through the shim environment prepared by this explicit activation.
-    namespace_mode = "1" if independent_namespace else "0"
-    if _transaction is None:
-        os.environ["JITTOR_TORCH_INDEPENDENT"] = namespace_mode
-    else:
-        _transaction.mutate_env("JITTOR_TORCH_INDEPENDENT", namespace_mode)
-    if not independent_namespace:
-        jittor_root.autograd.set_policy(
-            jittor_root.autograd.EXPLICIT_REQUIRES_GRAD
-        )
+    _require_independent_frontend()
     if _composition:
         jt = jittor_root
         configure_torch_math_flags(jt)
@@ -191,14 +178,13 @@ def _activate_once(
         transaction = ActivationTransaction("shim.composition")
         transaction.acquire()
         try:
-            published = _installation_target(jt, independent_namespace)
+            published = _installation_target(jt)
             torch_compat.install(published, strict=strict_bootstrap,
                                  parent_transaction=transaction)
-            if independent_namespace:
-                publish_independent_namespace(
-                    published, published._torch_compat_install_context.registry,
-                    transaction=transaction,
-                )
+            publish_independent_namespace(
+                published, published._torch_compat_install_context.registry,
+                transaction=transaction,
+            )
             _publish_torch_module(transaction, published, jt)
             if _transaction is not None:
                 _transaction.adopt(transaction)
@@ -270,14 +256,13 @@ def _activate_once(
         else:
             _transaction.mutate_flag(jt.flags, "no_grad", 1)
     from jittor.compat import torch as torch_compat
-    published = _installation_target(jt, independent_namespace)
+    published = _installation_target(jt)
     torch_compat.install(published, strict=strict_bootstrap,
                          parent_transaction=_transaction)
-    if independent_namespace:
-        publish_independent_namespace(
-            published, published._torch_compat_install_context.registry,
-            transaction=_transaction,
-        )
+    publish_independent_namespace(
+        published, published._torch_compat_install_context.registry,
+        transaction=_transaction,
+    )
     if _transaction is None:
         sys.modules["torch"] = published
     else:
@@ -392,27 +377,23 @@ def activate(
 
     Repeated calls return the original result and never rescan extensions or
     reapply integration patches. Use :func:`activation_status` for inspection.
-    The default publishes independent Torch types; pass independent_namespace=False
-    explicitly for the legacy Jittor-alias mode.
+    Torch types always belong to an independent namespace. The historical
+    independent_namespace=False argument is rejected before any mutation.
     """
 
+    _require_independent_frontend(independent_namespace)
     root = _root_module or sys.modules.get("jittor")
     if root is None:
         raise RuntimeError("import jittor before activating Torch compatibility")
     state = _runtime_state(root)
     already_installed = bool(state.get("installed"))
     if state.get("installed"):
+        if state.get("independent_namespace") is False:
+            raise RuntimeError("legacy Jittor-alias activation state cannot be reused; start a new process")
         if not torch_namespace_owned(root):
             raise RuntimeError(
                 "cannot re-activate the Jittor Torch shim over a changed Torch "
                 "module graph"
-            )
-        if bool(state.get("independent_namespace")) != bool(independent_namespace):
-            previous = "independent" if state.get("independent_namespace") else "native"
-            requested = "independent" if independent_namespace else "native"
-            raise RuntimeError(
-                "cannot change Torch namespace mode after activation "
-                "(active=%s, requested=%s)" % (previous, requested)
             )
         if _composition or state.get("runtime_configured"):
             return state.get("result")
@@ -440,7 +421,6 @@ def activate(
             _preflight_result=_preflight_result,
             _composition=_composition,
             _transaction=transaction,
-            independent_namespace=independent_namespace,
         )
     except BaseException as exc:
         try:
@@ -469,8 +449,8 @@ def activate(
         ),
         error=None,
         runtime_configured=not _composition,
-        independent_namespace=bool(independent_namespace),
     )
+    state.pop("independent_namespace", None)
     return result
 
 

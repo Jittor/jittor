@@ -55,12 +55,7 @@ def install_parity(ctx):
             setattr(conv, name, value)
     modules.conv = conv
 
-    if ctx.target_namespace is ctx.native_backend:
-        pooling = importlib.import_module("jittor.nn.modules.pooling")
-    else:
-        # The NN frontend already owns this module and its layer adapters.
-        # Publishing the native owner here would undo namespace isolation.
-        pooling = nn.modules.pooling
+    pooling = nn.modules.pooling
     registry.publish("torch.nn.modules.pooling", pooling)
     pooling._MaxPoolNd = getattr(
         pooling,

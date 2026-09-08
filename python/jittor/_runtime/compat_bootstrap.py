@@ -2,7 +2,6 @@
 
 import importlib
 import os
-import sys
 from types import SimpleNamespace
 
 from .import_aliases import install_aliases, register_alias_provider
@@ -19,11 +18,9 @@ def is_truthy(value):
 
 
 def _requested(environ):
-    torch = sys.modules.get("torch")
     return bool(is_truthy(environ.get("JITTOR_TORCH_SHIM"))
                 or environ.get("JITTOR_TORCH_PROJECT_ROOT")
-                or environ.get("JITTOR_TORCH_RUNTIME_ROOT")
-                or getattr(torch, "_jittor_torch_shim_placeholder", False))
+                or environ.get("JITTOR_TORCH_RUNTIME_ROOT"))
 
 
 def _compat_module(name):

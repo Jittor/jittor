@@ -5,14 +5,15 @@ import unittest
 
 import numpy as np
 
-import jittor as torch
+import torch
+import jittor as _native_jittor
 
 
 _HAS_TENSORDICT = importlib.util.find_spec("tensordict") is not None
 
 
 @unittest.skipUnless(_HAS_TENSORDICT, "tensordict is not installed")
-@unittest.skipUnless(torch.compiler.has_cuda, "CUDA is required")
+@unittest.skipUnless(_native_jittor.compiler.has_cuda, "CUDA is required")
 class TestTensorDictCompat(unittest.TestCase):
     def test_cpu_conversion_uses_device_objects(self):
         from tensordict import TensorDict
@@ -22,7 +23,7 @@ class TestTensorDictCompat(unittest.TestCase):
         self.assertEqual(parsed_device.type, "cpu")
         self.assertIsNone(parsed_device.index)
 
-        with torch.flag_scope(use_cuda=1):
+        with _native_jittor.flag_scope(use_cuda=1):
             tensordict = TensorDict(
                 {"value": torch.ones((2,), device="cuda")}, batch_size=[2]
             )
@@ -35,7 +36,7 @@ class TestTensorDictCompat(unittest.TestCase):
         from tensordict import TensorDict, lazy_stack
 
         expected = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], dtype=np.float32)
-        with torch.flag_scope(use_cuda=1):
+        with _native_jittor.flag_scope(use_cuda=1):
             value = torch.tensor(expected, device="cuda")
             tensordict = TensorDict({"value": value}, batch_size=[3])
             tensordict["double"] = tensordict["value"] * 2
@@ -53,7 +54,7 @@ class TestTensorDictCompat(unittest.TestCase):
         from tensordict.base import TensorDictBase
 
         expected = np.array([[10.0], [20.0], [30.0]], dtype=np.float32)
-        with torch.flag_scope(use_cuda=1):
+        with _native_jittor.flag_scope(use_cuda=1):
             tensordict = TensorDict(
                 {"value": torch.tensor(expected, device="cuda")}, batch_size=[3]
             )

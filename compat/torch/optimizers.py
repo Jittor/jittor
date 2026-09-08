@@ -42,19 +42,18 @@ def _install_optimizers(g, registry=None):
     """Register optimizer instances weakly on construction and mirror lr into
     each param_group. This makes the
     `loss.backward()` bridge (Var.backward) and torch-style LR schedulers work
-    even when using `import jittor as torch` directly (no torch_shim wrapper)."""
+    on the independent Torch-owned optimizer types."""
     _registry = registry_for(g, registry)
     _modules = _registry.module_map
     from jittor import optim as _optim
     from jittor.optim.algorithms.adam import adam_update
-    if g is not _registry.native_backend:
-        from .optim_frontend import make_optimizer_frontend
-        existing = vars(g).get("optim")
-        if (existing is None or
-                vars(existing).get("_native_optimizer_module") is not _optim):
-            existing = make_optimizer_frontend(_optim, g.Var)
-            g.optim = existing
-        _optim = existing
+    from .optim_frontend import make_optimizer_frontend
+    existing = vars(g).get("optim")
+    if (existing is None or
+            vars(existing).get("_native_optimizer_module") is not _optim):
+        existing = make_optimizer_frontend(_optim, g.Var)
+        g.optim = existing
+    _optim = existing
     Base = getattr(_optim, "Optimizer", None)
     if Base is None:
         raise RuntimeError("jittor.optim has no Optimizer owner")
@@ -127,9 +126,8 @@ def _install_optimizers(g, registry=None):
     Base._torch_compat_wrapped = True
     if not hasattr(_optim, "LBFGS"):
         _optim.LBFGS = _lbfgs_type(Base)
-    if g is not _registry.native_backend:
-        _optim.__all__ = sorted(name for name in vars(_optim)
-                               if not name.startswith("_"))
+    _optim.__all__ = sorted(name for name in vars(_optim)
+                           if not name.startswith("_"))
 
     import types as _types_optim
     _optim_mod = _modules.get("torch.optim")

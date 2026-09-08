@@ -1,4 +1,4 @@
-"""Torch-grade nn/functional-semantics regression tests for ``import jittor as torch``.
+"""Torch-grade nn/functional-semantics regression tests for ``import torch``.
 
 Part of the torch-grade test-suite rewrite (round 3). Like ``test_torch_compat_ops.py``
 this is a structured ``unittest`` module: every check compares jittor-as-torch's
@@ -27,9 +27,9 @@ Run:  python -m pytest tests/compat/torch/test_torch_compat_nn.py
 import math
 import unittest
 import numpy as np
-import jittor as torch          # the whole point: jittor IS torch here
+import torch
 import jittor as jt
-from jittor import nn
+from torch import nn
 
 F = nn.functional
 
@@ -45,7 +45,7 @@ def both_devices(fn):
 
 
 def t(a):
-    return torch.array(a)
+    return torch.tensor(a)
 
 
 _verf = np.vectorize(math.erf)

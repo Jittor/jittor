@@ -1,4 +1,4 @@
-"""Torch-grade loss-function parity for ``import jittor as torch``.
+"""Torch-grade loss-function parity for ``import torch``.
 
 Part of the torch-grade test-suite expansion. Like the sibling
 ``test_torch_compat_nn.py`` / ``test_torch_compat_math.py`` modules this is a structured
@@ -32,9 +32,9 @@ Run:  python -m pytest tests/compat/torch/test_torch_compat_loss.py
 """
 import unittest
 import numpy as np
-import jittor as torch          # the whole point: jittor IS torch here
+import torch
 import jittor as jt
-from jittor import nn
+from torch import nn
 
 F = nn.functional
 
@@ -50,7 +50,7 @@ def both_devices(fn):
 
 
 def t(a):
-    return torch.array(a)
+    return torch.tensor(a)
 
 
 def np_logsoftmax(x, axis):

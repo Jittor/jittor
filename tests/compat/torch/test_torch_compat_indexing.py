@@ -1,4 +1,4 @@
-"""Torch-grade indexing/slicing-semantics regression tests for ``import jittor as torch``.
+"""Torch-grade indexing/slicing-semantics regression tests for ``import torch``.
 
 Part of the torch-grade test-suite rewrite (round 2). Like ``test_torch_compat_ops.py``
 this is a structured ``unittest`` module: every check compares jittor-as-torch against an
@@ -16,7 +16,7 @@ Run:  python -m pytest tests/compat/torch/test_torch_compat_indexing.py
 """
 import unittest
 import numpy as np
-import jittor as torch          # the whole point: jittor IS torch here
+import torch
 import jittor as jt
 
 # Exercise CPU always; add CUDA when the build has it. NPU(ACL) reports has_cuda too.
@@ -32,7 +32,7 @@ def both_devices(fn):
 
 def t(a):
     """np array -> jittor Var (keep dtype, including int64/bool index tensors)."""
-    return torch.array(a)
+    return torch.tensor(a)
 
 
 class Base(unittest.TestCase):

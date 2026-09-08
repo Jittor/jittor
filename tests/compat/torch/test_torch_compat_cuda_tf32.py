@@ -1,7 +1,7 @@
 import unittest
 
 import jittor as jt
-import jittor as torch
+import torch
 
 
 # ``cuda_allow_tf32`` and ``cuda_allow_cudnn_tf32`` are registered by the CUDA

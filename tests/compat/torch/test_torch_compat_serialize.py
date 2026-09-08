@@ -1,4 +1,4 @@
-"""Torch-grade serialization / state_dict round-trip tests for ``import jittor as torch``.
+"""Torch-grade serialization / state_dict round-trip tests for ``import torch``.
 
 Part of the torch-grade test-suite rewrite (sibling of ``test_torch_compat_ops.py``).
 Locks the *semantics* of the save/load and state_dict layer that ``jittor`` exposes
@@ -24,7 +24,7 @@ import shutil
 import tempfile
 import unittest
 import numpy as np
-import jittor as torch          # the whole point: jittor IS torch here
+import torch
 import jittor as jt
 import jittor.nn as nn
 

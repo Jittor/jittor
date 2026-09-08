@@ -15,7 +15,7 @@ import unittest
 
 import numpy as np
 
-import jittor as torch
+import torch
 import jittor as jt
 
 from jittor.compat import optimizer_kinds

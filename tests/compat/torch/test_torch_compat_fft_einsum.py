@@ -1,4 +1,4 @@
-"""Torch-grade FFT / einsum / complex-number semantics tests for ``import jittor as torch``.
+"""Torch-grade FFT / einsum / complex-number semantics tests for ``import torch``.
 
 Part of the torch-grade test-suite rewrite (sibling of ``test_torch_compat_ops.py``).
 Every check compares jittor-as-torch against an INDEPENDENT ``numpy`` reference
@@ -20,7 +20,7 @@ Run:  python -m pytest tests/compat/torch/test_torch_compat_fft_einsum.py
 """
 import unittest
 import numpy as np
-import jittor as torch          # the whole point: jittor IS torch here
+import torch
 import jittor as jt
 
 # Exercise CPU always; add CUDA when the build has it. NPU(ACL) reports has_cuda too.
@@ -154,10 +154,10 @@ class TestRFFT(Base):
 
         def body(dev):
             def a():
-                return torch.array(a_np)
+                return torch.tensor(a_np)
 
             def b():
-                return torch.array(b_np)
+                return torch.tensor(b_np)
 
             # Preserve the forward/backward prelude which once made CUDA rFFT lose
             # the imaginary half-spectrum in the aggregate complex parity probe.
@@ -171,7 +171,7 @@ class TestRFFT(Base):
                 a().abs(),
                 a().sum(),
                 a().mean(),
-                torch.matmul(torch.array(m1_np), torch.array(m2_np)),
+                torch.matmul(torch.tensor(m1_np), torch.tensor(m2_np)),
                 torch.exp(a()),
                 torch.log(a()),
                 torch.sin(a()),
@@ -185,13 +185,13 @@ class TestRFFT(Base):
             materialize(torch.grad(((gx * gy).abs()).sum(), gx))
             gx = a()
             materialize(torch.grad(torch.exp(gx).abs().sum(), gx))
-            gx, gy = torch.array(m1_np), torch.array(m2_np)
+            gx, gy = torch.tensor(m1_np), torch.tensor(m2_np)
             materialize(torch.grad(torch.matmul(gx, gy).abs().sum(), gx))
             gx = a()
             bridge = torch.nn.view_as_complex(torch.nn.view_as_real(gx))
             materialize(torch.grad(bridge.abs().sum(), gx))
 
-            got = torch.fft.rfft(torch.array(x))
+            got = torch.fft.rfft(torch.tensor(x))
             ref = np.fft.rfft(x)
             self.acplx(got, ref, msg=f"rfft after complex sequence {dev}")
             self.ac(torch.fft.irfft(got, n=x.size).numpy(), x, atol=1e-4,

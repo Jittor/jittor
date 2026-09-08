@@ -21,7 +21,8 @@ import importlib
 import unittest
 
 import numpy as np
-import jittor as torch
+import torch
+import jittor as _native_jittor
 
 from _helpers import common as cu
 from _helpers.device_types import instantiate_device_type_tests
@@ -71,40 +72,40 @@ class TestTorchCumulativeFidelityMetadata(unittest.TestCase):
 
 class TestTorchCumulative(cu.JittorTestCase):
     def test_cumsum_matches_a_float64_reference(self, device):
-        actual = torch.cumsum(torch.array(SMALL), 1).numpy()
+        actual = torch.cumsum(torch.tensor(SMALL), 1).numpy()
         expected = np.cumsum(SMALL.astype("float64"), axis=1)
         np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=0)
 
     def test_cumsum_along_the_leading_dimension(self, device):
-        actual = torch.cumsum(torch.array(SMALL), 0).numpy()
+        actual = torch.cumsum(torch.tensor(SMALL), 0).numpy()
         expected = np.cumsum(SMALL.astype("float64"), axis=0)
         np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=0)
 
     def test_cumprod_matches_a_float64_reference(self, device):
-        actual = torch.cumprod(torch.array(SMALL), 1).numpy()
+        actual = torch.cumprod(torch.tensor(SMALL), 1).numpy()
         expected = np.cumprod(SMALL.astype("float64"), axis=1)
         np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=0)
 
     def test_default_dim_is_the_trailing_one(self, device):
-        actual = torch.cumsum(torch.array(SMALL)).numpy()
+        actual = torch.cumsum(torch.tensor(SMALL)).numpy()
         expected = np.cumsum(SMALL.astype("float64"), axis=-1)
         np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=0)
 
     def test_bool_input_is_promoted_to_int64_exactly(self, device):
-        result = torch.cumsum(torch.array(MASK), -1)
+        result = torch.cumsum(torch.tensor(MASK), -1)
         self.assertEqual(str(result.dtype), "int64")
         np.testing.assert_array_equal(
             result.numpy(), np.cumsum(MASK.astype("int64"), axis=-1))
 
     def test_uint8_input_is_promoted_to_int64_exactly(self, device):
         values = np.array([[3, 0, 7], [1, 2, 0]], dtype="uint8")
-        result = torch.cumsum(torch.array(values), -1)
+        result = torch.cumsum(torch.tensor(values), -1)
         self.assertEqual(str(result.dtype), "int64")
         np.testing.assert_array_equal(
             result.numpy(), np.cumsum(values.astype("int64"), axis=-1))
 
     def test_dtype_keyword_casts_the_result(self, device):
-        result = torch.cumsum(torch.array(SMALL), 1, dtype=torch.float64)
+        result = torch.cumsum(torch.tensor(SMALL), 1, dtype=torch.float64)
         self.assertEqual(str(result.dtype), "float64")
         np.testing.assert_allclose(
             result.numpy(), np.cumsum(SMALL.astype("float64"), axis=1),
@@ -112,7 +113,7 @@ class TestTorchCumulative(cu.JittorTestCase):
 
     def test_out_keeps_identity_and_receives_the_values(self, device):
         destination = torch.zeros(SMALL.shape)
-        returned = torch.cumsum(torch.array(SMALL), 1, out=destination)
+        returned = torch.cumsum(torch.tensor(SMALL), 1, out=destination)
         self.assertIs(returned, destination)
         np.testing.assert_allclose(
             destination.numpy(), np.cumsum(SMALL.astype("float64"), axis=1),
@@ -121,20 +122,20 @@ class TestTorchCumulative(cu.JittorTestCase):
     def test_out_reaches_the_parent_of_a_retained_view(self, device):
         parent = torch.zeros((2, 4))
         view = parent[0]
-        torch.cumsum(torch.array(SMALL[0]), 0, out=view)
+        torch.cumsum(torch.tensor(SMALL[0]), 0, out=view)
         np.testing.assert_allclose(
             parent.numpy()[0], np.cumsum(SMALL[0].astype("float64")),
             rtol=1e-6, atol=0)
 
     def test_var_method_delegates_to_the_module_level_object(self, device):
-        tensor = torch.array(SMALL)
+        tensor = torch.tensor(SMALL)
         np.testing.assert_array_equal(
             tensor.cumsum(1).numpy(), torch.cumsum(tensor, 1).numpy())
         np.testing.assert_array_equal(
             tensor.cumprod(1).numpy(), torch.cumprod(tensor, 1).numpy())
 
     def test_axis_alias_is_accepted_without_an_adapter(self, device):
-        tensor = torch.array(SMALL)
+        tensor = torch.tensor(SMALL)
         np.testing.assert_array_equal(
             tensor.cumsum(axis=0).numpy(), torch.cumsum(tensor, 0).numpy())
 
@@ -146,9 +147,9 @@ class TestTorchCumulative(cu.JittorTestCase):
         that neither has drifted away from the float64 reference, which is what
         would distinguish "different rounding" from "wrong".
         """
-        here = torch.cumsum(torch.array(LONG), 0).numpy().astype("float64")
-        with torch.flag_scope(use_cuda=0):
-            on_cpu = torch.cumsum(torch.array(LONG), 0).numpy().astype("float64")
+        here = torch.cumsum(torch.tensor(LONG), 0).numpy().astype("float64")
+        with _native_jittor.flag_scope(use_cuda=0):
+            on_cpu = torch.cumsum(torch.tensor(LONG), 0).numpy().astype("float64")
         reference = np.cumsum(LONG.astype("float64"))
         scale = np.max(np.abs(reference))
         self.assertLessEqual(np.max(np.abs(here - on_cpu)) / scale, 1e-5)
@@ -157,10 +158,10 @@ class TestTorchCumulative(cu.JittorTestCase):
 
     def test_this_device_agrees_with_the_cpu_path_exactly_on_integers(self, device):
         values = np.arange(4096, dtype="int64").reshape(8, 512) % 7
-        here = torch.cumsum(torch.array(values, dtype="int64"), 1).numpy()
-        with torch.flag_scope(use_cuda=0):
+        here = torch.cumsum(torch.tensor(values, dtype="int64"), 1).numpy()
+        with _native_jittor.flag_scope(use_cuda=0):
             on_cpu = torch.cumsum(
-                torch.array(values, dtype="int64"), 1).numpy()
+                torch.tensor(values, dtype="int64"), 1).numpy()
         np.testing.assert_array_equal(here, on_cpu)
         np.testing.assert_array_equal(here, np.cumsum(values, axis=1))
 

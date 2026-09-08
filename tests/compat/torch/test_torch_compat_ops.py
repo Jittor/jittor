@@ -1,4 +1,4 @@
-"""Torch-grade op-semantics regression tests for the ``import jittor as torch`` layer.
+"""Torch-grade op-semantics regression tests for the ``import torch`` layer.
 
 Part of the torch-grade test-suite rewrite. Unlike the legacy ``test_torch_compat.py``
 (a flat ``ok()`` script), this is a structured ``unittest`` module: every check compares
@@ -10,7 +10,7 @@ Run:  python -m pytest tests/compat/torch/test_torch_compat_ops.py
 """
 import unittest
 import numpy as np
-import jittor as torch          # the whole point: jittor IS torch here
+import torch
 import jittor as jt
 
 # Exercise CPU always; add CUDA when the build has it. NPU(ACL) reports has_cuda too.

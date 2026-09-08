@@ -27,7 +27,7 @@ def test_deployed_torch_entry_defaults_to_independent_types(tmp_path):
         assert type(value) is torch.Tensor
         value.sum().backward()
         assert all(p.grad is not None for p in model.parameters())
-        assert os.environ["JITTOR_TORCH_INDEPENDENT"] == "1"
+        assert torch is not jt  # No second frontend mode is selected by environment.
         subprocess.run([sys.executable, "-c",
             "import jittor as jt; import torch; "
             "assert torch is not jt; assert torch.Tensor is not jt.Var"],

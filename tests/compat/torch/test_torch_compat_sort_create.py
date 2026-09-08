@@ -1,4 +1,4 @@
-"""Torch-grade sort / search / creation op parity for ``import jittor as torch``.
+"""Torch-grade sort / search / creation op parity for ``import torch``.
 
 Part of the torch-grade test-suite rewrite. CPU+CUDA vs numpy references. Covers the
 sort/select and tensor-construction surface not exercised by the other modules.
@@ -7,7 +7,7 @@ Run:  python -m pytest tests/compat/torch/test_torch_compat_sort_create.py
 """
 import unittest
 import numpy as np
-import jittor as torch
+import torch
 import jittor as jt
 
 _DEVICES = [("cpu", 0)] + ([("cuda", 1)] if jt.has_cuda else [])

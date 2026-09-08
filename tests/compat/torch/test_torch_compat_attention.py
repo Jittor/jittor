@@ -1,4 +1,4 @@
-"""Torch-grade attention/transformer parity for ``import jittor as torch``.
+"""Torch-grade attention/transformer parity for ``import torch``.
 
 The transformer surface is the core of the jittor-as-torch project. Compares
 F.scaled_dot_product_attention and nn.MultiheadAttention against explicit numpy references.
@@ -15,9 +15,9 @@ import threading
 from types import ModuleType
 from unittest import mock
 import numpy as np
-import jittor as torch
+import torch
 import jittor as jt
-from jittor import nn
+from torch import nn
 
 from _helpers.child_process import run_python_child
 

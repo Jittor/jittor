@@ -24,7 +24,7 @@ import warnings
 import numpy as np
 
 import jittor as jt
-import jittor as torch
+import torch
 from jittor.compat import stub_policy
 
 

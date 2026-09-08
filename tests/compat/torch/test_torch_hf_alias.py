@@ -2,7 +2,7 @@
 # Regression test: run small HuggingFace transformers models through the
 # direct alias path:
 #
-#     import jittor as torch
+#     import torch
 #
 # transformers imports torch internally, so the test asserts that jittor's
 # compatibility layer registered sys.modules["torch"] before importing
@@ -19,7 +19,7 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("HF_DEACTIVATE_ASYNC_LOAD", "1")
 
 try:
-    import jittor as torch
+    import torch
     import jittor as jt
 
     _ALIAS_REGISTERED = sys.modules.get("torch") is torch

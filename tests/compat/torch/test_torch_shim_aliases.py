@@ -218,26 +218,27 @@ print('RESULT=' + json.dumps({'preserved': True}))
     @pytest.mark.xdist_group("torch_shim_module_graph")
     def test_compat_installer_remains_idempotent(self):
         from jittor.compat import torch as compat
+        import torch
 
         before_keys = {name for name in sys.modules if name.startswith("torch.")}
         before_objects = {
-            "grad": jt.grad,
-            "no_grad": jt.no_grad,
-            "nn": jt.nn,
-            "functional": jt.nn.functional,
-            "interpolate": jt.nn.functional.interpolate,
+            "grad": torch.grad,
+            "no_grad": torch.no_grad,
+            "nn": torch.nn,
+            "functional": torch.nn.functional,
+            "interpolate": torch.nn.functional.interpolate,
         }
-        self.assertIs(compat.install(jt), jt)
-        self.assertIs(compat.install(jt), jt)
+        self.assertIs(compat.install(torch), torch)
+        self.assertIs(compat.install(torch), torch)
         self.assertEqual(
             {name for name in sys.modules if name.startswith("torch.")}, before_keys
         )
         after_objects = {
-            "grad": jt.grad,
-            "no_grad": jt.no_grad,
-            "nn": jt.nn,
-            "functional": jt.nn.functional,
-            "interpolate": jt.nn.functional.interpolate,
+            "grad": torch.grad,
+            "no_grad": torch.no_grad,
+            "nn": torch.nn,
+            "functional": torch.nn.functional,
+            "interpolate": torch.nn.functional.interpolate,
         }
         for name, value in before_objects.items():
             self.assertIs(after_objects[name], value)
@@ -294,7 +295,7 @@ import torch
 import jittor
 from jittor.compat import torch as compat
 compat.install(jittor); compat.install(jittor)
-assert torch is jittor is sys.modules['torch']
+assert torch is sys.modules['torch'] and torch is not jittor
 assert jittor.__version__ == '1.3.11.0'
 assert jittor.__torch_version__ == '2.11.0'
 assert jittor.version.__version__ == '2.11.0'
