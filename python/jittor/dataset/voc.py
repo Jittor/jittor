@@ -52,8 +52,10 @@ class VOC(Dataset):
         for idx, line in enumerate(lines):
             _img_path = os.path.join(self.image_root, line + '.jpg')
             _label_path = os.path.join(self.label_root, line + '.png')
-            assert os.path.isfile(_img_path)
-            assert os.path.isfile(_label_path)
+            if not os.path.isfile(_img_path):
+                raise FileNotFoundError("VOC image not found: {}".format(_img_path))
+            if not os.path.isfile(_label_path):
+                raise FileNotFoundError("VOC label not found: {}".format(_label_path))
             self.image_path.append(_img_path)
             self.label_path.append(_label_path)
         self.set_attrs(total_len = len(self.image_path))
@@ -67,4 +69,3 @@ class VOC(Dataset):
         _label = np.array(_label)
         _img = _img.transpose(2,0,1)
         return _img, _label
-
