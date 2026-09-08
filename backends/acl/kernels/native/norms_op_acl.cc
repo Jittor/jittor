@@ -52,7 +52,7 @@ namespace jittor
                 shapes[idx], vars[idx]->mem_ptr, vars[idx]->size,
                 get_dtype(vars[idx]->dtype()), &tensors[idx],
                 idx < nchwPrefix);
-            CHECK_RET(ret == ACL_SUCCESS, return);
+            if (ret != ACL_SUCCESS) LOGf << name << ": normalization input tensor creation failed. ERROR:" << ret;
         }
     }
 

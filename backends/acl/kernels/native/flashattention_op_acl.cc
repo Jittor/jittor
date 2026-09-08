@@ -187,12 +187,12 @@ namespace jittor
                 cache + keyOffset, out_[0]->size - keyOffset,
                 key + sourceOffset, tokenBytes,
                 ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
-            CHECK_RET(ret == ACL_SUCCESS, return);
+            if (ret != ACL_SUCCESS) LOGf << name << ": key cache memcpy failed. ERROR:" << ret;
             ret = aclrtMemcpyAsync(
                 cache + valueOffset, out_[0]->size - valueOffset,
                 value + sourceOffset, tokenBytes,
                 ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
-            CHECK_RET(ret == ACL_SUCCESS, return);
+            if (ret != ACL_SUCCESS) LOGf << name << ": value cache memcpy failed. ERROR:" << ret;
         }
     }
 
