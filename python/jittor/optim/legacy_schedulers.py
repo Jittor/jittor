@@ -63,10 +63,14 @@ def _apply_lrs(optimizer, new_lrs):
 
 class ReduceLROnPlateau(object):
     def __init__(self, optimizer, mode='min', factor=0.1, patience=10, verbose=False, threshold=1e-4, threshold_mode='rel', cooldown=0, min_lr=0, eps=1e-8):
-        assert factor < 1.0, "factor should be < 1.0."
-        assert isinstance(optimizer, Optimizer), '{} is not an Optimizer'.format(type(optimizer).__name__)
-        assert mode in {'min', 'max'}, 'mode ' + mode + ' is unknown!'
-        assert threshold_mode in {'rel', 'abs'},  'threshold mode ' + threshold_mode + ' is unknown!'
+        if factor >= 1.0:
+            raise ValueError("factor should be < 1.0.")
+        if not isinstance(optimizer, Optimizer):
+            raise TypeError('{} is not an Optimizer'.format(type(optimizer).__name__))
+        if mode not in {'min', 'max'}:
+            raise ValueError('mode ' + mode + ' is unknown!')
+        if threshold_mode not in {'rel', 'abs'}:
+            raise ValueError('threshold mode ' + threshold_mode + ' is unknown!')
 
         if isinstance(min_lr, list) or isinstance(min_lr, tuple):
             assert len(min_lr) == len(optimizer.param_groups), "expected {} min_lrs, got {}".format(len(optimizer.param_groups), len(min_lr))
