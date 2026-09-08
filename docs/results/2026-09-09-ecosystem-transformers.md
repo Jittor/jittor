@@ -14,3 +14,11 @@ with `PYTHONPATH` set to that overlay. No model was downloaded and no model
 forward/backward claim is made. The full ecosystem parity gate still requires
 random tiny-model forward/backward comparisons under the Jittor shim and a
 matching dependency lock.
+
+The first local random-model attempt was also recorded. With the incompatible
+torchvision wheel temporarily hidden, `Swift.prepare_model` reached the LoRA
+wrapper but a tiny GPT-2 forward failed with
+`TypeError: Linear.__init__() missing 1 required positional argument: config`.
+This is the installed ms-swift 3.8.0 / Transformers 4.56.2 compatibility
+boundary. `verl` imports successfully (0.9.0), but trainer construction was
+not attempted because its distributed runtime requires a complete Ray setup.
