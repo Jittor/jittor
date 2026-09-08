@@ -638,7 +638,8 @@ class RandomOrder:
     """
 
     def __init__(self, transforms):
-        assert isinstance(transforms, (list, tuple))
+        if not isinstance(transforms, (list, tuple)):
+            raise TypeError("RandomOrder transforms must be a list or tuple")
         self.transforms = transforms
 
     def __call__(self, img):
@@ -658,7 +659,8 @@ class RandomChoice:
     """
 
     def __init__(self, transforms):
-        assert isinstance(transforms, (list, tuple))
+        if not isinstance(transforms, (list, tuple)):
+            raise TypeError("RandomChoice transforms must be a list or tuple")
         self.transforms = transforms
 
     def __call__(self, img):
