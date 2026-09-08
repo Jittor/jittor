@@ -73,7 +73,8 @@ class Uniform(Distribution):
         self.batch_shape = _bshape(low, high)
         # assert on python scalars only (elementwise high>low not checked for Vars)
         if not isinstance(low, jt.Var) and not isinstance(high, jt.Var):
-            assert high > low
+            if high <= low:
+                raise ValueError("Uniform: high must be greater than low")
 
     def _sample_impl(self, sample_shape=None):
         # torch parity: sample_shape + batch_shape. jittor has no jt.uniform; draw
