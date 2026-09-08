@@ -134,14 +134,8 @@ class RmsNormACL(jt.Function):
             jt.empty(x.shape, x.dtype),
             jt.empty(reduced_shape, "float32"),
         ]
-        attr_code = code_program(
-            [
-                '\n        op.jt_name = "rmsnorm";\n        ',
-                attribute_program("RmsNorm", {"eps": eps}, variable="op"),
-                "\n        ",
-            ]
-        )
-        result = norms_cmd("RmsNorm", inputs=[x, weight], outputs=outputs, attr_code=attr_code)
+        result = norms_cmd("RmsNorm", inputs=[x, weight], outputs=outputs,
+                           attributes={"eps": eps})
         self.rstd = result[1]
         return result[0]
 
