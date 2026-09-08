@@ -53,10 +53,21 @@ VarPtr device_copy(Var* x, int device);
  * is a gather, its result is a copy, and its ``VarSlice``s hold ``Var*``s that
  * this record would outlive.
  */
+struct VarViewStep {
+    enum Kind { Slice, Transpose } kind;
+    VarSlices slices;
+    NanoVector axes;
+    explicit VarViewStep(VarSlices&& value)
+        : kind(Slice), slices(move(value)) {}
+    explicit VarViewStep(NanoVector value)
+        : kind(Transpose), slices(0), axes(move(value)) {}
+};
+
 struct VarView {
     VarHolder* base;
+    VarHolder* owner;
     // Index expressions from `base` down to this view, outermost first.
-    vector<VarSlices> steps;
+    vector<VarViewStep> steps;
     // Siblings in `base->views`, so that base's destructor can find us.
     VarView* prev = nullptr;
     VarView* next = nullptr;
@@ -552,6 +563,16 @@ struct VarHolder {
     // @attrs(return_self)
     VarHolder* set_view_of(VarHolder* base, VarSlices&& slices);
 
+    // @pyjt(_set_transpose_view_of)
+    // @attrs(return_self)
+    VarHolder* set_transpose_view_of(VarHolder* base, NanoVector axes);
+
+    // @pyjt(_is_last2_transpose_view)
+    bool is_last2_transpose_view();
+
+    // @pyjt(_transpose_view_base)
+    VarHolder* transpose_view_base();
+
     /**
      * Whether an assignment to this holder writes through to some base.
      */
@@ -573,6 +594,8 @@ struct VarHolder {
     // the first one alone when a holder is re-pointed.
     void drop_view();
     void orphan_views();
+    void attach_view(VarHolder* base, VarViewStep step);
+    void refresh_transpose_views();
 };
 
 // @pyjt(sync)

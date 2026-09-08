@@ -1,17 +1,4 @@
-"""A transposed view must see a later in-place assign to its source.
-
-`5.03`'s acceptance is spelled out as one line: ``at = a.transpose();
-a.assign(0); matmul(at, b)`` must give 0. Today it does not -- ``matmul``
-consumes the hidden transpose flag that ``transpose()`` leaves on the returned
-Var and computes against the pre-assign contents, so the caller silently gets
-a stale answer rather than an error.
-
-The marker is ``strict``: when the storage model of `5.02` lands and this
-starts passing, the suite fails until someone removes the marker. An ordinary
-xfail would let a fixed defect keep reporting as "expected failure" forever,
-which is the same shape as the gates that stayed green while observing nothing
-(see the handoff, "门禁绿着，但不是因为它通过了").
-"""
+"""Transpose views follow source updates and support inverse write-through."""
 
 import numpy as np
 import pytest
@@ -19,42 +6,81 @@ import pytest
 import jittor as jt
 
 
-def _stale_transpose_case():
+@pytest.fixture(params=[0, 1], ids=["cpu", "cuda"])
+def transpose_device(request):
+    if request.param and not jt.has_cuda:
+        pytest.skip("CUDA unavailable")
+    with jt.flag_scope(use_cuda=request.param):
+        yield
+        jt.sync_all(True)
+
+
+def test_a_transposed_view_sees_a_later_assign_to_its_source(transpose_device):
     a = jt.array(np.arange(12, dtype="float32").reshape(3, 4))
     b = jt.array(np.ones((3, 5), dtype="float32"))
     at = a.transpose()
     a.assign(jt.zeros((3, 4), "float32"))
-    return jt.matmul(at, b).numpy()
+    np.testing.assert_array_equal(jt.matmul(at, b).numpy(), np.zeros((4, 5), "float32"))
+    np.testing.assert_array_equal(at.numpy(), np.zeros((4, 3), "float32"))
 
 
-@pytest.mark.xfail(strict=True, reason="5.03: transpose keeps a hidden flag, "
-                                      "so matmul reads the pre-assign source")
-def test_a_transposed_view_sees_a_later_assign_to_its_source():
-    # Reference semantics, verified against real torch 2.12.1:
-    #   a = torch.arange(12.).reshape(3, 4); at = a.t(); a.zero_(); at @ b
-    # gives all zeros. Jittor currently returns the pre-assign product, whose
-    # first row is 0 + 4 + 8 = 12 for every column of a ones matrix.
-    np.testing.assert_array_equal(_stale_transpose_case(), np.zeros((4, 5),
-                                                                    "float32"))
-
-
-def test_the_stale_result_is_the_pre_assign_product():
-    """Pin what is actually returned today, so the defect cannot drift quietly.
-
-    Without this, a change that made the result stale in some *other* way --
-    uninitialised memory, a partially applied assign -- would still leave the
-    xfail above red and look like no change at all.
-    """
-    got = _stale_transpose_case()
+def test_materialized_transpose_refreshes_after_repeated_source_assign(transpose_device):
     source = np.arange(12, dtype="float32").reshape(3, 4)
-    expected_stale = source.T @ np.ones((3, 5), dtype="float32")
-    np.testing.assert_allclose(got, expected_stale, rtol=0, atol=0)
+    a = jt.array(source)
+    at = a.transpose()
+    at.sync()
+    for offset in (3, 7):
+        current = source + offset
+        a.assign(jt.array(current))
+        np.testing.assert_array_equal(at.numpy(), current.T)
+        np.testing.assert_allclose(
+            jt.matmul(at, jt.ones((3, 2))).numpy(),
+            current.T @ np.ones((3, 2), "float32"), rtol=1e-6, atol=1e-6)
 
 
-def test_transpose_then_matmul_without_an_assign_is_correct():
-    """The path itself is fine; only the invalidation is missing."""
-    a = jt.array(np.arange(12, dtype="float32").reshape(3, 4))
+def test_transpose_then_matmul_without_an_assign_is_correct(transpose_device):
+    source = np.arange(12, dtype="float32").reshape(3, 4)
+    a = jt.array(source)
     b = jt.array(np.ones((3, 5), dtype="float32"))
     got = jt.matmul(a.transpose(), b).numpy()
-    np.testing.assert_allclose(got, a.numpy().T @ b.numpy(), rtol=1e-6,
-                               atol=1e-6)
+    np.testing.assert_allclose(got, source.T @ np.ones((3, 5), "float32"),
+                               rtol=1e-6, atol=1e-6)
+
+
+def test_assignment_through_transpose_and_slice_updates_source(transpose_device):
+    source = np.arange(12, dtype="float32").reshape(3, 4)
+    a = jt.array(source)
+    at = a.transpose()
+    section = at[1:3]
+    section.assign(jt.full((2, 3), 9.0))
+    expected = source.copy()
+    expected[:, 1:3] = 9
+    np.testing.assert_array_equal(a.numpy(), expected)
+    np.testing.assert_array_equal(at.numpy(), expected.T)
+    np.testing.assert_array_equal(section.numpy(), expected.T[1:3])
+    at.assign(jt.full((4, 3), 2.0))
+    np.testing.assert_array_equal(a.numpy(), np.full((3, 4), 2.0, "float32"))
+
+
+def test_batched_last_axes_transpose_is_an_explicit_view(transpose_device):
+    source = np.arange(24, dtype="float32").reshape(2, 3, 4)
+    a = jt.array(source)
+    at = a.transpose(-1, -2)
+    assert at._is_last2_transpose_view()
+    for name in ("_jittor_transpose_base", "_jittor_transpose_axes", "_jittor_transpose_last2"):
+        assert name not in vars(at)
+    a.assign(jt.array(source + 1))
+    b = jt.ones((2, 3, 2))
+    expected = (source + 1).swapaxes(-1, -2) @ np.ones((2, 3, 2), "float32")
+    np.testing.assert_allclose(jt.matmul(at, b).numpy(), expected, rtol=1e-6, atol=1e-6)
+
+
+def test_general_permutation_and_its_gradient_follow_updated_base(transpose_device):
+    source = np.arange(24, dtype="float32").reshape(2, 3, 4)
+    a = jt.array(source)
+    transposed = a.transpose((1, 2, 0))
+    assert not transposed._is_last2_transpose_view()
+    a.assign(jt.array(source + 1))
+    np.testing.assert_array_equal(transposed.numpy(), (source + 1).transpose(1, 2, 0))
+    np.testing.assert_array_equal(jt.grad(transposed.sum(), a).numpy(),
+                                  np.ones_like(source))

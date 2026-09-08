@@ -138,6 +138,7 @@ VarHolder::VarHolder(VarHolder* v) : var(v->var) {
     // records of every view that named `v` as its base. The records themselves
     // do not move, so only the back-pointers on the other side change.
     view = v->view;
+    if (view) view->owner = this;
     views = v->views;
     for (auto* w = views; w; w = w->next) w->base = this;
     v->view = nullptr;
@@ -164,6 +165,13 @@ static auto make_array_from_pyobj = op_constructor<VarPtr, PyObject*>("array");
 static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
 static auto make_setitem = op_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>("setitem");
 static auto make_getitem = op_constructor<VarPtr, Var*, VarSlices&&>("getitem");
+static auto make_transpose_view = op_constructor<VarPtr, Var*, NanoVector>("transpose");
+
+static VarPtr apply_view_step(Var* value, const VarViewStep& step) {
+    if (step.kind == VarViewStep::Transpose)
+        return make_transpose_view(value, NanoVector(step.axes));
+    return make_getitem(value, VarSlices(step.slices));
+}
 
 VarHolder::VarHolder(PyObject* obj, NanoString dtype) {
     auto vp = make_array_from_pyobj(obj);
@@ -206,21 +214,80 @@ VarHolder* VarHolder::set_view_of(VarHolder* base, VarSlices&& slices) {
         // An advanced index gathers, so its result is a copy -- and the Var*
         // it indexes with would outlive nothing in particular.
         if (slices.slices[i].is_var()) return this;
+    attach_view(base, VarViewStep(move(slices)));
+    return this;
+}
+
+void VarHolder::attach_view(VarHolder* base, VarViewStep final_step) {
     // Flatten: a view of a view is recorded against the root, so that the
     // intermediates of `y[1][2]` are free to die with the expression.
     VarHolder* root = base;
-    vector<VarSlices> steps;
+    vector<VarViewStep> steps;
     if (base->view && base->view->base) {
         root = base->view->base;
         steps.reserve(base->view->steps.size() + 1);
         for (auto& step : base->view->steps) steps.push_back(step);
     }
-    if (root == this) return this;
-    steps.push_back(move(slices));
-    view = new VarView{root, move(steps), nullptr, root->views};
+    if (root == this) return;
+    steps.push_back(move(final_step));
+    view = new VarView{root, this, move(steps), nullptr, root->views};
     if (root->views) root->views->prev = view;
     root->views = view;
+}
+
+VarHolder* VarHolder::set_transpose_view_of(VarHolder* base, NanoVector axes) {
+    USER_CHECK(base) << "transpose view requires a source";
+    auto rank = base->var->shape.size();
+    USER_CHECK(axes.size() == rank) << "transpose view axes must match source rank";
+    vector<bool> seen(rank, false);
+    NanoVector normalized;
+    for (int i=0; i<rank; ++i) {
+        auto axis = axes[i] < 0 ? axes[i] + rank : axes[i];
+        USER_CHECK(axis >= 0 && axis < rank && !seen[axis])
+            << "transpose view axes must be a permutation";
+        seen[axis] = true;
+        normalized.push_back(axis);
+    }
+    drop_view();
+    attach_view(base, VarViewStep(move(normalized)));
     return this;
+}
+
+bool VarHolder::is_last2_transpose_view() {
+    if (!is_view() || view->steps.empty()) return false;
+    const auto& step = view->steps.back();
+    if (step.kind != VarViewStep::Transpose || step.axes.size() < 2) return false;
+    int rank = step.axes.size();
+    for (int i=0; i<rank; ++i) {
+        int expected = i < rank-2 ? i : (i == rank-2 ? rank-1 : rank-2);
+        if (step.axes[i] != expected) return false;
+    }
+    return true;
+}
+
+VarHolder* VarHolder::transpose_view_base() {
+    USER_CHECK(is_last2_transpose_view()) << "tensor is not a live last-two-axis transpose view";
+    VarPtr value(view->base->var);
+    // Give the Python result its own Var/holder identity. The full basic view
+    // aliases storage without stealing the source Var's holder back-pointer.
+    if (view->steps.size() == 1)
+        value = make_getitem(value.ptr, VarSlices(0));
+    for (size_t i=0; i+1<view->steps.size(); ++i)
+        value = apply_view_step(value.ptr, view->steps[i]);
+    return new VarHolder(move(value));
+}
+
+void VarHolder::refresh_transpose_views() {
+    for (auto* record = views; record; record = record->next) {
+        bool transposed = false;
+        for (const auto& step : record->steps)
+            if (step.kind == VarViewStep::Transpose) transposed = true;
+        if (!transposed) continue;
+        VarPtr value(var);
+        for (const auto& step : record->steps)
+            value = apply_view_step(value.ptr, step);
+        *record->owner = move(value);
+    }
 }
 
 bool VarHolder::write_through_view(Var* value) {
@@ -233,7 +300,7 @@ bool VarHolder::write_through_view(Var* value) {
     vector<VarPtr> targets(n);
     Var* cur = base->var;
     for (int i=0; i<n-1; i++) {
-        targets[i] = make_getitem(cur, VarSlices(steps[i]));
+        targets[i] = apply_view_step(cur, steps[i]);
         cur = targets[i].ptr;
     }
     // Fold the write back outwards: the innermost slice takes `value`, and each
@@ -241,7 +308,15 @@ bool VarHolder::write_through_view(Var* value) {
     VarPtr updated;
     for (int i=n-1; i>=0; i--) {
         Var* target = i ? targets[i-1].ptr : base->var;
-        updated = make_setitem(target, VarSlices(steps[i]), value, ns_void);
+        if (steps[i].kind == VarViewStep::Transpose) {
+            const auto& axes = steps[i].axes;
+            vector<int64> inverse_values(axes.size());
+            for (int j=0; j<axes.size(); ++j) inverse_values[axes[j]] = j;
+            NanoVector inverse = NanoVector::make(inverse_values.data(), inverse_values.size());
+            updated = make_transpose_view(value, move(inverse));
+        } else {
+            updated = make_setitem(target, VarSlices(steps[i].slices), value, ns_void);
+        }
         value = updated.ptr;
     }
     *base = move(updated);
@@ -295,6 +370,7 @@ void VarHolder::operator=(VarPtr&& v) {
     var = v.ptr;
     own_holder();
     v.ptr = nullptr;
+    refresh_transpose_views();
 }
 
 extern bool no_grad;
@@ -372,6 +448,7 @@ VarHolder* VarHolder::assign(VarHolder* v) {
     var->release_both_liveness();
     var = v->var;
     own_holder();
+    refresh_transpose_views();
     return this;
 }
 
@@ -387,6 +464,7 @@ VarHolder* VarHolder::_update(VarHolder* v) {
     var = v->var;
     own_holder();
     var->set_flag(VarFlags::_out_hint);
+    refresh_transpose_views();
     return this;
 }
 

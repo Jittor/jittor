@@ -180,7 +180,7 @@ int round_down_pow2(int v) {
 void ParallelPass::run() {
     auto parallel = op->get_loop_option("parallel");
     auto fix_thread_num = op->get_loop_option("fix_thread_num", 0);
-    bool is_cuda = op->flag(OpFlags::_cuda);
+    bool is_cuda = op->executes_on_accelerator();
     if (is_cuda) parallel = 1;
     if (!parallel) return;
     int default_block_num = 256;

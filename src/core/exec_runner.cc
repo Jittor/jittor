@@ -135,6 +135,7 @@ static inline int op_target_device(Op* op) {
 
 void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                    vector<Var*>& vars, bool device_sync, int entry_device) {
+    ExecutionBackendScope backend_scope(plan.backend);
     // == phase 6: execute the plan ==
     auto& ops = plan.ops;
     auto& queue = plan.queue;
@@ -208,7 +209,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
         op->prepare_execution(jkl);
         prepared_jit_key = jkl.to_string();
-        bool is_cuda = op->flag(OpFlags::_cuda);
+        bool is_cuda = op->executes_on_accelerator();
         // Array staging and explicit transfers are not CPU implementations of
         // a requested accelerator computation. Reject a real fallback before
         // moving its inputs or executing any CPU kernel.

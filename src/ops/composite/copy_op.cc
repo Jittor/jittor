@@ -36,7 +36,7 @@ void CopyOp::run() {
     auto x_ptr = x->mem_ptr;
     auto y_ptr = outputs().front()->mem_ptr;
     #ifdef HAS_ACCELERATOR
-    if (flag(OpFlags::_cuda)) {
+    if (executes_on_accelerator()) {
         auto target = allocation_device(outputs().front()->allocator);
         backend_copy_async(y_ptr, target, x_ptr, allocation_device(x->allocator),
             size, backend_stream(target, BackendStreamKind::Compute));

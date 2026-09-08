@@ -342,7 +342,7 @@ void ConvTuner::forwardTune(FusedOp* fop) {
             LOGvvvv << "groups: " << groups;
             VarPtr rvar;
             int rid;
-            auto backend = fop->flag(OpFlags::_cpu) ? BackendId::Cpu : accelerator_backend_id();
+            auto backend = fop->execution_backend();
             OpCapability capability;
 
             if (y_id == 0) {

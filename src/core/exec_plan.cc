@@ -28,6 +28,7 @@ static inline bool has_gopt(Node* node) {
 }
 
 void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
+    plan.backend = execution_target_backend();
     // == phase 2: collect the batch ==
     // bfs find all ops need to run
     int op_num = 0;

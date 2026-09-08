@@ -1305,7 +1305,7 @@ OpCompiler::OpCompiler(Op* op) {
 
 jit_op_entry_t OpCompiler::compile(const string& jit_key, const string& src) {
     // add extra flags for custom ops
-    bool is_cuda = _op->flag(OpFlags::_cuda);
+    bool is_cuda = _op->executes_on_accelerator();
     string extra_flags = _op->codegen().extra_flags;
     auto add_compile_flags = [&](const loop_options_t& options) {
         for (auto& kv : options) {

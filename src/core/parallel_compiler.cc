@@ -201,7 +201,9 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
     std::atomic<bool> cancelled(false);
     std::mutex entry_lock;
     unordered_set<string> relay_keys_compiling;
+    const auto requested_backend = execution_target_backend();
     auto func = [&](int tid) -> vector<CompileResult> {
+        ExecutionBackendScope backend_scope(requested_backend);
         get_thread_name() = "C"+S(tid);
         vector<CompileResult> entries;
         auto& jkl = get_jk();
@@ -223,6 +225,8 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 result.previous_jit_key = task.previous_jit_key;
                 result.op_entry = op_entry;
                 result.new_jit_key = op->get_jit_key(jkl);
+                CHECK(result.new_jit_key == result.previous_jit_key)
+                    << "Non-fused compilation changed its JIT key";
                 entries.emplace_back(std::move(result));
             } else {
                 FusedOp& fused_op = *fop_needs_compile[-rid-1];
@@ -326,7 +330,6 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 jit_fused_ops[result.new_jit_key] = result.fused_context;
             } else {
                 jit_ops[result.previous_jit_key] = result.op_entry;
-                jit_ops[result.new_jit_key] = result.op_entry;
             }
             jit_key_mapper[result.previous_jit_key] = result.new_jit_key;
         }

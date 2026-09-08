@@ -245,7 +245,7 @@ static const string& code_op_key_tail(const string& header, const string& src) {
 
 void CodeOp::jit_prepare(JK& jk) {
     if (!backend.empty()) {
-        if (flag(OpFlags::_cuda)) {
+        if (executes_on_accelerator()) {
             auto expected = backend == "cuda" ? BackendId::Cuda
                 : backend == "acl" ? BackendId::Acl
                 : backend == "rocm" ? BackendId::Rocm : BackendId::Corex;
@@ -273,9 +273,9 @@ void CodeOp::jit_prepare(JK& jk) {
         jk << "«out" << JK::dec3(i) << "_type:"
             << _outputs[i]->dtype();
     }
-    string& header = flag(OpFlags::_cuda) ? 
+    const string& header = executes_on_accelerator() ?
         cuda_header : cpu_header;
-    string& src = flag(OpFlags::_cuda) ? 
+    const string& src = executes_on_accelerator() ?
         cuda_src : cpu_src;
 
     CHECK(src.size());

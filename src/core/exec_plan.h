@@ -6,6 +6,7 @@
 #pragma once
 #include "core/common.h"
 #include "runtime/traversal_epoch.h"
+#include "runtime/backend.h"
 
 namespace jittor {
 
@@ -20,6 +21,7 @@ namespace jittor {
 // Runner's job. That split is what lets `run_sync` be read as two halves and
 // is the precondition for reusing a plan across steps.
 struct ExecPlan {
+    BackendId backend = BackendId::Cpu;
     // The batch's claim on `Node::tflag`, and the stamp every index below is
     // relative to: `Node::batch_index_at(stamp)` is only answerable while this
     // epoch is alive. Compilation is its last reader, so the Runner releases

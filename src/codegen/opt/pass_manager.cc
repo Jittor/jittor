@@ -93,7 +93,7 @@ bool PassManager::check(Pass* pass) {
 
 void PassManager::run_passes() {
     auto& ir = *main_ir;
-    const bool accelerator = oc->op->flag(OpFlags::_cuda);
+    const bool accelerator = oc->op->executes_on_accelerator();
     const auto& policy = backend_ops(oc->op->execution_backend()).execution;
     const bool generated_parallel = !accelerator || policy.supports_generated_device_kernels;
 

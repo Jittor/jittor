@@ -498,7 +498,6 @@ def _with_accelerator_kernel_loaded(func):
 origin_transpose = transpose
 
 def transpose(x, *dim):
-    original_dim = dim
     if len(dim) == 1 and isinstance(dim[0], (Sequence, NanoVector)):
         dim = dim[0]
     elif len(dim) == 2:
@@ -522,23 +521,7 @@ def transpose(x, *dim):
     out = _try_dispatch("tensor.transpose", x, dim)
     if out is None:
         out = origin_transpose(x, dim)
-    try:
-        axes_tuple = tuple(pyint(i) for i in dim)
-        last2 = list(range(x.ndim))
-        if x.ndim >= 2:
-            last2[-1], last2[-2] = last2[-2], last2[-1]
-        if x.ndim >= 2 and axes_tuple == tuple(last2):
-            out._jittor_transpose_base = x
-            out._jittor_transpose_axes = axes_tuple
-            out._jittor_transpose_last2 = True
-        elif len(original_dim) == 2:
-            a, b = pyint(original_dim[0]), pyint(original_dim[1])
-            if x.ndim >= 2 and {a % x.ndim, b % x.ndim} == {x.ndim - 2, x.ndim - 1}:
-                out._jittor_transpose_base = x
-                out._jittor_transpose_axes = axes_tuple
-                out._jittor_transpose_last2 = True
-    except Exception:
-        pass
+    out._set_transpose_view_of(x, NanoVector(dim))
     return out
 
 transpose.__doc__ = origin_transpose.__doc__

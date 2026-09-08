@@ -253,7 +253,7 @@ extern int para_opt_level;
 // explicit warp-only comparison at level 4. ROCm retains its prior atomics
 // because its 64-lane wavefront needs a separate shuffle implementation.
 void SharedReducePass::run() {
-    if (op->flag(OpFlags::_cuda)) {
+    if (op->executes_on_accelerator()) {
         const auto& policy = backend_ops(op->execution_backend()).execution;
         if (!policy.supports_generated_device_kernels || policy.warp_shuffle_width != 32) return;
     }
@@ -261,7 +261,7 @@ void SharedReducePass::run() {
     auto use_shared_reduce = op->get_loop_option("use_shared_reduce", 1);
     if (use_shared_reduce == 0) return;
     if (para_opt_level < 4) return;
-    bool is_cuda = op->flag(OpFlags::_cuda);
+    bool is_cuda = op->executes_on_accelerator();
     if (is_cuda) parallel = 1;
     if (!parallel) return;
     for (uint i = 0; i < ir->children.size(); ++i) {

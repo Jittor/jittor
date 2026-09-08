@@ -109,8 +109,8 @@ void FusedOp::update_ops() {
 
 FusedOp::FusedOp() {
     Op::number_of_lived_ops--;
-    set_flag(OpFlags::_cpu, !runtime_use_cuda());
-    set_flag(OpFlags::_cuda, !!runtime_use_cuda());
+    set_flag(OpFlags::_cpu, 1);
+    set_flag(OpFlags::_cuda, 1);
 }
 
 FusedOp::FusedOp(const FusedOp& other) {
@@ -170,16 +170,12 @@ void FusedOp::prepare_fused_key(JK& jk) {
         if (!identity.empty()) add_jit_define(jk, "op_definition", i, identity);
     }
     jk << "«JIT:1";
-    if (!runtime_use_cuda()) {
+    if (!executes_on_accelerator()) {
         // only cpu
         jk << "«JIT_cpu:1";
-        this->set_flag(OpFlags::_cuda, 0);
-        this->set_flag(OpFlags::_cpu, 1);
     } else {
         jk << "«JIT_cuda:1";
         add_cuda_math_jit_define(jk);
-        this->set_flag(OpFlags::_cpu, 0);
-        this->set_flag(OpFlags::_cuda, 1);
     }
     jk << "«graph:";
     for (auto& t : edges) {

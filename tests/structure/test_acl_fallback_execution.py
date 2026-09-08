@@ -91,6 +91,15 @@ def test_cpu_fallback_restores_original_mode_flags_and_fused_context(tmp_path):
 using std::string;
 using std::vector;
 using loop_options_t = std::map<string, int>;
+enum class BackendId { Cpu, Acl };
+BackendId requested_backend = BackendId::Acl;
+struct ExecutionBackendScope {
+    BackendId previous;
+    explicit ExecutionBackendScope(BackendId backend) : previous(requested_backend) {
+        requested_backend = backend;
+    }
+    ~ExecutionBackendScope() { requested_backend = previous; }
+};
 struct OpFlags { enum Flags { _cpu, _cuda }; };
 struct Op {
     string identity;
@@ -127,13 +136,15 @@ int main() {
         try {
             AclCpuFallbackScope restore(&fused);
             assert(state.use_cuda == 0);
-            assert(fused.cpu == 1 && fused.cuda == 0 && child.cpu == 1 && child.cuda == 0);
+            assert(requested_backend == BackendId::Cpu);
+            assert(fused.cpu == 0 && fused.cuda == 1 && child.cpu == 1 && child.cuda == 1);
             fused.context = &temporary;
             fused.loop_options_tuned = {{"cpu_tuned", 99}};
             fused.loop_options = &fused.loop_options_tuned;
             throw 13;
         } catch (int value) { assert(value == 13); }
         assert(state.use_cuda == mode);
+        assert(requested_backend == BackendId::Acl);
         assert(fused.cpu == 0 && fused.cuda == 1 && child.cpu == 1 && child.cuda == 1);
         assert(fused.context == &original && fused.loop_options == &original_options);
         assert(fused.loop_options_tuned == loop_options_t({{"before", 3}}));

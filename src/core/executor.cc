@@ -239,6 +239,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // == phases 2-5: graph -> execution plan ==
     ExecPlan plan;
     build_exec_plan(vars, weak_sync, plan);
+    ExecutionBackendScope backend_scope(plan.backend);
 
     // The fusion verdict goes to FusedOp as the vector it already is, instead
     // of being written into bit 0 of every var's custom_data for update_ops()

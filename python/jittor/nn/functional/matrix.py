@@ -189,12 +189,9 @@ def _matmul_2d_cublas(a, b, trans_a=0, trans_b=0):
 
 
 def _transpose_base_last2(x):
-    try:
-        base = getattr(x, "_jittor_transpose_base", None)
-        if base is not None and getattr(x, "_jittor_transpose_last2", False):
-            return base
-    except Exception:
-        pass
+    query = getattr(x, "_is_last2_transpose_view", None)
+    if query is not None and query():
+        return x._transpose_view_base()
     return None
 
 

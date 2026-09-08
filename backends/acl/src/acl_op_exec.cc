@@ -176,8 +176,8 @@ namespace jittor
 
     class AclCpuFallbackScope
     {
+        ExecutionBackendScope execution_scope{BackendId::Cpu};
         int previous_mode;
-        vector<std::pair<Op *, std::pair<int, int>>> flags;
         FusedOp *fused = nullptr;
         FusedOpContext *context = nullptr;
         loop_options_t tuned;
@@ -190,32 +190,18 @@ namespace jittor
         explicit AclCpuFallbackScope(Op *op)
             : previous_mode(runtime_device_state().use_cuda)
         {
-            vector<Op *> operators{op};
             if (op->name() == string("fused"))
             {
                 fused = static_cast<FusedOp *>(op);
-                operators.insert(operators.end(), fused->ops.begin(), fused->ops.end());
                 context = fused->context;
                 tuned = fused->loop_options_tuned;
                 options = fused->loop_options;
             }
-            for (auto *item : operators)
-                flags.push_back({item, {item->flag(OpFlags::_cpu), item->flag(OpFlags::_cuda)}});
             runtime_device_state().use_cuda = 0;
-            for (const auto &saved : flags)
-            {
-                saved.first->set_flag(OpFlags::_cpu);
-                saved.first->set_flag(OpFlags::_cuda, 0);
-            }
         }
 
         ~AclCpuFallbackScope()
         {
-            for (const auto &saved : flags)
-            {
-                saved.first->set_flag(OpFlags::_cpu, saved.second.first);
-                saved.first->set_flag(OpFlags::_cuda, saved.second.second);
-            }
             if (fused)
             {
                 fused->context = context;

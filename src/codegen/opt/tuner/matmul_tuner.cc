@@ -96,7 +96,7 @@ void MatmulTuner::run(PassManager* pm, TunerManager* tm) {
         if (xx->dtype().dsize() != yy->dtype().dsize()) continue;
         if (rop->y->dtype() != xx->dtype()) continue;
 
-        auto backend = fop->flag(OpFlags::_cpu) ? BackendId::Cpu : accelerator_backend_id();
+        auto backend = fop->execution_backend();
         auto make_matmul = find_op_capability<VarPtr, Var*, Var*, bool, bool>(
             backend, OpCapability::Matmul, xx, yy, t1, t2);
         if (!make_matmul) continue;

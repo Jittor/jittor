@@ -291,7 +291,7 @@ static void tune_atomic(Pass* pass, KernelIR* func, bool is_cuda,
 
 void AtomicTunerPass::run() {
     auto parallel = op->get_loop_option("parallel");
-    bool is_cuda = op->flag(OpFlags::_cuda);
+    bool is_cuda = op->executes_on_accelerator();
     if (is_cuda) parallel = 1;
     if (!parallel) return;
     vector<vector<int>> loop_orders;

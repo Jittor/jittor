@@ -97,9 +97,25 @@ const OpDef& Op::definition() const {
     return *registered_definition;
 }
 
+static thread_local int execution_target_override = -1;
+
+BackendId execution_target_backend() {
+    return execution_target_override < 0
+        ? (runtime_use_cuda() ? accelerator_backend_id() : BackendId::Cpu)
+        : static_cast<BackendId>(execution_target_override);
+}
+
+ExecutionBackendScope::ExecutionBackendScope(BackendId backend)
+    : previous(execution_target_override) {
+    execution_target_override = static_cast<int>(backend);
+}
+
+ExecutionBackendScope::~ExecutionBackendScope() { execution_target_override = previous; }
+
 BackendId Op::execution_backend() const {
-    return flag(OpFlags::_cuda) && (!flag(OpFlags::_cpu) || runtime_use_cuda())
-        ? accelerator_backend_id() : BackendId::Cpu;
+    const auto requested = execution_target_backend();
+    return flag(OpFlags::_cuda) && requested != BackendId::Cpu
+        ? requested : BackendId::Cpu;
 }
 
 const OpImplementation& Op::implementation() const {
@@ -114,14 +130,6 @@ const OpImplementation& Op::implementation() const {
 const Codegen& Op::codegen() const { return implementation().codegen; }
 
 void Op::prepare_fragment(JK& key) {
-    // A dual-source operator must select its source before hashing it, not
-    // only when appending the backend suffix after fragment generation.
-    if (flag(OpFlags::_cpu) && flag(OpFlags::_cuda)) {
-        if (execution_backend() == BackendId::Cpu)
-            set_flag(OpFlags::_cuda, 0);
-        else
-            set_flag(OpFlags::_cpu, 0);
-    }
     auto callback = codegen().fragment;
     USER_CHECK(callback) << "Missing codegen fragment for" << name();
     callback(this, key);
@@ -357,14 +365,12 @@ void Op::prepare_codegen_key(JK& jk) {
         bool has_cuda = flag(OpFlags::_cuda);
         bool has_cpu = flag(OpFlags::_cpu);
         CHECK(has_cuda || has_cpu);
-        if (has_cuda && has_cpu && !runtime_use_cuda())
-            set_flag(OpFlags::_cuda, 0);
         jk.clear();
     } else {
         bool use_int64_t = false;
         // TODO: fused op do not have inputs,
         //   check use_cuda_op from outputs may not be enough
-        bool use_cuda_op = runtime_use_cuda();
+        bool use_cuda_op = executes_on_accelerator();
         for (Var* var : inputs()) {
             if (var->num >= std::numeric_limits<int32_t>::max())
                 use_int64_t = true;
@@ -374,10 +380,9 @@ void Op::prepare_codegen_key(JK& jk) {
                 use_int64_t = true;
         }
         jk << "«JIT:1";
-        if (use_cuda_op && flag(OpFlags::_cuda)) {
+        if (use_cuda_op) {
             jk << "«JIT_cuda:1";
             add_cuda_math_jit_define(jk);
-            set_flag(OpFlags::_cpu, 0);
             // TODO: 64bit index in CUDA
             // use_int64_t = false;
         } else {
@@ -390,7 +395,6 @@ void Op::prepare_codegen_key(JK& jk) {
             ASSERT(flag(OpFlags::_cpu))
                 << "Op" << name() << "doesn't have cpu version";
             jk << "«JIT_cpu:1";
-            set_flag(OpFlags::_cuda, 0);
         }
         if (try_use_32bit_index) use_int64_t = false;
         if (use_int64_t)
@@ -500,18 +504,12 @@ void Op::jit_run(JK& jk) {
     }
     LOGvv << "Jit op key not found:" << jit_key;
     // compile JIT op
-    string prev_jit_key = jit_key;
     auto op_entry = OpCompiler::do_compile(this);
-    string new_jit_key = get_jit_key(jk);
-    // Two statements, not `jit_ops[a] = jit_ops[b] = entry`. The tables are
-    // bounded now, so an insertion can evict -- and since C++17 the right
-    // operand of an assignment is sequenced first, the reference the inner
-    // subscript returned would be read after the outer one had erased it.
-    jit_ops[prev_jit_key] = op_entry;
-    jit_ops[new_jit_key] = op_entry;
-    jit_key_mapper[prev_jit_key] = new_jit_key;
+    CHECK(get_jit_key(jk) == jit_key) << "Non-fused compilation changed its JIT key";
+    jit_ops[jit_key] = op_entry;
+    jit_key_mapper[jit_key] = jit_key;
     LOGvv << "Get jit op entry:" << (void*)op_entry;
-    Profiler::record_and_run(op_entry, this, new_jit_key.c_str());
+    Profiler::record_and_run(op_entry, this, jit_key.c_str());
 }
 
 void Op::statistics(uint64_t& in, uint64_t& out, uint64_t& compute) {

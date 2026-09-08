@@ -53,7 +53,7 @@ static bool shuffleable(NanoString dtype) {
 }
 
 void WarpReducePass::run() {
-    if (!op->flag(OpFlags::_cuda)) return;
+    if (!op->executes_on_accelerator()) return;
     const auto& policy = backend_ops(op->execution_backend()).execution;
     if (!policy.supports_generated_device_kernels || policy.warp_shuffle_width != 32) return;
     if (op->get_loop_option("no_warp_reduce")) return;
