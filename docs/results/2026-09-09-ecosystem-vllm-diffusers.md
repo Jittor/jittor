@@ -5,11 +5,13 @@ request. It does not claim vLLM or TRELLIS support without those packages.
 
 ## Host evidence
 
-The current Python environment imports `torch`, `diffusers`, `transformers`, and
-`mmcv`. A real PyTorch `mmcv.cnn.ConvModule(3, 4, 3, padding=1)` forward and
-backward completed with output shape `(2, 4, 8, 8)` and a finite input gradient
-norm. A real PyTorch `diffusers.DDPMScheduler.add_noise` smoke also completed
-for a `(2, 4)` tensor.
+The host Python environment imports `torch`, `diffusers`, `transformers`, and
+`mmcv`. Its `torch` import is intercepted by the installed Jittor shim (the
+runtime log reports the Jittor source), so the following are host API smokes,
+not independent-PyTorch oracle evidence: `mmcv.cnn.ConvModule(3, 4, 3,
+padding=1)` forward/backward completed with output shape `(2, 4, 8, 8)` and a
+finite input gradient norm; `diffusers.DDPMScheduler.add_noise` completed for
+a `(2, 4)` tensor.
 
 The isolated PyTorch 3.12 target now contains `diffusers==0.35.1`. With the
 incompatible torchvision package temporarily hidden, a real PyTorch compact
