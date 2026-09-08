@@ -71,22 +71,21 @@ class _ConvACLNoBias:
         dilation = _pair(dilation)
         if groups <= 0:
             raise ValueError("groups must be a positive integer")
-        attr_code = _conv_attr_code(stride, padding, dilation, groups, "conv2d")
-        grad_attr_code = _conv_attr_code(stride, padding, dilation, groups, "conv2dbackward")
+        attributes = {"convStrides": list(stride), "convPads": list(padding), "convDilations": list(dilation), "group": groups, "convOutPads": [0, 0]}
         output_shape = _conv_output_shape(x, weight, stride, padding, dilation)
         result = conv_cmd(
             "Conv2d",
             [x, weight],
             output_dtypes=[x.dtype],
             output_shapes=[output_shape],
-            attr_code=attr_code,
+            attributes=attributes,
             multi_grad_src=code_program(
                 [
                     "\n            // aclop\n            Conv2dBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(in1, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            ",
-                    grad_attr_code,
                     "\n            op.run();\n            ",
                 ]
             ),
+            multi_grad_attributes=attributes,
         )[0]
         return result
 
@@ -102,20 +101,19 @@ class ConvACL:
         stride = _pair(stride)
         dilation = _pair(dilation)
         output_shape = _conv_output_shape(x, weight, stride, padding, dilation)
-        attr_code = _conv_attr_code(stride, padding, dilation, groups, "conv2d")
-        grad_attr_code = _conv_attr_code(stride, padding, dilation, groups, "conv2dbackward")
+        attributes = {"convStrides": list(stride), "convPads": list(padding), "convDilations": list(dilation), "group": groups, "convOutPads": [0, 0]}
 
         return conv_cmd(
             "Conv2d",
             [x, weight, bias],
             output_dtypes=[x.dtype],
             output_shapes=[output_shape],
-            attr_code=attr_code,
+            attributes=attributes,
             multi_grad_src=code_program(
                 [
                     "\n            // aclop\n            Conv2dBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(in1, true);\n            op.add(in2, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
-                    grad_attr_code,
                     "\n            op.run();\n            ",
                 ]
             ),
+            multi_grad_attributes=attributes,
         )[0]
