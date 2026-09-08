@@ -39,7 +39,7 @@ SDK 查询的 runner 继续保留其查询，不再保存无调用者的查询�
 
 旧看板“只剩类型擦除”的结论不成立。`acl_data.py` 和 `acl_data_channel.h`
 已有主机 schema/decoder/cache 壳，但生产 `_code.py` 仍生成属性赋值源码，
-runner 尚未消费该 data 通道，也没有使用描述符缓存。属性通道仍是代码缺口；
+runner 尚未消费该 data 通道，也没有使用描述符缓存。属性通道仍有少量 owner 待迁；SwiGlu.dim 已迁为 int64 typed data，并由结构合同覆盖；
 描述符缓存属于用户允许后移的优化。详见[迁移边界](../guides/acl-structure-boundary.md)。
 
 在 CANN 机器上必须先用真实 SDK 编译全部 ACL TU，再按

@@ -58,7 +58,7 @@ FSDP 的通信、mesh、
 
 8.06 的 ACL 注册表已统一为跨 TU 单例和四类查询适配器，47 个 TU 与 70 个
 launcher ABI 主机检查通过，已删除整头诊断过滤。但旧记录“只剩类型擦除”有误：
-属性通道现已接通Softmax前反向、Triu、Flip、Cumsum、Gather、Scatter共7个runner；
+属性通道现已接通Softmax前反向、Triu、Flip、Cumsum、Gather、Scatter及SwiGlu.dim runner；
 其余family及生产描述符缓存仍缺，不能关闭8.06。见
 [注册表证据](../results/2026-09-08-acl-registry.md)与
 [属性通道及上机限制](../results/2026-09-08-acl-code-data-wire.md)。
