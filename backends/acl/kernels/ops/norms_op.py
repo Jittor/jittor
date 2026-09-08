@@ -24,20 +24,8 @@ class BatchNormACL:
         self.momentum = float(momentum)
         self.is_train = bool(is_train)
 
-    def _attr_code(self, name):
-        return code_program(
-            [
-                '\n        op.jt_name = "',
-                name,
-                '";\n        ',
-                attribute_program(
-                    runner_for_alias(name),
-                    {"is_train": bool(self.is_train), "momentum": self.momentum, "eps": self.eps},
-                    variable="op",
-                ),
-                "\n        ",
-            ]
-        )
+    def _attributes(self):
+        return {"is_train": bool(self.is_train), "momentum": self.momentum, "eps": self.eps}
 
     def __call__(self, x, weight, bias, running_mean, running_var):
         channels = int(x.shape[1])
@@ -46,12 +34,12 @@ class BatchNormACL:
             inputs=[x, weight, bias, running_mean, running_var],
             output_dtypes=[x.dtype] * 3,
             output_shapes=[x.shape, (channels,), (channels,)],
-            attr_code=self._attr_code("batchnorm"),
+            attributes=self._attributes(),
             multi_grad_input_count=3,
             multi_grad_src=code_program(
                 [
                     "\n            // aclop\n            BatchNormBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(in1, true);\n            op.add(in3, true);\n            op.add(in4, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
-                    self._attr_code("batchnormbackward"),
+                    attribute_program("BatchNormBackward", self._attributes(), variable="op"),
                     "\n            op.run();\n            ",
                 ]
             ),
