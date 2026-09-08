@@ -100,14 +100,16 @@ class Categorical(Distribution):
 class Geometric(Distribution):
     def __init__(self,p=None,logits=None):
         import jittor as jt
-        assert (p is not None) or (logits is not None)
+        if p is None and logits is None:
+            raise ValueError("Geometric requires p or logits")
         if p is None:
             self.prob = jt.sigmoid(logits)
             self.logits = logits
         else:
             # assert range on python scalars only (batched Var probs allowed)
             if not isinstance(p, jt.Var):
-                assert 0 < p and p < 1
+                if not (0 < p < 1):
+                    raise ValueError("Geometric probability p must be between 0 and 1")
             self.prob = p
             self.logits = -jt.safe_log(1. / p - 1)
         # torch parity: batch_shape = broadcast(prob), event_shape = ()
