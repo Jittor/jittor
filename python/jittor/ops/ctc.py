@@ -11,7 +11,10 @@ class _CTCLossFunction(Function):
         self.blank = blank
         T, N, C = log_probs.shape
         _N, S = targets.shape
-        assert _N == N
+        if _N != N:
+            raise ValueError(
+                "ctc_loss: targets batch size {} does not match log_probs {}".format(_N, N)
+            )
         log_alpha = jt.full([T,N,S*2+1], -1e30)
         result = jt.empty((N,))
         jt.code([log_probs, targets, input_lengths, target_lengths], [log_alpha, result], cpu_src=f"""
@@ -189,7 +192,8 @@ def ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0, reducti
         return result.mean()
     elif reduction=="sum":
         return result.sum()
-    assert reduction=="none"
+    if reduction != "none":
+        raise ValueError("ctc_loss: reduction must be 'none', 'mean', or 'sum'")
     return result
 
 
