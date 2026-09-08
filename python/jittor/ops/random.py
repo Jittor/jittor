@@ -138,7 +138,8 @@ def multinomial(weights: Var, num_samples: int, replacement: bool=False) -> Var:
     else:
         # A-Res algorithm
         # Pavlos S. Efraimidis and Paul G. Spirakis, 2006, Weighted random sampling with a reservoir
-        assert num_samples <= weights.shape[-1], "num_samples larger than the input"
+        if num_samples > weights.shape[-1]:
+            raise ValueError("multinomial: num_samples larger than the input")
         # Use a strictly positive denominator and mask zero-probability entries
         # after the exponentiation.  The old ``1 / weights`` expression made
         # zero weights produce ``0 ** inf``/NaN keys, allowing an impossible
@@ -170,7 +171,7 @@ def histc(input, bins, min=0., max=0.):
     if min == 0 and max == 0:
         min, max = input.min(), input.max()
     if min >= max:
-        raise ValueError("uniform: min must be less than max")
+        raise ValueError("histc: min must be less than max")
     if bins <= 0:
         raise RuntimeError(f"bins must be > 0, but got {bins}")
     bin_length = (max - min) / bins
