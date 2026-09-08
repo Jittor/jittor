@@ -120,6 +120,7 @@ files = [
     "compat/torch/frontend.py",
     "compat/torch/autograd.py",
     "compat/torch/distribution_api.py",
+    "compat/torch/fidelity.py",
     "compat/torch/nested.py",
     "compat/torch/_placeholder_context.py",
     "compat/torch/namespace.py",

@@ -4,6 +4,7 @@ from __future__ import absolute_import
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Dict, Iterable
 from ..transaction import current_transaction, _MISSING
 
 
@@ -21,7 +22,7 @@ class FidelityRecord:
     implementation: object
 
 
-_REGISTRY = {}
+_REGISTRY: Dict[str, FidelityRecord] = {}
 
 
 def register_fidelity(api, implementation, level, detail):
@@ -73,7 +74,7 @@ def fidelity_of(api):
 
 def fidelity_report(prefix=None):
     """Return registered records in deterministic API-name order."""
-    records = _REGISTRY.values()
+    records: Iterable[FidelityRecord] = _REGISTRY.values()
     if prefix is not None:
         prefix = str(prefix)
         records = (record for record in records if record.api.startswith(prefix))
