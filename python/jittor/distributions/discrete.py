@@ -52,7 +52,8 @@ class Categorical(Distribution):
     def __init__(self, probs=None, logits=None):
         import jittor as jt
         from jittor import nn
-        assert not (probs is None and logits is None)
+        if probs is None and logits is None:
+            raise ValueError("Categorical requires probs or logits")
         # Align to torch.distributions.Categorical: logits map to probs via SOFTMAX
         # (not sigmoid+renorm), and `logits` are stored as normalized log-probs
         # (log_softmax) so log_prob/entropy are correct. probs/logits are kept
