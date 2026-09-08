@@ -266,7 +266,7 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
     if (op.get(NanoString::_no_need_back_in))
         set_flag(OpFlags::_manual_set_vnbb);
     ns = op;
-    ASSERT(ns.is_binary());
+    USER_CHECK(ns.is_binary()) << "reduce requires a binary reduction operation, got" << ns;
     auto xdim = x->shape.size();
     keepdims_mask = keepdims ? (int)-1 : (int)0;
     if (!dims.size()) {
@@ -305,7 +305,7 @@ ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, uint keepdims_mask)
     if (op.get(NanoString::_no_need_back_in))
         set_flag(OpFlags::_manual_set_vnbb);
     ns = op;
-    ASSERT(ns.is_binary());
+    USER_CHECK(ns.is_binary()) << "reduce requires a binary reduction operation, got" << ns;
     reduce_mask = dims_mask;
     this->keepdims_mask = keepdims_mask;
     y = create_output(nullptr, reduce_dtype_infer(ns, x->ns, policy.preserve_reduction_dtype));

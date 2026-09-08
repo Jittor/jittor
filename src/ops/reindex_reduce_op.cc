@@ -27,7 +27,8 @@ ReindexReduceOp::ReindexReduceOp(Var* y, NanoString op, NanoVector shape, vector
     if (op.get(NanoString::_no_need_back_in))
         set_flag(OpFlags::_manual_set_vnbb);
     ns = op;
-    ASSERT((ns.is_binary() && ns!=ns_mean) || ns == ns_void);
+    USER_CHECK((ns.is_binary() && ns!=ns_mean) || ns == ns_void)
+        << "reindex_reduce requires a binary reduction other than mean, got" << ns;
     x = create_output(nullptr, y->dtype());
     for (auto e : extras) {
         if (e->shape != y->shape) {

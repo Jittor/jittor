@@ -12,6 +12,7 @@
 #include "cudnn_conv3d_backward_w_op.h"
 #include "cudnn_descriptor.h"
 #include "cudnn_wrapper.h"
+#include "cudnn_user_checks.h"
 #include "cudnn_conv_algo_key.h"
 #include "core/executor.h"
 #include "ops/op_register.h"
@@ -28,6 +29,13 @@ namespace jittor {
 CudnnConv3dBackwardWOp::CudnnConv3dBackwardWOp(Var* x, Var* dy, int kd, int kh, int kw, int strided, int strideh, int stridew, int paddingd, int paddingh, int paddingw, int dilationd, int dilationh, int dilationw, int groups, string xformat)
         : x(x), dy(dy), kd(kd), kh(kh), kw(kw), strided(strided), strideh(strideh), stridew(stridew), paddingd(paddingd), paddingh(paddingh), paddingw(paddingw), dilationd(dilationd), dilationh(dilationh), dilationw(dilationw), groups(groups),
       xformat(move(xformat)) {
+    cudnn_check_conv_inputs(x, dy, groups);
+    cudnn_check_conv_axis(strideh, paddingh, dilationh, "height");
+    cudnn_check_conv_axis(stridew, paddingw, dilationw, "width");
+    cudnn_check_conv_axis(strided, paddingd, dilationd, "depth");
+    USER_CHECK(this->xformat == "ncdhw" || this->xformat == "ndhwc") << "Not a valid format for cuDNN conv3d" << this->xformat;
+    USER_CHECK(kh > 0 && kw > 0) << "cuDNN convolution kernel dimensions must be positive";
+    USER_CHECK(kd > 0) << "cuDNN convolution kernel depth must be positive";
     set_flag(OpFlags::_cuda, 1);
     set_flag(OpFlags::_cpu, 0);
     set_flag(OpFlags::_manual_set_vnbb);

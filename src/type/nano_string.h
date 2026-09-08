@@ -178,6 +178,7 @@ struct NanoString {
     inline NanoString() {}
     // @pyjt(__init__)
     inline NanoString(const char* s) {
+        USER_CHECK(s) << "NanoString requires a non-null name";
         auto iter = __string_to_ns.find(s);
         if (iter == __string_to_ns.end() && s &&
             s[0]=='t'&&s[1]=='o'&&s[2]=='r'&&s[3]=='c'&&s[4]=='h'&&s[5]=='.') {
@@ -187,7 +188,7 @@ struct NanoString {
             // subset resolved before; strip the prefix uniformly.
             iter = __string_to_ns.find(s+6);
         }
-        ASSERT(iter != __string_to_ns.end()) << s;
+        USER_CHECK(iter != __string_to_ns.end()) << "Unknown NanoString name:" << s;
         data = iter->second.data;
     }
     // @pyjt(__init__)

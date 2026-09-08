@@ -146,7 +146,7 @@ void MemoryProfiler::display_max_memory_info() {
 }
 
 void display_max_memory_info() {
-    ASSERT(profile_memory_enable);
+    USER_CHECK(profile_memory_enable) << "memory profiling must be enabled before querying its results";
     memory_profiler.display_max_memory_info();
 }
 
@@ -173,12 +173,12 @@ string MemoryProfiler::get_max_memory_info() {
 }
 
 int64 get_peak_allocator_used_memory() {
-    ASSERT(profile_memory_enable);
+    USER_CHECK(profile_memory_enable) << "memory profiling must be enabled before querying its results";
     return static_cast<int64>(memory_profiler.max_used_memory_size);
 }
 
 string get_max_memory_info() {
-    ASSERT(profile_memory_enable);
+    USER_CHECK(profile_memory_enable) << "memory profiling must be enabled before querying its results";
     return memory_profiler.get_max_memory_info();
 }
 

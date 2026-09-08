@@ -626,7 +626,7 @@ string VarHolder::debug_msg() {
 }
 
 int VarHolder::grad() {
-    LOGf << R""(Jittor Var doesn't have this interface, please change
+    USER_ERROR << R""(Jittor Var doesn't have this interface, please change
 your code as below::
 
     model = Model()

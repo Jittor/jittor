@@ -103,7 +103,7 @@ void CodeOp::configure_grad() {
         set_flag(OpFlags::_manual_set_vnbb);
     auto iter = data.find("multi_grad");
     if (iter != data.end() && iter->second != 0) {
-        CHECK(cpu_grad_src.size() || cuda_grad_src.size())
+        USER_CHECK(cpu_grad_src.size() || cuda_grad_src.size())
             << "multi-output code gradient requires a gradient source";
         set_flag(OpFlags::_grads);
     }
@@ -147,19 +147,27 @@ void CodeOp::grads(Var** douts, VarPtr* dins) {
 
     int output_index = 0;
     auto iter = data.find("multi_grad_output");
-    if (iter != data.end())
+    if (iter != data.end()) {
+        USER_CHECK(std::isfinite(iter->second) && std::floor(iter->second) == iter->second
+                   && iter->second >= 0 && iter->second < _outputs.size())
+            << "multi_grad_output must be a valid integer output index";
         output_index = int(iter->second);
-    CHECKop(output_index,>=,0);
-    CHECKop(output_index,<,_outputs.size());
+    }
+    USER_CHECKop(output_index,>=,0);
+    USER_CHECKop(output_index,<,_outputs.size());
     if (douts[output_index] == nullptr)
         return;
 
     int input_count = _inputs.size();
     iter = data.find("multi_grad_input_count");
-    if (iter != data.end())
+    if (iter != data.end()) {
+        USER_CHECK(std::isfinite(iter->second) && std::floor(iter->second) == iter->second
+                   && iter->second > 0 && iter->second <= _inputs.size())
+            << "multi_grad_input_count must be an integer within the input list";
         input_count = int(iter->second);
-    CHECKop(input_count,>,0);
-    CHECKop(input_count,<=,_inputs.size());
+    }
+    USER_CHECKop(input_count,>,0);
+    USER_CHECKop(input_count,<=,_inputs.size());
 
     auto inputs = clone(_inputs);
     std::stringstream new_alias;
@@ -285,7 +293,7 @@ void CodeOp::jit_prepare(JK& jk) {
     const string& src = executes_on_accelerator() ?
         cuda_src : cpu_src;
 
-    CHECK(src.size());
+    USER_CHECK(src.size()) << "code requires source for the selected backend";
     jk << "«HEADER:" << code_op_key_tail(header, src);
 }
 

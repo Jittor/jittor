@@ -36,9 +36,10 @@ ReindexOp::ReindexOp(Var* x, vector<Var*>&& indexes, float64 overflow_value, vec
     set_flag(OpFlags::_cuda);
     set_type(OpType::broadcast);
     y = create_output(nullptr, x->dtype());
-    ASSERTop(indexes.size(),==,x->shape.size());
+    USER_CHECKop(indexes.size(),==,x->shape.size()) << "reindex_var needs one index tensor per input dimension";
+    USER_CHECK(!indexes.empty()) << "reindex_var requires at least one index tensor to determine the output shape";
     auto& shape = indexes[0]->shape;
-    ASSERT(indexes.size()<=10 && shape.size()<=10);
+    USER_CHECK(indexes.size()<=10 && shape.size()<=10) << "reindex_var supports at most ten dimensions";
 
     string temp;
     temp.reserve(6+3*shape.size()); // @e0(i0,i1)
@@ -52,8 +53,9 @@ ReindexOp::ReindexOp(Var* x, vector<Var*>&& indexes, float64 overflow_value, vec
     this->indexes.reserve(indexes.size());
     for (uint i=0; i<indexes.size(); i++) {
         auto& ns = indexes[i]->shape;
-        ASSERTop(ns.size(),==,shape.size());
-        for (uint j=0; j<ns.size(); j++) ASSERTop(ns[j],==,shape[j]);
+        USER_CHECKop(ns.size(),==,shape.size()) << "reindex_var index tensor ranks must match";
+        for (uint j=0; j<ns.size(); j++)
+            USER_CHECKop(ns[j],==,shape[j]) << "reindex_var index tensor shapes must match";
         temp[2] = '0'+i; // @ei
         this->indexes.emplace_back(temp);
     }

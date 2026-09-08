@@ -7,6 +7,7 @@
 #include "core/var.h"
 #include "cusparse_spmmcoo_op.h"
 #include "cusparse_wrapper.h"
+#include "cusparse_user_checks.h"
 #include "core/executor.h"
 using namespace std;
 
@@ -42,11 +43,7 @@ void CusparseSpmmcooOp::jit_run() {
     const auto& xs = x->shape;
     const auto& vs = value->shape; 
     const auto& os = outputVar->shape;
-    USER_CHECKop(xs,==,os)
-        << "cuSPARSE COO matrix A and matrix C sizes must match, got " << xs << " and " << os;
-    USER_CHECKop(A_col,==,xs[0])
-        << "cuSPARSE COO matrix A columns must match matrix B rows, got " << A_col
-        << " and " << xs[0];
+    cusparse_check_spmm_metadata(outputVar, x, value, col_indices, row_indices, A_row, A_col, trans_A, trans_B, false);
     auto dtype_A = get_dtype(value->dtype());
     auto dtype_B = get_dtype(x->dtype());
     auto dtype_C = get_dtype(outputVar->dtype());

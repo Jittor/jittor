@@ -392,7 +392,7 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
     for (; sort_key_id<(int)rep[0].size(); sort_key_id++)
         if (rep[0][sort_key_id] == sort_key)
             break;
-    ASSERT(sort_key_id<(int)rep[0].size()) << "Key not supported:" << sort_key;
+    USER_CHECK(sort_key_id<(int)rep[0].size()) << "Profiler sort key not supported:" << sort_key;
     double total_time = 0;
     double total_mem_access = 0;
     for (auto& kv : profiler.records) {
@@ -551,7 +551,7 @@ vector<vector<string>> Profiler::report_cache(const string& sort_key) {
     for (; sort_key_id<(int)rep[0].size(); sort_key_id++)
         if (rep[0][sort_key_id] == sort_key)
             break;
-    ASSERT(sort_key_id<(int)rep[0].size()) << "Key not supported:" << sort_key;
+    USER_CHECK(sort_key_id<(int)rep[0].size()) << "Profiler sort key not supported:" << sort_key;
     sort_key_id--;
     for (auto& kv : profiler.records) {
         if (!kv.second.cache_info)

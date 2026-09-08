@@ -83,7 +83,7 @@ static inline cudnnDataType_t cudnn_dtype(NanoString dtype) {
     #ifndef IS_ROCM
     if (dtype == ns_bfloat16) return CUDNN_DATA_BFLOAT16;
     #endif
-    LOGf << "cudnn does not support dtype" << dtype;
+    USER_ERROR << "cudnn does not support dtype" << dtype;
     return CUDNN_DATA_FLOAT;
 }
 

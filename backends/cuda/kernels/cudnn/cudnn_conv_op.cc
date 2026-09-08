@@ -9,6 +9,7 @@
 #include "cudnn_conv_op.h"
 #include "cudnn_descriptor.h"
 #include "cudnn_wrapper.h"
+#include "cudnn_user_checks.h"
 #include "cudnn_conv_plan.h"
 #include "cudnn_conv_algo_key.h"
 #include "core/executor.h"
@@ -50,6 +51,13 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
 CudnnConvOp::CudnnConvOp(Var* x, Var* w, int strideh, int stridew, int paddingh, int paddingw, int dilationh, int dilationw, int groups, string xformat, string wformat, string yformat)
     : x(x), w(w), strideh(strideh), stridew(stridew), paddingh(paddingh), paddingw(paddingw), dilationh(dilationh), dilationw(dilationw), groups(groups),
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
+    cudnn_check_conv_inputs(x, w, groups);
+    cudnn_check_conv_axis(strideh, paddingh, dilationh, "height");
+    cudnn_check_conv_axis(stridew, paddingw, dilationw, "width");
+    cudnn_check_conv_layout(this->xformat, "abcd", "input");
+    cudnn_check_conv_layout(this->wformat, "oihw", "weight");
+    if (this->yformat.empty()) this->yformat = this->xformat;
+    cudnn_check_conv_layout(this->yformat, "abcd", "output");
     set_flag(OpFlags::_cuda, 1);
     set_flag(OpFlags::_cpu, 0);
     set_flag(OpFlags::_manual_set_vnbb);

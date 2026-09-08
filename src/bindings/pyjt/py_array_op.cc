@@ -149,7 +149,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
             }
         }
     } else {
-        LOGf << "type <" >> Py_TYPE(obj)->tp_name >> "> not support for jittor array";
+        USER_ERROR << "type <" >> Py_TYPE(obj)->tp_name >> "> not support for jittor array";
     }
     NanoVector shape = args.shape;
     output = create_output(shape, args.dtype);

@@ -140,7 +140,7 @@ void warn_grad_break(int i, Var* v) {
     // wrong thing with a clean log. There is no deduplication now: one report
     // per missing target per grad() call.
     if (missing_grad_error) {
-        LOGf << "grads[">>i>>"] '">> v->name>>"' doesn't have gradient:" << v
+        USER_ERROR << "grads[">>i>>"] '">> v->name>>"' doesn't have gradient:" << v
             << "\nThe target is not reachable from the loss through a"
             << "differentiable path. Drop it from the target list, or clear"
             << "jt.flags.missing_grad_error to get a zero gradient and a"
@@ -157,7 +157,7 @@ vector<VarPtr> grad(
 ) {
     LOGvv << "loss:" >> loss << "targets:" >> targets;
     USER_CHECK(loss->is_float()) << "Loss should be float";
-    CHECK(!loss->flag(VarFlags::_first_order_only))
+    USER_CHECK(!loss->flag(VarFlags::_first_order_only))
         << "Higher-order gradients are not supported because this loss "
         << "depends on a first-order-only gradient result.";
     for (Var* var : targets)
@@ -191,7 +191,7 @@ vector<VarPtr> grad(
         return true;
     });
     if (released)
-        LOGf << "Trying to backward through the graph a second time. This"
+        USER_ERROR << "Trying to backward through the graph a second time. This"
             << "backward graph was released by an earlier backward with"
             << "retain_graph=False and cannot be walked again; continuing would"
             << "silently produce zero gradients. Pass retain_graph=True to the"

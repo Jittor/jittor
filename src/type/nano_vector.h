@@ -121,13 +121,18 @@ struct NanoVector {
         auto nbits = get_nbits(v);
         int pre_offset = s ? get_offset(s-1) : 0;
         int next_offset = pre_offset+nbits;
-        ASSERT(s<10 && next_offset<=64);
+        USER_CHECK(s<10 && next_offset<=64) << "NanoVector exceeds its ten-entry or 64-bit value capacity";
         offset ++; 
         set_offset(s, next_offset);
         set_data(v, nbits, pre_offset);
     }
 
     // @pyjt(__getitem__, __map_getitem__)
+    inline int64 user_at(int i) const {
+        USER_CHECK(i >= -size() && i < size()) << "NanoVector index out of range" << i;
+        return at(i);
+    }
+
     inline int64 at(int i) const {
         if (i<0) i+= size();
         ASSERT(i>=0 && i<size());

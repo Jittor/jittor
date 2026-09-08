@@ -286,7 +286,7 @@ void Op::propagate_device() {
         if (v->device_id < 0 || is_pending_scalar(v)) continue;
         if (dev < 0) dev = v->device_id;
         else if (dev != v->device_id)
-            LOGf << "Expected all inputs to be on the same CUDA device, but found"
+            USER_ERROR << "Expected all inputs to be on the same CUDA device, but found"
                 << "cuda:" >> dev << "and cuda:" >> v->device_id << "for op" << name() >> "."
                 << "\nMove one side with Var.to_device() / .to(\"cuda:N\") first.";
     }
@@ -299,7 +299,7 @@ void Op::propagate_device() {
     for (Var* v : inputs())
         if (v->device_id != dev && v->device_id >= 0
                 && !(is_pending_scalar(v) && retarget_pending(v, dev)))
-            LOGf << "Expected all inputs to be on the same CUDA device, but found"
+            USER_ERROR << "Expected all inputs to be on the same CUDA device, but found"
                 << "cuda:" >> dev << "and cuda:" >> v->device_id << "for op" << name() >> "."
                 << "\nMove one side with Var.to_device() / .to(\"cuda:N\") first.";
     for (Var* v : outputs())

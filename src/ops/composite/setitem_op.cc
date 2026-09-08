@@ -34,7 +34,7 @@ SetitemOp::SetitemOp(Var* x, VarSlices&& slices, Var* y, NanoString op)
             if (vs.slices[i].is_var())
                 vs.slices[i].var->set_flag(VarFlags::_needed_by_backward);
     }
-    ASSERT(op == ns_void || op.is_binary());
+    USER_CHECK(op == ns_void || op.is_binary()) << "setitem requires void or a binary operation, got" << op;
     create_output(nullptr, x->dtype());
     if (flag(OpFlags::_custom_flag)) {
         set_flag(OpFlags::_grads);
@@ -172,7 +172,7 @@ VarPtr SetitemOp::grad(Var* out, Var* dout, Var* v, int v_index) {
             return make_binary(ndzx, y2, ns_divide);
         }
     }
-    LOGf << "Setitem grad of op" << op << "is not supported yet";
+    USER_ERROR << "Setitem grad of op" << op << "is not supported yet";
     return nullptr;
 }
 

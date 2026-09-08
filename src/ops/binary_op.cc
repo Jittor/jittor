@@ -471,7 +471,7 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
     set_flag(OpFlags::_cuda);
     set_type(OpType::element);
     ns = op;
-    ASSERT(ns.is_binary());
+    USER_CHECK(ns.is_binary()) << "binary requires a binary operation, got" << ns;
     // Bitwise/shift ops are only defined for integer/boolean dtypes. On a float input the
     // generated kernel hits a raw C++ "invalid operands ... to binary operator&" g++ wall
     // (the user never sees the word "dtype"). Guard early with a clear message instead.
@@ -479,7 +479,7 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
         ns==ns_left_shift || ns==ns_right_shift) {
         bool x_ok = x->dtype().is_int() || x->dtype().is_bool();
         bool y_ok = y->dtype().is_int() || y->dtype().is_bool();
-        CHECK(x_ok && y_ok) << "Binary op '" >> op.to_cstring() >>
+        USER_CHECK(x_ok && y_ok) << "Binary op '" >> op.to_cstring() >>
             "' requires integer or boolean dtypes, but got x:" >> x->dtype().to_cstring() <<
             "y:" >> y->dtype().to_cstring() <<
             "(bitwise/shift ops are not defined for floating-point or complex types).";

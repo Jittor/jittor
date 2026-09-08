@@ -499,7 +499,7 @@ struct VarHolder {
     // @pyjt(share_with)
     // @attrs(return_self)
     inline VarHolder* share_with(VarHolder* other) {
-        CHECK(!var->allocator && !var->is_sharing())
+        USER_CHECK(!var->allocator && !var->is_sharing())
             << "This var is already executed or shared.";
         var->share_with(other->var);
         return this;
@@ -530,7 +530,8 @@ struct VarHolder {
 
     // @pyjt(_input)
     inline VarHolder* _input(int i) {
-        CHECK(!var->is_finished());
+        USER_CHECK(!var->is_finished()) << "_input requires an unexecuted tensor";
+        USER_CHECK(i >= 0 && i < (int)var->input()->inputs().size()) << "_input index out of range" << i;
         return new VarHolder(var->input()->input(i));
     }
 
@@ -542,7 +543,7 @@ struct VarHolder {
         vector<Node*> b(vars.size());
         for (int i=0; i<vars.size(); i++)
             b[i] = vars[i]->var;
-        CHECK(!var->is_finished());
+        USER_CHECK(!var->is_finished()) << "_add_dependency requires an unexecuted tensor";
         auto a = var->input();
         var->input()->add_inputs(b);
         auto edge = a->_inputs.end();

@@ -12,6 +12,7 @@
 #include "cudnn_conv_backward_x_op.h"
 #include "cudnn_descriptor.h"
 #include "cudnn_wrapper.h"
+#include "cudnn_user_checks.h"
 #include "cudnn_conv_plan.h"
 #include "cudnn_conv_algo_key.h"
 #include "core/executor.h"
@@ -53,6 +54,13 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
 CudnnConvBackwardXOp::CudnnConvBackwardXOp(Var* w, Var* dy, int height, int width, int strideh, int stridew, int paddingh, int paddingw, int dilationh, int dilationw, int groups, string xformat, string wformat, string yformat) 
         : w(w), dy(dy), xh(height), xw(width), strideh(strideh), stridew(stridew), paddingh(paddingh), paddingw(paddingw), dilationh(dilationh), dilationw(dilationw), groups(groups),
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
+    cudnn_check_conv_inputs(w, dy, groups);
+    cudnn_check_conv_axis(strideh, paddingh, dilationh, "height");
+    cudnn_check_conv_axis(stridew, paddingw, dilationw, "width");
+    cudnn_check_conv_layout(this->xformat, "abcd", "input");
+    cudnn_check_conv_layout(this->wformat, "oihw", "weight");
+    cudnn_check_conv_layout(this->yformat, "abcd", "output");
+    USER_CHECK(height >= 0 && width >= 0) << "cuDNN convolution input spatial dimensions must be nonnegative";
     set_flag(OpFlags::_cuda, 1);
     set_flag(OpFlags::_cpu, 0);
     set_flag(OpFlags::_manual_set_vnbb);

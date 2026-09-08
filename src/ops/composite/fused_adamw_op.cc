@@ -19,12 +19,12 @@ FusedAdamwOp::FusedAdamwOp(
     set_flag(OpFlags::_cuda);
     set_flag(OpFlags::_manual_set_vnbb);
     for (uint i=0; i<parameters.size(); ++i) {
-        CHECK(parameters[i]->shape == moments[i]->shape);
-        CHECK(parameters[i]->shape == variances[i]->shape);
-        CHECK(parameters[i]->shape == gradients[i]->shape);
-        CHECK(parameters[i]->dtype() == moments[i]->dtype());
-        CHECK(parameters[i]->dtype() == variances[i]->dtype());
-        CHECK(parameters[i]->dtype() == gradients[i]->dtype());
+        USER_CHECK(parameters[i]->shape == moments[i]->shape) << "fused_adamw parameters and moments must have matching shape" << "at index" << i;
+        USER_CHECK(parameters[i]->shape == variances[i]->shape) << "fused_adamw parameters and variances must have matching shape" << "at index" << i;
+        USER_CHECK(parameters[i]->shape == gradients[i]->shape) << "fused_adamw parameters and gradients must have matching shape" << "at index" << i;
+        USER_CHECK(parameters[i]->dtype() == moments[i]->dtype()) << "fused_adamw parameters and moments must have matching dtype" << "at index" << i;
+        USER_CHECK(parameters[i]->dtype() == variances[i]->dtype()) << "fused_adamw parameters and variances must have matching dtype" << "at index" << i;
+        USER_CHECK(parameters[i]->dtype() == gradients[i]->dtype()) << "fused_adamw parameters and gradients must have matching dtype" << "at index" << i;
     }
     for (auto value : parameters)
         new_parameters.push_back(create_output(nullptr, value->dtype()));
@@ -55,7 +55,7 @@ void FusedAdamwOp::jit_prepare(JK& jk) {
 
 #else
 void FusedAdamwOp::jit_run() {
-    LOGf << "fused_adamw is only available through a mapped backend";
+    USER_ERROR << "fused_adamw is only available through a mapped backend";
 }
 #endif
 

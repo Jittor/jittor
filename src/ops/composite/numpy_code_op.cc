@@ -25,8 +25,8 @@ NumpyCodeOp::NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inpu
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
     _outputs.push_back(create_output(shape, dtype));
-    CHECKop(_inputs.size(),<=,10);
-    ASSERT(_outputs[0]->num >= 0);
+    USER_CHECKop(_inputs.size(),<=,10) << "numpy_code supports at most ten inputs";
+    USER_CHECK(_outputs[0]->num >= 0) << "numpy_code requires a known nonnegative output shape";
     for (int i=0; i<sbackward.size(); i++) {
         backward.push_back(sbackward[i]);
     }
@@ -39,12 +39,12 @@ NumpyCodeOp::NumpyCodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtype
     set_flag(OpFlags::_cuda);
     USER_CHECKop(shapes.size(),==,dtypes.size()) << "Number of outputs' shapes and dtypes should be the same";
     _outputs.resize(shapes.size());
-    CHECKop(_inputs.size(),<=,10);
-    CHECKop(_outputs.size(),<=,10);
+    USER_CHECKop(_inputs.size(),<=,10) << "numpy_code supports at most ten inputs";
+    USER_CHECKop(_outputs.size(),<=,10) << "numpy_code supports at most ten outputs";
     USER_CHECKop(_outputs.size(),>,0);
     for (int i=0; i<shapes.size(); i++) {
         _outputs[i] = create_output(shapes[i], dtypes[i]);
-        ASSERT(_outputs[i]->num >= 0);
+        USER_CHECK(_outputs[i]->num >= 0) << "numpy_code requires known nonnegative output shapes";
     }
     for (int i=0; i<sbackward.size(); i++) {
         backward.push_back(sbackward[i]);
@@ -57,8 +57,8 @@ NumpyCodeOp::NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inpu
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
     _outputs.push_back(create_output(shape, dtype));
-    CHECKop(_inputs.size(),<=,10);
-    ASSERT(_outputs[0]->num >= 0);
+    USER_CHECKop(_inputs.size(),<=,10) << "numpy_code supports at most ten inputs";
+    USER_CHECK(_outputs[0]->num >= 0) << "numpy_code requires a known nonnegative output shape";
 }
 
 NumpyCodeOp::NumpyCodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtypes, vector<Var*>&& inputs, NumpyFunc&& forward)
@@ -68,12 +68,12 @@ NumpyCodeOp::NumpyCodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtype
     set_flag(OpFlags::_cuda);
     USER_CHECKop(shapes.size(),==,dtypes.size()) << "Number of outputs' shapes and dtypes should be the same";
     _outputs.resize(shapes.size());
-    CHECKop(_inputs.size(),<=,10);
-    CHECKop(_outputs.size(),<=,10);
+    USER_CHECKop(_inputs.size(),<=,10) << "numpy_code supports at most ten inputs";
+    USER_CHECKop(_outputs.size(),<=,10) << "numpy_code supports at most ten outputs";
     USER_CHECKop(_outputs.size(),>,0);
     for (int i=0; i<shapes.size(); i++) {
         _outputs[i] = create_output(shapes[i], dtypes[i]);
-        ASSERT(_outputs[i]->num >= 0);
+        USER_CHECK(_outputs[i]->num >= 0) << "numpy_code requires known nonnegative output shapes";
     }
 }
 
@@ -83,11 +83,13 @@ NumpyCodeOp::NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inpu
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
     _outputs.push_back(create_output(shape, dtype));
-    CHECKop(_inputs.size(),<=,10);
-    ASSERT(_outputs[0]->num >= 0);
+    USER_CHECKop(_inputs.size(),<=,10) << "numpy_code supports at most ten inputs";
+    USER_CHECK(_outputs[0]->num >= 0) << "numpy_code requires a known nonnegative output shape";
 }
 
 VarPtr NumpyCodeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    USER_CHECK(v_index >= 0 && v_index < (int)backward.size())
+        << "numpy_code has no backward callback for input" << v_index;
     NumpyResult result;
     
     int out_index=-1;

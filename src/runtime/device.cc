@@ -48,7 +48,7 @@ void setter_use_cuda(const int& old_value, const int& requested) {
         LOGv << "CUDA disabled.";
     }
 #else
-    CHECK(value == 0) << "No CUDA found.";
+    USER_CHECK(value == 0) << "No CUDA found.";
 #endif
     if (old_value != value) {
         // Pending graphs were prepared for the old backend. The generated
@@ -68,7 +68,7 @@ void setter_device_id(const int& old_value, const int& value) {
     }
     set_current_device(value);
 #else
-    CHECK(value < 0) << "No CUDA found.";
+    USER_CHECK(value < 0) << "No CUDA found.";
 #endif
 }
 

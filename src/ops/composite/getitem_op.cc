@@ -111,7 +111,7 @@ void infer_index_slices(Var* in, VarSlices& vs, int& first_oid_of_var, int& var_
                     remain_slice--;
             auto remain_idims = nin-i;
             auto ellipsis_size = remain_idims - remain_slice;
-            ASSERT(ellipsis_size>=0) << "NDims not match";
+            USER_CHECK(ellipsis_size>=0) << "NDims not match: too many indices after ellipsis";
             for (int j=0; j<ellipsis_size; j++) {
                 i_to_vs[i+j] = -1;
                 i_to_o[i+j] = out_shape.size();
