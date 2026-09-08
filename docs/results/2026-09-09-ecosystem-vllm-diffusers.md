@@ -91,3 +91,9 @@ The model-independent adapter contract check also ran successfully:
 `python adapters/tests/test_adapters.py -q` executed 4 tests in 0.004 seconds.
 It covers version guards, import protection, and the NPU probe without importing
 the Jittor core or requiring optional model packages.
+
+With the optional package absent, the adapter lifecycle remains testable:
+`JITTOR_VLLM_HOST_ONLY=1 JITTOR_TORCH_SHIM=1 PYTHONPATH=adapters python -m
+pytest -q adapters/tests/vllm/test_plugin_lifecycle.py` passed 5 tests in 0.10
+seconds. This checks entry-point arming, no-import behavior, ownership, and
+rollback only; it is not vLLM numerical or CUDA-serving evidence.
