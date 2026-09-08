@@ -438,7 +438,8 @@ def resized_crop(img, top, left, height, width, size, interpolation=Image.BILINE
     Returns:
         PIL Image: Cropped image.
     """
-    assert _is_pil_image(img), 'img should be PIL Image'
+    if not _is_pil_image(img):
+        raise TypeError("img should be PIL Image. Got {}".format(type(img)))
     img = crop(img, top, left, height, width)
     img = resize(img, size, interpolation)
     return img
