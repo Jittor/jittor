@@ -67,7 +67,7 @@ namespace jittor
         {
             inputTensors.push_back(nullptr);
             auto ret = CreateAclTensor(inputShapes[idx], in_[idx]->mem_ptr, in_[idx]->size, get_dtype(in_[idx]->dtype()), &inputTensors[idx], use_nchw, in_[idx]);
-            CHECK_RET(ret == ACL_SUCCESS, return);
+            if (ret != ACL_SUCCESS) LOGf << name << ": input tensor creation failed. ERROR:" << ret;
         }
     }
 
@@ -111,7 +111,7 @@ namespace jittor
         {
             outputTensors.push_back(nullptr);
             auto ret = CreateAclTensor(outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw, out_[idx]);
-            CHECK_RET(ret == ACL_SUCCESS, return);
+            if (ret != ACL_SUCCESS) LOGf << name << ": output tensor creation failed. ERROR:" << ret;
         }
     }
 
@@ -192,14 +192,14 @@ namespace jittor
                         void *buffer = nullptr;
                         ret = aclrtMalloc(
                             &buffer, buffer_size, ACL_MEM_MALLOC_HUGE_FIRST);
-                        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: product intermediate allocation failed. ERROR: %d\n", name.c_str(), ret); return);
+                        if (ret != ACL_SUCCESS) LOGf << name << ": product intermediate allocation failed. ERROR:" << ret;
                         intermediate_buffers.push_back(buffer);
 
                         next_tensor = nullptr;
                         ret = CreateAclTensor(
                             next_shape, buffer, buffer_size,
                             get_dtype(out_[0]->dtype()), &next_tensor, use_nchw);
-                        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: product intermediate tensor creation failed. ERROR: %d\n", name.c_str(), ret); return);
+                        if (ret != ACL_SUCCESS) LOGf << name << ": product intermediate tensor creation failed. ERROR:" << ret;
                         intermediate_tensors.push_back(next_tensor);
                     }
 
@@ -214,7 +214,7 @@ namespace jittor
                 }
 
                 ret = aclrtSynchronizeStream(aclstream);
-                CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: product intermediate synchronization failed. ERROR: %d\n", name.c_str(), ret); return);
+                if (ret != ACL_SUCCESS) LOGf << name << ": product intermediate synchronization failed. ERROR:" << ret;
                 for (aclTensor *tensor : intermediate_tensors)
                     aclDestroyTensor(tensor);
                 for (void *buffer : intermediate_buffers)
