@@ -237,6 +237,7 @@ include backends/cuda/libraries/cudnn/include/cudnn_conv_algo_key.h
 include backends/cuda/libraries/cudnn/include/cudnn_conv_plan.h
 include backends/cuda/libraries/cudnn/include/cudnn_descriptor.h
 include backends/cuda/libraries/cudnn/include/cudnn_rnn_descriptor.h
+include backends/cuda/libraries/cudnn/include/cudnn_user_checks.h
 include backends/cuda/libraries/cudnn/include/cudnn_wrapper.h
 include backends/cuda/libraries/cudnn/src/cudnn_conv_test.cc
 include backends/cuda/libraries/cudnn/src/cudnn_rnn_descriptor.cc
@@ -249,6 +250,7 @@ include backends/cuda/libraries/cufft/src/helper_cufft.cc
 include backends/cuda/libraries/curand/include/curand_wrapper.h
 include backends/cuda/libraries/curand/src/curand_wrapper.cc
 include backends/cuda/libraries/curand/src/helper_curand.cc
+include backends/cuda/libraries/cusparse/include/cusparse_user_checks.h
 include backends/cuda/libraries/cusparse/include/cusparse_wrapper.h
 include backends/cuda/libraries/cusparse/src/cusparse_wrapper.cc
 include backends/cuda/libraries/cusparse/src/helper_cusparse.cc
@@ -307,6 +309,7 @@ include docs/architecture/float32-precision-policy.md
 include docs/architecture/index.md
 include docs/architecture/installer-backend-contracts.md
 include docs/architecture/multi-backend-design.md
+include docs/architecture/partial-graph-submission.md
 include docs/architecture/pipelined-execution.md
 include docs/architecture/refactor-board.md
 include docs/architecture/refactor-dispatch.md
