@@ -64,8 +64,8 @@ pickle保留，igamma与class资源清单同步。CPU/CUDA/shim和真实自定�
   运行期registry仍需继续迁移，不能把第一组状态当成整项已交付。
 - 原生边界：索引的`_torch_0d`标记链已由真实0-D内核取代，本批删除；模块注册和
   legacy Parameter仍直接依赖Torch角色标记，需迁到明确协议/兼容owner，不能只改名。
-- 物理分包：target-layout.md要求compat进入顶层独立distribution，目前代码仍在
-  `python/jittor/compat`；需要完成包归属、导入边界和打包入口，而非仅修改模块身份。
+- 物理分包已完成：顶层`compat/`是独立`jittor-torch`项目，core不带兼容文件。
+  `7.18`仍有vLLM独立仓库提取要求，不能把两包拆分等同于该项全部完成。
 
 存储/stride与完整API验证仍保留，但不能用笼统“继续API收口”替代上述具体前置。
 
@@ -73,12 +73,16 @@ pickle保留，igamma与class资源清单同步。CPU/CUDA/shim和真实自定�
 `_runtime/import_aliases.py`；`jittor/__init__.py`经`_runtime/compat_bootstrap.py`
 仅在显式请求时加载compat preflight/compose，plain native import不再导入兼容域。
 阻止所有compat导入的native前向/反向、按需旧别名与独立入口短验证CPU11/CUDA6项通过。
-见[启动解耦记录](../results/2026-09-08-native-compat-bootstrap.md)。下一批直接整树移动
-`python/jittor/compat`到顶层`compat`，独立项目独占`jittor.compat`包、shim资源和
-torch/triton部署命令，core wheel排除这些文件。两个distribution不得共同拥有
-`jittor/compat/__init__.py`。Torch入口保留一个源文件供打包和deploy复用。
-验收需包含未安装compat的native导入，以及两包安装后的torch-first/原生-first入口。
-最终兼容布局wheel SHA-256：
+见[启动解耦记录](../results/2026-09-08-native-compat-bootstrap.md)。随后已整树移动到
+顶层`compat`：独占`jittor.compat`包、shim资源和torch/triton部署命令，core wheel
+排除这些文件。两wheel文件交集为0，Torch入口供打包和deploy复用。未安装compat的
+native前向/反向、两包安装后的torch-first/native-first入口通过；源码短验证21项，
+打包与import-layering21项通过；compat直接wheel与sdist重建151文件逐字节相同。
+开发环境现在运行`python -m pip install -e . -e ./compat`；仅PYTHONPATH=python不再
+提供可选兼容包。换checkout时重装对应compat editable。下一批继续对象状态归并和
+native角色标记退出，不要退回逐API小修。安装命令、产物与边界见
+[独立发行物记录](../results/2026-09-08-independent-compat-distribution.md)。
+以下为此前单distribution历史产物，不再代表当前两包交付；旧兼容布局wheel SHA-256：
 `ddb76df749952bf7becfc31c8b0cab05f35c35cbd50833233d4a7d9f1b937244`。
 证据见 `agent/results/2026-09-08-compat-layout-and-view-ownership.md`。
 最终native打包检查：1111生产文件源码/sdist/wheel/install逐字节一致，隔离CPU冷构建

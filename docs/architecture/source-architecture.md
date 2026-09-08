@@ -620,8 +620,9 @@ FlashAttention adapter, are normal packages split by implementation family.
 Public callables without installation-state captures can retain module-level
 identity; stateful installation paths keep explicit context and their original
 registration order. Task 7.12 remains open: the remaining per-Tensor and runtime
-state must be consolidated, native Torch-role dependencies removed, and compat
-physically extracted into its own distribution. The explicit legacy mode still
+state must be consolidated and native Torch-role dependencies removed. The
+physical `compat/` tree is now the independent `jittor-torch` distribution; core
+packaging excludes it. The explicit legacy mode still
 adapts native classes and must not be confused with independent activation.
 
 Basic indexing uses native `VarView` tracking instead of a parallel Python
@@ -693,7 +694,7 @@ paths and therefore require special review:
 - `backends/acl/{include,kernels/native,src}/`
 - `backends/comm/`
 - `python/jittor/contrib/math_util/src/`
-- `python/jittor/compat/shim/cpp_extension/`
+- `compat/shim/cpp_extension/` (optional `jittor-torch` distribution)
 
 A move is complete only when source checkouts, sdists, wheels, cold JIT builds,
 and installed smoke tests all agree. Directory aesthetics alone are not a reason

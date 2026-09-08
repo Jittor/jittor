@@ -1,6 +1,6 @@
 ---
 name: torch-shim-noop-audit
-description: Decide whether a torch API in Jittor's compatibility layer really works or is a signature-complete no-op, then convert it into an implementation or an explicit NotImplementedError with a negative test. Use when auditing, fixing, or extending `python/jittor/compat/` — especially when an API "runs fine" but the numbers, the log file, the checkpoint or the speed-up are missing.
+description: Decide whether a torch API in Jittor's compatibility layer really works or is a signature-complete no-op, then convert it into an implementation or an explicit NotImplementedError with a negative test. Use when auditing, fixing, or extending `compat/` — especially when an API "runs fine" but the numbers, the log file, the checkpoint or the speed-up are missing.
 ---
 
 # Is this torch API real, or just a shape?
@@ -17,7 +17,7 @@ the next person adding an API to it.
 
 ## 1. Three-question test
 
-For any `torch.X` in `python/jittor/compat/`:
+For any `torch.X` in `compat/`:
 
 1. **Does the body read every argument it accepts?** An argument stored on
    `self` and never read again is the signature of a stub. `DataLoader.__init__`

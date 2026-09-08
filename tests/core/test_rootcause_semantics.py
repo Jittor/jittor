@@ -159,11 +159,12 @@ class TestParameterIdentity(unittest.TestCase):
 
     def test_canonical_installer_owns_the_parameter_marker(self):
         jittor_root = Path(jt.__file__).resolve().parent
-        owner = (jittor_root / "compat" / "torch" / "nested.py").read_text(
+        compat_root = Path(__file__).resolve().parents[2] / "compat"
+        owner = (compat_root / "torch" / "nested.py").read_text(
             encoding="utf-8"
         )
         template = (
-            jittor_root / "compat" / "shim" / "resources" / "torch_init.py"
+            compat_root / "shim" / "resources" / "torch" / "__init__.py"
         ).read_text(encoding="utf-8")
         self.assertIn("_is_torch_parameter", owner)
         self.assertIn("_torch_compat.install(_jittor)", template)

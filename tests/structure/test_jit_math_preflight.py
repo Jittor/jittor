@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _configure():
-    path = ROOT / "python/jittor/compat/shim/preflight.py"
+    path = ROOT / "compat/shim/preflight.py"
     tree = ast.parse(path.read_text())
     names = {
         "is_truthy", "_remove_strict_math_nvcc_flags",

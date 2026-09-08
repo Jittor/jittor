@@ -17,7 +17,7 @@ description: 验证 Jittor 读 PyTorch checkpoint（.pt/.pth）读得对不对�
 判断一个 reader 有没有这个毛病，看它对 `stride` 做了什么：
 
 ```bash
-grep -n "stride" python/jittor/compat/torch/serialization.py python/jittor_utils/load_pytorch.py
+grep -n "stride" compat/torch/serialization.py python/jittor_utils/load_pytorch.py
 ```
 
 两种典型错法：

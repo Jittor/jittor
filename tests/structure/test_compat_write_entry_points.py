@@ -7,7 +7,7 @@ entry points remain", each time from a fresh grep, each time with a different
 answer, because a grep says what matched and not what is left.
 
 So the inventory lives here as a closed set. The scanner finds every statement in
-``python/jittor/compat`` that writes ``os.environ``, ``sys.modules``,
+``compat`` that writes ``os.environ``, ``sys.modules``,
 ``sys.meta_path``, ``sys.path``, ``builtins.__import__``, or a Jittor flag, and
 every one of them has to appear in ``CLASSIFIED`` with a category. A new write
 entry point fails this test until somebody writes down which of the five it is,
@@ -40,7 +40,7 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-COMPAT = ROOT / "python/jittor/compat"
+COMPAT = ROOT / "compat"
 
 _ENVIRON_OWNERS = ("os.environ", "environ")
 _MODULE_OWNERS = ("sys.modules", "_sys.modules", "modules")
@@ -161,7 +161,7 @@ def discover_write_entry_points():
     return {key: sorted(lines) for key, lines in found.items()}
 
 
-C = "python/jittor/compat/"
+C = "compat/"
 
 CLASSIFIED = {
     # ---- the ledger itself -------------------------------------------------
@@ -233,7 +233,7 @@ CLASSIFIED = {
     (C + "triton/__init__.py", "_ensure_libcuda_linkable", "env"): "pre-ledger",
 
     # ---- deployed payload, a different process -----------------------------
-    (C + "shim/resources/torch_init.py", "<module>", "sys.modules"): "deployed-payload",
+    (C + "shim/resources/torch/__init__.py", "<module>", "sys.modules"): "deployed-payload",
     (C + "shim/resources/stubs/torchvision/__init__.py",
      "<module>", "sys.meta_path"): "deployed-payload",
     (C + "shim/resources/stubs/torchvision/__init__.py",

@@ -54,8 +54,12 @@ class TestPackagingStructure(unittest.TestCase):
                            and node.func.id == "find_packages"}
         self.assertEqual(discovery_roots, {"python", "backends"})
         self.assertTrue(config["tool"]["setuptools"]["include-package-data"])
+        with (self.repo_root / "compat/pyproject.toml").open("rb") as stream:
+            compat_config = tomllib.load(stream)
+        self.assertEqual(compat_config["project"]["name"], "jittor-torch")
+        self.assertNotIn("jittor-torch-shim", config["project"].get("scripts", {}))
         self.assertEqual(
-            config["project"]["scripts"]["jittor-torch-shim"],
+            compat_config["project"]["scripts"]["jittor-torch-shim"],
             "jittor.compat.shim.deploy:main",
         )
 
@@ -68,9 +72,6 @@ class TestPackagingStructure(unittest.TestCase):
         }
         runtime_resources = {
             "include python/jittor/__init__.pyi",
-            "recursive-include python/jittor/compat/shim/cpp_extension/include *",
-            "recursive-include python/jittor/compat/shim/cpp_extension/src *",
-            "recursive-include python/jittor/compat/shim/resources *",
             "recursive-include backends *",
             "recursive-include python/jittor/contrib/math_util/src *",
             "recursive-include src *.cc *.h",
@@ -78,6 +79,18 @@ class TestPackagingStructure(unittest.TestCase):
             "recursive-include python/jittor/build/utils/class *",
         }
         self.assertTrue(runtime_resources.issubset(directives))
+        compat_manifest = (self.repo_root / "compat/MANIFEST.in").read_text(encoding="utf-8")
+        compat_directives = {
+            line.strip() for line in compat_manifest.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        compat_resources = {
+            "recursive-include shim/cpp_extension/include *",
+            "recursive-include shim/cpp_extension/src *",
+            "recursive-include shim/resources *",
+        }
+        self.assertTrue(compat_resources.issubset(compat_directives))
+        self.assertFalse(any("compat/shim" in line for line in directives))
         self.assertNotIn("recursive-include python/jittor/extern *", directives)
         self.assertNotIn("recursive-include python/jittor *", directives)
         self.assertNotIn("recursive-include python/jittor_utils *", directives)
@@ -100,9 +113,9 @@ class TestPackagingStructure(unittest.TestCase):
 
     def test_required_deep_runtime_resources_exist(self):
         required = (
-            "python/jittor/compat/shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
-            "python/jittor/compat/shim/resources/stubs/flash_attn/flash_attn_interface.py",
-            "python/jittor/compat/shim/resources/torch_init.py",
+            "compat/shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
+            "compat/shim/resources/stubs/flash_attn/flash_attn_interface.py",
+            "compat/shim/resources/torch/__init__.py",
             "backends/cuda/kernels/nn/softmax_cuda.py",
             "backends/cuda/kernels/nn/group_norm_cuda.py",
             "backends/cuda/include/helper_cuda.h",

@@ -10,7 +10,7 @@ in README.md with a single command:
     jittor-torch-shim --target /path/to/site-packages
 
 It copies:
-  - resources/torch_init.py                 -> <site-packages>/torch/__init__.py
+  - resources/torch/__init__.py             -> <site-packages>/torch/__init__.py
   - resources/stubs/<pkg>/**/*.py           -> <site-packages>/<pkg>/**/*.py
   - resources/torch_dist_info/METADATA      -> <site-packages>/torch-<ver>.dist-info/METADATA
   - resources/flash_attn_dist_info/*         -> <site-packages>/flash_attn-<ver>.dist-info/*
@@ -148,7 +148,7 @@ def _plan(target, resource_root=None):
     target = _normalise_target(target)
     root = os.fspath(resource_root or resources_root())
     torch_init = _required_source_file(
-        os.path.join(root, "torch_init.py"), "torch shim"
+        os.path.join(root, "torch", "__init__.py"), "torch shim"
     )
     ops = [(
         torch_init,

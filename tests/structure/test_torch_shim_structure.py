@@ -12,7 +12,7 @@ class TestTorchShimStructure(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.repo_root = Path(__file__).resolve().parents[2]
-        cls.shim_root = cls.repo_root / "python" / "jittor" / "compat" / "shim"
+        cls.shim_root = cls.repo_root / "compat" / "shim"
         cls.manifest = cls.repo_root / "agent" / "baselines" / "torch-shim-resources-stage7.txt"
 
     def test_legacy_physical_package_is_absent(self):
@@ -54,14 +54,14 @@ class TestTorchShimStructure(unittest.TestCase):
         }
         required = {
             "docs/compatibility/torch-shim.md",
-            "python/jittor/compat/shim/runtime.py",
-            "python/jittor/compat/shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
-            "python/jittor/compat/shim/resources/stubs/flash_attn/flash_attn_interface.py",
-            "python/jittor/compat/shim/resources/stubs/flash_attn/ops/triton/rotary.py",
-            "python/jittor/compat/shim/resources/flash_attn_dist_info/METADATA",
-            "python/jittor/compat/shim/resources/flash_attn_dist_info/top_level.txt",
-            "python/jittor/compat/shim/resources/torch_dist_info/METADATA",
-            "python/jittor/compat/shim/resources/torch_init.py",
+            "compat/shim/runtime.py",
+            "compat/shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
+            "compat/shim/resources/stubs/flash_attn/flash_attn_interface.py",
+            "compat/shim/resources/stubs/flash_attn/ops/triton/rotary.py",
+            "compat/shim/resources/flash_attn_dist_info/METADATA",
+            "compat/shim/resources/flash_attn_dist_info/top_level.txt",
+            "compat/shim/resources/torch_dist_info/METADATA",
+            "compat/shim/resources/torch/__init__.py",
         }
         flash_root = self.shim_root / "backends" / "flash_attention"
         flash_sources = set(flash_root.glob("*.py"))
@@ -81,7 +81,7 @@ class TestTorchShimStructure(unittest.TestCase):
         publication is the last statement -- a line after it would run against
         the module it just replaced.
         """
-        template = self.shim_root / "resources" / "torch_init.py"
+        template = self.shim_root / "resources" / "torch" / "__init__.py"
         body = ast.parse(template.read_text(encoding="utf-8")).body
         self.assertFalse(
             any(isinstance(node, (ast.FunctionDef, ast.ClassDef)) for node in body)
@@ -137,8 +137,8 @@ class TestTorchShimStructure(unittest.TestCase):
 
     def test_production_imports_use_canonical_paths(self):
         production = (
-            self.repo_root / "python" / "jittor" / "compat" / "external_backend.py",
-            self.repo_root / "python" / "jittor" / "compat" / "torch" / "__init__.py",
+            self.repo_root / "compat" / "external_backend.py",
+            self.repo_root / "compat" / "torch" / "__init__.py",
             self.shim_root / "runtime.py",
             self.shim_root / "cpp_extension" / "torch_utils.py",
             self.shim_root / "backends" / "flash_attention" / "__init__.py",

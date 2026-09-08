@@ -1,13 +1,14 @@
 # Torch shim
 
 The torch shim lets a torch-oriented Python application use Jittor as its
-runtime. The main Jittor distribution owns only the reusable torch API,
+runtime. The independent `jittor-torch` distribution owns the reusable Torch API,
 deployment, extension build, import-patch, and external-backend mechanisms.
+The core `jittor` distribution contains none of these compatibility files.
 Project-specific runtime policy is supplied by optional adapter distributions.
 
 ## Components
 
-- `python/jittor/compat/shim/resources/torch_init.py` is the thin deployed
+- `compat/shim/resources/torch/__init__.py` is the thin installed and deployed
   `torch/__init__.py` entry point.
 - `resources/stubs/` contains bundled compatibility packages such as `flash_attn`,
   `torchvision`, `torchaudio`, and `torchdata`.
@@ -26,6 +27,24 @@ expected by third-party libraries.
 `jittor.compat.shim`; both names resolve to the same module objects.
 
 ## Bootstrap
+
+For development, install both projects from the checkout root:
+
+```bash
+python -m pip install -e . -e ./compat
+```
+
+The optional project maps the top-level `compat/` source tree to the installed
+`jittor.compat` package. A `PYTHONPATH=python` setting alone selects only core;
+install the optional editable project in the same interpreter when using
+compatibility APIs or running their tests. When testing a second checkout,
+install that checkout's `compat` project too. Nox runtime gates do this explicitly.
+
+For wheel deployment, install the matching core and `jittor-torch` wheels in one
+environment. Build them separately with `python -m build .` and
+`python -m build ./compat`; the latter declares its core version dependency.
+The independent wheel provides `torch` itself. The deployment helper below
+additionally installs the bundled third-party stubs when the application needs them.
 
 Applications that need a project-local runtime can enable it explicitly:
 
@@ -91,5 +110,5 @@ jittor-torch-shim --target /path/to/site-packages
 ```
 
 The target contains the torch package, bundled stubs, and distribution metadata.
-Do not copy only `resources/torch_init.py`; the nested stub modules and interfaces are
+Do not copy only `resources/torch/__init__.py`; the nested stub modules and interfaces are
 part of the runtime contract.

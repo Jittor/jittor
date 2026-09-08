@@ -259,7 +259,7 @@ class TestTorchFSDP2Structure(unittest.TestCase):
         package_path = Path(fsdp.__file__).resolve()
         self.assertEqual(package_path.parent.name, "fsdp2")
         self.assertEqual(package_path.parent.parent.name, "compat")
-        jittor_root = package_path.parents[2]
+        jittor_root = Path(jt.__file__).resolve().parent
         self.assertFalse((jittor_root / "_torch_fsdp2").exists())
         self.assertFalse((jittor_root / "torch_fsdp2_compat").exists())
         legacy = importlib.import_module("jittor.torch_fsdp2_compat")

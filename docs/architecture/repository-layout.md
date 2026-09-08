@@ -72,16 +72,15 @@ it was missing. At that point, the deploy helper still omitted
 following paths remain physically stable unless the compiler contract is first
 changed and independently validated:
 
-- `python/jittor/src/**`, including extensionless resources and the source files
-  selected by compiler ordering rules;
-- `python/jittor/extern/**`, including the `<backend>/{inc,ops,src}` layout and
-  ACL filename dispatch conventions;
+- `src/**`, installed as `jittor/src`, including the source files selected by
+  compiler ordering rules;
+- `backends/**`, mapped to the installed `jittor.backends` packages;
 - `python/jittor/build/{dlink_compiler.py,dumpdef.py}` and
   `python/jittor/tools/tracer.py` (the tracer is reached by the binding layer
   through its explicit module name).
-- `python/jittor/math_util/src/*.h`;
-- `python/jittor/compat/shim/cpp_extension/{include,src}/**` as the canonical
-  installed ABI resource boundary for extension builds;
+- `python/jittor/contrib/math_util/src/*.h`;
+- `compat/shim/cpp_extension/{include,src}/**`, owned exclusively by the optional
+  `jittor-torch` distribution, as the installed ABI resource boundary for extensions;
 - `python/jittor_utils` as a sibling of `python/jittor`;
 - the literal `__version__ = '...'` assignment in `python/jittor/__init__.py`
   while release and cache readers still parse it directly.

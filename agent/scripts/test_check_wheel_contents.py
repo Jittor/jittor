@@ -62,6 +62,28 @@ class TestWheelContents(unittest.TestCase):
             status = checker.main([str(argument) for argument in arguments])
         return status, stdout.getvalue(), stderr.getvalue()
 
+    def test_distribution_profiles_reject_cross_owned_payloads(self):
+        core = self._wheel("core.whl", self.base_members)
+        self.assertEqual(self._run(["audit", core])[0], 0)
+        compat_members = dict.fromkeys(checker.COMPAT_REQUIRED_MEMBERS, b"resource\n")
+        compat = self._wheel("compat.whl", compat_members)
+        self.assertEqual(self._run(["audit", compat, "--profile", "compat"])[0], 0)
+        self.assertEqual(self._run(["audit", compat])[0], 1)
+        self.assertEqual(self._run(["audit", core, "--profile", "compat"])[0], 1)
+        mixed = self._wheel("mixed.whl", dict(self.base_members, **compat_members))
+        for profile in ("core", "compat"):
+            self.assertEqual(self._run(["audit", mixed, "--profile", profile])[0], 1)
+
+    def test_compat_profile_requires_torch_entry_and_explicit_comparison_reference(self):
+        members = dict.fromkeys(checker.COMPAT_REQUIRED_MEMBERS, b"resource\n")
+        wheel = self._wheel("compat.whl", members)
+        self.assertEqual(self._run(["compare", wheel, "--profile", "compat"])[0], 2)
+        del members["torch/__init__.py"]
+        broken = self._wheel("broken.whl", members)
+        status, _, errors = self._run(["audit", broken, "--profile", "compat"])
+        self.assertEqual(status, 1)
+        self.assertIn("torch/__init__.py", errors)
+
     def test_repository_default_policy_is_the_clean_final_baseline(self):
         self.assertEqual(checker.DEFAULT_BASELINE.name, "wheel-contents-final.txt")
         self.assertEqual(

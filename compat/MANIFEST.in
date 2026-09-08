@@ -1,0 +1,9 @@
+include pyproject.toml setup.py
+recursive-include shim/cpp_extension/include *
+recursive-include shim/cpp_extension/src *
+recursive-include shim/resources *
+global-exclude *.py[cod]
+global-exclude __pycache__
+global-exclude .DS_Store
+prune build
+prune dist

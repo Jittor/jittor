@@ -1018,7 +1018,7 @@ assert after == before + 1, (before, after)
         import flash_attn
 
         expected = (
-            pathlib.Path(jt.__file__).resolve().parent
+            pathlib.Path(__file__).resolve().parents[3]
             / "compat" / "shim" / "resources" / "stubs"
             / "flash_attn" / "__init__.py"
         )

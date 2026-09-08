@@ -1,11 +1,11 @@
 ---
 name: torch-api-cohort-promotion
-description: 把 compat 层某一族 torch API 从 install 期闭包提升为模块级一等对象并登记保真度（任务 7.03）的完整口径——先核 owner、三件套验收怎么写、`_axis_to_dim` 适配器为什么会让「模块级对象」与 Var 方法不是同一个对象、以及怎么让一个 cohort 真的在 CUDA 上跑一遍而不是只写「CPU N passed」。改 `python/jittor/compat/torch/installers/**` 里的 install 闭包、或要给某个 torch API 写 fidelity 元数据时读这一篇。
+description: 把 compat 层某一族 torch API 从 install 期闭包提升为模块级一等对象并登记保真度（任务 7.03）的完整口径——先核 owner、三件套验收怎么写、`_axis_to_dim` 适配器为什么会让「模块级对象」与 Var 方法不是同一个对象、以及怎么让一个 cohort 真的在 CUDA 上跑一遍而不是只写「CPU N passed」。改 `compat/torch/installers/**` 里的 install 闭包、或要给某个 torch API 写 fidelity 元数据时读这一篇。
 ---
 
 # 把一族 torch API 提升为模块级一等对象
 
-适用对象：`python/jittor/compat/torch/installers/{tensor,nn,numerical,cuda,data}.py`
+适用对象：`compat/torch/installers/{tensor,nn,numerical,cuda,data}.py`
 里那些定义在 `install(...)` / `_install_*(...)` 内部的闭包。目标形态是
 **模块级 def + `register_fidelity` + install 只做绑定**。
 

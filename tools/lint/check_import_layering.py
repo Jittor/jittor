@@ -129,16 +129,20 @@ def scan_roots(root: Path) -> list[tuple[Path, str]]:
     explicit ``{"jittor.backends.cuda": "backends/cuda"}`` maps one dotted
     name onto a directory outside the main source root.
     """
-    package_dir = _load_pyproject(root)["tool"]["setuptools"]["package-dir"]
     roots: list[tuple[Path, str]] = []
-    for name, location in sorted(package_dir.items()):
-        base = root / location
-        if name:
-            roots.append((base, name))
-            continue
-        for child in sorted(base.iterdir()):
-            if child.is_dir() and (child / "__init__.py").is_file():
-                roots.append((child, child.name))
+    projects = [root]
+    if (root / "compat" / "pyproject.toml").is_file():
+        projects.append(root / "compat")
+    for project in projects:
+        package_dir = _load_pyproject(project)["tool"]["setuptools"]["package-dir"]
+        for name, location in sorted(package_dir.items()):
+            base = project / location
+            if name:
+                roots.append((base, name))
+                continue
+            for child in sorted(base.iterdir()):
+                if child.is_dir() and (child / "__init__.py").is_file():
+                    roots.append((child, child.name))
     return roots
 
 
@@ -219,17 +223,24 @@ def _absolute(node: ast.AST, module: str, is_package: bool) -> list[str]:
 
 
 def _import_aliases(root: Path) -> dict[str, str]:
-    path = root / "python" / "jittor" / "compat" / "_aliases.py"
-    if not path.is_file():
-        return {}
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "ALIASES"
-            for target in node.targets
-        ):
-            return ast.literal_eval(node.value)
-    raise ValueError("the module alias registry has no explicit ALIASES mapping")
+    aliases: dict[str, str] = {}
+    for path, declaration in (
+        (root / "python/jittor/_runtime/import_aliases.py", "ALIASES"),
+        (root / "compat/_aliases.py", "COMPAT_ALIASES"),
+    ):
+        if not path.is_file():
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == declaration
+                for target in node.targets
+            ):
+                aliases.update(ast.literal_eval(node.value))
+                break
+        else:
+            raise ValueError("the module alias registry has no explicit %s mapping" % declaration)
+    return aliases
 
 
 def _canonical_import(target: str, aliases: dict[str, str]) -> str:

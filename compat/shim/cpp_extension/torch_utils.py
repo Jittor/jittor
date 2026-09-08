@@ -2,7 +2,7 @@
 
 This module is shared by both entry points:
 
-* deployed ``import torch`` via ``jittor/compat/shim/resources/torch_init.py``
+* deployed ``import torch`` via ``jittor/compat/shim/resources/torch/__init__.py``
 * bare ``import jittor as torch`` via ``jittor.compat.torch``
 
 Keeping the facade here avoids two subtly different BuildExtension/load

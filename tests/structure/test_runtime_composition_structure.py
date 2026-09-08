@@ -18,7 +18,7 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
     def setUpClass(cls):
         cls.repo = Path(__file__).resolve().parents[2]
         cls.jittor = cls.repo / "python" / "jittor"
-        cls.compat = cls.jittor / "compat"
+        cls.compat = cls.repo / "compat"
 
     def test_root_contains_only_preflight_and_post_core_composition(self):
         path = self.jittor / "__init__.py"
@@ -205,7 +205,7 @@ print("RESULT=" + json.dumps({
 
     def test_indirect_deployed_torch_import_does_not_switch_native_mode(self):
         torch_source = (
-            self.compat / "shim" / "resources" / "torch_init.py"
+            self.compat / "shim" / "resources" / "torch" / "__init__.py"
         ).read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

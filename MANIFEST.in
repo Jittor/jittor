@@ -1,10 +1,7 @@
-# Runtime resources consumed by Jittor's compiler and compatibility shims.
+# Runtime resources consumed by Jittor's compiler.
 # Regular Python packages are included by package discovery; these declarations
 # cover runtime files it cannot discover and intentionally avoid catch-alls.
 include python/jittor/__init__.pyi
-recursive-include python/jittor/compat/shim/cpp_extension/include *
-recursive-include python/jittor/compat/shim/cpp_extension/src *
-recursive-include python/jittor/compat/shim/resources *
 recursive-include backends *
 recursive-include python/jittor/contrib/math_util/src *
 recursive-include src *.cc *.h
@@ -18,6 +15,7 @@ recursive-include docs *
 include requirements/examples.txt
 include requirements/docs.in
 include requirements/docs.txt
+prune compat
 
 global-exclude *.py[cod]
 global-exclude *.ipynb

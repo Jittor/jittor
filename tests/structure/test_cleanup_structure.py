@@ -43,7 +43,7 @@ MIGRATION_GUARD_EXPIRY = datetime.date(2027, 3, 1)
 
 
 def _runtime_sources(repo_root):
-    return sorted(path for root in (repo_root / "python/jittor", repo_root / "backends")
+    return sorted(path for root in (repo_root / "python/jittor", repo_root / "backends", repo_root / "compat")
                   for path in root.rglob("*.py"))
 
 
@@ -140,7 +140,7 @@ class TestCleanupStructure(unittest.TestCase):
 
     def test_cross_file_duplicate_implementations_are_reviewed(self):
         implementations: Dict[str, List[Tuple[str, str]]] = {}
-        sources = sorted(path for root in (self.repo_root / "python", self.repo_root / "backends")
+        sources = sorted(path for root in (self.repo_root / "python", self.repo_root / "backends", self.repo_root / "compat")
                          for path in root.rglob("*.py"))
         for path in sources:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -173,18 +173,18 @@ class TestCleanupStructure(unittest.TestCase):
         ]
         deploy_helpers = frozenset(
             {
-                ("python/jittor/compat/shim/deploy.py", "_default_site_packages"),
-                ("python/jittor/compat/triton/deploy.py", "_default_site_packages"),
+                ("compat/shim/deploy.py", "_default_site_packages"),
+                ("compat/triton/deploy.py", "_default_site_packages"),
             }
         )
         stub_fallbacks = frozenset(
             {
                 (
-                    "python/jittor/compat/shim/resources/stubs/torchaudio/__init__.py",
+                    "compat/shim/resources/stubs/torchaudio/__init__.py",
                     "_AnyModule",
                 ),
                 (
-                    "python/jittor/compat/shim/resources/stubs/torchdata/__init__.py",
+                    "compat/shim/resources/stubs/torchdata/__init__.py",
                     "_AnyModule",
                 ),
             }
@@ -340,6 +340,7 @@ class TestCleanupStructure(unittest.TestCase):
             "docs",
             "examples",
             "python",
+            "compat",
             "tests",
             "tools",
         )

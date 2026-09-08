@@ -453,17 +453,17 @@ class TestExternalBackend(unittest.TestCase):
                 )
 
     def test_runtime_modules_share_the_common_import_hook(self):
-        jittor_root = Path(module_patcher.__file__).resolve().parents[1]
+        compat_root = Path(module_patcher.__file__).resolve().parent
         for relative in (
-            "compat/shim/extensions/readonly.py",
+            "shim/extensions/readonly.py",
         ):
-            source = Path(jittor_root, relative).read_text(encoding="utf-8")
+            source = Path(compat_root, relative).read_text(encoding="utf-8")
             with self.subTest(relative=relative):
                 self.assertNotIn("MetaPathFinder", source)
                 self.assertNotIn("PathFinder.find_spec", source)
                 self.assertIn("register_module_patch", source)
     def test_project_runtime_glue_is_not_shipped(self):
-        jittor_root = Path(module_patcher.__file__).resolve().parents[1]
+        jittor_root = Path(__file__).resolve().parents[3] / "python/jittor"
         for relative in (
             "monkeypatch_ops.py",
             "torch_shim",
@@ -472,14 +472,14 @@ class TestExternalBackend(unittest.TestCase):
                 self.assertFalse(Path(jittor_root, relative).exists())
 
     def test_bootstrap_has_no_backend_specific_source_scanner(self):
-        jittor_root = Path(module_patcher.__file__).resolve().parents[1]
-        runtime = Path(jittor_root, "compat", "shim", "runtime.py").read_text(
+        compat_root = Path(module_patcher.__file__).resolve().parent
+        runtime = Path(compat_root, "shim", "runtime.py").read_text(
             encoding="utf-8"
         )
         discovery = Path(
-            jittor_root, "compat", "shim", "discovery.py"
+            compat_root, "shim", "discovery.py"
         ).read_text(encoding="utf-8")
-        flash_root = Path(jittor_root, "compat", "shim", "backends", "flash_attention")
+        flash_root = Path(compat_root, "shim", "backends", "flash_attention")
         flash_paths = list(flash_root.glob("*.py"))
         self.assertTrue(flash_paths)
         flash = "\n".join(path.read_text(encoding="utf-8") for path in flash_paths)

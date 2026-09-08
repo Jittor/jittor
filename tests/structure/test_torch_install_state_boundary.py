@@ -5,10 +5,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 GUIDE = ROOT / "docs/testing/torch-install-state-boundary.md"
 HELPER = ROOT / "tests/_helpers/child_process.py"
-DIST_INSTALLER = ROOT / "python/jittor/compat/torch/installers/distributed.py"
-RUNTIME = ROOT / "python/jittor/compat/shim/runtime.py"
-INTEGRATIONS = ROOT / "python/jittor/compat/integrations.py"
-TORCH_INSTALL = ROOT / "python/jittor/compat/torch/__init__.py"
+DIST_INSTALLER = ROOT / "compat/torch/installers/distributed.py"
+RUNTIME = ROOT / "compat/shim/runtime.py"
+INTEGRATIONS = ROOT / "compat/integrations.py"
+TORCH_INSTALL = ROOT / "compat/torch/__init__.py"
 
 
 def test_install_boundary_distinguishes_namespace_and_process_isolation():

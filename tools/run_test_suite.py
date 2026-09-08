@@ -29,7 +29,7 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 sys.path.insert(0, str(REPO_ROOT / "tests"))
-from _helpers.child_process import PYTHON, run_python_child  # noqa: E402
+from _helpers.child_process import PYTHON, run_python_child, source_python_dir  # noqa: E402
 from _helpers.gate_scope import (  # noqa: E402
     native_arguments,
     torch_arguments,
@@ -120,6 +120,44 @@ def _parse_counts(output):
 
 
 def _warmup(environment):
+    if environment.get("JITTOR_TORCH_SHIM") == "1":
+        source = source_python_dir()
+        expected = str(Path(source).parent / "compat") if source else ""
+        # Read installation metadata without importing Jittor or Torch. A
+        # different checkout's editable frontend must not satisfy this gate.
+        check = r'''
+import json, pathlib, sys
+from urllib.parse import unquote, urlparse
+try:
+    from importlib import metadata
+except ImportError:
+    import importlib_metadata as metadata
+expected = sys.argv[1]
+try:
+    dist = metadata.distribution("jittor-torch")
+except metadata.PackageNotFoundError:
+    dist = None
+valid = dist is not None
+if valid and expected:
+    record = json.loads(dist.read_text("direct_url.json") or "{}")
+    source = pathlib.Path(unquote(urlparse(record.get("url", "")).path)).resolve()
+    valid = record.get("dir_info", {}).get("editable", False) and source == pathlib.Path(expected).resolve()
+if not valid:
+    target = expected or "jittor-torch"
+    print("Torch suite needs the matching frontend installation. Run:", file=sys.stderr)
+    args = [sys.executable, "-m", "pip", "install", "--no-deps", "--no-build-isolation"]
+    if expected:
+        args.append("-e")
+    args.append(target)
+    import shlex
+    print(" ".join(shlex.quote(arg) for arg in args), file=sys.stderr)
+    sys.exit(1)
+'''
+        checked = run_python_child(
+            ["-c", check, expected], cwd=REPO_ROOT, env=environment,
+            inherit=False, merge_stderr=True, timeout=30)
+        if checked.returncode:
+            return checked.returncode, checked.stdout
     probe = (
         "import jittor as jt; "
         "assert not jt.compiler.has_cuda; "

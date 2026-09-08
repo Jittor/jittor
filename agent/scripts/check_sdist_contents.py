@@ -49,6 +49,8 @@ FORBIDDEN_DIRECTORY_NAMES = frozenset(
 FORBIDDEN_TOP_LEVEL_NAMES = frozenset(("doc", "jittor_fsdp2"))
 
 FORBIDDEN_SOURCE_PREFIXES = (
+    "compat/",
+    "python/jittor/compat/",
     "python/jittor/_misc/",
     "python/jittor/_nn/",
     "python/jittor/_pool/",

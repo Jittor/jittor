@@ -35,15 +35,20 @@ REQUIRED_MEMBERS = (
     "jittor/src/core/common.h",
     "jittor/src/bindings/pyjt/py_converter.h",
     "jittor/src/codegen/op_compiler.cc",
-    "jittor/compat/shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
-    "jittor/compat/shim/resources/stubs/flash_attn/flash_attn_interface.py",
-    "jittor/compat/shim/resources/torch_init.py",
     "jittor/backends/cuda/__init__.py",
     "jittor/backends/cuda/include/helper_cuda.h",
     "jittor/backends/cuda/libraries/cutt/include/cutt_wrapper.h",
     "jittor/backends/cuda/kernels/math/src/gamma_grad.h",
     "jittor/backends/cuda/kernels/debug/nan_checker.cu",
     "jittor/backends/acl/kernels/kv_cache.py",
+)
+
+COMPAT_REQUIRED_MEMBERS = (
+    "jittor/compat/__init__.py",
+    "jittor/compat/shim/__init__.py",
+    "jittor/compat/shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
+    "jittor/compat/shim/resources/stubs/flash_attn/flash_attn_interface.py",
+    "torch/__init__.py",
 )
 
 FORBIDDEN_DIRECTORY_NAMES = frozenset(
@@ -132,8 +137,43 @@ FORBIDDEN_SUFFIXES = (
 
 RUNTIME_BUILD_HELPERS = frozenset((
     "jittor/build/__init__.py",
+    "jittor/build/codegen.py",
+    "jittor/build/compilation.py",
+    "jittor/build/compile_extern.py",
+    "jittor/build/compiler.py",
     "jittor/build/dlink_compiler.py",
     "jittor/build/dumpdef.py",
+    "jittor/build/init_cupy.py",
+    "jittor/build/pyjt_compiler.py",
+    "jittor/build/utils/__init__.py",
+    "jittor/build/utils/auto_diff.py",
+    "jittor/build/utils/backend_discovery.py",
+    "jittor/build/utils/backend_resources.py",
+    "jittor/build/utils/bootstrap.py",
+    "jittor/build/utils/build_config.py",
+    "jittor/build/utils/clean_cache.py",
+    "jittor/build/utils/compiler_flags.py",
+    "jittor/build/utils/config.py",
+    "jittor/build/utils/cuda_wheel.py",
+    "jittor/build/utils/env_config.py",
+    "jittor/build/utils/env_manifest.py",
+    "jittor/build/utils/install_cuda.py",
+    "jittor/build/utils/install_msvc.py",
+    "jittor/build/utils/load_pytorch.py",
+    "jittor/build/utils/load_pytorch_old.py",
+    "jittor/build/utils/lock.py",
+    "jittor/build/utils/manifest.py",
+    "jittor/build/utils/misc.py",
+    "jittor/build/utils/preflight.py",
+    "jittor/build/utils/probe.py",
+    "jittor/build/utils/query_cuda_cc.py",
+    "jittor/build/utils/ring_buffer.py",
+    "jittor/build/utils/runtime_services.py",
+    "jittor/build/utils/save_pytorch.py",
+    "jittor/build/utils/student_queue.py",
+    "jittor/build/utils/class/motd",
+    "jittor/build/utils/class/setup.py",
+    "jittor/build/utils/class/setup_env.py",
 ))
 
 
@@ -296,14 +336,21 @@ def _pollution_reason(name):
     return None
 
 
-def _candidate_issues(members, extra_required):
+def _candidate_issues(members, extra_required, profile="core"):
     issues = []
     names = frozenset(members)
-    required = set(REQUIRED_MEMBERS)
+    required = set(COMPAT_REQUIRED_MEMBERS if profile == "compat" else REQUIRED_MEMBERS)
     required.update(extra_required)
     for name in sorted(required - names):
         issues.append("required wheel member is missing: {}".format(name))
     for name in sorted(names):
+        if profile == "core" and name.startswith(("jittor/compat/", "torch/")):
+            issues.append("compatibility member in core wheel: {}".format(name))
+        if profile == "compat" and not (
+            name.startswith(("jittor/compat/", "torch/"))
+            or PurePosixPath(name).parts[0].endswith(".dist-info")
+        ):
+            issues.append("non-compatibility member in compat wheel: {}".format(name))
         reason = _pollution_reason(name)
         if reason is not None:
             issues.append("polluting wheel member ({}): {}".format(reason, name))
@@ -325,7 +372,7 @@ def _manifest_text(wheel_path, members):
 def _write_manifest(args):
     wheel_path = Path(args.wheel)
     members, wheel_issues = _read_wheel(wheel_path)
-    issues = wheel_issues + _candidate_issues(members, args.require)
+    issues = wheel_issues + _candidate_issues(members, args.require, args.profile)
     if issues:
         for issue in issues:
             print("ERROR: {}".format(issue), file=sys.stderr)
@@ -349,6 +396,8 @@ def _load_reference(args):
         if issues:
             raise WheelContentsError("; ".join(issues))
         return members, "wheel {}".format(path)
+    if args.profile == "compat" and args.baseline is None:
+        raise WheelContentsError("compat comparison requires --baseline or --old-wheel")
     path = Path(args.baseline or DEFAULT_BASELINE)
     return _read_hashed_path_list(path, "baseline"), "baseline {}".format(path)
 
@@ -368,6 +417,8 @@ def _load_removal_allowlist(args, reference):
 
 
 def _uses_default_policy(args):
+    if args.profile != "core":
+        return False
     if args.old_wheel is not None:
         return False
     if args.baseline is None:
@@ -486,7 +537,7 @@ def _compare(args):
     unconsumed_content_change_allowances = set(allowed_content_changes) - changed
 
     issues = list(candidate_archive_issues)
-    issues.extend(_candidate_issues(candidate, args.require))
+    issues.extend(_candidate_issues(candidate, args.require, args.profile))
     for name in sorted(unexpected_removals):
         issues.append("wheel member removed without approval: {}".format(name))
     for name in sorted(unconsumed_removal_allowances):
@@ -554,6 +605,16 @@ def _compare(args):
         return 1
     print("wheel contents OK")
     return 0
+
+
+def _audit(args):
+    members, issues = _read_wheel(args.wheel)
+    issues.extend(_candidate_issues(members, args.require, args.profile))
+    for issue in issues:
+        print("ERROR: {}".format(issue), file=sys.stderr)
+    if not issues:
+        print("{} wheel contents OK ({} paths)".format(args.profile, len(members)))
+    return 1 if issues else 0
 
 
 def _build_parser():
@@ -637,6 +698,13 @@ def _build_parser():
         help="require an additional exact member path",
     )
     compare.set_defaults(run=_compare)
+    audit = subparsers.add_parser("audit", help="check required resources and distribution ownership")
+    audit.add_argument("wheel", help="candidate wheel to audit")
+    audit.add_argument("--require", action="append", default=[], metavar="WHEEL_PATH")
+    audit.set_defaults(run=_audit)
+    for command in (manifest, compare, audit):
+        command.add_argument("--profile", choices=("core", "compat"), default="core",
+                             help="distribution resource profile (default: core)")
     return parser
 
 

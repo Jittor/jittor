@@ -37,7 +37,7 @@ environments and also compiles the tree with a real Python 3.7 interpreter.
 ```bash
 git clone https://github.com/<your-account>/jittor.git
 cd jittor
-python -m pip install -e .
+python -m pip install -e . -e ./compat
 python -m pip install -r requirements/dev-tools.txt
 python -m jittor.selftest
 ```

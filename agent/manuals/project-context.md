@@ -34,7 +34,7 @@ current tree has:
 
 - normal packages for `jittor.nn`, `jittor.misc`, `jittor.pool`, and
   `jittor.compat.torch`;
-- compatibility domains under `jittor.compat`, including FSDP2 and Triton;
+- compatibility domains (`jittor.compat`) owned by the top-level `compat/` independent `jittor-torch` project;
 - repository tests under root `tests/`, examples under `examples/`, tools under
   `tools/`, and ASV benchmarks under `benchmarks/`;
 - `pyproject.toml` as package/tool configuration and `noxfile.py` as the

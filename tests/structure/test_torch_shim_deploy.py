@@ -15,8 +15,6 @@ from unittest import mock
 # Loading the leaf file avoids importing jittor and starting its JIT runtime.
 _MODULE_PATH = (
     Path(__file__).resolve().parents[2]
-    / "python"
-    / "jittor"
     / "compat"
     / "shim"
     / "deploy.py"
@@ -102,7 +100,8 @@ class TestTorchShimDeploy(unittest.TestCase):
         target = base / "target"
         (source / "stubs" / "example" / "nested").mkdir(parents=True)
         (source / "torch_dist_info").mkdir()
-        (source / "torch_init.py").write_text("shim = True\n", encoding="utf-8")
+        (source / "torch").mkdir(exist_ok=True)
+        (source / "torch" / "__init__.py").write_text("shim = True\n", encoding="utf-8")
         (source / "torch_dist_info" / "METADATA").write_text(
             "Name: torch\nVersion: 9.9.0\n", encoding="utf-8"
         )
@@ -214,7 +213,8 @@ class TestTorchShimDeploy(unittest.TestCase):
         self.addCleanup(temporary_directory.cleanup)
         source = Path(temporary_directory.name) / "source"
         source.mkdir()
-        (source / "torch_init.py").write_text("shim = True\n", encoding="utf-8")
+        (source / "torch").mkdir(exist_ok=True)
+        (source / "torch" / "__init__.py").write_text("shim = True\n", encoding="utf-8")
 
         with self.assertRaisesRegex(RuntimeError, "stubs directory"):
             deploy_module._plan(source / "target", resource_root=source)
@@ -242,7 +242,8 @@ class TestTorchShimDeploy(unittest.TestCase):
         complete.mkdir(parents=True)
         incomplete.mkdir()
         metadata.parent.mkdir()
-        (source / "torch_init.py").write_text("shim = True\n", encoding="utf-8")
+        (source / "torch").mkdir(exist_ok=True)
+        (source / "torch" / "__init__.py").write_text("shim = True\n", encoding="utf-8")
         (complete / "__init__.py").write_text("stub = True\n", encoding="utf-8")
         (incomplete / "api.py").write_text("stub = False\n", encoding="utf-8")
         metadata.write_text("Name: torch\nVersion: 9.9.0\n", encoding="utf-8")
@@ -260,7 +261,8 @@ class TestTorchShimDeploy(unittest.TestCase):
         package.mkdir(parents=True)
         bytecode_cache.mkdir()
         metadata.parent.mkdir()
-        (source / "torch_init.py").write_text("shim = True\n", encoding="utf-8")
+        (source / "torch").mkdir(exist_ok=True)
+        (source / "torch" / "__init__.py").write_text("shim = True\n", encoding="utf-8")
         (package / "__init__.py").write_text("stub = True\n", encoding="utf-8")
         (bytecode_cache / "__init__.cpython-311.pyc").write_bytes(b"bytecode")
         metadata.write_text("Name: torch\nVersion: 9.9.0\n", encoding="utf-8")
@@ -280,7 +282,8 @@ class TestTorchShimDeploy(unittest.TestCase):
         metadata = source / "torch_dist_info" / "METADATA"
         package.mkdir(parents=True)
         metadata.parent.mkdir()
-        (source / "torch_init.py").write_text("shim = True\n", encoding="utf-8")
+        (source / "torch").mkdir(exist_ok=True)
+        (source / "torch" / "__init__.py").write_text("shim = True\n", encoding="utf-8")
         package_init = package / "__init__.py"
         package_init.write_text("stub = True\n", encoding="utf-8")
         metadata.write_text("Name: torch\nVersion: 9.9.0\n", encoding="utf-8")

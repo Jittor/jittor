@@ -24,6 +24,8 @@ class BuildPythonWithCore(build_py):
         return super().get_outputs(include_bytecode) + [str(target) for _, target in self.core_files()]
 
 
-setup(cmdclass={"build_py": BuildPythonWithCore}, packages=find_packages("python") + [
+setup(cmdclass={"build_py": BuildPythonWithCore}, packages=find_packages(
+    "python", exclude=("jittor.compat", "jittor.compat.*")
+) + [
     "jittor.backends." + name for name in find_packages("backends")
 ])

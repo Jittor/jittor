@@ -143,7 +143,7 @@ RATCHET_FILES = (
     "docs/conf.py",
     "python/jittor/selftest.py",
     "python/jittor_utils/cuda_wheel.py",
-    "python/jittor/compat/shim/deploy.py",
+    "compat/shim/deploy.py",
     "tests/_helpers/torch_runtime.py",
     "tests/compat/torch/test_torchmetrics_compat.py",
     "tests/conftest.py",
@@ -538,8 +538,9 @@ def _source_copy(destination):
 
     def ignore_generated(path, names):
         excluded = set(ignored(path, names))
-        # tools/build is source-owned; every other build directory is generated.
-        if Path(path).resolve() != REPO_ROOT / "tools" and "build" in names:
+        # Native compiler and repository build tools are source-owned.
+        source_build_parents = (REPO_ROOT / "tools", REPO_ROOT / "python/jittor")
+        if Path(path).resolve() not in source_build_parents and "build" in names:
             excluded.add("build")
         return excluded
 
@@ -694,6 +695,26 @@ def _run_pytest(session, defaults, env, runner=None):
                              runner, timeout=600)
 
 
+_COMPAT_SOURCE_INSTALLS = set()
+
+
+def _install_compat_source(session, env, runner=None):
+    """Install the optional distribution for source-tree compatibility gates."""
+    source_root = env.get("JITTOR_SOURCE_ROOT", os.environ.get("JITTOR_SOURCE_ROOT"))
+    if source_root == "":
+        return  # An installed-artifact gate must use only its installed wheels.
+    source = Path(source_root).expanduser().resolve() if source_root else REPO_ROOT
+    python = runner or "python"
+    key = (id(session), python, str(source))
+    if key in _COMPAT_SOURCE_INSTALLS:
+        return
+    session.run(
+        python, "-m", "pip", "install", "--no-deps", "--no-build-isolation",
+        "-e", str(source / "compat"), external=runner is not None,
+    )
+    _COMPAT_SOURCE_INSTALLS.add(key)
+
+
 def _run_pytest_once(session, args, env, runner=None, timeout=900):
     """One pytest process for one whole set of paths.
 
@@ -703,6 +724,7 @@ def _run_pytest_once(session, args, env, runner=None, timeout=900):
     reporting one failure per run instead of all of them.
     """
     python = runner or "python"
+    _install_compat_source(session, env, runner)
     session.run(
         python,
         "-m",
@@ -755,7 +777,9 @@ def _install_docs_wheel(session, root, env):
     wheels = sorted(dist.glob("*.whl"))
     if len(wheels) != 1:
         session.error("expected exactly one documentation wheel, found %d" % len(wheels))
-    session.install("--no-deps", "--force-reinstall", str(wheels[0]))
+    compat_dist = root / "compat-dist"
+    compat_wheel = _build_compat_distribution(session, source, compat_dist, env)
+    session.install("--no-deps", "--force-reinstall", str(wheels[0]), str(compat_wheel))
 
     docs_env = env.copy()
     docs_env["PYTHONPATH"] = None
@@ -1061,6 +1085,7 @@ def structure(session):
         "tqdm==4.67.1",
     )
     session.run("bash", "agent/scripts/check_repo_layout.sh", external=True, env=env)
+    _install_compat_source(session, env)
     test_paths = tuple(session.posargs) or STRUCTURE_TESTS
     session.run(
         "python",
@@ -1071,6 +1096,21 @@ def structure(session):
         *test_paths,
         env=env,
     )
+
+
+def _build_compat_distribution(session, source, dist, env):
+    session.run(
+        "python", "-m", "build", "--no-isolation", "--sdist", "--wheel",
+        "--outdir", str(dist), str(source / "compat"), env=env,
+    )
+    wheels = sorted(dist.glob("*.whl"))
+    if len(wheels) != 1:
+        session.error("expected exactly one compatibility wheel, found %d" % len(wheels))
+    session.run(
+        "python", str(REPO_ROOT / "agent/scripts/check_wheel_contents.py"),
+        "audit", str(wheels[0]), "--profile", "compat", env=env,
+    )
+    return wheels[0]
 
 
 @nox.session(python="3.11")
@@ -1165,6 +1205,21 @@ def packaging(session):
     selftest_env["cache_name"] = "nox_wheel_selftest"
     with session.chdir(root):
         session.run("python", "-m", "jittor.selftest", env=selftest_env)
+
+    # Install both wheels together: pip --target must merge their disjoint
+    # jittor/ members in one transaction rather than replacing that directory.
+    compat_wheel = _build_compat_distribution(session, source, root / "compat-dist", env)
+    session.run(
+        "python", "-m", "pip", "install", "--no-deps", "--upgrade",
+        "--target", str(wheel_install), str(wheels[0]), str(compat_wheel), env=env,
+    )
+    with session.chdir(root):
+        session.run(
+            "python", "-c",
+            "import torch, jittor; assert torch is not jittor; "
+            "x = torch.tensor([2.0], requires_grad=True); (x*x).sum().backward(); "
+            "assert x.grad.item() == 4.0", env=selftest_env,
+        )
 
 
 @nox.session(python="3.11", venv_backend="venv")

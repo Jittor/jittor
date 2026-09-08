@@ -137,7 +137,7 @@ class TestTorchCompatStructure(unittest.TestCase):
             ("shim/cpp_extension/torch_utils.py", "load", "import_name"),
             ("shim/resources/stubs/torchaudio/__init__.py", "__getattr__", "<f-string>"),
             ("shim/resources/stubs/torchdata/__init__.py", "__getattr__", "<f-string>"),
-            ("shim/resources/torch_init.py", "<module>", "__name__"),
+            ("shim/resources/torch/__init__.py", "<module>", "__name__"),
             ("shim/runtime.py", "enable", repr("torch")),
             ("vllm/__init__.py", "install", "name"),
             ("vllm/flash_attn.py", "install", "_BUNDLE"),
@@ -208,10 +208,10 @@ class TestTorchCompatStructure(unittest.TestCase):
 
     def test_legacy_physical_scaffolding_is_absent(self):
         package_root = Path(types.__file__).resolve().parent
-        jittor_root = package_root.parents[1]
+        jittor_root = Path(__file__).resolve().parents[2] / "python/jittor"
         self.assertFalse((jittor_root / "torch_compat.py").exists())
         self.assertFalse((jittor_root / "_torch_compat").exists())
-        self.assertTrue((jittor_root / "compat" / "__init__.py").is_file())
+        self.assertTrue((package_root.parent / "__init__.py").is_file())
 
     def test_canonical_package_reexports_domain_symbols(self):
         expected = {
@@ -368,12 +368,17 @@ class TestTorchCompatStructure(unittest.TestCase):
 
     def test_package_discovery_includes_only_canonical_compat_packages(self):
         package_root = Path(types.__file__).resolve().parent
-        repo_root = package_root.parents[3]
+        repo_root = Path(__file__).resolve().parents[2]
         if not (repo_root / "pyproject.toml").is_file():
             self.skipTest("packaging metadata is only available in a source checkout")
         from setuptools import find_packages
 
-        packages = find_packages(where=str(repo_root / "python"))
+        native_packages = find_packages(where=str(repo_root / "python"))
+        self.assertNotIn("jittor.compat", native_packages)
+        packages = ["jittor.compat"] + [
+            "jittor.compat." + name
+            for name in find_packages(where=str(repo_root / "compat"))
+        ]
         self.assertIn("jittor.compat", packages)
         self.assertIn("jittor.compat.torch", packages)
         self.assertNotIn("jittor._torch_compat", packages)

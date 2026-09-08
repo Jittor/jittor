@@ -19,7 +19,7 @@ from pathlib import Path
 import jittor
 
 
-_COMPAT = Path(jittor.__file__).resolve().parent / "compat"
+_COMPAT = Path(__file__).resolve().parents[2] / "compat"
 
 #: Installing ``torch.distributed`` is precisely when the FSDP2 surface has to
 #: be hung off it, and the objects that needs exist only there. It is

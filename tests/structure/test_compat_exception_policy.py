@@ -10,7 +10,7 @@ SystemExit, so a full disk read as "the optional feature is unavailable", and
 absorbed NameError and AssertionError, which are this layer's own bugs.
 
 These are rules, not an inventory: they say what a handler in
-``python/jittor/compat`` must look like, and they fail on any new one that does
+``compat`` must look like, and they fail on any new one that does
 not. See ``jittor/compat/diagnostics.py`` for the policy tuple and the recorder.
 """
 
@@ -21,7 +21,7 @@ from pathlib import Path
 import jittor
 
 
-_COMPAT = Path(jittor.__file__).resolve().parent / "compat"
+_COMPAT = Path(__file__).resolve().parents[2] / "compat"
 _POLICY = "EXPECTED"
 
 

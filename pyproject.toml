@@ -47,10 +47,6 @@ perf = [
 [project.urls]
 Homepage = "http://jittor.org"
 
-[project.scripts]
-jittor-triton-shim = "jittor.compat.triton.deploy:main"
-jittor-torch-shim = "jittor.compat.shim.deploy:main"
-
 [project.entry-points."jittor.backends"]
 acl = "jittor.backends.acl"
 rocm = "jittor.backends.rocm"
@@ -67,7 +63,7 @@ version = { attr = "jittor.__version__" }
 required-version = "==0.15.22"
 target-version = "py37"
 line-length = 100
-src = ["python", "tests", "tools", "examples"]
+src = ["python", "compat", "tests", "tools", "examples"]
 
 [tool.ruff.lint]
 # Start with deterministic correctness and Python-compatibility checks. Expand
@@ -95,7 +91,7 @@ files = [
     "agent/scripts/check_wheel_contents.py",
     "python/jittor_utils",
     "python/jittor/build/utils",
-    "python/jittor/compat/shim/deploy.py",
+    "compat/shim/deploy.py",
     "tools/lint/check_import_layering.py",
     "tools/release/pack_offline.py",
     "tests/structure/test_cleanup_structure.py",

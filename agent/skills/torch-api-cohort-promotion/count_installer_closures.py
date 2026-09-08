@@ -50,7 +50,7 @@ def installers(path):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--root", default="python/jittor/compat",
+        "--root", default="compat",
         help="directory to scan (default: the compat tree)")
     parser.add_argument(
         "--only", nargs="*", default=None,

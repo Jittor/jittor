@@ -44,9 +44,9 @@ class TestWhatLeftTheDrawer(unittest.TestCase):
     #: source name -> (new location, the caller that names it)
     _MOVED = {
         # The PyTorch-source translator is compatibility code, not a utility.
-        "pytorch_converter.py": PACKAGE / "compat" / "pytorch_converter.py",
+        "pytorch_converter.py": REPO_ROOT / "compat" / "pytorch_converter.py",
         # Its HTTP front end belongs next to the translator it exposes.
-        "converter_server.py": PACKAGE / "compat" / "converter_server.py",
+        "converter_server.py": REPO_ROOT / "compat" / "converter_server.py",
         # Things a user runs against their own model.
         "nvtx.py": PACKAGE / "tools" / "nvtx.py",
         "jtune.py": PACKAGE / "tools" / "jtune.py",
@@ -90,7 +90,7 @@ class TestWhatLeftTheDrawer(unittest.TestCase):
     def test_legacy_converter_service_is_absent(self):
         self.assertFalse(
             (REPO_ROOT / "tools" / "services" / "legacy").exists())
-        server = _text(PACKAGE / "compat" / "converter_server.py")
+        server = _text(REPO_ROOT / "compat" / "converter_server.py")
         self.assertNotIn("tools/services/legacy", server)
 
     def test_the_user_tools_package_costs_nothing_to_have(self):

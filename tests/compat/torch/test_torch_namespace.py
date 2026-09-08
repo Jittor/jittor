@@ -399,7 +399,7 @@ def test_distribution_manifest_has_no_backend_import_dependency():
     import ast
     import pathlib
 
-    source = pathlib.Path(__file__).resolve().parents[3] / "python/jittor/compat/torch/distribution.py"
+    source = pathlib.Path(__file__).resolve().parents[3] / "compat/torch/distribution.py"
     tree = ast.parse(source.read_text(encoding="utf-8"))
     imports = [
         node for node in ast.walk(tree)

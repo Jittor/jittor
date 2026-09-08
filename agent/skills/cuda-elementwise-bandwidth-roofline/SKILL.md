@@ -244,7 +244,7 @@ reduce/norm 1.20、other 0.84。
 | 裸 `transpose`（565 GB/s，写合并读不合并） | 0.10 ms | `src/ops/transpose_op.cc` |
 | 一堆几乎不搬数据的小 kernel（约 60 次、每次约 1.6 µs） | 0.23 ms | 纯 launch 延迟，改不动 |
 
-**float64 那条值得单独记**：`python/jittor/compat/torch/installers/tensor.py`
+**float64 那条值得单独记**：`compat/torch/installers/tensor.py`
 的 `_make_truediv` 对「float32 张量 ÷ Python float」**故意加宽到 float64**
 （注释说是为 1-ulp 对齐 PyTorch）。sm_89 的 FP64 是 FP32 的 1/64，
 于是 diffusers `ResnetBlock2D` 那句 `(input + hidden) / self.output_scale_factor`
