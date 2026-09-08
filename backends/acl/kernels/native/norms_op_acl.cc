@@ -176,8 +176,7 @@ namespace jittor
         bool outputMaskValues[3] = {true, true, true};
         std::unique_ptr<aclBoolArray, decltype(&aclDestroyBoolArray)> outputMask(
             aclCreateBoolArray(outputMaskValues, 3), aclDestroyBoolArray);
-        CHECK_RET(outputMask != nullptr,
-                  LOG_PRINT("%s: aclCreateBoolArray failed.\n", name.c_str()); return);
+        if (!outputMask) LOGf << name << ": aclCreateBoolArray failed";
         ret = aclnnGroupNormBackwardGetWorkspaceSize(
             inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3],
             inputTensors[4], attr->batch, attr->channels, attr->spatialSize,

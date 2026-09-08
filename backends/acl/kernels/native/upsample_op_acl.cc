@@ -15,8 +15,7 @@ namespace jittor
         std::unique_ptr<aclIntArray, decltype(&aclDestroyIntArray)> outputSize(
             aclCreateIntArray(attr->outputSize.data(), attr->outputSize.size()),
             aclDestroyIntArray);
-        CHECK_RET(outputSize != nullptr,
-                  LOG_PRINT("%s: aclCreateIntArray failed.\n", name.c_str()); return);
+        if (!outputSize) LOGf << name << ": aclCreateIntArray failed";
         ret = aclnnUpsampleNearest2dGetWorkspaceSize(
             inputTensors[0], outputSize.get(), outputTensors[0],
             &workspaceSize, &executor);
@@ -39,8 +38,7 @@ namespace jittor
         std::unique_ptr<aclIntArray, decltype(&aclDestroyIntArray)> inputSize(
             aclCreateIntArray(attr->inputSize.data(), attr->inputSize.size()),
             aclDestroyIntArray);
-        CHECK_RET(outputSize != nullptr && inputSize != nullptr,
-                  LOG_PRINT("%s: aclCreateIntArray failed.\n", name.c_str()); return);
+        if (!outputSize || !inputSize) LOGf << name << ": aclCreateIntArray failed";
         ret = aclnnUpsampleNearest2dBackwardGetWorkspaceSize(
             inputTensors[0], outputSize.get(), inputSize.get(), 0.0, 0.0,
             outputTensors[0], &workspaceSize, &executor);
