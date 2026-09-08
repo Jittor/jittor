@@ -29,7 +29,8 @@ class LogitRelaxedBernoulli(Distribution):
 
     def __init__(self, temperature, probs=None, logits=None, validate_args=None):
         import jittor as jt
-        assert (probs is not None) or (logits is not None)
+        if probs is None and logits is None:
+            raise ValueError("RelaxedBernoulli requires probs or logits")
         self.temperature = temperature
         if logits is not None:
             self.logits = logits
