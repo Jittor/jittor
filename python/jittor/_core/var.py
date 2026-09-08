@@ -450,7 +450,8 @@ Var.std = std
 
 def norm(x, p=2, dim=-1, keepdims=False, eps=1e-30, keepdim=False):
     keepdim = keepdim or keepdims
-    assert p==1 or p==2
+    if p not in (1, 2):
+        raise ValueError("norm: only p=1 and p=2 are supported")
     if p==1:
         return x.abs().sum(dim, keepdim)
     if p==2:
