@@ -92,9 +92,10 @@ def acl_code(
     if outputs is not None:
         output_count = len(outputs)
     else:
-        assert output_dtypes is not None
-        assert output_shapes is not None
-        assert len(output_dtypes) == len(output_shapes)
+        if output_dtypes is None or output_shapes is None:
+            raise ValueError("ACL code requires output_dtypes and output_shapes")
+        if len(output_dtypes) != len(output_shapes):
+            raise ValueError("ACL code output dtypes and shapes must have equal length")
         output_count = len(output_shapes)
 
     input_code = "".join("op.add(in{}, true);\n".format(index) for index in range(len(inputs)))
