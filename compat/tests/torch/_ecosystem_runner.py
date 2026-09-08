@@ -92,7 +92,11 @@ def _import_torch(runtime):
     # Python package site can expose Jittor's deployed torchvision facade.
     try:
         import torchvision  # noqa: F401
-    except ImportError:
+    except Exception:
+        # torchvision is optional for the transformer cases.  Some reference
+        # environments ship a mismatched torchvision wheel whose import raises
+        # RuntimeError while registering compiled operators; that must not
+        # prevent unrelated torch-only models from running.
         pass
     _activate_package_site()
     return torch
