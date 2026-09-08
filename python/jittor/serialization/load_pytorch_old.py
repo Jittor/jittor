@@ -34,11 +34,16 @@ def get_dtype_size(dtype):
 
 def persistent_load(saved_id):
     global contents
-    assert isinstance(saved_id, tuple)
+    if not isinstance(saved_id, tuple):
+        raise TypeError("persistent_load: saved id must be a tuple")
     typename = _maybe_decode_ascii(saved_id[0])
     data = saved_id[1:]
-    assert typename == 'storage', \
-        f"Unknown typename for persistent_load, expected 'storage' but got '{typename}'"
+    if typename != "storage":
+        raise ValueError(
+            "Unknown typename for persistent_load, expected 'storage' but got '{}'".format(
+                typename
+            )
+        )
     storage_type, key, location, numel = data
     dtype = storage_type.dtype
     if key not in loaded_storages:
