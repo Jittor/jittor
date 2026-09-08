@@ -16,7 +16,12 @@ from .discrete import Categorical, OneHotCategorical, Geometric, Bernoulli
 
 def kl_divergence(cur_dist, old_dist):
     import jittor as jt
-    assert isinstance(cur_dist, type(old_dist))
+    if not isinstance(cur_dist, type(old_dist)):
+        raise TypeError(
+            "kl_divergence: distributions must have matching types ({} vs {})".format(
+                type(cur_dist).__name__, type(old_dist).__name__
+            )
+        )
     if isinstance(cur_dist, Normal):
         vr = (cur_dist.sigma / old_dist.sigma)**2
         t1 = ((cur_dist.mu - old_dist.mu) / old_dist.sigma)**2
