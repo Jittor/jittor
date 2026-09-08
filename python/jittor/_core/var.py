@@ -597,7 +597,8 @@ def detach(x):
 def unsqueeze(x, dim):
     shape = list(x.shape)
     if dim < 0: dim += len(shape) + 1
-    assert dim <= len(shape)
+    if dim < 0 or dim > len(shape):
+        raise IndexError("unsqueeze: dimension {} out of range".format(dim))
     return x.reshape(shape[:dim] + [1] + shape[dim:])
 
 Var.unsqueeze = unsqueeze
@@ -612,7 +613,8 @@ def squeeze(x, dim=None):
         return x.reshape(new_shape if new_shape else [1])
     else:
         if dim < 0: dim += len(shape)
-        assert dim < len(shape) and dim >= 0
+        if dim < 0 or dim >= len(shape):
+            raise IndexError("squeeze: dimension {} out of range".format(dim))
         # torch (and numpy): squeeze(dim) is a no-op when that dim's size != 1,
         # not an error (canine's _downsample_attention_mask relies on this).
         if shape[dim] != 1:
