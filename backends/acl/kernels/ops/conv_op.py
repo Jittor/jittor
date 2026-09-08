@@ -65,7 +65,8 @@ def _conv_output_shape(x, weight, stride, padding, dilation):
 
 class _ConvACLNoBias:
     def __call__(self, x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
-        assert bias is None
+        if bias is not None:
+            raise ValueError("Conv2d no-bias runner received a bias tensor")
         padding = _pair(padding)
         stride = _pair(stride)
         dilation = _pair(dilation)
