@@ -8,6 +8,7 @@
 #include "runtime/configuration.h"
 #include "runtime/backend.h"
 #include "runtime/backend_fallback.h"
+#include "runtime/launch_diagnostics.h"
 
 namespace jittor {
 
@@ -28,6 +29,7 @@ public:
     StartupConfigState& startup_config() { return startup_config_; }
     BackendRegistry& backends() { return backends_; }
     BackendFallbackState& fallbacks() { return fallbacks_; }
+    LaunchHistory& launches() { return launches_; }
 
 private:
     Executor executor_;
@@ -39,6 +41,7 @@ private:
     StartupConfigState startup_config_;
     BackendRegistry backends_;
     BackendFallbackState fallbacks_;
+    LaunchHistory launches_;
 };
 
 EXTERN_LIB NativeRuntime& native_runtime();

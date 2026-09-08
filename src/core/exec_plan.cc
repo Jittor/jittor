@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <queue>
 #include "core/exec_plan.h"
+#include "runtime/launch_diagnostics.h"
 #include "core/var.h"
 #include "core/op.h"
 #include "core/fuser.h"
@@ -82,6 +83,7 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                 ExecutionBackendScope backend_scope(n->op()->requested_backend());
                 TensorPlacementScope placement_scope(n->op()->graph_placement());
                 Float32PrecisionScope precision_scope(n->op()->float32_precision);
+                LaunchOriginScope origin_scope(n->op()->launch_origin);
                 n->op()->graph_optimize();
                 n->op()->set_flag(OpFlags::_has_gopt, 0);
             }

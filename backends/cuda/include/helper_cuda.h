@@ -18,6 +18,7 @@
 #pragma once
 
 #include "utils/log.h"
+#include "runtime/launch_diagnostics.h"
 
 #include <stdexcept>
 #include <stdint.h>
@@ -133,7 +134,7 @@ void check(T result, char const *const func, const char *const file,
     // DEVICE_RESET
     LOGf << "CUDA error at" << file >> ":" >> line << " code="
       >> static_cast<unsigned int>(result) >> "(" << _cudaGetErrorEnum(result) << ")"
-      << func;
+      << func << jittor::cuda_launch_error_context();
   }
 }
 

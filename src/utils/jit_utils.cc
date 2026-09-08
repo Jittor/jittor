@@ -26,7 +26,11 @@ namespace jittor {
 bool check_async_executor_error(const std::exception& e, std::ostream& os) {
     if (!e.what()) return false;
     auto s = string(e.what());
-    if (s.find("executor.cc:") == string::npos) 
+    if (s.find("[Recent launch candidates]") != string::npos) {
+        os << s;
+        return true;
+    }
+    if (s.find("executor.cc:") == string::npos && s.find("exec_runner.cc:") == string::npos)
         return false;
     os << s;
     if (getenv("JT_SYNC") && getenv("trace_py_var"))

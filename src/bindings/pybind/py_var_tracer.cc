@@ -16,6 +16,7 @@
 #include "core/op.h"
 #include "core/var.h"
 #include "core/fused_op.h"
+#include "runtime/launch_diagnostics.h"
 
 namespace jittor {
 
@@ -101,6 +102,47 @@ static PyFrameObject* frame_back(PyFrameObject* f) {
     return back;
     #endif
 }
+
+// A location, not a retained frame or a full module/value trace. Capture at
+// construction while the GIL is held; launch and error paths use native data.
+static uint64 capture_python_launch_origin() {
+    if (!Py_IsInitialized() || !PyGILState_Check()) return 0;
+    PyObject *error_type=nullptr, *error_value=nullptr, *error_traceback=nullptr;
+    PyErr_Fetch(&error_type, &error_value, &error_traceback);
+    uint64 result = 0;
+    PyFrameObject* frame = PyEval_GetFrame(); // borrowed
+    Py_XINCREF(frame);
+    for (int depth=0; frame && depth<64; ++depth) {
+        PyObject* globals = PyObject_GetAttrString((PyObject*)frame, "f_globals");
+        PyObject* module = globals && PyDict_Check(globals) ? PyDict_GetItemString(globals, "__name__") : nullptr;
+        const char* name = module && PyUnicode_Check(module) ? PyUnicode_AsUTF8(module) : nullptr;
+        bool internal = name && (!strcmp(name, "jittor") || !strncmp(name, "jittor.", 7)
+                                  || !strcmp(name, "torch") || !strncmp(name, "torch.", 6));
+        Py_XDECREF(globals);
+        if (!internal) {
+            PyObject* code = frame_code(frame);
+            PyObject* file = code ? PyObject_GetAttrString(code, "co_filename") : nullptr;
+            const char* path = file && PyUnicode_Check(file) ? PyUnicode_AsUTF8(file) : nullptr;
+            if (path) result = runtime_launch_history().intern_origin(path, PyFrame_GetLineNumber(frame));
+            Py_XDECREF(file);
+            Py_XDECREF(code);
+            break;
+        }
+        auto* previous = frame;
+        frame = frame_back(frame);
+        Py_DECREF(previous);
+    }
+    Py_XDECREF(frame);
+    PyErr_Clear();
+    PyErr_Restore(error_type, error_value, error_traceback);
+    return result;
+}
+
+struct LaunchOriginRegistration {
+    LaunchOriginRegistration() { set_launch_origin_capture(capture_python_launch_origin); }
+    ~LaunchOriginRegistration() { set_launch_origin_capture(nullptr); }
+};
+static LaunchOriginRegistration launch_origin_registration;
 
 // New reference to an attribute of the frame's code object, or nullptr.
 static PyObject* code_attr(PyFrameObject* f, const char* name) {

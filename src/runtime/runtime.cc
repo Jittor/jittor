@@ -32,6 +32,8 @@ Executor& runtime_executor() {
     return native_runtime().executor();
 }
 
+LaunchHistory& runtime_launch_history() { return native_runtime().launches(); }
+
 SubmissionPipeline& runtime_submission_pipeline() {
     return native_runtime().submissions();
 }

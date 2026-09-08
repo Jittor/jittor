@@ -1,6 +1,7 @@
 #include "runtime/backend.h"
 #include "runtime/runtime.h"
 #include "runtime/executor_entry.h"
+#include "runtime/launch_diagnostics.h"
 #include "mem/allocator.h"
 #include <stdexcept>
 
@@ -89,7 +90,9 @@ void backend_synchronize(Device device) {
 }
 
 BackendStream backend_stream(Device device, BackendStreamKind kind) {
-    return {device, backend_ops(device.backend).stream(device.index, kind)};
+    BackendStream stream{device, backend_ops(device.backend).stream(device.index, kind)};
+    if (kind != BackendStreamKind::Compute) record_active_launch(stream);
+    return stream;
 }
 
 BackendEvent backend_event(Device device, bool timing) {

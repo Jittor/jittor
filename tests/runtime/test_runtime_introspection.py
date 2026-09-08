@@ -119,6 +119,23 @@ def test_host_observation_namespaces_reject_assignment_and_deletion(services):
             delattr(obj, name)
 
 
+def test_host_launch_diagnostics_forward_without_device_queries(services):
+    calls = []
+    services.core.async_launch_history = lambda *args: calls.append(args) or "recent candidates"
+    diagnostics = services.api.diagnostics
+    assert diagnostics.launch_history() == "recent candidates"
+    assert diagnostics.launch_history("cuda", 1, 1234) == "recent candidates"
+    assert calls == [("cuda", 0, -1), ("cuda", 1, 1234)]
+    assert services.observed == []
+    with pytest.raises(ValueError, match="device"):
+        diagnostics.launch_history(device=-1)
+    with pytest.raises(ValueError, match="stream"):
+        diagnostics.launch_history(stream=-1)
+    with pytest.raises(AttributeError):
+        diagnostics.launch_history = None
+    assert len(calls) == 2
+
+
 def test_host_devices_use_named_backend_not_current_policy(services):
     api = services.api
     assert services.flags.use_cuda == 0

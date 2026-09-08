@@ -1,7 +1,7 @@
 # Runtime introspection
 
 `jt.introspection` is the supported read-only observation surface for tests and
-diagnostics. Its three layers read existing native/runtime services; they do
+diagnostics. Its observation layers read existing native/runtime services; they do
 not own a second configuration, backend registry, or counter table. Write
 operations remain in `jt.runtime.scope(...)`. Importing the implementation
 module itself requires only the standard library and the existing state and
@@ -93,6 +93,21 @@ They are sequential observations, not an atomic cross-thread/device checkpoint.
 Callers needing a completed-work boundary must explicitly synchronize outside
 the observation API. Executor-call counts measure the native executor counter,
 not kernel launches or elapsed time.
+
+## Launch diagnostics
+
+`jt.introspection.diagnostics.launch_history(backend="cuda", device=0, stream=None)`
+returns detached text describing recent launch candidates. `stream=None` selects
+the device's recorded streams; an integer selects that native stream handle.
+The getter neither submits work nor synchronizes nor initializes a backend.
+Negative device indices and negative explicit stream handles are rejected.
+
+The native history owns bounded copied source locations and records, so it
+survives graph release without holding tensors or Python frames. Its text
+states omissions and truncation. Candidates do not prove which operation
+caused an asynchronous fault. CUDA error handling attaches this information
+automatically; callers do not need to query it first. See the
+[error contract](../testing/async-error-diagnostics.md).
 
 ## Test-consumer migration
 

@@ -14,6 +14,7 @@
 #include "mem/allocator.h"
 #include "runtime/device.h"
 #include "runtime/jit_policy.h"
+#include "runtime/launch_diagnostics.h"
 #include "bindings/pybind/py_var_tracer.h"
 #include "core/executor.h"
 #include "core/var_holder.h"
@@ -61,6 +62,7 @@ bool lookup_requires_grad_disabled_edge(Node* source, Node* target) {
 }
 
 Op::Op() {
+    launch_origin = capture_launch_origin();
     float32_precision = current_float32_precision_policy();
     flags.set(NodeFlags::_var, 0);
     set_flag(OpFlags::_cpu, 1);

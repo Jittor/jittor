@@ -6,6 +6,7 @@
 // ***************************************************************
 #include "bindings/pybind/py_var_tracer.h"
 #include "core/grad.h"
+#include "runtime/launch_diagnostics.h"
 #include "core/var.h"
 #include "core/op.h"
 #include "core/graph.h"
@@ -82,6 +83,7 @@ VarPtr make_grad(Op* op, Var* out, Var* dout, Var* x, int x_index) {
         << "out:" >> out << "dout:" >> dout << "x:" >> x << "xid:" >> x_index;
     AmpGradGuard agg(op);
     Float32PrecisionScope precision_scope(op->float32_precision);
+    LaunchOriginScope origin_scope(op->launch_origin);
     auto dx = op->grad(out, dout, x, x_index);
     // A null dx is an ordinary path, not an error: floor/round/ceil, mod,
     // floor_divide, the bitwise ops and the default Op::grad all return one.
@@ -295,6 +297,7 @@ vector<VarPtr> grad(
                 {
                     AmpGradGuard agg(op);
                     Float32PrecisionScope precision_scope(op->float32_precision);
+                    LaunchOriginScope origin_scope(op->launch_origin);
                     op->grads(douts, dins);
                 }
                 for (int i=0; i<n_i; i++) {

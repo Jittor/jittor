@@ -4,6 +4,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <algorithm>
+#include <cstring>
 #ifdef HAS_ACCELERATOR
 #include "core/event_queue.h"
 #endif
@@ -11,6 +12,7 @@
 #include "runtime/executor_entry.h"
 #include "runtime/backend.h"
 #include "runtime/backend_fallback.h"
+#include "runtime/launch_diagnostics.h"
 #include "ops/op_register.h"
 #include "core/exec_runner.h"
 #include "core/executor.h"
@@ -176,6 +178,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         ExecutionBackendScope operation_backend_scope(requested_backend);
         TensorPlacementScope placement_scope(op->graph_placement());
         Float32PrecisionScope precision_scope(op->float32_precision);
+        LaunchOriginScope origin_scope(op->launch_origin);
         int execution_device = 0;
         #ifdef HAS_ACCELERATOR
         if (requested_backend != BackendId::Cpu) {
@@ -187,6 +190,16 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             }
         }
         #endif
+        LaunchRecord launch;
+        launch.origin = op->launch_origin;
+        launch.op_id = is_fused_op ? 0 : op->type_id();
+        std::strncpy(launch.name, is_fused_op ? "fused_op" : op->name(), sizeof(launch.name)-1);
+        if (is_fused_op) {
+            launch.fused_count = fused_op.ops.size();
+            for (size_t member=0; member<std::min(fused_op.ops.size(), size_t(8)); ++member)
+                launch.fused_ids[member] = fused_op.ops[member]->type_id();
+        }
+        LaunchOperationScope launch_scope(launch);
         Device allocation_target{execution_backend, execution_device};
         #ifdef HAS_ACCELERATOR
         // A genuine accelerator fallback may execute a CPU kernel against
@@ -283,6 +296,8 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         #endif
         exe.last_is_cuda = is_cuda;
         // _JT_SEH_START2;
+        if (execution_backend != BackendId::Cpu)
+            record_active_launch(backend_stream({execution_backend, execution_device}, BackendStreamKind::Compute));
         op->execute_prepared(jkl);
         // _JT_SEH_END2;
         #ifdef HAS_ACCELERATOR

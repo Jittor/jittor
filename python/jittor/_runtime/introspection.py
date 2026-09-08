@@ -206,16 +206,41 @@ class Counters(_ReadOnly):
                                self.live_vars, self.live_ops)
 
 
+class Diagnostics(_ReadOnly):
+    """Detached diagnostic text; querying never submits work or waits for a device."""
+    __slots__ = ("_core",)
+
+    def __init__(self, core):
+        object.__setattr__(self, "_core", core)
+
+    def launch_history(self, backend="cuda", device=0, stream=None):
+        """Recent launch candidates, with None selecting all streams on a device.
+
+        Candidates are not proof of which asynchronous operation caused a fault.
+        Stream values are native stream handles, not ordinal stream indices.
+        """
+        if not isinstance(backend, str):
+            raise TypeError("backend must be a name")
+        device = operator.index(device)
+        if device < 0:
+            raise ValueError("device must be nonnegative")
+        native_stream = -1 if stream is None else operator.index(stream)
+        if stream is not None and native_stream < 0:
+            raise ValueError("stream must be a nonnegative handle or None")
+        return self._core.async_launch_history(backend, device, native_stream)
+
+
 class Introspection(_ReadOnly):
     """The supported jt.introspection read-only capability/policy/counter API."""
-    __slots__ = ("capabilities", "policy", "counters")
+    __slots__ = ("capabilities", "policy", "counters", "diagnostics")
 
     def __init__(self, capability, config, runtime, core):
         object.__setattr__(self, "capabilities", CapabilityQueries(capability, core))
         object.__setattr__(self, "policy", EffectivePolicy(config, runtime.context))
         object.__setattr__(self, "counters", Counters(runtime.context, core))
+        object.__setattr__(self, "diagnostics", Diagnostics(core))
 
 
 __all__ = ["Introspection", "CapabilityQueries", "Device", "DeviceInventory",
            "PolicyValues", "EffectivePolicy", "PolicySnapshot", "Counters",
-           "AllocatorCounters", "CounterSnapshot"]
+           "AllocatorCounters", "CounterSnapshot", "Diagnostics"]

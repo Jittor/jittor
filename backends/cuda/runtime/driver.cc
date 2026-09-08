@@ -44,6 +44,7 @@ void accelerator_set(int device) {
 }
 
 void accelerator_sync(uint64 devices) {
+    LaunchErrorScope error_scope({BackendId::Cuda, accelerator_current()});
     checkCudaErrors(cudaGetLastError());
     if (!devices) {
         checkCudaErrors(cudaDeviceSynchronize());
@@ -54,6 +55,7 @@ void accelerator_sync(uint64 devices) {
         for (int device = 0; device < 64; ++device) {
             if (!(devices & (1ull << device))) continue;
             if (device != accelerator_current()) accelerator_set(device);
+            LaunchErrorScope device_error_scope({BackendId::Cuda, device});
             checkCudaErrors(cudaDeviceSynchronize());
         }
     } catch (...) {
@@ -94,6 +96,7 @@ void accelerator_peer(int from, int to) {
 
 template<class Func>
 auto on_device(int device, Func&& func) -> decltype(func()) {
+    LaunchErrorScope error_scope({BackendId::Cuda, device});
     int previous = accelerator_current();
     try {
         if (device != previous) accelerator_set(device);
@@ -169,6 +172,7 @@ void destroy_stream(BackendStream stream) {
 }
 void synchronize_stream(BackendStream stream) {
     on_device_void(stream.device.index, [&] {
+        LaunchErrorScope error_scope(stream.device, true, reinterpret_cast<uintptr_t>(stream.handle));
         checkCudaErrors(cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(stream.handle)));
     });
 }
@@ -187,6 +191,7 @@ void destroy_event(BackendEvent event) {
 void record_event(BackendEvent event, BackendStream stream) {
     CHECK(event.device.index == stream.device.index) << "Event and recording stream must share a device";
     on_device_void(stream.device.index, [&] {
+        LaunchErrorScope error_scope(stream.device, true, reinterpret_cast<uintptr_t>(stream.handle));
         checkCudaErrors(cudaEventRecord(reinterpret_cast<cudaEvent_t>(event.handle),
                                       reinterpret_cast<cudaStream_t>(stream.handle)));
     });
@@ -206,12 +211,14 @@ float elapsed_event(BackendEvent start, BackendEvent end) {
 }
 void wait_event(BackendStream stream, BackendEvent event) {
     on_device_void(stream.device.index, [&] {
+        LaunchErrorScope error_scope(stream.device, true, reinterpret_cast<uintptr_t>(stream.handle));
         checkCudaErrors(cudaStreamWaitEvent(reinterpret_cast<cudaStream_t>(stream.handle),
                                           reinterpret_cast<cudaEvent_t>(event.handle), 0));
     });
 }
 void host_callback(BackendStream stream, void (*callback)(void*), void* context) {
     on_device_void(stream.device.index, [&] {
+        LaunchErrorScope error_scope(stream.device, true, reinterpret_cast<uintptr_t>(stream.handle));
         checkCudaErrors(cudaLaunchHostFunc(reinterpret_cast<cudaStream_t>(stream.handle), callback, context));
     });
 }
@@ -234,6 +241,8 @@ auto copy_kind(Device dst, Device src) {
 void copy_async(void* dst, Device target, const void* src, Device source, size_t size, BackendStream stream) {
     if (!size) return;
     on_device_void(stream.device.index, [&] {
+        LaunchErrorScope error_scope(stream.device, true, reinterpret_cast<uintptr_t>(stream.handle));
+        record_active_launch(stream);
         checkCudaErrors(cudaMemcpyAsync(dst, src, size, copy_kind(target, source),
                                        reinterpret_cast<cudaStream_t>(stream.handle)));
     });
@@ -251,6 +260,7 @@ void copy(void* dst, Device target, const void* src, Device source, size_t size,
             if (source.index != device)
                 backend_default_stream_wait_side(BackendStreamKind::Copy, device, source.index);
         } else if (target.backend == BackendId::Cpu && source.backend != BackendId::Cpu) {
+            LaunchErrorScope error_scope(source, true, 0);
             // Readback waits for its producer stream's event, not the device.
             // This also serves data-dependent shape counts and scalar item().
             cudaEvent_t done;

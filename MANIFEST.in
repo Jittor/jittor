@@ -480,6 +480,7 @@ include docs/results/2026-09-08-acl-registry.md
 include docs/results/2026-09-08-api-owner-closure.md
 include docs/results/2026-09-08-api-runtime-integration.md
 include docs/results/2026-09-08-architecture-integration.md
+include docs/results/2026-09-08-async-launch-origins.md
 include docs/results/2026-09-08-autograd-library-owners.md
 include docs/results/2026-09-08-backend-plan-cache-lifetime.md
 include docs/results/2026-09-08-checkpoint-device-mapping.md
@@ -879,6 +880,8 @@ include src/runtime/init.cc
 include src/runtime/init.h
 include src/runtime/jit_policy.cc
 include src/runtime/jit_policy.h
+include src/runtime/launch_diagnostics.cc
+include src/runtime/launch_diagnostics.h
 include src/runtime/lock.cc
 include src/runtime/lock.h
 include src/runtime/node_index.h
