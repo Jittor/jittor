@@ -203,10 +203,10 @@ def compile_custom_ops(
         gen_name = gen_name[:50] + "___hash" + _compiler_state.hashlib.md5(gen_name.encode()).hexdigest()[:6]
 
     include_dirs = sorted(list(set(includes)))
-    includes = "".join(map(lambda x: f" -I\"{x}\" ", include_dirs))
-    _compiler_state.LOG.vvvv(f"Include flags:{includes}")
+    include_flags = "".join(map(lambda x: f" -I\"{x}\" ", include_dirs))
+    _compiler_state.LOG.vvvv(f"Include flags:{include_flags}")
 
-    op_extra_flags = includes + extra_flags
+    op_extra_flags = include_flags + extra_flags
 
     lib_path = _compiler_state.os.path.join(_compiler_state.cache_path, "custom_ops")
     _compiler_state.make_cache_dir(lib_path)
@@ -312,7 +312,8 @@ def _stat_signature(paths):
     never listed", and the second one must not be treated as up to date.
     """
     from . import compiler as _compiler_state
-    record = {}
+    from typing import Dict, List, Optional, Union
+    record: Dict[str, Optional[Union[List[int], None]]] = {}
     for path in paths:
         try:
             info = _compiler_state.os.stat(path)
