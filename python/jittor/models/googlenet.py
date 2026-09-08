@@ -33,7 +33,8 @@ class GoogLeNet(nn.Module):
         super(GoogLeNet, self).__init__()
         if (blocks is None):
             blocks = [BasicConv2d, Inception, InceptionAux]
-        assert (len(blocks) == 3)
+        if len(blocks) != 3:
+            raise ValueError("GoogLeNet blocks must contain exactly three classes")
         conv_block = blocks[0]
         inception_block = blocks[1]
         inception_aux_block = blocks[2]
