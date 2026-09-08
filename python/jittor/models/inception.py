@@ -23,7 +23,8 @@ class Inception3(nn.Module):
         super(Inception3, self).__init__()
         if (inception_blocks is None):
             inception_blocks = [BasicConv2d, InceptionA, InceptionB, InceptionC, InceptionD, InceptionE, InceptionAux]
-        assert (len(inception_blocks) == 7)
+        if len(inception_blocks) != 7:
+            raise ValueError("Inception3 inception_blocks must contain seven classes")
         conv_block = inception_blocks[0]
         inception_a = inception_blocks[1]
         inception_b = inception_blocks[2]
