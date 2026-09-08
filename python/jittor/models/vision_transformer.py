@@ -67,7 +67,12 @@ class VisionTransformer(nn.Module):
     def __init__(self, image_size=224, patch_size=16, num_classes=1000,
                  dim=768, depth=12, num_heads=12, mlp_ratio=4.0, drop=0.0):
         super().__init__()
-        assert image_size % patch_size == 0
+        if patch_size <= 0 or image_size <= 0 or image_size % patch_size != 0:
+            raise ValueError(
+                "VisionTransformer image_size {} must be divisible by positive patch_size {}".format(
+                    image_size, patch_size
+                )
+            )
         n_patches = (image_size // patch_size) ** 2
         self.patch_embed = nn.Conv2d(3, dim, kernel_size=patch_size, stride=patch_size)
         self.cls_token = jt.zeros((1, 1, dim))
