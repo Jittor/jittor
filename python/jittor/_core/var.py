@@ -1163,7 +1163,8 @@ def normal(mean, std, size=None, dtype="float32") -> Var:
     import jittor as jt
     if size is None:
         if isinstance(mean, Var) and isinstance(std, Var):
-            assert mean.shape == std.shape
+            if mean.shape != std.shape:
+                raise ValueError("normal: mean and std tensors must have matching shapes")
             size = mean.shape
         else:
             if isinstance(mean, Var): size = mean.shape
