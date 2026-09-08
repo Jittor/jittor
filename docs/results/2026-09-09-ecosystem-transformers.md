@@ -9,7 +9,10 @@ Jittor Python 3.11 环境存在，独立 PyTorch oracle 环境没有该包；`ve
 GPT-2 使用独立 PyTorch 2.12.1+cu126 oracle，在临时隔离不匹配的 torchvision 后可构建。
 Jittor shim forward 可运行，但 backward 在复杂 residual/attention/tied lm_head 图触发
 `backward liveness release without a matching owner`。单层 Linear/平方/求和 backward
-正常，说明问题位于复杂图的 holder/liveness ownership；该缺陷正在单独定位，不能通过
+正常。根因已定位为 stale liveness queue：节点由 `free()` 完成传播并标记
+`queued_for_free` 后，残留队列再次调用 release。三个 release 入口现在在该标志下
+安全返回，非 stale 节点仍保留原 underflow 检查。真实 runner 修复后返回
+`RC=0`、`29 tensors`、`fallback_count=0`，日志为 `/tmp/gpt2-fixed.log`；不能通过
 关闭检查或改变测试期望掩盖。
 
 生态测试已修复 oracle 环境隔离与可选 torchvision 处理，避免把 Jittor facade 当成 PyTorch

@@ -11,6 +11,11 @@ backward completed with output shape `(2, 4, 8, 8)` and a finite input gradient
 norm. A real PyTorch `diffusers.DDPMScheduler.add_noise` smoke also completed
 for a `(2, 4)` tensor.
 
+The dedicated PyTorch 2.12 environment does not contain `diffusers`; the
+installed package is only visible from the environment whose `python` entry
+point activates the Jittor shim. Consequently an actual PyTorch UNet
+forward/backward parity run was not available on this host.
+
 ## Compatibility status
 
 The current environment has no importable `vllm` or TRELLIS package, so their
