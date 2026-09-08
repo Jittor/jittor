@@ -26,9 +26,12 @@ def complex_inv(x:ComplexNumber):
     TODO: Faster Implementation; Check backward.
     """
     import jittor as jt
-    assert isinstance(x, ComplexNumber), "complex_inv is implemented for nn.ComplexNumber"
-    assert _jittor_dtype_name(x.real.dtype) == "float32" and _jittor_dtype_name(x.imag.dtype) == "float32", "real and imag in ComplexNumber should be jt.float32"
-    assert x.shape[-2] == x.shape[-1], "only square matrix is supported for complex_inv"
+    if not isinstance(x, ComplexNumber):
+        raise TypeError("complex_inv is implemented for nn.ComplexNumber")
+    if not (_jittor_dtype_name(x.real.dtype) == "float32" and _jittor_dtype_name(x.imag.dtype) == "float32"):
+        raise TypeError("real and imag in ComplexNumber should be jt.float32")
+    if x.shape[-2] != x.shape[-1]:
+        raise ValueError("only square matrix is supported for complex_inv")
 
     def forward_code(np, data):
 
