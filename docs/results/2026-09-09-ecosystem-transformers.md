@@ -22,3 +22,15 @@ wrapper but a tiny GPT-2 forward failed with
 This is the installed ms-swift 3.8.0 / Transformers 4.56.2 compatibility
 boundary. `verl` imports successfully (0.9.0), but trainer construction was
 not attempted because its distributed runtime requires a complete Ray setup.
+
+## Current function matrix
+
+| Framework | Verified | Blocked or not yet verified |
+| --- | --- | --- |
+| Transformers | Tiny GPT-2 PyTorch oracle forward/backward; Jittor shim GPT-2 after `e3dce0bf8` | Larger models and the full network matrix are not re-run here |
+| ms-swift | Package import; `swift 3.8.0` is discoverable | Tiny LoRA GPT-2 hits the installed swift/Transformers API mismatch (`Linear.__init__` requires `config`); torchvision ABI also needs isolation |
+| verl | `DataProto` construction, `chunk`, `repeat`, and `to("cpu")` | Trainer/PPO needs the full Ray/Hydra/codetiming dependency set |
+| MMCV / MMEngine | None | Packages are absent in the isolated environment |
+| vLLM / diffusers | Existing repository-specific records only | No new function run in this smoke environment |
+
+These are function-only results. No speed or scale claim is made.
