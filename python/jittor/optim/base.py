@@ -40,11 +40,13 @@ class Optimizer(object):
         self.lr = lr
         self.param_sync_iter = param_sync_iter
 
-        assert len(params) > 0, "Length of parameters should not be zero"
+        if len(params) == 0:
+            raise ValueError("Length of parameters should not be zero")
         if not isinstance(params[0], dict):
             params = [{'params': params}]
         for pg in params:
-            assert isinstance(pg, dict)
+            if not isinstance(pg, dict):
+                raise TypeError("optimizer parameter groups must be dictionaries")
             self.param_groups.append(pg)
         self.n_step = 0
         # __zero_grad is a value for fast determ the grad is zero or not
