@@ -44,7 +44,12 @@ def auto_parallel(n, src, block_num=1024, **kw):
     prev_func, func_name = a.rsplit(None, 1)
     args, code = b.split(')', 1)
     args = args.split(',')
-    assert len(args) >= n*2, (args, n)
+    if len(args) < n * 2:
+        raise ValueError(
+            "codegen: expected at least {} argument descriptors, got {}".format(
+                n * 2, len(args)
+            )
+        )
     oargs = args[n*2:]
     pargs = args[:n*2]
     piargs = pargs[1::2]
