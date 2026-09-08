@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from typing import Dict, Optional
 
 import nox
 
@@ -429,7 +430,7 @@ def _physical_cores_in_affinity(cpu_ids):
 
 def _isolated_outer_environment():
     """Block Nox's implicit outer-env merge, then admit named runner inputs."""
-    env = {name: None for name in os.environ}
+    env: Dict[str, Optional[str]] = {name: None for name in os.environ}
     for name in _SESSION_ENV_PASSTHROUGH:
         if name in os.environ:
             env[name] = os.environ[name]
