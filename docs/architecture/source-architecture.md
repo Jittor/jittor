@@ -619,8 +619,11 @@ Compatibility installers for NN, numerical and tensor APIs, and the
 FlashAttention adapter, are normal packages split by implementation family.
 Public callables without installation-state captures can retain module-level
 identity; stateful installation paths keep explicit context and their original
-registration order. Task 7.12 remains open: the remaining per-Tensor and runtime
-state must be consolidated and native Torch-role dependencies removed. The
+registration order. Task 7.12 remains open: remaining runtime ownership and the
+legacy activation path still need consolidation. Native Parameter is a real Var
+subclass; native Module registers parameters and buffers by attribute name and
+does not read or write Torch-role markers. Torch-specific assignment rules live
+in the independent Module adapter or the explicit legacy installer. The
 physical `compat/` tree is now the independent `jittor-torch` distribution; core
 packaging excludes it. The explicit legacy mode still
 adapts native classes and must not be confused with independent activation.
@@ -632,8 +635,12 @@ detached `.data` API retains its separate owner/path bookkeeping; assignment
 uses a detached right-hand-side node so stopping the data alias does not freeze
 its trainable owner. The write-only strong-reference table for `requires_grad`
 has been removed. Leaf registration, retained-gradient tracking and optimizer
-registration remain because they have actual consumers; they are not replaced
-by the view migration.
+registration remain because they have actual consumers. Independent Tensor
+holders use a weak identity index, while the native graph query determines leaf
+identity. An unrelated backward never erases a live independent holder's
+registration; retain_grad lasts for the holder's lifetime. Its flag, gradients,
+data-view owner/path, device hints and RMSNorm cache belong to TensorObjectState.
+Legacy non-weak-referenceable Vars retain their separate cleanup path.
 
 `jittor.compat.shim` owns the runtime and deployment code for the optional
 top-level `torch` surface used by applications that import Torch directly. The

@@ -27,6 +27,23 @@ def prepare_nn_namespace(context):
         __slots__ = ()
         _frontend_tensor_type = tensor_type
 
+        def __setattr__(self, name, value):
+            attributes = vars(self)
+            if attributes.get("_native_parameter_construction", False):
+                return native_module.__setattr__(self, name, value)
+            if isinstance(value, backend.Var) and not name.startswith("_"):
+                parameters = attributes.setdefault("_parameter_names", set())
+                non_parameters = attributes.setdefault("_non_parameter_names", set())
+                if isinstance(value, Parameter):
+                    parameters.add(name)
+                    non_parameters.discard(name)
+                    attributes.setdefault("_buffer_names", set()).discard(name)
+                    attributes.setdefault("_non_persistent_buffer_names", set()).discard(name)
+                elif name not in attributes.get("_buffer_names", ()):
+                    if name not in parameters:
+                        non_parameters.add(name)
+            object.__setattr__(self, name, value)
+
         def __call__(self, *args, **kwargs):
             with tensor_frontend(tensor_type):
                 return native_module.__call__(self, *args, **kwargs)
@@ -66,8 +83,16 @@ def prepare_nn_namespace(context):
                 arguments = inspect.signature(initializer).bind_partial(self, *args, **kwargs)
                 frozen = bool(arguments.arguments.get("_freeze", False))
             with tensor_frontend(tensor_type):
-                initializer(self, *args, **kwargs)
-                adopt_owned_children(self, external, frozen)
+                previous = vars(self).get("_native_parameter_construction")
+                object.__setattr__(self, "_native_parameter_construction", True)
+                try:
+                    initializer(self, *args, **kwargs)
+                    adopt_owned_children(self, external, frozen)
+                finally:
+                    if previous is None:
+                        vars(self).pop("_native_parameter_construction", None)
+                    else:
+                        object.__setattr__(self, "_native_parameter_construction", previous)
 
         adapted = type(native.__name__, (native, Module), {
             "__module__": "torch.nn", "__slots__": (),

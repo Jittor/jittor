@@ -415,12 +415,12 @@ def test_get_submodule_resolves_dotted_path():
     assert net.get_submodule("") is net
 
 
-def test_register_parameter_marks_the_var():
+def test_register_parameter_registers_the_name():
     net = _Net()
     p = torch.ones(2)
     net.register_parameter("extra", p)
     assert net.extra is p
-    assert getattr(p, "_is_torch_parameter", False)
+    assert dict(net.named_parameters())["extra"] is p
 
 
 def test_forward_result_matches_manual_matmul():

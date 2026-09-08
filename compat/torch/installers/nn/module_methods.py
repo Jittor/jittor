@@ -105,11 +105,11 @@ def _acl_bfloat16_rms_norm(value, weight, epsilon):
         and str(weight.dtype) == "bfloat16"
     ):
         return None
-    unit_weight = weight.__dict__.get("_torch_acl_rms_norm_unit_weight")
+    unit_weight = getattr(weight, "_torch_acl_rms_norm_unit_weight", None)
     if unit_weight is None or tuple(unit_weight.shape) != tuple(weight.shape):
         unit_weight = jt.ones(weight.shape, dtype="bfloat16")
         unit_weight.stop_grad()
-        weight.__dict__["_torch_acl_rms_norm_unit_weight"] = unit_weight
+        weight._torch_acl_rms_norm_unit_weight = unit_weight
     grouped = _backend_hooks.acl_grouped_bfloat16_rms_norm
     if grouped is not None:
         result = grouped(value, unit_weight, weight, epsilon)
@@ -902,6 +902,28 @@ def _get_buffer(self, target):
     raise AttributeError(f"`{target}` is not a buffer")
 
 
+_ORIG_MODULE_SETATTR = nn.Module.__setattr__
+
+
+def _legacy_parameter_setattr(self, name, value):
+    # The optional legacy frontend consumes its own plain-tensor marker.
+    # Native Module registration never needs to know that marker exists.
+    if isinstance(value, jt.Var) and not name.startswith("_"):
+        attributes = vars(self)
+        parameters = attributes.setdefault("_parameter_names", set())
+        non_parameters = attributes.setdefault("_non_parameter_names", set())
+        if isinstance(value, nn.Parameter):
+            parameters.add(name)
+            non_parameters.discard(name)
+        elif (vars(value).get("_jt_plain_tensor") is True
+                and name not in attributes.get("_buffer_names", ())
+                and name not in parameters):
+            non_parameters.add(name)
+            object.__setattr__(self, name, value)
+            return
+    _ORIG_MODULE_SETATTR(self, name, value)
+
+
 def _register_parameter(self, name, param):
     """Torch's ``register_parameter``: an explicit "this is a parameter"."""
     # This is torch's explicit "this attribute is a parameter" call, so
@@ -909,9 +931,13 @@ def _register_parameter(self, name, param):
     # a torch-authored class otherwise only registers by that wrapper, and
     # the value handed here need not have gone through it (vLLM builds its
     # typed ModelWeightParameter through its own metaclass __call__).
-    if isinstance(param, jt.Var):
-        param._is_torch_parameter = True
-    setattr(self, name, param)
+    if param is not None and not isinstance(param, jt.Var):
+        raise TypeError("registered parameter must be a tensor or None")
+    self.__dict__.setdefault("_parameter_names", set()).add(name)
+    self.__dict__.setdefault("_non_parameter_names", set()).discard(name)
+    self.__dict__.setdefault("_buffer_names", set()).discard(name)
+    self.__dict__.setdefault("_non_persistent_buffer_names", set()).discard(name)
+    object.__setattr__(self, name, param)
 
 
 def _module_type(self, dst_type=None):
@@ -1018,8 +1044,10 @@ def _install_module_methods(nn, registry=None):
     natives: install replaces the attributes they read, so a late lookup would
     recurse.
     """
-    registry_for(jt, registry)
+    registry = registry_for(jt, registry)
     M = nn.Module
+    if registry.target_namespace is registry.native_backend:
+        M.__setattr__ = _legacy_parameter_setattr
 
     # A fresh install re-reads the pipelining env var and forgets any threshold a
     # previous one had been asked for.

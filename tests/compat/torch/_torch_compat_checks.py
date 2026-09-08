@@ -300,14 +300,8 @@ ok(sorted(n for n, _ in _reg.named_parameters()) == ["plain", "w"],
 # nn.Linear declares its weight that way, so the torch rule must not reach them.
 ok([n for n, _ in torch.nn.Linear(4, 3).named_parameters()] == ["weight", "bias"],
    "jittor-authored classes keep assignment-is-parameter")
-# The marker IS the contract: it is the only signal Module.__setattr__ has that a
-# value assigned by torch-authored code is a parameter rather than a scratch
-# tensor. Anything that replaces nn.Parameter's constructor has to keep setting
-# it -- vLLM's adapter did not, and every `self.bias = Parameter(torch.empty(..))`
-# in its linear layers silently left named_parameters(), so the weight loader
-# never filled the bias and uninitialised memory reached the matmul.
-ok(bool(getattr(torch.nn.Parameter(jt.ones(2)), "_is_torch_parameter", False)),
-   "nn.Parameter marks the Var it returns")
+ok(type(torch.nn.Parameter(jt.ones(2))) is torch.nn.Parameter,
+   "nn.Parameter returns a real Parameter holder")
 
 # torch code subclasses nn.Parameter to carry loader metadata, giving the
 # subclass its own __new__/__init__ and extra keyword arguments. All of it has

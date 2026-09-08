@@ -147,7 +147,7 @@ def test_independent_tensor_installation_preserves_native_type():
         parameter = torch.nn.Parameter(source)
         assert type(parameter) is torch.nn.Parameter
         assert parameter is not source
-        assert not getattr(source, "_is_torch_parameter", False)
+        assert not isinstance(source, torch.nn.Parameter)
         assert parameter.requires_grad and parameter.is_leaf
         assert parameter.grad_fn is None and source.requires_grad
         assert type(parameter + 1) is torch.Tensor
@@ -180,7 +180,7 @@ def test_independent_tensor_installation_preserves_native_type():
         assert type(mapping["weight"]) is torch.nn.Parameter
         assert mapping.get_parameter("weight") is mapping["weight"]
         assert mapping["alias"] is parameter
-        assert not getattr(source, "_is_torch_parameter", False)
+        assert not isinstance(source, torch.nn.Parameter)
         assert torch.nn.modules.parameter.ParameterList is torch.nn.ParameterList
         assert torch.nn.ParameterDict is not torch.nn.ParameterList
         model = torch.nn.Sequential(torch.nn.Linear(2, 2), torch.nn.ReLU())
@@ -390,10 +390,21 @@ def test_independent_tensor_installation_preserves_native_type():
         fresh._torch_data_owner = fresh
         assert get_tensor_object_state(fresh) is object_state
         assert "_torch_data_owner" not in vars(fresh)
+        fresh._jittor_torch_force_cpu = True
+        fresh._torch_acl_rms_norm_unit_weight = fresh
+        assert object_state.force_cpu and object_state.rms_norm_unit_weight is fresh
+        assert "_jittor_torch_force_cpu" not in vars(fresh)
+        assert "_torch_acl_rms_norm_unit_weight" not in vars(fresh)
         copied_state = copy.deepcopy(fresh)
         assert copied_state._torch_data_owner is copied_state
+        assert copied_state._torch_acl_rms_norm_unit_weight is copied_state
+        assert copied_state._jittor_torch_force_cpu
         restored_state = pickle.loads(pickle.dumps(fresh))
         assert restored_state._torch_data_owner is restored_state
+        assert restored_state._torch_acl_rms_norm_unit_weight is restored_state
+        assert restored_state._jittor_torch_force_cpu
+        del object_state.force_cuda  # A state restored from an older pickle.
+        assert not fresh._jittor_torch_force_cuda
         np.testing.assert_array_equal(restored_state.grad.numpy(), [1., 1.])
         reference = weakref.ref(fresh)
         del fresh, object_state

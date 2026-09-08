@@ -253,12 +253,14 @@ def _rebuild_var_from_numpy(np_arr, dtype_str=None):
 def _torch_register_leaf(v):
     """Track torch-facing leaves so Tensor.backward() can publish .grad.
 
-    Jittor has no Python graph walk to discover every leaf that requires grad.
+    The native graph query decides leaf identity. This index locates holders
+    on which Python can publish gradients; it does not keep independent
+    Tensor holders alive.
     Constructors such as torch.rand(..., requires_grad=True) need to register
     their result immediately; Var.requires_grad_ also calls this helper later.
     """
     try:
-        if isinstance(v, jt.Var) and v.requires_grad:
+        if isinstance(v, jt.Var) and v.requires_grad and v.is_backward_leaf:
             get_tensor_state(jt).leaf_params[id(v)] = v
     except EXPECTED as exc:
         swallowed("torch/nested.py _torch_register_leaf: if isinstance(v, jt.Var) and v.requires_grad:", exc)
@@ -269,12 +271,16 @@ def _torch_prune_leaf_registry(keep_ids=None, keep_non_parameters=False):
         reg = get_tensor_state(jt).leaf_params
         keep = None if keep_ids is None else set(keep_ids)
         for k, v in list(reg.items()):
+            if reg.is_weak(k):
+                # Neither another optimizer nor an unrelated graph decides
+                # whether this live holder can receive a future gradient.
+                continue
             if (
                 keep is not None
                 and k not in keep
                 and not (
                     keep_non_parameters
-                    and not bool(getattr(v, "_is_torch_parameter", False))
+                    and not isinstance(v, jt.nn.Parameter)
                 )
             ):
                 reg.pop(k, None)
@@ -285,34 +291,7 @@ def _torch_prune_leaf_registry(keep_ids=None, keep_non_parameters=False):
         swallowed("torch/nested.py _torch_prune_leaf_registry: reg = getattr(jt, '_torch_leaf_params', None)", exc)
 
 def _torch_make_parameter(data=None, requires_grad=True):
-    """Create a torch.nn.Parameter-compatible jittor Var.
-
-    PyTorch's Parameter(tensor) is a new leaf and does not keep the tensor's
-    autograd history. 3DGS repeatedly replaces optimizer parameters with
-    Parameter(torch.cat(...)); carrying that history in the shim retains old
-    densification graphs and quickly exhausts GPU memory.
-    """
+    """Rebuild through the active frontend's real Parameter constructor."""
     from .tensor_state import compatibility_owner
     target = compatibility_owner(jt)
-    if target is not jt:
-        return target.nn.Parameter(data, requires_grad=requires_grad)
-    v = data if isinstance(data, jt.Var) else jt.array(data)
-    if isinstance(v, jt.Var):
-        v = v.stop_grad()
-    if requires_grad:
-        try:
-            v.requires_grad = True
-        except (AttributeError, TypeError) as exc:
-            swallowed("torch/nested.py _torch_make_parameter: v.requires_grad = True", exc)
-            v.start_grad()
-            _torch_register_leaf(v)
-    else:
-        try:
-            v.stop_grad()
-        except EXPECTED as exc:
-            swallowed("torch/nested.py _torch_make_parameter: v.stop_grad()", exc)
-    # Parameter is a semantic role, not every Var. Keep the marker on the
-    # Python holder so isinstance(..., nn.Parameter) can distinguish raw
-    # tensors produced under no_grad from actual model parameters.
-    v._is_torch_parameter = True
-    return v
+    return target.nn.Parameter(data, requires_grad=requires_grad)

@@ -83,7 +83,7 @@ class TestRequiresGradSemantics(unittest.TestCase):
 
 
 class TestParameterIdentity(unittest.TestCase):
-    def test_parameter_metaclass_distinguishes_raw_vars(self):
+    def test_parameter_type_and_native_module_registration_are_distinct(self):
         raw = jt.array([1.0, 2.0])
         self.assertNotIsInstance(raw, nn.Parameter)
 
@@ -92,16 +92,19 @@ class TestParameterIdentity(unittest.TestCase):
         self.assertTrue(parameter.requires_grad)
 
         layer = nn.Linear(2, 3)
-        self.assertIsInstance(layer.weight, nn.Parameter)
-        self.assertIsInstance(layer.bias, nn.Parameter)
+        self.assertIsInstance(layer.weight, jt.Var)
+        self.assertIs(dict(layer.named_parameters())["weight"], layer.weight)
+        self.assertIs(dict(layer.named_parameters())["bias"], layer.bias)
 
         layer.register_buffer("running", jt.zeros((3,)))
         self.assertNotIsInstance(layer.running, nn.Parameter)
 
-        parameters = nn.ParameterList([jt.ones((2,))])
-        self.assertIsInstance(parameters[0], nn.Parameter)
+        value = jt.ones((2,))
+        parameters = nn.ParameterList([value])
+        self.assertIs(parameters[0], value)
+        self.assertIs(parameters.parameters()[0], value)
 
-    def test_parameter_marker_survives_private_alias_assignment(self):
+    def test_parameter_type_survives_private_alias_assignment(self):
         module = jt.Module()
         parameter = nn.Parameter(jt.array([1.0, 2.0]))
 
@@ -157,17 +160,18 @@ class TestParameterIdentity(unittest.TestCase):
         self.assertIsInstance(parameter, nn.Parameter)
         self.assertTrue(parameter.requires_grad)
 
-    def test_canonical_installer_owns_the_parameter_marker(self):
+    def test_parameter_identity_comes_from_the_real_type(self):
         jittor_root = Path(jt.__file__).resolve().parent
         compat_root = Path(__file__).resolve().parents[2] / "compat"
-        owner = (compat_root / "torch" / "nested.py").read_text(
+        owner = (jittor_root / "nn/modules/parameter.py").read_text(
             encoding="utf-8"
         )
         template = (
             compat_root / "shim" / "resources" / "torch" / "__init__.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("_is_torch_parameter", owner)
-        self.assertIn("_torch_compat.install(_jittor)", template)
+        self.assertIn("class Parameter(jt.Var)", owner)
+        self.assertNotIn("_is_torch_parameter", owner)
+        self.assertIn('_activation["torch"]', template)
         self.assertNotIn("_is_torch_parameter", template)
         self.assertFalse((jittor_root / "torch_shim").exists())
 

@@ -114,7 +114,6 @@ def make_parameter_type(backend, tensor_type):
                 else:
                     source = data if isinstance(data, backend.Var) else backend.array(data)
                     value = backend.Var.detach(source)
-            value._is_torch_parameter = True
             value.requires_grad = bool(requires_grad)
             return value
 

@@ -558,9 +558,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # loss.backward() accumulates grads into the .grad of every leaf that
     # requires grad, but jittor has no graph-walk to recover those leaves. So
     # track Vars whose grad was explicitly enabled through the torch-facing
-    # API (requires_grad=True / requires_grad_()). Keyed by id() to dedupe;
-    # jittor Vars are not weak-referenceable, so we hold strong refs (leaf
-    # params are long-lived anyway) and prune entries that drop stop-grad.
+    # API (requires_grad=True / requires_grad_()). The identity index weakly
+    # references independent Tensor holders; native leaf identity decides
+    # whether a registered holder participates. Legacy Vars keep their pruning.
     def _register_leaf(v):
         _owner._torch_register_leaf(v)
 
@@ -777,12 +777,12 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 keep_non_parameters=True,
             )
             for v in list(tensor_state.leaf_params.values()):
-                if isinstance(v, _NativeVar) and v.requires_grad:
+                if isinstance(v, _NativeVar) and v.requires_grad and v.is_backward_leaf:
                     leaf_map.setdefault(id(v), v)
         else:
             _owner._torch_prune_leaf_registry()
             for v in list(tensor_state.leaf_params.values()):
-                if isinstance(v, _NativeVar) and v.requires_grad:
+                if isinstance(v, _NativeVar) and v.requires_grad and v.is_backward_leaf:
                     leaf_map.setdefault(id(v), v)
         if not leaf_map:
             return None
@@ -794,7 +794,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         grad_by_id = {}
         for p, gr in zip(leaves, grads):
             if gr is None:
-                if id(p) not in opt_ids and id(p) not in retained_ids:
+                if (id(p) not in opt_ids and id(p) not in retained_ids
+                        and not tensor_state.leaf_params.is_weak(id(p))):
                     tensor_state.leaf_params.pop(id(p), None)
                 continue
             grad_by_id[id(p)] = gr
@@ -824,10 +825,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         # what torch's autograd hooks guarantee: clipping and norm logging in
         # between must see the synchronised gradient.
         _owner._ddp_all_reduce_grads(leaves)
-        # retain_grad is per-forward in torch; clear so the next iteration's fresh
-        # screenspace tensor doesn't leak (jittor Vars aren't weak-referenceable).
+        # Independent retain_grad lasts as long as its weakly indexed holder.
+        # Preserve bounded cleanup only for legacy non-weak-referenceable Vars.
         if retained:
-            retained.clear()
+            retained.clear_legacy()
         return None
     Var.backward = _backward
 
@@ -944,19 +945,18 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     Var.grad_fn = property(_grad_fn)
     # torch's retain_grad() marks a NON-leaf tensor so its .grad is populated
-    # after backward (normally only leaves keep .grad). 3DGS relies on this for
-    # the screenspace `means2D` tensor (`zeros_like(xyz)+0` then retain_grad()),
-    # whose .grad drives densification. Register into a per-forward set the
-    # _backward pass includes as a grad target; cleared each backward so the
-    # next iteration's fresh tensor doesn't accumulate (jittor Vars can't be
-    # weak-ref'd, so a persistent dict would leak one Var per iteration).
+    # after backward (normally only leaves keep .grad). Registration follows
+    # the holder's lifetime, including repeated or interleaved backward graphs.
     def _retain_grad(self):
-        try:
-            _owner.get_tensor_state(_owner.jt).retained[id(self)] = self
-        except _owner.EXPECTED as exc:
-            _owner.swallowed("torch/installers/tensor.py _retain_grad: jt._torch_retained[id(self)] = self", exc)
-        return self
+        if not self.requires_grad:
+            raise RuntimeError("cannot retain_grad on a Tensor with requires_grad=False")
+        if self.is_backward_leaf:
+            return None
+        self._torch_retains_grad = True
+        _owner.get_tensor_state(_owner.jt).retained[id(self)] = self
+        return None
     Var.retain_grad = _retain_grad
+    Var.retains_grad = property(lambda self: bool(getattr(self, "_torch_retains_grad", False)))
 
     def _to(self, *args, **kwargs):
         ds = None

@@ -59,11 +59,14 @@ pickle保留，igamma与class资源清单同步。CPU/CUDA/shim和真实自定�
 7.12不能因此关闭。按refactor-plan.md原条目，下一步必须推进：
 
 - 每个Tensor的显式状态归并：现有`TorchTensorState`仍是安装级leaf/retained/optimizer
-  容器，不等于原计划要求的单Tensor字段owner。本批新增真正每对象的
-  `TensorObjectState`，已承载grad/data owner/data path/scalar marker；其余对象字段与
-  运行期registry仍需继续迁移，不能把第一组状态当成整项已交付。
-- 原生边界：索引的`_torch_0d`标记链已由真实0-D内核取代，本批删除；模块注册和
-  legacy Parameter仍直接依赖Torch角色标记，需迁到明确协议/兼容owner，不能只改名。
+  容器，不等于原计划要求的单Tensor字段owner。`TensorObjectState`已承载grad/data
+  owner/path/scalar marker、设备提示、RMSNorm缓存与retain标志；独立Tensor的holder
+  索引已改弱引用、叶子判断走内核，修复断连误删/retain过早清空/强持对象等缺陷。
+  仍需消除安装级状态向native namespace发布的旧别名与legacy activation路径，
+  不能把弱索引说成所有runtime状态已经归并。见[本批记录](../results/2026-09-08-parameter-and-holder-ownership.md)。
+- 原生参数边界已完成：Parameter是真Var子类，Module按名字自持角色；native不再读写
+  `_is_torch_parameter`或`_torch_parameter_class`。原生层仍可按名字注册普通Var，
+  不再用假isinstance冒充Parameter；Torch前端层构造完成后会提升为真实Parameter。
 - 物理分包已完成：顶层`compat/`是独立`jittor-torch`项目，core不带兼容文件。
   `7.18`仍有vLLM独立仓库提取要求，不能把两包拆分等同于该项全部完成。
 

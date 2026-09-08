@@ -10,21 +10,23 @@ of that owner's state, including during transactional installation.
 from __future__ import annotations
 
 from ..transaction import TransactionConflict, _MISSING
+from .holder_registry import HolderRegistry
 
 
 _OWNER_ATTR = "_torch_compat_owner"
 
-class TorchTensorState(dict):
+class TorchTensorState(HolderRegistry):
     """Per-installed-module bookkeeping for Torch-facing tensor autograd.
 
     The object subclasses ``dict`` so the historical ``jt._torch_leaf_params``
     mapping remains source-compatible while the retained registry is grouped
-    beside it.  This also keeps the published module namespace unchanged.
+    beside it. Independent holders are weak entries; the dictionaries locate
+    Python objects and never define their leaf identity or extend their life.
     """
 
     def __init__(self):
         super().__init__()
-        self.retained = {}
+        self.retained = HolderRegistry()
         # The native tensor descriptor owns requires_grad. Only registries
         # consumed by backward belong here; do not retain tensors a second
         # time merely because their gradient flag was enabled.

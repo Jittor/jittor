@@ -52,10 +52,6 @@ class _WriteThroughDict(dict):
             object.__delattr__(self._owner, k)
 
 
-def _is_plain_tensor(value):
-    return value.__dict__.get("_jt_plain_tensor") is True
-
-
 _ROLE_PARAMETER = "parameter"
 
 
@@ -978,34 +974,22 @@ Returns a handle that removes both halves.
             p.update(p.mpi_broadcast(root))
 
     def __setattr__(self, key, value):
-        if isinstance(value, Var):
-            buffer_names = self.__dict__.get("_buffer_names", ())
-            value_attrs = value.__dict__
-            is_parameter = (
-                not key.startswith("_")
-                and key not in buffer_names
-                and value_attrs.get("is_buffer") is not True
-                and value_attrs.get("persistent") is not False
-            )
-            if is_parameter and _is_plain_tensor(value):
-                non_params = self.__dict__.get("_non_parameter_names")
-                if getattr(value, "_is_torch_parameter", False):
-                    # nn.Parameter marks the Var itself, so re-registering a name
-                    # that used to hold a plain tensor promotes it.
-                    if non_params:
-                        non_params.discard(key)
-                elif not (isinstance(self.__dict__.get(key), Var)
-                          and not (non_params and key in non_params)):
-                    # Only the FIRST assignment decides. A name already holding a
-                    # parameter stays one, so the dtype cast / weight load that
-                    # replaces a Var with a plain one (from_pretrained does this)
-                    # cannot silently demote a real weight out of the optimizer.
-                    self.__dict__.setdefault("_non_parameter_names", set()).add(key)
-                    is_parameter = False
-            # Parameter identity belongs to the Var, not to its latest alias.
-            # A private/helper alias must not erase an existing Parameter marker.
-            if is_parameter:
-                value._is_torch_parameter = True
+        if isinstance(value, Var) and not key.startswith("_"):
+            attrs = self.__dict__
+            buffers = attrs.get("_buffer_names", ())
+            parameters = attrs.setdefault("_parameter_names", set())
+            non_parameters = attrs.setdefault("_non_parameter_names", set())
+            if key not in buffers:
+                buffer_alias = any(attrs.get(name) is value for name in buffers)
+                value_attrs = value.__dict__
+                if ((buffer_alias and key not in parameters)
+                        or value_attrs.get("is_buffer") is True
+                        or value_attrs.get("persistent") is False):
+                    parameters.discard(key)
+                    non_parameters.add(key)
+                else:
+                    parameters.add(key)
+                    non_parameters.discard(key)
         object.__setattr__(self, key, value)
 
     def __getattr__(self, key):
@@ -1032,14 +1016,8 @@ Returns a handle that removes both halves.
                 non_persistent.add(key)
         except Exception:
             pass
-        if value is not None:
-            is_parameter = value.__dict__.get("_is_torch_parameter") is True
-            if not is_parameter:
-                value.persistent = persistent
-                # Raw buffers remain non-Parameters even when the same Var is
-                # later exposed through another public attribute.
-                value.is_buffer = True
-                value._is_torch_parameter = False
+        self.__dict__.setdefault("_parameter_names", set()).discard(key)
+        self.__dict__.setdefault("_non_parameter_names", set()).discard(key)
         object.__setattr__(self, key, value)
         return value
 
