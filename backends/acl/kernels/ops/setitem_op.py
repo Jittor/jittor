@@ -206,7 +206,7 @@ class SetItemACL(jt.Function):
             expand_dim = True
             # value = value.unsqueeze(-1)
         else:
-            assert False, "not supported"
+            raise NotImplementedError("ACL setitem slice form is not supported")
         x_shape = list(x.shape)
         if expand_dim:
             x_shape.append(1)
@@ -229,7 +229,7 @@ class SetItemACL(jt.Function):
                 if isinstance(s, int):
                     s = slice(s, s + 1, 1)
                 if isinstance(s, jt.Var):
-                    assert False, "jt.Var not supported"
+                    raise NotImplementedError("ACL setitem does not support Var slice indices")
                 start, stop, step = s.indices(x_shape[dim])
                 size = (stop - start - 1) // step + 1
                 sizes.append(size)
