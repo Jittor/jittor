@@ -24,8 +24,10 @@ class StackACL(jt.Function):
     def execute(self, input_tensors, dim):
         if type(input_tensors) is tuple:
             input_tensors = list(input_tensors)
-        assert type(input_tensors) is list
-        assert -1 * len(input_tensors) - 1 <= dim and dim <= len(input_tensors)
+        if not isinstance(input_tensors, list):
+            raise TypeError("Stack expects a list or tuple of tensors")
+        if not (-len(input_tensors) - 1 <= dim <= len(input_tensors)):
+            raise ValueError("Stack dimension is out of range")
         for i in range(len(input_tensors)):
             if input_tensors[i].dtype != input_tensors[0].dtype:
                 raise ValueError("All input tensors must have the same dtype")
