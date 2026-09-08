@@ -20,8 +20,14 @@ def index_add_(x, dim, index, tensor):
         [  1.,   1.,   1.],
         [  5.,   6.,   7.]])
     """
-    assert len(index.shape) == 1
-    assert tensor.shape[0] == index.shape[0]
+    if len(index.shape) != 1:
+        raise ValueError("index_add_: index must be one-dimensional")
+    if tensor.shape[0] != index.shape[0]:
+        raise ValueError(
+            "index_add_: tensor and index lengths differ ({} vs {})".format(
+                tensor.shape[0], index.shape[0]
+            )
+        )
     # torch parity: index_add_ ACCUMULATES all contributions at DUPLICATE indices
     # (e.g. index=[0,0] adds both rows to row 0). The old impl used `x[adv_idx] += t`,
     # which compiles to a read-add-write and is LAST-WRITE-WINS for dups (drops the
