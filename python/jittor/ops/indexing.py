@@ -62,7 +62,7 @@ def var_getitem(x, slices, return_x=None):
 def var_setitem(x, slices, value, reduce=None):
     """Return an updated Var; assignment belongs to the public write owner."""
     value = _acl_assignment_value(x, value, reduce)
-    if reduce in (None, "void") and not x._needs_cascade_setitem():
+    if reduce in (None, "void"):
         result = try_dispatch("tensor.setitem", x, slices, value, reduce)
         if result is not None:
             return result
@@ -174,11 +174,10 @@ def setitem(x, slices, value):
     if isinstance(slices, jt.Var) and slices.dtype == "uint8":
         slices = slices != 0
     slices = _dispatch_slices(slices)
-    needs_cascade = x._needs_cascade_setitem()
-    if not needs_cascade:
-        result = try_dispatch("tensor.setitem", x, slices, value, None)
-        if result is not None:
-            return x.assign(result)
+    result = try_dispatch("tensor.setitem", x, slices, value, None)
+    if result is not None:
+        # assign handles recorded views as well as ordinary tensor holders.
+        return x.assign(result)
     if isinstance(slices, jt.Var) and slices.dtype == "bool":
         if slices.shape == x.shape:
             if isinstance(value, (int, float)):
@@ -199,14 +198,7 @@ def setitem(x, slices, value):
                 normalized.append(item)
         slices = tuple(normalized)
     result = x.setitem(slices, value)
-    if x._is_view():
-        # A recorded view needs no ancestry walk: `assign` writes through it, at
-        # any depth and for any basic index, where `check_cascade_setitem` could
-        # only rewrite chains of at most ten single integers. The dispatch
-        # decision above is deliberately left on `_needs_cascade_setitem` alone,
-        # so which results a backend is allowed to produce does not change here.
-        return x.assign(result)
-    return x.check_cascade_setitem(result) if needs_cascade else x.assign(result)
+    return x.assign(result)
 
 
 def install_var_indexing():
