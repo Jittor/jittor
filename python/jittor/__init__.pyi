@@ -1,15 +1,19 @@
+import builtins as _builtins
+import numpy as _numpy
+from typing import Dict, MutableMapping
 import jittor_core as jittor_core
 import jittor_core as core
 from ._runtime.introspection import Introspection as _Introspection
 introspection: _Introspection
-from . import autograd as autograd, compile_extern as compile_extern, compiler as compiler, dataset as dataset, distributions as distributions, fft as fft, init as init, linalg as linalg, math_util as math_util, misc as misc, nn as nn, numpy2cupy as numpy2cupy, optim as optim, sparse as sparse
+from . import autograd as autograd, compile_extern as compile_extern, compiler as compiler, dataset as dataset, distributions as distributions, fft as fft, init as init, linalg as linalg, math_util as math_util, misc as misc, nn as nn, optim as optim, sparse as sparse
 from .benchmarking import BenchmarkResult as BenchmarkResult, benchmark as benchmark
 from . import contrib as contrib
 from .compile_extern import cublas as cublas, cudnn as cudnn, cufft as cufft, curand as curand, cusparse as cusparse, mkl_ops as mkl_ops, mpi as mpi, mpi_ops as mpi_ops
 from .compiler import LOG as LOG, compile_custom_op as compile_custom_op, compile_custom_ops as compile_custom_ops, has_cuda as has_cuda
 from .linalg import einsum as einsum
-from .misc.concatenation import cat as cat, concat as concat
-from .nn import attention as attention, baddbmm as baddbmm, bmm as bmm, bmm_transpose as bmm_transpose, matmul as matmul
+from .ops.concatenation import cat as cat, concat as concat
+from .nn import attention as attention
+from .nn.functional.matrix import baddbmm as baddbmm, bmm as bmm, bmm_transpose as bmm_transpose, matmul as matmul
 from .nn.functional.softmax import logsumexp as logsumexp
 from .nn.functional.tensor import kron as kron, tensordot as tensordot
 from .optim import legacy_schedulers as lr_scheduler
@@ -806,7 +810,7 @@ def bitwise_xor(x: Var, y: Var)-> Var:
 
 	    * [in] y: the second input, jt.Var (integal or boolean).'''
 	...
-def argsort(x: Var, dim: int=-1, descending: bool=False, dtype: str="int32")-> Tuple[Var]:
+def argsort(x: Var, dim: _builtins.int=-1, descending: _builtins.bool=False, dtype: str="int32")-> Tuple[Var, ...]:
 	'''Document:
 	*
 	    Argsort Operator Perform an indirect sort by given key or compare function.
@@ -848,7 +852,7 @@ def argsort(x: Var, dim: int=-1, descending: bool=False, dtype: str="int32")-> T
 	            # return [[0 1 0],[1 0 1]],  [[11 11 12],[12 13 13]]'''
 	...
 @overload
-def code(shape: Tuple[int], dtype: str, inputs: List[Var]={}, cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str="", data={}, backend: str="")-> Var:
+def code(shape: Tuple[_builtins.int, ...], dtype: str, inputs: List[Var]=[], cpu_src: str="", cpu_grad_src: List[str]=[], cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]=[], cuda_header: str="", data={}, backend: str="")-> Var:
 	'''Document:
 	*
 	    Code Operator for easily customized op.
@@ -1092,7 +1096,7 @@ def code(shape: Tuple[int], dtype: str, inputs: List[Var]={}, cpu_src: str="", c
 	        print(jt.grad(c, [a, b]))'''
 	...
 @overload
-def code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var]={}, cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str="", data={}, backend: str="")-> Tuple[Var]:
+def code(shapes: List[Tuple[_builtins.int, ...]], dtypes: List[str], inputs: List[Var]=[], cpu_src: str="", cpu_grad_src: List[str]=[], cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]=[], cuda_header: str="", data={}, backend: str="")-> Tuple[Var, ...]:
 	'''Document:
 	*
 	    Code Operator for easily customized op.
@@ -1336,7 +1340,7 @@ def code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var]={}, cpu_
 	        print(jt.grad(c, [a, b]))'''
 	...
 @overload
-def code(inputs: List[Var], outputs: List[Var], cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str="", data={}, backend: str="")-> Tuple[Var]:
+def code(inputs: List[Var], outputs: List[Var], cpu_src: str="", cpu_grad_src: List[str]=[], cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]=[], cuda_header: str="", data={}, backend: str="")-> Tuple[Var, ...]:
 	'''Document:
 	*
 	    Code Operator for easily customized op.
@@ -1581,7 +1585,7 @@ def code(inputs: List[Var], outputs: List[Var], cpu_src: str="", cpu_grad_src: L
 	...
 def tape(x: Var)-> Var:
  ...
-def reshape(x: Var, shape: Tuple[int])-> Var:
+def reshape(x: Var, shape: Tuple[_builtins.int, ...])-> Var:
 	'''Document:
 	*
 	    Returns a tensor with the same data and number of elements as input, but with the specified shape.
@@ -1609,7 +1613,7 @@ def reshape(x: Var, shape: Tuple[int])-> Var:
 	         [1 8 1 1 2 2]], dtype=int32)'''
 	...
 @overload
-def numpy_code(shape: Tuple[int], dtype: str, inputs: List[Var], forward: Callable, backward: List[Callable])-> Var:
+def numpy_code(shape: Tuple[_builtins.int, ...], dtype: str, inputs: List[Var], forward: Callable, backward: List[Callable])-> Var:
 	'''Document:
 	*
 	    Numpy Code Operator for easily customized op.
@@ -1682,7 +1686,7 @@ def numpy_code(shape: Tuple[int], dtype: str, inputs: List[Var], forward: Callab
 	        )'''
 	...
 @overload
-def numpy_code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var], forward: Callable, backward: List[Callable])-> Tuple[Var]:
+def numpy_code(shapes: List[Tuple[_builtins.int, ...]], dtypes: List[str], inputs: List[Var], forward: Callable, backward: List[Callable])-> Tuple[Var, ...]:
 	'''Document:
 	*
 	    Numpy Code Operator for easily customized op.
@@ -1755,7 +1759,7 @@ def numpy_code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var], f
 	        )'''
 	...
 @overload
-def numpy_code(shape: Tuple[int], dtype: str, inputs: List[Var], forward: Callable)-> Var:
+def numpy_code(shape: Tuple[_builtins.int, ...], dtype: str, inputs: List[Var], forward: Callable)-> Var:
 	'''Document:
 	*
 	    Numpy Code Operator for easily customized op.
@@ -1828,7 +1832,7 @@ def numpy_code(shape: Tuple[int], dtype: str, inputs: List[Var], forward: Callab
 	        )'''
 	...
 @overload
-def numpy_code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var], forward: Callable)-> Tuple[Var]:
+def numpy_code(shapes: List[Tuple[_builtins.int, ...]], dtypes: List[str], inputs: List[Var], forward: Callable)-> Tuple[Var, ...]:
 	'''Document:
 	*
 	    Numpy Code Operator for easily customized op.
@@ -1900,10 +1904,10 @@ def numpy_code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var], f
 	            [backward_code1,backward_code2],
 	        )'''
 	...
-def random(shape: Tuple[int], dtype: str="float32", type: str="uniform")-> Var:
+def random(shape: Tuple[_builtins.int, ...], dtype: str="float32", type: str="uniform")-> Var:
  ...
 @overload
-def where(cond: Var, dtype: str="int64")-> Tuple[Var]:
+def where(cond: Var, dtype: str="int64")-> Tuple[Var, ...]:
 	'''Document:
 	*
 	    Where Operator generate index of true condition.
@@ -1930,7 +1934,7 @@ def where(cond: Var, x: Var, y: Var)-> Var:
 	     *'''
 	...
 @overload
-def index(shape: Tuple[int], dim: int, dtype: str="int32")-> Var:
+def index(shape: Tuple[_builtins.int, ...], dim: _builtins.int, dtype: str="int32")-> Var:
 	'''Document:
 	*
 	    Index Operator generate index of shape.
@@ -1957,7 +1961,7 @@ def index(shape: Tuple[int], dim: int, dtype: str="int32")-> Var:
 	        # output: [[0,1],[0,1]]'''
 	...
 @overload
-def index(shape: Tuple[int], dtype: str="int32")-> Tuple[Var]:
+def index(shape: Tuple[_builtins.int, ...], dtype: str="int32")-> Tuple[Var, ...]:
 	'''Document:
 	*
 	    Index Operator generate index of shape.
@@ -1984,37 +1988,37 @@ def index(shape: Tuple[int], dtype: str="int32")-> Tuple[Var]:
 	        # output: [[0,1],[0,1]]'''
 	...
 @overload
-def index(a: Var, dim: int, dtype: str="int32")-> Var:
+def index(a: Var, dim: _builtins.int, dtype: str="int32")-> Var:
 	'''Document:
 	* shape dependency version of index op
 	        jt.index_var(a, 1) similar with jt.index(a.shape, 1)'''
 	...
 @overload
-def index(a: Var, dtype: str="int32")-> Tuple[Var]:
+def index(a: Var, dtype: str="int32")-> Tuple[Var, ...]:
 	'''Document:
 	* shape dependency version of index op
 	        jt.index_var(a) similar with jt.index(a.shape)'''
 	...
 @overload
-def index_var(a: Var, dim: int, dtype: str="int32")-> Var:
+def index_var(a: Var, dim: _builtins.int, dtype: str="int32")-> Var:
 	'''Document:
 	* shape dependency version of index op
 	        jt.index_var(a, 1) similar with jt.index(a.shape, 1)'''
 	...
 @overload
-def index_var(a: Var, dtype: str="int32")-> Tuple[Var]:
+def index_var(a: Var, dtype: str="int32")-> Tuple[Var, ...]:
 	'''Document:
 	* shape dependency version of index op
 	        jt.index_var(a) similar with jt.index(a.shape)'''
 	...
 @overload
-def reduce(x: Var, op: str, dim: int, keepdims: bool=False)-> Var:
+def reduce(x: Var, op: str, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
  ...
 @overload
-def reduce(x: Var, op: str, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+def reduce(x: Var, op: str, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
  ...
 @overload
-def max(x: Var, dim: int, keepdims: bool=False)-> Var:
+def max(x: Var, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the maximum elements in the input.
@@ -2045,7 +2049,7 @@ def max(x: Var, dim: int, keepdims: bool=False)-> Var:
 	         [4]], dtype=int32)'''
 	...
 @overload
-def max(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+def max(x: Var, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the maximum elements in the input.
@@ -2076,7 +2080,7 @@ def max(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
 	         [4]], dtype=int32)'''
 	...
 @overload
-def max(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
+def max(x: Var, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 	'''Document:
 	*
 	    Returns the maximum elements in the input.
@@ -2107,7 +2111,7 @@ def max(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
 	         [4]], dtype=int32)'''
 	...
 @overload
-def reduce_maximum(x: Var, dim: int, keepdims: bool=False)-> Var:
+def reduce_maximum(x: Var, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the maximum elements in the input.
@@ -2138,7 +2142,7 @@ def reduce_maximum(x: Var, dim: int, keepdims: bool=False)-> Var:
 	         [4]], dtype=int32)'''
 	...
 @overload
-def reduce_maximum(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+def reduce_maximum(x: Var, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the maximum elements in the input.
@@ -2169,7 +2173,7 @@ def reduce_maximum(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
 	         [4]], dtype=int32)'''
 	...
 @overload
-def reduce_maximum(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
+def reduce_maximum(x: Var, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 	'''Document:
 	*
 	    Returns the maximum elements in the input.
@@ -2200,7 +2204,7 @@ def reduce_maximum(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
 	         [4]], dtype=int32)'''
 	...
 @overload
-def min(x: Var, dim: int, keepdims: bool=False)-> Var:
+def min(x: Var, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the minimum elements in the input.
@@ -2231,7 +2235,7 @@ def min(x: Var, dim: int, keepdims: bool=False)-> Var:
 	         [0]], dtype=int32)'''
 	...
 @overload
-def min(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+def min(x: Var, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the minimum elements in the input.
@@ -2262,7 +2266,7 @@ def min(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
 	         [0]], dtype=int32)'''
 	...
 @overload
-def min(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
+def min(x: Var, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 	'''Document:
 	*
 	    Returns the minimum elements in the input.
@@ -2293,7 +2297,7 @@ def min(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
 	         [0]], dtype=int32)'''
 	...
 @overload
-def reduce_minimum(x: Var, dim: int, keepdims: bool=False)-> Var:
+def reduce_minimum(x: Var, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the minimum elements in the input.
@@ -2324,7 +2328,7 @@ def reduce_minimum(x: Var, dim: int, keepdims: bool=False)-> Var:
 	         [0]], dtype=int32)'''
 	...
 @overload
-def reduce_minimum(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+def reduce_minimum(x: Var, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the minimum elements in the input.
@@ -2355,7 +2359,7 @@ def reduce_minimum(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
 	         [0]], dtype=int32)'''
 	...
 @overload
-def reduce_minimum(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
+def reduce_minimum(x: Var, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 	'''Document:
 	*
 	    Returns the minimum elements in the input.
@@ -2386,7 +2390,7 @@ def reduce_minimum(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
 	         [0]], dtype=int32)'''
 	...
 @overload
-def sum(x: Var, dim: int, keepdims: bool=False)-> Var:
+def sum(x: Var, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the sum of the input.
@@ -2417,7 +2421,7 @@ def sum(x: Var, dim: int, keepdims: bool=False)-> Var:
 	         [6]], dtype=int32)'''
 	...
 @overload
-def sum(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+def sum(x: Var, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the sum of the input.
@@ -2448,7 +2452,7 @@ def sum(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
 	         [6]], dtype=int32)'''
 	...
 @overload
-def sum(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
+def sum(x: Var, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 	'''Document:
 	*
 	    Returns the sum of the input.
@@ -2479,7 +2483,7 @@ def sum(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
 	         [6]], dtype=int32)'''
 	...
 @overload
-def reduce_add(x: Var, dim: int, keepdims: bool=False)-> Var:
+def reduce_add(x: Var, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the sum of the input.
@@ -2510,7 +2514,7 @@ def reduce_add(x: Var, dim: int, keepdims: bool=False)-> Var:
 	         [6]], dtype=int32)'''
 	...
 @overload
-def reduce_add(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+def reduce_add(x: Var, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the sum of the input.
@@ -2541,7 +2545,7 @@ def reduce_add(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
 	         [6]], dtype=int32)'''
 	...
 @overload
-def reduce_add(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
+def reduce_add(x: Var, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 	'''Document:
 	*
 	    Returns the sum of the input.
@@ -2572,7 +2576,7 @@ def reduce_add(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
 	         [6]], dtype=int32)'''
 	...
 @overload
-def prod(x: Var, dim: int, keepdims: bool=False)-> Var:
+def prod(x: Var, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the product of all the elements in the input.
@@ -2603,7 +2607,7 @@ def prod(x: Var, dim: int, keepdims: bool=False)-> Var:
 	         [175]], dtype=int32)'''
 	...
 @overload
-def prod(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+def prod(x: Var, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the product of all the elements in the input.
@@ -2634,7 +2638,7 @@ def prod(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
 	         [175]], dtype=int32)'''
 	...
 @overload
-def prod(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
+def prod(x: Var, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 	'''Document:
 	*
 	    Returns the product of all the elements in the input.
@@ -2665,7 +2669,7 @@ def prod(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
 	         [175]], dtype=int32)'''
 	...
 @overload
-def product(x: Var, dim: int, keepdims: bool=False)-> Var:
+def product(x: Var, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the product of all the elements in the input.
@@ -2696,7 +2700,7 @@ def product(x: Var, dim: int, keepdims: bool=False)-> Var:
 	         [175]], dtype=int32)'''
 	...
 @overload
-def product(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+def product(x: Var, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the product of all the elements in the input.
@@ -2727,7 +2731,7 @@ def product(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
 	         [175]], dtype=int32)'''
 	...
 @overload
-def product(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
+def product(x: Var, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 	'''Document:
 	*
 	    Returns the product of all the elements in the input.
@@ -2758,7 +2762,7 @@ def product(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
 	         [175]], dtype=int32)'''
 	...
 @overload
-def reduce_multiply(x: Var, dim: int, keepdims: bool=False)-> Var:
+def reduce_multiply(x: Var, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the product of all the elements in the input.
@@ -2789,7 +2793,7 @@ def reduce_multiply(x: Var, dim: int, keepdims: bool=False)-> Var:
 	         [175]], dtype=int32)'''
 	...
 @overload
-def reduce_multiply(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+def reduce_multiply(x: Var, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the product of all the elements in the input.
@@ -2820,7 +2824,7 @@ def reduce_multiply(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
 	         [175]], dtype=int32)'''
 	...
 @overload
-def reduce_multiply(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
+def reduce_multiply(x: Var, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 	'''Document:
 	*
 	    Returns the product of all the elements in the input.
@@ -2851,7 +2855,7 @@ def reduce_multiply(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
 	         [175]], dtype=int32)'''
 	...
 @overload
-def reduce_logical_and(x: Var, dim: int, keepdims: bool=False)-> Var:
+def reduce_logical_and(x: Var, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Tests if all elements in input evaluate to True.
@@ -2882,7 +2886,7 @@ def reduce_logical_and(x: Var, dim: int, keepdims: bool=False)-> Var:
 	         [False]], dtype=int32)'''
 	...
 @overload
-def reduce_logical_and(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+def reduce_logical_and(x: Var, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Tests if all elements in input evaluate to True.
@@ -2913,7 +2917,7 @@ def reduce_logical_and(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
 	         [False]], dtype=int32)'''
 	...
 @overload
-def reduce_logical_and(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
+def reduce_logical_and(x: Var, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 	'''Document:
 	*
 	    Tests if all elements in input evaluate to True.
@@ -2944,7 +2948,7 @@ def reduce_logical_and(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
 	         [False]], dtype=int32)'''
 	...
 @overload
-def all_(x: Var, dim: int, keepdims: bool=False)-> Var:
+def all_(x: Var, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Tests if all elements in input evaluate to True.
@@ -2975,7 +2979,7 @@ def all_(x: Var, dim: int, keepdims: bool=False)-> Var:
 	         [False]], dtype=int32)'''
 	...
 @overload
-def all_(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+def all_(x: Var, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Tests if all elements in input evaluate to True.
@@ -3006,7 +3010,7 @@ def all_(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
 	         [False]], dtype=int32)'''
 	...
 @overload
-def all_(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
+def all_(x: Var, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 	'''Document:
 	*
 	    Tests if all elements in input evaluate to True.
@@ -3037,7 +3041,7 @@ def all_(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
 	         [False]], dtype=int32)'''
 	...
 @overload
-def reduce_logical_or(x: Var, dim: int, keepdims: bool=False)-> Var:
+def reduce_logical_or(x: Var, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Tests if any elements in input evaluate to True.
@@ -3068,7 +3072,7 @@ def reduce_logical_or(x: Var, dim: int, keepdims: bool=False)-> Var:
 	         [False]], dtype=int32)'''
 	...
 @overload
-def reduce_logical_or(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+def reduce_logical_or(x: Var, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Tests if any elements in input evaluate to True.
@@ -3099,7 +3103,7 @@ def reduce_logical_or(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
 	         [False]], dtype=int32)'''
 	...
 @overload
-def reduce_logical_or(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
+def reduce_logical_or(x: Var, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 	'''Document:
 	*
 	    Tests if any elements in input evaluate to True.
@@ -3130,7 +3134,7 @@ def reduce_logical_or(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
 	         [False]], dtype=int32)'''
 	...
 @overload
-def any_(x: Var, dim: int, keepdims: bool=False)-> Var:
+def any_(x: Var, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Tests if any elements in input evaluate to True.
@@ -3161,7 +3165,7 @@ def any_(x: Var, dim: int, keepdims: bool=False)-> Var:
 	         [False]], dtype=int32)'''
 	...
 @overload
-def any_(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+def any_(x: Var, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Tests if any elements in input evaluate to True.
@@ -3192,7 +3196,7 @@ def any_(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
 	         [False]], dtype=int32)'''
 	...
 @overload
-def any_(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
+def any_(x: Var, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 	'''Document:
 	*
 	    Tests if any elements in input evaluate to True.
@@ -3223,43 +3227,43 @@ def any_(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
 	         [False]], dtype=int32)'''
 	...
 @overload
-def reduce_logical_xor(x: Var, dim: int, keepdims: bool=False)-> Var:
+def reduce_logical_xor(x: Var, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
  ...
 @overload
-def reduce_logical_xor(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+def reduce_logical_xor(x: Var, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
  ...
 @overload
-def reduce_logical_xor(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
+def reduce_logical_xor(x: Var, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
  ...
 @overload
-def reduce_bitwise_and(x: Var, dim: int, keepdims: bool=False)-> Var:
+def reduce_bitwise_and(x: Var, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
  ...
 @overload
-def reduce_bitwise_and(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+def reduce_bitwise_and(x: Var, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
  ...
 @overload
-def reduce_bitwise_and(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
+def reduce_bitwise_and(x: Var, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
  ...
 @overload
-def reduce_bitwise_or(x: Var, dim: int, keepdims: bool=False)-> Var:
+def reduce_bitwise_or(x: Var, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
  ...
 @overload
-def reduce_bitwise_or(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+def reduce_bitwise_or(x: Var, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
  ...
 @overload
-def reduce_bitwise_or(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
+def reduce_bitwise_or(x: Var, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
  ...
 @overload
-def reduce_bitwise_xor(x: Var, dim: int, keepdims: bool=False)-> Var:
+def reduce_bitwise_xor(x: Var, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
  ...
 @overload
-def reduce_bitwise_xor(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+def reduce_bitwise_xor(x: Var, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
  ...
 @overload
-def reduce_bitwise_xor(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
+def reduce_bitwise_xor(x: Var, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
  ...
 @overload
-def mean(x: Var, dim: int, keepdims: bool=False)-> Var:
+def mean(x: Var, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the mean value of the input.
@@ -3290,7 +3294,7 @@ def mean(x: Var, dim: int, keepdims: bool=False)-> Var:
 	         [5.3333335]], dtype=float32)'''
 	...
 @overload
-def mean(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+def mean(x: Var, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 	'''Document:
 	*
 	    Returns the mean value of the input.
@@ -3321,7 +3325,7 @@ def mean(x: Var, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
 	         [5.3333335]], dtype=float32)'''
 	...
 @overload
-def mean(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
+def mean(x: Var, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 	'''Document:
 	*
 	    Returns the mean value of the input.
@@ -3353,15 +3357,15 @@ def mean(x: Var, dims_mask: int, keepdims_mask: int)-> Var:
 	...
 def clone(x: Var)-> Var:
  ...
-def fuse_transpose(x: Var, axes: Tuple[int]=())-> Var:
+def fuse_transpose(x: Var, axes: Tuple[_builtins.int, ...]=())-> Var:
  ...
-def fused_adamw(parameters: List[Var], moments: List[Var], variances: List[Var], gradients: List[Var], step: Var, lr: float, beta1: float, beta2: float, weight_decay: float, eps: float)-> Tuple[Var]:
+def fused_adamw(parameters: List[Var], moments: List[Var], variances: List[Var], gradients: List[Var], step: Var, lr: _builtins.float, beta1: _builtins.float, beta2: _builtins.float, weight_decay: _builtins.float, eps: _builtins.float)-> Tuple[Var, ...]:
  ...
-def array_(args: numpy.ndarray)-> Var:
+def array_(args: _numpy.ndarray)-> Var:
  ...
-def array(obj: float | int | numpy.ndarray | Var)-> Var:
+def array(obj: _builtins.float | _builtins.int | _numpy.ndarray | Var)-> Var:
  ...
-def empty(shape: Tuple[int], dtype: str="float32")-> Var:
+def empty(shape: Tuple[_builtins.int, ...], dtype: str="float32")-> Var:
  ...
 def unary(x: Var, op: str)-> Var:
  ...
@@ -4311,9 +4315,9 @@ def setitem(x: Var, slices: slice, y: Var, op: str="void")-> Var:
  ...
 def fetch(inputs: List[Var], func: Callable)-> Var:
  ...
-def transpose(x: Var, axes: Tuple[int]=())-> Var:
+def transpose(x: Var, axes: Tuple[_builtins.int, ...]=())-> Var:
  ...
-def device_copy(x: Var, device: int)-> Var:
+def device_copy(x: Var, device: _builtins.int)-> Var:
 	'''Document:
 	*
 	    Copy a Var onto another CUDA device -- torch's ``tensor.to("cuda:N")``.
@@ -4324,7 +4328,7 @@ def device_copy(x: Var, device: int)-> Var:
 	    ops on it run there. It is differentiable: the gradient is a copy back to
 	    the source's device. Without CUDA it is a plain host copy.'''
 	...
-def arg_reduce(x: Var, op: str, dim: int, keepdims: bool)-> Tuple[Var]:
+def arg_reduce(x: Var, op: str, dim: _builtins.int, keepdims: _builtins.bool)-> Tuple[Var, ...]:
 	'''Document:
 	*
 	    Returns the indices of the maximum / minimum of the input across a dimension.
@@ -4397,18 +4401,18 @@ def candidate(x: Var, fail_cond: str, dtype: str="int32")-> Var:
 def getitem(x: Var, slices: slice)-> Var:
  ...
 @overload
-def getitem(x: Var, slices: slice, _: int)-> Tuple[Var]:
+def getitem(x: Var, slices: slice, _: _builtins.int)-> Tuple[Var, ...]:
  ...
 def ternary(cond: Var, x: Var, y: Var)-> Var:
  ...
-def reinterpret_view(x: Var, shape: Tuple[int], dtype: str)-> Var:
+def reinterpret_view(x: Var, shape: Tuple[_builtins.int, ...], dtype: str)-> Var:
 	'''Document:
 	*
 	    Returns a tensor that shares the same storage as input but reinterprets its
 	    dtype and shape. The total byte size must stay unchanged.'''
 	...
 @overload
-def broadcast(x: Var, shape: Tuple[int], dims: Tuple[int]=())-> Var:
+def broadcast(x: Var, shape: Tuple[_builtins.int, ...], dims: Tuple[_builtins.int, ...]=())-> Var:
 	'''Document:
 	*
 	    Broadcast ``x`` to a given shape.
@@ -4437,7 +4441,7 @@ def broadcast(x: Var, shape: Tuple[int], dims: Tuple[int]=())-> Var:
 	          [7 6]]], dtype=int32)'''
 	...
 @overload
-def broadcast(x: Var, y: Var, dims: Tuple[int]=())-> Var:
+def broadcast(x: Var, y: Var, dims: Tuple[_builtins.int, ...]=())-> Var:
 	'''Document:
 	*
 	    Broadcast ``x`` to the same shape as ``y``.
@@ -4476,7 +4480,7 @@ def broadcast(x: Var, y: Var, dims: Tuple[int]=())-> Var:
 	          [7 6]
 	          [7 6]]], dtype=int32)'''
 	...
-def broadcast_var(x: Var, y: Var, dims: Tuple[int]=())-> Var:
+def broadcast_var(x: Var, y: Var, dims: Tuple[_builtins.int, ...]=())-> Var:
 	'''Document:
 	*
 	    Broadcast ``x`` to the same shape as ``y``.
@@ -4515,7 +4519,7 @@ def broadcast_var(x: Var, y: Var, dims: Tuple[int]=())-> Var:
 	          [7 6]
 	          [7 6]]], dtype=int32)'''
 	...
-def safe_clip(x: Var, left: float=-1e300, right: float=1e300)-> Var:
+def safe_clip(x: Var, left: _builtins.float=-1e300, right: _builtins.float=1e300)-> Var:
 	'''Document:
 	* Safe clip value to a range, and keep
 	 the gradient pass thought.
@@ -4524,7 +4528,7 @@ def safe_clip(x: Var, left: float=-1e300, right: float=1e300)-> Var:
 	    * [in] left: float64 clip min value.
 	    * [in] right: float64 clip max value.'''
 	...
-def reindex_reduce(y: Var, op: str, shape: Tuple[int], indexes: List[str], overflow_conditions: List[str]={}, extras: List[Var]={})-> Var:
+def reindex_reduce(y: Var, op: str, shape: Tuple[_builtins.int, ...], indexes: List[str], overflow_conditions: List[str]=[], extras: List[Var]=[])-> Var:
 	'''Document:
 	*
 	    Reindex Reduce Operator is a many-to-one map operator.
@@ -4596,7 +4600,7 @@ def reindex_reduce(y: Var, op: str, shape: Tuple[int], indexes: List[str], overf
 def copy(x: Var)-> Var:
  ...
 @overload
-def reindex(x: Var, shape: Tuple[int], indexes: List[str], overflow_value: float=0, overflow_conditions: List[str]={}, extras: List[Var]={})-> Var:
+def reindex(x: Var, shape: Tuple[_builtins.int, ...], indexes: List[str], overflow_value: _builtins.float=0, overflow_conditions: List[str]=[], extras: List[Var]=[])-> Var:
 	'''Document:
 	*
 	    Reindex Operator is a one-to-many map operator.
@@ -4670,12 +4674,12 @@ def reindex(x: Var, shape: Tuple[int], indexes: List[str], overflow_value: float
 	            return y, yy'''
 	...
 @overload
-def reindex(x: Var, indexes: List[Var], overflow_value: float=0, overflow_conditions: List[str]={})-> Var:
+def reindex(x: Var, indexes: List[Var], overflow_value: _builtins.float=0, overflow_conditions: List[str]=[])-> Var:
 	'''Document:
 	* Alias x.reindex([i,j,k]) ->
 	        x.reindex(i.shape, ['@e0(...)','@e1(...)','@e2(...)',], extras=[i,j,k])'''
 	...
-def reindex_var(x: Var, indexes: List[Var], overflow_value: float=0, overflow_conditions: List[str]={})-> Var:
+def reindex_var(x: Var, indexes: List[Var], overflow_value: _builtins.float=0, overflow_conditions: List[str]=[])-> Var:
 	'''Document:
 	* Alias x.reindex([i,j,k]) ->
 	        x.reindex(i.shape, ['@e0(...)','@e1(...)','@e2(...)',], extras=[i,j,k])'''
@@ -5094,7 +5098,7 @@ class Var:
 
 		    * [in] y: the second input, jt.Var (integal or boolean).'''
 		...
-	def argsort(self, dim: int=-1, descending: bool=False, dtype: str="int32")-> Tuple[Var]:
+	def argsort(self, dim: _builtins.int=-1, descending: _builtins.bool=False, dtype: str="int32")-> Tuple[Var, ...]:
 		'''Document:
 		*
 		    Argsort Operator Perform an indirect sort by given key or compare function.
@@ -5135,8 +5139,7 @@ class Var:
 		            index, value = jt.argsort([[11,13,12], [12,11,13]], dim=0)
 		            # return [[0 1 0],[1 0 1]],  [[11 11 12],[12 13 13]]'''
 		...
-	@overload
-	def code(self, outputs: List[Var], cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str="", data={})-> Tuple[Var]:
+	def code(self, outputs: List[Var], cpu_src: str="", cpu_grad_src: List[str]=[], cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]=[], cuda_header: str="", data={})-> Tuple[Var, ...]:
 		'''Document:
 		*
 		    Code Operator for easily customized op.
@@ -5380,7 +5383,7 @@ class Var:
 		        print(jt.grad(c, [a, b]))'''
 		...
 	def tape(self)-> Var: ...
-	def reshape(self, shape: Tuple[int])-> Var:
+	def reshape(self, shape: Tuple[_builtins.int, ...])-> Var:
 		'''Document:
 		*
 		    Returns a tensor with the same data and number of elements as input, but with the specified shape.
@@ -5408,7 +5411,7 @@ class Var:
 		         [1 8 1 1 2 2]], dtype=int32)'''
 		...
 	@overload
-	def where(self, dtype: str="int64")-> Tuple[Var]:
+	def where(self, dtype: str="int64")-> Tuple[Var, ...]:
 		'''Document:
 		*
 		    Where Operator generate index of true condition.
@@ -5435,35 +5438,35 @@ class Var:
 		     *'''
 		...
 	@overload
-	def index(self, dim: int, dtype: str="int32")-> Var:
+	def index(self, dim: _builtins.int, dtype: str="int32")-> Var:
 		'''Document:
 		* shape dependency version of index op
 		        jt.index_var(a, 1) similar with jt.index(a.shape, 1)'''
 		...
 	@overload
-	def index(self, dtype: str="int32")-> Tuple[Var]:
+	def index(self, dtype: str="int32")-> Tuple[Var, ...]:
 		'''Document:
 		* shape dependency version of index op
 		        jt.index_var(a) similar with jt.index(a.shape)'''
 		...
 	@overload
-	def index_var(self, dim: int, dtype: str="int32")-> Var:
+	def index_var(self, dim: _builtins.int, dtype: str="int32")-> Var:
 		'''Document:
 		* shape dependency version of index op
 		        jt.index_var(a, 1) similar with jt.index(a.shape, 1)'''
 		...
 	@overload
-	def index_var(self, dtype: str="int32")-> Tuple[Var]:
+	def index_var(self, dtype: str="int32")-> Tuple[Var, ...]:
 		'''Document:
 		* shape dependency version of index op
 		        jt.index_var(a) similar with jt.index(a.shape)'''
 		...
 	@overload
-	def reduce(self, op: str, dim: int, keepdims: bool=False)-> Var: ...
+	def reduce(self, op: str, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var: ...
 	@overload
-	def reduce(self, op: str, dims: Tuple[int]=(), keepdims: bool=False)-> Var: ...
+	def reduce(self, op: str, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var: ...
 	@overload
-	def max(self, dim: int, keepdims: bool=False)-> Var:
+	def max(self, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the maximum elements in the input.
@@ -5494,7 +5497,7 @@ class Var:
 		         [4]], dtype=int32)'''
 		...
 	@overload
-	def max(self, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+	def max(self, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the maximum elements in the input.
@@ -5525,7 +5528,7 @@ class Var:
 		         [4]], dtype=int32)'''
 		...
 	@overload
-	def max(self, dims_mask: int, keepdims_mask: int)-> Var:
+	def max(self, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 		'''Document:
 		*
 		    Returns the maximum elements in the input.
@@ -5556,7 +5559,7 @@ class Var:
 		         [4]], dtype=int32)'''
 		...
 	@overload
-	def reduce_maximum(self, dim: int, keepdims: bool=False)-> Var:
+	def reduce_maximum(self, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the maximum elements in the input.
@@ -5587,7 +5590,7 @@ class Var:
 		         [4]], dtype=int32)'''
 		...
 	@overload
-	def reduce_maximum(self, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+	def reduce_maximum(self, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the maximum elements in the input.
@@ -5618,7 +5621,7 @@ class Var:
 		         [4]], dtype=int32)'''
 		...
 	@overload
-	def reduce_maximum(self, dims_mask: int, keepdims_mask: int)-> Var:
+	def reduce_maximum(self, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 		'''Document:
 		*
 		    Returns the maximum elements in the input.
@@ -5649,7 +5652,7 @@ class Var:
 		         [4]], dtype=int32)'''
 		...
 	@overload
-	def min(self, dim: int, keepdims: bool=False)-> Var:
+	def min(self, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the minimum elements in the input.
@@ -5680,7 +5683,7 @@ class Var:
 		         [0]], dtype=int32)'''
 		...
 	@overload
-	def min(self, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+	def min(self, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the minimum elements in the input.
@@ -5711,7 +5714,7 @@ class Var:
 		         [0]], dtype=int32)'''
 		...
 	@overload
-	def min(self, dims_mask: int, keepdims_mask: int)-> Var:
+	def min(self, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 		'''Document:
 		*
 		    Returns the minimum elements in the input.
@@ -5742,7 +5745,7 @@ class Var:
 		         [0]], dtype=int32)'''
 		...
 	@overload
-	def reduce_minimum(self, dim: int, keepdims: bool=False)-> Var:
+	def reduce_minimum(self, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the minimum elements in the input.
@@ -5773,7 +5776,7 @@ class Var:
 		         [0]], dtype=int32)'''
 		...
 	@overload
-	def reduce_minimum(self, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+	def reduce_minimum(self, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the minimum elements in the input.
@@ -5804,7 +5807,7 @@ class Var:
 		         [0]], dtype=int32)'''
 		...
 	@overload
-	def reduce_minimum(self, dims_mask: int, keepdims_mask: int)-> Var:
+	def reduce_minimum(self, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 		'''Document:
 		*
 		    Returns the minimum elements in the input.
@@ -5835,7 +5838,7 @@ class Var:
 		         [0]], dtype=int32)'''
 		...
 	@overload
-	def sum(self, dim: int, keepdims: bool=False)-> Var:
+	def sum(self, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the sum of the input.
@@ -5866,7 +5869,7 @@ class Var:
 		         [6]], dtype=int32)'''
 		...
 	@overload
-	def sum(self, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+	def sum(self, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the sum of the input.
@@ -5897,7 +5900,7 @@ class Var:
 		         [6]], dtype=int32)'''
 		...
 	@overload
-	def sum(self, dims_mask: int, keepdims_mask: int)-> Var:
+	def sum(self, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 		'''Document:
 		*
 		    Returns the sum of the input.
@@ -5928,7 +5931,7 @@ class Var:
 		         [6]], dtype=int32)'''
 		...
 	@overload
-	def reduce_add(self, dim: int, keepdims: bool=False)-> Var:
+	def reduce_add(self, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the sum of the input.
@@ -5959,7 +5962,7 @@ class Var:
 		         [6]], dtype=int32)'''
 		...
 	@overload
-	def reduce_add(self, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+	def reduce_add(self, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the sum of the input.
@@ -5990,7 +5993,7 @@ class Var:
 		         [6]], dtype=int32)'''
 		...
 	@overload
-	def reduce_add(self, dims_mask: int, keepdims_mask: int)-> Var:
+	def reduce_add(self, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 		'''Document:
 		*
 		    Returns the sum of the input.
@@ -6021,7 +6024,7 @@ class Var:
 		         [6]], dtype=int32)'''
 		...
 	@overload
-	def prod(self, dim: int, keepdims: bool=False)-> Var:
+	def prod(self, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the product of all the elements in the input.
@@ -6052,7 +6055,7 @@ class Var:
 		         [175]], dtype=int32)'''
 		...
 	@overload
-	def prod(self, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+	def prod(self, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the product of all the elements in the input.
@@ -6083,7 +6086,7 @@ class Var:
 		         [175]], dtype=int32)'''
 		...
 	@overload
-	def prod(self, dims_mask: int, keepdims_mask: int)-> Var:
+	def prod(self, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 		'''Document:
 		*
 		    Returns the product of all the elements in the input.
@@ -6114,7 +6117,7 @@ class Var:
 		         [175]], dtype=int32)'''
 		...
 	@overload
-	def product(self, dim: int, keepdims: bool=False)-> Var:
+	def product(self, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the product of all the elements in the input.
@@ -6145,7 +6148,7 @@ class Var:
 		         [175]], dtype=int32)'''
 		...
 	@overload
-	def product(self, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+	def product(self, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the product of all the elements in the input.
@@ -6176,7 +6179,7 @@ class Var:
 		         [175]], dtype=int32)'''
 		...
 	@overload
-	def product(self, dims_mask: int, keepdims_mask: int)-> Var:
+	def product(self, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 		'''Document:
 		*
 		    Returns the product of all the elements in the input.
@@ -6207,7 +6210,7 @@ class Var:
 		         [175]], dtype=int32)'''
 		...
 	@overload
-	def reduce_multiply(self, dim: int, keepdims: bool=False)-> Var:
+	def reduce_multiply(self, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the product of all the elements in the input.
@@ -6238,7 +6241,7 @@ class Var:
 		         [175]], dtype=int32)'''
 		...
 	@overload
-	def reduce_multiply(self, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+	def reduce_multiply(self, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the product of all the elements in the input.
@@ -6269,7 +6272,7 @@ class Var:
 		         [175]], dtype=int32)'''
 		...
 	@overload
-	def reduce_multiply(self, dims_mask: int, keepdims_mask: int)-> Var:
+	def reduce_multiply(self, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 		'''Document:
 		*
 		    Returns the product of all the elements in the input.
@@ -6300,7 +6303,7 @@ class Var:
 		         [175]], dtype=int32)'''
 		...
 	@overload
-	def reduce_logical_and(self, dim: int, keepdims: bool=False)-> Var:
+	def reduce_logical_and(self, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Tests if all elements in input evaluate to True.
@@ -6331,7 +6334,7 @@ class Var:
 		         [False]], dtype=int32)'''
 		...
 	@overload
-	def reduce_logical_and(self, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+	def reduce_logical_and(self, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Tests if all elements in input evaluate to True.
@@ -6362,7 +6365,7 @@ class Var:
 		         [False]], dtype=int32)'''
 		...
 	@overload
-	def reduce_logical_and(self, dims_mask: int, keepdims_mask: int)-> Var:
+	def reduce_logical_and(self, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 		'''Document:
 		*
 		    Tests if all elements in input evaluate to True.
@@ -6393,7 +6396,7 @@ class Var:
 		         [False]], dtype=int32)'''
 		...
 	@overload
-	def all_(self, dim: int, keepdims: bool=False)-> Var:
+	def all_(self, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Tests if all elements in input evaluate to True.
@@ -6424,7 +6427,7 @@ class Var:
 		         [False]], dtype=int32)'''
 		...
 	@overload
-	def all_(self, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+	def all_(self, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Tests if all elements in input evaluate to True.
@@ -6455,7 +6458,7 @@ class Var:
 		         [False]], dtype=int32)'''
 		...
 	@overload
-	def all_(self, dims_mask: int, keepdims_mask: int)-> Var:
+	def all_(self, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 		'''Document:
 		*
 		    Tests if all elements in input evaluate to True.
@@ -6486,7 +6489,7 @@ class Var:
 		         [False]], dtype=int32)'''
 		...
 	@overload
-	def reduce_logical_or(self, dim: int, keepdims: bool=False)-> Var:
+	def reduce_logical_or(self, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Tests if any elements in input evaluate to True.
@@ -6517,7 +6520,7 @@ class Var:
 		         [False]], dtype=int32)'''
 		...
 	@overload
-	def reduce_logical_or(self, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+	def reduce_logical_or(self, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Tests if any elements in input evaluate to True.
@@ -6548,7 +6551,7 @@ class Var:
 		         [False]], dtype=int32)'''
 		...
 	@overload
-	def reduce_logical_or(self, dims_mask: int, keepdims_mask: int)-> Var:
+	def reduce_logical_or(self, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 		'''Document:
 		*
 		    Tests if any elements in input evaluate to True.
@@ -6579,7 +6582,7 @@ class Var:
 		         [False]], dtype=int32)'''
 		...
 	@overload
-	def any_(self, dim: int, keepdims: bool=False)-> Var:
+	def any_(self, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Tests if any elements in input evaluate to True.
@@ -6610,7 +6613,7 @@ class Var:
 		         [False]], dtype=int32)'''
 		...
 	@overload
-	def any_(self, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+	def any_(self, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Tests if any elements in input evaluate to True.
@@ -6641,7 +6644,7 @@ class Var:
 		         [False]], dtype=int32)'''
 		...
 	@overload
-	def any_(self, dims_mask: int, keepdims_mask: int)-> Var:
+	def any_(self, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 		'''Document:
 		*
 		    Tests if any elements in input evaluate to True.
@@ -6672,31 +6675,31 @@ class Var:
 		         [False]], dtype=int32)'''
 		...
 	@overload
-	def reduce_logical_xor(self, dim: int, keepdims: bool=False)-> Var: ...
+	def reduce_logical_xor(self, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var: ...
 	@overload
-	def reduce_logical_xor(self, dims: Tuple[int]=(), keepdims: bool=False)-> Var: ...
+	def reduce_logical_xor(self, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var: ...
 	@overload
-	def reduce_logical_xor(self, dims_mask: int, keepdims_mask: int)-> Var: ...
+	def reduce_logical_xor(self, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var: ...
 	@overload
-	def reduce_bitwise_and(self, dim: int, keepdims: bool=False)-> Var: ...
+	def reduce_bitwise_and(self, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var: ...
 	@overload
-	def reduce_bitwise_and(self, dims: Tuple[int]=(), keepdims: bool=False)-> Var: ...
+	def reduce_bitwise_and(self, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var: ...
 	@overload
-	def reduce_bitwise_and(self, dims_mask: int, keepdims_mask: int)-> Var: ...
+	def reduce_bitwise_and(self, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var: ...
 	@overload
-	def reduce_bitwise_or(self, dim: int, keepdims: bool=False)-> Var: ...
+	def reduce_bitwise_or(self, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var: ...
 	@overload
-	def reduce_bitwise_or(self, dims: Tuple[int]=(), keepdims: bool=False)-> Var: ...
+	def reduce_bitwise_or(self, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var: ...
 	@overload
-	def reduce_bitwise_or(self, dims_mask: int, keepdims_mask: int)-> Var: ...
+	def reduce_bitwise_or(self, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var: ...
 	@overload
-	def reduce_bitwise_xor(self, dim: int, keepdims: bool=False)-> Var: ...
+	def reduce_bitwise_xor(self, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var: ...
 	@overload
-	def reduce_bitwise_xor(self, dims: Tuple[int]=(), keepdims: bool=False)-> Var: ...
+	def reduce_bitwise_xor(self, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var: ...
 	@overload
-	def reduce_bitwise_xor(self, dims_mask: int, keepdims_mask: int)-> Var: ...
+	def reduce_bitwise_xor(self, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var: ...
 	@overload
-	def mean(self, dim: int, keepdims: bool=False)-> Var:
+	def mean(self, dim: _builtins.int, keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the mean value of the input.
@@ -6727,7 +6730,7 @@ class Var:
 		         [5.3333335]], dtype=float32)'''
 		...
 	@overload
-	def mean(self, dims: Tuple[int]=(), keepdims: bool=False)-> Var:
+	def mean(self, dims: Tuple[_builtins.int, ...]=(), keepdims: _builtins.bool=False)-> Var:
 		'''Document:
 		*
 		    Returns the mean value of the input.
@@ -6758,7 +6761,7 @@ class Var:
 		         [5.3333335]], dtype=float32)'''
 		...
 	@overload
-	def mean(self, dims_mask: int, keepdims_mask: int)-> Var:
+	def mean(self, dims_mask: _builtins.int, keepdims_mask: _builtins.int)-> Var:
 		'''Document:
 		*
 		    Returns the mean value of the input.
@@ -6789,8 +6792,8 @@ class Var:
 		         [5.3333335]], dtype=float32)'''
 		...
 	def clone(self)-> Var: ...
-	def fuse_transpose(self, axes: Tuple[int]=())-> Var: ...
-	def fused_adamw(self, moments: List[Var], variances: List[Var], gradients: List[Var], step: Var, lr: float, beta1: float, beta2: float, weight_decay: float, eps: float)-> Tuple[Var]: ...
+	def fuse_transpose(self, axes: Tuple[_builtins.int, ...]=())-> Var: ...
+	def fused_adamw(self, moments: List[Var], variances: List[Var], gradients: List[Var], step: Var, lr: _builtins.float, beta1: _builtins.float, beta2: _builtins.float, weight_decay: _builtins.float, eps: _builtins.float)-> Tuple[Var, ...]: ...
 	def array(self)-> Var: ...
 	def unary(self, op: str)-> Var: ...
 	def cast(self, op: str)-> Var: ...
@@ -7736,8 +7739,8 @@ class Var:
 		...
 	def setitem(self, slices: slice, y: Var, op: str="void")-> Var: ...
 	def fetch(self, func: Callable)-> Var: ...
-	def transpose(self, axes: Tuple[int]=())-> Var: ...
-	def device_copy(self, device: int)-> Var:
+	def transpose(self, axes: Tuple[_builtins.int, ...]=())-> Var: ...
+	def device_copy(self, device: _builtins.int)-> Var:
 		'''Document:
 		*
 		    Copy a Var onto another CUDA device -- torch's ``tensor.to("cuda:N")``.
@@ -7748,7 +7751,7 @@ class Var:
 		    ops on it run there. It is differentiable: the gradient is a copy back to
 		    the source's device. Without CUDA it is a plain host copy.'''
 		...
-	def arg_reduce(self, op: str, dim: int, keepdims: bool)-> Tuple[Var]:
+	def arg_reduce(self, op: str, dim: _builtins.int, keepdims: _builtins.bool)-> Tuple[Var, ...]:
 		'''Document:
 		*
 		    Returns the indices of the maximum / minimum of the input across a dimension.
@@ -7820,16 +7823,16 @@ class Var:
 	@overload
 	def getitem(self, slices: slice)-> Var: ...
 	@overload
-	def getitem(self, slices: slice, _: int)-> Tuple[Var]: ...
+	def getitem(self, slices: slice, _: _builtins.int)-> Tuple[Var, ...]: ...
 	def ternary(self, x: Var, y: Var)-> Var: ...
-	def reinterpret_view(self, shape: Tuple[int], dtype: str)-> Var:
+	def reinterpret_view(self, shape: Tuple[_builtins.int, ...], dtype: str)-> Var:
 		'''Document:
 		*
 		    Returns a tensor that shares the same storage as input but reinterprets its
 		    dtype and shape. The total byte size must stay unchanged.'''
 		...
 	@overload
-	def broadcast(self, shape: Tuple[int], dims: Tuple[int]=())-> Var:
+	def broadcast(self, shape: Tuple[_builtins.int, ...], dims: Tuple[_builtins.int, ...]=())-> Var:
 		'''Document:
 		*
 		    Broadcast ``x`` to a given shape.
@@ -7858,7 +7861,7 @@ class Var:
 		          [7 6]]], dtype=int32)'''
 		...
 	@overload
-	def broadcast(self, y: Var, dims: Tuple[int]=())-> Var:
+	def broadcast(self, y: Var, dims: Tuple[_builtins.int, ...]=())-> Var:
 		'''Document:
 		*
 		    Broadcast ``x`` to the same shape as ``y``.
@@ -7897,7 +7900,7 @@ class Var:
 		          [7 6]
 		          [7 6]]], dtype=int32)'''
 		...
-	def broadcast_var(self, y: Var, dims: Tuple[int]=())-> Var:
+	def broadcast_var(self, y: Var, dims: Tuple[_builtins.int, ...]=())-> Var:
 		'''Document:
 		*
 		    Broadcast ``x`` to the same shape as ``y``.
@@ -7936,7 +7939,7 @@ class Var:
 		          [7 6]
 		          [7 6]]], dtype=int32)'''
 		...
-	def safe_clip(self, left: float=-1e300, right: float=1e300)-> Var:
+	def safe_clip(self, left: _builtins.float=-1e300, right: _builtins.float=1e300)-> Var:
 		'''Document:
 		* Safe clip value to a range, and keep
 		 the gradient pass thought.
@@ -7945,7 +7948,7 @@ class Var:
 		    * [in] left: float64 clip min value.
 		    * [in] right: float64 clip max value.'''
 		...
-	def reindex_reduce(self, op: str, shape: Tuple[int], indexes: List[str], overflow_conditions: List[str]={}, extras: List[Var]={})-> Var:
+	def reindex_reduce(self, op: str, shape: Tuple[_builtins.int, ...], indexes: List[str], overflow_conditions: List[str]=[], extras: List[Var]=[])-> Var:
 		'''Document:
 		*
 		    Reindex Reduce Operator is a many-to-one map operator.
@@ -8016,7 +8019,7 @@ class Var:
 		...
 	def copy(self)-> Var: ...
 	@overload
-	def reindex(self, shape: Tuple[int], indexes: List[str], overflow_value: float=0, overflow_conditions: List[str]={}, extras: List[Var]={})-> Var:
+	def reindex(self, shape: Tuple[_builtins.int, ...], indexes: List[str], overflow_value: _builtins.float=0, overflow_conditions: List[str]=[], extras: List[Var]=[])-> Var:
 		'''Document:
 		*
 		    Reindex Operator is a one-to-many map operator.
@@ -8090,23 +8093,23 @@ class Var:
 		            return y, yy'''
 		...
 	@overload
-	def reindex(self, indexes: List[Var], overflow_value: float=0, overflow_conditions: List[str]={})-> Var:
+	def reindex(self, indexes: List[Var], overflow_value: _builtins.float=0, overflow_conditions: List[str]=[])-> Var:
 		'''Document:
 		* Alias x.reindex([i,j,k]) ->
 		        x.reindex(i.shape, ['@e0(...)','@e1(...)','@e2(...)',], extras=[i,j,k])'''
 		...
-	def reindex_var(self, indexes: List[Var], overflow_value: float=0, overflow_conditions: List[str]={})-> Var:
+	def reindex_var(self, indexes: List[Var], overflow_value: _builtins.float=0, overflow_conditions: List[str]=[])-> Var:
 		'''Document:
 		* Alias x.reindex([i,j,k]) ->
 		        x.reindex(i.shape, ['@e0(...)','@e1(...)','@e2(...)',], extras=[i,j,k])'''
 		...
-	def sync(self, device_sync: bool=False, weak_sync: bool=True)-> Var: ...
-	def fetch_sync(self)-> numpy.ndarray:
+	def sync(self, device_sync: _builtins.bool=False, weak_sync: _builtins.bool=True)-> Var: ...
+	def fetch_sync(self)-> _numpy.ndarray:
 		'''Document:
 		*
 		     * Returns a numpy array copy of the Var.'''
 		...
-	def numpy(self)-> numpy.ndarray:
+	def numpy(self)-> _numpy.ndarray:
 		'''Document:
 		*
 		     * Returns a numpy array copy of the Var.'''
@@ -8149,7 +8152,7 @@ class Var:
 		*
 		     * set the name of the Var.'''
 		...
-	def numel(self)-> int:
+	def numel(self)-> _builtins.int:
 		'''Document:
 		*
 		     * return the number of elements in the Var.'''
@@ -8159,7 +8162,7 @@ class Var:
 		*
 		     * disable the gradient calculation for the Var.'''
 		...
-	def is_stop_grad(self)-> bool:
+	def is_stop_grad(self)-> _builtins.bool:
 		'''Document:
 		*
 		     * return True if the gradient is stopped.'''
@@ -8174,7 +8177,7 @@ class Var:
 		*
 		     * stop operator fusion.'''
 		...
-	def is_stop_fuse(self)-> bool:
+	def is_stop_fuse(self)-> _builtins.bool:
 		'''Document:
 		*
 		     * return True if operator fusion is stopped.'''
@@ -8190,13 +8193,13 @@ class Var:
 		*
 		     * enable the gradient calculation for the Var.'''
 		...
-	def item(self)-> float | int | bool:
+	def item(self)-> _builtins.float | _builtins.int | _builtins.bool:
 		'''Document:
 		*
 		     * returns the Python number if the Var contains only one element.
 		     * For other cases, see data().'''
 		...
-	def dim(self)-> int:
+	def dim(self)-> _builtins.int:
 		'''Document:
 		*
 		     * return the number of dimensions.'''
@@ -8207,18 +8210,25 @@ class Var:
 		*
 		     * print the information of the Var to debug.'''
 		...
-	def _input(self, i: int)-> Var: ...
+	def _input(self, i: _builtins.int)-> Var: ...
 	def _add_dependency(self, vars: List[Var])-> Var:
 		'''Document:
 		 Add dependency, make var computed after vars'''
 		...
-	def compile_options(self): ...
-	def data(self)-> numpy.ndarray:
+	@property
+	def compile_options(self) -> Dict[str, _builtins.int]: ...
+	@compile_options.setter
+	def compile_options(self, value: Dict[str, _builtins.int]) -> None: ...
+	@property
+	def data(self)-> _numpy.ndarray:
 		'''Document:
 		*
 		     * get a numpy array which shares the data with the Var.'''
 		...
-	def device_id(self)-> int:
+	@data.setter
+	def data(self, value: _numpy.ndarray) -> None: ...
+	@property
+	def device_id(self)-> _builtins.int:
 		'''Document:
 		*
 		     * The CUDA device index this Var lives on, or will be computed on; -1
@@ -8226,14 +8236,18 @@ class Var:
 		     * (see ``location``): a Var migrated to host memory keeps the device it
 		     * belongs to and goes back to it.'''
 		...
-	def device_raw_ptr(self)-> int: ...
-	def dtype(self)-> str:
+	@property
+	def device_raw_ptr(self)-> _builtins.int: ...
+	@property
+	def dtype(self)-> NanoString:
 		'''Document:
 		*
 		     * return the data type of the Var.'''
 		...
-	def flags(self): ...
-	def grad(self)-> int:
+	@property
+	def flags(self) -> _builtins.int: ...
+	@property
+	def grad(self)-> _builtins.int:
 		'''Document:
 		 Jittor Var doesn't have this interface, please change your code as below::
 
@@ -8249,35 +8263,45 @@ class Var:
 		        # change to:
 		        grad = p.opt_grad(optimizer)'''
 		...
-	def id(self)-> int:
+	@property
+	def id(self)-> _builtins.int:
 		'''Document:
 		*
 		     * return id of this Var.'''
 		...
-	def nbytes(self)-> int:
+	@property
+	def nbytes(self)-> _builtins.int:
 		'''Document:
 		*
 		     * return the number of bytes of this Var.'''
 		...
-	def ndim(self)-> int:
+	@property
+	def ndim(self)-> _builtins.int:
 		'''Document:
 		*
 		     * return the number of dimensions.'''
 		...
-	def raw_ptr(self)-> int: ...
-	def requires_grad(self)-> bool:
+	@property
+	def raw_ptr(self)-> _builtins.int: ...
+	@property
+	def requires_grad(self)-> _builtins.bool:
 		'''Document:
 		*
 		     * return True if the Var requires gradient calculation.
 		     * @see is_stop_grad'''
 		...
-	def shape(self)-> Tuple[int]:
+	@requires_grad.setter
+	def requires_grad(self, value: _builtins.bool) -> None: ...
+	@property
+	def shape(self)-> Tuple[_builtins.int, ...]:
 		'''Document:
 		*
 		     * return the shape of the Var.'''
 		...
-	def uncertain_shape(self)-> Tuple[int]: ...
-	def var_ptr(self)-> int: ...
+	@property
+	def uncertain_shape(self)-> Tuple[_builtins.int, ...]: ...
+	@property
+	def var_ptr(self)-> _builtins.int: ...
 	def mpi_all_reduce(self, x: Var, op: str="add")-> Var:
 		'''Document:
 		*
@@ -8289,7 +8313,7 @@ class Var:
 		    * x: variable to be all reduced.
 		    * op: 'sum' or 'add' means sum all [x], 'mean' means average all [x]. Default: 'add'.'''
 		...
-	def mpi_broadcast(self, x: Var, root: int=0)-> Var:
+	def mpi_broadcast(self, x: Var, root: _builtins.int=0)-> Var:
 		'''Document:
 		*
 
@@ -8300,7 +8324,7 @@ class Var:
 		    * x: variable to be broadcasted.
 		    * root: ID of MPI node to be broadcasted. Default: 0.'''
 		...
-	def mpi_reduce(self, x: Var, op: str="add", root: int=0)-> Var:
+	def mpi_reduce(self, x: Var, op: str="add", root: _builtins.int=0)-> Var:
 		'''Document:
 		*
 
@@ -8334,7 +8358,7 @@ class Var:
 
 		    * [in] y: the second input, a python number or jt.Var.'''
 		...
-	def view(self, x: Var, shape: Tuple[int])-> Var:
+	def view(self, x: Var, shape: Tuple[_builtins.int, ...])-> Var:
 		'''Document:
 		*
 		    Returns a tensor with the same data and number of elements as input, but with the specified shape.
@@ -8361,7 +8385,7 @@ class Var:
 		        jt.Var([[4 0 8 4 6 3]
 		         [1 8 1 1 2 2]], dtype=int32)'''
 		...
-	def permute(self, x: Var, axes: Tuple[int]=())-> Var: ...
+	def permute(self, x: Var, axes: Tuple[_builtins.int, ...]=())-> Var: ...
 	def detach_inplace(self)-> Var:
 		'''Document:
 		*
@@ -8392,7 +8416,7 @@ class Var:
 		        >>> jt.float16(x)
 		        jt.Var([4.094 2.008 8.48 ], dtype=float16)'''
 		...
-	def expand_as(self, x: Var, y: Var, dims: Tuple[int]=())-> Var:
+	def expand_as(self, x: Var, y: Var, dims: Tuple[_builtins.int, ...]=())-> Var:
 		'''Document:
 		*
 		    Broadcast ``x`` to the same shape as ``y``.
@@ -8431,19 +8455,31 @@ class Var:
 		          [7 6]
 		          [7 6]]], dtype=int32)'''
 		...
+	@property
+	def placement_backend(self) -> _builtins.int: ...
+	@property
+	def is_backward_leaf(self) -> _builtins.bool: ...
+	@property
+	def grad_fn_node_id(self) -> _builtins.int: ...
+	@property
+	def grad_fn_op_id(self) -> _builtins.int: ...
+	@property
+	def grad_fn_name(self) -> str: ...
+	@property
+	def _storage_address(self) -> _builtins.int: ...
 class Flags:
 	'''Compatibility flags: startup configuration and counters are read-only.'''
 	addr2line_path: str
 	'''Path of addr2line. Default: ""'''
-	amp_level: int
+	amp_level: _builtins.int
 	'''Auto mixed-precision optimization level, 0: not use fp16, 1-3: preserve level, not use fp16 for now; 4: perfer fp16, but some ops use fp32 e.g. sum,exp; 5: simular with 4, and array op will automatically convert to fp16; 6: all ops prefer fp16. Default: 0'''
-	amp_reg: int
+	amp_reg: _builtins.int
 	'''Auto mixed-precision control registers, bit 0: prefer 32; bit 1: prefer 16; bit 2: keep reduce type; bit 3 keep white list type; bit 4: array like op prefer too; bit 5, reduce16 intermediate not use 32. Default: 0'''
-	auto_convert_64_to_32: int
+	auto_convert_64_to_32: _builtins.int
 	'''auto convert 64bit numpy array into 32bit jittor array. Default: 1'''
-	auto_flush_ops: int
+	auto_flush_ops: _builtins.int
 	'''Pipeline graph construction with device execution on CUDA. Once this many operators have been created since the executor last ran, launch everything pending without waiting for the device, so the device computes while Python keeps building the rest of the step. 0 keeps fully lazy execution. Fusion and dead-code elimination still apply within each launched segment; CPU execution is synchronous and never flushes early. Default: 128'''
-	auto_mixed_precision_level: int
+	auto_mixed_precision_level: _builtins.int
 	'''Auto mixed-precision optimization level, 0: not use fp16, 1-3: preserve level, not use fp16 for now; 4: perfer fp16, but some ops use fp32 e.g. sum,exp; 5: simular with 4, and array op will automatically convert to fp16; 6: all ops prefer fp16. Default: 0'''
 	@property
 	def cache_path(self) -> str: ...
@@ -8457,76 +8493,76 @@ class Flags:
 	@property
 	def cc_type(self) -> str: ...
 	'''Type of C++ compiler(clang, icc, g++). Default: ""): Type of C++ compiler(clang, icc, g++'''
-	check_graph: int
+	check_graph: _builtins.int
 	'''Unify graph sanity check. Default: 0'''
 	compile_options: Any
 	'''Override the default loop transfrom options. Default: {}'''
-	cpu_mem_limit: int
+	cpu_mem_limit: _builtins.int
 	'''cpu_mem_limit. Default: -1'''
-	device_id: int
+	device_id: _builtins.int
 	'''The CUDA device new Vars are placed on, torch's current device. Setting it switches the device in place -- cudaSetDevice plus a handle swap in every library wrapper -- and never restarts the process; the other devices stay usable. Reads -1 only when no CUDA device exists. Default: -1'''
-	device_mem_limit: int
+	device_mem_limit: _builtins.int
 	'''device_mem_limit. Default: -1'''
 	@property
-	def disable_lock(self) -> bool: ...
+	def disable_lock(self) -> _builtins.bool: ...
 	'''Disable file lock. Default: 0'''
-	enable_tuner: int
+	enable_tuner: _builtins.int
 	'''Enable tuner. Default: 1'''
 	exclude_pass: str
 	'''Don't run certain pass. Default: ""'''
 	@property
-	def exec_called(self) -> int: ...
+	def exec_called(self) -> _builtins.int: ...
 	'''exec sync called. Default: 0'''
 	extra_gdb_cmd: str
 	'''Extra command pass to GDB, seperate by(;) . Default: ""): Extra command pass to GDB, seperate by(;'''
 	float32_matmul_precision: str
 	'''Accumulate precision for float32 matmul and convolution: highest (float32), high (tf32), medium (bfloat16). float16/bfloat16 inputs always accumulate in float32. Default: "highest"): Accumulate precision for float32 matmul and convolution: highest (float32), high (tf32), medium (bfloat16'''
-	gdb_attach: int
+	gdb_attach: _builtins.int
 	'''gdb attach self process. Default: 0'''
 	gdb_path: str
 	'''Path of GDB. Default: ""'''
-	gdb_trace_timeout: int
+	gdb_trace_timeout: _builtins.int
 	'''Seconds to wait for the GDB backtrace child before giving up. Zero or a negative value waits forever. Default: 30'''
-	gopt_disable: int
+	gopt_disable: _builtins.int
 	'''Disable graph optimizer. Default: 0'''
-	has_pybt: int
+	has_pybt: _builtins.int
 	'''GDB has pybt or not. Default: 0'''
-	jit_search_kernel: int
+	jit_search_kernel: _builtins.int
 	'''Jit search for the fastest kernel. Default: 0'''
-	jit_search_max_candidates: int
+	jit_search_max_candidates: _builtins.int
 	'''Upper bound on the number of candidate combinations a tuner may offer to the jit kernel search. Default: 1024'''
-	jit_search_rerun: int
+	jit_search_rerun: _builtins.int
 	'''. Default: 10'''
-	jit_search_timeout: int
+	jit_search_timeout: _builtins.int
 	'''Wall-clock budget in seconds for the jit kernel search, 0 means no limit. The search compiles and times one kernel per combination of the tuner's candidates, so the cost is the product of the per-key choice counts. Default: 0'''
-	jit_search_warmup: int
+	jit_search_warmup: _builtins.int
 	'''. Default: 2'''
 	@property
 	def jittor_path(self) -> str: ...
 	'''Source path of jittor. Default: ""'''
-	l1_cache_size: int
+	l1_cache_size: _builtins.int
 	'''size of level 1 cache (byte). Default: 32768): size of level 1 cache (byte'''
-	lazy_execution: int
+	lazy_execution: _builtins.int
 	'''Default enabled, if disable, use immediately eager execution rather than lazy execution, This flag makes error message and traceback infomation better. But this flag will raise memory consumption and lower the performance. Default: 1'''
 	log_file: str
 	'''log to file, mpi env will add $OMPI_COMM_WORLD_RANK suffix. Default: ""'''
 	log_op_hash: str
 	'''Output compiler pass result of certain hash of op. Default: ""'''
-	log_silent: int
+	log_silent: _builtins.int
 	'''The log will be completely silent. Default: 0'''
-	log_sync: int
+	log_sync: _builtins.int
 	'''Set log printed synchronously. Default: 1'''
-	log_v: int
+	log_v: _builtins.int
 	'''Verbose level of logging. Default: 0'''
 	log_vprefix: str
 	'''Verbose level of logging prefix. Default: ""'''
-	missing_grad_error: int
+	missing_grad_error: _builtins.int
 	'''Raise instead of warning when a target of grad receives no gradient at all and is filled with zeros. Default: 0'''
-	no_fuse: bool
+	no_fuse: _builtins.bool
 	'''No fusion optimization for all jittor Var creation. Default: 0'''
-	no_grad: bool
+	no_grad: _builtins.bool
 	'''No grad for all jittor Var creation. Default: 0'''
-	node_order: int
+	node_order: _builtins.int
 	'''id prior. Default: 0'''
 	@property
 	def nvcc_flags(self) -> str: ...
@@ -8534,88 +8570,88 @@ class Flags:
 	@property
 	def nvcc_path(self) -> str: ...
 	'''Path of CUDA C++ compiler. Default: ""'''
-	para_opt_level: int
+	para_opt_level: _builtins.int
 	'''para_opt_level. Default: 3'''
-	profile_memory_enable: int
+	profile_memory_enable: _builtins.int
 	'''Enable memory profiler. Default: 0'''
-	profiler_enable: int
+	profiler_enable: _builtins.int
 	'''Enable profiler. Default: 0'''
-	profiler_hide_relay: int
+	profiler_hide_relay: _builtins.int
 	'''Profiler hide relayed op. Default: 0'''
-	profiler_record_peek: int
+	profiler_record_peek: _builtins.int
 	'''Profiler record peek mem bandwidth. Default: 0'''
-	profiler_record_shape: int
+	profiler_record_shape: _builtins.int
 	'''Profiler record shape for op. Default: 0'''
-	profiler_rerun: int
+	profiler_rerun: _builtins.int
 	'''Profiler rerun. Default: 0'''
-	profiler_warmup: int
+	profiler_warmup: _builtins.int
 	'''Profiler warmup. Default: 0'''
 	@property
 	def python_path(self) -> str: ...
 	'''Path of python interpreter. Default: ""'''
-	reuse_array: int
+	reuse_array: _builtins.int
 	'''try reuse np.array memory into jt.array. Default: 0'''
-	rewrite_op: int
+	rewrite_op: _builtins.int
 	'''Rewrite source file of jit operator or not. Default: 1'''
-	sfrl_large_block_size_device: int
+	sfrl_large_block_size_device: _builtins.int
 	'''sfrl_large_block_size, larger will reduce memory shard, only affect device. Default: 5242880'''
 	@property
-	def stat_allocator_total_alloc_byte(self) -> int: ...
+	def stat_allocator_total_alloc_byte(self) -> _builtins.int: ...
 	'''Total alloc byte. Default: 0'''
 	@property
-	def stat_allocator_total_alloc_call(self) -> int: ...
+	def stat_allocator_total_alloc_call(self) -> _builtins.int: ...
 	'''Number of alloc function call. Default: 0'''
 	@property
-	def stat_allocator_total_free_byte(self) -> int: ...
+	def stat_allocator_total_free_byte(self) -> _builtins.int: ...
 	'''Total alloc byte. Default: 0'''
 	@property
-	def stat_allocator_total_free_call(self) -> int: ...
+	def stat_allocator_total_free_call(self) -> _builtins.int: ...
 	'''Number of alloc function call. Default: 0'''
-	sync_run: int
+	sync_run: _builtins.int
 	'''Enable per-op-sync or not. Default: 1'''
 	'''th mode. Default: 0'''
-	trace_depth: int
+	trace_depth: _builtins.int
 	'''trace depth for GDB. Default: 10'''
-	trace_py_var: int
+	trace_py_var: _builtins.int
 	'''Trace py stack max depth for debug. Default: 0'''
-	trace_var_data: int
+	trace_var_data: _builtins.int
 	'''Trace py stack max depth for debug. Default: 0'''
-	try_use_32bit_index: int
+	try_use_32bit_index: _builtins.int
 	'''If not overflow, try to use 32 bit type as index type. Default: 0'''
-	use_acl: int
+	use_acl: _builtins.int
 	'''Use cuda or not. 1 for trying to use cuda, 2 for forcing to use cuda. Default: 0'''
-	use_corex: int
+	use_corex: _builtins.int
 	'''Use cuda or not. 1 for trying to use cuda, 2 for forcing to use cuda. Default: 0'''
-	use_cuda: int
+	use_cuda: _builtins.int
 	'''Use cuda or not. 1 for trying to use cuda, 2 for forcing to use cuda. Default: 0'''
-	use_cuda_host_allocator: int
+	use_cuda_host_allocator: _builtins.int
 	'''use cuda host allocator for cpu memory globally. Default: 1'''
-	use_device: int
+	use_device: _builtins.int
 	'''Use cuda or not. 1 for trying to use cuda, 2 for forcing to use cuda. Default: 0'''
-	use_nfef_allocator: int
+	use_nfef_allocator: _builtins.int
 	'''Enable never free exact fit allocator. Default: 0'''
-	use_parallel_op_compiler: int
+	use_parallel_op_compiler: _builtins.int
 	'''Number of threads that parallel op comiler used, default 16, set this value to 0 will disable parallel op compiler. Default: 16'''
-	use_rocm: int
+	use_rocm: _builtins.int
 	'''Use cuda or not. 1 for trying to use cuda, 2 for forcing to use cuda. Default: 0'''
-	use_sfrl_allocator: int
+	use_sfrl_allocator: _builtins.int
 	'''Enable sfrl allocator. Default: 1'''
-	use_stat_allocator: int
+	use_stat_allocator: _builtins.int
 	'''Enable stat allocator. Default: 0'''
-	use_temp_allocator: int
+	use_temp_allocator: _builtins.int
 	'''Enable temp allocator. Default: 1'''
-	use_tensorcore: int
+	use_tensorcore: _builtins.int
 	'''Deprecated, use float32_matmul_precision. Raises the float32 accumulate tier for matmul and convolution: 1=high(tf32), 2 and 3=medium(bfloat16). Default: 0): Deprecated, use float32_matmul_precision. Raises the float32 accumulate tier for matmul and convolution: 1=high(tf32), 2 and 3=medium(bfloat16'''
-	use_threading: int
+	use_threading: _builtins.int
 	'''Allow to use python threading with jittor. Default: 0'''
-	cuda_allow_cudnn_tf32: int
-	cuda_allow_tf32: int
+	cuda_allow_cudnn_tf32: _builtins.int
+	cuda_allow_tf32: _builtins.int
 	@property
-	def cuda_archs(self) -> List[int]: ...
-	cuda_device_allocator_managed_fallback: int
+	def cuda_archs(self) -> List[_builtins.int]: ...
+	cuda_device_allocator_managed_fallback: _builtins.int
 	cuda_kernel_math: str
 	backend_fallback: str
-	use_cuda_managed_allocator: int
+	use_cuda_managed_allocator: _builtins.int
 flags: Flags
 '''Compatibility access to startup configuration and live runtime flags.'''
 
@@ -8631,9 +8667,9 @@ class StartupConfig:
 	@property
 	def cc_type(self) -> str: ...
 	@property
-	def cuda_archs(self) -> Tuple[int, ...]: ...
+	def cuda_archs(self) -> Tuple[_builtins.int, ...]: ...
 	@property
-	def disable_lock(self) -> bool: ...
+	def disable_lock(self) -> _builtins.bool: ...
 	@property
 	def jittor_path(self) -> str: ...
 	@property
@@ -8650,244 +8686,244 @@ class RuntimeContext:
 	@property
 	def addr2line_path(self) -> str: ...
 	@property
-	def amp_level(self) -> int: ...
+	def amp_level(self) -> _builtins.int: ...
 	@property
-	def amp_reg(self) -> int: ...
+	def amp_reg(self) -> _builtins.int: ...
 	@property
-	def auto_convert_64_to_32(self) -> int: ...
+	def auto_convert_64_to_32(self) -> _builtins.int: ...
 	@property
-	def auto_flush_ops(self) -> int: ...
+	def auto_flush_ops(self) -> _builtins.int: ...
 	@property
-	def auto_mixed_precision_level(self) -> int: ...
+	def auto_mixed_precision_level(self) -> _builtins.int: ...
 	@property
-	def check_graph(self) -> int: ...
+	def check_graph(self) -> _builtins.int: ...
 	@property
 	def compile_options(self) -> Any: ...
 	@property
-	def cpu_mem_limit(self) -> int: ...
+	def cpu_mem_limit(self) -> _builtins.int: ...
 	@property
-	def cuda_allow_cudnn_tf32(self) -> int: ...
+	def cuda_allow_cudnn_tf32(self) -> _builtins.int: ...
 	@property
-	def cuda_allow_tf32(self) -> int: ...
+	def cuda_allow_tf32(self) -> _builtins.int: ...
 	@property
-	def cuda_device_allocator_managed_fallback(self) -> int: ...
+	def cuda_device_allocator_managed_fallback(self) -> _builtins.int: ...
 	@property
 	def cuda_kernel_math(self) -> str: ...
 	@property
 	def backend_fallback(self) -> str: ...
 	@property
-	def device_id(self) -> int: ...
+	def device_id(self) -> _builtins.int: ...
 	@property
-	def device_mem_limit(self) -> int: ...
+	def device_mem_limit(self) -> _builtins.int: ...
 	@property
-	def enable_tuner(self) -> int: ...
+	def enable_tuner(self) -> _builtins.int: ...
 	@property
 	def exclude_pass(self) -> str: ...
 	@property
-	def exec_called(self) -> int: ...
+	def exec_called(self) -> _builtins.int: ...
 	@property
 	def extra_gdb_cmd(self) -> str: ...
 	@property
 	def float32_matmul_precision(self) -> str: ...
 	@property
-	def gdb_attach(self) -> int: ...
+	def gdb_attach(self) -> _builtins.int: ...
 	@property
 	def gdb_path(self) -> str: ...
 	@property
-	def gdb_trace_timeout(self) -> int: ...
+	def gdb_trace_timeout(self) -> _builtins.int: ...
 	@property
-	def gopt_disable(self) -> int: ...
+	def gopt_disable(self) -> _builtins.int: ...
 	@property
-	def has_pybt(self) -> int: ...
+	def has_pybt(self) -> _builtins.int: ...
 	@property
-	def jit_search_kernel(self) -> int: ...
+	def jit_search_kernel(self) -> _builtins.int: ...
 	@property
-	def jit_search_max_candidates(self) -> int: ...
+	def jit_search_max_candidates(self) -> _builtins.int: ...
 	@property
-	def jit_search_rerun(self) -> int: ...
+	def jit_search_rerun(self) -> _builtins.int: ...
 	@property
-	def jit_search_timeout(self) -> int: ...
+	def jit_search_timeout(self) -> _builtins.int: ...
 	@property
-	def jit_search_warmup(self) -> int: ...
+	def jit_search_warmup(self) -> _builtins.int: ...
 	@property
-	def l1_cache_size(self) -> int: ...
+	def l1_cache_size(self) -> _builtins.int: ...
 	@property
-	def lazy_execution(self) -> int: ...
+	def lazy_execution(self) -> _builtins.int: ...
 	@property
 	def log_file(self) -> str: ...
 	@property
 	def log_op_hash(self) -> str: ...
 	@property
-	def log_silent(self) -> int: ...
+	def log_silent(self) -> _builtins.int: ...
 	@property
-	def log_sync(self) -> int: ...
+	def log_sync(self) -> _builtins.int: ...
 	@property
-	def log_v(self) -> int: ...
+	def log_v(self) -> _builtins.int: ...
 	@property
 	def log_vprefix(self) -> str: ...
 	@property
-	def missing_grad_error(self) -> int: ...
+	def missing_grad_error(self) -> _builtins.int: ...
 	@property
-	def no_fuse(self) -> bool: ...
+	def no_fuse(self) -> _builtins.bool: ...
 	@property
-	def no_grad(self) -> bool: ...
+	def no_grad(self) -> _builtins.bool: ...
 	@property
-	def node_order(self) -> int: ...
+	def node_order(self) -> _builtins.int: ...
 	@property
-	def para_opt_level(self) -> int: ...
+	def para_opt_level(self) -> _builtins.int: ...
 	@property
-	def profile_memory_enable(self) -> int: ...
+	def profile_memory_enable(self) -> _builtins.int: ...
 	@property
-	def profiler_enable(self) -> int: ...
+	def profiler_enable(self) -> _builtins.int: ...
 	@property
-	def profiler_hide_relay(self) -> int: ...
+	def profiler_hide_relay(self) -> _builtins.int: ...
 	@property
-	def profiler_record_peek(self) -> int: ...
+	def profiler_record_peek(self) -> _builtins.int: ...
 	@property
-	def profiler_record_shape(self) -> int: ...
+	def profiler_record_shape(self) -> _builtins.int: ...
 	@property
-	def profiler_rerun(self) -> int: ...
+	def profiler_rerun(self) -> _builtins.int: ...
 	@property
-	def profiler_warmup(self) -> int: ...
+	def profiler_warmup(self) -> _builtins.int: ...
 	@property
-	def reuse_array(self) -> int: ...
+	def reuse_array(self) -> _builtins.int: ...
 	@property
-	def rewrite_op(self) -> int: ...
+	def rewrite_op(self) -> _builtins.int: ...
 	@property
-	def sfrl_large_block_size_device(self) -> int: ...
+	def sfrl_large_block_size_device(self) -> _builtins.int: ...
 	@property
-	def stat_allocator_total_alloc_byte(self) -> int: ...
+	def stat_allocator_total_alloc_byte(self) -> _builtins.int: ...
 	@property
-	def stat_allocator_total_alloc_call(self) -> int: ...
+	def stat_allocator_total_alloc_call(self) -> _builtins.int: ...
 	@property
-	def stat_allocator_total_free_byte(self) -> int: ...
+	def stat_allocator_total_free_byte(self) -> _builtins.int: ...
 	@property
-	def stat_allocator_total_free_call(self) -> int: ...
+	def stat_allocator_total_free_call(self) -> _builtins.int: ...
 	@property
-	def sync_run(self) -> int: ...
+	def sync_run(self) -> _builtins.int: ...
 	@property
-	def trace_depth(self) -> int: ...
+	def trace_depth(self) -> _builtins.int: ...
 	@property
-	def trace_py_var(self) -> int: ...
+	def trace_py_var(self) -> _builtins.int: ...
 	@property
-	def trace_var_data(self) -> int: ...
+	def trace_var_data(self) -> _builtins.int: ...
 	@property
-	def try_use_32bit_index(self) -> int: ...
+	def try_use_32bit_index(self) -> _builtins.int: ...
 	@property
-	def use_acl(self) -> int: ...
+	def use_acl(self) -> _builtins.int: ...
 	@property
-	def use_corex(self) -> int: ...
+	def use_corex(self) -> _builtins.int: ...
 	@property
-	def use_cuda(self) -> int: ...
+	def use_cuda(self) -> _builtins.int: ...
 	@property
-	def use_cuda_host_allocator(self) -> int: ...
+	def use_cuda_host_allocator(self) -> _builtins.int: ...
 	@property
-	def use_cuda_managed_allocator(self) -> int: ...
+	def use_cuda_managed_allocator(self) -> _builtins.int: ...
 	@property
-	def use_device(self) -> int: ...
+	def use_device(self) -> _builtins.int: ...
 	@property
-	def use_nfef_allocator(self) -> int: ...
+	def use_nfef_allocator(self) -> _builtins.int: ...
 	@property
-	def use_parallel_op_compiler(self) -> int: ...
+	def use_parallel_op_compiler(self) -> _builtins.int: ...
 	@property
-	def use_rocm(self) -> int: ...
+	def use_rocm(self) -> _builtins.int: ...
 	@property
-	def use_sfrl_allocator(self) -> int: ...
+	def use_sfrl_allocator(self) -> _builtins.int: ...
 	@property
-	def use_stat_allocator(self) -> int: ...
+	def use_stat_allocator(self) -> _builtins.int: ...
 	@property
-	def use_temp_allocator(self) -> int: ...
+	def use_temp_allocator(self) -> _builtins.int: ...
 	@property
-	def use_tensorcore(self) -> int: ...
+	def use_tensorcore(self) -> _builtins.int: ...
 	@property
-	def use_threading(self) -> int: ...
+	def use_threading(self) -> _builtins.int: ...
 	def snapshot(self) -> dict[str, Any]: ...
 
 class RuntimeState:
 	'''Writable runtime switches and aliases; counters remain read-only.'''
 	def __init__(self, context: RuntimeContext, scope_factory: Optional[Callable[..., ContextManager[None]]] = None) -> None: ...
 	addr2line_path: str
-	amp_level: int
-	amp_reg: int
-	auto_convert_64_to_32: int
-	auto_flush_ops: int
-	auto_mixed_precision_level: int
-	check_graph: int
+	amp_level: _builtins.int
+	amp_reg: _builtins.int
+	auto_convert_64_to_32: _builtins.int
+	auto_flush_ops: _builtins.int
+	auto_mixed_precision_level: _builtins.int
+	check_graph: _builtins.int
 	compile_options: Any
-	cpu_mem_limit: int
-	cuda_allow_cudnn_tf32: int
-	cuda_allow_tf32: int
-	cuda_device_allocator_managed_fallback: int
+	cpu_mem_limit: _builtins.int
+	cuda_allow_cudnn_tf32: _builtins.int
+	cuda_allow_tf32: _builtins.int
+	cuda_device_allocator_managed_fallback: _builtins.int
 	cuda_kernel_math: str
 	backend_fallback: str
-	device_id: int
-	device_mem_limit: int
-	enable_tuner: int
+	device_id: _builtins.int
+	device_mem_limit: _builtins.int
+	enable_tuner: _builtins.int
 	exclude_pass: str
 	@property
-	def exec_called(self) -> int: ...
+	def exec_called(self) -> _builtins.int: ...
 	extra_gdb_cmd: str
 	float32_matmul_precision: str
-	gdb_attach: int
+	gdb_attach: _builtins.int
 	gdb_path: str
-	gdb_trace_timeout: int
-	gopt_disable: int
-	has_pybt: int
-	jit_search_kernel: int
-	jit_search_max_candidates: int
-	jit_search_rerun: int
-	jit_search_timeout: int
-	jit_search_warmup: int
-	l1_cache_size: int
-	lazy_execution: int
+	gdb_trace_timeout: _builtins.int
+	gopt_disable: _builtins.int
+	has_pybt: _builtins.int
+	jit_search_kernel: _builtins.int
+	jit_search_max_candidates: _builtins.int
+	jit_search_rerun: _builtins.int
+	jit_search_timeout: _builtins.int
+	jit_search_warmup: _builtins.int
+	l1_cache_size: _builtins.int
+	lazy_execution: _builtins.int
 	log_file: str
 	log_op_hash: str
-	log_silent: int
-	log_sync: int
-	log_v: int
+	log_silent: _builtins.int
+	log_sync: _builtins.int
+	log_v: _builtins.int
 	log_vprefix: str
-	missing_grad_error: int
-	no_fuse: bool
-	no_grad: bool
-	node_order: int
-	para_opt_level: int
-	profile_memory_enable: int
-	profiler_enable: int
-	profiler_hide_relay: int
-	profiler_record_peek: int
-	profiler_record_shape: int
-	profiler_rerun: int
-	profiler_warmup: int
-	reuse_array: int
-	rewrite_op: int
-	sfrl_large_block_size_device: int
+	missing_grad_error: _builtins.int
+	no_fuse: _builtins.bool
+	no_grad: _builtins.bool
+	node_order: _builtins.int
+	para_opt_level: _builtins.int
+	profile_memory_enable: _builtins.int
+	profiler_enable: _builtins.int
+	profiler_hide_relay: _builtins.int
+	profiler_record_peek: _builtins.int
+	profiler_record_shape: _builtins.int
+	profiler_rerun: _builtins.int
+	profiler_warmup: _builtins.int
+	reuse_array: _builtins.int
+	rewrite_op: _builtins.int
+	sfrl_large_block_size_device: _builtins.int
 	@property
-	def stat_allocator_total_alloc_byte(self) -> int: ...
+	def stat_allocator_total_alloc_byte(self) -> _builtins.int: ...
 	@property
-	def stat_allocator_total_alloc_call(self) -> int: ...
+	def stat_allocator_total_alloc_call(self) -> _builtins.int: ...
 	@property
-	def stat_allocator_total_free_byte(self) -> int: ...
+	def stat_allocator_total_free_byte(self) -> _builtins.int: ...
 	@property
-	def stat_allocator_total_free_call(self) -> int: ...
-	sync_run: int
-	trace_depth: int
-	trace_py_var: int
-	trace_var_data: int
-	try_use_32bit_index: int
-	use_acl: int
-	use_corex: int
-	use_cuda: int
-	use_cuda_host_allocator: int
-	use_cuda_managed_allocator: int
-	use_device: int
-	use_nfef_allocator: int
-	use_parallel_op_compiler: int
-	use_rocm: int
-	use_sfrl_allocator: int
-	use_stat_allocator: int
-	use_temp_allocator: int
-	use_tensorcore: int
-	use_threading: int
+	def stat_allocator_total_free_call(self) -> _builtins.int: ...
+	sync_run: _builtins.int
+	trace_depth: _builtins.int
+	trace_py_var: _builtins.int
+	trace_var_data: _builtins.int
+	try_use_32bit_index: _builtins.int
+	use_acl: _builtins.int
+	use_corex: _builtins.int
+	use_cuda: _builtins.int
+	use_cuda_host_allocator: _builtins.int
+	use_cuda_managed_allocator: _builtins.int
+	use_device: _builtins.int
+	use_nfef_allocator: _builtins.int
+	use_parallel_op_compiler: _builtins.int
+	use_rocm: _builtins.int
+	use_sfrl_allocator: _builtins.int
+	use_stat_allocator: _builtins.int
+	use_temp_allocator: _builtins.int
+	use_tensorcore: _builtins.int
+	use_threading: _builtins.int
 	@property
 	def context(self) -> RuntimeContext: ...
 	def snapshot(self) -> dict[str, Any]: ...
@@ -8944,7 +8980,6 @@ clean_graph: Any
 cleanup: Any
 clear_trace_data: Any
 contiguous: Any
-core: Any
 count_nonzero: Any
 cpu: Any
 cross: Any
@@ -9017,7 +9052,6 @@ isinf: Any
 isnan: Any
 isneginf: Any
 isposinf: Any
-jittor_core: Any
 jittor_exit: Any
 jt_init_subprocess: Any
 knn: Any
@@ -9142,3 +9176,6 @@ world_size: Any
 wrap_var_addr: Any
 zeros: Any
 zeros_like: Any
+
+# Optional CuPy adapter mutates numpy-code argument records in place.
+numpy2cupy: Optional[Callable[[object, MutableMapping[str, object]], None]]
