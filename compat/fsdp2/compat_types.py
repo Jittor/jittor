@@ -95,8 +95,12 @@ def loss_parallel(*args, **kwargs):
     yield
 
 
+def _checkpoint_identity(module):
+    return module
+
+
 def _checkpoint_wrapper(module=None, *args, **kwargs):
-    return (lambda m: m) if module is None else module
+    return _checkpoint_identity if module is None else module
 
 
 def _apply_activation_checkpointing(model, *args, **kwargs):

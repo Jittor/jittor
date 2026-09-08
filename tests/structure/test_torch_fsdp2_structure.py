@@ -8,6 +8,7 @@ import importlib
 import inspect
 import json
 import pickle
+import runpy
 from pathlib import Path
 import sys
 import types
@@ -25,6 +26,7 @@ from jittor.compat.fsdp2 import dtensor
 from jittor.compat.fsdp2 import grad_sync
 from jittor.compat.fsdp2 import installer
 from jittor.compat.fsdp2 import optimizer
+from jittor.compat.fsdp2 import public_helpers
 from jittor.compat.fsdp2 import shard
 from jittor.compat.torch.context import ModuleRegistry
 
@@ -467,7 +469,7 @@ assert value is fsdp2.DeviceMesh
             ).CheckpointImpl,
         )
         self.assertTrue(all(
-            value.__module__ == installer.__name__ for value in origin_values
+            value.__module__ == public_helpers.__name__ for value in origin_values
         ))
 
         original_device_mesh = dtensor.DeviceMesh
@@ -515,7 +517,7 @@ assert value is fsdp2.DeviceMesh
         # the gate red for growth rather than for a boundary violation, which is
         # what the rest of this test is about.
         package_path = Path(fsdp.__file__).resolve()
-        for module in _OWNERSHIP:
+        for module in (*_OWNERSHIP, public_helpers):
             path = Path(module.__file__).resolve()
             source = path.read_text(encoding="utf-8")
             tree = ast.parse(source, filename=str(path))
@@ -534,15 +536,33 @@ assert value is fsdp2.DeviceMesh
                 if module is installer:
                     self.assertEqual(relative_imports, {
                         "api", "common", "compat_types", "config", "dtensor",
-                        "grad_sync", "optimizer", "shard",
+                        "grad_sync", "optimizer", "shard", "public_helpers",
                     })
 
-        repo_root = package_path.parents[4]
-        if not (repo_root / "pyproject.toml").is_file():
+        compat_root = package_path.parents[1]
+        repo_root = compat_root.parent
+        if not (compat_root / "pyproject.toml").is_file():
             self.skipTest("packaging metadata is only available in a source checkout")
         from setuptools import find_packages
-        packages = find_packages(where=str(repo_root / "python"))
+        from setuptools.config.pyprojecttoml import read_configuration
+        metadata = read_configuration(str(compat_root / "pyproject.toml"), expand=False)
+        self.assertEqual(metadata["tool"]["setuptools"]["package-dir"], {
+            "jittor.compat": ".", "torch": "shim/resources/torch",
+        })
+        # Execute the distribution's actual discovery expression without building
+        # it or changing the process working directory.
+        def discover(where=".", **kwargs):
+            return find_packages(where=str(compat_root / where), **kwargs)
+
+        with mock.patch("setuptools.setup") as setup, mock.patch(
+                "setuptools.find_packages", side_effect=discover):
+            runpy.run_path(str(compat_root / "setup.py"))
+        setup.assert_called_once()
+        packages = setup.call_args[1]["packages"]
         self.assertIn("jittor.compat.fsdp2", packages)
+        self.assertIn("torch", packages)
+        self.assertTrue((compat_root / "fsdp2/public_helpers.py").is_file())
+        self.assertNotIn("jittor.compat", find_packages(where=str(repo_root / "python")))
         self.assertNotIn("jittor._torch_fsdp2", packages)
         self.assertNotIn("jittor.torch_fsdp2_compat", packages)
 

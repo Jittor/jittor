@@ -109,8 +109,14 @@ def test_independent_tensor_installation_preserves_native_type():
         assert autograd_before.keys() == vars(jt.autograd).keys()
         assert all(value is vars(jt.autograd)[key] for key, value in autograd_before.items())
         for module, original in namespace_before + distribution_types:
-            assert original.keys() == vars(module).keys()
-            assert all(value is vars(module)[key] for key, value in original.items())
+            current = vars(module)
+            label = getattr(module, "__name__", repr(module))
+            assert original.keys() == current.keys(), (
+                label, "added", sorted(current.keys() - original.keys()),
+                "removed", sorted(original.keys() - current.keys()))
+            assert all(value is current[key] for key, value in original.items()), (
+                label, "rebound", sorted(key for key, value in original.items()
+                                          if value is not current[key]))
         assert torch.linalg is not jt.linalg and torch.sparse is not jt.sparse
         assert torch.distributions is not jt.distributions
         assert torch.nn is not native_nn

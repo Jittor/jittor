@@ -26,6 +26,7 @@ from ..types import (
     _make_dtypes, device, dtype, make_torch_types_module,
     SymBool, SymFloat, SymInt,
 )
+from ..core_install_api import bind_core_install_api
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
 from ...transaction import set_flag, set_attr
@@ -100,20 +101,11 @@ def install(ctx):
     # Escape hatch for the APIs this layer refuses to fake.  See
     # jittor/compat/stub_policy.py; JITTOR_TORCH_ALLOW_STUB=1 does the same.
     from ...stub_policy import (
-        allow_stub as _allow_stub,
-        set_allow_stub as _set_allow_stub,
         registry as _unimplemented_registry,
         approximate_registry as _approximate_registry,
     )
 
-    def _compat_allow_stub(value=None):
-        """Query (no argument) or set the silent-stub escape hatch."""
-        if value is None:
-            return _allow_stub()
-        _set_allow_stub(value)
-        return _allow_stub()
-
-    g.compat_allow_stub = _compat_allow_stub
+    bind_core_install_api(ctx)
     g.compat_unimplemented_apis = _unimplemented_registry
     g.compat_approximate_apis = _approximate_registry
 
@@ -144,51 +136,12 @@ def install(ctx):
     # `torch.version.__version__`. A caller that must present the API level --
     # a library that gates features on `torch.__version__` and cannot be told
     # otherwise -- asks for it here.
-    def _compat_report_torch_api_version(enable=True):
-        """Report the torch API level (not Jittor's) from torch.__version__.
-
-        Returns the value now reported. ``enable=False`` restores Jittor's own
-        version. Querying with no argument is not possible on purpose: read
-        ``torch.__version__`` for that.
-        """
-        native = getattr(g, "__jittor_version__", None) or _NATIVE_VERSION[0]
-        api = getattr(g, "__torch_version__", None)
-        if enable and api is not None:
-            set_attr(g, "__version__", api, context=ctx)
-        else:
-            set_attr(g, "__version__", native, context=ctx)
-        return g.__version__
-
-    _NATIVE_VERSION = (getattr(g, "__version__", None),)
-    g.compat_report_torch_api_version = _compat_report_torch_api_version
     if "core_native_api" not in ctx.state:
         from types import MappingProxyType
         ctx.state["core_native_api"] = MappingProxyType({
             name: getattr(g, name, None)
             for name in ("load", "save", "where", "nonzero", "seed")
         })
-
-    # Pillow 11 rejects int8 RGB arrays. Some legacy torch projects, including
-    # graphdeco gaussian-splatting, use np.byte as a uint8 alias before
-    # Image.fromarray(..., "RGB"). PyTorch/torchvision environments historically
-    # tolerated that path, so reinterpret int8 image buffers as uint8.
-    try:
-        from PIL import Image as _PILImage
-        _pil_fromarray = _PILImage.fromarray
-        if not getattr(_pil_fromarray, "_jittor_torch_compat", False):
-            def _fromarray_compat(obj, mode=None, *args, **kwargs):
-                if mode in ("RGB", "RGBA", "L") and getattr(obj, "dtype", None) is not None:
-                    try:
-                        import numpy as _np
-                        if obj.dtype == _np.int8:
-                            obj = obj.view(_np.uint8)
-                    except EXPECTED as exc:
-                        swallowed("torch/installers/core.py _fromarray_compat: import numpy as _np", exc)
-                return _pil_fromarray(obj, mode=mode, *args, **kwargs)
-            _fromarray_compat._jittor_torch_compat = True
-            _PILImage.fromarray = _fromarray_compat
-    except EXPECTED as exc:
-        swallowed("torch/installers/core.py install: from PIL import Image as _PILImage", exc)
 
     # Critical: jittor dispatches every op to CPU unless flags.use_cuda is set.
     # The accelerator (Ascend NPU via jt.compiler.has_acl, or NVIDIA GPU via

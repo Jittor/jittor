@@ -35,7 +35,10 @@ def register_fidelity(api, implementation, level, detail):
     _REGISTRY[record.api] = record
     # Native descriptors are first-class API owners too, but CPython does not
     # give them a writable attribute dictionary. The registry is authoritative.
-    if (isinstance(getattr(implementation, "__dict__", None), dict)
+    module = getattr(implementation, "__module__", "")
+    shared_native = (module == "jittor" or module.startswith("jittor.")) and not module.startswith("jittor.compat.")
+    if not shared_native and (
+            isinstance(getattr(implementation, "__dict__", None), dict)
             or isinstance(implementation, type) and implementation.__flags__ & (1 << 9)):
         if transaction is None:
             implementation.__torch_fidelity__ = level.value

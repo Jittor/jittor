@@ -1,11 +1,65 @@
 """Torch ``nn.modules`` namespace and global module registration hooks."""
 
 import types
+import weakref
+from collections import namedtuple
 
 import jittor as jt
 
-from .context import registry_for
+from .context import registry_for, get_install_context
+from .api_delegates import bind_delegates
+from .fidelity import Fidelity, register_fidelity
+from ..transaction import set_attr
 from ..diagnostics import EXPECTED, swallowed
+
+
+class _ModuleRegistrationHandle:
+    def __init__(self, hooks, hook_id):
+        self.hooks, self.id = hooks, hook_id
+        self._hook = hooks[hook_id]
+
+    def remove(self):
+        if self.hooks.get(self.id) is self._hook:
+            self.hooks.pop(self.id, None)
+        self._hook = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.remove()
+        return False
+
+
+class _IncompatibleKeys(namedtuple("IncompatibleKeys", "missing_keys unexpected_keys")):
+    __slots__ = ()
+
+
+def register_module_module_registration_hook(hook):
+    if not callable(hook):
+        raise TypeError("module registration hook must be callable")
+    state = get_install_context(jt).state["nn_module_registration"]
+    hooks = state["hooks"]
+    hook_id = max(hooks, default=-1) + 1
+    hooks[hook_id] = hook
+    return _ModuleRegistrationHandle(hooks, hook_id)
+
+
+def module_setattr(self, name, value):
+    reference = getattr(type(self), "_torch_registration_context", None)
+    context = reference() if reference is not None else None
+    if context is None:
+        raise RuntimeError("Module registration owner is no longer active")
+    state = context.state["nn_module_registration"]
+    if isinstance(value, state["module_type"]):
+        for hook in tuple(state["hooks"].values()):
+            replacement = hook(self, name, value)
+            if replacement is not None:
+                value = replacement
+    return state["setattr"](self, name, value)
+
+
+module_setattr._torch_module_registration_hooks = True
 
 
 def install_module_namespace(nn, registry=None):
@@ -37,59 +91,24 @@ def install_module_namespace(nn, registry=None):
         registration_hooks = {}
         nn.Module._torch_global_module_registration_hooks = registration_hooks
 
-    class _ModuleRegistrationHandle:
-        def __init__(self, hooks, hook_id):
-            self.hooks = hooks
-            self.id = hook_id
-
-        def remove(self):
-            self.hooks.pop(self.id, None)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            self.remove()
-            return False
-
-    def register_module_module_registration_hook(hook):
-        if not callable(hook):
-            raise TypeError("module registration hook must be callable")
-        hook_id = max(registration_hooks, default=-1) + 1
-        registration_hooks[hook_id] = hook
-        return _ModuleRegistrationHandle(registration_hooks, hook_id)
-
-    if not getattr(nn.Module.__setattr__, "_torch_module_registration_hooks", False):
-        original_module_setattr = nn.Module.__setattr__
-
-        def module_setattr(self, name, value):
-            if isinstance(value, nn.Module):
-                for hook in tuple(registration_hooks.values()):
-                    result = hook(self, name, value)
-                    if result is not None:
-                        value = result
-            return original_module_setattr(self, name, value)
-
-        module_setattr._torch_module_registration_hooks = True
-        nn.Module.__setattr__ = module_setattr
+    context = get_install_context(registry_for(jt, registry).target_namespace)
+    state = context.state.get("nn_module_registration")
+    if state is None or state["module_type"] is not nn.Module:
+        original = nn.Module.__setattr__
+        if original is module_setattr:
+            raise RuntimeError("Module registration hooks already belong to another context")
+        bind_delegates(context, "nn_module_registration", {
+            "module_type": nn.Module, "hooks": registration_hooks, "setattr": original,
+        })
+    set_attr(nn.Module, "_torch_registration_context", weakref.ref(context), context=context)
+    set_attr(nn.Module, "__setattr__", module_setattr, context=context)
 
     module_mod._global_module_registration_hooks = registration_hooks
     module_mod.register_module_module_registration_hook = register_module_module_registration_hook
-    module_mod._IncompatibleKeys = getattr(
-        module_mod,
-        "_IncompatibleKeys",
-        type(
-            "_IncompatibleKeys",
-            (tuple,),
-            {
-                "__new__": lambda cls, missing_keys, unexpected_keys: tuple.__new__(
-                    cls, (missing_keys, unexpected_keys)
-                ),
-                "missing_keys": property(lambda self: self[0]),
-                "unexpected_keys": property(lambda self: self[1]),
-            },
-        ),
-    )
+    module_mod._IncompatibleKeys = getattr(module_mod, "_IncompatibleKeys", _IncompatibleKeys)
+    register_fidelity("torch.nn.modules.module.register_module_module_registration_hook",
+                      register_module_module_registration_hook, Fidelity.APPROXIMATE,
+                      "Ordered module replacement hooks; ownership follows the active frontend context")
     modules_pkg.Module = nn.Module
     modules_pkg.module = module_mod
     for class_name in dir(nn):

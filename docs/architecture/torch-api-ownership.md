@@ -39,6 +39,32 @@ not establish numerical equivalence or working hardware support. CUDA logical
 streams are serialized, event timing uses synchronized host timestamps, and
 memory peaks are sampled at queries. These are recorded limitations.
 
+The independent root namespace permits native fallback only during bootstrap.
+After publication it is sealed: an undeclared name raises `AttributeError`;
+deleting a local name cannot reveal a native implementation. `native_api.py`
+declares stable `NativeOperation` objects for shared mathematical operations.
+They resolve a read-only, transaction-owned delegate table and enter the
+frontend result-type/autograd scope. Native-only `flags`, `core` and `runtime`
+are not public Torch attributes. Internal services resolve the explicit owner.
+FFT/linalg facades copy public exports, excluding imported implementation
+modules, and retain their own namespace identity.
+
+`api_manifest.py` records the final composed API paths after family installation.
+Family-specific restrictions take precedence over generic composition metadata.
+`fidelity_report()` returns sorted immutable records; `fidelity_table()` renders
+the coverage table. The registry is authoritative per API spelling: aliases can
+share an object while declaring different supported behavior. Metadata must not
+mutate shared native Python classes/functions. Neither coverage registration nor
+namespace sealing proves full Torch semantics; native placement is still tracked
+under 7.12 and `KI-BACKEND-PLACEMENT-001`.
+
+Serialization owners separate portable values, restricted pickle loading, Torch
+archives and safetensors. Restricted mode rejects native-only fallback paths that
+cannot enforce its unpickler policy. Autograd/library owners retain one native
+graph and register detached custom-op results with their explicit backward.
+See [serialization](torch-serialization-owners.md) and
+[autograd/library](torch-autograd-library-owners.md) for the detailed boundaries.
+
 ## Runtime services and temporary scopes
 
 `jt.runtime.service_state(namespace, factory=...)` owns extension state without

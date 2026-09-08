@@ -55,7 +55,7 @@ from .types import (
     dtype,
 )
 from .installers import (
-    autograd,
+    autograd as autograd_installer,
     compiler,
     core,
     cuda,
@@ -143,7 +143,7 @@ _REQUIRED_STEPS = (
     ("tensor.methods", tensor.install_methods),
     ("nn", nn.install),
     ("optim", _install_optim_and_schedulers),
-    ("autograd", autograd.install),
+    ("autograd", autograd_installer.install),
     ("cuda", cuda.install),
     ("distributed", distributed.install),
     ("core.extended", core.install_misc),
@@ -155,7 +155,7 @@ _REQUIRED_STEPS = (
     ("compiler", compiler.install),
     ("numerical", numerical.install),
     ("numerical.signal", numerical.install_signal),
-    ("autograd.module-keys", autograd.install_parity),
+    ("autograd.module-keys", autograd_installer.install_parity),
     ("nn.module-keys", nn.install_parity),
     ("optim.module-keys", optimizers_owner.install_module_keys),
     ("distributions.module-keys", distributions.install_parity),
@@ -167,7 +167,7 @@ _REQUIRED_STEPS = (
 _OPTIONAL_STEPS = (
     ("optional.torchmetrics", utilities.install_torchmetrics),
     ("optional.transformers", utilities.install_transformers),
-    ("optional.tensordict", autograd.install_tensordict),
+    ("optional.tensordict", autograd_installer.install_tensordict),
     ("optional.safetensors", _install_optional_safetensors),
     ("optional.flash-attn", utilities.install_flash),
     ("optional.vllm", _install_optional_vllm),
@@ -296,6 +296,10 @@ def install(torch, strict=True, parent_transaction=None):
             context.run_required(step, installer)
         for step, installer in _OPTIONAL_STEPS:
             context.run_optional(step, installer)
+        from .native_api import install as install_native_delegates
+        install_native_delegates(context)
+        from .api_manifest import register_public_apis
+        register_public_apis(context)
         context.mark_complete()
     except BaseException as exc:
         swallowed("torch/__init__.py install: for step, installer in _REQUIRED_STEPS:", exc)

@@ -497,6 +497,11 @@ def _execute_with_true_fsdp(module, orig_execute, *args, **kwargs):
 
 
 
+def _wrapped_execute(self, *args, **kwargs):
+    return _execute_with_true_fsdp(
+        self, self._fsdp_orig_execute, *args, **kwargs)
+
+
 def _install_true_fsdp_execute(module):
     state = getattr(module, "_fsdp_state", None)
     if state is None or not getattr(state, "true_fsdp_initialized", False):
@@ -507,10 +512,6 @@ def _install_true_fsdp_execute(module):
     if not callable(orig_execute):
         return module
     object.__setattr__(module, "_fsdp_orig_execute", orig_execute)
-
-    def _wrapped_execute(self, *args, **kwargs):
-        return _execute_with_true_fsdp(
-            self, self._fsdp_orig_execute, *args, **kwargs)
 
     object.__setattr__(module, "execute", types.MethodType(_wrapped_execute, module))
     return module

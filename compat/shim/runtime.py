@@ -24,6 +24,7 @@ from jittor.compat._aliases import torch_namespace_claimable, torch_namespace_ow
 from jittor.compat.torch.publication import (
     bind_published_namespace, independent_torch_namespace,
     publish_independent_namespace,
+    namespace_owner,
 )
 from ..diagnostics import EXPECTED, swallowed
 from ..transaction import ActivationTransaction, _MISSING
@@ -49,7 +50,8 @@ def _new_runtime_state():
 
 
 def _runtime_state(root_module, create=True):
-    runtime = getattr(root_module, "runtime", None)
+    backend = namespace_owner(root_module)
+    runtime = getattr(backend if backend is not None else root_module, "runtime", None)
     if runtime is None:
         if not create:
             return None

@@ -74,7 +74,7 @@ __all__ = (
 
 _SUBMODULE_NAMES = (
     "api", "common", "compat_types", "config", "dtensor", "grad_sync",
-    "installer", "optimizer", "shard",
+    "installer", "optimizer", "shard", "public_helpers",
 )
 for _submodule_name in _SUBMODULE_NAMES:
     globals().pop(_submodule_name, None)

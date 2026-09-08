@@ -1,11 +1,9 @@
 """Install the FSDP2/DTensor compatibility modules into the torch shim."""
 
-import contextlib
-import enum
 import sys
 import types
 
-from . import api, common, compat_types, config, dtensor, grad_sync, optimizer, shard
+from . import api, common, compat_types, config, dtensor, grad_sync, optimizer, shard, public_helpers
 
 
 _INSTALL_MARKER = "_jittor_fsdp2_install_complete"
@@ -17,32 +15,22 @@ def _ensure_module(registry, name, parent=None, attr=None):
 
 
 def _install_wrap_helpers(fsdp_wrap_mod):
-    @contextlib.contextmanager
-    def enable_wrap(*args, **kwargs):
-        yield
-
-    def wrap(module, *args, **kwargs):
-        return api.fully_shard(module, **{
-            k: v for k, v in kwargs.items()
-            if k in ("mesh", "reshard_after_forward", "mp_policy", "offload_policy")
-        })
-
-    fsdp_wrap_mod.enable_wrap = enable_wrap
-    fsdp_wrap_mod.wrap = wrap
-    fsdp_wrap_mod.always_wrap_policy = lambda *a, **k: True
-    fsdp_wrap_mod.size_based_auto_wrap_policy = (
-        lambda module, recurse, nonwrapped_numel, min_num_params=1e8, *a, **k:
-        bool(nonwrapped_numel >= min_num_params))
-    fsdp_wrap_mod.transformer_auto_wrap_policy = lambda *a, **k: False
-    fsdp_wrap_mod.lambda_auto_wrap_policy = (
-        lambda module, recurse, nonwrapped_numel, lambda_fn=None, *a, **k:
-        bool(lambda_fn(module) if callable(lambda_fn) else False))
+    for name in public_helpers.WRAP_HELPERS:
+        setattr(fsdp_wrap_mod, name, getattr(public_helpers, name))
     fsdp_wrap_mod.ModuleWrapPolicy = compat_types.ModuleWrapPolicy
     fsdp_wrap_mod.CustomPolicy = compat_types.CustomPolicy
-    fsdp_wrap_mod._or_policy = (
-        lambda module, recurse, nonwrapped_numel, policies=None, *a, **k:
-        any(policy(module=module, recurse=recurse, nonwrapped_numel=nonwrapped_numel)
-            for policy in (policies or ()) if callable(policy)))
+
+
+class _ModuleGraph:
+    """Per-install binding ledger; it does not own any public API implementation."""
+    def __init__(self, registry):
+        self.registry = registry
+        self.entries = []
+
+    def __call__(self, name, parent=None, attr=None):
+        installed = _ensure_module(self.registry, name, parent, attr)
+        self.entries.append((name, installed))
+        return installed
 
 
 def _registry_for(torch_module, registry=None):
@@ -75,12 +63,8 @@ def install_with_registry(dist, torch_module=None, registry=None):
                 registry.publish(name, installed_module)
             return dist
 
-    module_graph = []
-
-    def module(name, parent=None, attr=None):
-        installed_module = _ensure_module(registry, name, parent, attr)
-        module_graph.append((name, installed_module))
-        return installed_module
+    module = _ModuleGraph(registry)
+    module_graph = module.entries
 
     tensor_mod = module("torch.distributed.tensor", dist, "tensor")
     tensor_legacy_mod = module(
@@ -213,13 +197,8 @@ def install_with_registry(dist, torch_module=None, registry=None):
     fsdp_mod.FSDP = exports["FullyShardedDataParallel"]
     fsdp_full_mod.FSDP = exports["FullyShardedDataParallel"]
     fsdp_scaler_mod.ShardedGradScaler = exports["ShardedGradScaler"]
-    fsdp_traversal_mod._get_fsdp_states = (
-        lambda module: [
-            getattr(m, "_fsdp_state")
-            for m in shard._iter_fsdp_modules(module, True)
-            if hasattr(m, "_fsdp_state")
-        ])
-    fsdp_traversal_mod._get_fsdp_handles = lambda module: []
+    fsdp_traversal_mod._get_fsdp_states = public_helpers._get_fsdp_states
+    fsdp_traversal_mod._get_fsdp_handles = public_helpers._get_fsdp_handles
     for mod in (fsdp_runtime_mod, fsdp_top_common_mod, fsdp_state_mod,
                 fsdp_common_mod, fsdp_fully_state_mod):
         mod.FSDPState = compat_types.FSDPState
@@ -232,12 +211,8 @@ def install_with_registry(dist, torch_module=None, registry=None):
             compat_types._get_module_fsdp_state_if_fully_sharded_module)
         mod._is_fsdp_managed_module = compat_types._is_fsdp_managed_module
     fsdp_param_mod.FlatParameter = exports["FlatParameter"]
-    fsdp_collectives_mod.all_gather = lambda tensor, *a, **k: (
-        common._all_gather_shards(tensor)
-        if common._in_true_distributed() else tensor)
-    fsdp_collectives_mod.reduce_scatter = lambda tensor, *a, **k: (
-        common._reduce_scatter_padded(tensor)
-        if common._in_true_distributed() else tensor)
+    fsdp_collectives_mod.all_gather = public_helpers.all_gather
+    fsdp_collectives_mod.reduce_scatter = public_helpers.reduce_scatter
     _install_wrap_helpers(fsdp_wrap_mod)
 
     tensor_factories = {
@@ -269,12 +244,9 @@ def install_with_registry(dist, torch_module=None, registry=None):
                 tensor_device_mesh_mod):
         mod.DeviceMesh = exports["DeviceMesh"]
         mod.init_device_mesh = exports["init_device_mesh"]
-    parallel_classes = {}
-    for name in ("ColwiseParallel", "RowwiseParallel", "SequenceParallel",
-                 "PrepareModuleInput", "PrepareModuleOutput",
-                 "PrepareModuleInputOutput"):
-        parallel_classes[name] = type(
-            name, (compat_types.ParallelStyle,), {"__module__": __name__})
+    parallel_classes = {
+        name: getattr(public_helpers, name) for name in public_helpers.PARALLEL_STYLES
+    }
     for mod in (tensor_parallel_mod, tensor_parallel_style_mod):
         mod.ParallelStyle = compat_types.ParallelStyle
         for name, cls in parallel_classes.items():
@@ -291,31 +263,21 @@ def install_with_registry(dist, torch_module=None, registry=None):
     device_mesh_mod.init_device_mesh = exports["init_device_mesh"]
     dist.DeviceMesh = exports["DeviceMesh"]
     dist.init_device_mesh = exports["init_device_mesh"]
-    dist.is_available = lambda *a, **k: True
-    class AsyncCollectiveTensor:
-        def __init__(self, tensor=None):
-            self.tensor = tensor
-        def wait(self):
-            return self.tensor
-        def __getattr__(self, name):
-            return getattr(self.tensor, name)
-    functional_collectives_mod.AsyncCollectiveTensor = AsyncCollectiveTensor
+    dist.is_available = public_helpers.is_available
+    functional_collectives_mod.AsyncCollectiveTensor = public_helpers.AsyncCollectiveTensor
 
     checkpoint_wrapper_mod.checkpoint_wrapper = compat_types._checkpoint_wrapper
     checkpoint_wrapper_mod.apply_activation_checkpointing = (
         compat_types._apply_activation_checkpointing)
-    checkpoint_wrapper_mod.offload_wrapper = lambda module, *a, **k: module
+    checkpoint_wrapper_mod.offload_wrapper = public_helpers.offload_wrapper
     checkpoint_wrapper_mod._CHECKPOINT_PREFIX = "_checkpoint_wrapped_module."
-    checkpoint_wrapper_mod.CheckpointImpl = enum.Enum(
-        "CheckpointImpl",
-        {"NO_REENTRANT": "no_reentrant", "REENTRANT": "reentrant"},
-        module=__name__,
-    )
+    checkpoint_wrapper_mod.CheckpointImpl = public_helpers.CheckpointImpl
     checkpoint_wrapper_mod.checkpoint = compat_types._checkpoint
     fsdp_common_mod.FSDPMeshInfo = compat_types.FSDPMeshInfo
     fsdp_common_mod.ShardPlacementResult = compat_types.ShardPlacementResult
     fsdp_init_mod._get_mesh_info = compat_types._get_mesh_info
     fsdp_init_mod._get_post_forward_mesh_info = compat_types._get_post_forward_mesh_info
+    public_helpers.register_helper_fidelity()
     setattr(dist, _INSTALL_MARKER, True)
     setattr(dist, _MODULE_GRAPH_ATTR, tuple(module_graph))
     registry.publish("torch.distributed", dist)

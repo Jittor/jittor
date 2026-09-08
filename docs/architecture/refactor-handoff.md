@@ -6,7 +6,7 @@
 ## 当前开发底座
 
 - 在 `$JITTOR_LAB_ROOT/refactor/coord` 的 `wk/coord` 工作，整合后推送远端
-  `2.0-refactor`。本批以 `7e83d6da4` 为起点，最新提交以远端分支为准。
+  `2.0-refactor`。本批以 `c68b0cf7d` 为起点，最新提交以远端分支为准。
 - 物理源码固定为顶层 `src/`、`backends/`；`python/jittor/{src,extern}` 已不存在。
   Var/Op 统一图和七个元算子保留。真实 strides/storage、dtype/C++ 边界、
   动态形状提交与 GIL 前置见[上一批记录](../results/2026-09-08-architecture-integration.md)。
@@ -19,14 +19,23 @@
   MANIFEST 由 `tools/build/generate_manifest.py` 生成，见
   [打包记录](../results/2026-09-08-packaging-ownership.md)。
 
-本批运行证据与仍红的全仓门禁见[整合记录](../results/2026-09-08-api-runtime-integration.md)。
+本批补齐 serialization/autograd/library/distribution 公共函数、factory/vmap/FSDP
+公共 helper owner，独立根 namespace 安装后关闭原生 fallback；收口 11.03，
+当前剩 21 条代码/性能记录，另有 9 条硬件验收。本批运行证据与仍红的全仓门禁见
+[整合记录](../results/2026-09-08-api-owner-closure.md)。
 相关修复节点已通过，但非共享分配器的 scalar broadcast/view、旧断言计数及部分
 pytest/子进程合同仍需后续处理；不能把本批收口解释为全仓门禁全绿。
 
 ## 继续顺序
 
 先收齐独立前端、剩余 API 和第三方 adapter 边界，再处理剩余功能与性能。
-7.03、7.12 仍是聚合任务，不能因部分家族迁出就全部关闭。FSDP 的通信、mesh、
+7.03 仍需将 distribution/NN/frontend 类型工厂中的真实适配逻辑迁为模块级实现，
+不能用 installer 命名范围的闭包计数证明全项完成。7.12 的优先缺口是
+KI-BACKEND-PLACEMENT-001：CUDA 全局模式下，CPU checkpoint 后续计算会迁回
+GPU；原生 TensorPlacement/图传播/执行器已在隔离树实现并过 TU 语法与 host
+scope 检查，尚需与当前 Python 工厂/to/load 接线并做真实运行验收。
+不能用 force_cpu 显示标记或每步强制同步替代原生约束；严格 xfail 用例保留至修复。
+FSDP 的通信、mesh、
 原生 optimizer 复用和生命周期架构已实现；峰值显存性能仍未达，优化后移。
 缺硬件的 ACL/HCCL/NPU、ROCm/Corex 和多机验证继续按上机文档交接。
 

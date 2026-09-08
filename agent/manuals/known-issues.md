@@ -22,6 +22,25 @@ framework defects.
 - **Research:** an intentionally unsupported capability requiring architectural
   work.
 
+## KI-BACKEND-PLACEMENT-001: a CPU Tensor can return to CUDA during computation
+
+- Severity: Critical
+- Status: Reproduced; 7.12 backend-placement work remains open
+- Owner: runtime and independent frontend maintainers
+- Evidence: `test_cuda_checkpoint_mapped_to_cpu_stays_on_cpu_for_subsequent_ops`
+  in `tests/compat/torch/test_serialization_api_owners.py` is a strict expected
+  failure on a real CUDA runtime. CUDA checkpoint values load into host storage,
+  but adding a scalar while the global CUDA mode is enabled migrates them back
+  to device storage; the frontend's CPU hint still reports CPU.
+- Cause established so far: native `Var.device_id` records CUDA affinity, not
+  CPU placement; host residency is separate, and execution backend selection
+  still follows the submission's global mode. No claim is made that changing
+  only the Python residency hint fixes this boundary.
+- Exit condition: explicit CPU Tensor placement survives subsequent operators
+  under a CUDA default, both physical storage and public device agree, and
+  CUDA/CPU mixed graphs preserve native default-policy behavior without forcing
+  an immediate sync after every CPU operation.
+
 ## KI-TEST-001: formerly silent test cases expose unresolved contracts
 
 - Severity: Medium

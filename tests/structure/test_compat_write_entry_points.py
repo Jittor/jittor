@@ -258,7 +258,7 @@ CLASSIFIED = {
     (C + "torch/optimizer_api.py", "_adam_step", "flags"): "runtime",
     (C + "torch/optimizer_api.py", "_step_with_closure", "flags"): "runtime",
     (C + "torch/optimizer_api.py", "_torch_post_step", "flags"): "runtime",
-    (C + "torch/serialization.py", "_apply_map_location", "flags"): "runtime",
+    (C + "torch/serialization/portable.py", "_apply_map_location", "flags"): "runtime",
     (C + "fsdp2/optimizer.py", "optimizer_step", "flags"): "runtime",
     # Scoped environment overrides around one borrow/copy region.
     (C + "shim/extensions/readonly.py", "_borrow_scope", "env"): "runtime",

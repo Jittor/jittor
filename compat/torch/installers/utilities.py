@@ -6,6 +6,7 @@ import numpy as np
 
 from ..context import get_install_context, registry_for
 from ..fidelity import Fidelity, register_fidelity
+from .._placeholder_context import _PlaceholderContext
 
 from ..grad import (
     _amp_passthrough_decorator, _AutocastContext,
@@ -99,13 +100,8 @@ class TorchDispatchMode:
     """Annotation placeholder; native dispatch does not consult this mode."""
 
 
-class FakeTensorMode:
-    def __init__(self, *args, **kwargs):
-        pass
-    def __enter__(self):
-        return self
-    def __exit__(self, *exc):
-        return False
+class FakeTensorMode(_PlaceholderContext):
+    """Import-compatible mode placeholder; no fake-tensor dispatch is installed."""
 
 
 def _profile_schedule_action(step):

@@ -1,6 +1,6 @@
 # 整改看板
 
-2026-09-08 最新：本批收口 5.24、7.05、7.07、9.19；任务表剩 22 条代码/性能未完成记录，另有 9 条硬件验收记录，父项与派生项存在重叠。继续优先完成架构迁移供多人开发，性能调优后移。主要 API 家族、Runtime 状态、安装事务和打包布局已整合，完整独立 Torch 与剩余 API 仍待完成。证据及未绿的全仓门禁见[本批整合记录](../results/2026-09-08-api-runtime-integration.md)；此前 storage/dtype/提交/GIL 与 FSDP 架构见[上一批记录](../results/2026-09-08-architecture-integration.md)。不以历史波次或提交数代表完成程度。
+2026-09-08 最新：本批收口 11.03，任务表剩 21 条代码/性能未完成记录，另有 9 条硬件验收记录，父项与派生项存在重叠。serialization/autograd/library/distributions/factories/FSDP公共owner与显式数学API已整合，7.03仍缺类型工厂内的实际适配逻辑迁出，7.12仍有真实CUDA上的CPU放置缺陷；不提前关闭聚合项。证据及未绿的全仓门禁见[本批整合记录](../results/2026-09-08-api-owner-closure.md)。上一批已收口5.24、7.05、7.07、9.19，见[API与Runtime记录](../results/2026-09-08-api-runtime-integration.md)。继续优先完成架构迁移供多人开发，性能调优后移，不以历史波次或提交数代表完成程度。
 
 下方早期波次记录为历史证据，当前关闭状态以任务表为准；Tensor 子类底层前置见 [类型边界记录](../results/2026-09-08-tensor-frontend-types.md)。
 
@@ -710,7 +710,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.B17 | 析构不得抛 | 已合并 | cudabk | 272f00ba |
 | 7.01 | 「看起来支持其实空操作」一律改为实现或抛 `NotImplementedError`，需显式 `… | 已合并 | 兼容层分区 | ff395ecc b7c12ddc 0446217e 47012a27 46bc9ea7 49d41acf 9053a7c0 |
 | 7.02 | DDP 真实梯度同步 | 已合并 | 兼容层分区 | 4f08f1da |
-| 7.03 | 每个 torch API 一个模块级一等对象加保真度标注 | 待领 | coord | 本批完整迁出 tensor/nn/nn_init/data、CUDA、utilities/compiler、core misc、optimizer/scheduler、distributed 的主要 installer 实现；安装仅绑定，实际函数/类可导入，原生委托和可变缓存归 context，fidelity_table 自动生成当前对象覆盖表。原有 numerical/reductions/module-method owner 保留。仍缺 serialization/safetensors、distributions、autograd/library、部分 numerical/FSDP/factory 与类型工厂边界；不按已迁出家族数量关闭整项。见[owner 契约](torch-api-owners.md)与[本批证据](../results/2026-09-08-api-runtime-integration.md)。 |
+| 7.03 | 每个 torch API 一个模块级一等对象加保真度标注 | 部分实现 | coord | 主要installer及本批serialization/safetensors、autograd/library、distribution公共函数、factory、vmap、FSDP公共helper已有真实模块级owner；显式native数学委托封闭根fallback，api_manifest补最终绑定，fidelity_table生成覆盖表。73个命名installer尚有5个生命周期/模块补丁嵌套定义，此计数不能代表整个前端已完成。复核仍有distribution_frontend的scoped/constructor（rsample策略、参数改名/检查/转Tensor）及nn_frontend的Module/initialize/adopt真实逻辑藏在类型工厂中，需连同其余frontend类型工厂收齐模块级实现、公开metadata与身份验收。不能只改qualname或按已迁家族数量关闭。见[本批证据](../results/2026-09-08-api-owner-closure.md)。 |
 | 7.04 | 激活显式、一次性、可查询 | 已合并 | compat | `f704b9d4`：删除 argv 源码嗅探与 `jt.flags` 代理，部署/运行时入口统一为幂等 `activate()`（`enable` 仅同对象别名），公开不可变 `activation_status()`；HOME/TMPDIR/NCCL/严格数学环境只在显式 preflight 中准备，并接入 `EXPLICIT_REQUIRES_GRAD` 策略。聚焦 bootstrap 41 passed，策略接线 1 passed，部署静态测试 15 passed；结构实算单例仍命中既有 JIT IR 重复行号失败，非本项激活回归。 |
 | 7.05 | install 事务化 | 已合并 | coord | 激活可接管成功子安装的 ledger，失败撤回 namespace/类/完成标记/状态；延迟 vLLM、扩展与 module patches 有 RuntimeHook 生命周期；source import 只回滚本方条目，保留并发写并报告冲突。fidelity 逐项记账，快照与显式/子 hook 同 slot 去重；中断和冲突仍释放锁，内部错误保留原类型。旧两条 import hook 已由 7.07 移除。见[事务契约](runtime-hook-transactions.md)及[本批记录](../results/2026-09-08-api-runtime-integration.md)。 |
 | 7.06 | 依赖单向化 core→tensor→nn/optim→distributed→fsdp→适配器 | 已合并 | 兼容层分区 | 27c4bdeb |
@@ -719,7 +719,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.09 | `torch.library` | 已合并 | compat | 99901e6c、d0a782a0。按张量真实驻留选择 CPU/CUDA 并排除 Meta，`register_autograd` 真正接入且模型特判移出通用注册层；线程局部 autocast dtype policy 进一步选择 AutocastCPU/CUDA，嵌套禁用与退出恢复普通路由。独立 PyTorch oracle 一致，CPU dispatch 8 passed、1 个未分配 CUDA 节点 skipped |
 | 7.10 | `torch.compile`/`jit.trace`/`jit.script` 保留 pass… | 已合并 | 兼容层分区 | 3d898ece。语义参数拒绝、permissive allowlist/audit 与 ShapeProp ImportError 验收均有测试 |
 | 7.11 | autograd 语义 | 已合并 | compat | `2ec34693`：`Var.is_leaf` 转发内核 `is_backward_leaf`，`Var.grad_fn` 对叶子返回 None、对非叶子返回 node/op/name 代理；shim autograd 语义 20 passed，core backward-leaf 查询 20 passed。requires_grad 策略差异仍归 7.12。 |
-| 7.12 | 独立 torch 包 | 部分实现 | coord | 独立包、Tensor/Parameter/Module、native storage/dtype及私有弱owner路由已整合；native不再承载独立前端的leaf/retained/optimizer表，最近optimizer也弱查找。统一Var/Op图保留。仍需收齐legacy激活/原生类型修改路径与API对象边界；不以已有模块身份代替整项完成。见[整合记录](../results/2026-09-08-architecture-integration.md)。 |
+| 7.12 | 独立 torch 包 | 部分实现 | coord | 独立包、Tensor/Parameter/Module、native storage/dtype及弱owner路由已整合，统一Var/Op图保留。本批独立根命名空间安装后封闭原生fallback，数学API经显式委托执行。仍有真实CUDA缺陷KI-BACKEND-PLACEMENT-001：map_location=cpu后首次计算可将源和结果迁回GPU，Python设备标记与实际驻留不一致；原生placement/图传播/执行器与工厂/to/load整链正在隔离树实现，尚无运行验收。legacy激活清理仍待完成，不以namespace身份代替整项完成。见[本批记录](../results/2026-09-08-api-owner-closure.md)。 |
 | 7.13 | FSDP2 | 架构已实现，性能未达 | coord | 真实rank矩阵/ProcessGroup/hybrid通信及分组范数、共享native SGD/Adam数学、自定义子类super接线、弱state/entry与owned local shard均已整合；四rank小模型数值通过。真实used高水位仍高于full，性能按用户要求后移，不关整项。见[FSDP记录](../results/2026-09-08-fsdp-mesh-optimizer-lifetime.md)。 |
 | 7.14 | vLLM 边界检查把 `torch` 视作 jittor 别名 | 已合并 | 兼容层分区 | 178be65a |
 | 7.15 | `_rebuild_tensor_v2` 按 stride 还原或报错 | 已合并 | | 7e7877c8 |
@@ -799,7 +799,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 10.24 | fixture 契约按真实来源解析 | 已合并 | gatecheck | `c8ce8760`。原判据拿函数参数与一份只含 pytest 内置 fixture 的冻结清单比较，7 处使用自有 fixture 的合法测试全被误判成「命名成 test 的 helper」；改为按真实来源解析（内置 + 本模块声明 + 沿树 conftest + 该函数的 parametrize argname）。修前 27 passed 1 failed、修后 28 passed；另造反例（参数无人提供的 `test_*` helper）确认判据未被放宽 |
 | 11.01 | 删已被取代的绕过与死路径 | 已合并 | gatecheck | 逐项核查（无需新代码，六项在各自前置里已经完成）：`nn/backends/cudnn.py` 的 `_CudnnConv2d` 全树 0 处（8.07）；`change_function()` 0 处（4.11）；`process_acl` 0 处（4.12 今日的 ACL/ROCm 源转换移除）；`asm_tuner.py` 文件已删且引用 0 处；`var_holder.cc` 的十层硬编码下标链已换成 `cascade_setitem_root` 的循环加 `needs_cascade_setitem()`；`event_queue` 无「cause hang」标注、`executor.cc` 无注释掉的 `run_sync`，且有 `tests/structure/test_event_queue_contract.py` 钉着（3.19 选的是「修好并加测试」而不是删除）。**唯一剩余项 `process_jittor_source` 交由 4.12**：它现在只有 `compiler.py:61` 一处赋值给 `BuildContext.transform_sources`，而 `transform_sources` **零消费者**，即已成死代码，可安全删除 |
 | 11.02 | 已提前为 0.20 | 并入 0.20 | | |
-| 11.03 | 单文件异常拆分 | 待领 | | |
+| 11.03 | 单文件异常拆分 | 已合并 | coord | 本批收口：六个源码根共1175个维护实现文件，超过1500行为0；最大build/compiler.py为1472行。Python大文件已拆入域包，op_compiler.cc/opt/expr.cc按域迁入src/codegen且仍保留独立TU。生成的9142行__init__.pyi声明清单和第三方vendored源码不计入维护实现规模，未把生成声明声称为已拆分。见[规模与验证记录](../results/2026-09-08-api-owner-closure.md)。 |
 | 11.04 | 关键接口写成显式契约 | 待领 | coreops | `8e1ad4bd`、`fa2d8523`、`029fa9a4`（随 3.01）已交付 `executor.h` 那一份：79 行，写明一次批的承诺、执行序按 `Op::order`、`device_sync`/`weak_sync` 语义、不可重入、两个分配器与 `last_is_cuda` 的所有权；新增的 `exec_plan.h`/`exec_runner.h` 同样以契约起头。**仍待**：`allocator.h`（58 行下挂 8 个实现）、compat 28k 行、`Installer`/`Backend` 协议类型统一 19 处 install 与 7 处 check |
 
 ## 增量证据（按波次）

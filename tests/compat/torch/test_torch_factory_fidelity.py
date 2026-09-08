@@ -3,7 +3,8 @@ import unittest
 
 import numpy as np
 
-import jittor as torch
+import jittor as jt
+import torch
 
 
 FACTORY_NAMES = (
@@ -48,19 +49,19 @@ class TestTorchFactoryFidelity(unittest.TestCase):
     def test_independently_imported_factory_executes_on_cpu(self):
         factories = importlib.import_module(
             "jittor.compat.torch.installers.factories")
-        with torch.flag_scope(use_cuda=0):
+        with jt.flag_scope(use_cuda=0):
             value = factories.zeros((2, 3), dtype=torch.float32)
         np.testing.assert_array_equal(value.numpy(), np.zeros((2, 3)))
 
     def test_empty_like_implementation_is_family_owned_and_runs_on_cpu(self):
         factories = importlib.import_module(
             "jittor.compat.torch.installers.factories")
-        self.assertEqual(
-            factories.empty_like.implementation.__module__, factories.__name__)
+        self.assertEqual(factories.empty_like.__module__, factories.__name__)
+        self.assertIs(getattr(torch, "empty_like"), factories.empty_like)
         record = importlib.import_module(
             "jittor.compat.torch.fidelity").fidelity_of("torch.empty_like")
         self.assertIn("device", record.detail)
-        with torch.flag_scope(use_cuda=0):
+        with jt.flag_scope(use_cuda=0):
             source = torch.ones((2, 3), dtype=torch.float64)
             value = factories.empty_like(source)
         self.assertEqual(tuple(value.shape), (2, 3))

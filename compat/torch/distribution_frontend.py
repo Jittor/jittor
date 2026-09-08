@@ -5,6 +5,9 @@ from functools import wraps
 from types import ModuleType
 
 from .frontend import tensor_frontend
+from .api_delegates import bind_delegates
+from .context import get_install_context
+from .distribution_api import DISTRIBUTION_FUNCTIONS
 
 
 def make_distribution_frontend(native, target):
@@ -16,6 +19,10 @@ def make_distribution_frontend(native, target):
     native_base = native.Distribution
     native_normal = native.Normal
     native_uniform = native.Uniform
+    bind_delegates(get_install_context(target), "distribution_functions", {
+        name: getattr(native, name) for name in DISTRIBUTION_FUNCTIONS
+        if name in native.__all__
+    })
     tensor_parameters = {
         "mu", "sigma", "loc", "scale", "low", "high", "concentration",
         "concentration0", "concentration1", "rate", "probs", "logits",
@@ -124,7 +131,7 @@ def make_distribution_frontend(native, target):
                     setattr(child, attribute, getattr(value, attribute))
             value = child
         elif inspect.isfunction(value):
-            value = scoped(value)
+            value = DISTRIBUTION_FUNCTIONS[name]
         setattr(module, name, value)
     module.__all__ = list(native.__all__)
     return module

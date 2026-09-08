@@ -355,7 +355,9 @@ class TestTorchCompatStructure(unittest.TestCase):
             "lr_scheduler.py",
             "nested.py",
             "optimizers.py",
-            "serialization.py",
+            "serialization/portable.py",
+            "serialization/torch_archive.py",
+            "serialization/safetensors.py",
             "types.py",
         ):
             path = package_root / name
@@ -380,6 +382,7 @@ class TestTorchCompatStructure(unittest.TestCase):
         ]
         self.assertIn("jittor.compat", packages)
         self.assertIn("jittor.compat.torch", packages)
+        self.assertIn("jittor.compat.torch.serialization", packages)
         self.assertNotIn("jittor._torch_compat", packages)
 
     def test_installation_order_remains_stable(self):

@@ -496,6 +496,8 @@ def _install_nn_extras(nn, registry=None):
     register_api_bindings(nn, 'torch.nn',
         ('CELU', 'ConvTranspose1d', 'DataParallel', 'Hardshrink', 'Hardsigmoid', 'Hardswish', 'Identity', 'ModuleDict', 'Parameter', 'ParameterList', 'RMSNorm', 'SELU', 'Softplus', 'Softshrink', 'Softsign', 'SyncBatchNorm', 'Tanhshrink', 'Transformer', 'TransformerDecoder', 'TransformerDecoderLayer', 'TransformerEncoder', 'TransformerEncoderLayer', 'attention', 'parallel', 'parameter', 'utils') + tuple(()),
         Fidelity.APPROXIMATE, 'Native neural-network implementations and installation-owned layer adapters; unsupported Torch modes and parameter subsets remain restricted')
+    register_api_bindings(F, "torch.nn.functional", ("linear",),
+        Fidelity.APPROXIMATE, "Native linear mathematics with frontend dtype promotion and installation-owned delegates")
     register_api_bindings(
         nn.utils, "torch.nn.utils",
         ("clip_grad_norm_", "clip_grad_value_", "weight_norm", "remove_weight_norm",

@@ -73,7 +73,11 @@ def compatibility_owner(module):
 
 
 def _state_table(module, create=False):
-    runtime = getattr(module, "runtime", None)
+    from .namespace import TorchNamespace
+    if isinstance(module, TorchNamespace):
+        runtime = getattr(module.owner, "runtime", None)
+    else:
+        runtime = getattr(module, "runtime", None)
     if runtime is None:
         if create:
             raise RuntimeError("Torch tensor state requires the native Runtime service interface")

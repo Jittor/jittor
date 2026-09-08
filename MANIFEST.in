@@ -310,10 +310,12 @@ include docs/architecture/system-design-audit.md
 include docs/architecture/target-layout.md
 include docs/architecture/torch-api-owners.md
 include docs/architecture/torch-api-ownership.md
+include docs/architecture/torch-autograd-library-owners.md
 include docs/architecture/torch-compatibility-principles.md
 include docs/architecture/torch-distributed-api-owners.md
 include docs/architecture/torch-dtype-boundary.md
 include docs/architecture/torch-optimizer-owners.md
+include docs/architecture/torch-serialization-owners.md
 include docs/architecture/vmap-owner-plan.md
 include docs/community/AWESOME-JITTOR-LIST.cn.md
 include docs/community/AWESOME-JITTOR-LIST.md
@@ -463,8 +465,10 @@ include docs/results/2026-09-07-build-contrib-layout.md
 include docs/results/2026-09-07-native-core-packages.md
 include docs/results/2026-09-07-ops-pooling-layout.md
 include docs/results/2026-09-07-python-domain-packages.md
+include docs/results/2026-09-08-api-owner-closure.md
 include docs/results/2026-09-08-api-runtime-integration.md
 include docs/results/2026-09-08-architecture-integration.md
+include docs/results/2026-09-08-autograd-library-owners.md
 include docs/results/2026-09-08-checkpoint-device-mapping.md
 include docs/results/2026-09-08-compat-layout-and-view-ownership.md
 include docs/results/2026-09-08-core-misc-api-owner.md

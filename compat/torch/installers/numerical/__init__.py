@@ -23,23 +23,17 @@ from ...nested import _NestedTensor
 
 from ...types import _dtype_to_str
 
-from ...fidelity import Fidelity, register_fidelity
+from ...fidelity import Fidelity, register_fidelity, register_api_bindings
 
-from ...context import getitem_transform_active
 
 from ....diagnostics import EXPECTED, swallowed
 
-_vmap_runtime_impl = None
-
-def vmap(func, in_dims=0, out_dims=0, *args, **kwargs):
-    if _vmap_runtime_impl is None:
-        raise RuntimeError("torch.vmap runtime owner is not installed")
-    return _vmap_runtime_impl(func, in_dims, out_dims, *args, **kwargs)
+from .batching import vmap
 
 register_fidelity(
     "torch.vmap", vmap, Fidelity.APPROXIMATE,
-    "delegates Torch vmap batching to the compatibility runtime; device, "
-    "randomness, and unsupported kwargs follow the installed backend policy",
+    "runs loop/broadcast batching over the shared native graph; randomness "
+    "and advanced batching arguments retain existing compatibility limitations",
 )
 
 autocast = _AutocastContext
@@ -1056,15 +1050,36 @@ register_fidelity(
     "not implemented",
 )
 
+def _bind_missing(target, name, implementation):
+    if not hasattr(target, name):
+        setattr(target, name, implementation)
+
+
+def _tensor_abs(value):
+    # Native module-level C functions do not implement Python's descriptor
+    # binding protocol; a Tensor method must supply its argument explicitly.
+    return _native_abs(value)
+
+
+def _sparse_sum(x, dim=None):
+    d = x._dense if isinstance(x, _SparseCOO) else x
+    return _SparseCOO(d.sum(dim) if dim is not None else d.sum())
+
+
+def _vdet(self):
+    import jittor.linalg as _la; return _la.det(self)
+
+
+def _vinv(self):
+    import jittor.linalg as _la; return _la.inv(self)
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
     Var = ctx.state["Var"]
     _DTYPE_OBJS = ctx.state["dtypes"]
     import collections as _collections
-    def _alias(name, fn):
-        if not hasattr(g, name):
-            setattr(g, name, fn)
     # complex-dtype API (#3): jittor represents complex via nn.ComplexNumber (real/imag
     # pair); wire the torch entry points onto it. torch.complex(re,im), view_as_complex
     # (last dim of 2 -> complex), view_as_real (complex -> last dim of 2), polar, real/
@@ -1075,253 +1090,158 @@ def install(ctx):
     # accessors below handle both; Var.real/imag/angle are patched in jittor.nn. We force-set
     # (not _alias) the accessors because _alias skips names that already exist as native ops --
     # that is why torch.conj(ComplexNumber) used to fall through to the native conj op and crash.
-    _alias("complex", complex)  # native complex64
-    _alias("view_as_complex", view_as_complex)   # -> native complex64
-    _alias("view_as_real", view_as_real)         # polymorphic
+    _bind_missing(g, "complex", complex)  # native complex64
+    _bind_missing(g, "view_as_complex", view_as_complex)   # -> native complex64
+    _bind_missing(g, "view_as_real", view_as_real)         # polymorphic
     g.is_complex = is_complex
     g.real = real
     g.imag = imag
-    _alias("polar", polar)                                        # -> native complex64
+    _bind_missing(g, "polar", polar)                                        # -> native complex64
     g.conj = conj
     g.angle = angle
     # torch.abs of a complex tensor is its magnitude; jittor's abs only takes real Vars.
     g.abs = abs
-    Var.abs = lambda self: _native_abs(self)
+    Var.abs = _tensor_abs
 
     # ``jittor.fft`` is the native owner. Torch mode publishes that same module
     # object under its historical namespace instead of carrying a duplicate DFT.
     from jittor import fft as _fft_ns
+    if g is not ctx.native_backend:
+        from ...namespace import native_module_facade
+        _fft_ns = native_module_facade(_fft_ns, "torch.fft")
     g.fft = _fft_ns
     _modules["torch.fft"] = _fft_ns
     # torch.softmax / log_softmax / relu top-level function forms (convbert calls
     # torch.softmax(x, dim=...)). jittor exposes these via nn, not the top level.
-    _alias("softmax", softmax)
-    _alias("log_softmax", log_softmax)
-    _alias("relu", relu)
+    _bind_missing(g, "softmax", softmax)
+    _bind_missing(g, "log_softmax", log_softmax)
+    _bind_missing(g, "relu", relu)
     # elementwise / functional top-level forms missing from jittor's top level
-    _alias("log1p", log1p)
-    _alias("reciprocal", reciprocal)
-    _alias("lerp", lerp)
-    _alias("isclose", isclose)
-    _alias("allclose", allclose)
-    _alias("cosine_similarity", cosine_similarity)
-    _alias("pairwise_distance", pairwise_distance)
+    _bind_missing(g, "log1p", log1p)
+    _bind_missing(g, "reciprocal", reciprocal)
+    _bind_missing(g, "lerp", lerp)
+    _bind_missing(g, "isclose", isclose)
+    _bind_missing(g, "allclose", allclose)
+    _bind_missing(g, "cosine_similarity", cosine_similarity)
+    _bind_missing(g, "pairwise_distance", pairwise_distance)
     # torch.take_along_dim(input, indices, dim): like gather, but torch BROADCASTS
     # indices against input on every dim except `dim` first. transformers' beam search
     # _gather_beams passes indices of shape (batch, k, 1) to gather full sequences of
     # shape (batch, beams, seq_len) along dim=1 -> expects (batch, k, seq_len). A plain
     # jt.gather returns the index's shape (batch, k, 1), collapsing seq_len -> beam
     # search crashed on the next `seq[:, :, cur_len] = ...` setitem. Broadcast first.
-    _alias("take_along_dim", take_along_dim)
+    _bind_missing(g, "take_along_dim", take_along_dim)
     _orig_all = getattr(g, "all", None)
     _orig_any = getattr(g, "any", None)
     if callable(_orig_all):
         g.all = all
     if callable(_orig_any):
         g.any = any
-    _alias("movedim", movedim)
-    _alias("moveaxis", moveaxis)
+    _bind_missing(g, "movedim", movedim)
+    _bind_missing(g, "moveaxis", moveaxis)
     # Var.movedim/moveaxis (the functions exist but weren't bound as methods), plus
     # index_put_/index_put (scatter-style assignment), tensor_split (uneven split), take.
-    Var.movedim = lambda self, source, destination: _movedim_impl(self, source, destination)
-    Var.moveaxis = lambda self, source, destination: _movedim_impl(self, source, destination)
+    Var.movedim = _movedim_impl
+    Var.moveaxis = _movedim_impl
     Var.index_put_ = index_put_
-    Var.index_put = lambda self, indices, values, accumulate=False: index_put(
-        self, indices, values, accumulate)
+    Var.index_put = index_put
     # index_copy_(dim, index, source): self[..,index[i],..] = source[i,..] along dim
     # (overwrite, NOT accumulate -- cf. index_add).
     Var.index_copy_ = index_copy_
-    Var.index_copy = lambda self, dim, index, source: index_copy(
-        self, dim, index, source)
+    Var.index_copy = index_copy
     g.index_copy = index_copy
     g.index_copy_ = index_copy_
     g.index_put = index_put
     g.index_put_ = index_put_
-    Var.tensor_split = lambda self, indices_or_sections, dim=0: tensor_split(
-        self, indices_or_sections, dim)
+    Var.tensor_split = tensor_split
     g.tensor_split = tensor_split
-    Var.take = lambda self, index: take(self, index)
+    Var.take = take
     g.take = take
-    _alias("eye", eye)
+    _bind_missing(g, "eye", eye)
     register_fidelity(
         "torch.eye", eye, Fidelity.APPROXIMATE,
         "Values and dtype are supported; layout, device, out, and pin_memory "
         "arguments are not implemented.")
     # torch.narrow(input, dim, start, length) / torch.tile(input, dims) --
     # function forms mirroring the Var methods (added in _install_tensor_methods).
-    _alias("narrow", narrow)
-    _alias("tile", tile)
+    _bind_missing(g, "narrow", narrow)
+    _bind_missing(g, "tile", tile)
     # torch.equal returns a Python bool (True iff same shape & all elements
     # equal). jittor's native `equal` is elementwise, so force-override.
     g.equal = equal
-    Var.equal = lambda self, other: equal(self, other)
-    _alias("diff", diff)
-    _alias("trapz", trapz)
-    _alias("trapezoid", trapezoid)
+    Var.equal = equal
+    _bind_missing(g, "diff", diff)
+    _bind_missing(g, "trapz", trapz)
+    _bind_missing(g, "trapezoid", trapezoid)
     g.repeat_interleave = repeat_interleave
-    _alias("autocast", autocast)
+    _bind_missing(g, "autocast", autocast)
     # Real loop-based torch.vmap. The old no-op stub (`lambda fn,*a,**k: fn`)
     # ignored in_dims/out_dims, so transformers' vmap-based causal-mask builder
     # (taken when a model passes and_mask/or_mask -- e.g. falcon) collapsed to a
     # single direct call and produced a wrong all-True (seq,) mask instead of the
     # (b,1,q,kv) causal triangle -> bidirectional attention -> ~79% forward error.
-    # Map over in_dims and stack along out_dims. jittor has no 0-d tensors, so a
-    # scalar leaf is (1,) where torch has (); collapse that spurious trailing
-    # singleton so the stacked rank matches torch.vmap.
-    def _vectorized_getitem_vmap(func, specs, args):
-        # Transformers builds attention masks under TransformGetItemToIndex
-        # using nested pointwise vmaps. Materialize their Cartesian batch axes
-        # through broadcasting instead of creating one graph per scalar pair.
-        if len(specs) < 2 or _py_any(out_dims != 0 for _, out_dims in specs):
-            return None
-        mapped_by_arg = [[] for _ in args]
-        level_sizes = []
-        for level, (level_dims, _) in enumerate(specs):
-            dims = ((level_dims,) * len(args)
-                    if isinstance(level_dims, int) or level_dims is None
-                    else tuple(level_dims))
-            if len(dims) != len(args):
-                return None
-            mapped_sizes = []
-            for arg_index, dim in enumerate(dims):
-                if dim is not None:
-                    if dim != 0 or not isinstance(args[arg_index], jt.Var):
-                        return None
-                    mapped_by_arg[arg_index].append(level)
-                    mapped_sizes.append(int(args[arg_index].shape[dim]))
-            if not mapped_sizes or _py_any(size != mapped_sizes[0]
-                                       for size in mapped_sizes[1:]):
-                return None
-            level_sizes.append(mapped_sizes[0])
-        if _py_any(len(levels) > 1 for levels in mapped_by_arg):
-            return None
+    # Batching is owned by the module-level implementation in batching.py.
 
-        level_count = len(specs)
-        expanded = []
-        for arg, mapped_levels in zip(args, mapped_by_arg):
-            if not mapped_levels:
-                expanded.append(arg)
-                continue
-            output_axis = level_count - 1 - mapped_levels[0]
-            shape = ([1] * output_axis + [int(arg.shape[0])] +
-                     [1] * (level_count - output_axis - 1) +
-                     [int(size) for size in arg.shape[1:]])
-            expanded.append(arg.reshape(shape))
-        result = func(*expanded)
-        if (
-            not isinstance(result, jt.Var)
-            or _jittor_dtype_name(result.dtype) != "bool"
-            or result.ndim > level_count
-        ):
-            return None
-        if result.ndim < level_count:
-            result = result.reshape([1] * (level_count - result.ndim) +
-                                    [int(size) for size in result.shape])
-        target_shape = list(reversed(level_sizes)) + [
-            int(size) for size in result.shape[level_count:]
-        ]
-        return result.broadcast(target_shape)
-
-    def _vmap(func, in_dims=0, out_dims=0, *_a, **_k):
-        base_func = getattr(func, "_jittor_vmap_base", func)
-        specs = getattr(func, "_jittor_vmap_specs", ()) + ((in_dims, out_dims),)
-
-        def wrapped(*args):
-            if getitem_transform_active(g):
-                vectorized = _vectorized_getitem_vmap(base_func, specs, args)
-                if vectorized is not None:
-                    return vectorized
-            ids = (in_dims,) * len(args) if (isinstance(in_dims, int) or in_dims is None) else tuple(in_dims)
-            size = None
-            for a, d in zip(args, ids):
-                if d is not None:
-                    size = int(a.shape[d]); break
-            if size is None:
-                return func(*args)
-            outs = []
-            for i in range(size):
-                sub = []
-                for a, d in zip(args, ids):
-                    if d is None:
-                        sub.append(a)
-                    else:
-                        idx = [slice(None)] * a.ndim; idx[d] = i
-                        sub.append(a[tuple(idx)])
-                r = func(*sub)
-                if not isinstance(r, jt.Var):
-                    r = jt.array(r)
-                outs.append(r)
-            if _py_all(o.ndim >= 1 and o.shape[-1] == 1 for o in outs) and _py_all(o.ndim == outs[0].ndim for o in outs):
-                outs = [o.reshape(o.shape[:-1]) if o.ndim > 1 else o for o in outs]
-            od = out_dims if isinstance(out_dims, int) else (out_dims[0] if out_dims else 0)
-            return jt.stack(outs, dim=od)
-        wrapped._jittor_vmap_base = base_func
-        wrapped._jittor_vmap_specs = specs
-        return wrapped
-    global _vmap_runtime_impl
-    _vmap_runtime_impl = _vmap
     g.vmap = vmap
     g.outer = outer
     g.isin = isin
     # Pairwise distances and sorted-boundary insertion indices.
-    _alias("cdist", cdist)
-    _alias("bucketize", bucketize)
+    _bind_missing(g, "cdist", cdist)
+    _bind_missing(g, "bucketize", bucketize)
     # trace / diag_embed / diagflat / kron / logcumsumexp / tensordot / pdist.
-    _alias("trace", trace); Var.trace = _trace_impl
-    _alias("diag_embed", diag_embed); Var.diag_embed = _diag_embed_impl
-    _alias("diagflat", diagflat)
+    _bind_missing(g, "trace", trace); Var.trace = _trace_impl
+    _bind_missing(g, "diag_embed", diag_embed); Var.diag_embed = _diag_embed_impl
+    _bind_missing(g, "diagflat", diagflat)
     g.kron = kron; Var.kron = kron
-    _alias("logcumsumexp", logcumsumexp); Var.logcumsumexp = _logcumsumexp_impl
+    _bind_missing(g, "logcumsumexp", logcumsumexp); Var.logcumsumexp = _logcumsumexp_impl
     g.tensordot = tensordot
-    _alias("pdist", pdist); Var.pdist = _pdist_impl
+    _bind_missing(g, "pdist", pdist); Var.pdist = _pdist_impl
     # shape ops: unflatten / swapaxes / swapdims / ravel + numpy-style stacking helpers.
-    _alias("unflatten", unflatten); Var.unflatten = _unflatten_impl
-    _alias("swapaxes", swapaxes); _alias("swapdims", swapdims)
+    _bind_missing(g, "unflatten", unflatten); Var.unflatten = _unflatten_impl
+    _bind_missing(g, "swapaxes", swapaxes); _bind_missing(g, "swapdims", swapdims)
     Var.swapaxes = _swapaxes_impl; Var.swapdims = _swapaxes_impl
-    _alias("ravel", ravel); Var.ravel = _ravel_impl
-    _alias("vstack", vstack)
-    _alias("row_stack", row_stack)
-    _alias("hstack", hstack)
-    _alias("dstack", dstack)
-    _alias("column_stack", column_stack)
+    _bind_missing(g, "ravel", ravel); Var.ravel = _ravel_impl
+    _bind_missing(g, "vstack", vstack)
+    _bind_missing(g, "row_stack", row_stack)
+    _bind_missing(g, "hstack", hstack)
+    _bind_missing(g, "dstack", dstack)
+    _bind_missing(g, "column_stack", column_stack)
     # element-wise ops: copysign / xlogy / heaviside / float_power / signbit.
-    _alias("copysign", copysign); Var.copysign = _copysign_impl
-    _alias("xlogy", xlogy); Var.xlogy = _xlogy_impl
-    _alias("heaviside", heaviside); Var.heaviside = _heaviside_impl
-    _alias("float_power", float_power); Var.float_power = _float_power_impl
-    _alias("signbit", signbit); Var.signbit = _signbit_impl
+    _bind_missing(g, "copysign", copysign); Var.copysign = _copysign_impl
+    _bind_missing(g, "xlogy", xlogy); Var.xlogy = _xlogy_impl
+    _bind_missing(g, "heaviside", heaviside); Var.heaviside = _heaviside_impl
+    _bind_missing(g, "float_power", float_power); Var.float_power = _float_power_impl
+    _bind_missing(g, "signbit", signbit); Var.signbit = _signbit_impl
     # reductions: logsumexp (attention/MoE/loss/beam), nansum/nanmean, std_mean/var_mean,
     # aminmax, quantile. NaN handling uses nan_to_num plus an explicit isnan mask.
     g.logsumexp = logsumexp; Var.logsumexp = logsumexp
-    _alias("nansum", nansum); Var.nansum = _nansum_impl
-    _alias("nanmean", nanmean); Var.nanmean = _nanmean_impl
-    _alias("std_mean", std_mean)
-    _alias("var_mean", var_mean)
-    _alias("aminmax", aminmax); Var.aminmax = _aminmax_impl
-    _alias("quantile", quantile)
-    _alias("nanquantile", nanquantile)
+    _bind_missing(g, "nansum", nansum); Var.nansum = _nansum_impl
+    _bind_missing(g, "nanmean", nanmean); Var.nanmean = _nanmean_impl
+    _bind_missing(g, "std_mean", std_mean)
+    _bind_missing(g, "var_mean", var_mean)
+    _bind_missing(g, "aminmax", aminmax); Var.aminmax = _aminmax_impl
+    _bind_missing(g, "quantile", quantile)
+    _bind_missing(g, "nanquantile", nanquantile)
     # Keep the Tensor methods on the same numerical owners as the top-level
     # functions.  The owners intentionally use the documented CPU NumPy
     # fallback, so method and function forms share the same fidelity limits.
-    Var.quantile = lambda self, q, dim=None, keepdim=False, interpolation="linear", **kwargs: quantile(
-        self, q, dim=dim, keepdim=keepdim, interpolation=interpolation, **kwargs)
-    Var.nanquantile = lambda self, q, dim=None, keepdim=False, interpolation="linear", **kwargs: nanquantile(
-        self, q, dim=dim, keepdim=keepdim, interpolation=interpolation, **kwargs)
-    _alias("square", square)
-    _alias("addmm", addmm)
+    Var.quantile = quantile
+    Var.nanquantile = nanquantile
+    _bind_missing(g, "square", square)
+    _bind_missing(g, "addmm", addmm)
 
     # ---- torch.* ops used by mmdetection (additive aliases) ----
-    _alias("mm", mm)
-    _alias("mv", mv)
-    _alias("masked_select", masked_select)
-    _alias("split_with_sizes", split_with_sizes)
-    _alias("_shape_as_tensor", _shape_as_tensor)
-    _alias("nan_to_num_", nan_to_num_)
+    _bind_missing(g, "mm", mm)
+    _bind_missing(g, "mv", mv)
+    _bind_missing(g, "masked_select", masked_select)
+    _bind_missing(g, "split_with_sizes", split_with_sizes)
+    _bind_missing(g, "_shape_as_tensor", _shape_as_tensor)
+    _bind_missing(g, "nan_to_num_", nan_to_num_)
     # torch.randint_like(input, low, high=None, *, dtype=...): jittor's native lacks
     # the dtype kwarg (DINO's denoising uses it). Force-override with torch semantics.
     g.randint_like = randint_like
 
-    _alias("sparse_coo_tensor", sparse_coo_tensor)
+    _bind_missing(g, "sparse_coo_tensor", sparse_coo_tensor)
     import jittor.sparse as _jt_sparse
     if g is not ctx.native_backend:
         from ...namespace import native_module_facade
@@ -1330,31 +1250,30 @@ def install(ctx):
         sparse_namespace = _jt_sparse
     g.sparse = sparse_namespace
     if not hasattr(sparse_namespace, "sum"):
-        def _sparse_sum(x, dim=None):
-            d = x._dense if isinstance(x, _SparseCOO) else x
-            return _SparseCOO(d.sum(dim) if dim is not None else d.sum())
         sparse_namespace.sum = _sparse_sum
 
     # det/inverse on (batched) square matrices (mmrotate GWD/KLD/KFIoU Gaussian losses)
-    def _vdet(self):
-        import jittor.linalg as _la; return _la.det(self)
-    def _vinv(self):
-        import jittor.linalg as _la; return _la.inv(self)
     if not hasattr(Var, "det"):       Var.det = _vdet
     if not hasattr(Var, "inverse"):   Var.inverse = _vinv
     g.det = det
     g.inverse = inverse
 
     # ---- linalg (peft / lora init need svd_lowrank, svd) ----
-    _alias("svd", svd)
-    _alias("svd_lowrank", svd_lowrank)
-    _alias("pca_lowrank", pca_lowrank)
+    _bind_missing(g, "svd", svd)
+    _bind_missing(g, "svd_lowrank", svd_lowrank)
+    _bind_missing(g, "pca_lowrank", pca_lowrank)
+    register_api_bindings(Var, "torch.Tensor", (
+        "abs", "movedim", "moveaxis", "index_put", "index_copy",
+        "tensor_split", "take", "equal", "quantile", "nanquantile",
+        "det", "inverse",
+    ), Fidelity.APPROXIMATE,
+        "Shares the numerical module's implementation; existing dtype, layout and fallback limitations remain")
+    register_api_bindings(sparse_namespace, "torch.sparse", ("sum",),
+        Fidelity.APPROXIMATE, "Existing dense-backed sparse reduction fallback")
 
 def install_parity(ctx):
     g = ctx.jittor_module
     registry = ctx.registry
-    def module(name):
-        return registry.ensure(name)
     import jittor.linalg as linalg
     if g is not ctx.native_backend:
         from ...namespace import native_module_facade
@@ -1366,7 +1285,7 @@ def install_parity(ctx):
     registry.publish("torch.sparse", sparse)
     g.sparse = sparse
 
-    special = module("torch.special")
+    special = registry.ensure("torch.special")
     for name in ("erf", "erfc", "exp", "expm1", "log1p", "sinc"):
         value = getattr(g, name, None)
         if value is not None:

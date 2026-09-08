@@ -112,9 +112,17 @@ def register(torch_module):
     hook = current_runtime_hook()
     table = getattr(getattr(torch_module, "ops", None), "__dict__", {}).get("_namespaces")
     namespace_before_creation = table.get("_C") if isinstance(table, dict) else None
+    if hook is not None and namespace_before_creation is not None:
+        existing = vars(namespace_before_creation).get("_ops", {})
+        names = [name for name, _ in _OPERATORS] + list(_CAPABILITY_PROBES)
+        if any(name in existing for name in names):
+            raise TransactionConflict("vLLM cannot replace an existing _C operator")
     fragment = library.Library("_C", "FRAGMENT")
     owned_ops = None
-    if hook is not None:
+    # The native compatibility Library records each registry slot itself.
+    # Adding a second snapshot here would try to undo the same registration
+    # twice. Other Library implementations retain the explicit fallback ledger.
+    if hook is not None and getattr(fragment, "_transactional_registry", False) is not True:
         destroy = getattr(fragment, "_destroy", None)
         if callable(destroy):
             hook.record_undo(destroy)

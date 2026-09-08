@@ -1,8 +1,7 @@
 """Torch operator-library schema compatibility.
 
-This module owns metadata-only helpers used by the dynamically published
-``torch.library`` module.  Operator execution and dispatch remain owned by the
-installer that publishes the active Torch namespace.
+This module owns the stable public registration objects and native custom-op
+bridge. Mutable dispatch state belongs to the active installation context.
 """
 
 from __future__ import absolute_import
@@ -12,11 +11,29 @@ import enum
 import inspect
 import types
 import typing
+import jittor as jt
 from ..diagnostics import EXPECTED, swallowed
+from ..transaction import InstallTransaction, current_transaction, _MISSING
 
 
 _EMPTY = inspect.Parameter.empty
 _UNKNOWN_MUTATES = "unknown"
+
+
+def _set_item(mapping, key, value):
+    """Publish one registry slot into the enclosing installation/runtime hook."""
+    transaction = current_transaction()
+    if transaction is not None:
+        transaction.record(mapping, key, mapping.get(key, _MISSING), value)
+    mapping[key] = value
+
+
+def _set_attr(target, key, value):
+    transaction = current_transaction()
+    if transaction is not None:
+        transaction.mutate_attr(target, key, value)
+    else:
+        setattr(target, key, value)
 
 
 class Tag(enum.Enum):
@@ -141,27 +158,43 @@ def _call_with_registered_autograd(op, function, args, kwargs):
     if not slots:
         return function(*args, **kwargs)
 
-    class _LibraryAutograd(jt.Function):
-        def execute(self, *taped):
-            full = list(args)
-            for slot, value in zip(slots, taped):
-                full[slot] = value
-            self._ctx = _AutogradContext()
-            output = function(*full, **kwargs)
-            if op._setup_context is not None:
-                op._setup_context(self._ctx, tuple(full), output)
-            return output
+    return _LibraryAutograd(op, function, args, kwargs, slots)(
+        *[args[slot] for slot in slots])
 
-        def grad(self, *grads):
-            produced = op._backward(self._ctx, *grads)
-            if not isinstance(produced, (tuple, list)):
-                produced = (produced,)
-            picked = []
-            for slot in slots:
-                picked.append(produced[slot] if slot < len(produced) else None)
-            return tuple(picked)
 
-    return _LibraryAutograd.apply(*[args[slot] for slot in slots])
+class _LibraryAutograd(jt.Function):
+    """One native taped call; configuration is copied into its call context."""
+
+    def __init__(self, op, function, args, kwargs, slots):
+        self.op, self.function = op, function
+        self.args, self.kwargs, self.slots = args, kwargs, slots
+
+    def execute(self, *taped):
+        full = list(self.args)
+        for slot, value in zip(self.slots, taped):
+            full[slot] = value
+        self._ctx = _AutogradContext()
+        output = self.function(*full, **self.kwargs)
+        if self.op._setup_context is not None:
+            self.op._setup_context(self._ctx, tuple(full), output)
+        # A registered backward, rather than the kernel's internal graph,
+        # owns differentiation. Under explicit-requires-grad policy a detached
+        # forward result stays stopped unless it is enabled before native tape
+        # construction. Integer/bool outputs remain non-differentiable.
+        from jittor._core.dtypes import dtype_name
+        outputs = output if isinstance(output, (tuple, list)) else (output,)
+        for value in outputs:
+            if isinstance(value, jt.Var) and dtype_name(value.dtype).startswith(
+                    ("float", "bfloat", "complex")):
+                value.start_grad()
+        return output
+
+    def grad(self, *grads):
+        produced = self.op._backward(self._ctx, *grads)
+        if not isinstance(produced, (tuple, list)):
+            produced = (produced,)
+        return tuple(produced[slot] if slot < len(produced) else None
+                     for slot in self.slots)
 
 
 class _RegisteredOp:
@@ -178,13 +211,14 @@ class _RegisteredOp:
         self._overridden_by_integration = None
 
     def register_impl(self, dispatch_key, function, allow_override=False):
-        key = str(dispatch_key or "CompositeExplicitAutograd")
-        if key in self._implementations and not allow_override:
-            raise RuntimeError(
-                "operator %s::%s already has an implementation for %s"
-                % (self.namespace, self.name, key)
-            )
-        self._implementations[key] = function
+        with InstallTransaction._lock:
+            key = str(dispatch_key or "CompositeExplicitAutograd")
+            if key in self._implementations and not allow_override:
+                raise RuntimeError(
+                    "operator %s::%s already has an implementation for %s"
+                    % (self.namespace, self.name, key)
+                )
+            _set_item(self._implementations, key, function)
 
     def select_impl(self, args=(), kwargs=None):
         """Pick the kernel torch's dispatcher would pick for these arguments.
@@ -236,10 +270,11 @@ class _OpNamespace:
         object.__setattr__(self, "_ops", {})
 
     def get_or_create(self, name):
-        ops = object.__getattribute__(self, "_ops")
-        if name not in ops:
-            ops[name] = _RegisteredOp(object.__getattribute__(self, "_namespace"), name)
-        return ops[name]
+        with InstallTransaction._lock:
+            ops = object.__getattribute__(self, "_ops")
+            if name not in ops:
+                _set_item(ops, name, _RegisteredOp(object.__getattribute__(self, "_namespace"), name))
+            return ops[name]
 
     def __getattr__(self, name):
         ops = object.__getattribute__(self, "_ops")
@@ -256,9 +291,11 @@ class _OpsDispatcher:
         object.__setattr__(self, "_namespaces", {})
 
     def get_or_create(self, namespace, name):
-        namespaces = object.__getattribute__(self, "_namespaces")
-        module = namespaces.setdefault(namespace, _OpNamespace(namespace))
-        return module.get_or_create(name)
+        with InstallTransaction._lock:
+            namespaces = object.__getattribute__(self, "_namespaces")
+            if namespace not in namespaces:
+                _set_item(namespaces, namespace, _OpNamespace(namespace))
+            return namespaces[namespace].get_or_create(name)
 
     def __getattr__(self, name):
         namespaces = object.__getattribute__(self, "_namespaces")
@@ -270,9 +307,10 @@ class _OpsDispatcher:
                 return getattr(base, name)
             except AttributeError as exc:
                 swallowed("torch/library.py __getattr__: return getattr(base, name)", exc)
-        namespace = _OpNamespace(name)
-        namespaces[name] = namespace
-        return namespace
+        with InstallTransaction._lock:
+            if name not in namespaces:
+                _set_item(namespaces, name, _OpNamespace(name))
+            return namespaces[name]
 
 
 def _operator_name(schema_or_name):
@@ -297,147 +335,211 @@ def _integration_custom_op_overrides():
         return {}
 
 
-def install_torch_library(torch_module, modules):
-    """Publish one executable ``torch.library`` and ``torch.ops`` surface."""
-    library_module = types.ModuleType("torch.library")
-    dispatcher = getattr(torch_module, "ops", None)
-    if not isinstance(dispatcher, _OpsDispatcher):
-        dispatcher = _OpsDispatcher(dispatcher)
+def _library_state():
+    import jittor as jt
+    from .context import get_install_context
+    return get_install_context(jt).state["library_api"]
 
-    class Library:
-        def __init__(self, namespace, kind, dispatch_key=""):
-            self.ns = str(namespace)
-            self.kind = str(kind)
-            self.dispatch_key = str(dispatch_key)
 
-        def _op(self, op_name):
-            return dispatcher.get_or_create(self.ns, _operator_name(op_name))
+class Library:
+    _transactional_registry = True
 
-        def define(self, schema, alias_analysis="", *, tags=()):
-            if "(" not in str(schema):
-                raise ValueError("operator schema must contain an argument list")
-            op = self._op(schema)
-            op._schema = "%s::%s" % (self.ns, schema)
-            op._tags = tuple(tags)
-            return op.name
+    def __init__(self, namespace, kind, dispatch_key=""):
+        self._dispatcher = _library_state()["dispatcher"]
+        self.ns = str(namespace)
+        self.kind = str(kind)
+        self.dispatch_key = str(dispatch_key)
 
-        def impl(self, op_name, fn, dispatch_key="", *, with_keyset=False, allow_override=False):
-            if not callable(fn):
-                raise TypeError("Library.impl expects a callable implementation")
-            key = dispatch_key or self.dispatch_key
-            self._op(op_name).register_impl(key, fn, allow_override)
-            return None
+    def _op(self, op_name):
+        return self._dispatcher.get_or_create(self.ns, _operator_name(op_name))
 
-        def _register_fake(self, op_name, fn, _stacklevel=1, *, allow_override=False):
-            op = self._op(op_name)
-            if op._fake_impl is not None and not allow_override:
-                raise RuntimeError(
-                    "operator %s::%s already has a fake implementation" % (self.ns, op.name)
-                )
-            op._fake_impl = fn
-            return None
+    def define(self, schema, alias_analysis="", *, tags=()):
+        if "(" not in str(schema):
+            raise ValueError("operator schema must contain an argument list")
+        op = self._op(schema)
+        _set_attr(op, "_schema", "%s::%s" % (self.ns, schema))
+        _set_attr(op, "_tags", tuple(tags))
+        return op.name
 
-    def custom_op(name=None, fn=None, *args, **kwargs):
-        """torch.library.custom_op -- a generic registration API.
-
-        It used to carry a hard-coded branch comparing ``name`` against one
-        specific downstream library's operator, throwing the caller's
-        implementation away and substituting the shim's own.  A model-specific
-        special case inside a general-purpose registration API silently
-        overrides any library that registers that exact name.
-        Integration-supplied replacements now come from
-        jittor.compat.integrations, keyed by name, and the substitution is
-        recorded on the operator as ``_overridden_by_integration``.
-        """
-        def decorator(implementation):
-            if isinstance(name, str) and "::" in name:
-                namespace, op_name = name.split("::", 1)
-                override = _integration_custom_op_overrides().get(name)
-                op = dispatcher.get_or_create(namespace, op_name)
-                if override is not None:
-                    op._overridden_by_integration = name
-                op.register_impl(
-                    "CompositeExplicitAutograd", override or implementation,
-                    allow_override=True
-                )
-            return implementation
-
-        return decorator(fn) if fn is not None else decorator
-
-    def register_fake(op, func=None, *, lib=None, **kwargs):
-        def decorator(function):
-            if isinstance(op, _RegisteredOp):
-                op._fake_impl = function
-            elif isinstance(op, str) and "::" in op:
-                namespace, name = op.split("::", 1)
-                target = lib or Library(namespace, "FRAGMENT")
-                target._register_fake(name, function, **kwargs)
-            return function
-
-        return decorator(func) if func is not None else decorator
-
-    def impl(qualname, dispatch_types, func=None, *, lib=None):
-        def decorator(function):
-            if "::" not in qualname:
-                raise ValueError("operator name must have the form namespace::name")
-            namespace, name = qualname.split("::", 1)
-            target = lib or Library(namespace, "FRAGMENT")
-            keys = (dispatch_types,) if isinstance(dispatch_types, str) else tuple(dispatch_types)
-            for key in keys:
-                target.impl(name, function, dispatch_key=key)
-            return function
-
-        return decorator(func) if func is not None else decorator
-
-    def register_autograd(op, backward, *, setup_context=None, lib=None):
-        if not callable(backward):
-            raise TypeError("register_autograd expects a callable backward")
-        if isinstance(op, _RegisteredOp):
-            target = op
-        elif isinstance(op, str) and "::" in op:
-            namespace, name = op.split("::", 1)
-            target = dispatcher.get_or_create(namespace, _operator_name(name))
-        else:
-            raise TypeError("register_autograd expects an operator or namespace::name")
-        target._backward = backward
-        target._setup_context = setup_context
+    def impl(self, op_name, fn, dispatch_key="", *, with_keyset=False, allow_override=False):
+        if not callable(fn):
+            raise TypeError("Library.impl expects a callable implementation")
+        key = dispatch_key or self.dispatch_key
+        self._op(op_name).register_impl(key, fn, allow_override)
         return None
 
-    library_module.Library = Library
-    library_module.Tag = Tag
-    library_module.custom_op = custom_op
-    library_module.infer_schema = make_infer_schema(torch_module)
-    library_module.register_fake = register_fake
-    library_module.register_kernel = impl
-    library_module.impl = impl
-    library_module.register_autograd = register_autograd
-    library_module.register_torch_dispatch = lambda *a, **k: lambda f: f
-    library_module.register_vmap = lambda *a, **k: lambda f: f
-    from ..stub_policy import unimplemented_callable as _unimplemented_callable
-    library_module.opcheck = _unimplemented_callable(
-        "torch.library.opcheck",
-        "return None from every operator-correctness check, so a user's "
-        "custom-op test suite passes unconditionally whatever the operator does",
-        "Test the operator directly against a reference implementation.")
-    library_module.get_ctx = lambda: None
+    def _register_fake(self, op_name, fn, _stacklevel=1, *, allow_override=False):
+        op = self._op(op_name)
+        if op._fake_impl is not None and not allow_override:
+            raise RuntimeError(
+                "operator %s::%s already has a fake implementation" % (self.ns, op.name)
+            )
+        _set_attr(op, "_fake_impl", fn)
+        return None
 
-    ops_module = types.ModuleType("torch._ops")
+
+def custom_op(name=None, fn=None, *args, **kwargs):
+    """torch.library.custom_op -- a generic registration API.
+
+    It used to carry a hard-coded branch comparing ``name`` against one
+    specific downstream library's operator, throwing the caller's
+    implementation away and substituting the shim's own.  A model-specific
+    special case inside a general-purpose registration API silently
+    overrides any library that registers that exact name.
+    Integration-supplied replacements now come from
+    jittor.compat.integrations, keyed by name, and the substitution is
+    recorded on the operator as ``_overridden_by_integration``.
+    """
+    def decorator(implementation):
+        if isinstance(name, str) and "::" in name:
+            namespace, op_name = name.split("::", 1)
+            override = _integration_custom_op_overrides().get(name)
+            op = _library_state()["dispatcher"].get_or_create(namespace, op_name)
+            if override is not None:
+                _set_attr(op, "_overridden_by_integration", name)
+            op.register_impl(
+                "CompositeExplicitAutograd", override or implementation,
+                allow_override=True
+            )
+        return implementation
+
+    return decorator(fn) if fn is not None else decorator
+
+
+def register_fake(op, func=None, *, lib=None, **kwargs):
+    def decorator(function):
+        if isinstance(op, _RegisteredOp):
+            _set_attr(op, "_fake_impl", function)
+        elif isinstance(op, str) and "::" in op:
+            namespace, name = op.split("::", 1)
+            target = lib or Library(namespace, "FRAGMENT")
+            target._register_fake(name, function, **kwargs)
+        return function
+
+    return decorator(func) if func is not None else decorator
+
+
+def impl(qualname, dispatch_types, func=None, *, lib=None):
+    def decorator(function):
+        if "::" not in qualname:
+            raise ValueError("operator name must have the form namespace::name")
+        namespace, name = qualname.split("::", 1)
+        target = lib or Library(namespace, "FRAGMENT")
+        keys = (dispatch_types,) if isinstance(dispatch_types, str) else tuple(dispatch_types)
+        for key in keys:
+            target.impl(name, function, dispatch_key=key)
+        return function
+
+    return decorator(func) if func is not None else decorator
+
+
+def register_autograd(op, backward, *, setup_context=None, lib=None):
+    if not callable(backward):
+        raise TypeError("register_autograd expects a callable backward")
+    if isinstance(op, _RegisteredOp):
+        target = op
+    elif isinstance(op, str) and "::" in op:
+        namespace, name = op.split("::", 1)
+        target = _library_state()["dispatcher"].get_or_create(namespace, _operator_name(name))
+    else:
+        raise TypeError("register_autograd expects an operator or namespace::name")
+    _set_attr(target, "_backward", backward)
+    _set_attr(target, "_setup_context", setup_context)
+    return None
+
+
+
+class HigherOrderOperator:
+    """Metadata-only higher-order operator placeholder."""
+
+
+def _annotation_identity(function):
+    return function
+
+
+def register_torch_dispatch(*args, **kwargs):
+    return _annotation_identity
+
+
+def register_vmap(*args, **kwargs):
+    return _annotation_identity
+
+
+def get_ctx():
+    return None
+
+
+_OPCHECK_EFFECT = (
+    "return None from every operator-correctness check, so a user's "
+    "custom-op test suite passes unconditionally whatever the operator does")
+_OPCHECK_HINT = "Test the operator directly against a reference implementation."
+
+
+def opcheck(*args, **kwargs):
+    from ..stub_policy import unimplemented
+    return unimplemented("torch.library.opcheck", _OPCHECK_EFFECT, _OPCHECK_HINT)
+
+
+opcheck._jittor_unimplemented = "torch.library.opcheck"
+
+
+def infer_schema(prototype_function, *, mutates_args, op_name=None):
+    return _infer_schema(prototype_function, mutates_args, op_name,
+                         _library_state()["torch_module"])
+
+
+register_kernel = impl
+
+
+def install_torch_library(torch_module, modules):
+    """Publish stable API objects and the installation-owned dispatcher."""
+    from .context import get_install_context
+    from .fidelity import Fidelity, register_api_bindings
+    from ..stub_policy import record_unimplemented
+    ctx = get_install_context(torch_module)
+    record_unimplemented("torch.library.opcheck", _OPCHECK_EFFECT, _OPCHECK_HINT)
+    state = ctx.state.get("library_api")
+    if state is None:
+        dispatcher = getattr(torch_module, "ops", None)
+        if not isinstance(dispatcher, _OpsDispatcher):
+            dispatcher = _OpsDispatcher(dispatcher)
+        state = {"dispatcher": dispatcher, "torch_module": torch_module}
+        ctx.state["library_api"] = state
+    library_module = ctx.registry.ensure("torch.library")
+    for name in ("Library", "Tag", "custom_op", "infer_schema", "register_fake",
+                 "register_kernel", "impl", "register_autograd",
+                 "register_torch_dispatch", "register_vmap", "opcheck", "get_ctx"):
+        setattr(library_module, name, globals()[name])
+    ops_module = ctx.registry.ensure("torch._ops")
     ops_module.OpOverload = _RegisteredOp
     ops_module.OpOverloadPacket = _RegisteredOp
-    ops_module.HigherOrderOperator = type("HigherOrderOperator", (), {})
-    ops_module.__all__ = [
-        "OpOverload", "OpOverloadPacket", "HigherOrderOperator"
-    ]
-
+    ops_module.HigherOrderOperator = HigherOrderOperator
+    ops_module.__all__ = ["OpOverload", "OpOverloadPacket", "HigherOrderOperator"]
     modules["torch.library"] = library_module
     modules["torch._ops"] = ops_module
     torch_module.library = library_module
     torch_module._ops = ops_module
-    torch_module.ops = dispatcher
+    torch_module.ops = state["dispatcher"]
     torch_module.Tag = Tag
     torch_c = modules.get("torch._C")
     if torch_c is not None:
         torch_c.Tag = Tag
+    register_api_bindings(library_module, "torch.library",
+                          ("Library", "Tag", "custom_op", "infer_schema", "register_fake",
+                           "register_kernel", "impl", "register_autograd"),
+                          Fidelity.APPROXIMATE,
+                          "Context-owned dispatcher uses actual tensor CPU/CUDA residency and "
+                          "native Function/Var gradient graph; fake kernels are metadata only. "
+                          "Schema inference supports the documented Python annotation subset.")
+    register_api_bindings(library_module, "torch.library",
+                          ("register_torch_dispatch", "register_vmap", "opcheck", "get_ctx"),
+                          Fidelity.UNIMPLEMENTED,
+                          "Dispatch/vmap annotations do not install transforms; no fake context. "
+                          "opcheck is unsupported under the configured stub policy.")
+    register_api_bindings(ops_module, "torch._ops", ("OpOverload", "OpOverloadPacket"),
+                          Fidelity.APPROXIMATE, "One default overload backed by the native execution graph.")
+    register_api_bindings(ops_module, "torch._ops", ("HigherOrderOperator",),
+                          Fidelity.UNIMPLEMENTED, "Metadata placeholder; no higher-order dispatch.")
     return library_module
 
 
@@ -652,13 +754,12 @@ def _infer_schema(function, mutates_args, op_name, torch_module):
 
 
 def make_infer_schema(torch_module):
-    """Bind ``infer_schema`` to the active Torch-compatible type objects."""
-
-    def infer_schema(prototype_function, *, mutates_args, op_name=None):
-        return _infer_schema(prototype_function, mutates_args, op_name, torch_module)
-
-    infer_schema.__module__ = __name__
+    """Legacy factory spelling; return the one active schema implementation."""
+    from .context import get_install_context
+    get_install_context(torch_module)
     return infer_schema
 
 
-__all__ = ["Tag", "install_torch_library", "make_infer_schema"]
+__all__ = ["Tag", "Library", "custom_op", "infer_schema", "register_fake",
+           "register_kernel", "impl", "register_autograd", "register_torch_dispatch",
+           "register_vmap", "opcheck", "get_ctx", "install_torch_library", "make_infer_schema"]

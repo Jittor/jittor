@@ -11,26 +11,41 @@ import types
 
 
 def native_module_facade(source, name):
-    """Give native implementations an installation-owned writable namespace."""
+    """Copy materialized public values without triggering native lazy imports."""
     facade = types.ModuleType(name, source.__doc__)
     facade.__package__ = name if hasattr(source, "__path__") else name.rpartition(".")[0]
     if hasattr(source, "__path__"):
         facade.__path__ = []
-    for key, value in vars(source).items():
-        if key.startswith("__") and key != "__all__":
+    source_values = vars(source)
+    names = source_values.get("__all__")
+    if names is None:
+        names = tuple(key for key in source_values if not key.startswith("_"))
+    exported = []
+    for key in names:
+        if not isinstance(key, str) or key.startswith("_"):
+            continue
+        # Looking up a legacy lazy export can import a private implementation
+        # module and attach it to the native parent (linalg.complex is one).
+        # Copy existing bindings only. native_api declares and installs the
+        # supported Torch mathematical delegates separately.
+        if key not in source_values:
+            continue
+        value = source_values[key]
+        if isinstance(value, types.ModuleType):
             continue
         if isinstance(value, (dict, list, set)):
             value = value.copy()
         setattr(facade, key, value)
+        exported.append(key)
+    facade.__all__ = tuple(exported)
     return facade
 
 
 class TorchNamespace(types.ModuleType):
     """Module-shaped view over one Jittor compatibility owner.
 
-    Missing reads may use the native owner while installers are migrated.
-    Writes and deletions belong to this namespace. Native capabilities remain
-    readable without making application patches mutate the native module.
+    Bootstrap may read the backend while installers collect their delegates.
+    Once sealed, reads, writes and deletions stay within explicit bindings.
     """
 
     _LOCAL_METADATA = frozenset({
@@ -44,6 +59,7 @@ class TorchNamespace(types.ModuleType):
         super().__init__("torch")
         object.__setattr__(self, "_torch_owner", owner)
         object.__setattr__(self, "_hidden_owner_names", frozenset())
+        object.__setattr__(self, "_sealed", False)
         # Import metadata belongs to this detached module.  In particular,
         # assigning ``__spec__`` through the public delegation path would
         # silently write it onto the Jittor owner and make the package look
@@ -70,7 +86,7 @@ class TorchNamespace(types.ModuleType):
         # Import metadata is owned by this detached module.  Once a caller
         # removes a local metadata field, do not resurrect the owner's value
         # through the public delegation path (e.g. ``owner.__file__``).
-        if name in self._LOCAL_METADATA or name in self._hidden_owner_names:
+        if name in self._LOCAL_METADATA or name in self._hidden_owner_names or self._sealed:
             raise AttributeError(name)
         return getattr(self.owner, name)
 
@@ -84,12 +100,18 @@ class TorchNamespace(types.ModuleType):
             return super().__delattr__(name)
         if name in vars(self):
             super().__delattr__(name)
-        elif name in self._hidden_owner_names or not hasattr(self.owner, name):
+        elif self._sealed or name in self._hidden_owner_names or not hasattr(self.owner, name):
             raise AttributeError(name)
         object.__setattr__(self, "_hidden_owner_names", self._hidden_owner_names | {name})
 
     def __dir__(self):
+        if self._sealed:
+            return sorted(set(super().__dir__()) - self._hidden_owner_names)
         return sorted((set(super().__dir__()) | set(dir(self.owner))) - self._hidden_owner_names)
+
+    def _seal(self):
+        """End implicit backend reads after all explicit API bindings exist."""
+        object.__setattr__(self, "_sealed", True)
 
     def _binding_state(self, name):
         local = vars(self)

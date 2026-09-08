@@ -576,7 +576,7 @@ def install(ctx):
     _jit.export = _api_jit_export
     _jit.is_scripting = _api_jit_is_scripting
     _jit.is_tracing = _api_jit_is_tracing
-    _jit.ScriptModule = jt.nn.Module
+    _jit.ScriptModule = g.nn.Module
     _jit.interface = _api_jit_interface
     try:
         from typing import Final as _Final

@@ -23,6 +23,7 @@ def test_family_installers_only_bind_objects():
         "cuda": ("_install_cuda", "_install_accelerator"),
         "utilities": ("install", "install_parity", "install_runtime_knobs"),
         "compiler": ("install", "install_parity"),
+        "numerical": ("install", "install_parity", "install_signal"),
     }
     for family, names in entries.items():
         module = importlib.import_module("jittor.compat.torch.installers." + family)
@@ -54,12 +55,14 @@ def test_public_family_objects_have_real_importable_owners():
     cuda = importlib.import_module("jittor.compat.torch.installers.cuda.api")
     utilities = importlib.import_module("jittor.compat.torch.installers.utilities")
     compiler = importlib.import_module("jittor.compat.torch.installers.compiler")
+    batching = importlib.import_module("jittor.compat.torch.installers.numerical.batching")
     pairs += [(torch.cuda.Stream, cuda._Stream),
               (torch.cuda.current_stream, cuda._current_stream),
               (torch.utils._pytree.tree_map, utilities._tree_map),
               (torch.hub.load_state_dict_from_url, utilities._load_state_dict_from_url),
               (torch.func.functional_call, compiler._functional_call),
-              (torch.func.grad, compiler._func_grad)]
+              (torch.func.grad, compiler._func_grad),
+              (torch.vmap, batching.vmap)]
     for actual, expected in pairs:
         assert actual is expected
         assert "<locals>" not in actual.__qualname__
