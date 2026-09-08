@@ -16,6 +16,8 @@ zeros, on every rank).
 These tests compare against numpy expectations computed from the rank index, so
 they fail loudly on a wrong datatype rather than on a wrong-looking number.
 """
+
+from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
@@ -121,7 +123,7 @@ class TestMpiCollectiveDtypes(unittest.TestCase):
             x.mpi_all_reduce().sync()
 
 
-@unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")
+@_test_capability.library_required('mpi', backend=jt)
 class TestMpiCollectiveDtypesEntry(unittest.TestCase):
     def test(self):
         run_mpi_test(2, "test_mpi_dtypes")

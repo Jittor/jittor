@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -53,7 +55,7 @@ class TestReduceTunerCuda(unittest.TestCase):
     holding, one of them fails and points at the comment to revisit.
     """
 
-    @unittest.skipIf(not jt.has_cuda, "No cuda found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
     def test_declines_on_cuda(self):
         with jt.flag_scope(use_cuda=1):
             a = jt.random([1024, 1024])

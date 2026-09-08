@@ -20,7 +20,7 @@ class ReduceOpCases:
 
     def test1(self):
         def check(a, op, dims):
-            if ("logical" in op) and jt.flags.use_cuda:
+            if ("logical" in op) and jt.introspection.policy.runtime.use_cuda:
                 # TODO: atomic bool operation for cuda not 
                 # supported yet
                 return
@@ -65,7 +65,7 @@ class ReduceOpCases:
             return a.reshape(shape).astype("int32")
 
         def check(a, op, dims):
-            if ("logical" in op) and jt.flags.use_cuda:
+            if ("logical" in op) and jt.introspection.policy.runtime.use_cuda:
                 # TODO: atomic bool operation for cuda not 
                 # supported yet
                 return

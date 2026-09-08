@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -65,7 +67,7 @@ class TestMpiOps(unittest.TestCase):
         np.testing.assert_allclose(g.data, np.ones([5,5]))
 
 
-@unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")
+@_test_capability.library_required('mpi', backend=jt)
 class TestMpiOpsEntry(unittest.TestCase):
     def test(self):
         run_mpi_test(2, "test_mpi_op")

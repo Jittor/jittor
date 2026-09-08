@@ -10,6 +10,8 @@ Python scalar to type inference: its own dtype stopped taking part in
 promotion, and the mixed-precision override was skipped on every operator
 that touched it.
 """
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
 import unittest
 
 import numpy as np
@@ -17,12 +19,15 @@ import numpy as np
 import jittor as jt
 
 
+@_test_preserve_policy(jt, 'amp_reg')
 class TestScalarFlag(unittest.TestCase):
     def setUp(self):
-        self._amp = jt.flags.amp_reg
+        self._amp = jt.introspection.policy.runtime.amp_reg
 
     def tearDown(self):
-        jt.flags.amp_reg = self._amp
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(amp_reg=self._amp))
 
     def _pair(self, dtype):
         data = np.ones(4, dtype)

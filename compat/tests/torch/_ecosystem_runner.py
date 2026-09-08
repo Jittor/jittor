@@ -12,13 +12,17 @@ for parity *and* for no speed regression.
 """
 
 import argparse
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 import importlib
 import json
 import os
 from pathlib import Path
 import sys
 import time
+
+# This helper is also launched directly, outside pytest's path bootstrap.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tests"))
+from _helpers import capability as _test_capability
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
@@ -94,33 +98,22 @@ def _import_torch(runtime):
     return torch
 
 
-def _select_device(torch, runtime, device):
-    """Put both runtimes on the requested device using each one's own idiom.
-
-    Jittor has no per-tensor device; a single global flag moves the whole graph,
-    so the two runtimes need different code here even though everything else in
-    this file is spelled once.
-    """
+def _select_device(torch, runtime, device, *, policy_stack=None):
+    """Keep default placement selected for the caller-owned workload lifetime."""
     if runtime == "jittor":
         import jittor as jt
-
+        if policy_stack is None:
+            raise RuntimeError("Jittor device selection requires a caller-owned policy stack")
         if device == "cuda":
-            if not jt.has_cuda or getattr(jt.compiler, "has_acl", 0):
+            if not _test_capability.check_accelerator("cuda", backend=jt).enabled:
                 raise SystemExit("CUDA is unavailable in this Jittor build")
-            jt.flags.use_cuda = 1
+            policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
         elif device == "npu":
-            if not getattr(jt.compiler, "has_acl", 0):
+            if not _test_capability.check_accelerator("acl", backend=jt).enabled:
                 raise SystemExit("ACL is unavailable in this Jittor build")
-            jt.flags.use_cuda = 1
-            jt.flags.use_acl = 1
+            policy_stack.enter_context(jt.runtime.scope(use_cuda=1, use_acl=1))
         else:
-            # Jittor turns CUDA on by default whenever a GPU is present, so the
-            # CPU run has to turn it off explicitly. Leaving it alone measures
-            # Jittor on the accelerator against PyTorch on the CPU, which looks
-            # like a large speedup and proves nothing about either.
-            jt.flags.use_cuda = 0
-            if hasattr(jt.flags, "use_acl"):
-                jt.flags.use_acl = 0
+            policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
         return lambda tensor: tensor
     if device == "cuda":
         if not torch.cuda.is_available():
@@ -149,12 +142,11 @@ def _device_in_use(torch, runtime, device):
 
         if (
             device == "npu"
-            and getattr(jt.compiler, "has_acl", 0)
-            and jt.flags.use_cuda
-            and jt.flags.use_acl
+            and _test_capability.check_accelerator('acl', backend=jt).enabled
+            and jt.introspection.policy.runtime.use_cuda
         ):
             return "npu"
-        return "cuda" if jt.flags.use_cuda else "cpu"
+        return "cuda" if jt.introspection.policy.runtime.use_cuda else "cpu"
     if device == "cuda":
         return "cuda" if torch.cuda.is_available() else "cpu"
     if device == "npu":
@@ -168,9 +160,10 @@ def _backend_report(runtime):
         import jittor as jt
 
         return {
-            "has_acl": bool(getattr(jt.compiler, "has_acl", 0)),
-            "use_acl": bool(getattr(jt.flags, "use_acl", 0)),
-            "use_cuda": bool(jt.flags.use_cuda),
+            "has_acl": bool(_test_capability.check_accelerator('acl', backend=jt).enabled),
+            "use_acl": bool(_test_capability.check_accelerator("acl", backend=jt).enabled
+                            and jt.introspection.policy.runtime.use_cuda),
+            "use_cuda": bool(jt.introspection.policy.runtime.use_cuda),
         }
     return {}
 
@@ -258,6 +251,11 @@ def _numpy_snapshot(value):
 
 
 def main():
+    with ExitStack() as policy_stack:
+        return _run(policy_stack)
+
+
+def _run(policy_stack):
     parser = argparse.ArgumentParser()
     parser.add_argument("case")
     parser.add_argument("output")
@@ -269,7 +267,7 @@ def main():
     options = parser.parse_args()
 
     torch = _import_torch(options.runtime)
-    to_device = _select_device(torch, options.runtime, options.device)
+    to_device = _select_device(torch, options.runtime, options.device, policy_stack=policy_stack)
     tf32 = _configure_tf32(torch, options.device)
     runtime_conditions = _runtime_conditions(torch, tf32)
 
@@ -279,7 +277,7 @@ def main():
         import jittor as jt
         from jittor._runtime.fallback import forbid_backend_fallbacks
 
-        jt.runtime.backend_fallback = "error"
+        policy_stack.enter_context(jt.runtime.scope(backend_fallback="error"))
         fallback_before = jt.core.backend_fallback_count()
         fallback_scope = forbid_backend_fallbacks()
 

@@ -1,3 +1,7 @@
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
@@ -5,16 +9,22 @@ import numpy as np
 import jittor as jt
 
 
+@_test_preserve_policy(jt, 'use_cuda')
 class _FloorDivideMixin:
     use_cuda = 0
 
     def setUp(self):
-        self._previous_use_cuda = jt.flags.use_cuda
-        jt.flags.use_cuda = self.use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._previous_use_cuda = jt.introspection.policy.runtime.use_cuda
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self.use_cuda))
 
     def tearDown(self):
-        jt.sync_all()
-        jt.flags.use_cuda = self._previous_use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            jt.sync_all()
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._previous_use_cuda))
 
     def test_signed_integer_floor_semantics(self):
         dividends = np.array([-7, -6, -5, -1, 0, 1, 5, 6, 7])
@@ -53,14 +63,14 @@ class TestFloorDivideCPU(_FloorDivideMixin, unittest.TestCase):
 
 
 @unittest.skipUnless(
-    jt.compiler.has_cuda and not getattr(jt.compiler, "has_acl", 0),
+    _test_capability.check_accelerator('cuda', backend=jt).enabled and not _test_capability.check_accelerator('acl', backend=jt).enabled,
     "CUDA is unavailable",
 )
 class TestFloorDivideCUDA(_FloorDivideMixin, unittest.TestCase):
     use_cuda = 1
 
 
-@unittest.skipUnless(getattr(jt.compiler, "has_acl", 0), "ACL is unavailable")
+@unittest.skipUnless(_test_capability.check_accelerator('acl', backend=jt).enabled, "ACL is unavailable")
 class TestFloorDivideNPU(_FloorDivideMixin, unittest.TestCase):
     use_cuda = 1
 

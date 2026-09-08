@@ -46,6 +46,8 @@ Configuration
     applied to both runtimes for controlled algorithm-selection experiments.
 """
 
+from _helpers import capability as _test_capability
+
 import importlib.machinery
 import importlib.util
 import json
@@ -193,7 +195,7 @@ def _cuda_is_available():
         import jittor as jt
     except Exception:
         return False
-    return bool(jt.has_cuda and not getattr(jt.compiler, "has_acl", 0))
+    return bool(_test_capability.check_accelerator('cuda', backend=jt).enabled and not _test_capability.check_accelerator('acl', backend=jt).enabled)
 
 
 def _npu_is_available():
@@ -202,7 +204,7 @@ def _npu_is_available():
         import jittor as jt
     except Exception:
         return False
-    return bool(getattr(jt.compiler, "has_acl", 0))
+    return bool(_test_capability.check_accelerator('acl', backend=jt).enabled)
 
 
 def _distributions_available(names):

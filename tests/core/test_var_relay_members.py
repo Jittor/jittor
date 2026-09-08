@@ -11,6 +11,8 @@ source is written into the JIT cache and reused, so it must not encode anything
 about the op's struct layout: byte offsets move when an op gains a member or the
 compiler ABI changes, and the jit key covers neither.
 """
+
+from _helpers import capability as _test_capability
 import os
 import re
 import unittest
@@ -59,7 +61,7 @@ class TestVarRelayMembers(unittest.TestCase):
     def test_relay_kernel_names_members_instead_of_offsets_cpu(self):
         self._check_relay_source(1, 0)
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_relay_kernel_names_members_instead_of_offsets_cuda(self):
         self._check_relay_source(2, 1)
 

@@ -1,5 +1,7 @@
 """Native semantic capabilities select real CUDA implementations and graph relays."""
 
+from _helpers import capability as _test_capability
+
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +12,7 @@ import pytest
 def cuda_runtime():
     import jittor as jt
 
-    if not jt.has_cuda or "cuda" not in jt.core.registered_backends():
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled or "cuda" not in jt.core.registered_backends():
         pytest.skip("CUDA runtime required")
     with jt.flag_scope(use_cuda=1, auto_mixed_precision_level=0, enable_tuner=1,
                        profiler_hide_relay=0, profiler_record_shape=0):

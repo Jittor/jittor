@@ -14,6 +14,8 @@ for the driver to JIT, and the run dies with "no kernel image is available for
 execution on the device" -- the failure the message promised could not happen.
 """
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import jittor.compiler as compiler
@@ -74,7 +76,7 @@ class TestCudaArchFlags(unittest.TestCase):
                          [100])
 
     def test_a_real_nvcc_reports_a_ceiling(self):
-        if not compiler.has_cuda:
+        if not _test_capability.check_accelerator('cuda').enabled:
             raise unittest.SkipTest("no nvcc")
         supported = compiler.query_nvcc_archs(compiler.nvcc_path)
         self.assertTrue(supported, "nvcc reported no architectures")

@@ -1,3 +1,7 @@
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -48,7 +52,7 @@ class TestResnetFp32(unittest.TestCase):
         random.seed(seed)
         jt.seed(seed)
 
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1, use_stat_allocator=1)
     def test_resnet(self):
         self.setup_seed(1)
@@ -58,7 +62,7 @@ class TestResnetFp32(unittest.TestCase):
         self.weight_decay = 0.0001
         self.momentum = 0.9
         self.learning_rate = 0.1
-        if jt.flags.amp_reg:
+        if jt.introspection.policy.runtime.amp_reg:
             self.learning_rate = 0.01
         # mnist dataset
         self.train_loader = MNIST(train=True, transform=trans.Resize(224)) \
@@ -108,8 +112,8 @@ class TestResnetFp32(unittest.TestCase):
             # if batch_id > 2:
             #     assert len(log_conv)==59 and len(log_matmul)==6, (len(log_conv), len(log_matmul))
 
-            mem_used = jt.flags.stat_allocator_total_alloc_byte \
-                -jt.flags.stat_allocator_total_free_byte
+            mem_used = jt.introspection.counters.allocator.allocated_bytes \
+                -jt.introspection.counters.allocator.freed_bytes
             # assert mem_used < 4e9, mem_used
             # TODO: why bigger?
             assert mem_used < 5.6e9, mem_used
@@ -130,7 +134,7 @@ class TestResnetFp32(unittest.TestCase):
             # Train Epoch: 0 [40/100 (40%)]   Loss: 2.286762  Acc: 0.130000
             # Train Epoch: 0 [50/100 (50%)]   Loss: 2.055014  Acc: 0.290000
 
-            if jt.flags.amp_reg:
+            if jt.introspection.policy.runtime.amp_reg:
                 continue
             if jt.in_mpi:
                 assert jt.core.number_of_lived_vars() < 8100, jt.core.number_of_lived_vars()
@@ -144,13 +148,17 @@ class TestResnetFp32(unittest.TestCase):
         assert np.mean(acc_list[-50:])>0.8
         
 
+@_test_preserve_policy(jt, 'auto_mixed_precision_level')
 @unittest.skipIf(skip_this_test, "skip_this_test")
 class TestResnetFp16(TestResnetFp32):
     def setup(self):
-        jt.flags.auto_mixed_precision_level = 5
+        from _helpers.runtime_policy import fixture_stack
+        fixture_stack(self).enter_context(jt.runtime.scope(auto_mixed_precision_level=5))
 
     def tearDown(self):
-        jt.flags.auto_mixed_precision_level = 0
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(auto_mixed_precision_level=0))
 
 class TestZeroInitResidual(unittest.TestCase):
     """``zero_init_residual`` was accepted and never acted on.

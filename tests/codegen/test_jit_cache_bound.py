@@ -53,7 +53,7 @@ def expected(n):
 
 class TestJitCacheIsBounded(unittest.TestCase):
     def test_the_bound_is_a_flag_with_a_sane_default(self):
-        self.assertGreater(jt.flags.jit_cache_size, 0)
+        self.assertGreater(jt.introspection.policy.runtime.jit_cache_size, 0)
 
     def test_a_changing_shape_workload_stays_correct_with_a_tiny_cache(self):
         shapes = list(range(3, 40))

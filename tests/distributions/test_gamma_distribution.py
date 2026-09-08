@@ -1,3 +1,7 @@
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved.
 # Maintainers:
@@ -24,15 +28,21 @@ def setUpModule():
         (torch,) = import_torch_modules("torch")
 
 
+@_test_preserve_policy(jt, 'use_cuda')
 @unittest.skipIf(
-    not has_autograd or not jt.compiler.has_cuda,
+    not has_autograd or not _test_capability.check_accelerator('cuda', backend=jt).enabled,
     "No independent Torch or CUDA found.",
 )
 class TestDigamma(unittest.TestCase):
     def setUp(self):
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
     def tearDown(self):
-        jt.flags.use_cuda = 0
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
 
     def test_digamma(self):
         for i in range(30):

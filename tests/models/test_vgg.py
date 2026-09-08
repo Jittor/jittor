@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -56,7 +58,7 @@ class TestVGGClass(unittest.TestCase):
         random.seed(seed)
         jt.seed(seed)
 
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1, use_stat_allocator=1)
     def test_vgg(self):
         self.setup_seed(1)
@@ -92,8 +94,8 @@ class TestVGGClass(unittest.TestCase):
             # if batch_idx:
             #     assert len(log_conv)==38 and len(log_matmul)==12, (len(log_conv), len(log_matmul))
 
-            mem_used = jt.flags.stat_allocator_total_alloc_byte \
-                -jt.flags.stat_allocator_total_free_byte
+            mem_used = jt.introspection.counters.allocator.allocated_bytes \
+                -jt.introspection.counters.allocator.freed_bytes
             assert mem_used < 11e9, mem_used
             # assert jt.core.number_of_lived_vars() < 3500
             if (np.mean(loss_list[-50:])<0.2):

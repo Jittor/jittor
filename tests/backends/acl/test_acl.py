@@ -1,3 +1,7 @@
+
+from _helpers.introspection import liveness_snapshot as _test_liveness_snapshot
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved.
 # Maintainers: Dun Liang <randonlang@gmail.com>.
@@ -18,7 +22,7 @@ def _bfloat16_round(values):
     bits += np.uint32(0x7fff) + ((bits >> 16) & np.uint32(1))
     return (bits & np.uint32(0xffff0000)).view(np.float32)
 
-@unittest.skipIf(not jt.compiler.has_acl, "No ACL found")
+@unittest.skipIf(not _test_capability.check_accelerator('acl', backend=jt).enabled, "No ACL found")
 class TestACL(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
@@ -1350,7 +1354,7 @@ class Model(Module):
         return self.linear2(x)
 
 
-@unittest.skipIf(not jt.compiler.has_acl, "No ACL found")
+@unittest.skipIf(not _test_capability.check_accelerator('acl', backend=jt).enabled, "No ACL found")
 class TestExample(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1)
@@ -1380,11 +1384,10 @@ class TestExample(unittest.TestCase):
             for p, g in zip(ps, gs):
                 p -= g * lr
             if i > 2:
-                assert prev == jt.liveness_info(
-                ), f"memory leak {prev} {jt.liveness_info()}"
-            prev = jt.liveness_info()
+                assert prev == _test_liveness_snapshot(jt), f"memory leak {prev} {_test_liveness_snapshot(jt)}"
+            prev = _test_liveness_snapshot(jt)
             print(
-                f"step {i}, loss = {loss_mean.data.sum()} {jt.liveness_info()}"
+                f"step {i}, loss = {loss_mean.data.sum()} {_test_liveness_snapshot(jt)}"
             )
 
         # The exact converged loss depends on the RNG stream and op

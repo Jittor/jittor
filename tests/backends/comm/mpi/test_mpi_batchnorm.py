@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -102,14 +104,14 @@ class TestMpiBatchnorm(unittest.TestCase):
         for i in range(len(gs1)):
             assert np.allclose(gs1[i].data, gs2[i].data, rtol=1e-2),(mpi.world_rank(),gs1[i].data, gs2[i].data,gs1[i].data-gs2[i].data)
 
-    @unittest.skipIf(not jt.has_cuda, "no cuda")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "no cuda")
     @jt.flag_scope(use_cuda=1)
     def test_batchnorm_cuda(self):
         self.test_batchnorm()
         self.test_batchnorm_backward()
 
 
-@unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")
+@_test_capability.library_required('mpi', backend=jt)
 class TestMpiBatchnormEntry(unittest.TestCase):
     def test(self):
         run_mpi_test(2, "test_mpi_batchnorm")

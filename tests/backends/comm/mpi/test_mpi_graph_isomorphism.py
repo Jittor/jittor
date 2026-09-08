@@ -29,6 +29,8 @@ distinct address, in order of first appearance -- because that, and not the
 address itself, is the thing ``share_with`` changes and the thing that has to
 match across ranks.
 """
+
+from _helpers import capability as _test_capability
 import os
 from pathlib import Path
 import re
@@ -161,7 +163,7 @@ class TestMpiGraphIsomorphism(unittest.TestCase):
                          % (jt.rank, addresses))
 
 
-@unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")
+@_test_capability.library_required('mpi', backend=jt)
 class TestMpiGraphIsomorphismEntry(unittest.TestCase):
     def test_entry(self):
         run_mpi_test(_N, "test_mpi_graph_isomorphism")

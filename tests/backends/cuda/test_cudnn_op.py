@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
@@ -11,10 +13,6 @@ import numpy as np
 from jittor import compile_extern
 
 from _helpers.logs import find_log_with_re
-if jt.has_cuda:
-    from jittor.compile_extern import cublas_ops, cudnn_ops
-else:
-    cublas_ops = cudnn_ops = None
 
 def conv_oihw(x, w, stride=1, padding=0, dilation=1):
     assert type(stride)==int and type(padding)==int
@@ -51,7 +49,7 @@ def conv(x, w, stride, padding):
     y = yy.sum([2,5,6]) # Kc, Kh, Kw
     return y
 
-@unittest.skipIf(cudnn_ops==None, "Not use cudnn, Skip")
+@_test_capability.library_required("cudnn", backend=jt)
 class TestCudnnConvOp(unittest.TestCase):
     def test_fp16_patch_conv_uses_fp32_accumulation(self):
         rng = np.random.RandomState(20260712)

@@ -39,6 +39,8 @@ jittor scalar tensors are zero-dimensional (a reduced value has shape ``()``).
 Run::  python -m pytest tests/type/test_type_system.py
        python tools/run_test_suite.py --session torch -- -k type_system
 """
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
 import unittest
 
 import numpy as np
@@ -150,17 +152,23 @@ def _ref_promote(a, b):
     return _PROMO[(b, a)]
 
 
+@_test_preserve_policy(jt, 'use_cuda')
 class _CPUOnly(JittorTestCase):
     """Promotion is decided in Python from operand dtype names, before any kernel
     runs, so it is device-independent; pin CPU to keep this off the busy
     accelerator and make the lock deterministic."""
 
     def setUp(self):
-        self._saved_use_cuda = jt.flags.use_cuda
-        jt.flags.use_cuda = 0
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._saved_use_cuda = jt.introspection.policy.runtime.use_cuda
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
 
     def tearDown(self):
-        jt.flags.use_cuda = self._saved_use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._saved_use_cuda))
 
 
 # -------------------------------------------------------- result_type / promote_types API

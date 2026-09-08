@@ -5,6 +5,8 @@
 # ***************************************************************
 """CUDA library handles bind their stream on every real execution."""
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -14,25 +16,22 @@ from jittor.nn.legacy_complex import _fft2
 
 
 def _device_count():
-    try:
-        return int(jt.get_device_count())
-    except Exception:
-        return 0
+    return int(_test_capability.device_count('cuda', backend=jt))
 
 
 class TestCudaLibraryStreams(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        if not jt.has_cuda or _device_count() < 2:
+        if not _test_capability.check_accelerator('cuda', backend=jt).enabled or _device_count() < 2:
             raise unittest.SkipTest("two CUDA devices are required")
-        cls.libs = {
-            name: getattr(jt.compile_extern, name, None)
-            for name in ("cublas", "cudnn", "cusparse", "curand", "cufft")
-        }
+        names = ("cublas", "cudnn", "cusparse", "curand", "cufft")
+        for name in names:
+            _test_capability.require_library(name)
+        cls.libs = {name: getattr(jt.compile_extern, name) for name in names}
         missing = [name for name, module in cls.libs.items() if module is None]
         if missing:
-            raise unittest.SkipTest(
-                "CUDA library support unavailable: " + ", ".join(missing))
+            raise AssertionError(
+                "available CUDA library did not expose its module: " + ", ".join(missing))
 
     def _run_libraries(self, device):
         with jt.flag_scope(use_cuda=1, device_id=device):

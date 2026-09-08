@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -38,7 +40,7 @@ class TestRandomOp(unittest.TestCase):
             match="ns_uniform",
         )
 
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
     def test(self):
         jt.set_seed(3)
@@ -51,7 +53,7 @@ class TestRandomOp(unittest.TestCase):
         logs = find_log_with_re(raw_log, "(Jit op key (not )?found: " + "curand_random" + ".*)")
         assert len(logs)==1
 
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
     def test_float64(self):
         jt.set_seed(3)
@@ -96,7 +98,7 @@ class TestRandomOp(unittest.TestCase):
         assert (np.abs(np_res.mean() - jt_res.data.mean()) < 0.1)
         assert (np.abs(np_res.std() - jt_res.data.std()) < 0.1)
 
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
     def test_normal_cuda(self):
         self.test_normal()
@@ -128,7 +130,7 @@ class TestRandomOp(unittest.TestCase):
     def test_seed_is_reproducible(self):
         self._check_seed_is_reproducible()
 
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
     def test_seed_is_reproducible_cuda(self):
         # curand keeps its position in the sequence across a re-seed, so

@@ -21,6 +21,8 @@ that an unprobed core reports *nothing* rather than reporting zeros.  A phase
 table of zeros and a phase table that was never filled are the same picture,
 and a harness that cannot tell them apart will publish "the jit key costs 0".
 """
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
 import unittest
 
 import jittor as jt
@@ -59,6 +61,7 @@ class TestProbeAvailability(unittest.TestCase):
         self.assertLessEqual({"pyjt_entry", "edge_table", "jit_key"}, phases)
 
 
+@_test_preserve_policy(jt, 'auto_flush_ops')
 @unittest.skipUnless(PROBED, "needs a core built with JT_GRAPH_BUILD_PROFILE=1")
 class TestPhaseAttribution(unittest.TestCase):
     """Does the split put a cost where the cost actually is?
@@ -69,15 +72,20 @@ class TestPhaseAttribution(unittest.TestCase):
     """
 
     def setUp(self):
-        self.previous_flush = jt.flags.auto_flush_ops
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self.previous_flush = jt.introspection.policy.runtime.auto_flush_ops
         # Nothing may be submitted while a graph is being built, or the window
         # contains execution and the phases stop meaning build cost.
-        jt.flags.auto_flush_ops = 0
+        _test_policy_stack.enter_context(jt.runtime.scope(auto_flush_ops=0))
         jt.sync_all(True)
 
     def tearDown(self):
-        jt.sync_all(True)
-        jt.flags.auto_flush_ops = self.previous_flush
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            jt.sync_all(True)
+            _test_policy_stack.enter_context(jt.runtime.scope(auto_flush_ops=self.previous_flush))
 
     def _measure(self, build):
         build()          # let any first-time compile happen outside the window

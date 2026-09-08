@@ -8,6 +8,8 @@ ACL result for BOTH forward and backward. Run on a free NPU:
 
 Exit code 0 = all pass. Failures are printed with the max abs error.
 """
+
+from _helpers import capability as _test_capability
 import numpy as np
 import jittor as jt
 import pytest
@@ -89,7 +91,7 @@ def smask_values(name, np_x, np_mask):
 
 def test_acl_indexing():
     global PASS, FAIL
-    if not getattr(jt.compiler, "has_acl", 0):
+    if not _test_capability.check_accelerator('acl', backend=jt).enabled:
         pytest.skip("ACL backend is unavailable")
     PASS = FAIL = 0
     with jt.flag_scope(use_acl=1):
@@ -178,7 +180,7 @@ def test_acl_indexing():
 
 
 def test_acl_getitem_preserves_async_dependencies():
-    if not getattr(jt.compiler, "has_acl", 0):
+    if not _test_capability.check_accelerator('acl', backend=jt).enabled:
         pytest.skip("ACL backend is unavailable")
     source = np.arange(24, dtype=np.float32).reshape(4, 6)
     with jt.flag_scope(use_acl=1):
@@ -193,7 +195,7 @@ def test_acl_getitem_preserves_async_dependencies():
 
 
 def test_acl_full_slice_uses_identity_forward_and_backward():
-    if not getattr(jt.compiler, "has_acl", 0):
+    if not _test_capability.check_accelerator('acl', backend=jt).enabled:
         pytest.skip("ACL backend is unavailable")
     source = np.arange(2 * 4 * 6, dtype=np.float32).reshape(2, 4, 6)
     weights = np.linspace(-1.0, 1.0, source.size, dtype=np.float32).reshape(
@@ -220,14 +222,14 @@ def test_acl_full_slice_uses_identity_forward_and_backward():
 
 
 def test_disabling_device_execution_disables_acl_dispatch():
-    if not getattr(jt.compiler, "has_acl", 0):
+    if not _test_capability.check_accelerator('acl', backend=jt).enabled:
         pytest.skip("ACL backend is unavailable")
     source = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
     mask = source.sum(axis=-1) > 20
 
     with jt.flag_scope(use_acl=1, use_cuda=0):
-        assert jt.flags.use_acl == 0
-        assert jt.flags.use_cuda == 0
+        assert jt.introspection.policy.runtime.use_cuda == 0
+        assert jt.introspection.policy.runtime.use_cuda == 0
         output = jt.array(source)[jt.array(mask)]
         actual = output.numpy()
 
@@ -235,7 +237,7 @@ def test_disabling_device_execution_disables_acl_dispatch():
 
 
 def test_acl_contiguous_last_axis_slice_gradients_use_concat():
-    if not getattr(jt.compiler, "has_acl", 0):
+    if not _test_capability.check_accelerator('acl', backend=jt).enabled:
         pytest.skip("ACL backend is unavailable")
     from jittor.backends.acl.kernels.ops.getitem_op import _slice_zero_cache
 
@@ -279,7 +281,7 @@ def test_acl_contiguous_last_axis_slice_gradients_use_concat():
 
 
 def test_acl_slice_gradients_remain_lazy_and_zero_initialized():
-    if not getattr(jt.compiler, "has_acl", 0):
+    if not _test_capability.check_accelerator('acl', backend=jt).enabled:
         pytest.skip("ACL backend is unavailable")
     source = np.arange(48, dtype=np.float32).reshape(2, 4, 6)
     gradients = []
@@ -301,7 +303,7 @@ def test_acl_slice_gradients_remain_lazy_and_zero_initialized():
 
 
 def test_acl_rfft_keeps_lazy_dft_constants_alive():
-    if not getattr(jt.compiler, "has_acl", 0):
+    if not _test_capability.check_accelerator('acl', backend=jt).enabled:
         pytest.skip("ACL backend is unavailable")
     samples = (
         ((8,), 910, -1, None),

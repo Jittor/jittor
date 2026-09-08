@@ -37,6 +37,8 @@ so a child that aborts takes the runner with it and pytest vanishes with no
 output at all (6.C31).  The shell in between turns the abort into an ordinary
 non-zero exit that can be asserted.
 """
+
+from _helpers import capability as _test_capability
 import textwrap
 import unittest
 
@@ -75,7 +77,7 @@ _CUDA_FORWARD_ONLY = """
 """
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestVarHolderTeardown(unittest.TestCase):
     def test_ordinary_teardown_is_quiet(self):
         """Control: without this, the next test would pass on a build that

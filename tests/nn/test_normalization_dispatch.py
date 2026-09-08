@@ -1,5 +1,7 @@
 """Normalization capabilities use registry selection and preserve device math."""
 
+from _helpers import capability as _test_capability
+
 import numpy as np
 import pytest
 
@@ -24,7 +26,7 @@ def test_registered_cuda_layer_norm_forward_backward_and_capability_limits():
     from jittor._runtime.dispatch import select_kernel
     from jittor.backends.cuda.kernels.nn.layer_norm_training_cuda import _layer_norm_cuda
 
-    if not jt.has_cuda:
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA runtime required")
     data = np.arange(16, dtype=np.float32).reshape(2, 8) / 7
     weight_data = np.linspace(0.5, 1.5, 8, dtype=np.float32)
@@ -67,7 +69,7 @@ def test_attention_lengths_cache_tracks_real_cuda_device():
     import jittor as jt
     from jittor.nn import attention
 
-    if not jt.has_cuda or jt.core.backend_device_count("cuda") < 2:
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled or jt.core.backend_device_count("cuda") < 2:
         pytest.skip("two CUDA devices required")
     lengths = (3, 2)
     with jt.flag_scope(use_cuda=1, device_id=0):

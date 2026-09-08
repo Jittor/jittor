@@ -49,7 +49,7 @@ class BinaryOpCases:
             if isinstance(a, list):
                 a = np.array(a)
                 b = np.array(b)
-            if jt.flags.use_cuda and op == "@":
+            if jt.introspection.policy.runtime.use_cuda and op == "@":
                 return
             if op=="@":
                 a = np.float32(a)
@@ -95,7 +95,7 @@ class BinaryOpCases:
         def check(op, a, b):
             a = np.array(a)
             b = np.array(b)
-            if jt.flags.use_cuda and op == "@":
+            if jt.introspection.policy.runtime.use_cuda and op == "@":
                 return
             jb = jt.array(b)
             jc = eval(f"a {op} jb").data
@@ -129,7 +129,7 @@ class BinaryOpCases:
         a = np.random.rand(10)
         b = np.random.rand(10)
         c = np.random.rand(10)
-        tol = 1e-2 if jt.flags.amp_reg & 2 else 1e-4
+        tol = 1e-2 if jt.introspection.policy.runtime.amp_reg & 2 else 1e-4
         for op in ops:
             func = lambda x: eval(f"((x[0]{op}x[1])*x[2]).sum()")
             x, grads = ngrad(func, [a,b,c], 1e-8)
@@ -150,7 +150,7 @@ class BinaryOpCases:
         b = jt.random((10,), 'float64')
         c = a % b
         assert np.allclose(c.data, a.data % b.data, a.data, b.data)
-        if jt.flags.amp_reg & 2: return
+        if jt.introspection.policy.runtime.amp_reg & 2: return
         a = jt.random((10,)) * 1000
         b = (jt.random((10,)) * 10).int() + 1
         c = a % b

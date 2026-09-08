@@ -11,6 +11,10 @@ growing.  The cuFFT op leaked a second plan on top of that: ``cufftCreate``
 produced a handle that the following ``cufftPlanMany`` immediately overwrote
 and nothing ever destroyed.
 """
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 import ctypes
 import unittest
 
@@ -38,17 +42,23 @@ def _reference_fft2(x):
     return np.stack([spectrum.real, spectrum.imag], axis=-1)
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@_test_preserve_policy(jt, 'use_cuda')
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 @unittest.skipIf(not _HAS_CUFFT, "cuFFT plan cache accessors not built")
 class TestCufftPlanCacheBounds(unittest.TestCase):
     def setUp(self):
-        self._use_cuda = jt.flags.use_cuda
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._use_cuda = jt.introspection.policy.runtime.use_cuda
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
 
     def tearDown(self):
-        jt.sync_all()
-        cufft.cufft_set_plan_cache_size(32)
-        jt.flags.use_cuda = self._use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            jt.sync_all()
+            cufft.cufft_set_plan_cache_size(32)
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._use_cuda))
 
     def test_same_shape_reuses_one_plan(self):
         cufft.cufft_set_plan_cache_size(8)
@@ -76,17 +86,23 @@ class TestCufftPlanCacheBounds(unittest.TestCase):
         self.assertEqual(cufft.cufft_plan_cache_size(), 1)
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@_test_preserve_policy(jt, 'use_cuda')
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 @unittest.skipIf(not _HAS_CUTT, "cuTT plan cache accessors not built")
 class TestCuttPlanCacheBounds(unittest.TestCase):
     def setUp(self):
-        self._use_cuda = jt.flags.use_cuda
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._use_cuda = jt.introspection.policy.runtime.use_cuda
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
 
     def tearDown(self):
-        jt.sync_all()
-        cutt.cutt_set_plan_cache_size(64)
-        jt.flags.use_cuda = self._use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            jt.sync_all()
+            cutt.cutt_set_plan_cache_size(64)
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._use_cuda))
 
     def test_many_shapes_stay_within_the_limit(self):
         cutt.cutt_set_plan_cache_size(4)

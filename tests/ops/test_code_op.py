@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
@@ -307,7 +309,7 @@ class TestCodeOp(unittest.TestCase):
         )
         assert (b.data==[1,2,3]).all()
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_cuda(self):
         a = jt.random([100000])
@@ -347,7 +349,7 @@ class TestCodeOp(unittest.TestCase):
         assert np.allclose(da.data, b.data)
         assert np.allclose(db.data, a.data)
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_cuda2(self):
         a = jt.random((100,100))
@@ -385,7 +387,7 @@ class TestCodeOp(unittest.TestCase):
         assert np.allclose(da.data, b.data)
         assert np.allclose(db.data, a.data)
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_cuda2_use_func(self):
         class Func(Function):

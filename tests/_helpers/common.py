@@ -24,6 +24,8 @@ against an INDEPENDENT reference (numpy, via ``OpInfo.ref``), and backward via
 green test means jittor matches the outside world -- the opposite of the legacy
 self-consistency checks the audit flagged as low-assurance.
 """
+
+from _helpers import capability as _test_capability
 import hashlib
 import itertools
 import os
@@ -38,9 +40,9 @@ import jittor as jt
 # jittor exposes a single global accelerator behind ``use_cuda``; on an Ascend
 # build that same flag drives ACL, so ``has_acl`` is the only honest CUDA-vs-NPU
 # discriminator. A jittor build targets exactly one accelerator.
-HAS_ACL = bool(getattr(jt.compiler, "has_acl", 0))
-HAS_ROCM = bool(getattr(jt.compiler, "has_rocm", 0))
-HAS_CUDA = bool(jt.has_cuda)
+HAS_ACL = bool(_test_capability.check_accelerator('acl', backend=jt).enabled)
+HAS_ROCM = bool(_test_capability.check_accelerator('rocm', backend=jt).enabled)
+HAS_CUDA = bool(_test_capability.check_accelerator('cuda', backend=jt).enabled)
 
 #: Every device label this harness knows how to run a test on. It is the single
 #: enumeration ``JITTOR_TEST_DEVICES``, the ``only_for``/``except_for`` pins and

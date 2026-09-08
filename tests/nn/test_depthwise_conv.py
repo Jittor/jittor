@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers:
@@ -115,7 +117,7 @@ def compare_parameters(m1, m2):
         assert diff < 1e-4, (diff, 'backward', ps2[i].name(), ps1[i].mean(), ps1[i].std(), ps2[i].mean(), ps2[i].std())
 
 class TestDepthwiseConv(unittest.TestCase):
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
     def test_data(self):
         test_img = np.random.random((64,3,224,224)).astype('float32')

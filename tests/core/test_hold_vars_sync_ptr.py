@@ -37,7 +37,7 @@ import unittest
 from _helpers.child_process import run_child_script
 
 
-PROBE = r'''
+PROBE = """
 import os
 import numpy as np
 import jittor as jt
@@ -45,7 +45,7 @@ import jittor as jt
 release_a_holder = os.environ["PROBE_MODE"] == "release"
 
 def pending():
-    """A var whose op has not run yet."""
+    \"""A var whose op has not run yet.\"""
     return jt.array(np.zeros(4, "float32")) * 2.0
 
 # hold_vars has to be non-empty when the destructor runs: next(end()) on an
@@ -58,12 +58,12 @@ if release_a_holder:
     del victim
 
 a, b, c = pending(), pending(), pending()
-before = jt.number_of_lived_ops()
+before = jt.introspection.counters.live_ops
 # Weak sync is on by default: syncing the newest var must also sweep in the
 # older pending ones.
 c.sync()
-print("RESULT before=%d after=%d" % (before, jt.number_of_lived_ops()))
-'''
+print("RESULT before=%d after=%d" % (before, jt.introspection.counters.live_ops))
+"""
 
 
 def run_probe(mode):
@@ -79,7 +79,7 @@ def run_probe(mode):
 
 class TestHoldVarsSyncPtr(unittest.TestCase):
     def test_graph_and_memory_diagnostics_use_the_runtime_roots(self):
-        probe = r'''
+        probe = """
 import jittor as jt
 import numpy as np
 with jt.flag_scope(use_cuda=0, lazy_execution=1, auto_flush_ops=0,
@@ -88,12 +88,12 @@ with jt.flag_scope(use_cuda=0, lazy_execution=1, auto_flush_ops=0,
     y = (x * x).sum()
     gradient = jt.grad(y, x)
     np.testing.assert_allclose(gradient.numpy(), [2., 4., 6.])
-    assert jt.liveness_info()["hold_vars"] >= 3
+    assert dict(hold_vars=jt.introspection.counters.held_vars, lived_vars=jt.introspection.counters.live_vars, lived_ops=jt.introspection.counters.live_ops)["hold_vars"] >= 3
     assert any("runtime_root_input" in name for name in jt.dump_all_graphs().hold_vars)
     assert "root()" in jt.get_max_memory_treemap()[1]
     jt.core.display_memory_info("runtime-root-test", True)
 print("ROOT_DIAGNOSTICS_OK")
-'''
+"""
         done = run_child_script(probe, text=True, merge_stderr=True,
                                 name="runtime_root_diagnostics")
         self.assertEqual(done.returncode, 0, done.stdout[-4000:])

@@ -9,6 +9,8 @@ are exercised on CPU (the message is identical on CUDA).
 
 Run:  python -m pytest compat/tests/torch/test_torch_compat_errors.py
 """
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
 import unittest
 import numpy as np
 import jittor as jt
@@ -23,15 +25,21 @@ def _msg(fn):
     return None, ""
 
 
+@_test_preserve_policy(jt, 'use_cuda')
 class TestTorchCompatErrors(unittest.TestCase):
     def setUp(self):
         # These assert CPU error messages, but the flag is process-global: left
         # at 0 it silently moves every later test in the session onto the CPU.
-        self._use_cuda = jt.flags.use_cuda
-        jt.flags.use_cuda = 0
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._use_cuda = jt.introspection.policy.runtime.use_cuda
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
 
     def tearDown(self):
-        jt.flags.use_cuda = self._use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._use_cuda))
 
     # ---- supported op x complex dtype ----
     def test_supported_complex_transcendentals_match_numpy(self):

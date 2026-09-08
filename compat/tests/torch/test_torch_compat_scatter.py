@@ -20,6 +20,8 @@ duplicate indices -- so those are tested with deliberate collisions.
 Run:  python -m pytest compat/tests/torch/test_torch_compat_scatter.py
       python -m pytest compat/tests/torch/test_torch_compat_scatter.py
 """
+
+from _helpers import capability as _test_capability
 import unittest
 import numpy as np
 import torch
@@ -27,8 +29,8 @@ import jittor as jt
 
 F = jt.nn.functional
 
-# Exercise CPU always; add CUDA when the build has it. NPU(ACL) reports has_cuda too.
-_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if jt.has_cuda else [])
+# The legacy cuda sweep label also exercises the registered ACL/ROCm backend.
+_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if _test_capability.any_accelerator_enabled(backend=jt) else [])
 
 
 def both_devices(fn):

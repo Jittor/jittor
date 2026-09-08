@@ -102,10 +102,10 @@ def test_expand_does_not_materialize_when_it_is_consumed():
     a = jt.ones((4096, 1))
     a.sync()
     with jt.flag_scope(use_stat_allocator=1):
-        before = jt.flags.stat_allocator_total_alloc_byte
+        before = jt.introspection.counters.allocator.allocated_bytes
         total = (a.expand(4096, 4096) * 2).sum()
         total.sync()
-        grew = jt.flags.stat_allocator_total_alloc_byte - before
+        grew = jt.introspection.counters.allocator.allocated_bytes - before
     assert float(total.numpy()) == 4096 * 4096 * 2
     # 4096*4096*4 bytes is 64 MB; a fused consumer must not pay it.
     assert grew < 4096 * 4096, grew

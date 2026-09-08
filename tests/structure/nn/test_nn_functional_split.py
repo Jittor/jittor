@@ -1,5 +1,7 @@
 """Independent numeric coverage for functions moved out of ``jittor.nn``."""
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -55,11 +57,11 @@ class TestNNFunctionalSplit(unittest.TestCase):
     def test_pairwise_distance_cpu(self):
         self._check_pairwise_distance(use_cuda=False)
 
-    @unittest.skipIf(not jt.has_cuda, "CUDA is not available")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA is not available")
     def test_rrelu_cuda(self):
         self._check_rrelu(use_cuda=True)
 
-    @unittest.skipIf(not jt.has_cuda, "CUDA is not available")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA is not available")
     def test_pairwise_distance_cuda(self):
         self._check_pairwise_distance(use_cuda=True)
 

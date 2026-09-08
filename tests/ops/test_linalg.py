@@ -1,3 +1,7 @@
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved.
 # Maintainers:
@@ -303,7 +307,7 @@ class TestLinalgOp(unittest.TestCase):
                 print(tgq[0])
                 print(tgr[0])
 
-@unittest.skipIf(not jt.has_cuda, "No cuda found.")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found.")
 class TestBUG4_2Op(unittest.TestCase):
     # flag_scope, not a bare assignment: `jt.flags.use_cuda = 1` here used to
     # leak CUDA into every test that ran after this one in the same process,
@@ -326,6 +330,7 @@ class TestBUG4_2Op(unittest.TestCase):
         grad = jt.grad(log_prob, x)
         grad.sync()
 
+@_test_preserve_policy(jt, 'use_cuda')
 class TestEighZeroEigenvectorGrad(unittest.TestCase):
     """``eigh``'s backward must write its output buffer unconditionally.
 
@@ -348,11 +353,16 @@ class TestEighZeroEigenvectorGrad(unittest.TestCase):
         # numpy closed form below fixes LAPACK's convention, so it is only a
         # valid oracle on the host.  ``TestEighCrossDevice`` covers CUDA with
         # sign-invariant assertions instead.
-        self._saved_use_cuda = jt.flags.use_cuda
-        jt.flags.use_cuda = 0
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._saved_use_cuda = jt.introspection.policy.runtime.use_cuda
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
 
     def tearDown(self):
-        jt.flags.use_cuda = self._saved_use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._saved_use_cuda))
 
     @staticmethod
     def _poison(shape, value):
@@ -434,6 +444,7 @@ class TestEighZeroEigenvectorGrad(unittest.TestCase):
         np.testing.assert_allclose(grad.numpy(), expected, rtol=1e-4, atol=1e-4)
 
 
+@_test_preserve_policy(jt, 'use_cuda')
 class TestEighCrossDevice(unittest.TestCase):
     """What ``eigh`` does and does not promise across CPU and CUDA.
 
@@ -460,14 +471,16 @@ class TestEighCrossDevice(unittest.TestCase):
     SIZE = 5
 
     def setUp(self):
-        self._saved_use_cuda = jt.flags.use_cuda
+        self._saved_use_cuda = jt.introspection.policy.runtime.use_cuda
         rng = np.random.default_rng(31)
         a = rng.standard_normal((self.SIZE, self.SIZE))
         self.x = ((a + a.T) / 2).astype("float32")
         self.seed = rng.standard_normal((self.SIZE, self.SIZE)).astype("float32")
 
     def tearDown(self):
-        jt.flags.use_cuda = self._saved_use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._saved_use_cuda))
 
     def _closed_form_vector_grad(self, values, vectors, dout):
         size = self.SIZE
@@ -477,72 +490,80 @@ class TestEighCrossDevice(unittest.TestCase):
         return vectors @ (f * (vectors.T @ dout)) @ vectors.T
 
     def _devices(self):
-        return (0, 1) if jt.compiler.has_cuda else (0,)
+        return (0, 1) if _test_capability.check_accelerator('cuda', backend=jt).enabled else (0,)
 
     def test_eigenvalues_and_reconstruction_match_on_every_device(self):
-        expected_values = np.linalg.eigvalsh(self.x.astype("float64"), UPLO="L")
-        for use_cuda in self._devices():
-            with self.subTest(use_cuda=use_cuda):
-                jt.flags.use_cuda = use_cuda
-                w, v = jt.linalg.eigh(jt.array(self.x))
-                np.testing.assert_allclose(
-                    w.numpy(), expected_values, rtol=1e-4, atol=1e-4)
-                values = w.numpy().astype("float64")
-                vectors = v.numpy().astype("float64")
-                np.testing.assert_allclose(
-                    vectors @ np.diag(values) @ vectors.T,
-                    self.x.astype("float64"), rtol=1e-4, atol=1e-4)
-                np.testing.assert_allclose(
-                    vectors.T @ vectors, np.eye(self.SIZE), rtol=1e-4, atol=1e-4)
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            expected_values = np.linalg.eigvalsh(self.x.astype("float64"), UPLO="L")
+            for use_cuda in self._devices():
+                with self.subTest(use_cuda=use_cuda):
+                    _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=use_cuda))
+                    w, v = jt.linalg.eigh(jt.array(self.x))
+                    np.testing.assert_allclose(
+                        w.numpy(), expected_values, rtol=1e-4, atol=1e-4)
+                    values = w.numpy().astype("float64")
+                    vectors = v.numpy().astype("float64")
+                    np.testing.assert_allclose(
+                        vectors @ np.diag(values) @ vectors.T,
+                        self.x.astype("float64"), rtol=1e-4, atol=1e-4)
+                    np.testing.assert_allclose(
+                        vectors.T @ vectors, np.eye(self.SIZE), rtol=1e-4, atol=1e-4)
 
     def test_vector_gradient_is_self_consistent_on_every_device(self):
-        for use_cuda in self._devices():
-            with self.subTest(use_cuda=use_cuda):
-                jt.flags.use_cuda = use_cuda
-                xv = jt.array(self.x)
-                _, v = jt.linalg.eigh(xv)
-                grad, = jt.grad((v * jt.array(self.seed)).sum(), [xv])
-                w2, v2 = jt.linalg.eigh(jt.array(self.x))
-                expected = self._closed_form_vector_grad(
-                    w2.numpy().astype("float64"),
-                    v2.numpy().astype("float64"),
-                    self.seed.astype("float64"),
-                )
-                np.testing.assert_allclose(
-                    grad.numpy(), expected, rtol=1e-3, atol=1e-3)
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            for use_cuda in self._devices():
+                with self.subTest(use_cuda=use_cuda):
+                    _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=use_cuda))
+                    xv = jt.array(self.x)
+                    _, v = jt.linalg.eigh(xv)
+                    grad, = jt.grad((v * jt.array(self.seed)).sum(), [xv])
+                    w2, v2 = jt.linalg.eigh(jt.array(self.x))
+                    expected = self._closed_form_vector_grad(
+                        w2.numpy().astype("float64"),
+                        v2.numpy().astype("float64"),
+                        self.seed.astype("float64"),
+                    )
+                    np.testing.assert_allclose(
+                        grad.numpy(), expected, rtol=1e-3, atol=1e-3)
 
     def test_sign_invariant_loss_gives_the_same_gradient_on_every_device(self):
         """``v diag(w) v^T`` does not depend on the eigenvector sign convention."""
-        results = []
-        for use_cuda in self._devices():
-            jt.flags.use_cuda = use_cuda
-            xv = jt.array(self.x)
-            w, v = jt.linalg.eigh(xv)
-            reconstruction = jt.matmul(
-                v * w.broadcast(v.shape, [0]), v.transpose(1, 0))
-            grad, = jt.grad((reconstruction * jt.array(self.seed)).sum(), [xv])
-            results.append(grad.numpy())
-        for other in results[1:]:
-            np.testing.assert_allclose(other, results[0], rtol=1e-3, atol=1e-3)
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            results = []
+            for use_cuda in self._devices():
+                _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=use_cuda))
+                xv = jt.array(self.x)
+                w, v = jt.linalg.eigh(xv)
+                reconstruction = jt.matmul(
+                    v * w.broadcast(v.shape, [0]), v.transpose(1, 0))
+                grad, = jt.grad((reconstruction * jt.array(self.seed)).sum(), [xv])
+                results.append(grad.numpy())
+            for other in results[1:]:
+                np.testing.assert_allclose(other, results[0], rtol=1e-3, atol=1e-3)
 
     def test_zero_eigenvector_grad_writes_zero_on_every_device(self):
         """The 6.P07 ``else: copyto(out, 0)`` branch also runs under cupy."""
-        rng = np.random.default_rng(41)
-        value_seed = rng.standard_normal(self.SIZE).astype("float32")
-        zeros = np.zeros((self.SIZE, self.SIZE), dtype="float32")
-        for use_cuda in self._devices():
-            with self.subTest(use_cuda=use_cuda):
-                jt.flags.use_cuda = use_cuda
-                xv = jt.array(self.x)
-                w, v = jt.linalg.eigh(xv)
-                seeded = (w * jt.array(value_seed)).sum()
-                with_term, = jt.grad(seeded + (v * jt.array(zeros)).sum(), [xv])
-                xv2 = jt.array(self.x)
-                w2, _ = jt.linalg.eigh(xv2)
-                without_term, = jt.grad(
-                    (w2 * jt.array(value_seed)).sum(), [xv2])
-                np.testing.assert_array_equal(
-                    with_term.numpy(), without_term.numpy())
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            rng = np.random.default_rng(41)
+            value_seed = rng.standard_normal(self.SIZE).astype("float32")
+            zeros = np.zeros((self.SIZE, self.SIZE), dtype="float32")
+            for use_cuda in self._devices():
+                with self.subTest(use_cuda=use_cuda):
+                    _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=use_cuda))
+                    xv = jt.array(self.x)
+                    w, v = jt.linalg.eigh(xv)
+                    seeded = (w * jt.array(value_seed)).sum()
+                    with_term, = jt.grad(seeded + (v * jt.array(zeros)).sum(), [xv])
+                    xv2 = jt.array(self.x)
+                    w2, _ = jt.linalg.eigh(xv2)
+                    without_term, = jt.grad(
+                        (w2 * jt.array(value_seed)).sum(), [xv2])
+                    np.testing.assert_array_equal(
+                        with_term.numpy(), without_term.numpy())
 
 
 if __name__ == "__main__":

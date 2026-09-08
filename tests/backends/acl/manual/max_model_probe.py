@@ -6,8 +6,12 @@ import sys, time, numpy as np, jittor as jt
 # NB: use_acl alone routes to native ACL ops but leaves use_cuda=0, which keeps
 # *execution on CPU* (measuring host RAM, not the 64GB HBM). Must set use_cuda=1
 # so allocations actually land on the NPU.
-jt.flags.use_acl = 1
-jt.flags.use_cuda = 1
+from contextlib import ExitStack as _ProcessPolicyStack
+import atexit as _process_policy_atexit
+_process_policy_scopes = _ProcessPolicyStack()
+_process_policy_atexit.register(_process_policy_scopes.close)
+_process_policy_scopes.enter_context(jt.runtime.scope(use_acl=1))
+_process_policy_scopes.enter_context(jt.runtime.scope(use_cuda=1))
 from jittor import nn
 import math
 

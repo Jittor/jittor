@@ -46,8 +46,8 @@ net(data)
 '''
         with open("/tmp/test_pt_hook.py", 'w') as f:
             f.write(code)
-        print(jt.flags.cache_path)
-        os.system(f"rm -rf {jt.flags.cache_path}/../../auto_diff/resnet50")
+        print(jt.introspection.policy.startup.cache_path)
+        os.system(f"rm -rf {jt.introspection.policy.startup.cache_path}/../../auto_diff/resnet50")
         assert run_python_child(["/tmp/test_pt_hook.py"]).returncode == 0
         assert run_python_child(["/tmp/test_pt_hook.py"]).returncode == 0
         code = '''

@@ -28,6 +28,8 @@ Notes:
 Run:  python -m pytest compat/tests/torch/test_torch_compat_norm.py
       python -m pytest compat/tests/torch/test_torch_compat_norm.py
 """
+
+from _helpers import capability as _test_capability
 import os
 import unittest
 import numpy as np
@@ -39,7 +41,7 @@ from jittor.backends.cuda.kernels.nn.layer_norm_cuda import _layer_norm_no_grad_
 
 F = nn.functional
 
-_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if jt.has_cuda else [])
+_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if _test_capability.any_accelerator_enabled(backend=jt) else [])
 
 
 def both_devices(fn):
@@ -228,7 +230,7 @@ class TestLayerNorm(Base):
                     msg=f"F.layer_norm {dev}")
         both_devices(body)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_ln_no_grad_cuda_3d(self):
         rng = np.random.RandomState(216)
         x = rng.randn(2, 8, 32).astype("float32")
@@ -241,7 +243,7 @@ class TestLayerNorm(Base):
             ln.weight.update(t(w)); ln.bias.update(t(b))
             self.ac(ln(t(x)).numpy(), ref, atol=1e-4, msg="ln no_grad cuda 3d")
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_ln_no_grad_cuda_dynamic_rows_share_source(self):
         rng = np.random.RandomState(219)
         arrays = [
@@ -273,7 +275,7 @@ class TestLayerNorm(Base):
                 self.ac(output.numpy(), ref, atol=1e-4,
                         msg="ln dynamic rows shared source")
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_ln_no_grad_cuda_bfloat16_private_opt_in(self):
         rng = np.random.RandomState(220)
         x_np = rng.randn(2, 5, 1536).astype("float32")
@@ -331,7 +333,7 @@ class TestLayerNorm(Base):
         np.testing.assert_array_equal(
             np.isnan(affine_np[2:]), np.ones((2, 1536), dtype=bool))
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_ln_no_grad_cuda_fast_path_float32_and_float16(self):
         rng = np.random.RandomState(218)
         # Patch the module that DEFINES the composite path, not the jt.nn
@@ -390,7 +392,7 @@ class TestLayerNorm(Base):
         finally:
             _normalization._ln_normalize = original
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_ln_no_grad_cuda_scalar_affine_fast(self):
         rng = np.random.RandomState(217)
         x = rng.randn(4, 16, 128).astype("float32")
@@ -412,7 +414,7 @@ class TestLayerNorm(Base):
 # --------------------------------------------------------------------------- RMSNorm
 
 class TestRMSNormDispatch(Base):
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_standard_contract_routes_and_offset_variant_falls_back(self):
         class FixtureRMSNorm(nn.Module):
             def __init__(self):

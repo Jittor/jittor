@@ -5,6 +5,8 @@ profiler peaks from identical invocations; CUDA facade peak sampling is not
 an allocator high-water mark and is intentionally not used here.
 """
 
+from _helpers import capability as _test_capability
+
 import gc
 import json
 import os
@@ -13,7 +15,7 @@ import unittest
 import jittor as jt
 
 
-@unittest.skipUnless(jt.has_cuda and int(jt.world_size) >= 2,
+@unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled and int(jt.world_size) >= 2,
                      "requires a multi-rank CUDA launch")
 class TestFsdpMemory(unittest.TestCase):
     @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0, profile_memory_enable=2)

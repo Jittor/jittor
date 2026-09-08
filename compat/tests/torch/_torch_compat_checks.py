@@ -3,6 +3,8 @@
 Run: python compat/tests/torch/_torch_compat_checks.py.
 These exercise the torch-API surface that transformers/LlamaFactory depend on.
 """
+
+from _helpers import capability as _test_capability
 import numpy as np
 import torch
 import jittor as jt
@@ -21,7 +23,7 @@ ok(torch.zeros(2, dtype=torch.float16).dtype == "float16", "zeros dtype")
 ok(torch.long == "int64", "long alias")
 
 # constructors with torch kwargs
-_available_device = "cuda" if jt.has_cuda else "cpu"
+_available_device = "cuda" if _test_capability.check_accelerator('cuda', backend=jt).enabled else "cpu"
 ok(tuple(torch.zeros(2, 3, device=_available_device).shape) == (2, 3), "zeros device kwarg")
 ok(tuple(torch.arange(5, device=_available_device).shape) == (5,), "arange device kwarg")
 ok(torch.from_numpy(np.zeros(3, dtype=np.int64)).dtype == "int64", "from_numpy int64")
@@ -131,8 +133,8 @@ ok(_dt in {torch.float16, torch.float32}, "Var.dtype hashable + in dtype set")
 # ---- regression: NPU dispatch + ops exposed when moving CPU->Ascend ----
 # On Ascend the compat layer MUST enable jt.flags.use_cuda, else every op runs
 # on CPU (~10000x slower). This was the root cause of pathological 8B step times.
-if getattr(jt.compiler, "has_acl", 0):
-    ok(jt.flags.use_cuda == 1, "NPU dispatch enabled (use_cuda=1) when has_acl")
+if _test_capability.check_accelerator('acl', backend=jt).enabled:
+    ok(jt.introspection.policy.runtime.use_cuda == 1, "NPU dispatch enabled (use_cuda=1) when has_acl")
 
 # cumsum on bool must not segfault (ACL aclnnCumsum crashes on bool input) and
 # must match torch, which promotes bool->int64 then counts.
@@ -158,7 +160,7 @@ def _acf(x): return x * 3
 ok(_acf(torch.ones(2)).numpy().tolist() == [3, 3], "autocast as decorator")
 
 # bf16 matmul must work on ACL (cube units); was 'Not supported dtype: bfloat16'
-if getattr(jt.compiler, "has_acl", 0):
+if _test_capability.check_accelerator('acl', backend=jt).enabled:
     _bm = torch.matmul(torch.ones(8, 8).to(torch.bfloat16), torch.ones(8, 8).to(torch.bfloat16))
     ok(str(_bm.dtype) == "bfloat16" and abs(float(_bm.float32().numpy().reshape(-1)[0]) - 8.0) < 1e-2,
        "bf16 matmul on ACL")

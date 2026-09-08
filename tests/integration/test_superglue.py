@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
@@ -121,7 +123,7 @@ def _run(stack):
 
 class TestSuperglue(unittest.TestCase):
     def test(self):
-        if not jt.has_cuda: return
+        if not _test_capability.check_accelerator('cuda', backend=jt).enabled: return
         t1 = main()
         os.environ["use_fp16"] = "1"
         t2 = main()

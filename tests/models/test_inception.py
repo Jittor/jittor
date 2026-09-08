@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -59,7 +61,7 @@ class TestInception(unittest.TestCase):
         random.seed(seed)
         jt.seed(seed)
 
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1, use_stat_allocator=1)
     def test_inception(self):
         self.setup_seed(1)
@@ -100,8 +102,8 @@ class TestInception(unittest.TestCase):
             if batch_idx > 2:
                 assert len(log_conv)==283 and len(log_matmul)==6, (len(log_conv), len(log_matmul))
 
-            mem_used = jt.flags.stat_allocator_total_alloc_byte \
-                -jt.flags.stat_allocator_total_free_byte
+            mem_used = jt.introspection.counters.allocator.allocated_bytes \
+                -jt.introspection.counters.allocator.freed_bytes
             # assert mem_used < 4e9, mem_used
             # TODO: why bigger?
             assert mem_used < 15.6e9, mem_used

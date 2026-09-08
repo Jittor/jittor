@@ -41,386 +41,386 @@ def test_deployed_torch_entry_defaults_to_independent_types(tmp_path):
 
 def test_independent_tensor_installation_preserves_native_type():
     result = run_python_child(["-c", textwrap.dedent("""
-        import os
-        import copy
-        import pickle
-        import numpy as np
-        import jittor as jt
-        if os.environ.get("use_cuda") == "1":
-            assert jt.has_cuda and jt.flags.use_cuda
-        before = dict(vars(jt.Var))
-        module_before = dict(vars(jt.Module))
-        linear_before = dict(vars(jt.nn.Linear))
-        optimizer_types = (jt.optim.Optimizer, jt.optim.SGD, jt.optim.Adam, jt.optim.AdamW)
-        optimizer_before = [(cls, dict(vars(cls))) for cls in optimizer_types]
-        function_before = dict(vars(jt.Function))
-        autograd_before = dict(vars(jt.autograd))
-        namespace_before = [(module, dict(vars(module)))
-                            for module in (jt.linalg, jt.sparse, jt.distributions)]
-        distribution_types = [(cls, dict(vars(cls))) for cls in
-                              (jt.distributions.Distribution, jt.distributions.Normal,
-                               jt.distributions.Categorical, jt.distributions.Bernoulli)]
-        native_nn = jt.nn
-        native_init = jt.nn.init
-        policy_before = jt.autograd.get_policy()
-        from jittor.compat.shim.runtime import activate
-        from jittor.compat import torch as compatibility
-        required = compatibility._REQUIRED_STEPS
-        def fail_after_install(context):
-            raise RuntimeError("injected frontend install failure")
-        compatibility._REQUIRED_STEPS = required + (("frontend.failure", fail_after_install),)
-        try:
-            try:
-                activate(
-                    independent_namespace=True, auto_scan_extensions=False,
-                    build_extensions=False, configure_cuda=False,
-                    local_home=False, verbose=False,
-                )
-            except RuntimeError as error:
-                assert "injected frontend install failure" in str(error)
-            else:
-                raise AssertionError("injected failure was swallowed")
-        finally:
-            compatibility._REQUIRED_STEPS = required
-        torch = activate(
+import os
+import copy
+import pickle
+import numpy as np
+import jittor as jt
+if os.environ.get("use_cuda") == "1":
+    assert any(jt.introspection.capabilities.backend(name).enabled for name in jt.introspection.capabilities.registered_backends() if name != "cpu") and jt.introspection.policy.runtime.use_cuda
+before = dict(vars(jt.Var))
+module_before = dict(vars(jt.Module))
+linear_before = dict(vars(jt.nn.Linear))
+optimizer_types = (jt.optim.Optimizer, jt.optim.SGD, jt.optim.Adam, jt.optim.AdamW)
+optimizer_before = [(cls, dict(vars(cls))) for cls in optimizer_types]
+function_before = dict(vars(jt.Function))
+autograd_before = dict(vars(jt.autograd))
+namespace_before = [(module, dict(vars(module)))
+                    for module in (jt.linalg, jt.sparse, jt.distributions)]
+distribution_types = [(cls, dict(vars(cls))) for cls in
+                      (jt.distributions.Distribution, jt.distributions.Normal,
+                       jt.distributions.Categorical, jt.distributions.Bernoulli)]
+native_nn = jt.nn
+native_init = jt.nn.init
+policy_before = jt.autograd.get_policy()
+from jittor.compat.shim.runtime import activate
+from jittor.compat import torch as compatibility
+required = compatibility._REQUIRED_STEPS
+def fail_after_install(context):
+    raise RuntimeError("injected frontend install failure")
+compatibility._REQUIRED_STEPS = required + (("frontend.failure", fail_after_install),)
+try:
+    try:
+        activate(
             independent_namespace=True, auto_scan_extensions=False,
             build_extensions=False, configure_cuda=False,
             local_home=False, verbose=False,
-        )["torch"]
-        assert torch.Tensor is not jt.Var
-        assert issubclass(torch.Tensor, jt.Var)
-        assert before.keys() == vars(jt.Var).keys()
-        assert all(value is vars(jt.Var)[key] for key, value in before.items())
-        assert module_before.keys() == vars(jt.Module).keys()
-        assert all(value is vars(jt.Module)[key]
-                   for key, value in module_before.items())
-        assert linear_before.keys() == vars(jt.nn.Linear).keys()
-        assert all(value is vars(jt.nn.Linear)[key]
-                   for key, value in linear_before.items())
-        for cls, original in optimizer_before:
-            assert original.keys() == vars(cls).keys()
-            assert all(value is vars(cls)[key] for key, value in original.items())
-        assert torch.optim is not jt.optim
-        assert issubclass(torch.optim.SGD, torch.optim.Optimizer)
-        assert torch.autograd is not jt.autograd
-        assert torch.autograd.Function is not jt.Function
-        assert function_before.keys() == vars(jt.Function).keys()
-        assert all(value is vars(jt.Function)[key] for key, value in function_before.items())
-        assert autograd_before.keys() == vars(jt.autograd).keys()
-        assert all(value is vars(jt.autograd)[key] for key, value in autograd_before.items())
-        for module, original in namespace_before + distribution_types:
-            current = vars(module)
-            label = getattr(module, "__name__", repr(module))
-            assert original.keys() == current.keys(), (
-                label, "added", sorted(current.keys() - original.keys()),
-                "removed", sorted(original.keys() - current.keys()))
-            assert all(value is current[key] for key, value in original.items()), (
-                label, "rebound", sorted(key for key, value in original.items()
-                                          if value is not current[key]))
-        assert torch.linalg is not jt.linalg and torch.sparse is not jt.sparse
-        assert torch.distributions is not jt.distributions
-        assert torch.nn is not native_nn
-        assert torch.nn.init is not native_init
-        assert torch.nn.Module is not jt.Module
-        assert issubclass(torch.nn.Linear, torch.nn.Module)
-        assert jt.autograd.get_policy() is policy_before
-        x = torch.tensor([1., 2.], requires_grad=True)
-        assert type(x) is torch.Tensor
-        assert x.dtype is torch.float32
-        if jt.flags.use_cuda:
-            x.sync()
-            assert x.location() == "device"
-        (x * x).sum().backward()
-        np.testing.assert_allclose(x.grad.numpy(), [2., 4.])
-        for value in (torch.ones(2), torch.Tensor(2), torch.eye(2),
-                      torch.FloatTensor([1., 2.]),
-                      torch.from_numpy(np.ones(2, dtype=np.float32))):
-            assert type(value) is torch.Tensor
-        data = x.data
-        assert type(data) is torch.Tensor
-        with torch.no_grad():
-            data[0].fill_(3)
-        np.testing.assert_allclose(x.numpy(), [3., 2.])
-        assert x.requires_grad
-        plain = torch.ones(2)
-        assert not plain.requires_grad
-        assert not (plain + 1).requires_grad
-        assert not x.detach().requires_grad
-        assert jt.autograd.get_policy() is policy_before
-        assert type(jt.array([1.])) is jt.Var
-        assert issubclass(torch.nn.Parameter, torch.Tensor)
-        source = torch.tensor([2., 3.], requires_grad=True)
-        parameter = torch.nn.Parameter(source)
-        assert type(parameter) is torch.nn.Parameter
-        assert parameter is not source
-        assert not isinstance(source, torch.nn.Parameter)
-        assert parameter.requires_grad and parameter.is_leaf
-        assert parameter.grad_fn is None and source.requires_grad
-        assert type(parameter + 1) is torch.Tensor
-        assert type(parameter.detach()) is torch.Tensor
-        class TaggedParameter(torch.nn.Parameter):
-            def __new__(cls, data, label):
-                return super().__new__(cls, data)
-            def __init__(self, data, label):
-                super().__init__(data)
-                self.label = label
-        tagged = TaggedParameter(source, "weight")
-        assert type(tagged) is TaggedParameter and tagged.label == "weight"
-        assert type(tagged * 2) is torch.Tensor
-        for restored in (pickle.loads(pickle.dumps(parameter)), copy.deepcopy(parameter)):
-            assert type(restored) is torch.nn.Parameter
-            assert restored.requires_grad and restored.is_leaf
-            np.testing.assert_allclose(restored.numpy(), [2., 3.])
-        copied_tagged = copy.deepcopy(tagged)
-        assert type(copied_tagged) is TaggedParameter and copied_tagged.label == "weight"
-        restored_tensor = pickle.loads(pickle.dumps(source))
-        assert type(restored_tensor) is torch.Tensor and restored_tensor.requires_grad
-        parameters = torch.nn.ParameterList([source, parameter])
-        assert type(parameters[0]) is torch.nn.Parameter and parameters[0] is not source
-        assert parameters[1] is parameter
-        parameters.append(tagged)
-        assert parameters[1:][1] is tagged
-        assert parameters.get_parameter("0") is parameters[0]
-        assert list(parameters.state_dict()) == ["0", "1", "2"]
-        mapping = torch.nn.ParameterDict({"weight": source, "alias": parameter})
-        assert type(mapping["weight"]) is torch.nn.Parameter
-        assert mapping.get_parameter("weight") is mapping["weight"]
-        assert mapping["alias"] is parameter
-        assert not isinstance(source, torch.nn.Parameter)
-        assert torch.nn.modules.parameter.ParameterList is torch.nn.ParameterList
-        assert torch.nn.ParameterDict is not torch.nn.ParameterList
-        model = torch.nn.Sequential(torch.nn.Linear(2, 2), torch.nn.ReLU())
-        output = model(torch.ones((2, 2)))
-        assert type(output) is torch.Tensor
-        assert all(type(p) is torch.nn.Parameter for p in model.parameters())
-        output.sum().backward()
-        assert all(p.grad is not None for p in model.parameters())
-        weight = model[0].weight
-        model[0].alias = weight
-        model.register_buffer("floating", torch.ones(2))
-        model.register_buffer("integer", torch.ones(2, dtype=torch.int64))
-        model.to(dtype=torch.float64)
-        assert model[0].weight is weight and model[0].alias is weight
-        assert type(weight) is torch.nn.Parameter and weight.is_leaf
-        assert weight.dtype is torch.float64 and weight.grad.dtype is torch.float64
-        assert model.floating.dtype is torch.float64
-        assert model.integer.dtype is torch.int64
-        parameters.double()
-        assert all(p.dtype is torch.float64 for p in parameters)
-        for algorithm, options, expected in (
-            (torch.optim.SGD, {}, [0.8, 1.6]),
-            (torch.optim.Adam, {}, [0.9, 1.9]),
-            (torch.optim.AdamW, {"weight_decay": 0.1}, [0.89, 1.88]),
-        ):
-            trainable = torch.nn.Parameter(torch.tensor([1., 2.]))
-            optimizer = algorithm((p for p in [trainable]), lr=0.1, **options)
-            (trainable * trainable).sum().backward()
-            optimizer.step()
-            np.testing.assert_allclose(trainable.numpy(), expected, atol=1e-6)
-            assert type(trainable) is torch.nn.Parameter
-            state = optimizer.state_dict()
-            for values in state["state"].values():
-                assert all(isinstance(value, torch.Tensor) for value in values.values()
-                           if isinstance(value, jt.Var))
-            from jittor.compat.optimizer_kinds import kind_of
-            assert kind_of(optimizer, require_unmodified_step=True) is not None
-            optimizer.load_state_dict(state)
-            assert optimizer.param_groups[0]["params"][0] is trainable
-            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
-            scheduler.step()
-            assert abs(optimizer.param_groups[0]["lr"] - 0.05) < 1e-12
-            optimizer.zero_grad(set_to_none=True)
-            assert trainable.grad is None
-        assert "_current_optimizer" not in vars(jt)
-        class Square(torch.autograd.Function):
-            @staticmethod
-            def forward(ctx, value):
-                ctx.save_for_backward(value)
-                return value * value
-            @staticmethod
-            def backward(ctx, gradient):
-                value, = ctx.saved_tensors
-                return gradient * value * 2
-        custom_input = torch.tensor([2., 3.], requires_grad=True)
-        gradient, = torch.autograd.grad(Square.apply(custom_input).sum(), custom_input)
-        assert type(gradient) is torch.Tensor
-        np.testing.assert_allclose(gradient.numpy(), [4., 6.])
-        collate = torch.utils.data.default_collate
-        batch = collate([{"index": 2**45, "value": np.float32(1.25)},
-                         {"index": 2**45 + 1, "value": np.float32(2.5)}])
-        assert type(batch["index"]) is torch.Tensor
-        assert batch["index"].dtype is torch.int64
-        assert batch["value"].dtype is torch.float32
-        np.testing.assert_array_equal(batch["index"].numpy(), [2**45, 2**45 + 1])
-        assert collate([1.25, 2.5]).dtype is torch.float64
-        differentiable_batch = collate([custom_input, custom_input])
-        batch_gradient, = torch.autograd.grad(differentiable_batch.sum(), custom_input)
-        np.testing.assert_allclose(batch_gradient.numpy(), [2., 2.])
-        import io
-        checkpoint = io.BytesIO()
-        saved = {"wide": torch.tensor([2**45, 2**45+1], dtype=torch.int64),
-                 "bf16": torch.tensor([1.25, 2.5], dtype=torch.bfloat16),
-                 "parameter": torch.nn.Parameter(torch.tensor([3., 4.]))}
-        torch.save(saved, checkpoint)
-        checkpoint.seek(0)
-        loaded = torch.load(checkpoint, map_location="cpu")
-        assert type(loaded["wide"]) is torch.Tensor
-        assert loaded["wide"].dtype is torch.int64
-        np.testing.assert_array_equal(loaded["wide"].numpy(), [2**45, 2**45+1])
-        assert loaded["bf16"].dtype is torch.bfloat16
-        assert type(loaded["parameter"]) is torch.nn.Parameter
-        assert loaded["parameter"].requires_grad and loaded["parameter"].is_leaf
-        if jt.flags.use_cuda and torch.cuda.device_count() >= 2:
-            on_second = torch.nn.Parameter(torch.tensor([5., 6.], device="cuda:1"))
-            on_second.sync()
-            assert on_second.device_id == 1
-            archive = io.BytesIO()
-            torch.save(on_second, archive)
-            assert on_second.device_id == 1 and on_second.location() == "device"
-            archive.seek(0)
-            restored = torch.load(archive, map_location="cuda:1")
-            restored.sync()
-            assert type(restored) is torch.nn.Parameter and restored.device_id == 1
-            np.testing.assert_array_equal(restored.numpy(), [5., 6.])
-            archive.seek(0)
-            restored_default = torch.load(archive)
-            restored_default.sync()
-            assert restored_default.device_id == 1
-            archive.seek(0)
-            remapped = torch.load(archive, map_location={"cuda:1": "cpu"})
-            assert type(remapped) is torch.nn.Parameter and remapped.is_cpu
-            converted_model = torch.nn.Linear(2, 1)
-            original_weight = converted_model.weight
-            converted_model.to(device="cpu", dtype=torch.float64)
-            assert converted_model.weight is original_weight and original_weight.is_cpu
-            assert original_weight.dtype is torch.float64 and original_weight.is_leaf
-        assert jt.autograd.get_policy() is policy_before
-        normal = torch.distributions.Normal(loc=0.0, scale=1.0)
-        assert isinstance(normal, torch.distributions.Distribution)
-        assert type(normal.loc) is torch.Tensor and not normal.loc.requires_grad
-        assert type(normal.sample((3,))) is torch.Tensor
-        assert not normal.rsample((3,)).requires_grad
-        np.testing.assert_allclose(normal.log_prob(torch.tensor(0.)).numpy(),
-                                   -0.5 * np.log(2 * np.pi), atol=1e-6)
-        loc = torch.tensor(0., requires_grad=True)
-        sampled = torch.distributions.Normal(loc=loc, scale=1.).rsample((3,))
-        loc_gradient, = torch.autograd.grad(sampled.sum(), loc)
-        np.testing.assert_allclose(loc_gradient.numpy(), 3.)
-        categorical = torch.distributions.Categorical(probs=torch.tensor([0.25, 0.75]))
-        assert type(categorical.sample((3,))) is torch.Tensor
-        np.testing.assert_allclose(categorical.log_prob(torch.tensor(1)).numpy(), np.log(0.75), atol=1e-6)
-        bernoulli = torch.distributions.Bernoulli(probs=0.25)
-        assert type(bernoulli.sample((3,))) is torch.Tensor
-        np.testing.assert_allclose(bernoulli.log_prob(torch.tensor(1.)).numpy(), np.log(0.25), atol=1e-6)
-        matrix = torch.tensor([[2., 0.], [0., 4.]])
-        inverse = torch.linalg.inv(matrix)
-        assert type(inverse) is torch.Tensor
-        np.testing.assert_allclose(inverse.numpy(), [[0.5, 0.], [0., 0.25]])
-        precise = 1.0000000000000002
-        exact = torch.tensor([precise], dtype=torch.float64)
-        np.testing.assert_array_equal(exact.numpy(), np.array([precise], dtype=np.float64))
-        typed = torch.DoubleTensor([precise])
-        assert typed.dtype is torch.float64 and not typed.requires_grad
-        assert typed.item() == precise
-        numpy_scalar = torch.tensor(np.float64(precise))
-        assert numpy_scalar.dtype is torch.float64
-        assert numpy_scalar.item() == precise
-        previous_dtype = torch.get_default_dtype()
-        try:
-            torch.set_default_dtype(torch.float64)
-            for value in (torch.tensor([precise]), torch.Tensor([precise]),
-                          torch.Tensor(2), torch.nn.Parameter()):
-                assert value.dtype is torch.float64
-            assert torch.Tensor([precise]).item() == precise
-            try:
-                torch.set_default_dtype(torch.int64)
-            except TypeError:
-                pass
-            else:
-                raise AssertionError("integer default dtype was accepted")
-            assert torch.get_default_dtype() is torch.float64
-        finally:
-            torch.set_default_dtype(previous_dtype)
-        original = torch.tensor([1., 2.], dtype=torch.float64, requires_grad=True)
-        alias = torch.Tensor(original)
-        clone = original.clone()
-        assert clone.data_ptr() != original.data_ptr()
-        assert clone.requires_grad and not clone.is_leaf
-        clone_gradient, = torch.autograd.grad(clone.sum(), original)
-        np.testing.assert_array_equal(clone_gradient.numpy(), [1., 1.])
-        copied = torch.tensor(original, requires_grad=True)
-        assert copied.data_ptr() != original.data_ptr()
-        assert copied.requires_grad and copied.is_leaf
-        assert torch.clone(original).data_ptr() != original.data_ptr()
-        assert torch.as_tensor(original, dtype=torch.float64) is original
-        native_value = jt.array([9., 10.], dtype="float64")
-        native_alias = torch.as_tensor(native_value)
-        native_copy = torch.tensor(native_value)
-        assert type(native_alias) is type(native_copy) is torch.Tensor
-        assert native_alias.dtype is native_copy.dtype is torch.float64
-        assert native_alias.data_ptr() == native_value._storage_address
-        assert native_copy.data_ptr() != native_value._storage_address
-        cpu_original = torch.tensor([7., 8.], device="cpu")
-        cpu_copy = cpu_original.clone()
-        assert cpu_copy.is_cpu and cpu_original.is_cpu
-        assert cpu_copy.data_ptr() != cpu_original.data_ptr()
-        assert cpu_copy.location() == "cpu"
-        assert original.to(dtype=original.dtype) is original
-        explicit_copy = original.to(dtype=original.dtype, copy=True)
-        assert explicit_copy.data_ptr() != original.data_ptr()
-        assert explicit_copy.requires_grad and not explicit_copy.is_leaf
-        formatted_copy = torch.clone(original, memory_format=torch.preserve_format)
-        assert formatted_copy.data_ptr() != original.data_ptr()
-        converted_cpu = cpu_original.to(dtype=torch.float64)
-        assert converted_cpu.dtype is torch.float64 and converted_cpu.is_cpu
-        converted_cpu.sync()
-        assert converted_cpu.location() == "cpu"
-        assert alias is not original and alias.dtype is torch.float64
-        assert alias.requires_grad and not alias.is_leaf
-        assert alias.data_ptr() == original.data_ptr()
-        if jt.flags.use_cuda:
-            assert alias.location() == original.location() == "device"
-        with torch.no_grad():
-            alias[0].fill_(3.)
-        np.testing.assert_array_equal(original.numpy(), [3., 2.])
-        from jittor.compat.torch.tensor_object_state import get_tensor_object_state
-        assert not any(name in vars(jt) for name in (
-            "_torch_compat_owner", "_torch_tensor_state", "_torch_leaf_params",
-            "_torch_retained", "_active_optimizers",
-        ))
-        import gc
-        import weakref
-        fresh = torch.tensor([1., 2.])
-        assert get_tensor_object_state(fresh) is None
-        assert fresh.grad is None and get_tensor_object_state(fresh) is None
-        fresh.grad = torch.ones_like(fresh)
-        object_state = get_tensor_object_state(fresh)
-        assert object_state.grad is fresh.grad
-        assert "_torch_grad" not in vars(fresh)
-        fresh._torch_data_owner = fresh
-        assert get_tensor_object_state(fresh) is object_state
-        assert "_torch_data_owner" not in vars(fresh)
-        fresh._jittor_torch_force_cpu = True
-        fresh._torch_acl_rms_norm_unit_weight = fresh
-        assert object_state.force_cpu and object_state.rms_norm_unit_weight is fresh
-        assert "_jittor_torch_force_cpu" not in vars(fresh)
-        assert "_torch_acl_rms_norm_unit_weight" not in vars(fresh)
-        copied_state = copy.deepcopy(fresh)
-        assert copied_state._torch_data_owner is copied_state
-        assert copied_state._torch_acl_rms_norm_unit_weight is copied_state
-        assert copied_state._jittor_torch_force_cpu
-        restored_state = pickle.loads(pickle.dumps(fresh))
-        assert restored_state._torch_data_owner is restored_state
-        assert restored_state._torch_acl_rms_norm_unit_weight is restored_state
-        assert restored_state._jittor_torch_force_cpu
-        del object_state.force_cuda  # A state restored from an older pickle.
-        assert not fresh._jittor_torch_force_cuda
-        np.testing.assert_array_equal(restored_state.grad.numpy(), [1., 1.])
-        reference = weakref.ref(fresh)
-        del fresh, object_state
-        gc.collect()
-        assert reference() is None
-        print("INDEPENDENT_TENSOR_OK")
-    """)], without_torch_mode=True, merge_stderr=True)
+        )
+    except RuntimeError as error:
+        assert "injected frontend install failure" in str(error)
+    else:
+        raise AssertionError("injected failure was swallowed")
+finally:
+    compatibility._REQUIRED_STEPS = required
+torch = activate(
+    independent_namespace=True, auto_scan_extensions=False,
+    build_extensions=False, configure_cuda=False,
+    local_home=False, verbose=False,
+)["torch"]
+assert torch.Tensor is not jt.Var
+assert issubclass(torch.Tensor, jt.Var)
+assert before.keys() == vars(jt.Var).keys()
+assert all(value is vars(jt.Var)[key] for key, value in before.items())
+assert module_before.keys() == vars(jt.Module).keys()
+assert all(value is vars(jt.Module)[key]
+           for key, value in module_before.items())
+assert linear_before.keys() == vars(jt.nn.Linear).keys()
+assert all(value is vars(jt.nn.Linear)[key]
+           for key, value in linear_before.items())
+for cls, original in optimizer_before:
+    assert original.keys() == vars(cls).keys()
+    assert all(value is vars(cls)[key] for key, value in original.items())
+assert torch.optim is not jt.optim
+assert issubclass(torch.optim.SGD, torch.optim.Optimizer)
+assert torch.autograd is not jt.autograd
+assert torch.autograd.Function is not jt.Function
+assert function_before.keys() == vars(jt.Function).keys()
+assert all(value is vars(jt.Function)[key] for key, value in function_before.items())
+assert autograd_before.keys() == vars(jt.autograd).keys()
+assert all(value is vars(jt.autograd)[key] for key, value in autograd_before.items())
+for module, original in namespace_before + distribution_types:
+    current = vars(module)
+    label = getattr(module, "__name__", repr(module))
+    assert original.keys() == current.keys(), (
+        label, "added", sorted(current.keys() - original.keys()),
+        "removed", sorted(original.keys() - current.keys()))
+    assert all(value is current[key] for key, value in original.items()), (
+        label, "rebound", sorted(key for key, value in original.items()
+                                  if value is not current[key]))
+assert torch.linalg is not jt.linalg and torch.sparse is not jt.sparse
+assert torch.distributions is not jt.distributions
+assert torch.nn is not native_nn
+assert torch.nn.init is not native_init
+assert torch.nn.Module is not jt.Module
+assert issubclass(torch.nn.Linear, torch.nn.Module)
+assert jt.autograd.get_policy() is policy_before
+x = torch.tensor([1., 2.], requires_grad=True)
+assert type(x) is torch.Tensor
+assert x.dtype is torch.float32
+if jt.introspection.policy.runtime.use_cuda:
+    x.sync()
+    assert x.location() == "device"
+(x * x).sum().backward()
+np.testing.assert_allclose(x.grad.numpy(), [2., 4.])
+for value in (torch.ones(2), torch.Tensor(2), torch.eye(2),
+              torch.FloatTensor([1., 2.]),
+              torch.from_numpy(np.ones(2, dtype=np.float32))):
+    assert type(value) is torch.Tensor
+data = x.data
+assert type(data) is torch.Tensor
+with torch.no_grad():
+    data[0].fill_(3)
+np.testing.assert_allclose(x.numpy(), [3., 2.])
+assert x.requires_grad
+plain = torch.ones(2)
+assert not plain.requires_grad
+assert not (plain + 1).requires_grad
+assert not x.detach().requires_grad
+assert jt.autograd.get_policy() is policy_before
+assert type(jt.array([1.])) is jt.Var
+assert issubclass(torch.nn.Parameter, torch.Tensor)
+source = torch.tensor([2., 3.], requires_grad=True)
+parameter = torch.nn.Parameter(source)
+assert type(parameter) is torch.nn.Parameter
+assert parameter is not source
+assert not isinstance(source, torch.nn.Parameter)
+assert parameter.requires_grad and parameter.is_leaf
+assert parameter.grad_fn is None and source.requires_grad
+assert type(parameter + 1) is torch.Tensor
+assert type(parameter.detach()) is torch.Tensor
+class TaggedParameter(torch.nn.Parameter):
+    def __new__(cls, data, label):
+        return super().__new__(cls, data)
+    def __init__(self, data, label):
+        super().__init__(data)
+        self.label = label
+tagged = TaggedParameter(source, "weight")
+assert type(tagged) is TaggedParameter and tagged.label == "weight"
+assert type(tagged * 2) is torch.Tensor
+for restored in (pickle.loads(pickle.dumps(parameter)), copy.deepcopy(parameter)):
+    assert type(restored) is torch.nn.Parameter
+    assert restored.requires_grad and restored.is_leaf
+    np.testing.assert_allclose(restored.numpy(), [2., 3.])
+copied_tagged = copy.deepcopy(tagged)
+assert type(copied_tagged) is TaggedParameter and copied_tagged.label == "weight"
+restored_tensor = pickle.loads(pickle.dumps(source))
+assert type(restored_tensor) is torch.Tensor and restored_tensor.requires_grad
+parameters = torch.nn.ParameterList([source, parameter])
+assert type(parameters[0]) is torch.nn.Parameter and parameters[0] is not source
+assert parameters[1] is parameter
+parameters.append(tagged)
+assert parameters[1:][1] is tagged
+assert parameters.get_parameter("0") is parameters[0]
+assert list(parameters.state_dict()) == ["0", "1", "2"]
+mapping = torch.nn.ParameterDict({"weight": source, "alias": parameter})
+assert type(mapping["weight"]) is torch.nn.Parameter
+assert mapping.get_parameter("weight") is mapping["weight"]
+assert mapping["alias"] is parameter
+assert not isinstance(source, torch.nn.Parameter)
+assert torch.nn.modules.parameter.ParameterList is torch.nn.ParameterList
+assert torch.nn.ParameterDict is not torch.nn.ParameterList
+model = torch.nn.Sequential(torch.nn.Linear(2, 2), torch.nn.ReLU())
+output = model(torch.ones((2, 2)))
+assert type(output) is torch.Tensor
+assert all(type(p) is torch.nn.Parameter for p in model.parameters())
+output.sum().backward()
+assert all(p.grad is not None for p in model.parameters())
+weight = model[0].weight
+model[0].alias = weight
+model.register_buffer("floating", torch.ones(2))
+model.register_buffer("integer", torch.ones(2, dtype=torch.int64))
+model.to(dtype=torch.float64)
+assert model[0].weight is weight and model[0].alias is weight
+assert type(weight) is torch.nn.Parameter and weight.is_leaf
+assert weight.dtype is torch.float64 and weight.grad.dtype is torch.float64
+assert model.floating.dtype is torch.float64
+assert model.integer.dtype is torch.int64
+parameters.double()
+assert all(p.dtype is torch.float64 for p in parameters)
+for algorithm, options, expected in (
+    (torch.optim.SGD, {}, [0.8, 1.6]),
+    (torch.optim.Adam, {}, [0.9, 1.9]),
+    (torch.optim.AdamW, {"weight_decay": 0.1}, [0.89, 1.88]),
+):
+    trainable = torch.nn.Parameter(torch.tensor([1., 2.]))
+    optimizer = algorithm((p for p in [trainable]), lr=0.1, **options)
+    (trainable * trainable).sum().backward()
+    optimizer.step()
+    np.testing.assert_allclose(trainable.numpy(), expected, atol=1e-6)
+    assert type(trainable) is torch.nn.Parameter
+    state = optimizer.state_dict()
+    for values in state["state"].values():
+        assert all(isinstance(value, torch.Tensor) for value in values.values()
+                   if isinstance(value, jt.Var))
+    from jittor.compat.optimizer_kinds import kind_of
+    assert kind_of(optimizer, require_unmodified_step=True) is not None
+    optimizer.load_state_dict(state)
+    assert optimizer.param_groups[0]["params"][0] is trainable
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
+    scheduler.step()
+    assert abs(optimizer.param_groups[0]["lr"] - 0.05) < 1e-12
+    optimizer.zero_grad(set_to_none=True)
+    assert trainable.grad is None
+assert "_current_optimizer" not in vars(jt)
+class Square(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, value):
+        ctx.save_for_backward(value)
+        return value * value
+    @staticmethod
+    def backward(ctx, gradient):
+        value, = ctx.saved_tensors
+        return gradient * value * 2
+custom_input = torch.tensor([2., 3.], requires_grad=True)
+gradient, = torch.autograd.grad(Square.apply(custom_input).sum(), custom_input)
+assert type(gradient) is torch.Tensor
+np.testing.assert_allclose(gradient.numpy(), [4., 6.])
+collate = torch.utils.data.default_collate
+batch = collate([{"index": 2**45, "value": np.float32(1.25)},
+                 {"index": 2**45 + 1, "value": np.float32(2.5)}])
+assert type(batch["index"]) is torch.Tensor
+assert batch["index"].dtype is torch.int64
+assert batch["value"].dtype is torch.float32
+np.testing.assert_array_equal(batch["index"].numpy(), [2**45, 2**45 + 1])
+assert collate([1.25, 2.5]).dtype is torch.float64
+differentiable_batch = collate([custom_input, custom_input])
+batch_gradient, = torch.autograd.grad(differentiable_batch.sum(), custom_input)
+np.testing.assert_allclose(batch_gradient.numpy(), [2., 2.])
+import io
+checkpoint = io.BytesIO()
+saved = {"wide": torch.tensor([2**45, 2**45+1], dtype=torch.int64),
+         "bf16": torch.tensor([1.25, 2.5], dtype=torch.bfloat16),
+         "parameter": torch.nn.Parameter(torch.tensor([3., 4.]))}
+torch.save(saved, checkpoint)
+checkpoint.seek(0)
+loaded = torch.load(checkpoint, map_location="cpu")
+assert type(loaded["wide"]) is torch.Tensor
+assert loaded["wide"].dtype is torch.int64
+np.testing.assert_array_equal(loaded["wide"].numpy(), [2**45, 2**45+1])
+assert loaded["bf16"].dtype is torch.bfloat16
+assert type(loaded["parameter"]) is torch.nn.Parameter
+assert loaded["parameter"].requires_grad and loaded["parameter"].is_leaf
+if jt.introspection.policy.runtime.use_cuda and torch.cuda.device_count() >= 2:
+    on_second = torch.nn.Parameter(torch.tensor([5., 6.], device="cuda:1"))
+    on_second.sync()
+    assert on_second.device_id == 1
+    archive = io.BytesIO()
+    torch.save(on_second, archive)
+    assert on_second.device_id == 1 and on_second.location() == "device"
+    archive.seek(0)
+    restored = torch.load(archive, map_location="cuda:1")
+    restored.sync()
+    assert type(restored) is torch.nn.Parameter and restored.device_id == 1
+    np.testing.assert_array_equal(restored.numpy(), [5., 6.])
+    archive.seek(0)
+    restored_default = torch.load(archive)
+    restored_default.sync()
+    assert restored_default.device_id == 1
+    archive.seek(0)
+    remapped = torch.load(archive, map_location={"cuda:1": "cpu"})
+    assert type(remapped) is torch.nn.Parameter and remapped.is_cpu
+    converted_model = torch.nn.Linear(2, 1)
+    original_weight = converted_model.weight
+    converted_model.to(device="cpu", dtype=torch.float64)
+    assert converted_model.weight is original_weight and original_weight.is_cpu
+    assert original_weight.dtype is torch.float64 and original_weight.is_leaf
+assert jt.autograd.get_policy() is policy_before
+normal = torch.distributions.Normal(loc=0.0, scale=1.0)
+assert isinstance(normal, torch.distributions.Distribution)
+assert type(normal.loc) is torch.Tensor and not normal.loc.requires_grad
+assert type(normal.sample((3,))) is torch.Tensor
+assert not normal.rsample((3,)).requires_grad
+np.testing.assert_allclose(normal.log_prob(torch.tensor(0.)).numpy(),
+                           -0.5 * np.log(2 * np.pi), atol=1e-6)
+loc = torch.tensor(0., requires_grad=True)
+sampled = torch.distributions.Normal(loc=loc, scale=1.).rsample((3,))
+loc_gradient, = torch.autograd.grad(sampled.sum(), loc)
+np.testing.assert_allclose(loc_gradient.numpy(), 3.)
+categorical = torch.distributions.Categorical(probs=torch.tensor([0.25, 0.75]))
+assert type(categorical.sample((3,))) is torch.Tensor
+np.testing.assert_allclose(categorical.log_prob(torch.tensor(1)).numpy(), np.log(0.75), atol=1e-6)
+bernoulli = torch.distributions.Bernoulli(probs=0.25)
+assert type(bernoulli.sample((3,))) is torch.Tensor
+np.testing.assert_allclose(bernoulli.log_prob(torch.tensor(1.)).numpy(), np.log(0.25), atol=1e-6)
+matrix = torch.tensor([[2., 0.], [0., 4.]])
+inverse = torch.linalg.inv(matrix)
+assert type(inverse) is torch.Tensor
+np.testing.assert_allclose(inverse.numpy(), [[0.5, 0.], [0., 0.25]])
+precise = 1.0000000000000002
+exact = torch.tensor([precise], dtype=torch.float64)
+np.testing.assert_array_equal(exact.numpy(), np.array([precise], dtype=np.float64))
+typed = torch.DoubleTensor([precise])
+assert typed.dtype is torch.float64 and not typed.requires_grad
+assert typed.item() == precise
+numpy_scalar = torch.tensor(np.float64(precise))
+assert numpy_scalar.dtype is torch.float64
+assert numpy_scalar.item() == precise
+previous_dtype = torch.get_default_dtype()
+try:
+    torch.set_default_dtype(torch.float64)
+    for value in (torch.tensor([precise]), torch.Tensor([precise]),
+                  torch.Tensor(2), torch.nn.Parameter()):
+        assert value.dtype is torch.float64
+    assert torch.Tensor([precise]).item() == precise
+    try:
+        torch.set_default_dtype(torch.int64)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("integer default dtype was accepted")
+    assert torch.get_default_dtype() is torch.float64
+finally:
+    torch.set_default_dtype(previous_dtype)
+original = torch.tensor([1., 2.], dtype=torch.float64, requires_grad=True)
+alias = torch.Tensor(original)
+clone = original.clone()
+assert clone.data_ptr() != original.data_ptr()
+assert clone.requires_grad and not clone.is_leaf
+clone_gradient, = torch.autograd.grad(clone.sum(), original)
+np.testing.assert_array_equal(clone_gradient.numpy(), [1., 1.])
+copied = torch.tensor(original, requires_grad=True)
+assert copied.data_ptr() != original.data_ptr()
+assert copied.requires_grad and copied.is_leaf
+assert torch.clone(original).data_ptr() != original.data_ptr()
+assert torch.as_tensor(original, dtype=torch.float64) is original
+native_value = jt.array([9., 10.], dtype="float64")
+native_alias = torch.as_tensor(native_value)
+native_copy = torch.tensor(native_value)
+assert type(native_alias) is type(native_copy) is torch.Tensor
+assert native_alias.dtype is native_copy.dtype is torch.float64
+assert native_alias.data_ptr() == native_value._storage_address
+assert native_copy.data_ptr() != native_value._storage_address
+cpu_original = torch.tensor([7., 8.], device="cpu")
+cpu_copy = cpu_original.clone()
+assert cpu_copy.is_cpu and cpu_original.is_cpu
+assert cpu_copy.data_ptr() != cpu_original.data_ptr()
+assert cpu_copy.location() == "cpu"
+assert original.to(dtype=original.dtype) is original
+explicit_copy = original.to(dtype=original.dtype, copy=True)
+assert explicit_copy.data_ptr() != original.data_ptr()
+assert explicit_copy.requires_grad and not explicit_copy.is_leaf
+formatted_copy = torch.clone(original, memory_format=torch.preserve_format)
+assert formatted_copy.data_ptr() != original.data_ptr()
+converted_cpu = cpu_original.to(dtype=torch.float64)
+assert converted_cpu.dtype is torch.float64 and converted_cpu.is_cpu
+converted_cpu.sync()
+assert converted_cpu.location() == "cpu"
+assert alias is not original and alias.dtype is torch.float64
+assert alias.requires_grad and not alias.is_leaf
+assert alias.data_ptr() == original.data_ptr()
+if jt.introspection.policy.runtime.use_cuda:
+    assert alias.location() == original.location() == "device"
+with torch.no_grad():
+    alias[0].fill_(3.)
+np.testing.assert_array_equal(original.numpy(), [3., 2.])
+from jittor.compat.torch.tensor_object_state import get_tensor_object_state
+assert not any(name in vars(jt) for name in (
+    "_torch_compat_owner", "_torch_tensor_state", "_torch_leaf_params",
+    "_torch_retained", "_active_optimizers",
+))
+import gc
+import weakref
+fresh = torch.tensor([1., 2.])
+assert get_tensor_object_state(fresh) is None
+assert fresh.grad is None and get_tensor_object_state(fresh) is None
+fresh.grad = torch.ones_like(fresh)
+object_state = get_tensor_object_state(fresh)
+assert object_state.grad is fresh.grad
+assert "_torch_grad" not in vars(fresh)
+fresh._torch_data_owner = fresh
+assert get_tensor_object_state(fresh) is object_state
+assert "_torch_data_owner" not in vars(fresh)
+fresh._jittor_torch_force_cpu = True
+fresh._torch_acl_rms_norm_unit_weight = fresh
+assert object_state.force_cpu and object_state.rms_norm_unit_weight is fresh
+assert "_jittor_torch_force_cpu" not in vars(fresh)
+assert "_torch_acl_rms_norm_unit_weight" not in vars(fresh)
+copied_state = copy.deepcopy(fresh)
+assert copied_state._torch_data_owner is copied_state
+assert copied_state._torch_acl_rms_norm_unit_weight is copied_state
+assert copied_state._jittor_torch_force_cpu
+restored_state = pickle.loads(pickle.dumps(fresh))
+assert restored_state._torch_data_owner is restored_state
+assert restored_state._torch_acl_rms_norm_unit_weight is restored_state
+assert restored_state._jittor_torch_force_cpu
+del object_state.force_cuda  # A state restored from an older pickle.
+assert not fresh._jittor_torch_force_cuda
+np.testing.assert_array_equal(restored_state.grad.numpy(), [1., 1.])
+reference = weakref.ref(fresh)
+del fresh, object_state
+gc.collect()
+assert reference() is None
+print("INDEPENDENT_TENSOR_OK")
+""")], without_torch_mode=True, merge_stderr=True)
     assert result.returncode == 0, result.stdout
     assert "INDEPENDENT_TENSOR_OK" in result.stdout

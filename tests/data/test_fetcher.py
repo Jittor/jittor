@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
@@ -21,15 +23,23 @@ class TestFetcher(unittest.TestCase):
         jt.sync_all(True)
         assert len(v)==1 and (v[0]==[2,4,6]).all()
 
-@unittest.skipIf(not jt.has_cuda, "Cuda not found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
 class TestFetcherCuda(TestFetcher):
     @classmethod
     def setUpClass(self):
-        jt.flags.use_cuda = 1
+        from _helpers.runtime_policy import fixture_stack
+        _test_policy_stack = fixture_stack(self, class_scope=True)
+        try:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
+        except BaseException:
+            _test_policy_stack.close()
+            raise
 
     @classmethod
     def tearDownClass(self):
-        jt.flags.use_cuda = 0
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
 
 if __name__ == "__main__":
     unittest.main()

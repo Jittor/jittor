@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers:
@@ -15,11 +17,15 @@ import os
 from _helpers.child_process import python_executable, shell
 
 class TestLazyExecution(unittest.TestCase):
-    @unittest.skipIf(not jt.has_cuda, "No cuda found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
     def test_lazy_execution(self):
         code = """
 import jittor as jt
-jt.flags.use_cuda = 1
+from contextlib import ExitStack as _ProcessPolicyStack
+import atexit as _process_policy_atexit
+_process_policy_scopes = _ProcessPolicyStack()
+_process_policy_atexit.register(_process_policy_scopes.close)
+_process_policy_scopes.enter_context(jt.runtime.scope(use_cuda=1))
 
 a = jt.zeros(1)
 b = jt.code([1], a.dtype, [a],
@@ -36,7 +42,7 @@ kernel<<<1,1>>>(in0_p, out0_p);
 c = a+b
 print(c)
 """
-        fpath = os.path.join(jt.flags.cache_path, "lazy_error.py")
+        fpath = os.path.join(jt.introspection.policy.startup.cache_path, "lazy_error.py")
         with open(fpath, 'w') as f:
             f.write(code)
         # shell(), not run_python_child(): this child is *meant* to abort --

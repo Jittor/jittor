@@ -18,12 +18,12 @@ class TestClone(unittest.TestCase):
             b = b.clone()
             if i==5: c=b
         b.sync()
-        assert jt.number_of_lived_vars()==11
+        assert jt.introspection.counters.live_vars==11
         c.name("c")
         c.stop_grad()
         for n in jt.dump_all_graphs().nodes_info:
             print(n)
-        assert jt.number_of_lived_vars()==3, jt.number_of_lived_vars()
+        assert jt.introspection.counters.live_vars==3, jt.introspection.counters.live_vars
 
     def test2(self):
         a = jt.array([1,2])

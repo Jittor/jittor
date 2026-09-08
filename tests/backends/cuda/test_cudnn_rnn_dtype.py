@@ -20,6 +20,8 @@ from curand under CUDA and from the CPU generator otherwise, so a test that
 builds the two sides from a seed compares two different models and reports a
 large difference regardless of the backend.
 """
+
+from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
@@ -37,7 +39,7 @@ def _load(module, weights, dtype):
         p.assign(jt.array(weights[name]).cast(dtype))
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestCudnnRnnDtype(unittest.TestCase):
     def setUp(self):
         rs = np.random.RandomState(7)

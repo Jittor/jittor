@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor.
 # All Rights Reserved. 
@@ -86,7 +88,7 @@ class TestSlice(unittest.TestCase):
         check((None,1,None,2,None), "[-,1,-,2,-,]")
         check((...,1,...,2,...), "[...,1,...,2,...,]")
 
-    @unittest.skipIf(not jt.has_cuda, "No cuda")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda")
     @jt.flag_scope(use_cuda=1)
     def test_getitem(self):
         def check(shape, slices, i_to_vs="", i_to_o="", o_shape=""):

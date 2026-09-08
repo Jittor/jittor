@@ -23,6 +23,10 @@ silently narrows int64 to int32 and float64 to float32.
 Run::  python -m pytest tests/bindings/test_item.py
 """
 
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -100,13 +104,19 @@ class TestItem(unittest.TestCase):
         self.assertEqual(var.min().item(), 55)
 
 
-@unittest.skipIf(not jt.has_cuda, "no cuda found")
+@_test_preserve_policy(jt, 'use_cuda')
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "no cuda found")
 class TestItemCuda(TestItem):
     def setUp(self):
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
 
     def tearDown(self):
-        jt.flags.use_cuda = 0
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
 
 
 if __name__ == "__main__":

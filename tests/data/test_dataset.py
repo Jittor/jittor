@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -141,7 +143,7 @@ class TestDataset2(unittest.TestCase):
             pass
 
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_dataset_use_jittor_cuda(self):
         self.test_dataset_use_jittor()
@@ -278,7 +280,7 @@ if __name__ == "__main__":
         assert "ring buffer pop timed out" in s
 
 
-    @unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")
+    @_test_capability.library_required('mpi', backend=jt)
     def test_dataset_shuffle_mpi(self):
         src = """
 import jittor as jt
@@ -300,7 +302,7 @@ for d in dataset:
     for a in d:
         print("CHECK: ", a.item())
 """
-        fname = os.path.join(jt.flags.cache_path, "test_dataset_shuffle_mpi.py")
+        fname = os.path.join(jt.introspection.policy.startup.cache_path, "test_dataset_shuffle_mpi.py")
         with open(fname, 'w') as f:
             f.write(src)
         # mpirun starts both ranks itself, so neither inherits this process'
@@ -379,7 +381,7 @@ def run_child_script(src, extra_env=None, timeout=300):
     child-launching test shares.
     """
     return _run_child_script(src, env=extra_env, timeout=timeout,
-                             directory=jt.flags.cache_path, name="dataset_child")
+                             directory=jt.introspection.policy.startup.cache_path, name="dataset_child")
 
 
 class TestChildScriptHelper(unittest.TestCase):

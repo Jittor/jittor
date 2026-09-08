@@ -1,5 +1,7 @@
 """Real TensorDict behavior through the deployed Jittor Torch shim."""
 
+from _helpers import capability as _test_capability
+
 import importlib.util
 import unittest
 
@@ -13,7 +15,7 @@ _HAS_TENSORDICT = importlib.util.find_spec("tensordict") is not None
 
 
 @unittest.skipUnless(_HAS_TENSORDICT, "tensordict is not installed")
-@unittest.skipUnless(_native_jittor.compiler.has_cuda, "CUDA is required")
+@unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=_native_jittor).enabled, "CUDA is required")
 class TestTensorDictCompat(unittest.TestCase):
     def test_cpu_conversion_uses_device_objects(self):
         from tensordict import TensorDict

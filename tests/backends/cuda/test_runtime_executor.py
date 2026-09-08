@@ -1,5 +1,7 @@
 """Runtime-owned executor access from Python-generated CUDA code."""
 
+from _helpers import capability as _test_capability
+
 import numpy as np
 import pytest
 
@@ -7,7 +9,7 @@ import pytest
 def test_unique_generated_cuda_uses_runtime_executor_allocator():
     import jittor as jt
 
-    if not jt.has_cuda:
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA runtime required")
     data = np.array([4, 1, 4, 2, 1, 3], dtype=np.int32)
     reference, inverse, counts = np.unique(data, return_inverse=True, return_counts=True)

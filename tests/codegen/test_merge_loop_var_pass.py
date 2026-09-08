@@ -10,6 +10,10 @@ The merged loop is named after the ranges it covers, so the name has to say
 which ranges those are without ambiguity -- see parse_loop_id in kernel_ir.h.
 "range0_1" is the merge of ranges 0 and 1; "range10" is range number 10.
 """
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 import itertools
 import re
 import unittest
@@ -109,7 +113,7 @@ class TestMergeLoopVarPass(unittest.TestCase):
         pre-existing split/parallel incompatibility recorded under 1.04, not
         something this pass can do anything about.
         """
-        splits = (0,) if jt.flags.use_cuda else (0, 1, 2, 3)
+        splits = (0,) if jt.introspection.policy.runtime.use_cuda else (0, 1, 2, 3)
         for nd, nsplit in itertools.product((7, 8, 9, 10), splits):
             shape = [2] * nd
             a = jt.random(shape)
@@ -128,14 +132,20 @@ class TestMergeLoopVarPass(unittest.TestCase):
                                        err_msg="ndim=%d splits=%d" % (nd, nsplit))
 
 
-@unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+@_test_preserve_policy(jt, 'use_cuda')
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestMergeLoopVarPassCuda(TestMergeLoopVarPass):
     def setUp(self):
-        self._previous_use_cuda = jt.flags.use_cuda
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._previous_use_cuda = jt.introspection.policy.runtime.use_cuda
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
     def tearDown(self):
-        jt.sync_all()
-        jt.flags.use_cuda = self._previous_use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            jt.sync_all()
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._previous_use_cuda))
 
 if __name__ == "__main__":
     unittest.main()

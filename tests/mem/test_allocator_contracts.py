@@ -9,6 +9,8 @@
 See ``agent/skills/jittor-allocator-flag-matrix`` for why each flag
 combination below is needed and how to add a new one.
 """
+
+from _helpers import capability as _test_capability
 import gc
 import unittest
 from pathlib import Path
@@ -124,7 +126,7 @@ class TestAllocatorContracts(unittest.TestCase):
         jt.gc()
 
 
-@unittest.skipIf(not jt.has_cuda, "Cuda not found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
 class TestAllocatorContractsCuda(TestAllocatorContracts):
 
     def setUp(self):

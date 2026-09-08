@@ -1,4 +1,6 @@
 """Materialized stride-zero views remain usable by generated kernels."""
+
+from _helpers import capability as _test_capability
 import numpy as np
 import pytest
 import jittor as jt
@@ -8,7 +10,7 @@ pytestmark = pytest.mark.usefixtures("storage_device")
 
 @pytest.fixture(params=("cpu", "cuda"))
 def storage_device(request):
-    if request.param == "cuda" and not jt.has_cuda:
+    if request.param == "cuda" and not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA compiler and device required")
     with jt.flag_scope(use_cuda=int(request.param == "cuda"), backend_fallback="error"):
         yield
@@ -28,7 +30,7 @@ def test_expanded_storage_consumers_and_readback():
     assert not b.data.flags.writeable
     added = b + b
     added.sync()
-    if jt.flags.use_cuda:
+    if jt.introspection.policy.runtime.use_cuda:
         assert added.location() == "device"
     np.testing.assert_array_equal(added.numpy(), expected * 2)
     np.testing.assert_array_equal((-b).numpy(), -expected)

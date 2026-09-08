@@ -17,6 +17,8 @@ Every kernel result is checked against an INDEPENDENT numpy reference.
 Run:  python -m pytest compat/tests/triton/test_triton_backend.py
       python -m pytest compat/tests/triton/test_triton_backend.py
 """
+
+from _helpers import capability as _test_capability
 import importlib.util
 import unittest
 import numpy as np
@@ -24,7 +26,7 @@ import numpy as np
 import jittor as jt
 
 
-_HAVE = bool(jt.has_cuda and importlib.util.find_spec("triton") is not None)
+_HAVE = bool(_test_capability.check_accelerator('cuda', backend=jt).enabled and importlib.util.find_spec("triton") is not None)
 _shim = None
 triton = None
 tl = None
@@ -206,22 +208,30 @@ def setUpModule():
 class TestTritonBackend(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        super().setUpClass()
-        cls._previous_use_cuda = jt.flags.use_cuda
+        from _helpers.runtime_policy import fixture_stack
+        _test_policy_stack = fixture_stack(cls, class_scope=True)
         try:
-            jt.flags.use_cuda = 1
-            if not _shim.activate_bridge():
-                raise unittest.SkipTest("jittor Triton bridge is unavailable")
+            super().setUpClass()
+            cls._previous_use_cuda = jt.introspection.policy.runtime.use_cuda
+            try:
+                _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
+                if not _shim.activate_bridge():
+                    raise unittest.SkipTest("jittor Triton bridge is unavailable")
+            except BaseException:
+                _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=cls._previous_use_cuda))
+                raise
         except BaseException:
-            jt.flags.use_cuda = cls._previous_use_cuda
+            _test_policy_stack.close()
             raise
 
     @classmethod
     def tearDownClass(cls):
-        try:
-            jt.flags.use_cuda = cls._previous_use_cuda
-        finally:
-            super().tearDownClass()
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            try:
+                _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=cls._previous_use_cuda))
+            finally:
+                super().tearDownClass()
 
     def ac(self, got, ref, atol=1e-5, rtol=1e-5, msg=""):
         g, r = np.asarray(got), np.asarray(ref)

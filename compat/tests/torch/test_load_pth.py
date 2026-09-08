@@ -62,7 +62,7 @@ class TestLoadPth(unittest.TestCase):
         print(np.max(np.abs(jt_out.fetch_sync() - torch_out.detach().numpy())))
         assert np.max(np.abs(jt_out.fetch_sync() - torch_out.detach().numpy())) < 1e-3
 
-        pth_name = os.path.join(jt.flags.cache_path, "x.pth")
+        pth_name = os.path.join(jt.introspection.policy.startup.cache_path, "x.pth")
         torch.save(torch_model.state_dict(), pth_name)
         jt_model.load(pth_name)
 

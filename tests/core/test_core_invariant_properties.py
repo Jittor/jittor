@@ -179,59 +179,63 @@ SHAPES = {
 }
 '''
 
-_CHILD = _SHAPES + r'''
+_CHILD = _SHAPES + """
 
 def measure():
-    results = {}
-    for lazy in (1, 0):
-        jt.flags.lazy_execution = lazy
-        for name, shape in SHAPES.items():
-            # Settle first, so the delta is about this shape only. gc runs
-            # because a Python-side cycle (a traceback, a Function holding its
-            # inputs on self) also holds Vars, and that is not a leak.
-            jt.clean(); gc.collect(); jt.clean()
-            before = jt.liveness_info()["lived_vars"]
-            shape()
-            gc.collect(); jt.clean()
-            after = jt.liveness_info()["lived_vars"]
-            results["%s/lazy=%d" % (name, lazy)] = after - before
-    jt.flags.lazy_execution = 1
-    return results
+    from contextlib import ExitStack as _TestPolicyStack
+    with _TestPolicyStack() as _test_policy_stack:
+        results = {}
+        for lazy in (1, 0):
+            _test_policy_stack.enter_context(jt.runtime.scope(lazy_execution=lazy))
+            for name, shape in SHAPES.items():
+                # Settle first, so the delta is about this shape only. gc runs
+                # because a Python-side cycle (a traceback, a Function holding its
+                # inputs on self) also holds Vars, and that is not a leak.
+                jt.clean(); gc.collect(); jt.clean()
+                before = dict(hold_vars=jt.introspection.counters.held_vars, lived_vars=jt.introspection.counters.live_vars, lived_ops=jt.introspection.counters.live_ops)["lived_vars"]
+                shape()
+                gc.collect(); jt.clean()
+                after = dict(hold_vars=jt.introspection.counters.held_vars, lived_vars=jt.introspection.counters.live_vars, lived_ops=jt.introspection.counters.live_ops)["lived_vars"]
+                results["%s/lazy=%d" % (name, lazy)] = after - before
+        _test_policy_stack.enter_context(jt.runtime.scope(lazy_execution=1))
+        return results
 
 
 def sweep():
-    """The dangling-node half of graph_check, with the registry actually on.
+    from contextlib import ExitStack as _TestPolicyStack
+    with _TestPolicyStack() as _test_policy_stack:
+        \"""The dangling-node half of graph_check, with the registry actually on.
 
-    ``check_graph``'s setter turns node tracking on (6.C21: in a release build
-    the sweep used to walk an empty table and report success). So the number
-    this returns is the evidence that the sweep ran, and it is only non-zero for
-    nodes created *after* the flag went on.
-    """
-    report = {}
-    jt.clean(); gc.collect(); jt.clean()
-    # Before the flag: nothing is registered, so the sweep has nothing to walk.
-    report["swept_before_flag"] = jt.graph_check()
+        ``check_graph``'s setter turns node tracking on (6.C21: in a release build
+        the sweep used to walk an empty table and report success). So the number
+        this returns is the evidence that the sweep ran, and it is only non-zero for
+        nodes created *after* the flag went on.
+        \"""
+        report = {}
+        jt.clean(); gc.collect(); jt.clean()
+        # Before the flag: nothing is registered, so the sweep has nothing to walk.
+        report["swept_before_flag"] = jt.graph_check()
 
-    jt.flags.check_graph = 1
-    held = [jt.array([1.0, 2.0]) for _ in range(4)]
-    combined = (held[0] * held[1] + held[2]).sum()
-    jt.sync([combined])
-    report["swept_with_flag"] = jt.graph_check()
-    # The liveness half walks forward from the holders, so this is how many
-    # roots it had. It is reported separately from `swept` on purpose: the two
-    # halves cover different node sets and one can be empty while the other is
-    # not, which is the whole point of 6.C21.
-    report["hold_vars"] = jt.liveness_info()["hold_vars"]
-    report["lived_vars"] = jt.liveness_info()["lived_vars"]
-    jt.flags.check_graph = 0
-    del held, combined
-    jt.clean(); gc.collect(); jt.clean()
-    return report
+        _test_policy_stack.enter_context(jt.runtime.scope(check_graph=1))
+        held = [jt.array([1.0, 2.0]) for _ in range(4)]
+        combined = (held[0] * held[1] + held[2]).sum()
+        jt.sync([combined])
+        report["swept_with_flag"] = jt.graph_check()
+        # The liveness half walks forward from the holders, so this is how many
+        # roots it had. It is reported separately from `swept` on purpose: the two
+        # halves cover different node sets and one can be empty while the other is
+        # not, which is the whole point of 6.C21.
+        report["hold_vars"] = dict(hold_vars=jt.introspection.counters.held_vars, lived_vars=jt.introspection.counters.live_vars, lived_ops=jt.introspection.counters.live_ops)["hold_vars"]
+        report["lived_vars"] = dict(hold_vars=jt.introspection.counters.held_vars, lived_vars=jt.introspection.counters.live_vars, lived_ops=jt.introspection.counters.live_ops)["lived_vars"]
+        _test_policy_stack.enter_context(jt.runtime.scope(check_graph=0))
+        del held, combined
+        jt.clean(); gc.collect(); jt.clean()
+        return report
 
 
 out = {"deltas": measure(), "sweep": sweep()}
 print("PROPERTY-JSON " + json.dumps(out), flush=True)
-'''
+"""
 
 
 def _run_matrix():
@@ -509,7 +513,7 @@ class TestDumpedGraphProperties(unittest.TestCase):
         """``hold_vars`` heads the walk, so losing one loses its whole subgraph."""
         graphs, _keep = self._graph()
         self.assertEqual(
-            len(graphs.hold_vars), jt.liveness_info()["hold_vars"])
+            len(graphs.hold_vars), jt.introspection.counters.held_vars)
         self.assertLessEqual(len(graphs.hold_vars), len(graphs.nodes_info))
 
 

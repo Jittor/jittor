@@ -46,7 +46,11 @@ import sys
 import traceback
 import jittor as jt
 
-jt.flags.use_parallel_op_compiler = {threads}
+from contextlib import ExitStack as _ProcessPolicyStack
+import atexit as _process_policy_atexit
+_process_policy_scopes = _ProcessPolicyStack()
+_process_policy_atexit.register(_process_policy_scopes.close)
+_process_policy_scopes.enter_context(jt.runtime.scope(use_parallel_op_compiler={threads}))
 BAD = {bad}
 
 def sync(tag):
@@ -73,14 +77,18 @@ def _run(body, threads=16):
     return result.stdout.decode() + result.stderr.decode()
 
 
-_FORK_SCRIPT = r"""
+_FORK_SCRIPT = """
 import os
 import threading
 import time
 
 import jittor as jt
 
-jt.flags.use_parallel_op_compiler = 2
+from contextlib import ExitStack as _ProcessPolicyStack
+import atexit as _process_policy_atexit
+_process_policy_scopes = _ProcessPolicyStack()
+_process_policy_atexit.register(_process_policy_scopes.close)
+_process_policy_scopes.enter_context(jt.runtime.scope(use_parallel_op_compiler=2))
 
 def compile_batch(label):
     outputs = []
@@ -115,10 +123,14 @@ print("CHILD_STATUS", exit_code, flush=True)
 """
 
 
-_PREPARE_FAILURE_SCRIPT = r"""
+_PREPARE_FAILURE_SCRIPT = """
 import jittor as jt
 
-jt.flags.use_parallel_op_compiler = 0
+from contextlib import ExitStack as _ProcessPolicyStack
+import atexit as _process_policy_atexit
+_process_policy_scopes = _ProcessPolicyStack()
+_process_policy_atexit.register(_process_policy_scopes.close)
+_process_policy_scopes.enter_context(jt.runtime.scope(use_parallel_op_compiler=0))
 prepare_once = jt.compile_custom_op(r'''
 struct PrepareOnceOp : Op {
     Var* output;

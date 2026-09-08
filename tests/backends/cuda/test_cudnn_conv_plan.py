@@ -10,6 +10,9 @@ implementation) for the forward value and both gradients, across layouts,
 groups, strides, dilations and half precision, with tensor-op numerics both
 allowed and forbidden.
 """
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+from _helpers import capability as _test_capability
 from pathlib import Path
 import unittest
 
@@ -28,43 +31,49 @@ def _reference(x, w, stride, padding, dilation, groups):
         return y.numpy(), gx.numpy(), gw.numpy(), r.numpy()
 
 
-@unittest.skipIf(not jt.has_cuda, "No cuda found")
+@_test_preserve_policy(jt, 'use_cuda', 'cuda_allow_cudnn_tf32')
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
 class TestCudnnConvPlan(unittest.TestCase):
     def setUp(self):
-        self._saved = (jt.flags.use_cuda, jt.flags.cuda_allow_cudnn_tf32)
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._saved = (jt.introspection.policy.runtime.use_cuda, jt.introspection.policy.runtime.cuda_allow_cudnn_tf32)
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
 
     def tearDown(self):
-        jt.flags.use_cuda, jt.flags.cuda_allow_cudnn_tf32 = self._saved
+        pass  # fixture cleanup restores the captured runtime policy
 
     def _check(self, n, c, h, k, r, stride=1, padding=0, dilation=1, groups=1,
                dtype="float32", nhwc=False, tf32=False, tol=None):
-        rng = np.random.RandomState(0)
-        x = rng.randn(n, c, h, h).astype("float32")
-        w = rng.randn(k, c // groups, r, r).astype("float32")
-        y_ref, gx_ref, gw_ref, dout = _reference(x, w, stride, padding, dilation, groups)
-        jt.flags.cuda_allow_cudnn_tf32 = int(tf32)
-        xd = jt.array(x).cast(dtype); wd = jt.array(w).cast(dtype)
-        if nhwc:
-            xd = xd.transpose(0, 2, 3, 1); wd = wd.transpose(0, 2, 3, 1)
-            y = jt.cudnn.ops.cudnn_conv(xd, wd, stride, stride, padding, padding,
-                                        dilation, dilation, groups, "acdb", "ohwi", "")
-            y_cmp = y.transpose(0, 3, 1, 2)
-        else:
-            y = jt.cudnn.ops.cudnn_conv(xd, wd, stride, stride, padding, padding,
-                                        dilation, dilation, groups, "abcd", "oihw", "")
-            y_cmp = y
-        loss = (y_cmp.float32() * jt.array(dout)).sum()
-        gx, gw = jt.grad(loss, [xd, wd])
-        if nhwc:
-            gx = gx.transpose(0, 3, 1, 2); gw = gw.transpose(0, 3, 1, 2)
-        if tol is None:
-            tol = 2e-2 if (tf32 or dtype != "float32") else 1e-4
-        for name, got, ref in (("y", y_cmp, y_ref), ("dx", gx, gx_ref), ("dw", gw, gw_ref)):
-            got = got.float32().numpy()
-            scale = max(1.0, float(np.abs(ref).max()))
-            err = float(np.abs(got - ref).max()) / scale
-            self.assertLess(err, tol, "%s mismatch %.3g (nhwc=%s tf32=%s dtype=%s)" % (name, err, nhwc, tf32, dtype))
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            rng = np.random.RandomState(0)
+            x = rng.randn(n, c, h, h).astype("float32")
+            w = rng.randn(k, c // groups, r, r).astype("float32")
+            y_ref, gx_ref, gw_ref, dout = _reference(x, w, stride, padding, dilation, groups)
+            _test_policy_stack.enter_context(jt.runtime.scope(cuda_allow_cudnn_tf32=int(tf32)))
+            xd = jt.array(x).cast(dtype); wd = jt.array(w).cast(dtype)
+            if nhwc:
+                xd = xd.transpose(0, 2, 3, 1); wd = wd.transpose(0, 2, 3, 1)
+                y = jt.cudnn.ops.cudnn_conv(xd, wd, stride, stride, padding, padding,
+                                            dilation, dilation, groups, "acdb", "ohwi", "")
+                y_cmp = y.transpose(0, 3, 1, 2)
+            else:
+                y = jt.cudnn.ops.cudnn_conv(xd, wd, stride, stride, padding, padding,
+                                            dilation, dilation, groups, "abcd", "oihw", "")
+                y_cmp = y
+            loss = (y_cmp.float32() * jt.array(dout)).sum()
+            gx, gw = jt.grad(loss, [xd, wd])
+            if nhwc:
+                gx = gx.transpose(0, 3, 1, 2); gw = gw.transpose(0, 3, 1, 2)
+            if tol is None:
+                tol = 2e-2 if (tf32 or dtype != "float32") else 1e-4
+            for name, got, ref in (("y", y_cmp, y_ref), ("dx", gx, gx_ref), ("dw", gw, gw_ref)):
+                got = got.float32().numpy()
+                scale = max(1.0, float(np.abs(ref).max()))
+                err = float(np.abs(got - ref).max()) / scale
+                self.assertLess(err, tol, "%s mismatch %.3g (nhwc=%s tf32=%s dtype=%s)" % (name, err, nhwc, tf32, dtype))
 
     def test_plain_fp32(self):
         self._check(2, 8, 16, 4, 3, padding=1)

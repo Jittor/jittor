@@ -16,6 +16,8 @@ algorithm, a 2-D key could collide with a 3-D one, and changing
 This is the interim fix -- a fuller one moves conv3d onto the backend-API plan
 cache -- so the test asserts on the key itself.
 """
+
+from _helpers import capability as _test_capability
 import re
 import unittest
 
@@ -73,16 +75,19 @@ def _forward_and_gradients(x_np, w_np, use_cuda):
         return y.numpy(), gx.numpy(), gw.numpy()
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
-@unittest.skipIf(not jt.cudnn, "No cuDNN found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
+@_test_capability.library_required('cudnn', backend=jt)
 class TestCudnnConv3dAlgoCache(unittest.TestCase):
     def setUp(self):
-        self._saved = (jt.flags.use_cuda, jt.flags.use_tensorcore)
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
 
     def tearDown(self):
         jt.sync_all()
-        jt.flags.use_cuda, jt.flags.use_tensorcore = self._saved
+        # setUp cleanup restores placement; per-test policy scopes restore
+        # tensorcore mode even when a numerical assertion raises.
 
     def _inputs(self, dtype):
         x = jt.array(np.random.RandomState(0)

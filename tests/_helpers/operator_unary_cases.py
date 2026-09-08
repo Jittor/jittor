@@ -33,7 +33,7 @@ class UnaryOpCases:
         check("logical_not", a)
         check("bitwise_not", a)
         b = np.array([1.1, 2.2, 3.3, 4.4, -1, 0])
-        type = "float16" if (jt.flags.amp_reg & 2) else "float32"
+        type = "float16" if (jt.introspection.policy.runtime.amp_reg & 2) else "float32"
         check("log", a.astype(type))
         check("exp", a.astype(type))
         check("sqrt", a.astype(type))
@@ -62,7 +62,7 @@ class UnaryOpCases:
             ja = jt.array(b)
             jb = eval(f"jt.{op}(ja)")
             jda = jt.grad(jb, ja)
-            tol = 1e-2 if jt.flags.amp_reg & 2 else 1e-6
+            tol = 1e-2 if jt.introspection.policy.runtime.amp_reg & 2 else 1e-6
             assert (np.allclose(jda.data, da, atol=tol, rtol=tol)), (jda.data,da,op)
 
     def test_sigmoid(self):
@@ -75,7 +75,7 @@ class UnaryOpCases:
     def test_safe_clip(self):
         a = jt.array([-1.0,0,0.4,1,2,3])
         b = a.safe_clip(0.1, 0.5)
-        tol = 1e-3 if jt.flags.amp_reg & 2 else 1e-6
+        tol = 1e-3 if jt.introspection.policy.runtime.amp_reg & 2 else 1e-6
         np.testing.assert_allclose(
             b.data, [0.1,0.1,0.4,0.5,0.5,0.5], atol=tol, rtol=tol
         )
@@ -88,7 +88,7 @@ class UnaryOpCases:
         x = special.erfinv(y)
         y2 = jt.array(y)
         x2 = jt.erfinv(y2)
-        tol = 1e-3 if jt.flags.amp_reg & 2 else 1e-6
+        tol = 1e-3 if jt.introspection.policy.runtime.amp_reg & 2 else 1e-6
         np.testing.assert_allclose(x2.data, x, atol=tol, rtol=tol)
 
         y = np.linspace(-0.9, 0.9, num=10)

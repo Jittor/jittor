@@ -19,6 +19,8 @@ Two failure modes are covered.
    was rank 0 and Python believed it was rank 2 -- which does not crash, it just
    exchanges tensors with the wrong peers.
 """
+
+from _helpers import capability as _test_capability
 import os
 from pathlib import Path
 import re
@@ -106,7 +108,7 @@ class TestMpiLauncherDetection(unittest.TestCase):
         stayed disabled while Python said in_mpi -- caught now by the
         consistency check at the end of compile_extern.
         """
-        if not compile_extern.has_mpi:
+        if not _test_capability.library_enabled('mpi'):
             self.skipTest("no mpi found")
         result = _run_child(
             {"PMI_SIZE": "2", "PMI_RANK": "0", "nvcc_path": ""},

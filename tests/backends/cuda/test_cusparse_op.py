@@ -7,15 +7,17 @@
 import unittest
 import jittor as jt
 import numpy as np
+from _helpers import capability as _test_capability
 
 cusparse_ops = None
 
 
 def setUpModule():
     global cusparse_ops
-    cusparse_ops = getattr(jt.compile_extern, "cusparse_ops", None)
+    _test_capability.require_library("cusparse")
+    cusparse_ops = jt.compile_extern.cusparse_ops
     if cusparse_ops is None:
-        raise unittest.SkipTest("cuSPARSE support is unavailable")
+        raise AssertionError("cuSPARSE reported available but exposed no ops")
 
 
 class TestSpmmCsrOp(unittest.TestCase):

@@ -313,7 +313,7 @@ class TestFunction(unittest.TestCase):
             self.test_multi_grads_multi_out5()
         test()
         jt.clean()
-        self.assertEqual(jt.liveness_info()["lived_vars"], 0)
+        self.assertEqual(jt.introspection.counters.live_vars, 0)
 
     def test_zmem_leak2(self):
         def test():
@@ -335,7 +335,7 @@ class TestFunction(unittest.TestCase):
         test()
         jt.clean()
         jt.dump_all_graphs()
-        self.assertEqual(jt.liveness_info()["lived_vars"], 0)
+        self.assertEqual(jt.introspection.counters.live_vars, 0)
 
     @pytest.mark.slow
     def test_zmem_leak3(self):
@@ -357,16 +357,24 @@ class TestFunction(unittest.TestCase):
             jt.sync(g)
         assert_rss_growth_bounded(
             test, iterations=512, max_growth_bytes=4 << 20, cleanup=jt.clean)
-        self.assertEqual(jt.liveness_info()["lived_vars"], 0)
+        self.assertEqual(jt.introspection.counters.live_vars, 0)
 
 
 class TestFunctionWithEagerExecution(TestFunction):
     @classmethod
     def setUpClass(self):
-        jt.flags.lazy_execution = 0
+        from _helpers.runtime_policy import fixture_stack
+        _test_policy_stack = fixture_stack(self, class_scope=True)
+        try:
+            _test_policy_stack.enter_context(jt.runtime.scope(lazy_execution=0))
+        except BaseException:
+            _test_policy_stack.close()
+            raise
     @classmethod
     def tearDownClass(self):
-        jt.flags.lazy_execution = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(lazy_execution=1))
 
 class TestFunctionCallIsIndependent(unittest.TestCase):
     """One Function instance called twice used to corrupt the first backward.

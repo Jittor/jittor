@@ -5,6 +5,8 @@
 # ***************************************************************
 """Autograd semantics are selected by a policy, not a core Torch flag."""
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import jittor as jt
@@ -39,7 +41,7 @@ class TestAutogradPolicy(unittest.TestCase):
             self.assertTrue(self._stopped_output().is_stop_grad())
             self.assertTrue(self._assigned_parameter().requires_grad)
 
-    @unittest.skipUnless(jt.has_cuda, "CUDA is not available")
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA is not available")
     def test_explicit_requires_grad_policy_on_cuda(self):
         with jt.flag_scope(use_cuda=1):
             with jt.autograd.policy_scope(jt.autograd.EXPLICIT_REQUIRES_GRAD):

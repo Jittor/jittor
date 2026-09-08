@@ -1,5 +1,7 @@
 """Fusion dispatch follows output autograd semantics, not process mode alone."""
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -30,7 +32,7 @@ class TestOutputGradPolicy(unittest.TestCase):
         self.assertFalse(returned[1][0].requires_grad)
 
 
-@unittest.skipUnless(jt.has_cuda, "fusion policy CUDA checks need CUDA")
+@unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "fusion policy CUDA checks need CUDA")
 class TestCudaFusionGradPolicy(unittest.TestCase):
     def test_stopped_input_uses_inference_fusion_without_no_grad_scope(self):
         raw = np.random.RandomState(0).randn(3, 16).astype("float32")

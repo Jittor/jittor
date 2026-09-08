@@ -1,5 +1,7 @@
 """Real CPU-only kernel fallback, distinct from explicit host/device copies."""
 
+from _helpers import capability as _test_capability
+
 import gc
 import json
 import re
@@ -15,7 +17,7 @@ FALLBACK_MESSAGE = r"Backend fallback: op=code backend=cuda target=cpu reason=\S
 def cuda_runtime():
     import jittor as jt
 
-    if not jt.has_cuda or jt.get_device_count() < 1:
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled or _test_capability.device_count('cuda', backend=jt) < 1:
         pytest.skip("backend fallback policy requires a real CUDA device")
     return jt
 

@@ -6,8 +6,8 @@
 用户最新要求：后续改动不 push。已推送的最新批次是 `c618d841d`；此后的本地
 整合继续推进，未经新的用户指令不恢复推送。vLLM放本仓
 `adapters/jittor_adapters/vllm`，复用现有adapters发行物；外部提取目录先保留，
-不是交付前置。7.18、10.23、7.12、8.12、7.19、7.20已在本地收口，当前261条已合并、13条代码/性能未完成，
-远端仍是255条已合并；以后报进度须注明本地与远端区别。
+不是交付前置。7.18、10.23、7.12、8.12、7.19、7.20、10.20已在本地收口，当前262条已合并、12条代码/性能未完成，
+本会话最后推送版本记录255条已合并；未重新查询远端是否有他人更新，报进度须注明本地范围。
 
 ## 当前开发底座
 
@@ -48,7 +48,8 @@ tests/_helpers/pytest_policy.py，旧路径不再作为可执行选择器。386�
 不修改pytest nodeid。布局与包证据见[记录](../results/2026-09-08-test-layout-integration.md)。
 legacy移除及只读introspection基座已按新测试路径整合，正式CPU-only入口7项
 通过，已有CUDA构建16项及27个相关兼容契约通过；详见
-[单一前端记录](../results/2026-09-08-single-torch-frontend.md)。10.20还需完成消费者迁移，
+[单一前端记录](../results/2026-09-08-single-torch-frontend.md)。10.20消费者与共享pytest策略已整合，
+能力失败、fixture恢复和启动封印绕过均有定向合同，见[调用者记录](../results/2026-09-08-introspection-consumers.md)。
 8.12的后端plan缓存device生命周期已整合并关闭，双卡cuFFT/cuDNN/cuTT共6项通过，
 最后cuTT析构回调保护由主机负向测试验证，详见[缓存记录](../results/2026-09-08-backend-plan-cache-lifetime.md)。
 FSDP 的通信、mesh、

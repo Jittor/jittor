@@ -6,6 +6,8 @@ CPU+CUDA.
 
 Run:  python -m pytest compat/tests/torch/test_torch_compat_attention.py
 """
+
+from _helpers import capability as _test_capability
 import unittest
 import os
 import pathlib
@@ -23,7 +25,7 @@ from jittor.compat.torch.installers.nn import attention as _attention_impl
 
 from _helpers.child_process import run_python_child
 
-_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if jt.has_cuda else [])
+_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if _test_capability.any_accelerator_enabled(backend=jt) else [])
 
 
 def _flash_stats(*, reset=False):
@@ -214,7 +216,7 @@ class TestSDPA(Base):
 
         both_devices(body)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_sdpa_fp16_training_fallback_mask_and_causal(self):
         rng = np.random.RandomState(53)
         q = rng.randn(2, 4, 8, 16).astype("float32")
@@ -242,7 +244,7 @@ class TestSDPA(Base):
                     self.assertTrue(np.isfinite(got_grad).all(),
                                     name + " " + tensor_name + " grad")
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_sdpa_short_training_prefers_math(self):
         from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
@@ -281,7 +283,7 @@ class TestSDPA(Base):
             self.ac(got, expected, atol=6e-3, rtol=6e-3,
                     msg="short training math %s gradient" % name)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_sdpa_short_square_inference_prefers_math(self):
         rng = np.random.RandomState(97)
         q = rng.randn(1, 12, 50, 64).astype("float32")
@@ -308,7 +310,7 @@ class TestSDPA(Base):
         self.ac(got, _sdpa_ref(q, k, v), atol=3e-3, rtol=3e-3,
                 msg="short square inference math SDPA")
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_required_flash_backend_returning_none_raises(self):
         from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
@@ -322,7 +324,7 @@ class TestSDPA(Base):
             with self.assertRaisesRegex(RuntimeError, "returned no output"):
                 torch.nn.functional.scaled_dot_product_attention(q, q, q)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_native_flash_receives_compact_gqa_kv_heads(self):
         from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
@@ -354,7 +356,7 @@ class TestSDPA(Base):
             (1, 3, 2, 32),
         ))
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_native_flash_rejects_head_mismatch_without_gqa(self):
         from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
@@ -372,7 +374,7 @@ class TestSDPA(Base):
         loader.assert_not_called()
         backend.flash_attn_func.assert_not_called()
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_static_inference_reuses_capability_checked_backend(self):
         from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
@@ -426,7 +428,7 @@ class TestSDPA(Base):
         finally:
             cache.clear()
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_training_reuses_capability_checked_backend(self):
         from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
@@ -461,7 +463,7 @@ class TestSDPA(Base):
         finally:
             cache.clear()
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_static_inference_does_not_cache_backend_across_env_race(self):
         from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
@@ -614,7 +616,7 @@ assert after == before + 1, (before, after)
         finally:
             setattr(sys, attr, original)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_static_inference_cache_disables_without_environment_epoch(self):
         from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
@@ -1164,7 +1166,7 @@ assert after == before + 1, (before, after)
 
         both_devices(body)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_sdpa_cuda_routes_masked_rows_through_safe_softmax(self):
         from jittor.backends.cuda.kernels.nn import softmax_cuda
 
@@ -1194,7 +1196,7 @@ assert after == before + 1, (before, after)
         self.assertTrue(np.isfinite(masked.numpy()).all())
         self.assertTrue(np.isfinite(causal.numpy()).all())
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     def test_sdpa_native_flash_attn_fp16_cuda(self):
@@ -1212,7 +1214,7 @@ assert after == before + 1, (before, after)
         self.assertIn("flashattn_jittor", str(stats.get("backend", "")))
         self.ac(got, _sdpa_ref(q, k, v), atol=2e-3, rtol=2e-3, msg="sdpa native flash fp16 cuda")
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     def test_sdpa_native_flash_attn_backward_fp16_cuda(self):
@@ -1242,7 +1244,7 @@ assert after == before + 1, (before, after)
             self.ac(got, expected, atol=6e-3, rtol=6e-3,
                     msg="sdpa native flash %s gradient" % name)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
@@ -1316,7 +1318,7 @@ assert after == before + 1, (before, after)
                         msg="sdpa native flash mask fallback %s %s gradient"
                         % (name, tensor_name))
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
@@ -1324,7 +1326,7 @@ assert after == before + 1, (before, after)
     def test_sdpa_native_flash_attn_mask_fallback_fp16_cuda(self):
         self._check_sdpa_native_flash_mask_fallback("float16", 3e-3, 6e-3)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
@@ -1332,7 +1334,7 @@ assert after == before + 1, (before, after)
     def test_sdpa_native_flash_attn_mask_fallback_bf16_cuda(self):
         self._check_sdpa_native_flash_mask_fallback("bfloat16", 3e-2, 3e-2)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
@@ -1390,7 +1392,7 @@ assert after == before + 1, (before, after)
             self.assertTrue(np.isfinite(trained).all())
             self.assertGreater(float(np.max(np.abs(trained - q))), 0.0)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
@@ -1424,7 +1426,7 @@ assert after == before + 1, (before, after)
             self.ac(got, expected, atol=3e-2, rtol=3e-2,
                     msg="sdpa native hdim64 bf16 flash %s gradient" % name)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
@@ -1458,7 +1460,7 @@ assert after == before + 1, (before, after)
             self.ac(got, expected, atol=3e-2, rtol=3e-2,
                     msg="sdpa native hdim96 bf16 flash %s gradient" % name)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
@@ -1492,7 +1494,7 @@ assert after == before + 1, (before, after)
             self.ac(got, expected, atol=3e-2, rtol=3e-2,
                     msg="sdpa native hdim128 bf16 flash %s gradient" % name)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
@@ -1526,7 +1528,7 @@ assert after == before + 1, (before, after)
             self.ac(got, expected, atol=3e-2, rtol=3e-2,
                     msg="sdpa native hdim192 bf16 flash %s gradient" % name)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
@@ -1560,7 +1562,7 @@ assert after == before + 1, (before, after)
             self.ac(got, expected, atol=3e-2, rtol=3e-2,
                     msg="sdpa native hdim256 bf16 flash %s gradient" % name)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
@@ -1594,7 +1596,7 @@ assert after == before + 1, (before, after)
             self.ac(got, expected, atol=3e-3, rtol=3e-3,
                     msg="sdpa native hdim64 flash %s gradient" % name)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
@@ -1628,7 +1630,7 @@ assert after == before + 1, (before, after)
             self.ac(got, expected, atol=3e-3, rtol=3e-3,
                     msg="sdpa native hdim96 flash %s gradient" % name)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
@@ -1662,7 +1664,7 @@ assert after == before + 1, (before, after)
             self.ac(got, expected, atol=3e-3, rtol=3e-3,
                     msg="sdpa native hdim128 flash %s gradient" % name)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
@@ -1696,7 +1698,7 @@ assert after == before + 1, (before, after)
             self.ac(got, expected, atol=4e-3, rtol=4e-3,
                     msg="sdpa native hdim192 flash %s gradient" % name)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
@@ -1798,7 +1800,7 @@ assert after == before + 1, (before, after)
         self.assertTrue(np.isfinite(forward_value).all())
         self.assertGreater(float(np.abs(forward_value).sum()), 0.0)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
@@ -1806,7 +1808,7 @@ assert after == before + 1, (before, after)
     def test_native_flash_attn_dropout_replays_seed_and_backward(self):
         self._check_native_flash_attn_dropout("float16")
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
@@ -1814,7 +1816,7 @@ assert after == before + 1, (before, after)
     def test_native_flash_attn_dropout_replays_seed_and_backward_bf16(self):
         self._check_native_flash_attn_dropout("bfloat16")
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
@@ -1824,7 +1826,7 @@ assert after == before + 1, (before, after)
     def test_native_flash_attn_dropout_hdim64_fp16(self):
         self._check_native_flash_attn_dropout("float16", 64)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
@@ -1875,7 +1877,7 @@ assert after == before + 1, (before, after)
             self.ac(got, np.concatenate(expected), atol=grad_tol, rtol=grad_tol,
                     msg="native flash varlen %s gradient" % name)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
@@ -1883,7 +1885,7 @@ assert after == before + 1, (before, after)
     def test_native_flash_attn_varlen_backward_fp16_cuda(self):
         self._check_native_flash_attn_varlen_backward("float16", 3e-3, 6e-3)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
@@ -1891,7 +1893,7 @@ assert after == before + 1, (before, after)
     def test_native_flash_attn_varlen_backward_bf16_cuda(self):
         self._check_native_flash_attn_varlen_backward("bfloat16", 3e-2, 3e-2)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
@@ -1901,7 +1903,7 @@ assert after == before + 1, (before, after)
     def test_native_flash_attn_varlen_backward_hdim64_fp16_cuda(self):
         self._check_native_flash_attn_varlen_backward("float16", 3e-3, 6e-3, 64)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
@@ -1939,7 +1941,7 @@ assert after == before + 1, (before, after)
         self.ac(fetched[1], expected_grad, atol=0.0, rtol=0.0,
                 msg="native qkvpacked gradient")
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
@@ -1947,7 +1949,7 @@ assert after == before + 1, (before, after)
     def test_native_flash_attn_qkvpacked_backward_matches_dense(self):
         self._check_native_flash_attn_qkvpacked_backward("float16")
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
@@ -1955,7 +1957,7 @@ assert after == before + 1, (before, after)
     def test_native_flash_attn_qkvpacked_backward_matches_dense_bf16(self):
         self._check_native_flash_attn_qkvpacked_backward("bfloat16")
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
@@ -1965,7 +1967,7 @@ assert after == before + 1, (before, after)
     def test_native_flash_attn_qkvpacked_backward_hdim64_fp16(self):
         self._check_native_flash_attn_qkvpacked_backward("float16", 64)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
@@ -1975,7 +1977,7 @@ assert after == before + 1, (before, after)
     def test_native_flash_attn_qkvpacked_backward_hdim64_bf16(self):
         self._check_native_flash_attn_qkvpacked_backward("bfloat16", 64)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
@@ -1987,7 +1989,7 @@ assert after == before + 1, (before, after)
         self._check_native_flash_attn_varlen_backward("float16", 3e-3, 6e-3, 96)
         self._check_native_flash_attn_qkvpacked_backward("float16", 96)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
@@ -1999,7 +2001,7 @@ assert after == before + 1, (before, after)
         self._check_native_flash_attn_varlen_backward("bfloat16", 3e-2, 3e-2, 96)
         self._check_native_flash_attn_qkvpacked_backward("bfloat16", 96)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
@@ -2011,7 +2013,7 @@ assert after == before + 1, (before, after)
         self._check_native_flash_attn_varlen_backward("float16", 3e-3, 6e-3, 128)
         self._check_native_flash_attn_qkvpacked_backward("float16", 128)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
@@ -2023,7 +2025,7 @@ assert after == before + 1, (before, after)
         self._check_native_flash_attn_varlen_backward("bfloat16", 3e-2, 3e-2, 128)
         self._check_native_flash_attn_qkvpacked_backward("bfloat16", 128)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
@@ -2035,7 +2037,7 @@ assert after == before + 1, (before, after)
         self._check_native_flash_attn_varlen_backward("float16", 3e-3, 6e-3, 192)
         self._check_native_flash_attn_qkvpacked_backward("float16", 192)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
@@ -2047,7 +2049,7 @@ assert after == before + 1, (before, after)
         self._check_native_flash_attn_varlen_backward("bfloat16", 3e-2, 3e-2, 192)
         self._check_native_flash_attn_qkvpacked_backward("bfloat16", 192)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
@@ -2058,14 +2060,14 @@ assert after == before + 1, (before, after)
         from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         if flashattn_jittor._official_dropout_backward_supported(
-                256, jt.flags.cuda_archs):
+                256, jt.introspection.policy.startup.cuda_archs):
             self._check_native_flash_attn_dropout("float16", 256)
         else:
             self._check_native_flash_attn_dropout_backward_rejected("float16", 256)
         self._check_native_flash_attn_varlen_backward("float16", 3e-3, 6e-3, 256)
         self._check_native_flash_attn_qkvpacked_backward("float16", 256)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
@@ -2076,14 +2078,14 @@ assert after == before + 1, (before, after)
         from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         if flashattn_jittor._official_dropout_backward_supported(
-                256, jt.flags.cuda_archs):
+                256, jt.introspection.policy.startup.cuda_archs):
             self._check_native_flash_attn_dropout("bfloat16", 256)
         else:
             self._check_native_flash_attn_dropout_backward_rejected("bfloat16", 256)
         self._check_native_flash_attn_varlen_backward("bfloat16", 3e-2, 3e-2, 256)
         self._check_native_flash_attn_qkvpacked_backward("bfloat16", 256)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     def test_sdpa_native_flash_attn_gqa_fp16_cuda(self):
@@ -2106,7 +2108,7 @@ assert after == before + 1, (before, after)
         self.ac(got, expected, atol=3e-3, rtol=3e-3,
                 msg="sdpa native flash gqa fp16 cuda")
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     def test_sdpa_native_flash_attn_float32_opt_in_cast_cuda(self):
@@ -2133,7 +2135,7 @@ assert after == before + 1, (before, after)
         self.assertGreaterEqual(stats.get("casts", {}).get("float32_to_float16", 0), 1)
         self.ac(got, _sdpa_ref(q, k, v), atol=2e-3, rtol=2e-3, msg="sdpa native flash fp32 opt-in cast cuda")
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_flash_attn_packed_split_cuda(self):
         from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 

@@ -27,6 +27,8 @@ skill on changes under ``backends/cuda/include``).
 Run::  python -m pytest tests/backends/cuda/test_peek_cuda_error.py
 """
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import jittor as jt
@@ -34,27 +36,31 @@ import jittor as jt
 from _helpers.child_process import run_child_script
 
 
-PROBE = r'''
+PROBE = """
 import jittor as jt
-jt.flags.use_cuda = 1
+from contextlib import ExitStack as _ProcessPolicyStack
+import atexit as _process_policy_atexit
+_process_policy_scopes = _ProcessPolicyStack()
+_process_policy_atexit.register(_process_policy_scopes.close)
+_process_policy_scopes.enter_context(jt.runtime.scope(use_cuda=1))
 a = jt.zeros(1)
 b = jt.code([1], a.dtype, [a],
-cuda_header="""
+cuda_header=\"""
 #include "helper_cuda.h"
-""",
-cuda_src="""
+\""",
+cuda_src=\"""
 __global__ void kernel(float32* a, float32* b) { b[0] = a[0]; }
 kernel<<<1,1>>>(in0_p, out0_p);
 peekCudaErrors(cudaErrorInvalidValue);
 peekCudaErrors(cudaErrorInvalidValue);
 peekCudaErrors(cudaErrorInvalidDevice);
-""")
+\""")
 b.sync()
 print("DONE")
-'''
+"""
 
 
-@unittest.skipIf(not jt.has_cuda, "No cuda found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
 class TestPeekCudaError(unittest.TestCase):
     def test_every_call_site_is_reported(self):
         done = run_child_script(PROBE, text=True, merge_stderr=True,

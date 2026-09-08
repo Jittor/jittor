@@ -13,6 +13,10 @@ Task 7.09.  Three defects from the compat audit's "custom operators" section:
 
 Run: python -m pytest compat/tests/torch/test_torch_compat_library_dispatch.py
 """
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
@@ -29,17 +33,23 @@ def _fresh_ns():
     return "jittor_dispatch_%d" % _COUNTER[0]
 
 
+@_test_preserve_policy(jt, 'use_cuda')
 class TestDispatchKeySelection(unittest.TestCase):
     def setUp(self):
         # These cases are about which registered kernel gets picked, so they
         # need residency pinned to CPU. Setting the flag inside each test left
         # it set for every file that ran afterwards -- and the flag is
         # process-global, so "afterwards" means the rest of the session.
-        self._previous_use_cuda = jt.flags.use_cuda
-        jt.flags.use_cuda = 0
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._previous_use_cuda = jt.introspection.policy.runtime.use_cuda
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
 
     def tearDown(self):
-        jt.flags.use_cuda = self._previous_use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._previous_use_cuda))
 
     def _op(self, keys_to_impls, schema="f(Tensor x) -> Tensor"):
         ns = _fresh_ns()
@@ -117,7 +127,7 @@ class TestDispatchKeySelection(unittest.TestCase):
             op(jt.zeros(2))
         self.assertIn("XLA", str(cm.exception))
 
-    @unittest.skipUnless(jt.has_cuda, "needs an accelerator")
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "needs an accelerator")
     def test_cuda_tensor_takes_the_cuda_kernel(self):
         op = self._op([("CPU", lambda x: x + 1), ("CUDA", lambda x: x + 100)])
         with jt.flag_scope(use_cuda=1):

@@ -31,6 +31,8 @@ only ``sync``-dependent step is whether the two statistics are all-reduced.
 functionals.
 """
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -371,7 +373,7 @@ class TestNormParityCPU(_NormParity, unittest.TestCase):
     use_cuda = 0
 
 
-@unittest.skipIf(not jt.has_cuda, "no CUDA")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "no CUDA")
 class TestNormParityCUDA(_NormParity, unittest.TestCase):
     use_cuda = 1
 

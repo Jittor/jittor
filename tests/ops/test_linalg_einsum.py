@@ -1,3 +1,7 @@
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved.
 # This file is subject to the terms and conditions defined in
@@ -163,14 +167,20 @@ class TestLinalgEinsum(unittest.TestCase):
             jt.linalg.einsum("i,i->", a, b).sync()
 
 
-@unittest.skipIf(not jt.has_cuda, "no cuda")
+@_test_preserve_policy(jt, 'use_cuda')
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "no cuda")
 class TestLinalgEinsumCuda(TestLinalgEinsum):
     def setUp(self):
-        self._old = jt.flags.use_cuda
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._old = jt.introspection.policy.runtime.use_cuda
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
 
     def tearDown(self):
-        jt.flags.use_cuda = self._old
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._old))
 
 
 if __name__ == "__main__":

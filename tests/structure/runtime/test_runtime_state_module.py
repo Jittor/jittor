@@ -290,7 +290,7 @@ def test_native_snapshot_contains_python_values_without_allocating_tensors():
         else:
             assert value is None or type(value) in (int, bool, float, str), type(value)
 
-    held_before = jt.liveness_info()["hold_vars"]
+    held_before = jt.introspection.counters.held_vars
     check_value(jt.runtime.snapshot())
     check_value(jt.config.snapshot())
-    assert jt.liveness_info()["hold_vars"] == held_before
+    assert jt.introspection.counters.held_vars == held_before

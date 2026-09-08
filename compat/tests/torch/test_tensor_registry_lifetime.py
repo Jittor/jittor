@@ -10,7 +10,7 @@ from _helpers.child_process import run_python_child
     "unowned_parameter", "retain_contract",
 ))
 def test_independent_autograd_registration_lifetime(case):
-    script = r'''
+    script = """
 import gc
 import sys
 import weakref
@@ -19,7 +19,7 @@ from jittor.compat.shim import activate
 torch = activate()["torch"]
 x = torch.tensor([2.], requires_grad=True)
 import jittor as jt
-if jt.flags.use_cuda:
+if jt.introspection.policy.runtime.use_cuda:
     x.sync()
     assert x.location() == "device", "CUDA probe silently used host storage"
 case = sys.argv[1]
@@ -75,7 +75,7 @@ elif case == "retain_contract":
     else:
         raise AssertionError("retain_grad accepted a non-differentiable Tensor")
 print("REGISTRY_LIFETIME_OK")
-'''
+"""
     result = run_python_child(
         ["-c", script, case], without_torch_mode=True, merge_stderr=True,
     )

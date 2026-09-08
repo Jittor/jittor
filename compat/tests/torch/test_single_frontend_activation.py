@@ -1,4 +1,6 @@
 """Torch activation has one target and cannot install onto the native backend."""
+
+from _helpers import capability as _test_capability
 import os
 import types
 from unittest import mock
@@ -59,7 +61,7 @@ def test_native_dtype_casts_and_independent_cpu_cuda_storage_and_gradients():
     assert not callable(torch.float32)
     with pytest.raises(TypeError):
         torch.float32([1., 2.])
-    devices = ["cpu"] + (["cuda"] if jt.has_cuda else [])
+    devices = ["cpu"] + (["cuda"] if _test_capability.check_accelerator('cuda', backend=jt).enabled else [])
     for device in devices:
         value = torch.tensor([[1., 2.], [3., 4.]], dtype=torch.float64,
                              requires_grad=True, device=device)

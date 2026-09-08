@@ -84,7 +84,7 @@ class TestTraceVar(unittest.TestCase):
 
             data = jt.dump_trace_data()
             jt.clear_trace_data()
-            with open(f"{jt.flags.cache_path}/simple_model.pkl", "wb") as f:
+            with open(f"{jt.introspection.policy.startup.cache_path}/simple_model.pkl", "wb") as f:
                 pickle.dump(data, f)
 
     def test_simple_model_train(self):
@@ -111,7 +111,7 @@ class TestTraceVar(unittest.TestCase):
                 if v["attrs"]["name"] == "unname":
                     assert 0
             print(len(data["node_data"]))
-            with open(f"{jt.flags.cache_path}/simple_model_train.pkl", "wb") as f:
+            with open(f"{jt.introspection.policy.startup.cache_path}/simple_model_train.pkl", "wb") as f:
                 pickle.dump(data, f)
 
     def test_resnet_infer(self):
@@ -124,7 +124,7 @@ class TestTraceVar(unittest.TestCase):
 
             data = jt.dump_trace_data()
             jt.clear_trace_data()
-            with open(f"{jt.flags.cache_path}/resnet.pkl", "wb") as f:
+            with open(f"{jt.introspection.policy.startup.cache_path}/resnet.pkl", "wb") as f:
                 pickle.dump(data, f)
             for k,v in data["execute_op_info"].items():
                 for i in v['fused_ops']:
@@ -135,7 +135,7 @@ class TestTraceVar(unittest.TestCase):
     def test_resnet_infer_with_feature(self):
         cat_url = "https://ss1.bdstatic.com/70cFuXSh_Q1YnxGkpoWK1HF6hhy/it/u=3782485413,1118109468&fm=26&gp=0.jpg"
         import jittor_utils
-        cat_path = f"{jt.flags.cache_path}/cat.jpg"
+        cat_path = f"{jt.introspection.policy.startup.cache_path}/cat.jpg"
         print("download")
         jittor_utils.download(cat_url, cat_path)
         with open(cat_path, 'rb') as f:
@@ -155,7 +155,7 @@ class TestTraceVar(unittest.TestCase):
 
             data = jt.dump_trace_data()
             jt.clear_trace_data()
-            with open(f"{jt.flags.cache_path}/resnet_with_feature.pkl", "wb") as f:
+            with open(f"{jt.introspection.policy.startup.cache_path}/resnet_with_feature.pkl", "wb") as f:
                 pickle.dump(data, f)
             for k,v in data["execute_op_info"].items():
                 for i in v['fused_ops']:
@@ -175,7 +175,7 @@ class TestTraceVar(unittest.TestCase):
 
             data = jt.dump_trace_data()
             jt.clear_trace_data()
-            with open(f"{jt.flags.cache_path}/resnet_train.pkl", "wb") as f:
+            with open(f"{jt.introspection.policy.startup.cache_path}/resnet_train.pkl", "wb") as f:
                 pickle.dump(data, f)
             for k,v in data["execute_op_info"].items():
                 for i in v['fused_ops']:

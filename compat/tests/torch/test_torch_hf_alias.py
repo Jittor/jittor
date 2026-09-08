@@ -11,6 +11,7 @@
 import os
 import sys
 import unittest
+from _helpers import capability as _test_capability
 
 import numpy as np
 
@@ -111,8 +112,8 @@ class TestTorchHFAlias(unittest.TestCase):
                 self.assertTrue(np.allclose(y1, y2, atol=1e-5), f"{arch} eval forward is unstable")
 
     def test_alias_uses_cuda_when_available(self):
-        if getattr(jt, "has_cuda", 0):
-            self.assertEqual(jt.flags.use_cuda, 1)
+        if _test_capability.check_accelerator("cuda", backend=jt).enabled:
+            self.assertEqual(jt.introspection.policy.runtime.use_cuda, 1)
 
 
 if __name__ == "__main__":

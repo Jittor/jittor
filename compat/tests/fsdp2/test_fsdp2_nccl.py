@@ -8,6 +8,8 @@ Set ``JITTOR_NCCL_WORLD_SIZE`` and expose at least that many devices to run
 more than the default two ranks.
 """
 
+from _helpers import capability as _test_capability
+
 import importlib
 import math
 import unittest
@@ -45,7 +47,7 @@ def _linear_grads(weight, bias, inputs, target):
 
 
 @unittest.skipUnless(
-    jt.has_cuda and int(jt.world_size) >= 2 and fsdp2._common._in_true_distributed(),
+    _test_capability.check_accelerator('cuda', backend=jt).enabled and int(jt.world_size) >= 2 and fsdp2._common._in_true_distributed(),
     "requires the multi-rank NCCL nox gate",
 )
 class TestFSDP2Nccl(unittest.TestCase):

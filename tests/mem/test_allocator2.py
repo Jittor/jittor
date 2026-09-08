@@ -22,10 +22,10 @@ def check_allocation(h, w, total_alloc_call, total_alloc_byte, total_free_call =
             del a,b,c
             gc.collect()
             x = (
-                jt.flags.stat_allocator_total_alloc_call,
-                jt.flags.stat_allocator_total_alloc_byte,
-                jt.flags.stat_allocator_total_free_call,
-                jt.flags.stat_allocator_total_free_byte
+                jt.introspection.counters.allocator.alloc_calls,
+                jt.introspection.counters.allocator.allocated_bytes,
+                jt.introspection.counters.allocator.free_calls,
+                jt.introspection.counters.allocator.freed_bytes
             )
             y = (total_alloc_call, total_alloc_byte, total_free_call, total_free_byte)
             assert x==y, (x, y)

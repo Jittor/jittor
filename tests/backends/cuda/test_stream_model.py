@@ -5,6 +5,8 @@
 # ***************************************************************
 """Per-device copy/communication streams and their event dependencies."""
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -13,16 +15,13 @@ import jittor as jt
 
 
 def _device_count():
-    try:
-        return int(jt.get_device_count())
-    except Exception:
-        return 0
+    return int(_test_capability.device_count('cuda', backend=jt))
 
 
 class TestCudaStreamModel(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        if not jt.has_cuda or _device_count() < 2:
+        if not _test_capability.check_accelerator('cuda', backend=jt).enabled or _device_count() < 2:
             raise unittest.SkipTest("two CUDA devices are required")
 
     def test_copy_and_communication_streams_are_per_device(self):

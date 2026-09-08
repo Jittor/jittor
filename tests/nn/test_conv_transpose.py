@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -26,7 +28,7 @@ def setUpModule():
 @unittest.skipIf(skip_this_test, "No Torch found")
 class TestConvTranspose(unittest.TestCase):
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_cuda(self):
         self.test()

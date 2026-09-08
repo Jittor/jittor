@@ -25,6 +25,8 @@ calling its own ``_conv_forward`` did different things.
 ``execute`` now goes through ``_conv_forward`` into ``jt.nn.conv2d``.
 """
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -141,12 +143,12 @@ class TestConvParityCPU(_ConvParity, unittest.TestCase):
     use_cuda = 0
 
 
-@unittest.skipIf(not jt.has_cuda, "no CUDA")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "no CUDA")
 class TestConvParityCUDA(_ConvParity, unittest.TestCase):
     use_cuda = 1
 
 
-@unittest.skipIf(not jt.has_cuda, "no CUDA")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "no CUDA")
 class TestCudaGradientReproducibility(unittest.TestCase):
     """Why the parity test above compares CUDA gradients with a tolerance.
 
@@ -216,7 +218,7 @@ class TestCudaGradientReproducibility(unittest.TestCase):
             np.testing.assert_allclose(a, b, rtol=1e-4, atol=1e-4)
 
 
-@unittest.skipIf(not jt.has_cuda, "no CUDA")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "no CUDA")
 class TestDepthwiseSelectionIsPerCall(unittest.TestCase):
     """The fast path is chosen when the layer runs, not when it is built.
 

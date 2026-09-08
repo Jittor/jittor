@@ -27,7 +27,7 @@ class TestJtune(unittest.TestCase):
             c.sync()
         assert len(rep) == 2
         self.fname = rep[1][1]
-        self.jtune_path = os.path.join(jt.flags.jittor_path, "tools/jtune.py")
+        self.jtune_path = os.path.join(jt.introspection.policy.startup.jittor_path, "tools/jtune.py")
 
     def run_cmd(self, cmd):
         # jtune.py is run out of the package under test, so the child has to

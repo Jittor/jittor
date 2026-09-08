@@ -154,7 +154,7 @@ class TestGrad(unittest.TestCase):
                 b = b.clone() + 1
         assert b.data == 11
         jt.clean()
-        assert jt.liveness_info()["lived_vars"] == 2
+        assert jt.introspection.counters.live_vars == 2
 
     def test_requires_grad(self):
         a = jt.array(2.0)

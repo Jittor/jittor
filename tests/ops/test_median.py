@@ -1,3 +1,7 @@
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
@@ -23,16 +27,22 @@ def _median_reference(x, dim, keepdim):
     return values, selected
 
 
+@_test_preserve_policy(jt, 'use_cuda')
 class _MedianMixin:
     use_cuda = 0
 
     def setUp(self):
-        self._previous_use_cuda = jt.flags.use_cuda
-        jt.flags.use_cuda = self.use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._previous_use_cuda = jt.introspection.policy.runtime.use_cuda
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self.use_cuda))
 
     def tearDown(self):
-        jt.sync_all()
-        jt.flags.use_cuda = self._previous_use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            jt.sync_all()
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._previous_use_cuda))
 
     def test_values_and_gradients_across_axes(self):
         source = np.array([
@@ -78,7 +88,7 @@ class TestMedianCPU(_MedianMixin, unittest.TestCase):
     pass
 
 
-@unittest.skipUnless(jt.compiler.has_cuda, "CUDA is unavailable")
+@unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA is unavailable")
 class TestMedianCUDA(_MedianMixin, unittest.TestCase):
     use_cuda = 1
 

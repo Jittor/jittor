@@ -145,7 +145,7 @@ class TestHcclCheckMacros(unittest.TestCase):
         self.assertNotIn("return;", macros,
                          "an HCCL check macro still swallows the error with return")
 
-        cc = getattr(jt.compiler, "cc_path", None) or "g++"
+        cc = getattr(jt.introspection.policy.startup, "cc_path", None) or "g++"
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             src = tmp / "hccl_macros.cc"

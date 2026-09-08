@@ -192,7 +192,9 @@ def test_module_methods_appear_in_the_report():
 
 @contextlib.contextmanager
 def unbridged_grad():
-    """Run a backward-dependent block on the unbridged autograd path.
+    from contextlib import ExitStack as _TestPolicyStack
+    with _TestPolicyStack() as _test_policy_stack:
+        """Run a backward-dependent block on the unbridged autograd path.
 
     Two pieces of process-global state decide whether ``backward()`` populates
     ``.grad`` at all, and neither belongs to this file:
@@ -210,17 +212,17 @@ def unbridged_grad():
     it locally is what makes a zero_grad assertion fail only when zero_grad is
     actually wrong.
     """
-    previous_no_grad = bool(jt.flags.no_grad)
-    from jittor.compat.torch.tensor_state import get_tensor_state
-    state = get_tensor_state(jt)
-    previous_active = list(state.active_optimizers)
-    jt.flags.no_grad = 0
-    state.active_optimizers[:] = []
-    try:
-        yield
-    finally:
-        jt.flags.no_grad = 1 if previous_no_grad else 0
-        state.active_optimizers[:] = previous_active
+        previous_no_grad = bool(jt.introspection.policy.runtime.no_grad)
+        from jittor.compat.torch.tensor_state import get_tensor_state
+        state = get_tensor_state(jt)
+        previous_active = list(state.active_optimizers)
+        _test_policy_stack.enter_context(jt.runtime.scope(no_grad=0))
+        state.active_optimizers[:] = []
+        try:
+            yield
+        finally:
+            _test_policy_stack.enter_context(jt.runtime.scope(no_grad=1 if previous_no_grad else 0))
+            state.active_optimizers[:] = previous_active
 
 
 @pytest.fixture

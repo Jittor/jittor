@@ -24,8 +24,14 @@ the build enabled.
 """
 
 import unittest
+import functools
+import inspect
 
-import jittor as jt
+def _native_backend(backend=None):
+    if backend is None:
+        import jittor
+        return jittor
+    return backend
 
 
 def _skip(capability):
@@ -44,13 +50,14 @@ def _refuse(capability):
         % (capability.kind, capability.name, capability.reason))
 
 
-def check_accelerator(name):
+def check_accelerator(name, *, backend=None):
     """Return the accelerator capability, refusing to let a failure skip.
 
     Use when the caller wants to branch rather than skip. ``FAILED`` still
     raises, because no caller should ever branch around a broken build.
     """
-    capability = jt.capability.accelerator(name)
+    backend = _native_backend(backend)
+    capability = backend.introspection.capabilities.backend(name)
     if capability.failed:
         _refuse(capability)
     return capability
@@ -64,11 +71,78 @@ def require_accelerator(name):
     return capability
 
 
-def check_library(name, load=True):
-    capability = jt.capability.library(name, load=load)
+def any_accelerator_enabled(*, backend=None):
+    """Legacy generic accelerator sweeps must also retain ACL/ROCm coverage."""
+    backend = _native_backend(backend)
+    queries = backend.introspection.capabilities
+    names = tuple(name for name in queries.registered_backends() if name != "cpu")
+    if not names:
+        # No registered accelerator may mean an intentionally CPU-only build
+        # or a requested backend that failed. Do not collapse the latter.
+        names = tuple(name for name in queries.backends() if name != "cpu")
+    enabled = False
+    for name in names:
+        enabled = check_accelerator(name, backend=backend).enabled or enabled
+    return enabled
+
+
+def check_library(name, load=True, *, backend=None):
+    backend = _native_backend(backend)
+    capability = backend.introspection.capabilities.library(name)
+    if capability.unprobed and load:
+        # Loading is an explicit test prerequisite, outside read-only
+        # introspection. Never relabel an unprobed or failed loader as absent.
+        capability = backend.capability.library(name, load=True)
+        if capability.failed:
+            _refuse(capability)
+        capability = backend.introspection.capabilities.library(name)
     if capability.failed:
         _refuse(capability)
     return capability
+
+
+def library_enabled(name, *, backend=None):
+    capability = check_library(name, load=True, backend=backend)
+    if capability.unprobed:
+        raise AssertionError("library %s remained unprobed after explicit initialization" % name)
+    return capability.enabled
+
+
+def library_required(name, *, backend=None):
+    """Defer an optional library prerequisite until execution, not collection."""
+    def decorate(target):
+        if inspect.isclass(target):
+            setup = target.setUpClass.__func__
+            @classmethod
+            def checked_setup(cls):
+                capability = check_library(name, load=True, backend=backend)
+                if capability.unprobed:
+                    raise AssertionError("library %s remained unprobed" % name)
+                if not capability.enabled:
+                    _skip(capability)
+                setup(cls)
+            target.setUpClass = checked_setup
+            return target
+        @functools.wraps(target)
+        def checked(*args, **kwargs):
+            capability = check_library(name, load=True, backend=backend)
+            if capability.unprobed:
+                raise AssertionError("library %s remained unprobed" % name)
+            if not capability.enabled:
+                _skip(capability)
+            return target(*args, **kwargs)
+        return checked
+    return decorate
+
+
+def device_count(backend_name, *, backend=None):
+    backend = _native_backend(backend)
+    inventory = backend.introspection.capabilities.devices(backend_name)
+    if inventory.capability.failed:
+        _refuse(inventory.capability)
+    if inventory.count is None:
+        raise AssertionError("device inventory for %s is unprobed" % backend_name)
+    return inventory.count
 
 
 def require_library(name, load=True):
@@ -96,7 +170,7 @@ def machine_has_accelerator(name):
     ``True`` with ``require_accelerator`` skipping means the build is the
     variable, not the hardware.
     """
-    return jt.capability.accelerator(name).present
+    return _native_backend().capability.accelerator(name).present
 
 
 __all__ = ["check_accelerator", "require_accelerator", "check_library",

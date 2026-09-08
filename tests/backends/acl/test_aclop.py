@@ -1,10 +1,12 @@
+
+from _helpers import capability as _test_capability
 import unittest
 import jittor as jt
 import numpy as np
 import time
 
 
-@unittest.skipIf(not jt.compiler.has_acl, "No ACL found")
+@unittest.skipIf(not _test_capability.check_accelerator('acl', backend=jt).enabled, "No ACL found")
 class TestACL(unittest.TestCase):
 
     def setUp(self):

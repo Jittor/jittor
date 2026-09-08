@@ -18,6 +18,8 @@ the same reduction disagreed now agrees.
 Run::  python -m pytest tests/runtime/test_install_order.py
 """
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -126,7 +128,7 @@ class TestOneReductionOneNumeric(unittest.TestCase):
         np.testing.assert_array_equal(jt.mean(value).numpy(),
                                       value.mean().numpy())
 
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     def test_the_two_spellings_agree_bit_for_bit_on_cuda(self):
         # Large enough to take the fast path (>= 1<<14 elements). Before this
         # task jt.sum went to a quarter-million atomicAdds and x.sum() to the
@@ -140,7 +142,7 @@ class TestOneReductionOneNumeric(unittest.TestCase):
             np.testing.assert_array_equal(jt.mean(value).numpy(),
                                           value.mean().numpy())
 
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     def test_the_root_spelling_is_reproducible_on_cuda(self):
         with jt.flag_scope(use_cuda=1):
             value = jt.array(np.random.RandomState(2).randn(1 << 20)

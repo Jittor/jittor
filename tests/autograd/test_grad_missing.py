@@ -38,7 +38,11 @@ PYTHON_DIR = os.path.dirname(os.path.dirname(os.path.abspath(jt.__file__)))
 PREAMBLE = """
 import numpy as np
 import jittor as jt
-jt.flags.missing_grad_error = {flag}
+from contextlib import ExitStack as _ProcessPolicyStack
+import atexit as _process_policy_atexit
+_process_policy_scopes = _ProcessPolicyStack()
+_process_policy_atexit.register(_process_policy_scopes.close)
+_process_policy_scopes.enter_context(jt.runtime.scope(missing_grad_error={flag}))
 
 def unrelated_pair():
     # loss does not depend on target at all, so target collects no gradient.
@@ -105,14 +109,16 @@ else:
 
 class TestMissingGradInProcess(unittest.TestCase):
     def test_flag_exists_and_round_trips(self):
-        before = jt.flags.missing_grad_error
-        try:
-            jt.flags.missing_grad_error = 0
-            self.assertEqual(jt.flags.missing_grad_error, 0)
-            jt.flags.missing_grad_error = 1
-            self.assertEqual(jt.flags.missing_grad_error, 1)
-        finally:
-            jt.flags.missing_grad_error = before
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            before = jt.introspection.policy.runtime.missing_grad_error
+            try:
+                _test_policy_stack.enter_context(jt.runtime.scope(missing_grad_error=0))
+                self.assertEqual(jt.introspection.policy.runtime.missing_grad_error, 0)
+                _test_policy_stack.enter_context(jt.runtime.scope(missing_grad_error=1))
+                self.assertEqual(jt.introspection.policy.runtime.missing_grad_error, 1)
+            finally:
+                _test_policy_stack.enter_context(jt.runtime.scope(missing_grad_error=before))
 
 
 if __name__ == "__main__":

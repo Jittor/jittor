@@ -24,6 +24,8 @@ form (an inclusive reverse scan of the seed) and, at a few coordinates, against
 a finite difference of the numpy forward.
 """
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -128,7 +130,7 @@ class TestCumsumCPU(_Cumsum, unittest.TestCase):
     use_cuda = 0
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestCumsumCUDA(_Cumsum, unittest.TestCase):
     use_cuda = 1
 

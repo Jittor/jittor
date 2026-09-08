@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
@@ -9,7 +11,7 @@ import jittor as jt
 import numpy as np
 from _helpers.assertions import expect_error
 
-@unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestCuda(unittest.TestCase):
     @jt.flag_scope(use_cuda=1)
     def test_cuda_flags(self):
@@ -17,7 +19,9 @@ class TestCuda(unittest.TestCase):
         a.sync()
 
     def test_no_cuda_op(self):
-        no_cuda_op = jt.compile_custom_op("""
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            no_cuda_op = jt.compile_custom_op("""
         struct NoCudaOp : Op {
             Var* output;
             NoCudaOp(NanoVector shape, string dtype="float");
@@ -40,23 +44,23 @@ class TestCuda(unittest.TestCase):
         void NoCudaOp::jit_run() {}
         #endif // JIT
         """,
-        "no_cuda")
+            "no_cuda")
 
-        def run_without_cuda_implementation():
-            with jt.flag_scope(use_cuda=2):
-                no_cuda_op([3,4,5], 'float').sync()
+            def run_without_cuda_implementation():
+                with jt.flag_scope(use_cuda=2):
+                    no_cuda_op([3,4,5], 'float').sync()
 
-        previous_use_cuda = jt.flags.use_cuda
-        try:
-            expect_error(
-                run_without_cuda_implementation,
-                exc_type=RuntimeError,
-                match="doesn't have cuda version",
-            )
-        finally:
-            # The failed lazy graph must not be retried while restoring flags.
-            jt.clean()
-            jt.flags.use_cuda = previous_use_cuda
+            previous_use_cuda = jt.introspection.policy.runtime.use_cuda
+            try:
+                expect_error(
+                    run_without_cuda_implementation,
+                    exc_type=RuntimeError,
+                    match="doesn't have cuda version",
+                )
+            finally:
+                # The failed lazy graph must not be retried while restoring flags.
+                jt.clean()
+                _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=previous_use_cuda))
 
     @jt.flag_scope(use_cuda=1)
     def test_cuda_custom_op(self):
@@ -134,7 +138,7 @@ class TestCuda(unittest.TestCase):
             np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
 
 
-@unittest.skipIf(jt.compiler.has_cuda, "Only test without CUDA")
+@unittest.skipIf(_test_capability.check_accelerator('cuda', backend=jt).enabled, "Only test without CUDA")
 class TestNoCuda(unittest.TestCase):
     def test_cuda_flags(self):
         expect_error(

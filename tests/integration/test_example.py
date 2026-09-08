@@ -1,3 +1,5 @@
+
+from _helpers.introspection import liveness_snapshot as _test_liveness_snapshot
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
@@ -67,9 +69,9 @@ class TestExample(unittest.TestCase):
                 p -= g * lr
 
             if i>2:
-                assert prev == jt.liveness_info(), f"memory leak {prev} {jt.liveness_info()}"
-            prev = jt.liveness_info()
-            print(f"step {i}, loss = {loss_mean.data.sum()} {jt.liveness_info()}")
+                assert prev == _test_liveness_snapshot(jt), f"memory leak {prev} {_test_liveness_snapshot(jt)}"
+            prev = _test_liveness_snapshot(jt)
+            print(f"step {i}, loss = {loss_mean.data.sum()} {_test_liveness_snapshot(jt)}")
 
         possible_results = [
             0.0009948202641680837,

@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers:
@@ -14,7 +16,7 @@ import unittest
 import numpy as np
 
 class TestBMM(unittest.TestCase):
-    @unittest.skipIf(not jt.has_cuda, "No cuda found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
     def test_bmm_cuda(self):
         def check(batch, n, m, k):
             def calc(use_cuda, a, b, mask):

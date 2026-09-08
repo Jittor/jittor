@@ -1,3 +1,5 @@
+
+from _helpers.introspection import liveness_snapshot as _test_liveness_snapshot
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
@@ -20,8 +22,8 @@ def counts():
     import gc
     gc.collect()
     jt.graph_check()
-    return (jt.number_of_hold_vars(), jt.number_of_lived_vars(),
-            jt.number_of_lived_ops())
+    return (jt.introspection.counters.held_vars, jt.introspection.counters.live_vars,
+            jt.introspection.counters.live_ops)
 
 
 def baseline():
@@ -151,7 +153,7 @@ class TestNode(unittest.TestCase):
             a = jt.array(0.0)
             for x in queue:
                 a += x
-            LOG.i("build graph", time.time()-start_time, jt.liveness_info().values())
+            LOG.i("build graph", time.time()-start_time, _test_liveness_snapshot(jt).values())
             start_time = time.time()
             a.sync()
             LOG.i("execute", time.time()-start_time)

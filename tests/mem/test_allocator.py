@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
@@ -18,12 +20,12 @@ class TestAllocator(unittest.TestCase):
             c.data
             del a,b,c
             gc.collect()
-        assert jt.flags.stat_allocator_total_alloc_call == 2
-        assert jt.flags.stat_allocator_total_alloc_byte == 800
-        assert jt.flags.stat_allocator_total_free_call == 2
-        assert jt.flags.stat_allocator_total_free_byte == 800
+        assert jt.introspection.counters.allocator.alloc_calls == 2
+        assert jt.introspection.counters.allocator.allocated_bytes == 800
+        assert jt.introspection.counters.allocator.free_calls == 2
+        assert jt.introspection.counters.allocator.freed_bytes == 800
 
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1, use_cuda_managed_allocator=0)
     def test_device_allocator(self):
         a = jt.array([1,2,3,4,5])

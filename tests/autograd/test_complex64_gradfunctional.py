@@ -28,13 +28,15 @@ Scope notes (limitations of native complex64 itself, NOT of gradfunctional):
 
 Run:  python -m pytest tests/autograd/test_complex64_gradfunctional.py
 """
+
+from _helpers import capability as _test_capability
 import unittest
 import numpy as np
 import jittor as jt
 from jittor.gradfunctional import vjp, jvp
 from jittor.nn import ComplexNumber
 
-_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if jt.has_cuda else [])
+_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if _test_capability.check_accelerator('cuda', backend=jt).enabled else [])
 
 
 def both_devices(fn):

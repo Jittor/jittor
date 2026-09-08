@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2019 Dun Liang <randonlang@gmail.com>. All Rights Reserved.
 # This file is subject to the terms and conditions defined in
@@ -83,7 +85,7 @@ def check(jt_model, torch_model, shape, near_data):
 
 @unittest.skipIf(skip_this_test, "No Torch found")
 class TestArgPoolOp(unittest.TestCase):
-    @unittest.skipIf(not jt.compiler.has_cuda, "No cuda found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
     @jt.flag_scope(use_cuda=1)
     def test_cuda(self):
         jt_model = jt.nn.Sequential(Pool(2, 2, 0), Pool(2, 2, 0), Pool(2, 2, 0, ceil_mode=True), Pool(2, 2, 0), Pool(2, 2, 0), Pool(3, 1, 1))
@@ -95,7 +97,7 @@ class TestArgPoolOp(unittest.TestCase):
         for i in range(10):
             check(jt_model, torch_model, [1,1,300,300], True)
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No cuda found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
     @jt.flag_scope(use_cuda=1)
     def test_cuda_tuple(self):
         jt_model = jt.nn.Sequential(Pool((2,3), (2,3), (1,1)), Pool((2,3), (2,3), (1,1)), Pool((2,3), (2,3), (1,1), ceil_mode=True), Pool((2,3), (2,3), (1,1)), Pool((2,3), (2,3), (1,1)), Pool(3, 1, 1))
@@ -108,7 +110,7 @@ class TestArgPoolOp(unittest.TestCase):
             check(jt_model, torch_model, [1,1,300,300], True)
 
     @unittest.expectedFailure
-    @unittest.skipIf(not jt.compiler.has_cuda, "No cuda found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
     @jt.flag_scope(use_cuda=1)
     def test_cuda_old_pool(self):
         # KI-TEST-001: legacy pooling still diverges from the Torch reference.
@@ -202,7 +204,7 @@ class TestArgPoolOp(unittest.TestCase):
 
         
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No cuda found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
     @jt.flag_scope(use_cuda=1)
     def test_cuda_avg_pool(self):
         self.test_cpu_avg_pool()
@@ -286,7 +288,7 @@ class TestArgPoolOp(unittest.TestCase):
         dt = tin.grad
         assert np.allclose(dj.numpy(), dt.numpy())
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No cuda found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
     @jt.flag_scope(use_cuda=1)
     def test_cuda_pool_3d(self):
         self.test_pool_3d()

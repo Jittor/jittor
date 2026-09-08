@@ -15,6 +15,8 @@ has to ask.  These tests pin down the places that did not.
 See ``agent/skills/jittor-allocator-flag-matrix`` for the flag combinations and
 for the poison-then-read technique used below.
 """
+
+from _helpers import capability as _test_capability
 import gc
 import unittest
 
@@ -56,7 +58,7 @@ def _alias_groups(ptrs):
     return [ids for ids in by_ptr.values() if len(ids) > 1]
 
 
-@unittest.skipIf(not jt.has_cuda, "Cuda not found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
 class TestMigrateKeepsShareAlias(unittest.TestCase):
     """``migrate_to_cpu``/``migrate_to_gpu`` must not silently unshare.
 
@@ -112,7 +114,7 @@ class TestMigrateKeepsShareAlias(unittest.TestCase):
             gc.collect()
 
 
-@unittest.skipIf(not jt.has_cuda, "Cuda not found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
 class TestFetchCrossStreamOrder(unittest.TestCase):
     """``jt.fetch`` copies on a side stream; the default stream must wait.
 

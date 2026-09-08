@@ -26,6 +26,9 @@ So: forward, both hidden states, the input gradient and every weight gradient,
 across the four cell types and the layer/direction shapes that change the
 weight-space layout.
 """
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
@@ -64,7 +67,7 @@ def _run(layer, x_np, h_np, c_np, use_cuda):
     return names, got
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestCudnnRnnMatchesTheRecurrence(unittest.TestCase):
     SEQ, BATCH, INPUT, HIDDEN = 5, 3, 4, 6
 
@@ -119,7 +122,8 @@ class TestCudnnRnnMatchesTheRecurrence(unittest.TestCase):
         self._check(nn.RNN, "rnn", nonlinearity="tanh", bias=False)
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@_test_preserve_policy(jt, 'float32_matmul_precision', 'cuda_allow_cudnn_tf32')
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestRnnFollowsTheFloat32Policy(unittest.TestCase):
     """`float32_matmul_precision` reaches the RNN, and it is measurable.
 
@@ -136,44 +140,48 @@ class TestRnnFollowsTheFloat32Policy(unittest.TestCase):
     """
 
     def setUp(self):
-        self._saved = (jt.flags.float32_matmul_precision,
-                       jt.flags.cuda_allow_cudnn_tf32)
-        jt.flags.cuda_allow_cudnn_tf32 = 0
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._saved = (jt.introspection.policy.runtime.float32_matmul_precision,
+                       jt.introspection.policy.runtime.cuda_allow_cudnn_tf32)
+        _test_policy_stack.enter_context(jt.runtime.scope(cuda_allow_cudnn_tf32=0))
 
     def tearDown(self):
         jt.sync_all()
-        (jt.flags.float32_matmul_precision,
-         jt.flags.cuda_allow_cudnn_tf32) = self._saved
+        pass  # fixture cleanup restores the captured runtime policy
 
     def _error_against_float64(self, tier):
-        rng = np.random.RandomState(0)
-        seq, batch, isize, hidden = 5, 3, 4, 6
-        layer = nn.LSTM(isize, hidden)
-        x = rng.randn(seq, batch, isize).astype("float32")
-        h = rng.randn(1, batch, hidden).astype("float32")
-        c = rng.randn(1, batch, hidden).astype("float32")
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            rng = np.random.RandomState(0)
+            seq, batch, isize, hidden = 5, 3, 4, 6
+            layer = nn.LSTM(isize, hidden)
+            x = rng.randn(seq, batch, isize).astype("float32")
+            h = rng.randn(1, batch, hidden).astype("float32")
+            c = rng.randn(1, batch, hidden).astype("float32")
 
-        # float64 reference, on the CPU recurrence.
-        saved = [(n, p.numpy()) for n, p in _params(layer)]
-        with jt.flag_scope(use_cuda=0):
-            for _, p in _params(layer):
-                p.assign(p.float64())
-            xr, hr, cr = (jt.array(v.astype("float64")) for v in (x, h, c))
-            out, _ = layer(xr, (hr, cr))
-            seed = jt.array(np.linspace(-1.0, 1.0, int(np.prod(out.shape)))
-                            .reshape(out.shape).astype("float64"))
-            gref = jt.grad((out * seed).sum(),
-                           [p for _, p in _params(layer)])
-            ref = jt.fetch_sync(list(gref))
-        for (name, value), (_, p) in zip(saved, _params(layer)):
-            p.assign(jt.array(value))
+            # float64 reference, on the CPU recurrence.
+            saved = [(n, p.numpy()) for n, p in _params(layer)]
+            with jt.flag_scope(use_cuda=0):
+                for _, p in _params(layer):
+                    p.assign(p.float64())
+                xr, hr, cr = (jt.array(v.astype("float64")) for v in (x, h, c))
+                out, _ = layer(xr, (hr, cr))
+                seed = jt.array(np.linspace(-1.0, 1.0, int(np.prod(out.shape)))
+                                .reshape(out.shape).astype("float64"))
+                gref = jt.grad((out * seed).sum(),
+                               [p for _, p in _params(layer)])
+                ref = jt.fetch_sync(list(gref))
+            for (name, value), (_, p) in zip(saved, _params(layer)):
+                p.assign(jt.array(value))
 
-        jt.flags.float32_matmul_precision = tier
-        _, got = _run(layer, x, h, c, use_cuda=1)
-        # skip output/h_n/c_n/d_input; compare the weight gradients
-        got_grads = got[4:]
-        return max(float(np.abs(a - b).max()) / max(1.0, float(np.abs(b).max()))
-                   for a, b in zip(got_grads, ref))
+            _test_policy_stack.enter_context(jt.runtime.scope(float32_matmul_precision=tier))
+            _, got = _run(layer, x, h, c, use_cuda=1)
+            # skip output/h_n/c_n/d_input; compare the weight gradients
+            got_grads = got[4:]
+            return max(float(np.abs(a - b).max()) / max(1.0, float(np.abs(b).max()))
+                       for a, b in zip(got_grads, ref))
 
     def test_highest_is_true_float32_and_medium_is_not(self):
         highest = self._error_against_float64("highest")

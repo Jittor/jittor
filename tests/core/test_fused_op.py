@@ -1,3 +1,5 @@
+
+from _helpers.introspection import liveness_snapshot as _test_liveness_snapshot
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
@@ -26,7 +28,7 @@ def performance_test_scope(warmup=0, rerun=0, **args):
             ......
         print(report)
     """
-    assert not jt.flags.profiler_enable
+    assert not jt.introspection.policy.runtime.profiler_enable
     if skip_slow_test:
         jt.profiler.start(0, 0)
     else:
@@ -69,16 +71,16 @@ class TestFusedOp(unittest.TestCase):
         # nodes *this* graph creates and how many survive fusion, which is a
         # difference.
         baseline = (
-            jt.number_of_hold_vars(),
-            jt.number_of_lived_vars(),
-            jt.number_of_lived_ops(),
+            jt.introspection.counters.held_vars,
+            jt.introspection.counters.live_vars,
+            jt.introspection.counters.live_ops,
         )
 
         def check(hv, lv, lo):
             self.assertEqual((
-                jt.number_of_hold_vars() - baseline[0],
-                jt.number_of_lived_vars() - baseline[1],
-                jt.number_of_lived_ops() - baseline[2]),
+                jt.introspection.counters.held_vars - baseline[0],
+                jt.introspection.counters.live_vars - baseline[1],
+                jt.introspection.counters.live_ops - baseline[2]),
                 (hv, lv, lo))
         for i in range(8):
             check(0,0,0)
@@ -94,7 +96,7 @@ class TestFusedOp(unittest.TestCase):
             print("check", i)
             for n in graph2.nodes_info:
                 print(n)
-            print(jt.liveness_info())
+            print(_test_liveness_snapshot(jt))
             check(3,5,2)
             graph = jt.dump_all_graphs()
             for node in graph.nodes_info:

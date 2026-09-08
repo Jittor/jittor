@@ -21,6 +21,8 @@ tests fail loudly. (The 1st-order *formula* is still covered generically in
 
 Run::  python -m pytest tests/nn/test_norm.py
 """
+
+from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
@@ -104,7 +106,7 @@ class TestLayerNorm(_NormBase):
                                    jt.array(b.astype(str(v.dtype))), 1e-5),
             x, "LayerNorm grad @ var~1e-6")
 
-    @unittest.skipUnless(jt.has_cuda, "CUDA LayerNorm fast path needs CUDA")
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA LayerNorm fast path needs CUDA")
     def test_cuda_fast_path_forward_and_all_gradients(self):
         rng = np.random.RandomState(20260826)
         shape = (3, 5, 1024)
@@ -150,7 +152,7 @@ class TestLayerNorm(_NormBase):
 
 
 class TestRMSNorm(_NormBase):
-    @unittest.skipUnless(jt.has_cuda, "CUDA RMSNorm fast path needs CUDA")
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA RMSNorm fast path needs CUDA")
     def test_cuda_training_forward_and_all_gradients(self):
         rng = np.random.RandomState(20260827)
         shape = (3, 5, 1024)
@@ -187,7 +189,7 @@ class TestRMSNorm(_NormBase):
 
 
 class TestGroupNorm(_NormBase):
-    @unittest.skipUnless(jt.has_cuda, "CUDA GroupNorm fast path needs CUDA")
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA GroupNorm fast path needs CUDA")
     def test_cuda_fast_path_forward_and_all_gradients(self):
         rng = np.random.RandomState(20260823)
         shape = (2, 32, 16, 16)
@@ -235,7 +237,7 @@ class TestGroupNorm(_NormBase):
                                    jt.array(b.astype(str(v.dtype))), 1e-5),
             x, "GroupNorm grad @ var~1e-6")
 
-    @unittest.skipUnless(jt.has_cuda, "CUDA GroupNorm fast path needs CUDA")
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA GroupNorm fast path needs CUDA")
     def test_cuda_forward_hands_statistics_not_a_full_size_intermediate(self):
         """The forward must not stash a whole normalized feature map (8.20).
 
@@ -253,48 +255,50 @@ class TestGroupNorm(_NormBase):
         loss like ``(y * cotangent).sum()`` would allocate full-size
         intermediates of its own and bury the quantity under test.
         """
-        shape, groups = (2, 32, 16, 16), 8
-        full_size = 4 * int(np.prod(shape))
-        rng = np.random.RandomState(20260906)
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            shape, groups = (2, 32, 16, 16), 8
+            full_size = 4 * int(np.prod(shape))
+            rng = np.random.RandomState(20260906)
 
-        with jt.flag_scope(use_cuda=1):
-            x = jt.array(rng.randn(*shape).astype("float32"))
-            weight = jt.array(rng.randn(shape[1]).astype("float32"))
-            bias = jt.array(rng.randn(shape[1]).astype("float32"))
-            cotangent = jt.array(rng.randn(*shape).astype("float32"))
-            cls = _group_norm_cuda_cls(shape, groups, 1e-5)
+            with jt.flag_scope(use_cuda=1):
+                x = jt.array(rng.randn(*shape).astype("float32"))
+                weight = jt.array(rng.randn(shape[1]).astype("float32"))
+                bias = jt.array(rng.randn(shape[1]).astype("float32"))
+                cotangent = jt.array(rng.randn(*shape).astype("float32"))
+                cls = _group_norm_cuda_cls(shape, groups, 1e-5)
 
-            def forward_and_backward():
-                function = cls()
-                output = function.execute(x, weight, bias)
-                grads = function.grad(cotangent)
-                jt.sync([output] + list(grads), device_sync=True)
+                def forward_and_backward():
+                    function = cls()
+                    output = function.execute(x, weight, bias)
+                    grads = function.grad(cotangent)
+                    jt.sync([output] + list(grads), device_sync=True)
 
-            forward_and_backward()          # compile outside the measurement
-            jt.sync_all(True)
-            jt.flags.use_stat_allocator = 2  # enabling resets the counters
-            try:
-                forward_and_backward()
-                allocated = int(jt.flags.stat_allocator_total_alloc_byte)
-            finally:
-                jt.flags.use_stat_allocator = 0
+                forward_and_backward()          # compile outside the measurement
+                jt.sync_all(True)
+                _test_policy_stack.enter_context(jt.runtime.scope(use_stat_allocator=2))
+                try:
+                    forward_and_backward()
+                    allocated = int(jt.introspection.counters.allocator.allocated_bytes)
+                finally:
+                    _test_policy_stack.enter_context(jt.runtime.scope(use_stat_allocator=0))
 
-        # y and grad_x are unavoidable, so anything below 1.5 copies means the
-        # counter did not see the operators at all and this assertion would be
-        # passing for the wrong reason.
-        self.assertGreater(
-            allocated, 1.5 * full_size,
-            "the allocator counter saw %d B, less than the output and the "
+            # y and grad_x are unavoidable, so anything below 1.5 copies means the
+            # counter did not see the operators at all and this assertion would be
+            # passing for the wrong reason.
+            self.assertGreater(
+                allocated, 1.5 * full_size,
+                "the allocator counter saw %d B, less than the output and the "
             "input gradient together -- the measurement, not the kernel, is "
             "what changed" % allocated)
-        self.assertLess(
-            allocated, 2.5 * full_size,
-            "GroupNorm forward+backward asked for %.2f full-size copies of "
+            self.assertLess(
+                allocated, 2.5 * full_size,
+                "GroupNorm forward+backward asked for %.2f full-size copies of "
             "%s; two (y and grad_x) is all it needs. A third means the "
             "forward is materializing xhat for the backward again"
-            % (allocated / float(full_size), shape))
+                % (allocated / float(full_size), shape))
 
-    @unittest.skipUnless(jt.has_cuda, "CUDA GroupNorm fast path needs CUDA")
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA GroupNorm fast path needs CUDA")
     def test_cuda_fast_path_at_the_num_groups_boundaries(self):
         """num_groups of 1 and of C, and the shape the fast path must refuse.
 
@@ -356,7 +360,7 @@ class TestInstanceNorm(_NormBase):
 
 
 class TestBatchNorm(_NormBase):
-    @unittest.skipUnless(jt.has_cuda, "CUDA BatchNorm eval fast path needs CUDA")
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA BatchNorm eval fast path needs CUDA")
     def test_cuda_eval_fast_path_forward_and_all_gradients(self):
         rng = np.random.RandomState(20260829)
         shape = (2, 16, 8, 8)
@@ -401,7 +405,7 @@ class TestBatchNorm(_NormBase):
                 err_msg="CUDA eval BatchNorm %s" % name,
             )
 
-    @unittest.skipUnless(jt.has_cuda, "CUDA BatchNorm fast path needs CUDA")
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA BatchNorm fast path needs CUDA")
     def test_cuda_fast_path_forward_and_all_gradients(self):
         rng = np.random.RandomState(20260828)
         shape = (2, 32, 8, 8)
@@ -493,7 +497,7 @@ class TestBatchNorm(_NormBase):
 
 
 class TestChannelBias(_NormBase):
-    @unittest.skipUnless(jt.has_cuda, "CUDA channel bias fast path needs CUDA")
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA channel bias fast path needs CUDA")
     def test_cuda_forward_and_bias_gradient(self):
         rng = np.random.RandomState(20260830)
         shape = (2, 24, 8, 8)

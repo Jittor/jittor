@@ -55,6 +55,8 @@ any other test that spawns a jittor process:
    leaves via ``os._exit`` rather than letting interpreter shutdown run. That
    the exception can be caught at all is the point of the explicit init.
 """
+
+from _helpers import capability as _test_capability
 import json
 import os
 from pathlib import Path
@@ -106,7 +108,11 @@ import os
 import jittor as jt
 import torch.distributed as dist
 dist.init_process_group(backend="nccl", init_method="env://")
-jt.flags.use_cuda = 1
+from contextlib import ExitStack as _ProcessPolicyStack
+import atexit as _process_policy_atexit
+_process_policy_scopes = _ProcessPolicyStack()
+_process_policy_atexit.register(_process_policy_scopes.close)
+_process_policy_scopes.enter_context(jt.runtime.scope(use_cuda=1))
 rank = int(os.environ["RANK"])
 value = jt.array([rank + 1.0]).mpi_all_reduce("sum")
 assert float(value.item()) == 3.0, (rank, value.item())
@@ -195,7 +201,7 @@ def _run_import(env_overrides, timeout=_IMPORT_TIMEOUT_S, code=_CHILD):
     return done.returncode, done.stdout, time.time() - start
 
 
-@unittest.skipIf(not jt.has_cuda, "no CUDA, NCCL is not built")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "no CUDA, NCCL is not built")
 class TestNcclRendezvousTimeout(unittest.TestCase):
 
     def setUp(self):
@@ -245,7 +251,7 @@ class TestNcclRendezvousTimeout(unittest.TestCase):
         self.assertGreater(elapsed, _RENDEZVOUS_TIMEOUT_S)
         self.assertLess(elapsed, _RENDEZVOUS_TIMEOUT_S + 20)
 
-    @unittest.skipIf(jt.core.get_device_count() < 2, "requires two CUDA devices")
+    @unittest.skipIf(_test_capability.device_count('cuda', backend=jt) < 2, "requires two CUDA devices")
     def test_two_rank_nccl_uses_tcp_store_without_rootinfo_file(self):
         # Warm the shared cache before rank 0 enters the blocking store
         # constructor; otherwise rank 1 can be waiting for rank 0's build lock.

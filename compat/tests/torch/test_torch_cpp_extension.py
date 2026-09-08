@@ -16,6 +16,7 @@ import tempfile
 import unittest
 from types import ModuleType, SimpleNamespace
 from unittest import mock
+from _helpers import capability as _test_capability
 
 import jittor as jt
 
@@ -178,12 +179,12 @@ def _torch_cpp_extension_available():
         from torch.utils.cpp_extension import load_inline  # noqa: F401
         # This test is meaningful only when bare import torch is the deployed
         # jittor torch-shim, not a real PyTorch install.
-        if not isinstance(torch.tensor([1]), jt.Var):
+        if not issubclass(torch.Tensor, jt.Var):
             return False
-        from jittor import compiler
-        return bool(getattr(compiler, "nvcc_path", ""))
-    except Exception:
+    except ImportError:
         return False
+    return (_test_capability.check_accelerator("cuda", backend=jt).enabled
+            and bool(jt.introspection.policy.startup.nvcc_path))
 
 
 class TestTorchCppExtension(unittest.TestCase):

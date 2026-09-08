@@ -31,6 +31,8 @@ RTX 4090, three trials each:
 so the threshold below (half of full speed) sits ~1500x above the pre-fix
 number and ~2x below the post-fix one.
 """
+
+from _helpers import capability as _test_capability
 import sys
 import threading
 import time
@@ -65,7 +67,7 @@ def _queue_device_work(jt):
 def test_other_python_thread_runs_during_device_wait():
     import jittor as jt
 
-    if not jt.has_cuda:
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA runtime required")
 
     with jt.flag_scope(use_cuda=1):
@@ -128,7 +130,7 @@ def test_concurrent_cuda_batches_stay_correct():
     """
     import jittor as jt
 
-    if not jt.has_cuda:
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA runtime required")
 
     threads_n, rounds, side = 6, 20, 256
@@ -185,7 +187,7 @@ def test_fetch_callback_still_runs_under_the_gil():
     """
     import jittor as jt
 
-    if not jt.has_cuda:
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA runtime required")
 
     seen = []

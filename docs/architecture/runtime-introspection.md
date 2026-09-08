@@ -94,10 +94,13 @@ Callers needing a completed-work boundary must explicitly synchronize outside
 the observation API. Executor-call counts measure the native executor counter,
 not kernel launches or elapsed time.
 
-## Remaining test-consumer migration
+## Test-consumer migration
 
-This batch delivers the API foundation. Bulk consumer migration follows the
-test-layout batch; it is not counted as complete here. These mappings preserve
+Bulk native/compat test consumers and shared pytest policy now use these APIs.
+10.20 is complete with explicit exceptions for tests of native bindings,
+startup sealing bypasses, bounded-cache inventories and the user-protected file.
+See the [integration record](../results/2026-09-08-introspection-consumers.md).
+These mappings preserve
 the question each test is actually asking:
 
 | Existing read | Supported replacement | Boundary |

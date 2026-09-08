@@ -1,5 +1,7 @@
 """Transpose views follow source updates and support inverse write-through."""
 
+from _helpers import capability as _test_capability
+
 import numpy as np
 import pytest
 
@@ -8,7 +10,7 @@ import jittor as jt
 
 @pytest.fixture(params=[0, 1], ids=["cpu", "cuda"])
 def transpose_device(request):
-    if request.param and not jt.has_cuda:
+    if request.param and not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA unavailable")
     with jt.flag_scope(use_cuda=request.param):
         yield

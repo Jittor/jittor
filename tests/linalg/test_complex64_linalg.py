@@ -1,3 +1,7 @@
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved.
 # Maintainers: Jittor Group
@@ -43,6 +47,7 @@ def _diag_embed(s):
     return out
 
 
+@_test_preserve_policy(jt, 'use_cuda')
 class _Mixin:
     use_cuda = 0
 
@@ -50,12 +55,17 @@ class _Mixin:
         # Remembered, not assumed: Jittor turns CUDA on by default when a GPU
         # is present, so restoring a hard-coded 0 would switch the accelerator
         # off for every later file instead of putting things back.
-        self._previous_use_cuda = jt.flags.use_cuda
-        jt.flags.use_cuda = self.use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._previous_use_cuda = jt.introspection.policy.runtime.use_cuda
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self.use_cuda))
 
     def tearDown(self):
-        jt.sync_all()
-        jt.flags.use_cuda = self._previous_use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            jt.sync_all()
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._previous_use_cuda))
 
     # -------------------------------------------------------------------- inv
     def test_inv(self):
@@ -261,7 +271,7 @@ class _Mixin:
         np.testing.assert_allclose(np.sort(w.numpy()), ref, atol=1e-3, rtol=1e-3)
 
 
-@unittest.skipIf(not jt.has_cuda, "no cuda found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "no cuda found")
 class TestComplex64LinalgCUDA(_Mixin, unittest.TestCase):
     use_cuda = 1
 

@@ -1,3 +1,5 @@
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
 # ***************************************************************
 # CUDA device regression for transformers through the direct alias path:
 #
@@ -10,6 +12,7 @@
 import os
 import sys
 import unittest
+from _helpers import capability as _test_capability
 
 import numpy as np
 
@@ -87,19 +90,25 @@ def _inputs(torch, cfg, vocab_size, device):
     return data
 
 
+@_test_preserve_policy(jt, 'use_cuda')
 @unittest.skipUnless(_HAS, "needs jittor torch alias + transformers")
 class TestTorchHFCudaDevice(unittest.TestCase):
     def setUp(self):
-        if not getattr(jt, "has_cuda", 0):
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        if not _test_capability.check_accelerator("cuda", backend=jt).enabled:
             self.skipTest("needs CUDA")
         # Restored in tearDown: without it this class turned CUDA on for every
         # test that ran after it, in every file, for the rest of the session.
-        self._previous_use_cuda = jt.flags.use_cuda
-        jt.flags.use_cuda = 1
+        self._previous_use_cuda = jt.introspection.policy.runtime.use_cuda
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
 
     def tearDown(self):
-        jt.sync_all()
-        jt.flags.use_cuda = self._previous_use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            jt.sync_all()
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._previous_use_cuda))
 
     def test_direct_alias_registers_torch_and_cuda(self):
         self.assertTrue(_ALIAS_REGISTERED)

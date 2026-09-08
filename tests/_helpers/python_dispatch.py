@@ -51,14 +51,14 @@ def pending_and_materialized(jt, backend, device_id):
 
     with registered_kernels(op, backend) as register:
         register(kernel, dtypes={"float32"})
-        before = (pending.location(), jt.number_of_lived_ops(), jt.flags.exec_called)
+        before = (pending.location(), jt.introspection.counters.live_ops, jt.introspection.counters.exec_calls)
         for _ in range(3):
             context = dispatch_context(pending)
             assert (context.backend, context.device_id) == (backend, device_id)
             assert context.dtypes == ("float32",)
             assert select_kernel(op, pending) is kernel
         assert calls == []
-        assert (pending.location(), jt.number_of_lived_ops(), jt.flags.exec_called) == before
+        assert (pending.location(), jt.introspection.counters.live_ops, jt.introspection.counters.exec_calls) == before
         assert_result(jt, select_kernel(op, pending)(pending),
                       (values + 1) * 2, backend, device_id)
         assert calls == [pending]

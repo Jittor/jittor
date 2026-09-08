@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -48,7 +50,7 @@ class TestSingleProcessScope(unittest.TestCase):
         val2()
 
 
-@unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")
+@_test_capability.library_required('mpi', backend=jt)
 class TestSingleProcessScopeEntry(unittest.TestCase):
     def test_entry(self):
         run_mpi_test(2, "test_single_process_scope")

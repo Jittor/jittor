@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -15,7 +17,7 @@ from jittor import compile_extern
 # TODO: compare with pytorch
 
 from _helpers.logs import find_log_with_re
-if jt.has_cuda:
+if _test_capability.check_accelerator('cuda', backend=jt).enabled:
     from jittor.compile_extern import cublas_ops, cudnn_ops
 else:
     cublas_ops = cudnn_ops = None
@@ -117,7 +119,7 @@ def check_backward(xshape, wshape, stride, padding, dilation, groups, use_cuda, 
 
 
 class TestGroupConvTuner(unittest.TestCase):
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_forward_cuda(self):
         for groups in [2, 4, 8]:
             check_forward([10,8,100,100], [8,8//groups,3,3], 1, 0, 1, groups, 1, False)
@@ -130,7 +132,7 @@ class TestGroupConvTuner(unittest.TestCase):
             check_forward([10,8,40,50], [16,8//groups,5,5], 1, 1, 2, groups, 0, False)
             check_forward([10,8,40,50], [16,8//groups,4,4], 3, 1, 3, groups, 0, False)
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_backward_cuda(self):
         for groups in [2, 4, 8]:
             check_backward([10,8,100,100], [8,8//groups,3,3], 1, 0, 1, groups, 1, False)

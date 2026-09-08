@@ -28,6 +28,8 @@ and "the collective ran unordered" both give structurally wrong numbers rather
 than plausible ones.
 """
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -194,7 +196,7 @@ class TestNcclCommunicationStream(unittest.TestCase):
                          .format(iterations))
 
 
-@unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")
+@_test_capability.library_required('mpi', backend=jt)
 class TestNcclCommunicationStreamEntry(unittest.TestCase):
     def test(self):
         run_mpi_test(WORLD, "test_nccl_comm_stream")

@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2019 
 #     Guoye Yang <498731903@qq.com>
@@ -36,7 +38,7 @@ class TestCuttUnavailableIsNotSkipped(unittest.TestCase):
     """
 
     def test_load_failure_with_cuda_and_cutt_enabled_is_an_error(self):
-        if not jt.has_cuda:
+        if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
             self.skipTest("no CUDA on this machine")
         import _helpers.cutt as helper
         original = helper.get_library_ops
@@ -62,7 +64,7 @@ class TestCuttUnavailableIsNotSkipped(unittest.TestCase):
         self.assertIn("build failed", str(raised))
 
     def test_disabled_by_env_still_skips(self):
-        if not jt.has_cuda:
+        if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
             self.skipTest("no CUDA on this machine")
         import _helpers.cutt as helper
         with unittest.mock.patch.dict(os.environ, {"use_cutt": "0"}):

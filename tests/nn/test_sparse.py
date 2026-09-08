@@ -1,4 +1,6 @@
 
+from _helpers import capability as _test_capability
+
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -193,7 +195,7 @@ class TestSubmanifoldDuplicateCoords(unittest.TestCase):
             coords_np, self.KERNEL, self.DILATION)
         np.testing.assert_array_equal(got, expected)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_first_occurrence_on_cuda_matches_cpu(self):
         coords_np = self._duplicated_coords()
         expected = _reference_first_occurrence_neighbors(
@@ -204,7 +206,7 @@ class TestSubmanifoldDuplicateCoords(unittest.TestCase):
         np.testing.assert_array_equal(cuda, expected)
         np.testing.assert_array_equal(cuda, cpu)
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_convolution_output_agrees_across_backends(self):
         coords_np = self._duplicated_coords(n_points=256, n_distinct=4)
         rng = np.random.RandomState(3)
@@ -293,7 +295,7 @@ class TestSubmanifoldNeighborCache(unittest.TestCase):
         assert "build_submanifold_conv3d_neighbors" in str(ctx.exception)
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestSparseCOODuplicatesCuda(TestSparseCOODuplicates):
     """Same contract on CUDA: the scatter-add there goes through atomics, and
     duplicate coordinates are exactly the case that exercises them."""

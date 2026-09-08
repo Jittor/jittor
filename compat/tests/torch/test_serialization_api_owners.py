@@ -1,4 +1,6 @@
 """Serialization owners preserve values and enforce restricted loading."""
+
+from _helpers import capability as _test_capability
 import ast
 import importlib
 import inspect
@@ -22,7 +24,7 @@ from jittor.compat.torch.serialization import portable, safetensors as safe_owne
 def test_cuda_checkpoint_mapped_to_cpu_stays_on_cpu_for_subsequent_ops():
     import jittor as jt
     import torch
-    if not jt.has_cuda or not jt.flags.use_cuda:
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled or not jt.introspection.policy.runtime.use_cuda:
         pytest.skip("requires active CUDA runtime")
     previous = torch.get_default_device()
     try:

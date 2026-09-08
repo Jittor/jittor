@@ -5,6 +5,8 @@
 # ***************************************************************
 """Native ``Var``/``Module`` device methods on two real CUDA devices."""
 
+from _helpers import capability as _test_capability
+
 import ctypes
 import unittest
 
@@ -18,10 +20,7 @@ _libcuda = None
 
 
 def _device_count():
-    try:
-        return int(jt.get_device_count())
-    except Exception:
-        return 0
+    return int(_test_capability.device_count('cuda', backend=jt))
 
 
 def _pointer_device(var):
@@ -43,7 +42,7 @@ def _pointer_device(var):
 class _TwoDeviceCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        if not jt.has_cuda or _device_count() < 2:
+        if not _test_capability.check_accelerator('cuda', backend=jt).enabled or _device_count() < 2:
             raise unittest.SkipTest("two CUDA devices are required")
 
     def setUp(self):

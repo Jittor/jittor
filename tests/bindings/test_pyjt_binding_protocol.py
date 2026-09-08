@@ -165,20 +165,20 @@ class TestInstanceDictParticipatesInGC(unittest.TestCase):
     def test_self_referencing_var_is_collected(self):
         gc.collect()
         jt.gc()
-        before = jt.liveness_info()["lived_vars"]
+        before = jt.introspection.counters.live_vars
         for _ in range(50):
             v = jt.array([1.0, 2.0])
             v.self_ref = v          # cycle through the instance dict
             del v
         gc.collect()
         jt.gc()
-        after = jt.liveness_info()["lived_vars"]
+        after = jt.introspection.counters.live_vars
         self.assertEqual(after, before)
 
     def test_two_var_cycle_is_collected(self):
         gc.collect()
         jt.gc()
-        before = jt.liveness_info()["lived_vars"]
+        before = jt.introspection.counters.live_vars
         for _ in range(20):
             a = jt.array([1.0])
             b = jt.array([2.0])
@@ -187,7 +187,7 @@ class TestInstanceDictParticipatesInGC(unittest.TestCase):
             del a, b
         gc.collect()
         jt.gc()
-        self.assertEqual(jt.liveness_info()["lived_vars"], before)
+        self.assertEqual(jt.introspection.counters.live_vars, before)
 
     def test_attributes_and_dict_still_work(self):
         v = jt.array([1.0])
@@ -362,15 +362,19 @@ class TestNonStdExceptionAtTheBoundary(unittest.TestCase):
         # asks for crash isolation, without which the child's abort trips
         # jittor's SIGCHLD handler and takes this session down too.
         proc = run_in_subprocess("""
-            jt.flags.use_cuda = 0
-            try:
-                x = jt.code([1], "float32", [], cpu_src='throw 42;')
-                x.sync()
-                print("NO-RAISE")
-            except Exception:
-                print("RAISED")
-            print("SURVIVED")
-        """)
+from contextlib import ExitStack as _ProcessPolicyStack
+import atexit as _process_policy_atexit
+_process_policy_scopes = _ProcessPolicyStack()
+_process_policy_atexit.register(_process_policy_scopes.close)
+_process_policy_scopes.enter_context(jt.runtime.scope(use_cuda=0))
+try:
+    x = jt.code([1], "float32", [], cpu_src='throw 42;')
+    x.sync()
+    print("NO-RAISE")
+except Exception:
+    print("RAISED")
+print("SURVIVED")
+""")
         output = proc.stdout.decode("utf8", "replace")
         self.assertEqual(proc.returncode, 0, output)
         self.assertIn("RAISED", output)

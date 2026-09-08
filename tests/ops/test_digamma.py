@@ -1,3 +1,7 @@
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved.
 # Maintainers:
@@ -38,12 +42,18 @@ class TestDigamma(unittest.TestCase):
             tgdx = torch.autograd.grad(tdx, tx, torch.ones_like(tx))[0]
             np.testing.assert_allclose(jgdx.data, tgdx.detach().numpy(), rtol=1e-4, atol=1e-6)
 
-@unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+@_test_preserve_policy(jt, 'use_cuda')
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestCudaDigamma(TestDigamma):
     def setUp(self):
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
     def tearDown(self):
-        jt.flags.use_cuda = 0
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,6 +11,8 @@ passed a hardcoded 0 to MPI_Bcast. Any broadcast from a non-zero root silently
 did the wrong thing -- every rank got rank 0's buffer, and the real root's data
 was overwritten -- with no error anywhere.
 """
+
+from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
@@ -73,7 +75,7 @@ class TestMpiVarOps(unittest.TestCase):
         np.testing.assert_allclose(v.data, total, rtol=1e-5)
 
 
-@unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")
+@_test_capability.library_required('mpi', backend=jt)
 class TestMpiVarOpsEntry(unittest.TestCase):
     def test(self):
         run_mpi_test(3, "test_mpi_var_ops")

@@ -1,5 +1,7 @@
 """Three-step training trajectories for common networks against PyTorch."""
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -182,7 +184,7 @@ class TestNetworkTrainingParityCPU(NetworkTrainingParity):
 
 
 @unittest.skipIf(skip_this_test, "independent PyTorch is unavailable")
-@unittest.skipIf(not jt.has_cuda, "CUDA is unavailable")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA is unavailable")
 class TestNetworkTrainingParityCUDA(NetworkTrainingParity):
     loss_tolerance = 1e-2
     buffer_absolute_tolerance = 5e-5

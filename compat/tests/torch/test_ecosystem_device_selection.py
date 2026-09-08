@@ -12,11 +12,15 @@ These tests exercise the selection helper directly so the contract is checked
 without an oracle interpreter or a downstream library.
 """
 
+from _helpers import capability as _test_capability
+
 import os
 import sys
 from pathlib import Path
 import tempfile
 import unittest
+from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest import mock
 
 import jittor as jt
@@ -26,6 +30,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _helpers import child_process  # noqa: E402
+from _helpers.runtime_policy import fixture_stack
 
 import _ecosystem_runner  # noqa: E402
 import _ecosystem_harness  # noqa: E402
@@ -38,6 +43,27 @@ class _StubTorch(object):
 class _StubFlags(object):
     use_cuda = 0
     use_acl = 0
+
+
+def _stub_observation_runtime(flags, acl):
+    from jittor._runtime.state import RuntimeContext, RuntimeState
+    from jittor._runtime.introspection import EffectivePolicy
+    @contextmanager
+    def scope(**changes):
+        before = {key: getattr(flags, key) for key in changes}
+        try:
+            for key, value in changes.items():
+                setattr(flags, key, value)
+            yield
+        finally:
+            for key, value in before.items():
+                setattr(flags, key, value)
+    runtime = RuntimeState(RuntimeContext(flags), scope)
+    introspection = SimpleNamespace(
+        policy=EffectivePolicy(SimpleNamespace(), runtime.context),
+        capabilities=SimpleNamespace(backend=lambda name: SimpleNamespace(
+            enabled=bool(acl and name == "acl"), failed=False)))
+    return runtime, introspection
 
 
 class _SharedNumpyTensor(object):
@@ -56,38 +82,41 @@ class _SharedNumpyTensor(object):
 
 class TestEcosystemDeviceSelection(unittest.TestCase):
     def setUp(self):
-        self._restore = jt.flags.use_cuda
-        self.addCleanup(self._put_back)
-
-    def _put_back(self):
-        jt.flags.use_cuda = self._restore
+        self._policy_stack = fixture_stack(self)
 
     def test_cpu_request_turns_cuda_off(self):
-        jt.flags.use_cuda = 1 if jt.has_cuda else 0
-        _ecosystem_runner._select_device(_StubTorch(), "jittor", "cpu")
-        self.assertEqual(jt.flags.use_cuda, 0)
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1 if _test_capability.check_accelerator('cuda', backend=jt).enabled else 0))
+            _ecosystem_runner._select_device(_StubTorch(), "jittor", "cpu", policy_stack=_test_policy_stack)
+            self.assertEqual(jt.introspection.policy.runtime.use_cuda, 0)
 
     def test_cpu_request_is_reported_as_cpu(self):
-        jt.flags.use_cuda = 1 if jt.has_cuda else 0
-        _ecosystem_runner._select_device(_StubTorch(), "jittor", "cpu")
-        self.assertEqual(
-            _ecosystem_runner._device_in_use(_StubTorch(), "jittor", "cpu"), "cpu"
-        )
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1 if _test_capability.check_accelerator('cuda', backend=jt).enabled else 0))
+            _ecosystem_runner._select_device(_StubTorch(), "jittor", "cpu", policy_stack=_test_policy_stack)
+            self.assertEqual(
+                _ecosystem_runner._device_in_use(_StubTorch(), "jittor", "cpu"), "cpu"
+            )
 
-    @unittest.skipUnless(jt.has_cuda, "CUDA is unavailable")
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA is unavailable")
     def test_cuda_request_turns_cuda_on_and_is_reported(self):
-        jt.flags.use_cuda = 0
-        _ecosystem_runner._select_device(_StubTorch(), "jittor", "cuda")
-        self.assertEqual(jt.flags.use_cuda, 1)
-        self.assertEqual(
-            _ecosystem_runner._device_in_use(_StubTorch(), "jittor", "cuda"), "cuda"
-        )
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
+            _ecosystem_runner._select_device(_StubTorch(), "jittor", "cuda", policy_stack=_test_policy_stack)
+            self.assertEqual(jt.introspection.policy.runtime.use_cuda, 1)
+            self.assertEqual(
+                _ecosystem_runner._device_in_use(_StubTorch(), "jittor", "cuda"), "cuda"
+            )
 
     def test_npu_request_requires_acl_and_is_reported_separately(self):
         flags = _StubFlags()
-        with mock.patch.object(jt.compiler, "has_acl", 1):
-            with mock.patch.object(jt, "flags", flags):
-                _ecosystem_runner._select_device(_StubTorch(), "jittor", "npu")
+        runtime, observation = _stub_observation_runtime(flags, True)
+        with mock.patch.object(jt, "runtime", runtime):
+            with mock.patch.object(jt, "introspection", observation):
+                _ecosystem_runner._select_device(_StubTorch(), "jittor", "npu", policy_stack=self._policy_stack)
                 self.assertEqual(flags.use_cuda, 1)
                 self.assertEqual(flags.use_acl, 1)
                 self.assertEqual(
@@ -98,13 +127,14 @@ class TestEcosystemDeviceSelection(unittest.TestCase):
                 )
 
     def test_npu_request_fails_without_acl(self):
-        with mock.patch.object(jt.compiler, "has_acl", 0):
+        runtime, observation = _stub_observation_runtime(_StubFlags(), False)
+        with mock.patch.object(jt, "runtime", runtime), mock.patch.object(jt, "introspection", observation):
             with self.assertRaisesRegex(SystemExit, "ACL is unavailable"):
-                _ecosystem_runner._select_device(_StubTorch(), "jittor", "npu")
+                _ecosystem_runner._select_device(_StubTorch(), "jittor", "npu", policy_stack=self._policy_stack)
 
     def test_jittor_tensors_are_never_moved_by_hand(self):
         """The returned callable is identity: Jittor moves the graph, not tensors."""
-        move = _ecosystem_runner._select_device(_StubTorch(), "jittor", "cpu")
+        move = _ecosystem_runner._select_device(_StubTorch(), "jittor", "cpu", policy_stack=self._policy_stack)
         sentinel = object()
         self.assertIs(move(sentinel), sentinel)
 

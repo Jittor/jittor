@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2020 Jittor. Authors: 
 #     Guowei Yang <471184555@qq.com>
@@ -39,7 +41,7 @@ class TestSearchsorted(unittest.TestCase):
             y_tc = torch.searchsorted(s_tc, v_tc, right=False)
             assert np.allclose(y_jt.numpy(), y_tc.data)
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_searchsorted_gpu(self):
         self.test_searchsorted_cpu()

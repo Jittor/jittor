@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2026 Jittor. All Rights Reserved.
 # Maintainers:
@@ -13,7 +15,7 @@ import numpy as np
 import jittor as jt
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestStackFast(unittest.TestCase):
 
     def test_no_grad_cuda_stack_matches_numpy(self):

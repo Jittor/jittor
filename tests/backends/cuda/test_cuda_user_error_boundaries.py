@@ -32,6 +32,8 @@ The ops are called directly rather than through ``jt.nn``.  The Python wrappers
 validate first, so a test that goes through them proves the wrapper checks and
 leaves the C++ boundary -- the thing 2.19 changed -- untouched.
 """
+
+from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
@@ -42,13 +44,14 @@ from _helpers.assertions import expect_error
 
 
 def _ops(name):
-    module = getattr(jt.compile_extern, name, None)
+    _test_capability.require_library(name[:-4] if name.endswith("_ops") else name)
+    module = getattr(jt.compile_extern, name)
     if module is None:
-        raise unittest.SkipTest("%s is not available in this build" % name)
+        raise AssertionError("%s reported available but exposed no ops" % name)
     return module
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class CudaBoundaryCase(unittest.TestCase):
     """Base: every rejection is followed by a real computation.
 

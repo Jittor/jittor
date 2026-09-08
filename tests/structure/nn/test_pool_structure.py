@@ -1,5 +1,7 @@
 """Architecture and compatibility contracts for the ``jittor.pool`` facade."""
 
+from _helpers import capability as _test_capability
+
 import ast
 import inspect
 import importlib
@@ -534,7 +536,7 @@ class TestPoolStructure(unittest.TestCase):
                 public = getattr(nn, name)
                 source = getattr(pool_facade, name)
                 if name == "Pool" and public is not source:
-                    self.assertTrue(jt.compiler.has_acl)
+                    self.assertTrue(_test_capability.check_accelerator('acl', backend=jt).enabled)
                 else:
                     self.assertIs(public, source)
 

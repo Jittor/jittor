@@ -31,6 +31,8 @@ between two float32 reductions is also wide enough for a kernel that is wrong
 by a percent -- verified: a 0.1% error injected into the reduction still
 passed. Positive cotangents keep the reduction well-conditioned.
 """
+
+from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
@@ -111,7 +113,7 @@ def _grad_tolerance(prob, cot_np, grad_ref, log, sum_error):
     return from_reduction + from_probability + elementwise
 
 
-@unittest.skipIf(not jt.has_cuda, "No cuda found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
 class TestSoftmaxCudaGrad(unittest.TestCase):
     def _cuda(self, x_np, cot_np, log):
         with jt.flag_scope(use_cuda=1):

@@ -1,5 +1,7 @@
 """Moved native helpers still link into CPU and CUDA operator execution."""
 
+from _helpers import capability as _test_capability
+
 import jittor as jt
 import numpy as np
 import pytest
@@ -7,7 +9,7 @@ import pytest
 
 @pytest.mark.parametrize("use_cuda", [0, 1])
 def test_relocated_nan_checker_links_and_checks_device_storage(use_cuda):
-    if use_cuda and not jt.has_cuda:
+    if use_cuda and not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA runtime required")
     with jt.runtime.scope(use_cuda=use_cuda):
         value = jt.array(np.arange(16, dtype=np.float32)) + 1

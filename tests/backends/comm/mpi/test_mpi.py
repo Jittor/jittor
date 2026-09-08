@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -29,7 +31,7 @@ class TestMpi(unittest.TestCase):
     def test_mpi_test_op(self):
         assert jt.compile_extern.mpi_ops.mpi_test("").data == 123
 
-    @unittest.skipIf(jt.compile_extern.nccl_ops is None, "no nccl")
+    @_test_capability.library_required("nccl", backend=jt)
     @jt.flag_scope(use_cuda=1)
     def test_nccl_with_mpi(self):
         assert jt.compile_extern.nccl_ops.nccl_test("test_with_mpi").data == 123
@@ -73,12 +75,12 @@ class TestMpi(unittest.TestCase):
 
                 assert (c==a.data).all(), (c, a.data)
 
-@unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")
+@_test_capability.library_required('mpi', backend=jt)
 class TestMpiEntry(unittest.TestCase):
     def test_entry(self):
         run_mpi_test(2, "test_mpi")
         
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     def test_mpi_resnet_entry(self):
         run_mpi_test(2, "test_resnet")
 

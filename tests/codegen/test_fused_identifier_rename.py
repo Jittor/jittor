@@ -62,7 +62,7 @@ def build_op(name, body, extra=""):
     """Compile an element-wise custom op whose loop body is ``body``."""
     cls = name.capitalize()
     subst = dict(name=name, cls=cls, body=body, extra=extra)
-    path = jt.flags.cache_path
+    path = jt.introspection.policy.startup.cache_path
     hname = os.path.join(path, name + "_op.h")
     ccname = os.path.join(path, name + "_op.cc")
     with open(hname, "w") as f:

@@ -1,5 +1,7 @@
 """Native domain dispatch follows the runtime target and keeps kernel identities."""
 
+from _helpers import capability as _test_capability
+
 import importlib
 import math
 from types import SimpleNamespace
@@ -81,7 +83,7 @@ def test_fft_cache_uses_tensor_device_and_reuses_matrices():
                                    atol=1e-5)
 
 
-@pytest.mark.skipif(not jt.has_cuda or not jt.compiler.is_cuda, reason="requires CUDA")
+@pytest.mark.skipif(not _test_capability.check_accelerator('cuda', backend=jt).enabled or not jt.compiler.is_cuda, reason="requires CUDA")
 def test_cpu_tensor_can_feed_the_cuda_runtime_target():
     gamma = importlib.import_module("jittor.math_util.gamma")
     tensor_ops = importlib.import_module("jittor.misc.tensor_ops")
@@ -99,7 +101,7 @@ def test_cpu_tensor_can_feed_the_cuda_runtime_target():
         np.testing.assert_allclose(result.numpy(), [1.0, 3.0, 6.0])
 
 
-@pytest.mark.skipif(not jt.has_cuda or not jt.compiler.is_cuda, reason="requires CUDA")
+@pytest.mark.skipif(not _test_capability.check_accelerator('cuda', backend=jt).enabled or not jt.compiler.is_cuda, reason="requires CUDA")
 def test_cuda_gamma_float_pointer_kernels_require_float32():
     gamma = importlib.import_module("jittor.math_util.gamma")
     with jt.flag_scope(use_cuda=1):

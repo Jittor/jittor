@@ -1,3 +1,7 @@
+
+from _helpers.introspection import liveness_snapshot as _test_liveness_snapshot
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -102,7 +106,7 @@ def check_matmul2(s1, s2, t1, t2, dtype = 'float32'):
     logs = find_log_with_re(logs, 
         "Jit op key (not )?found: (mkl)|(cublas)_matmul.*")
     if (dtype.startswith('float')):
-        if jt.flags.use_cuda or dtype == 'float32':
+        if jt.introspection.policy.runtime.use_cuda or dtype == 'float32':
             assert(len(logs)==1)
 
 class TestMatmul(unittest.TestCase):
@@ -161,13 +165,13 @@ class TestMatmul(unittest.TestCase):
             
             SGD.step(loss_mean)
             if i>2:
-                assert prev == jt.liveness_info(), f"memory leak {prev} {jt.liveness_info()}"
-            prev = jt.liveness_info()
+                assert prev == _test_liveness_snapshot(jt), f"memory leak {prev} {_test_liveness_snapshot(jt)}"
+            prev = _test_liveness_snapshot(jt)
             if (i % 10 == 9):
-                print(f"step {i}, loss = {loss_mean.data.sum()} {jt.liveness_info()}")
+                print(f"step {i}, loss = {loss_mean.data.sum()} {_test_liveness_snapshot(jt)}")
             else:
                 loss_mean.data.sum() 
-                jt.liveness_info()
+                _test_liveness_snapshot(jt)
 
         possible_results = [0.00022486248053610325, 0.00020916158973705024, 0.00561215]
         loss_mean = loss_mean.data
@@ -203,7 +207,7 @@ class TestMatmul(unittest.TestCase):
             assert len(logs_b)==2, len(logs_b)
         jt.clean()
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_matmul_type_cuda(self):
         with jt.flag_scope(use_cuda=1):
             check_matmul2([2,5],[5,8], False, False, 'float32')
@@ -218,7 +222,7 @@ class TestMatmul(unittest.TestCase):
             check_matmul2([5,2],[5,8], True, False, 'int32')
             check_matmul2([2,5],[8,5], False, True, 'int32')
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_matmul_cuda(self):
         with jt.flag_scope(use_cuda=1):
             check_matmul([2,5],[5,8])
@@ -232,7 +236,7 @@ class TestMatmul(unittest.TestCase):
             check_matmul2([200,500],[800,500], False, True)
             check_matmul2([500,500],[50,500], False, True)
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_matmul_transpose_cuda_float(self):
         with jt.flag_scope(use_cuda=1):
             a = jt.random([16, 32])
@@ -242,7 +246,7 @@ class TestMatmul(unittest.TestCase):
             got = c.data
             np.testing.assert_allclose(got, expected, atol=1e-5)
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_backward_cuda(self):
         with jt.flag_scope(use_cuda=1):
             np.random.seed(0)
@@ -270,20 +274,20 @@ class TestMatmul(unittest.TestCase):
                 SGD.step(loss_mean)
 
                 if i>2:
-                    assert prev == jt.liveness_info(), f"memory leak {prev} {jt.liveness_info()}"
-                prev = jt.liveness_info()
+                    assert prev == _test_liveness_snapshot(jt), f"memory leak {prev} {_test_liveness_snapshot(jt)}"
+                prev = _test_liveness_snapshot(jt)
                 if (i % 10 == 9):
-                    print(f"step {i}, loss = {loss_mean.data.sum()} {jt.liveness_info()}")
+                    print(f"step {i}, loss = {loss_mean.data.sum()} {_test_liveness_snapshot(jt)}")
                 else:
                     loss_mean.data.sum() 
-                    jt.liveness_info()
+                    _test_liveness_snapshot(jt)
 
             # result is 0.00018236637697555125
             result = 0.00018236637697555125
             assert abs(loss_mean.data - result) < 1e-2
             jt.clean()
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_backward_once_cuda(self):
         with jt.flag_scope(use_cuda=1):
             np.random.seed(0)
@@ -364,7 +368,7 @@ class TestMatmul(unittest.TestCase):
         check([8,1,3,4], [10,4,5])
         check([5,10,3,4], [5,10,4,5])
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_matmul_example2_cuda(self):
         self.test_matmul_example2()

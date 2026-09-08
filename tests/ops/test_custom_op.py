@@ -59,7 +59,7 @@ void CustomOp::jit_run() {
 
 class TestCustomOp(unittest.TestCase):
     def test_compile_custom_ops(self):
-        tmp_path = jt.flags.cache_path
+        tmp_path = jt.introspection.policy.startup.cache_path
         hname = tmp_path+"/custom_op.h"
         ccname = tmp_path+"/custom_op.cc"
         with open(hname, "w") as f:

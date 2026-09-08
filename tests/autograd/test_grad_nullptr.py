@@ -68,7 +68,11 @@ class TestGradNullptr(unittest.TestCase):
 
     def test_missing_grad_under_amp_level_3(self):
         # grad(): `if (auto_mixed_precision_level == 3 && grad->ns != var->ns)`
-        self._check(setup="jt.flags.auto_mixed_precision_level = 3")
+        self._check(setup="""from contextlib import ExitStack as _ProcessPolicyStack
+import atexit as _process_policy_atexit
+_process_policy_scopes = _ProcessPolicyStack()
+_process_policy_atexit.register(_process_policy_scopes.close)
+_process_policy_scopes.enter_context(jt.runtime.scope(auto_mixed_precision_level=3))""")
 
     def test_missing_grad_plain(self):
         # The same graph without either trigger must keep working.

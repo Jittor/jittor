@@ -11,6 +11,10 @@ handle in its plan cache and executed with it, and the caller got undefined
 output with no exception -- and every later transform of the same shape reused
 the same invalid handle.
 """
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
@@ -24,15 +28,21 @@ def _reference_fft2(real):
     return np.stack([spectrum.real, spectrum.imag], axis=-1)
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@_test_preserve_policy(jt, 'use_cuda')
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestCufftErrors(unittest.TestCase):
     def setUp(self):
-        self._use_cuda = jt.flags.use_cuda
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._use_cuda = jt.introspection.policy.runtime.use_cuda
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
 
     def tearDown(self):
-        jt.sync_all()
-        jt.flags.use_cuda = self._use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            jt.sync_all()
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._use_cuda))
 
     def test_forward_matches_numpy(self):
         real = np.random.RandomState(0).rand(2, 8, 8).astype("float32")

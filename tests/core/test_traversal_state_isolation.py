@@ -48,6 +48,8 @@ So there are two things to hold, and they are different:
 Run::  python -m pytest tests/core/test_traversal_state_isolation.py
 """
 
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
 import unittest
 
 import numpy as np
@@ -98,26 +100,31 @@ class TestBatchIndexIsChecked(unittest.TestCase):
         jt.tests.node_index_table()
 
 
+@_test_preserve_policy(jt, 'profile_memory_enable')
 class TestTraversalStateIsolation(unittest.TestCase):
     def setUp(self):
-        self.previous = jt.flags.profile_memory_enable
+        self.previous = jt.introspection.policy.runtime.profile_memory_enable
 
     def tearDown(self):
-        jt.flags.profile_memory_enable = self.previous
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(profile_memory_enable=self.previous))
 
     def test_a_traversal_inside_run_sync_does_not_break_fusion(self):
-        x = np.random.RandomState(0).rand(96, 96).astype("float32")
-        reference = build(x).item()
-        np.testing.assert_allclose(reference, expected(x), rtol=1e-5)
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            x = np.random.RandomState(0).rand(96, 96).astype("float32")
+            reference = build(x).item()
+            np.testing.assert_allclose(reference, expected(x), rtol=1e-5)
 
-        jt.flags.profile_memory_enable = 1
-        try:
-            # MemoryProfiler::check() walks the whole graph once per op that
-            # run_sync executes, from inside run_sync.
-            with_profiler = build(x).item()
-        finally:
-            jt.flags.profile_memory_enable = 0
-        np.testing.assert_allclose(with_profiler, reference, rtol=1e-5)
+            _test_policy_stack.enter_context(jt.runtime.scope(profile_memory_enable=1))
+            try:
+                # MemoryProfiler::check() walks the whole graph once per op that
+                # run_sync executes, from inside run_sync.
+                with_profiler = build(x).item()
+            finally:
+                _test_policy_stack.enter_context(jt.runtime.scope(profile_memory_enable=0))
+            np.testing.assert_allclose(with_profiler, reference, rtol=1e-5)
 
     def test_backward_survives_a_traversal_inside_its_own_forward(self):
         """``grad()`` sorts the graph, then keeps indices across op building.
@@ -125,20 +132,22 @@ class TestTraversalStateIsolation(unittest.TestCase):
         Building the backward ops can re-enter ``run_sync`` (``Op::init`` does,
         for a vary-shape op), and the profiler's traversal rides along with it.
         """
-        x = np.random.RandomState(1).rand(32, 32).astype("float32")
-        weight = jt.array(x)
-        loss = (weight * weight + weight).sum()
-        reference = jt.grad(loss, weight).numpy()
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            x = np.random.RandomState(1).rand(32, 32).astype("float32")
+            weight = jt.array(x)
+            loss = (weight * weight + weight).sum()
+            reference = jt.grad(loss, weight).numpy()
 
-        jt.flags.profile_memory_enable = 1
-        try:
-            weight2 = jt.array(x)
-            loss2 = (weight2 * weight2 + weight2).sum()
-            with_profiler = jt.grad(loss2, weight2).numpy()
-        finally:
-            jt.flags.profile_memory_enable = 0
-        np.testing.assert_allclose(with_profiler, reference, rtol=1e-5)
-        np.testing.assert_allclose(reference, 2 * x + 1, rtol=1e-5)
+            _test_policy_stack.enter_context(jt.runtime.scope(profile_memory_enable=1))
+            try:
+                weight2 = jt.array(x)
+                loss2 = (weight2 * weight2 + weight2).sum()
+                with_profiler = jt.grad(loss2, weight2).numpy()
+            finally:
+                _test_policy_stack.enter_context(jt.runtime.scope(profile_memory_enable=0))
+            np.testing.assert_allclose(with_profiler, reference, rtol=1e-5)
+            np.testing.assert_allclose(reference, 2 * x + 1, rtol=1e-5)
 
 
 if __name__ == "__main__":

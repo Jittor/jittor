@@ -19,14 +19,18 @@ class TestTracer(unittest.TestCase):
             with jt.flag_scope(gdb_path=""):
                 jt.print_trace()
 
-    @unittest.skipUnless(jt.flags.gdb_path, "GDB is disabled in this test environment")
+    @unittest.skipUnless(jt.introspection.policy.runtime.gdb_path, "GDB is disabled in this test environment")
     def test_breakpoint(self):
-        fname = os.path.join(jt.flags.cache_path, "test_breakpoint.py")
+        fname = os.path.join(jt.introspection.policy.startup.cache_path, "test_breakpoint.py")
         with open(fname, 'w') as f:
             f.write("""
 import jittor as jt
+from contextlib import ExitStack as _ProcessPolicyStack
+import atexit as _process_policy_atexit
+_process_policy_scopes = _ProcessPolicyStack()
+_process_policy_atexit.register(_process_policy_scopes.close)
 with jt.flag_scope(extra_gdb_cmd="c;q"):
-    jt.flags.gdb_attach = 1
+    _process_policy_scopes.enter_context(jt.runtime.scope(gdb_attach=1))
 """)
         completed = run_python_child([fname], merge_stderr=True)
         out = completed.stdout
@@ -43,7 +47,7 @@ with jt.flag_scope(extra_gdb_cmd="c;q"):
         entire suite.  Stand in a debugger that never exits and require the
         call to return.
         """
-        fake_gdb = os.path.join(jt.flags.cache_path, "hanging_gdb.sh")
+        fake_gdb = os.path.join(jt.introspection.policy.startup.cache_path, "hanging_gdb.sh")
         with open(fake_gdb, "w") as f:
             # exec, so the stand-in debugger *is* the forked child. A plain
             # "sleep 600" would leave a grandchild holding the inherited stdout
@@ -52,7 +56,7 @@ with jt.flag_scope(extra_gdb_cmd="c;q"):
             f.write("#!/bin/sh\nexec sleep 600\n")
         os.chmod(fake_gdb, 0o755)
 
-        fname = os.path.join(jt.flags.cache_path, "test_gdb_timeout.py")
+        fname = os.path.join(jt.introspection.policy.startup.cache_path, "test_gdb_timeout.py")
         with open(fname, 'w') as f:
             f.write("""
 import time

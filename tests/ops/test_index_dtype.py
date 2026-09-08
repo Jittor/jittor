@@ -28,6 +28,8 @@ CUB paths underneath and, for arange, a blast radius across the whole library;
 they are out of scope for this task and recorded in its commit message.
 """
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -168,7 +170,7 @@ class TestIndexDtypeCPU(_IndexDtype, unittest.TestCase):
     use_cuda = 0
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestIndexDtypeCUDA(_IndexDtype, unittest.TestCase):
     use_cuda = 1
 
@@ -188,7 +190,7 @@ class TestRepeatInterleaveCounts(unittest.TestCase):
         x = rng.standard_normal((7, 3)).astype("float32")
         repeats = np.array([0, 2, 1, 3, 0, 1, 4], dtype="int64")
         expected = np.repeat(x, repeats, axis=0)
-        for use_cuda in ((0, 1) if jt.has_cuda else (0,)):
+        for use_cuda in ((0, 1) if _test_capability.check_accelerator('cuda', backend=jt).enabled else (0,)):
             with self.subTest(use_cuda=use_cuda):
                 with jt.flag_scope(use_cuda=use_cuda):
                     got = jt.repeat_interleave(
@@ -197,7 +199,7 @@ class TestRepeatInterleaveCounts(unittest.TestCase):
                 np.testing.assert_allclose(got, expected)
 
     @pytest.mark.manual
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_more_than_two_billion_output_rows(self):
         """Opt-in probe: it allocates 2 GiB on the device.
 

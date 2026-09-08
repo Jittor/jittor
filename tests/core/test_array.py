@@ -1,3 +1,7 @@
+
+from _helpers.introspection import liveness_snapshot as _test_liveness_snapshot
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
@@ -21,11 +25,11 @@ class TestArray(unittest.TestCase):
         a.data[1] = -2
         assert (a.data == [1,-2,3]).all()
         assert (a.fetch_sync()==[1,-2,3]).all()
-        li = jt.liveness_info()
+        li = _test_liveness_snapshot(jt)
         del a
-        assert li == jt.liveness_info()
+        assert li == _test_liveness_snapshot(jt)
         del d
-        assert li != jt.liveness_info()
+        assert li != _test_liveness_snapshot(jt)
 
     def test_set_data(self):
         a = jt.array([1,2,3])
@@ -118,7 +122,7 @@ class TestArray(unittest.TestCase):
         jt.LOG.v(f"pure compute: {t1}, overlap: {t2}")
         return t1, t2, a, b, results
 
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
     def test_memcopy_overlap(self):
         """Fetching alongside compute produces the same numbers.
@@ -132,7 +136,7 @@ class TestArray(unittest.TestCase):
             assert np.allclose(a.data, v), (v.shape, a.data.shape)
 
     @pytest.mark.load_sensitive
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
     def test_memcopy_overlap_costs_almost_nothing(self):
         """Fetching alongside compute must not cost more than 10 ms over ten runs.
@@ -155,17 +159,17 @@ class TestArray(unittest.TestCase):
 
     def test_segfault2(self):
         assert (jt.array([1,2,3]).reshape((1,3)).data==[1,2,3]).all()
-        if jt.has_cuda:
+        if _test_capability.check_accelerator('cuda', backend=jt).enabled:
             with jt.flag_scope(use_cuda=1):
                 assert (jt.array([1,2,3]).reshape((1,3)).data==[1,2,3]).all()
     
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     def test_array_dual(self):
         with jt.flag_scope(use_cuda=1):
             a = jt.array(np.float32([1,2,3]))
             assert (a.data==[1,2,3]).all()
         
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     def test_array_migrate(self):
         with jt.flag_scope(use_cuda=1):
             a = jt.array(np.float32([1,2,3]))
@@ -274,7 +278,7 @@ class TestArray(unittest.TestCase):
             assert b.numpy()[1] == 0
         assert len(rep) == 2
         
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     def test_scalar_fuse_unary_cuda(self):
         with jt.flag_scope(use_cuda=1):
             self.test_scalar_fuse_unary()

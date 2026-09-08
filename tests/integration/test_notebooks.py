@@ -209,7 +209,7 @@ def test_jupytext_materializes_clean_notebooks_outside_the_checkout(topic, tmp_p
 
 
 def _offline_guard():
-    return r"""import socket
+    return """import socket
 _original_connect = socket.socket.connect
 _original_create_connection = socket.create_connection
 
@@ -229,8 +229,12 @@ def _offline_create_connection(address, *args, **kwargs):
 socket.socket.connect = _offline_connect
 socket.create_connection = _offline_create_connection
 import jittor as jt
-jt.flags.use_cuda = 0
-assert jt.flags.use_parallel_op_compiler == 0
+from contextlib import ExitStack as _ProcessPolicyStack
+import atexit as _process_policy_atexit
+_process_policy_scopes = _ProcessPolicyStack()
+_process_policy_atexit.register(_process_policy_scopes.close)
+_process_policy_scopes.enter_context(jt.runtime.scope(use_cuda=0))
+assert jt.introspection.policy.runtime.use_parallel_op_compiler == 0
 """
 
 

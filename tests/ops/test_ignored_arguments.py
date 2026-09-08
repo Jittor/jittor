@@ -252,23 +252,25 @@ class TestSortStable(_PolicyCase):
 
     def test_argsort_really_is_unstable_on_cpu(self):
         """The reason ``stable=True`` is refused rather than accepted."""
-        saved = jt.flags.use_cuda
-        jt.flags.use_cuda = 0
-        try:
-            rng = np.random.default_rng(0)
-            keys = rng.integers(0, 4, size=1000).astype("int32")
-            index, _ = jt.argsort(jt.array(keys), 0, False)
-            stable_reference = np.argsort(keys, kind="stable")
-            self.assertFalse(
-                np.array_equal(index.numpy(), stable_reference),
-                "argsort became stable on CPU -- implement sort(stable=True) "
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            saved = jt.introspection.policy.runtime.use_cuda
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
+            try:
+                rng = np.random.default_rng(0)
+                keys = rng.integers(0, 4, size=1000).astype("int32")
+                index, _ = jt.argsort(jt.array(keys), 0, False)
+                stable_reference = np.argsort(keys, kind="stable")
+                self.assertFalse(
+                    np.array_equal(index.numpy(), stable_reference),
+                    "argsort became stable on CPU -- implement sort(stable=True) "
                 "instead of refusing it",
-            )
-            # it is still a correct sort, just not a stable one
-            np.testing.assert_array_equal(
-                keys[index.numpy()], keys[stable_reference])
-        finally:
-            jt.flags.use_cuda = saved
+                )
+                # it is still a correct sort, just not a stable one
+                np.testing.assert_array_equal(
+                    keys[index.numpy()], keys[stable_reference])
+            finally:
+                _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=saved))
 
     def test_default_sort_is_unchanged(self):
         x = jt.array(np.array([3.0, 1.0, 2.0], dtype="float32"))

@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -57,7 +59,7 @@ class TestDensenet(unittest.TestCase):
         random.seed(seed)
         jt.seed(seed)
 
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1, use_stat_allocator=1)
     def test_densenet(self):
         self.setup_seed(1)

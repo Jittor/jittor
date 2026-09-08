@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
@@ -15,7 +17,7 @@ def _bfloat16_round(values):
     return (bits & np.uint32(0xffff0000)).view(np.float32)
 
 
-@unittest.skipIf(not jt.compiler.has_acl, "No ACL found")
+@unittest.skipIf(not _test_capability.check_accelerator('acl', backend=jt).enabled, "No ACL found")
 class TestACLTorchCompat(unittest.TestCase):
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_fused_adamw_bfloat16_matches_cann_two_steps(self):
@@ -414,8 +416,8 @@ class TestACLTorchCompat(unittest.TestCase):
             return result
 
         with override_kernel("nn.group_norm", "acl", record_group_norm):
-            self.assertTrue(jt.flags.use_acl)
-            self.assertTrue(jt.flags.use_cuda)
+            self.assertTrue(jt.introspection.policy.runtime.use_cuda)
+            self.assertTrue(jt.introspection.policy.runtime.use_cuda)
             with jt.log_capture_scope(
                 log_v=0, log_vprefix="acl_op_exec.cc=100"
             ) as logs:
@@ -632,8 +634,8 @@ class TestACLTorchCompat(unittest.TestCase):
             [0.25, -0.5, 1.5, 2.0, -1.0, 0.75, 1.0], dtype="float32"
         )
 
-        self.assertTrue(jt.flags.use_acl)
-        self.assertTrue(jt.flags.use_cuda)
+        self.assertTrue(jt.introspection.policy.runtime.use_cuda)
+        self.assertTrue(jt.introspection.policy.runtime.use_cuda)
         self.assertIs(torch.nn.functional.silu, jt.nn.silu)
         source = torch.tensor(source_np)
         source.requires_grad_(True)
@@ -662,8 +664,8 @@ class TestACLTorchCompat(unittest.TestCase):
         with jt.flag_scope(use_acl=1, use_cuda=1), jt.log_capture_scope(
             log_v=0, log_vprefix="acl_op_exec.cc=100"
         ) as bf_logs:
-            self.assertTrue(jt.flags.use_acl)
-            self.assertTrue(jt.flags.use_cuda)
+            self.assertTrue(jt.introspection.policy.runtime.use_cuda)
+            self.assertTrue(jt.introspection.policy.runtime.use_cuda)
             source_bf = torch.tensor(source_np, dtype=torch.bfloat16)
             source_bf.requires_grad_(True)
             loss_weight_bf = torch.tensor(loss_weight_np, dtype=torch.bfloat16)
@@ -701,8 +703,8 @@ class TestACLTorchCompat(unittest.TestCase):
             rng.randn(*shape).astype("float32") * 0.1 for _ in range(4)
         )
 
-        self.assertTrue(jt.flags.use_acl)
-        self.assertTrue(jt.flags.use_cuda)
+        self.assertTrue(jt.introspection.policy.runtime.use_cuda)
+        self.assertTrue(jt.introspection.policy.runtime.use_cuda)
         inputs = [
             torch.tensor(value) for value in (query_np, key_np, value_np)
         ]

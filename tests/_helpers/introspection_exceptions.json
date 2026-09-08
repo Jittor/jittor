@@ -1,0 +1,57 @@
+{
+  "user_protected": {
+    "tests/core/test_setitem.py": "User explicitly protected this file; excluded from edits and zero-coverage claims."
+  },
+  "whitebox": {
+    "tests/structure/runtime/test_backend_op_registry_contract.py": "AST classifier negative input deliberately contains a literal flag assignment.",
+    "tests/backends/cuda/test_cuda.py": "TestNoCuda.test_cuda_flags verifies that the actual native Flags setter rejects unavailable CUDA.",
+    "tests/mem/test_allocator_aliasing.py": "The native Flags save_mem attribute must remain absent; this explicitly validates the removed binding.",
+    "tests/structure/runtime/test_runtime_sync_state.py": "Native Runtime/Flags synchronization and independent C++ setters are the subject of the contract.",
+    "tests/runtime/test_flags.py": "Native Flags descriptors and the flag_scope implementation are under test.",
+    "tests/runtime/test_flag_env_and_setter.py": "Native environment bindings and setter side effects are under test.",
+    "tests/runtime/test_startup_config.py": "Startup sealing through every native Flags instance is under test.",
+    "tests/runtime/test_runtime_device_state.py": "Native device state synchronization is under test.",
+    "tests/runtime/test_native_backend_registry.py": "Native registry and device alias setters are under test.",
+    "tests/runtime/test_backend_execution_policy.py": "Native registry execution policy is compared with its native flag inputs.",
+    "tests/runtime/test_capability_queries.py": "Original hardware/build capability provider states are directly under test.",
+    "tests/runtime/test_runtime_introspection.py": "Fake/native backing service wiring of introspection itself is under test.",
+    "tests/backends/cuda/test_cuda_runtime_device_state.py": "Native CUDA device setter failure and alias synchronization are under test."
+  },
+  "legitimate_implementation_reads": {
+    "tests/_helpers/capability.py": "Physical presence intentionally queries the existing hardware evidence provider; explicit optional-library initialization is separate from readonly observation.",
+    "tests/backends/cpu/test_onednn_contract.py": "Assertions on mkl_ops publication and loader layout validate those exact implementation contracts.",
+    "tests/ops/test_mkl_batched_matmul.py": "Lazy MKL first-use publication is under test; converting it to an initializing availability query would hide the defect.",
+    "tests/_helpers/child_process.py": "Compiler MPI launcher path is a launch resource, not a backend capability boolean.",
+    "tests/_helpers/distributed.py": "inside_mpi is process-membership state, not library availability.",
+    "tests/build/test_import_bootstrap_laziness.py": "Loader callable identity and mocked build flags validate bootstrap itself.",
+    "tests/mem/test_allocator_aliasing.py": "The save_mem Flags attribute must remain absent; this explicitly tests native flag removal.",
+    "tests/_helpers/state_leaks.py": "Only startup sealing bypass checks inspect compiler publication directly; bounded-cache inventory and native autograd-policy identity keep their own observed services. Ordinary flags and counters use introspection."
+  },
+  "process_lifetime_scopes": [
+    "tests/autograd/test_grad_missing.py",
+    "tests/backends/acl/manual/max_model_probe.py",
+    "tests/backends/acl/manual/xcheck/run_jt.py",
+    "tests/backends/comm/nccl/test_nccl_rendezvous_timeout.py",
+    "tests/backends/comm/nccl/test_nccl_watchdog.py",
+    "tests/backends/cuda/test_peek_cuda_error.py",
+    "tests/bindings/test_tracer.py",
+    "tests/codegen/test_parallel_compile_attribution.py",
+    "tests/core/test_lazy_execution.py",
+    "tests/integration/test_notebooks.py",
+    "tests/ops/test_misc_issue.py",
+    "tests/backends/cuda/test_backend_teardown.py",
+    "tests/autograd/test_grad_nullptr.py",
+    "tests/bindings/test_pyjt_binding_protocol.py"
+  ],
+  "remaining_write_migrations": {},
+  "binding_contracts": {
+    "compat/tests/torch/test_torch_bootstrap.py": "Activation entry/owner binding and synthetic preflight flags are the subject of these tests.",
+    "compat/tests/torch/test_transaction.py": "Transaction owner conflict and descriptor restoration use deliberately controlled Flags stand-ins.",
+    "compat/tests/torch/test_install_context.py": "Native-versus-target identity and installer context binding are under test.",
+    "compat/tests/torch/test_torch_shim_aliases.py": "Explicit namespace bindings, implementation identity and native alias absence are under test.",
+    "compat/tests/structure/test_torch_install_state_boundary.py": "Static contracts forbid native/root state aliases; source spellings must remain literal.",
+    "compat/tests/structure/test_compat_write_entry_points.py": "AST write-entrypoint classification is under test; literal flags syntax is classification input.",
+    "compat/tests/torch/test_torch_compiler_fidelity.py": "The compiler variable denotes the frontend API owner, not native build configuration.",
+    "compat/tests/torch/test_torch_backends_tf32.py": "Frontend context precision mapping is under test; native policy immutability uses introspection."
+  }
+}

@@ -5,13 +5,15 @@ import pytest
 
 
 def test_cuda_math_policy_rejects_invalid_values_and_restores_scope():
-    before = jt.flags.cuda_kernel_math
-    with jt.flag_scope(cuda_kernel_math="strict"):
-        assert jt.flags.cuda_kernel_math == "strict"
-        with pytest.raises(RuntimeError, match="cuda_kernel_math must be"):
-            jt.flags.cuda_kernel_math = "not-a-policy"
-        assert jt.flags.cuda_kernel_math == "strict"
-    assert jt.flags.cuda_kernel_math == before
+    from contextlib import ExitStack as _TestPolicyStack
+    with _TestPolicyStack() as _test_policy_stack:
+        before = jt.introspection.policy.runtime.cuda_kernel_math
+        with jt.flag_scope(cuda_kernel_math="strict"):
+            assert jt.introspection.policy.runtime.cuda_kernel_math == "strict"
+            with pytest.raises(RuntimeError, match="cuda_kernel_math must be"):
+                _test_policy_stack.enter_context(jt.runtime.scope(cuda_kernel_math="not-a-policy"))
+            assert jt.introspection.policy.runtime.cuda_kernel_math == "strict"
+        assert jt.introspection.policy.runtime.cuda_kernel_math == before
 
 
 def test_cuda_math_compilation_uses_captured_key_not_current_policy():
@@ -49,11 +51,13 @@ def test_cuda_math_compilation_uses_captured_key_not_current_policy():
 
 
 def test_pending_graph_runs_under_old_math_policy():
-    with jt.flag_scope(use_cuda=0, cuda_kernel_math="default"):
-        result = jt.code([1], "int32", cpu_header=r'''
+    from contextlib import ExitStack as _TestPolicyStack
+    with _TestPolicyStack() as _test_policy_stack:
+        with jt.flag_scope(use_cuda=0, cuda_kernel_math="default"):
+            result = jt.code([1], "int32", cpu_header=r'''
             #include "runtime/jit_policy.h"
         ''', cpu_src=r'''
             @out(0) = jittor::runtime_flag_cuda_kernel_math() == "default";
         ''')
-        jt.flags.cuda_kernel_math = "strict"
-        assert result.item() == 1
+            _test_policy_stack.enter_context(jt.runtime.scope(cuda_kernel_math="strict"))
+            assert result.item() == 1

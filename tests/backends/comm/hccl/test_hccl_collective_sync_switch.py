@@ -113,7 +113,7 @@ class TestHcclCollectiveSyncSwitch(unittest.TestCase):
                               ("hccl_collective_begin", "hccl_collective_end"))
         self.assertIn("hccl_collective_full_sync()", helpers)
 
-        cc = getattr(jt.compiler, "cc_path", None) or "g++"
+        cc = getattr(jt.introspection.policy.startup, "cc_path", None) or "g++"
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             src = tmp / "hccl_sync.cc"

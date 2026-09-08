@@ -8,8 +8,9 @@
 # ***************************************************************
 import jittor as jt
 import unittest
+from _helpers import capability as _test_capability
 
-@unittest.skipIf(jt.compile_extern.nccl_ops is None, "no nccl found")
+@_test_capability.library_required("nccl", backend=jt)
 class TestNccl(unittest.TestCase):
     @jt.flag_scope(use_cuda=1)
     def test_nccl(self):

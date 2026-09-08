@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -28,7 +30,7 @@ class TestCodeOp(unittest.TestCase):
             def forward_code(self, np, data):
                 a = data["inputs"][0]
                 b = data["outputs"][0]
-                if (jt.flags.use_cuda==0):
+                if (jt.introspection.policy.runtime.use_cuda==0):
                     assert isinstance(a,numpy.ndarray)
                 else:
                     assert isinstance(a,cupy.ndarray)
@@ -66,7 +68,7 @@ class TestCodeOp(unittest.TestCase):
             one=numpy.ones(a.shape)
             assert numpy.allclose(da.data,one*2.0)
 
-        if jt.has_cuda:
+        if _test_capability.check_accelerator('cuda', backend=jt).enabled:
             with jt.flag_scope(use_cuda=1):
                 check()
         check()
@@ -75,7 +77,7 @@ class TestCodeOp(unittest.TestCase):
         def forward_code(np, data):
             a = data["inputs"][0]
             b = data["outputs"][0]
-            if (jt.flags.use_cuda==0):
+            if (jt.introspection.policy.runtime.use_cuda==0):
                 assert isinstance(a,numpy.ndarray)
             else:
                 assert isinstance(a,cupy.ndarray)
@@ -100,7 +102,7 @@ class TestCodeOp(unittest.TestCase):
             one=numpy.ones(a.shape)
             assert numpy.allclose(da.data,one*2.0)
 
-        if jt.has_cuda:
+        if _test_capability.check_accelerator('cuda', backend=jt).enabled:
             with jt.flag_scope(use_cuda=1):
                 check()
         check()
@@ -147,7 +149,7 @@ class TestCodeOp(unittest.TestCase):
             assert numpy.allclose(dda.data,one)
             assert numpy.allclose(ddb.data,mone)
         
-        if jt.has_cuda:
+        if _test_capability.check_accelerator('cuda', backend=jt).enabled:
             with jt.flag_scope(use_cuda=1):
                 check()
         check()

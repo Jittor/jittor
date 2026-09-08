@@ -41,6 +41,8 @@ socket to break, and ncclCommGetAsyncError stayed ncclSuccess for the full two
 minutes while the kernel spun. The heartbeats are what catch this case; a
 regression that removed them would leave this test hanging, not failing.
 """
+
+from _helpers import capability as _test_capability
 import json
 import os
 from pathlib import Path
@@ -68,7 +70,11 @@ _WARMUP_TIMEOUT_S = 1800
 _RANK_SCRIPT = """
 import os, sys, time
 import jittor as jt
-jt.flags.use_cuda = 1
+from contextlib import ExitStack as _ProcessPolicyStack
+import atexit as _process_policy_atexit
+_process_policy_scopes = _ProcessPolicyStack()
+_process_policy_atexit.register(_process_policy_scopes.close)
+_process_policy_scopes.enter_context(jt.runtime.scope(use_cuda=1))
 ops = jt.compile_extern.nccl_ops
 rank, world = int(jt.rank), int(jt.world_size)
 print("READY rank %d/%d pid %d" % (rank, world, os.getpid()), flush=True)
@@ -186,7 +192,7 @@ def _base_env(rootinfo, world_size):
     return env
 
 
-@unittest.skipUnless(jt.has_cuda and len(_visible_devices()) >= 2,
+@unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled and len(_visible_devices()) >= 2,
                      "needs two CUDA devices in CUDA_VISIBLE_DEVICES")
 class TestNcclWatchdog(unittest.TestCase):
 

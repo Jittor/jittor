@@ -1,3 +1,5 @@
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -51,6 +53,7 @@ def conv_nhwc_hwio(x, w, stride=1, padding=0):
     y = (x*w).sum([3,4,5]) # Kh, Kw, C
     return y
 
+@_test_preserve_policy(jt, 'use_cuda')
 class TestMklConvOp(unittest.TestCase):
     """oneDNN is the CPU convolution backend, so these all pin CUDA off.
 
@@ -66,6 +69,9 @@ class TestMklConvOp(unittest.TestCase):
         # rather than run. The class-level `use_mkl` guard did not catch that
         # -- the flag is True by default and says nothing about whether the
         # library was loaded. See tests/_helpers/onednn.py.
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
         self.mkl_ops = requires_onednn()
         # Every case here asserts a `Run tuner conv` relay log, which is a
         # native-semantics claim: in Torch-compatibility mode convolution does
@@ -78,11 +84,13 @@ class TestMklConvOp(unittest.TestCase):
         if "_torch_compat_install_context" in jt.__dict__:
             self.skipTest("the conv tuner relay is native-only; this process "
                           "is in torch compatibility mode")
-        self._use_cuda = jt.flags.use_cuda
-        jt.flags.use_cuda = 0
+        self._use_cuda = jt.introspection.policy.runtime.use_cuda
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
 
     def tearDown(self):
-        jt.flags.use_cuda = self._use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._use_cuda))
 
     def test_forward(self):
         a = np.random.rand(1,3,224,224).astype(np.float32)

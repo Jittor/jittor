@@ -43,9 +43,9 @@ WATCHED_FLAGS = (
 )
 
 _COUNTERS = (
-    "number_of_hold_vars",
-    "number_of_lived_vars",
-    "number_of_lived_ops",
+    ("number_of_hold_vars", "held_vars"),
+    ("number_of_lived_vars", "live_vars"),
+    ("number_of_lived_ops", "live_ops"),
 )
 
 #: Process-level caches *inside jittor* that legitimately hold Vars, as
@@ -180,24 +180,25 @@ def snapshot(collect=True):
     jittor = _jittor()
     if jittor is None:
         return None
+    observations = getattr(jittor, "introspection", None)
+    if observations is None:
+        # A partially imported module is not an initialized observation
+        # service. Never bootstrap it or fall back to legacy mutable flags.
+        if (getattr(jittor, "runtime", None) is None
+                or getattr(getattr(jittor, "__spec__", None), "_initializing", False)):
+            return None
+        raise RuntimeError("initialized Runtime has no public introspection service")
     if collect:
         # Without this the counters measure Python's garbage collector schedule
         # rather than the test file, and every report would be noise.
         gc.collect()
-    counters = {}
-    for name in _COUNTERS:
-        function = getattr(jittor, name, None)
-        if callable(function):
-            try:
-                counters[name] = function()
-            except Exception:
-                pass
-    flags = {}
-    for name in WATCHED_FLAGS:
-        try:
-            flags[name] = getattr(jittor.flags, name)
-        except Exception:
-            continue
+    # Preserve report keys while reading supported observations. Failures
+    # propagate rather than yielding an empty counter set and a false clean
+    # report. policy.snapshot() supplies detached, immutable container values.
+    counters = {name: getattr(observations.counters, field)
+                for name, field in _COUNTERS}
+    effective = observations.policy.runtime.snapshot()
+    flags = {name: effective[name] for name in WATCHED_FLAGS if name in effective}
     return {
         "counters": counters,
         "flags": flags,
@@ -230,7 +231,7 @@ def differences(before, after):
     for name, value in sorted(after["flags"].items()):
         previous = before["flags"].get(name)
         if previous is not None and previous != value:
-            report.append("flags.%s %r -> %r (use jt.flag_scope)" % (name, previous, value))
+            report.append("flags.%s %r -> %r (use jt.runtime.scope)" % (name, previous, value))
     for name, value in sorted(after.get("startup", {}).items()):
         previous = before.get("startup", {}).get(name)
         if previous is not None and previous != value:
@@ -253,6 +254,8 @@ def differences(before, after):
 
 
 def _autograd_policy(jittor):
+    # Native autograd policy is a separate public service, not the no_grad
+    # flag; keep observing the state exercised by native policy-scope tests.
     autograd = getattr(jittor, "autograd", None)
     get_policy = getattr(autograd, "get_policy", None)
     if not callable(get_policy):

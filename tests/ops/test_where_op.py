@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 import unittest
 
 import jittor as jt
@@ -9,22 +11,30 @@ class TestWhereOp(WhereOpCases, unittest.TestCase):
     __test__ = True
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestWhereOpCuda(WhereOpCases, unittest.TestCase):
     __test__ = True
 
     @classmethod
     def setUpClass(cls):
-        cls._previous_use_cuda = jt.flags.use_cuda
-        jt.flags.use_cuda = 1
+        from _helpers.runtime_policy import fixture_stack
+        _test_policy_stack = fixture_stack(cls, class_scope=True)
+        try:
+            cls._previous_use_cuda = jt.introspection.policy.runtime.use_cuda
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
+        except BaseException:
+            _test_policy_stack.close()
+            raise
 
     @classmethod
     def tearDownClass(cls):
-        jt.sync_all()
-        jt.flags.use_cuda = cls._previous_use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            jt.sync_all()
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=cls._previous_use_cuda))
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestWhereOpCub(TestWhereOpCuda):
     def setUp(self):
         self.where = jt.compile_extern.cub_ops.cub_where

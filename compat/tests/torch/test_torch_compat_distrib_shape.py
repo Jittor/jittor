@@ -27,6 +27,8 @@ scalar params with a non-empty ``sample_shape``, the shapes match torch EXACTLY.
 Run:  python -m pytest compat/tests/torch/test_torch_compat_distrib_shape.py
       python -m pytest compat/tests/torch/test_torch_compat_distrib_shape.py
 """
+
+from _helpers import capability as _test_capability
 import unittest
 import numpy as np
 import torch
@@ -34,7 +36,7 @@ import jittor as jt
 from jittor import distributions as D
 
 # CPU always; CUDA when the build has it (NPU/ACL also reports has_cuda).
-_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if jt.has_cuda else [])
+_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if _test_capability.any_accelerator_enabled(backend=jt) else [])
 
 
 def both_devices(fn):

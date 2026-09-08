@@ -1,5 +1,7 @@
 """Preparing a key must not consume an operator's other backend capability."""
 
+from _helpers import capability as _test_capability
+
 import numpy as np
 import pytest
 import jittor as jt
@@ -60,7 +62,7 @@ def test_cpu_prepare_preserves_dual_source_and_nested_target(key_probe):
         np.testing.assert_array_equal(y.numpy(), [17])
 
 
-@pytest.mark.skipif(not jt.has_cuda, reason="CUDA compiler and device required")
+@pytest.mark.skipif(not _test_capability.check_accelerator('cuda', backend=jt).enabled, reason="CUDA compiler and device required")
 def test_cpu_prepared_operator_can_execute_cuda(key_probe):
     # The ordinary runtime switch flushes pending graphs. Prepare explicitly
     # for CPU inside the probe while keeping this graph pending for CUDA.

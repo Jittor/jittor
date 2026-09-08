@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -67,7 +69,7 @@ class test_models(unittest.TestCase):
             'inception_v3',
         ]
 
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
     def test_models(self):
         with torch.no_grad():
@@ -75,7 +77,7 @@ class test_models(unittest.TestCase):
 
     def run_models(self):
         def to_cuda(x):
-            if jt.has_cuda:
+            if _test_capability.check_accelerator('cuda', backend=jt).enabled:
                 return x.cuda()
             return x
         threshold = 1e-2

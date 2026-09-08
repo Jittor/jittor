@@ -26,6 +26,8 @@ cost is legibility: the two ``"complex" not in`` tests next to it can never
 fire, because no complex dtype is spelled with "float" in it either.
 """
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -119,7 +121,7 @@ class TestDispatchCPU(_Dispatch, unittest.TestCase):
     use_cuda = 0
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestDispatchCUDA(_Dispatch, unittest.TestCase):
     use_cuda = 1
 

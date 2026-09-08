@@ -16,6 +16,8 @@ initialization difference.  Run with an independent binary PyTorch::
     REAL_TORCH_SITE=/path/to/site-packages python -m pytest tests/models/test_network_parity.py
 """
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -182,7 +184,7 @@ class TestNetworkParityCPU(NetworkParity):
 
 
 @unittest.skipIf(skip_this_test, "independent PyTorch is unavailable")
-@unittest.skipIf(not jt.has_cuda, "CUDA is unavailable")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA is unavailable")
 class TestNetworkParityCUDA(NetworkParity):
     # CUDA convolution and reduction kernels select different accumulation
     # orders than the CPU reference, so the accepted band is wider here.

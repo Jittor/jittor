@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
@@ -59,12 +61,12 @@ class TestParallelPass(unittest.TestCase):
 
     def test_int32_align(self):
         ca, cu = self.check(1)
-        if jt.flags.cc_type=="clang":
+        if jt.introspection.policy.startup.cc_type=="clang":
             assert ca>1 and cu<=1, (ca, cu)
     
     def test_int64_align(self):
         ca, cu = self.check(0)
-        if jt.flags.cc_type=="clang":
+        if jt.introspection.policy.startup.cc_type=="clang":
             assert ca>1 and cu<=1, (ca, cu)
 
 class TestParallelPass2(TestParallelPass):
@@ -140,7 +142,7 @@ class TestParallelPass3(unittest.TestCase):
         check(5, 3, 3)
         check(5, 4, 4)
         check(5, 5, 5)
-        if jt.compiler.has_cuda:
+        if _test_capability.check_accelerator('cuda', backend=jt).enabled:
             with jt.flag_scope(use_cuda=1):
                 check(1, 2, 1)
                 check(2, 2, 2)
@@ -204,7 +206,7 @@ class TestParallelPass3(unittest.TestCase):
         check(3, 1, 1, [0,1], 1)
         check(3, 1, 1, [0,1], 0, [0,0,2])
         check(3, 2, 2, [2], 0)
-        if jt.flags.use_cuda:
+        if jt.introspection.policy.runtime.use_cuda:
             # loop is not merged so parallel depth 2
             check(3, 2, 2, [1], 1)
         else:
@@ -227,7 +229,7 @@ class TestParallelPass3(unittest.TestCase):
         check(3, 1, 1, [0,1], 1)
         check(3, 1, 1, [0,1], 0, [0,0,2])
         check(3, 2, 1, [2], 0)
-        if jt.flags.use_cuda:
+        if jt.introspection.policy.runtime.use_cuda:
             # loop is not merged so parallel depth 2
             check(3, 2, 2, [1], 1)
         else:
@@ -236,7 +238,7 @@ class TestParallelPass3(unittest.TestCase):
         check(4, 2, 1, [2,3], 0)
         check(4, 2, 2, [0,3], 1)
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_reduce_cuda(self):
         with jt.flag_scope(use_cuda=1):
             self.test_reduce()

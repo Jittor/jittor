@@ -16,6 +16,10 @@ Reference values are plain numpy; the semantics were checked once against a
 binary PyTorch 2.12 build in a separate process.
 """
 
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -151,14 +155,20 @@ class TestScatterIsOutOfPlace(unittest.TestCase):
             grad_base.numpy(), 1.0 - overwritten, rtol=1e-6, atol=1e-6)
 
 
+@_test_preserve_policy(jt, 'use_cuda')
 class TestScatterIsOutOfPlaceCuda(TestScatterIsOutOfPlace):
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def setUp(self):
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
         super().setUp()
-        jt.flags.use_cuda = 1
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
 
     def tearDown(self):
-        jt.flags.use_cuda = 0
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
 
 
 if __name__ == "__main__":

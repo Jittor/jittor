@@ -1,5 +1,7 @@
 """Real-CUDA execution and multi-device Python routing probes."""
 
+from _helpers import capability as _test_capability
+
 import numpy as np
 import pytest
 
@@ -7,9 +9,9 @@ from _helpers.python_dispatch import DISPATCH_PROBES, assert_result, registered_
 
 
 def _require_cuda(jt, count=1):
-    if not jt.has_cuda:
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA Python dispatch requires a CUDA build")
-    if jt.get_device_count() < count:
+    if _test_capability.device_count('cuda', backend=jt) < count:
         pytest.skip("CUDA Python dispatch requires %d visible CUDA devices" % count)
 
 
@@ -41,11 +43,11 @@ def test_input_device_wins_over_current_device():
             for materialized in (False, True):
                 if materialized:
                     x.sync()
-                before = (x.location(), x.device_id, jt.flags.device_id)
+                before = (x.location(), x.device_id, jt.introspection.policy.runtime.device_id)
                 context = dispatch_context(x)
                 assert (context.backend, context.device_id) == ("cuda", 1)
                 assert select_kernel(op, x) is kernel
-                assert (x.location(), x.device_id, jt.flags.device_id) == before
+                assert (x.location(), x.device_id, jt.introspection.policy.runtime.device_id) == before
                 assert_result(jt, kernel(x), values + 2, "cuda", 1)
 
 
@@ -72,12 +74,12 @@ def test_mixed_devices_are_rejected_before_kernel_or_graph_execution():
                 if materialized:
                     x.sync()
                     y.sync()
-                before = (x.location(), y.location(), jt.flags.exec_called)
+                before = (x.location(), y.location(), jt.introspection.counters.exec_calls)
                 with pytest.raises(RuntimeError, match="same device"):
                     dispatch_context(x, y)
                 with pytest.raises(RuntimeError, match="same device"):
                     select_kernel(op, x, y)
-                assert (x.location(), y.location(), jt.flags.exec_called) == before
+                assert (x.location(), y.location(), jt.introspection.counters.exec_calls) == before
                 assert calls == []
             assert_result(jt, x + 1, values + 1, "cuda", 0)
             assert_result(jt, y + 1, values + 2, "cuda", 1)

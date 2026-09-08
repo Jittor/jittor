@@ -141,7 +141,7 @@ class TestOutputStoresStayOrdinary(unittest.TestCase):
 
 class TestUseMovntIsGone(unittest.TestCase):
     def test_the_pass_and_its_sources_are_removed(self):
-        passes = pathlib.Path(jt.flags.jittor_path) / "src" / "opt" / "pass"
+        passes = pathlib.Path(jt.introspection.policy.startup.jittor_path) / "src" / "opt" / "pass"
         self.assertFalse((passes / "use_movnt_pass.h").exists())
         self.assertFalse((passes / "use_movnt_pass.cc").exists())
         manager = (passes.parent / "pass_manager.cc").read_text()
@@ -149,7 +149,7 @@ class TestUseMovntIsGone(unittest.TestCase):
         self.assertNotIn("use_movnt_pass.h", manager)
 
     def test_the_broadcast_tuner_no_longer_offers_the_candidate(self):
-        tuner = (pathlib.Path(jt.flags.jittor_path) / "src" / "opt" / "tuner"
+        tuner = (pathlib.Path(jt.introspection.policy.startup.jittor_path) / "src" / "opt" / "tuner"
                  / "broadcast_tuner.cc").read_text()
         self.assertNotIn('add_candidate("use_movnt"', tuner)
 

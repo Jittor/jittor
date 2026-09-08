@@ -26,6 +26,8 @@ exit or SIGTERM (``utils/log.cc``), so a pre-fix run of this file ended as
 ``crash_isolated=True`` below puts a shell in between, so the abort is now
 reported as this test failing.
 """
+
+from _helpers import capability as _test_capability
 import textwrap
 import unittest
 
@@ -47,12 +49,16 @@ def _run_child(body):
 
 # Creates the cublas / cudnn / curand handles whose teardown is under test.
 _TOUCH_BACKENDS = """
-    import ctypes
-    import jittor as jt
-    jt.flags.use_cuda = 1
-    a = jt.random((16, 16), "float32")     # curand
-    jt.matmul(a, a).sync()                 # cublas
-    print("BODY-DONE", flush=True)
+import ctypes
+import jittor as jt
+from contextlib import ExitStack as _ProcessPolicyStack
+import atexit as _process_policy_atexit
+_process_policy_scopes = _ProcessPolicyStack()
+_process_policy_atexit.register(_process_policy_scopes.close)
+_process_policy_scopes.enter_context(jt.runtime.scope(use_cuda=1))
+a = jt.random((16, 16), "float32")     # curand
+jt.matmul(a, a).sync()                 # cublas
+print("BODY-DONE", flush=True)
 """
 
 # A one-thread kernel writing a gigabyte past its output. The launch itself
@@ -87,7 +93,7 @@ _POISON_CONTEXT = """
 """
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestBackendTeardown(unittest.TestCase):
     def test_clean_exit_reports_nothing(self):
         """Control: an ordinary exit reports no teardown error at all.

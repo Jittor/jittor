@@ -17,6 +17,10 @@ without a stated consequence.
 
 Run: python -m pytest compat/tests/torch/test_torch_compat_unimplemented.py
 """
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 import os
 import unittest
 import warnings
@@ -110,16 +114,19 @@ class TestStubPolicy(StubPolicyBase):
             stub_policy.set_allow_stub(False)
 
 
+@_test_preserve_policy(jt, 'amp_reg')
 class TestAutocast(StubPolicyBase):
     """torch.autocast used to be a total no-op: mixed precision silently ran fp32."""
 
     def setUp(self):
         super().setUp()
-        self._amp_reg = int(getattr(jt.flags, "amp_reg", 0))
+        self._amp_reg = int(getattr(jt.introspection.policy.runtime, "amp_reg", 0))
 
     def tearDown(self):
-        jt.flags.amp_reg = self._amp_reg
-        super().tearDown()
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(amp_reg=self._amp_reg))
+            super().tearDown()
 
     def test_autocast_actually_lowers_op_dtype(self):
         a = jt.random((4, 4), dtype="float32")
@@ -138,10 +145,10 @@ class TestAutocast(StubPolicyBase):
         self.assertFalse(torch.is_autocast_enabled())
 
     def test_autocast_restores_the_previous_register(self):
-        before = int(jt.flags.amp_reg)
+        before = int(jt.introspection.policy.runtime.amp_reg)
         with torch.autocast("cuda", dtype=torch.float16):
-            self.assertNotEqual(int(jt.flags.amp_reg), before)
-        self.assertEqual(int(jt.flags.amp_reg), before)
+            self.assertNotEqual(int(jt.introspection.policy.runtime.amp_reg), before)
+        self.assertEqual(int(jt.introspection.policy.runtime.amp_reg), before)
 
     def test_autocast_enabled_false_is_a_real_no_op(self):
         a = jt.random((4, 4), dtype="float32")
@@ -302,7 +309,7 @@ class TestTorchLoad(StubPolicyBase):
     def test_map_location_cuda_without_a_device_is_an_error(self):
         p = self._path("m2.pkl")
         torch.save({"w": jt.ones((2, 2))}, p)
-        if jt.flags.use_cuda:
+        if jt.introspection.policy.runtime.use_cuda:
             self.skipTest("this asserts the CPU-only diagnosis")
         with self.assertRaises(RuntimeError) as cm:
             torch.load(p, map_location="cuda")
@@ -600,16 +607,19 @@ class TestInitAndSwa(StubPolicyBase):
                                    np.full(4, 5.0), atol=1e-4)
 
 
+@_test_preserve_policy(jt, 'use_cuda')
 class TestOverridesAndDefaults(StubPolicyBase):
     """has_torch_function was constantly False; set_default_device did nothing."""
 
     def setUp(self):
         super().setUp()
-        self._use_cuda = jt.flags.use_cuda
+        self._use_cuda = jt.introspection.policy.runtime.use_cuda
 
     def tearDown(self):
-        jt.flags.use_cuda = self._use_cuda
-        super().tearDown()
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._use_cuda))
+            super().tearDown()
 
     def test_has_torch_function_is_false_for_plain_vars(self):
         import sys
@@ -654,13 +664,13 @@ class TestOverridesAndDefaults(StubPolicyBase):
         self.assertEqual(str(torch.get_default_device()), "cpu")
 
     def test_set_default_device_cuda_agrees_with_get(self):
-        if not jt.has_cuda:
+        if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
             self.skipTest("no accelerator on this box")
         torch.set_default_device("cuda")
         self.assertIn("cuda", str(torch.get_default_device()))
 
     def test_set_default_device_non_zero_index_is_refused(self):
-        if not jt.has_cuda:
+        if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
             self.skipTest("no accelerator on this box")
         self.assertRefuses(lambda: torch.set_default_device("cuda:1"),
                            "set_default_device")

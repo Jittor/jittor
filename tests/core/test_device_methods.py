@@ -5,6 +5,8 @@
 # ***************************************************************
 """Native Var device-method contracts that do not need accelerator hardware."""
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -27,7 +29,7 @@ class TestVarToSignature(unittest.TestCase):
         self.assertEqual(dtype_first.location(), "cpu")
 
     def test_unavailable_npu_is_not_silently_cuda(self):
-        if getattr(jt.compiler, "has_acl", False):
+        if _test_capability.check_accelerator('acl', backend=jt).enabled:
             self.skipTest("this check is for a build without the ACL backend")
         with jt.flag_scope(use_cuda=0):
             x = jt.ones((2,))

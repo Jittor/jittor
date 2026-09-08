@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
@@ -57,7 +59,7 @@ class TestConcatOp(unittest.TestCase):
         print('concat success...')
 
     
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda = 1)
     def test_concat_perf(self):
         def check(dim, size, backward=False):
@@ -113,7 +115,7 @@ class TestConcatOp(unittest.TestCase):
 
         '''
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda = 1)
     def test_concat2_perf(self):
         def check(dim, size, backward=False):

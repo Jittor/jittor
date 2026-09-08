@@ -18,6 +18,8 @@ did ask -- undefined behaviour on any algorithm that wants a buffer.  Before
 the fix the fp64 COO case below did not fail, it *aborted the interpreter*,
 which is why running it took the whole pytest session with it.
 """
+
+from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
@@ -33,11 +35,12 @@ cusparse_ops = None
 
 def setUpModule():
     global cusparse_ops
-    if not jt.has_cuda:
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         raise unittest.SkipTest("No CUDA found")
-    cusparse_ops = getattr(jt.compile_extern, "cusparse_ops", None)
+    _test_capability.require_library("cusparse")
+    cusparse_ops = jt.compile_extern.cusparse_ops
     if cusparse_ops is None:
-        raise unittest.SkipTest("cuSPARSE support is unavailable")
+        raise AssertionError("cuSPARSE reported available but exposed no ops")
 
 
 def _as(value, dtype):

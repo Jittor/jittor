@@ -213,14 +213,14 @@ def resnet152(pretrained=False, **kwargs):
 @unittest.skipIf(skip_this_test, "pytorch not found.")
 class TestPytorchConverter(unittest.TestCase):
     def test_pytorch_converter(self):
-        name1 = os.path.join(jt.flags.cache_path, 'test_pytorch_converter_1.py')
+        name1 = os.path.join(jt.introspection.policy.startup.cache_path, 'test_pytorch_converter_1.py')
         print(f"save source code into {name1}")
         with open(name1, 'w') as f:
             f.write(code)
         
         ret = convert(code)
 
-        name2 = os.path.join(jt.flags.cache_path, 'test_pytorch_converter_2.py')
+        name2 = os.path.join(jt.introspection.policy.startup.cache_path, 'test_pytorch_converter_2.py')
         print(f"save destination code into {name2}")
         with open(name2, 'w') as f:
             f.write(ret)

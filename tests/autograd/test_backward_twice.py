@@ -95,18 +95,20 @@ class TestBackwardTwice(unittest.TestCase):
         # Once a value has been fetched, the executor frees the finished
         # forward ops, so the second backward finds no path at all rather than
         # a stop_grad'ed one. That must be reported too, not silently zeroed.
-        weight, loss_a, loss_b = trunk_and_heads()
-        first = jt.grad(loss_a, weight, retain_graph=False)
-        np.testing.assert_allclose(first.numpy(), [6.0, 6.0], rtol=1e-6)
-        before = jt.flags.missing_grad_error
-        try:
-            jt.flags.missing_grad_error = 1
-            with self.assertRaises(Exception) as caught:
-                jt.grad(loss_b, weight, retain_graph=False)
-            self.assertIn("doesn't have gradient", str(caught.exception),
-                          str(caught.exception)[:2000])
-        finally:
-            jt.flags.missing_grad_error = before
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            weight, loss_a, loss_b = trunk_and_heads()
+            first = jt.grad(loss_a, weight, retain_graph=False)
+            np.testing.assert_allclose(first.numpy(), [6.0, 6.0], rtol=1e-6)
+            before = jt.introspection.policy.runtime.missing_grad_error
+            try:
+                _test_policy_stack.enter_context(jt.runtime.scope(missing_grad_error=1))
+                with self.assertRaises(Exception) as caught:
+                    jt.grad(loss_b, weight, retain_graph=False)
+                self.assertIn("doesn't have gradient", str(caught.exception),
+                              str(caught.exception)[:2000])
+            finally:
+                _test_policy_stack.enter_context(jt.runtime.scope(missing_grad_error=before))
 
 
 if __name__ == "__main__":

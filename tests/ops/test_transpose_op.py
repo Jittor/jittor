@@ -1,3 +1,7 @@
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
@@ -94,7 +98,7 @@ class TestTransposeOp(unittest.TestCase):
         a = jt.ones([2,3,4])
         assert a.transpose(0,1).shape == (3,2,4)
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_cutt(self):
         a = jt.rand((10,2)) > 0.5
@@ -107,7 +111,7 @@ class TestTransposeOp(unittest.TestCase):
         b = a.transpose((1,0))
         b.sync()
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_cutt_bug(self):
         a = jt.rand(640000,4,3)
@@ -172,14 +176,20 @@ class TestFuseTransposeOp(unittest.TestCase):
         assert len(rep) == 3
 
 
-@unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+@_test_preserve_policy(jt, 'use_cuda')
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestFuseTransposeCudaOp(TestFuseTransposeOp):
     def setUp(self):
-        self._previous_use_cuda = jt.flags.use_cuda
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._previous_use_cuda = jt.introspection.policy.runtime.use_cuda
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
     def tearDown(self):
-        jt.sync_all()
-        jt.flags.use_cuda = self._previous_use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            jt.sync_all()
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._previous_use_cuda))
 
 if __name__ == "__main__":
     unittest.main()

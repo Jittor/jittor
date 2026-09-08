@@ -1,5 +1,7 @@
 """Real CUDA placement, transfer and synchronization through BackendOps."""
 
+from _helpers import capability as _test_capability
+
 import numpy as np
 import pytest
 
@@ -9,7 +11,7 @@ from _helpers.backend_probe import _backend_probe
 def test_cuda_execution_uses_backend_allocation_copy_and_sync_callbacks():
     import jittor as jt
 
-    if not jt.has_cuda:
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA runtime required")
     assert "cuda" in jt.core.registered_backends()
     assert jt.core.backend_device_count("cuda") >= 1
@@ -41,10 +43,10 @@ def test_cuda_execution_uses_backend_allocation_copy_and_sync_callbacks():
 def test_registered_managed_pools_preserve_device_placement():
     import jittor as jt
 
-    if not jt.has_cuda:
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA runtime required")
     data = np.arange(17, dtype=np.float32)
-    for device in range(min(2, jt.get_device_count())):
+    for device in range(min(2, _test_capability.device_count('cuda', backend=jt))):
         with jt.runtime.scope(use_cuda=1, use_cuda_managed_allocator=1, device_id=device):
             value = jt.array(data) * 3
             jt.sync_all(True)

@@ -40,6 +40,8 @@ when cheap, because the moment-buffer *update* runs as device kernels.
 
 Run::  python -m pytest tests/optim/test_optim_core.py
 """
+
+from _helpers import capability as _test_capability
 import unittest
 import math
 
@@ -448,7 +450,7 @@ class TestRMSpropUpdate(_OptimCoreBase):
 # ===========================================================================
 class TestOptimizerPlumbing(_OptimCoreBase):
 
-    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_low_precision_parameter_and_state_dtypes_are_preserved(self):
         factories = (
             ("base", lambda p: jt.optim.Optimizer([p], lr=1e-3)),

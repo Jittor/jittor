@@ -416,14 +416,15 @@ def rocm_backend(request):
 
     import jittor as jt
 
-    if not jt.compiler.has_rocm:
-        pytest.skip("ROCm backend is unavailable")
-    previous = jt.flags.use_rocm
-    jt.flags.use_rocm = 1
-    try:
+    capability = jt.introspection.capabilities.backend("rocm")
+    if capability.failed or capability.unprobed:
+        raise pytest.UsageError("ROCm backend is %s: %s" % (
+            capability.state.value, capability.reason))
+    if not capability.enabled:
+        pytest.skip("ROCm backend is %s: %s" % (
+            capability.state.value, capability.reason))
+    with jt.runtime.scope(use_rocm=1):
         yield
-    finally:
-        jt.flags.use_rocm = previous
 
 
 # --------------------------------------------------------------------------
@@ -792,10 +793,16 @@ def _require_real_accelerator():
         import jittor as jt
     except Exception as error:
         raise pytest.UsageError("accelerator gate could not initialize Jittor: {}".format(error))
-    if require_cuda in truthy and not bool(jt.compiler.has_cuda):
-        raise pytest.UsageError("CUDA gate declared JITTOR_TEST_REQUIRE_CUDA but has_cuda is false")
-    if require_acl in truthy and not bool(getattr(jt.compiler, "has_acl", 0)):
-        raise pytest.UsageError("NPU gate declared JITTOR_TEST_REQUIRE_ACL but has_acl is false")
+    for name, requested in (("cuda", require_cuda), ("acl", require_acl)):
+        if requested not in truthy:
+            continue
+        try:
+            capability = jt.introspection.capabilities.backend(name)
+        except Exception as error:
+            raise pytest.UsageError("%s gate capability query failed: %s" % (name, error)) from error
+        if not capability.enabled:
+            raise pytest.UsageError("%s gate requires an available backend; observed %s: %s" % (
+                name, capability.state.value, capability.reason))
 
 
 def _report_files_that_executed_nothing(terminalreporter, config):

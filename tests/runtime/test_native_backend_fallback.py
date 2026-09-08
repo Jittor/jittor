@@ -10,17 +10,19 @@ def test_backend_fallback_has_one_runtime_owner():
 
 
 def test_invalid_backend_fallback_preserves_policy():
-    original = jt.flags.backend_fallback
-    try:
-        with jt.flag_scope(backend_fallback="error"):
-            with pytest.raises(RuntimeError, match="backend_fallback must be error, warn, or allow"):
-                jt.flags.backend_fallback = "silent"
-            assert jt.flags.backend_fallback == "error"
-            with jt.flag_scope(backend_fallback="allow"):
-                assert jt.flags.backend_fallback == "allow"
-            assert jt.flags.backend_fallback == "error"
-    finally:
-        jt.flags.backend_fallback = original
+    from contextlib import ExitStack as _TestPolicyStack
+    with _TestPolicyStack() as _test_policy_stack:
+        original = jt.introspection.policy.runtime.backend_fallback
+        try:
+            with jt.flag_scope(backend_fallback="error"):
+                with pytest.raises(RuntimeError, match="backend_fallback must be error, warn, or allow"):
+                    _test_policy_stack.enter_context(jt.runtime.scope(backend_fallback="silent"))
+                assert jt.introspection.policy.runtime.backend_fallback == "error"
+                with jt.flag_scope(backend_fallback="allow"):
+                    assert jt.introspection.policy.runtime.backend_fallback == "allow"
+                assert jt.introspection.policy.runtime.backend_fallback == "error"
+        finally:
+            _test_policy_stack.enter_context(jt.runtime.scope(backend_fallback=original))
 
 
 @pytest.mark.parametrize("policy", ["error", "warn", "allow"])

@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -147,7 +149,7 @@ class TestNcclOps(unittest.TestCase):
         assert loss_mean.data < 0.0025, loss_mean.data
         jt.clean()
 
-@unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")
+@_test_capability.library_required('mpi', backend=jt)
 class TestNcclOpsEntry(unittest.TestCase):
     def test(self):
         run_mpi_test(2, "test_nccl_ops")

@@ -14,12 +14,12 @@ class TestConsole(unittest.TestCase):
     def test_console(self):
         # Both children import jittor_utils, so they have to reach this checkout.
         shell(f"{PYTHON} -m jittor_utils.config --cxx-example > tmp.cc",
-              cwd=jt.flags.cache_path, merge_stderr=True, check=True)
+              cwd=jt.introspection.policy.startup.cache_path, merge_stderr=True, check=True)
         s = shell(
-            f"{jt.flags.cc_path} tmp.cc "
+            f"{jt.introspection.policy.startup.cc_path} tmp.cc "
             f"$({PYTHON} -m jittor_utils.config --include-flags --libs-flags --cxx-flags) "
             f"-o tmp.out && ./tmp.out",
-            cwd=jt.flags.cache_path, merge_stderr=True, check=True).stdout
+            cwd=jt.introspection.policy.startup.cache_path, merge_stderr=True, check=True).stdout
         print(s)
         assert "jt.Var" in s
         assert "pred.shape 2 1000" in s

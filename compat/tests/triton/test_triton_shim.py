@@ -18,6 +18,8 @@ faithfully (a *multi-row* 2-D softmax) must raise, not return garbage.
 Run:  python -m pytest compat/tests/triton/test_triton_shim.py
       python -m pytest compat/tests/triton/test_triton_shim.py
 """
+
+from _helpers import capability as _test_capability
 import unittest
 import numpy as np
 import jittor as jt
@@ -26,7 +28,7 @@ triton = None
 tl = None
 
 # Exercise CPU always; add CUDA when the build has it (mirrors the other suites).
-_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if jt.has_cuda else [])
+_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if _test_capability.any_accelerator_enabled(backend=jt) else [])
 
 
 def both_devices(fn):

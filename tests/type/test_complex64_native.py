@@ -5,12 +5,14 @@ from a numpy complex64 array, and elementwise add/sub/mul/div/neg matching numpy
 
 Run:  python -m pytest tests/type/test_complex64_native.py
 """
+
+from _helpers import capability as _test_capability
 import unittest
 import numpy as np
 import jittor as jt
 from jittor.nn.functional.complex import _real2_to_complex64
 
-_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if jt.has_cuda else [])
+_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if _test_capability.check_accelerator('cuda', backend=jt).enabled else [])
 
 
 def both_devices(fn):

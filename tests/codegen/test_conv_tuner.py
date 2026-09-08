@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -15,7 +17,7 @@ from jittor import compile_extern
 # TODO: compare with pytorch
 
 from _helpers.logs import find_log_with_re
-if jt.has_cuda:
+if _test_capability.check_accelerator('cuda', backend=jt).enabled:
     from jittor.compile_extern import cublas_ops, cudnn_ops
 else:
     cublas_ops = cudnn_ops = None
@@ -149,7 +151,7 @@ class TestConvTuner(unittest.TestCase):
             check_backward([10,4,40,50], [5,4,5,5], 1, 1, dilation, 0, False)
             check_backward([10,4,40,50], [5,4,4,4], 3, 1, dilation, 0, False)
             
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_forward_cuda(self):
         for dilation in [1,2,3]:
             check_forward([10,100,100,3], [5,3,3,3], 2, 0, dilation, 1, True)
@@ -160,7 +162,7 @@ class TestConvTuner(unittest.TestCase):
             check_forward([10,4,40,50], [5,4,5,5], 1, 1, dilation, 1, False)
             check_forward([10,4,40,50], [5,4,4,4], 3, 1, dilation, 1, False)
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_backward_cuda(self):
         for dilation in [1,2,3]:
             check_backward([10,3,100,100], [5,3,3,3], 2, 0, dilation, 1, False)

@@ -1,5 +1,7 @@
 """Gradient clipping and AMP-scaler correctness/synchronization regressions."""
 
+from _helpers import capability as _test_capability
+
 import math
 import unittest
 
@@ -8,7 +10,7 @@ import jittor as jt
 from jittor.compat.torch import _GradScaler, _clip_grad_norm_device
 
 
-_DEVICES = [("cpu", 0)] + ([ ("cuda", 1) ] if jt.has_cuda else [])
+_DEVICES = [("cpu", 0)] + ([ ("cuda", 1) ] if _test_capability.any_accelerator_enabled(backend=jt) else [])
 
 
 def both_devices(fn):

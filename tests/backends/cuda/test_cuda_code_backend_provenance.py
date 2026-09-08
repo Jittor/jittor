@@ -1,5 +1,7 @@
 """Explicit CUDA source provenance is enforced before executing foreign code."""
 
+from _helpers import capability as _test_capability
+
 import gc
 
 import numpy as np
@@ -9,7 +11,7 @@ import jittor as jt
 
 
 def _require_cuda():
-    if not jt.has_cuda or jt.get_device_count() < 1:
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled or _test_capability.device_count('cuda', backend=jt) < 1:
         pytest.skip("CUDA source provenance requires a CUDA device")
 
 

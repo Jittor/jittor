@@ -1,3 +1,7 @@
+
+from _helpers.introspection import liveness_snapshot as _test_liveness_snapshot
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers: Zheng-Ning Liu <lzhengning@gmail.com>. 
@@ -32,7 +36,7 @@ from _helpers.operator_cases import (
 from _helpers.tuner_parser import simple_parser
 
 
-@unittest.skipIf(not jt.compiler.has_rocm, "No ROCm found")
+@unittest.skipIf(not _test_capability.check_accelerator('rocm', backend=jt).enabled, "No ROCm found")
 class TestROCm(unittest.TestCase):
 
     @jt.flag_scope(use_rocm=1)
@@ -132,7 +136,7 @@ class Model(Module):
         return self.linear2(x)
 
 
-@unittest.skipIf(not jt.compiler.has_rocm, "No ROCm found")
+@unittest.skipIf(not _test_capability.check_accelerator('rocm', backend=jt).enabled, "No ROCm found")
 class TestExample(unittest.TestCase):
     @jt.flag_scope(use_rocm=1)
     def test1(self):
@@ -162,8 +166,8 @@ class TestExample(unittest.TestCase):
                 p -= g * lr
 
             if i>2:
-                assert prev == jt.liveness_info(), f"memory leak {prev} {jt.liveness_info()}"
-            prev = jt.liveness_info()
+                assert prev == _test_liveness_snapshot(jt), f"memory leak {prev} {_test_liveness_snapshot(jt)}"
+            prev = _test_liveness_snapshot(jt)
 
         possible_results = [
             0.0009948202641680837,
@@ -177,32 +181,32 @@ class TestExample(unittest.TestCase):
         jt.clean()
 
 
-@unittest.skipIf(not jt.compiler.has_rocm, "No ROCm found")
+@unittest.skipIf(not _test_capability.check_accelerator('rocm', backend=jt).enabled, "No ROCm found")
 class TestROCmUnaryOp(UnaryOpCases, unittest.TestCase):
     __test__ = True
 
 
-@unittest.skipIf(not jt.compiler.has_rocm, "No ROCm found")
+@unittest.skipIf(not _test_capability.check_accelerator('rocm', backend=jt).enabled, "No ROCm found")
 class TestROCmBinaryOp(BinaryOpCases, unittest.TestCase):
     __test__ = True
 
 
-@unittest.skipIf(not jt.compiler.has_rocm, "No ROCm found")
+@unittest.skipIf(not _test_capability.check_accelerator('rocm', backend=jt).enabled, "No ROCm found")
 class TestROCmReduceOp(ReduceOpCases, unittest.TestCase):
     __test__ = True
 
 
-@unittest.skipIf(not jt.compiler.has_rocm, "No ROCm found")
+@unittest.skipIf(not _test_capability.check_accelerator('rocm', backend=jt).enabled, "No ROCm found")
 class TestROCmReindexOp(ReindexOpCases, unittest.TestCase):
     __test__ = True
 
 
-@unittest.skipIf(not jt.compiler.has_rocm, "No ROCm found")
+@unittest.skipIf(not _test_capability.check_accelerator('rocm', backend=jt).enabled, "No ROCm found")
 class TestROCmWhereOp(WhereOpCases, unittest.TestCase):
     __test__ = True
 
 
-@unittest.skipIf(not jt.compiler.has_rocm, "No ROCm found")
+@unittest.skipIf(not _test_capability.check_accelerator('rocm', backend=jt).enabled, "No ROCm found")
 class TestROCmCodeOp(unittest.TestCase):
     @jt.flag_scope(use_rocm=1)
     def test_cuda(self):
@@ -322,7 +326,7 @@ class TestROCmCodeOp(unittest.TestCase):
         assert np.allclose(db.data, a.data)
 
 
-@unittest.skipIf(not jt.compiler.has_rocm, "No ROCm found")
+@unittest.skipIf(not _test_capability.check_accelerator('rocm', backend=jt).enabled, "No ROCm found")
 class TestBMM(unittest.TestCase):
     def test_bmm_rocm(self):
         def check(batch, n, m, k):
@@ -372,7 +376,7 @@ class MnistNet(Module):
         x = self.layer(x)
         return x
 
-@unittest.skipIf(not jt.compiler.has_rocm, "skip_this_test")
+@unittest.skipIf(not _test_capability.check_accelerator('rocm', backend=jt).enabled, "skip_this_test")
 class TestResnetFp32(unittest.TestCase):
     # setup random seed
     def setup_seed(self, seed):
@@ -389,7 +393,7 @@ class TestResnetFp32(unittest.TestCase):
         self.weight_decay = 0.0001
         self.momentum = 0.9
         self.learning_rate = 0.1
-        if jt.flags.amp_reg:
+        if jt.introspection.policy.runtime.amp_reg:
             self.learning_rate = 0.01
         # mnist dataset
         self.train_loader = MNIST(train=True, transform=trans.Resize(224)) \

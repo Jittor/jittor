@@ -65,7 +65,7 @@ import warnings
 with warnings.catch_warnings(record=True) as caught:
     warnings.simplefilter("always")
     import jittor as jt
-print("LOG_V", jt.flags.log_v)
+print("LOG_V", jt.introspection.policy.runtime.log_v)
 print("IS_DEBUG", jt.compiler.is_debug)
 for entry in caught:
     if entry.category is DeprecationWarning:

@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -68,14 +70,14 @@ class TestSingleArray(unittest.TestCase):
     def test6(self):
         jt.clean()
         baseline = (
-            jt.number_of_hold_vars(),
-            jt.number_of_lived_vars(),
-            jt.number_of_lived_ops(),
+            jt.introspection.counters.held_vars,
+            jt.introspection.counters.live_vars,
+            jt.introspection.counters.live_ops,
         )
         def check(hv, lv, lo):
-            self.assertEqual(jt.number_of_hold_vars() - baseline[0], hv)
-            self.assertEqual(jt.number_of_lived_vars() - baseline[1], lv)
-            self.assertEqual(jt.number_of_lived_ops() - baseline[2], lo)
+            self.assertEqual(jt.introspection.counters.held_vars - baseline[0], hv)
+            self.assertEqual(jt.introspection.counters.live_vars - baseline[1], lv)
+            self.assertEqual(jt.introspection.counters.live_ops - baseline[2], lo)
         check(0,0,0)
         a = jt.array(1.0).name('a').stop_fuse()
         b = (a+jt.array(1.0).name('t1').stop_fuse()).name('b')
@@ -85,7 +87,7 @@ class TestSingleArray(unittest.TestCase):
         self.assertEqual(c.data, 3)
         check(3,5,2)
     
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test5(self):
         with jt.flag_scope(use_cuda=1):
             f32 = jt.float32
@@ -137,7 +139,7 @@ class TestSingleArray(unittest.TestCase):
                 shape.append(random.randint(1,50))
             check_merge(shape, get_random_op(), get_random_op())
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_main_cuda(self):
         with jt.flag_scope(use_cuda=1):
             test_n = 10

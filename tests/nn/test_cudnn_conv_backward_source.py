@@ -19,6 +19,8 @@ These pin both halves: the values are checked against the CPU reindex path,
 which is an independent implementation, and a rule check keeps a hand-written
 backward from coming back into the Python layer.
 """
+
+from _helpers import capability as _test_capability
 from pathlib import Path
 import unittest
 
@@ -74,7 +76,7 @@ class TestCudnnConvBackwardHasOneDefinition(unittest.TestCase):
             "definition that silently wins:\n" + "\n".join(offenders))
 
 
-@unittest.skipIf(not jt.has_cuda, "no CUDA")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "no CUDA")
 class TestCudnnConvMatchesTheCpuReference(unittest.TestCase):
     """Values, against an independent implementation.
 

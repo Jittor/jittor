@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved.
 # Maintainers:
@@ -344,7 +346,7 @@ class TestRNN(unittest.TestCase):
         optimizer = optim.RMSprop(rnn1.parameters())
         optimizer.step(loss)
 
-    @skipIf(not jt.has_cuda, "No Cuda found")
+    @skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No Cuda found")
     @jt.flag_scope(use_cuda=1)
     def test_cudnn_rnn(self):
         dev = torch.device('cuda:0')
@@ -365,7 +367,7 @@ class TestRNN(unittest.TestCase):
         np.testing.assert_allclose(j_output.data, t_output.detach().cpu().numpy())
         np.testing.assert_allclose(jh.data, th.detach().cpu().numpy())
 
-    @skipIf(not jt.has_cuda, "No Cuda found")
+    @skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No Cuda found")
     @jt.flag_scope(use_cuda=1)
     def test_cudnn_rnn_train(self):
         dev = torch.device('cuda:0')
@@ -394,8 +396,8 @@ class TestRNN(unittest.TestCase):
             np.testing.assert_allclose(t_loss.item(), j_loss.item(), rtol=1e-2)
             np.testing.assert_allclose(t_rnn.bias_hh_l0.detach().cpu().numpy(), j_rnn.bias_hh_l0.data, atol=1e-3, rtol=1e-2)
 
-    @unittest.skipIf(not jt.has_cuda, "No Cuda found")
-    @unittest.skipIf(not jt.cudnn, "No Cudnn found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No Cuda found")
+    @_test_capability.library_required('cudnn', backend=jt)
     @jt.flag_scope(use_cuda=1)
     def test_basic_cudnn_rnn(self):
         dev = torch.device('cuda:0')
@@ -406,8 +408,8 @@ class TestRNN(unittest.TestCase):
         input = np.random.rand(32, 24, 100).astype(np.float32)
         check_equal_1(t_rnn, j_rnn, input, h0, dev)
 
-    @unittest.skipIf(not jt.has_cuda, "No Cuda found")
-    @unittest.skipIf(not jt.cudnn, "No Cudnn found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No Cuda found")
+    @_test_capability.library_required('cudnn', backend=jt)
     @jt.flag_scope(use_cuda=1)
     def test_multilayer_cudnn_rnn(self):
         dev = torch.device('cuda:0')
@@ -418,8 +420,8 @@ class TestRNN(unittest.TestCase):
         input = np.random.rand(5, 8, 100).astype(np.float32)
         check_equal_1(t_rnn, j_rnn, input, h0, dev)
 
-    @unittest.skipIf(not jt.has_cuda, "No Cuda found")
-    @unittest.skipIf(not jt.cudnn, "No Cudnn found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No Cuda found")
+    @_test_capability.library_required('cudnn', backend=jt)
     @jt.flag_scope(use_cuda=1)
     def test_bidirectional_cudnn_rnn(self):
         dev = torch.device('cuda:0')
@@ -430,8 +432,8 @@ class TestRNN(unittest.TestCase):
         input = np.random.rand(5, 8, 100).astype(np.float32)
         check_equal_1(t_rnn, j_rnn, input, h0, dev)
 
-    @unittest.skipIf(not jt.has_cuda, "No Cuda found")
-    @unittest.skipIf(not jt.cudnn, "No Cudnn found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No Cuda found")
+    @_test_capability.library_required('cudnn', backend=jt)
     @jt.flag_scope(use_cuda=1)
     def test_no_bias_cudnn_rnn(self):
         dev = torch.device('cuda:0')
@@ -442,8 +444,8 @@ class TestRNN(unittest.TestCase):
         input = np.random.rand(5, 8, 100).astype(np.float32)
         check_equal_1(t_rnn, j_rnn, input, h0, dev)
 
-    @unittest.skipIf(not jt.has_cuda, "No Cuda found")
-    @unittest.skipIf(not jt.cudnn, "No Cudnn found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No Cuda found")
+    @_test_capability.library_required('cudnn', backend=jt)
     @jt.flag_scope(use_cuda=1)
     def test_dropout_cudnn_rnn(self):
         dev = torch.device('cuda:0')
@@ -456,8 +458,8 @@ class TestRNN(unittest.TestCase):
         input = np.random.rand(5, 8, 100).astype(np.float32)
         check_equal_1(t_rnn, j_rnn, input, h0, dev)
 
-    @unittest.skipIf(not jt.has_cuda, "No Cuda found")
-    @unittest.skipIf(not jt.cudnn, "No Cudnn found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No Cuda found")
+    @_test_capability.library_required('cudnn', backend=jt)
     @jt.flag_scope(use_cuda=1)
     def test_basic_lstm_rnn(self):
         dev = torch.device('cuda:0')
@@ -469,8 +471,8 @@ class TestRNN(unittest.TestCase):
         input = np.random.rand(32, 24, 100).astype(np.float32)
         check_equal_2(t_rnn, j_rnn, input, h0, c0, dev)
 
-    @unittest.skipIf(not jt.has_cuda, "No Cuda found")
-    @unittest.skipIf(not jt.cudnn, "No Cudnn found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No Cuda found")
+    @_test_capability.library_required('cudnn', backend=jt)
     @jt.flag_scope(use_cuda=1)
     def test_cudnn_rnn_train(self):
         dev = torch.device('cuda:0')
@@ -499,8 +501,8 @@ class TestRNN(unittest.TestCase):
             np.testing.assert_allclose(t_loss.item(), j_loss.item(), rtol=1e-4)
             np.testing.assert_allclose(t_rnn.bias_hh_l0.detach().cpu().numpy(), j_rnn.bias_hh_l0.data, atol=1e-4, rtol=1e-4)
 
-    @unittest.skipIf(not jt.has_cuda, "No Cuda found")
-    @unittest.skipIf(not jt.cudnn, "No Cudnn found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No Cuda found")
+    @_test_capability.library_required('cudnn', backend=jt)
     @jt.flag_scope(use_cuda=1)
     def test_cudnn_gru_train(self):
         dev = torch.device('cuda:0')
@@ -529,8 +531,8 @@ class TestRNN(unittest.TestCase):
             np.testing.assert_allclose(t_loss.item(), j_loss.item(), rtol=1e-4)
             np.testing.assert_allclose(t_rnn.bias_hh_l0.detach().cpu().numpy(), j_rnn.bias_hh_l0.data, atol=1e-4, rtol=1e-4)
 
-    @unittest.skipIf(not jt.has_cuda, "No Cuda found")
-    @unittest.skipIf(not jt.cudnn, "No Cudnn found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No Cuda found")
+    @_test_capability.library_required('cudnn', backend=jt)
     @jt.flag_scope(use_cuda=1)
     def test_cudnn_lstm_train(self):
         dev = torch.device('cuda:0')
@@ -561,8 +563,8 @@ class TestRNN(unittest.TestCase):
             np.testing.assert_allclose(t_loss.item(), j_loss.item(), rtol=1e-4)
             np.testing.assert_allclose(t_rnn.bias_hh_l0.detach().cpu().numpy(), j_rnn.bias_hh_l0.data, atol=1e-4, rtol=1e-4)
 
-    @unittest.skipIf(not jt.has_cuda, "No Cuda found")
-    @unittest.skipIf(not jt.cudnn, "No Cudnn found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No Cuda found")
+    @_test_capability.library_required('cudnn', backend=jt)
     @jt.flag_scope(use_cuda=1)
     def test_multilayer_bidirectional_cudnn_lstm_train(self):
         dev = torch.device('cuda:0')
@@ -593,7 +595,7 @@ class TestRNN(unittest.TestCase):
             np.testing.assert_allclose(t_loss.item(), j_loss.item(), rtol=1e-4)
             np.testing.assert_allclose(t_rnn.bias_hh_l0.detach().cpu().numpy(), j_rnn.bias_hh_l0.data, atol=1e-4, rtol=1e-4)
 
-    @unittest.skipIf(not jt.has_cuda, "No Cuda found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No Cuda found")
     @jt.flag_scope(use_cuda=1)
     def test_cudnn_rnn_speed(self):
         from time import time

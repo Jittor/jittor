@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
@@ -59,7 +61,7 @@ b.sync()
 
     @unittest.skipIf(not has_torch, "No independent Torch found")
     def test_mkl_conflict1(self):
-        if jt.mkl_ops is None:
+        if not _test_capability.library_enabled('mkl', backend=jt):
             return
         # import with pytorch cause segfault
         src = _REAL_TORCH_PREAMBLE + """
@@ -81,7 +83,7 @@ m(torch.rand(*nchw))
 
     @unittest.skipIf(not has_torch, "No independent Torch found")
     def test_mkl_conflict2(self):
-        if jt.mkl_ops is None:
+        if not _test_capability.library_enabled('mkl', backend=jt):
             return
         # import with pytorch cause segfault
         src = _REAL_TORCH_PREAMBLE + """
@@ -102,7 +104,7 @@ jt.mkl_ops.mkl_conv(x, w, 1, 1, 2, 2).sync()
         run_python_child(["-c", src], check=True)
 
     def test_cuda_lowsm(self):
-        if not jt.has_cuda: return
+        if not _test_capability.check_accelerator('cuda', backend=jt).enabled: return
         src = """
 import jittor
 from jittor.nn import matmul_transpose
@@ -111,7 +113,11 @@ a = jittor.ones((3,4,2), dtype="float32")
 b = jittor.ones((5, 2), dtype="float32")
 print(matmul_transpose(a, b))
 
-jittor.flags.use_cuda = 1
+from contextlib import ExitStack as _ProcessPolicyStack
+import atexit as _process_policy_atexit
+_process_policy_scopes = _ProcessPolicyStack()
+_process_policy_atexit.register(_process_policy_scopes.close)
+_process_policy_scopes.enter_context(jittor.runtime.scope(use_cuda=1))
 a = jittor.ones((3,4,2), dtype="float32")
 b = jittor.ones((5, 2), dtype="float32")
 print(matmul_transpose(a, b))
@@ -126,7 +132,7 @@ print(matmul_transpose(a, b))
         """, cpu_header='#include <omp.h>').data
         assert (a==[456]*4).all(), a
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_reduce_opt(self):
         a = jt.random((16,512,38,38))
@@ -148,7 +154,7 @@ print(matmul_transpose(a, b))
 
         assert float(rep[1][3]) < 15e6, float(rep[1][3]) # 15ms(about 8ms)
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_cuda_min_max(self):
         a = jt.random((10,)) - 2
@@ -165,7 +171,7 @@ print(matmul_transpose(a, b))
         assert a.min().data == a.data.min(), (a.min(), a.data.min())
         assert a.max().data == a.data.max(), (a.max(), a.data.max())
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_cuda_pow_grad_nan(self):
         a = jt.float32([1,-1, -1000.1])
@@ -217,7 +223,7 @@ print(matmul_transpose(a, b))
         g.sync()
         del a, g, m
         jt.display_memory_info()
-        assert jt.liveness_info()["lived_ops"] == 0
+        assert jt.introspection.counters.live_ops == 0
 
 
 if __name__ == "__main__":

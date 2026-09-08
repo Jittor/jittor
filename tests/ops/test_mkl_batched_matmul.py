@@ -11,6 +11,8 @@ path it replaces (forward *and* both gradients), and it is the path actually
 taken for a float32 batched matmul on CPU.
 """
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -114,7 +116,7 @@ class TestMklBatchedMatmul(unittest.TestCase):
         self.assertLess(float(np.abs(result - expected).max()), 1e-9)
 
     def test_cuda_is_left_to_cublas(self):
-        if not jt.has_cuda:
+        if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
             self.skipTest("CUDA is unavailable")
         with jt.flag_scope(use_cuda=1):
             a = jt.array(self.random.randn(2, 3, 4).astype("float32"))

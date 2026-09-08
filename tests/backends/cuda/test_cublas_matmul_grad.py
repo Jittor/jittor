@@ -1,3 +1,7 @@
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
@@ -7,7 +11,8 @@ from jittor import nn
 from _helpers.assertions import expect_error
 
 
-@unittest.skipIf(not jt.has_cuda, "CUDA is required")
+@_test_preserve_policy(jt, 'cuda_allow_tf32')
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA is required")
 class TestCublasMatmulGrad(unittest.TestCase):
     def test_acc_non_float_inputs_are_rejected_clearly(self):
         with jt.flag_scope(use_cuda=1):
@@ -102,13 +107,18 @@ class TestCublasMatmulGrad(unittest.TestCase):
             )
 
     def setUp(self):
-        self.old_tf32 = int(getattr(jt.flags, "cuda_allow_tf32", 0))
-        if hasattr(jt.flags, "cuda_allow_tf32"):
-            jt.flags.cuda_allow_tf32 = 0
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self.old_tf32 = int(getattr(jt.introspection.policy.runtime, "cuda_allow_tf32", 0))
+        if hasattr(jt.introspection.policy.runtime, "cuda_allow_tf32"):
+            _test_policy_stack.enter_context(jt.runtime.scope(cuda_allow_tf32=0))
 
     def tearDown(self):
-        if hasattr(jt.flags, "cuda_allow_tf32"):
-            jt.flags.cuda_allow_tf32 = self.old_tf32
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            if hasattr(jt.introspection.policy.runtime, "cuda_allow_tf32"):
+                _test_policy_stack.enter_context(jt.runtime.scope(cuda_allow_tf32=self.old_tf32))
 
     def test_all_transpose_combinations(self):
         rng = np.random.RandomState(20260710)

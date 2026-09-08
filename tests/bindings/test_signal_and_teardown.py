@@ -12,6 +12,8 @@ failures that need diagnosing.  Every case here therefore asserts on *readable*
 output and on an exit status, never only on "it did not hang".
 """
 
+from _helpers import capability as _test_capability
+
 import os
 import unittest
 
@@ -69,7 +71,7 @@ class TestChildKilledBySignal(unittest.TestCase):
         self.assertIn("killed by signal", output)
 
 
-@unittest.skipIf(not jt.has_cuda, "EventQueue only exists in CUDA builds")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "EventQueue only exists in CUDA builds")
 class TestExitWithoutCleanup(unittest.TestCase):
     """Exiting without ``core.cleanup()`` must not abort.
 

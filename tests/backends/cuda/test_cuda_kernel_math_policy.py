@@ -1,5 +1,7 @@
 """Math-policy switches distinguish both standalone and fused CUDA kernels."""
 
+from _helpers import capability as _test_capability
+
 from pathlib import Path
 
 import jittor as jt
@@ -7,7 +9,7 @@ import numpy as np
 import pytest
 
 
-@pytest.mark.skipif(not jt.has_cuda, reason="CUDA is required")
+@pytest.mark.skipif(not _test_capability.check_accelerator('cuda', backend=jt).enabled, reason="CUDA is required")
 @pytest.mark.parametrize("fused", [False, True])
 def test_cuda_math_policy_has_distinct_compiled_keys(fused):
     filenames = {}
@@ -48,7 +50,7 @@ def test_cuda_math_policy_has_distinct_compiled_keys(fused):
     assert filenames["strict"].isdisjoint(filenames["backend"])
 
 
-@pytest.mark.skipif(not jt.has_cuda, reason="CUDA is required")
+@pytest.mark.skipif(not _test_capability.check_accelerator('cuda', backend=jt).enabled, reason="CUDA is required")
 @pytest.mark.parametrize("fused", [False, True])
 def test_strict_math_changes_actual_cuda_rounding(fused):
     with jt.flag_scope(use_cuda=1, enable_tuner=0):

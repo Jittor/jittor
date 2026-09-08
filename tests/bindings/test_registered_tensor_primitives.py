@@ -1,5 +1,7 @@
 """Native tensor spellings retain their overloads after backend routing."""
 
+from _helpers import capability as _test_capability
+
 import jittor as jt
 import numpy as np
 import pytest
@@ -7,7 +9,7 @@ import pytest
 
 @pytest.mark.parametrize("use_cuda", [0, 1])
 def test_registered_tensor_spellings_match_native_values(use_cuda):
-    if use_cuda and not jt.has_cuda:
+    if use_cuda and not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA is unavailable")
     values = np.arange(6, dtype="float32").reshape(2, 3)
     with jt.flag_scope(use_cuda=use_cuda, backend_fallback="error"):

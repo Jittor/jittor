@@ -17,6 +17,10 @@ The expected arrays below were cross-checked once against a binary PyTorch
 2.12 build running in a separate process; the tests themselves only need numpy.
 """
 
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -142,22 +146,34 @@ class TestMaxUnpool3d(unittest.TestCase):
         np.testing.assert_allclose(out.numpy(), expected, rtol=1e-5, atol=1e-5)
 
 
+@_test_preserve_policy(jt, 'use_cuda')
 class TestMaxUnpool2dCuda(TestMaxUnpool2d):
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def setUp(self):
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
 
     def tearDown(self):
-        jt.flags.use_cuda = 0
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
 
 
+@_test_preserve_policy(jt, 'use_cuda')
 class TestMaxUnpool3dCuda(TestMaxUnpool3d):
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def setUp(self):
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
 
     def tearDown(self):
-        jt.flags.use_cuda = 0
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
 
 
 if __name__ == "__main__":

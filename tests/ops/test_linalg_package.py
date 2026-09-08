@@ -1,4 +1,6 @@
 """Public identity and compact numerical coverage across linalg domain owners."""
+
+from _helpers import capability as _test_capability
 import importlib
 import pickle
 
@@ -46,7 +48,7 @@ def test_result_types_retain_names_fields_and_pickle_identity():
 
 @pytest.mark.parametrize("use_cuda", [0, 1], ids=["cpu", "cuda"])
 def test_linalg_domain_values_and_solve_gradients(use_cuda):
-    if use_cuda and not jt.has_cuda:
+    if use_cuda and not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA unavailable")
     a_np = np.array([[4., 1.], [1., 3.]], dtype=np.float32)
     b_np = np.array([2., 5.], dtype=np.float32)

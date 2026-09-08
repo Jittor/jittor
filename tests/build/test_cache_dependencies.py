@@ -10,6 +10,8 @@ decide which quoted, angled, conditional, and macro-expanded includes belong to
 an output. The paths are stored with SHA-256 content hashes in its cache key.
 """
 
+from _helpers import capability as _test_capability
+
 import glob
 import hashlib
 import os
@@ -74,7 +76,7 @@ class TestCacheDependencies(unittest.TestCase):
         self.assertTrue(seen, "no dependencies recorded at all")
         self.assertIn("common.h", seen)
 
-    @unittest.skipIf(not jt.has_cuda, "helper_cuda.h is only reachable with CUDA")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "helper_cuda.h is only reachable with CUDA")
     def test_helper_cuda_is_a_dependency_again(self):
         """The real CUDA preprocessor selects this conditional dependency."""
         holders = [key for key in self.keys

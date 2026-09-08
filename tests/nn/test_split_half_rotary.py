@@ -1,5 +1,7 @@
 """The shared rotary entry retains forward and backward math on CPU and CUDA."""
 
+from _helpers import capability as _test_capability
+
 import jittor as jt
 import numpy as np
 import pytest
@@ -7,7 +9,7 @@ import pytest
 
 @pytest.mark.parametrize("use_cuda", [0, 1])
 def test_rotary_emb_matches_split_half_reference_and_gradient(use_cuda):
-    if use_cuda and not jt.has_cuda:
+    if use_cuda and not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA is unavailable")
     q = np.arange(32, dtype="float32").reshape(1, 2, 2, 8) / 16
     k = q + 0.25

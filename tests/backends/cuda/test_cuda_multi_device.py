@@ -16,6 +16,10 @@ Reading ``x.device_id`` only says what jittor *believes*.
 which is the claim these tests have to make: the second device is really in
 use, not merely recorded.
 """
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 import ctypes
 import unittest
 
@@ -25,10 +29,7 @@ import jittor as jt
 
 
 def _device_count():
-    try:
-        return int(jt.get_device_count())
-    except Exception:
-        return 0
+    return int(_test_capability.device_count('cuda', backend=jt))
 
 
 # CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL, from cuda.h. The driver API is used
@@ -65,6 +66,7 @@ def _pointer_device(ptr):
     return value.value
 
 
+@_test_preserve_policy(jt, 'use_cuda')
 class _DeviceCase(unittest.TestCase):
     #: How many visible CUDA devices this class needs. Checked in
     #: ``setUpClass``, not in a module-level ``skipIf``: asking the backend how
@@ -76,7 +78,7 @@ class _DeviceCase(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        if not jt.has_cuda:
+        if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
             raise unittest.SkipTest("this machine has no CUDA build")
         if _device_count() < cls.min_devices:
             raise unittest.SkipTest(
@@ -84,21 +86,26 @@ class _DeviceCase(unittest.TestCase):
                 % (_device_count(), cls.min_devices))
 
     def setUp(self):
-        self._saved = (jt.flags.use_cuda, jt.current_device())
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._saved = (jt.introspection.policy.runtime.use_cuda, jt.current_device())
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
         jt.set_device(0)
 
     def tearDown(self):
-        jt.sync_all(True)
-        if self._saved[1] >= 0:
-            jt.set_device(self._saved[1])
-        jt.flags.use_cuda = self._saved[0]
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            jt.sync_all(True)
+            if self._saved[1] >= 0:
+                jt.set_device(self._saved[1])
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._saved[0]))
 
 
 class TestCurrentDevice(_DeviceCase):
     def test_current_device_is_the_flag(self):
         self.assertEqual(jt.current_device(), 0)
-        self.assertEqual(jt.flags.device_id, 0)
+        self.assertEqual(jt.introspection.policy.runtime.device_id, 0)
 
     def test_new_vars_take_the_current_device(self):
         x = jt.array(np.ones(4, "float32"))
@@ -153,7 +160,7 @@ class TestSecondDevice(_DeviceCase):
         with jt.flag_scope(device_id=1):
             self.assertEqual(jt.current_device(), 1)
         self.assertEqual(jt.current_device(), 0)
-        self.assertEqual(jt.flags.device_id, 0)
+        self.assertEqual(jt.introspection.policy.runtime.device_id, 0)
 
     def test_pending_scalar_follows_its_operand(self):
         # The 3 and the 1 are built while device 0 is current, but they are

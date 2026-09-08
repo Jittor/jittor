@@ -1,4 +1,6 @@
 """Dynamic outputs become concrete after construction, at submission boundaries."""
+
+from _helpers import capability as _test_capability
 import numpy as np
 import pytest
 import jittor as jt
@@ -80,7 +82,7 @@ def test_fetch_ready_and_backpressure_submit_after_construction():
 
 @pytest.mark.cuda
 def test_cuda_dynamic_counts_and_fetch_readbacks():
-    if not jt.has_cuda:
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA runtime required")
     with jt.flag_scope(use_cuda=1, lazy_execution=1):
         mask = jt.array([0, 1, 0, 1])

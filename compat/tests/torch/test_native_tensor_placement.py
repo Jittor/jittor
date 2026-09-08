@@ -1,11 +1,13 @@
 """Explicit Tensor placement survives global policy and mixed native graphs."""
+
+from _helpers import capability as _test_capability
 import numpy as np
 import pytest
 
 
 def _cuda_runtime():
     import jittor as jt
-    if not jt.has_cuda:
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("accelerator prerequisite: CUDA runtime unavailable")
     return jt.flag_scope(use_cuda=1, auto_flush_ops=0)
 

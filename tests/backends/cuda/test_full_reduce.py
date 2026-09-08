@@ -6,6 +6,8 @@ accuracy suffers from accumulating a million terms into one float. The fast path
 folds per block instead. It must produce the same answer, keep gradients, and
 decline every case it does not cover.
 """
+
+from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
@@ -23,7 +25,7 @@ class TestFullReduceDispatch(unittest.TestCase):
             x = jt.array(np.zeros(1 << 16, "float32"))
             self.assertIsNone(_full_reduce_cuda(x))
 
-    @unittest.skipIf(not jt.has_cuda, "CUDA is required")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA is required")
     def test_declines_non_float32_and_small_inputs(self):
         with jt.flag_scope(use_cuda=1):
             # ``jt.array`` narrows a float64 buffer to float32, so ask for the
@@ -38,7 +40,7 @@ class TestFullReduceDispatch(unittest.TestCase):
                 _full_reduce_cuda(jt.array(np.zeros(64, "float32"))))
 
 
-@unittest.skipIf(not jt.has_cuda, "CUDA is required")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA is required")
 class TestFullReduce(unittest.TestCase):
     def setUp(self):
         self.rng = np.random.RandomState(20260828)

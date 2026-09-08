@@ -43,18 +43,20 @@ class TestCudaTypedTensorCompat(unittest.TestCase):
 
     @unittest.skipUnless(torch.cuda.is_available(), "needs CUDA or an accelerator backend")
     def test_cuda_dtype_constructor_executes_on_device(self):
-        previous = _native_jittor.flags.use_cuda
-        try:
-            value = torch.cuda.FloatTensor([1.0, 2.0])
-            self.assertTrue(value.is_cuda)
-            self.assertIsInstance(value, torch.cuda.FloatTensor)
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            previous = _native_jittor.introspection.policy.runtime.use_cuda
+            try:
+                value = torch.cuda.FloatTensor([1.0, 2.0])
+                self.assertTrue(value.is_cuda)
+                self.assertIsInstance(value, torch.cuda.FloatTensor)
 
-            result = value * 3.0
-            self.assertTrue(result.is_cuda)
-            np.testing.assert_allclose(result.numpy(), np.array([3.0, 6.0], dtype=np.float32))
-        finally:
-            _native_jittor.sync_all()
-            _native_jittor.flags.use_cuda = previous
+                result = value * 3.0
+                self.assertTrue(result.is_cuda)
+                np.testing.assert_allclose(result.numpy(), np.array([3.0, 6.0], dtype=np.float32))
+            finally:
+                _native_jittor.sync_all()
+                _test_policy_stack.enter_context(_native_jittor.runtime.scope(use_cuda=previous))
 
 
 @unittest.skipUnless(_HAS_MMCV and _HAS_MMENGINE, "needs mmcv-lite and mmengine")

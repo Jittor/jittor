@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -19,7 +21,7 @@ from _helpers.torch_runtime import import_torch_modules, modules_available
 
 torch = None
 TEMD = None
-skip_emd_test = not jt.has_cuda or not modules_available("torch", "emd")
+skip_emd_test = not _test_capability.check_accelerator('cuda', backend=jt).enabled or not modules_available("torch", "emd")
 
 
 def setUpModule():
@@ -48,7 +50,7 @@ class TestLoss3d(unittest.TestCase):
 
         test()
 
-        if jt.has_cuda:
+        if _test_capability.check_accelerator('cuda', backend=jt).enabled:
             with jt.flag_scope(use_cuda=1):
                 test()
 
@@ -70,13 +72,13 @@ class TestLoss3d(unittest.TestCase):
 
         test()
         
-        if jt.has_cuda:
+        if _test_capability.check_accelerator('cuda', backend=jt).enabled:
             with jt.flag_scope(use_cuda=1):
                 test()
 
     @unittest.skipIf(skip_emd_test, "No independent Torch, PyTorch EMD, or CUDA found")
     def test_emd_torch(self):
-        if jt.has_cuda:
+        if _test_capability.check_accelerator('cuda', backend=jt).enabled:
             # Entered here and unwound by addCleanup, because the body below is
             # the whole test. A bare assignment left CUDA on for every file that
             # ran afterwards -- the flag is process-global.

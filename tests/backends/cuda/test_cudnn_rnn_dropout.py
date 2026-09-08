@@ -23,6 +23,8 @@ Two things make a test of this real:
 * the ``dropout=0`` control.  Without it, "two calls disagree" would also pass
   for an implementation that returned noise.
 """
+
+from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
@@ -38,7 +40,7 @@ def _lstm(dropout):
     return rnn
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestCudnnRnnDropout(unittest.TestCase):
     def setUp(self):
         self.flags = jt.flag_scope(use_cuda=1)
@@ -87,7 +89,7 @@ class TestCudnnRnnDropout(unittest.TestCase):
         self.assertFalse(np.allclose(first[0], first[1]))
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestCudnnRnnReserveSpace(unittest.TestCase):
     def test_reserve_space_is_queried_once_per_configuration(self):
         """Shape inference must not re-ask cuDNN on every step.

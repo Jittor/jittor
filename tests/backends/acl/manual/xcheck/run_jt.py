@@ -2,10 +2,14 @@
 and per-name grad L2.  Usage: python run_jt.py [acl|cuda]"""
 import sys, json, math, numpy as np, jittor as jt
 backend = sys.argv[1] if len(sys.argv) > 1 else "acl"
+from contextlib import ExitStack as _ProcessPolicyStack
+import atexit as _process_policy_atexit
+_process_policy_scopes = _ProcessPolicyStack()
+_process_policy_atexit.register(_process_policy_scopes.close)
 if backend == "acl":
-    jt.flags.use_acl = 1; jt.flags.use_cuda = 1
+    _process_policy_scopes.enter_context(jt.runtime.scope(use_acl=1)); _process_policy_scopes.enter_context(jt.runtime.scope(use_cuda=1))
 else:
-    jt.flags.use_cuda = 1
+    _process_policy_scopes.enter_context(jt.runtime.scope(use_cuda=1))
 from model_jt import GPT2
 B, T, V, L, H, E = 2, 64, 512, 2, 4, 128
 m = GPT2(V, T, L, H, E)

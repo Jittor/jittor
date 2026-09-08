@@ -13,8 +13,11 @@ NCCL.
 Run: ``pytest compat/tests/torch/test_torch_fsdp2_multirank.py``. The outer
 process launches the ranks; the assertions run inside them.
 """
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
 import os
 import unittest
+from _helpers import capability as _test_capability
 
 import numpy as np
 
@@ -25,9 +28,8 @@ from _helpers.child_process import run_mpi_python
 from _helpers.common import selected_device_types
 
 
-_HAS_MPI = bool(getattr(jt.compile_extern, "has_mpi", False))
-_INSIDE = bool(jt.compile_extern.inside_mpi()) if _HAS_MPI else False
-_HAS_CUDA = bool(getattr(jt, "has_cuda", 0))
+_INSIDE = bool(jt.compile_extern.inside_mpi())
+_HAS_CUDA = _test_capability.check_accelerator("cuda", backend=jt).enabled
 #: The launcher below starts a second, GPU-using job. A session that asked for
 #: CPU must not have GPUs taken out from under it -- and on a shared machine
 #: those are somebody else's cards, since this process has no say in which
@@ -42,17 +44,23 @@ def _spread(var):
     return float(jt.abs(var - var.mpi_all_reduce("mean")).max().item())
 
 
-@unittest.skipIf(not _HAS_MPI, "this Jittor build has no MPI")
+@_test_preserve_policy(jt, 'use_cuda')
+@_test_capability.library_required("mpi", backend=jt)
 @unittest.skipIf(not _INSIDE, "runs inside mpirun; see TestLaunch below")
 @unittest.skipIf(not _HAS_CUDA, "FSDP2 shard gather is NCCL-only")
 class TestFSDP2InsideMpi(unittest.TestCase):
     def setUp(self):
-        self._use_cuda = jt.flags.use_cuda
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._use_cuda = jt.introspection.policy.runtime.use_cuda
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
         self.assertEqual(jt.world_size, _RANKS)
 
     def tearDown(self):
-        jt.flags.use_cuda = self._use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._use_cuda))
 
     # ---- fully_shard(mesh=) ------------------------------------------------
 
@@ -153,7 +161,7 @@ class TestFSDP2InsideMpi(unittest.TestCase):
         self.assertAlmostEqual(total, float(np.sqrt(squares)), places=3)
 
 
-@unittest.skipIf(not _HAS_MPI, "this Jittor build has no MPI")
+@_test_capability.library_required("mpi", backend=jt)
 @unittest.skipIf(_INSIDE, "this is the launcher; the ranks run the class above")
 @unittest.skipIf(not _CUDA_SELECTED,
                  "FSDP2 shard gather is NCCL-only, and this session did not "

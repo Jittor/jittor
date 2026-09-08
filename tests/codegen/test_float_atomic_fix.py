@@ -17,6 +17,10 @@ understand leaves an integer atomicMax running over raw float bit patterns that
 are never converted back.  It used to do exactly that, in three places: a shape
 mismatch, a target whose name does not end in ``p``, and ``catch (...)``.
 """
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 import os
 import unittest
 
@@ -40,15 +44,21 @@ def _kernels(build, tag, options=None):
     return got, src
 
 
-@unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+@_test_preserve_policy(jt, 'use_cuda')
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestFloatAtomicFix(unittest.TestCase):
     def setUp(self):
-        self._use_cuda = jt.flags.use_cuda
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._use_cuda = jt.introspection.policy.runtime.use_cuda
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
 
     def tearDown(self):
-        jt.sync_all()
-        jt.flags.use_cuda = self._use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            jt.sync_all()
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._use_cuda))
 
     def test_a_float_atomic_reduce_is_converted_and_converted_back(self):
         """Both halves have to be there, or the buffer is left as ordered ints."""

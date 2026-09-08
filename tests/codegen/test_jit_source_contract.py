@@ -57,7 +57,7 @@ void JitsourceOp::jit_run() {
 
 
 def _build_op():
-    path = jt.flags.cache_path
+    path = jt.introspection.policy.startup.cache_path
     header = os.path.join(path, "jitsource_op.h")
     source = os.path.join(path, "jitsource_op.cc")
     with open(header, "w", encoding="utf-8") as f:

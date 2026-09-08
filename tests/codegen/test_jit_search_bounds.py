@@ -44,7 +44,7 @@ class TestJitSearchBounds(unittest.TestCase):
         # Unbounded this is order0..order12.
         assert sorted(candidates) == ["order%d" % i for i in range(6)], \
             (sorted(candidates), product)
-        limit = getattr(jt.flags, "jit_search_max_candidates", None)
+        limit = getattr(jt.introspection.policy.runtime, "jit_search_max_candidates", None)
         assert limit, "flag jit_search_max_candidates is missing"
         assert product <= limit, (product, limit, sorted(candidates))
 

@@ -11,6 +11,8 @@ process silently runs without the accelerator, and each CUDA operator fails
 with "Op ... doesn't have cuda version". The ordering is the whole defence.
 """
 
+from _helpers import capability as _test_capability
+
 import os
 import sys
 import unittest
@@ -19,9 +21,9 @@ import jittor as jt
 
 
 class TestCachePathPrecedence(unittest.TestCase):
-    @unittest.skipUnless(jt.has_cuda, "CUDA is unavailable")
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA is unavailable")
     def test_cuda_cache_precedes_its_parent(self):
-        cache_path = jt.flags.cache_path
+        cache_path = jt.introspection.policy.startup.cache_path
         parent = os.path.dirname(cache_path)
         self.assertIn(cache_path, sys.path, "the CUDA cache is not on the path")
         if parent not in sys.path:
@@ -32,19 +34,19 @@ class TestCachePathPrecedence(unittest.TestCase):
             "a CPU-only jittor_core in {} would shadow the CUDA build".format(parent),
         )
 
-    @unittest.skipUnless(jt.has_cuda, "CUDA is unavailable")
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA is unavailable")
     def test_the_imported_core_is_the_cuda_one(self):
         import jittor_core
 
         self.assertTrue(
-            hasattr(jt.flags, "cuda_archs"),
+            hasattr(jt.introspection.policy.startup, "cuda_archs"),
             "jittor_core at {} has no CUDA support".format(jittor_core.__file__),
         )
         self.assertTrue(
             os.path.dirname(os.path.abspath(jittor_core.__file__))
-            == os.path.abspath(jt.flags.cache_path),
+            == os.path.abspath(jt.introspection.policy.startup.cache_path),
             "jittor_core came from {}, not the CUDA cache {}".format(
-                jittor_core.__file__, jt.flags.cache_path
+                jittor_core.__file__, jt.introspection.policy.startup.cache_path
             ),
         )
 

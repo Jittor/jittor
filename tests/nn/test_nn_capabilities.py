@@ -1,5 +1,7 @@
 """Focused contracts for capabilities extracted from downstream runtimes."""
 
+from _helpers import capability as _test_capability
+
 import ast
 import inspect
 import math
@@ -610,7 +612,7 @@ class TestSparseCapabilities(unittest.TestCase):
         self.assertEqual(calls.count("matmul"), 1)
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestCudaCapabilities(unittest.TestCase):
     def test_submanifold_conv_cuda_hash_and_backward(self):
         coords_np = np.array(

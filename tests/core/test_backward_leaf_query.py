@@ -33,6 +33,8 @@ see ``tests/core/test_backward_leaf_torch_parity.py``.
 Run::  python -m pytest tests/core/test_backward_leaf_query.py
 """
 
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
 import unittest
 
 import numpy as np
@@ -207,6 +209,7 @@ class TestBackwardLeafQueryCostAndTraversal(unittest.TestCase):
         jt.tests.backward_leaf_query_inside_a_traversal()
 
 
+@_test_preserve_policy(jt, 'profile_memory_enable')
 class TestBackwardLeafQueryUnderANestedTraversal(unittest.TestCase):
     """The behavioural half: asking while the profiler walks the graph.
 
@@ -217,10 +220,12 @@ class TestBackwardLeafQueryUnderANestedTraversal(unittest.TestCase):
     """
 
     def setUp(self):
-        self.previous = jt.flags.profile_memory_enable
+        self.previous = jt.introspection.policy.runtime.profile_memory_enable
 
     def tearDown(self):
-        jt.flags.profile_memory_enable = self.previous
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(profile_memory_enable=self.previous))
 
     def snapshot(self):
         x = float_var(64)
@@ -237,19 +242,21 @@ class TestBackwardLeafQueryUnderANestedTraversal(unittest.TestCase):
         return answers, grad.numpy()
 
     def test_the_answers_do_not_depend_on_a_traversal_being_in_flight(self):
-        baseline, baseline_grad = self.snapshot()
-        jt.flags.profile_memory_enable = 1
-        try:
-            profiled, profiled_grad = self.snapshot()
-        finally:
-            jt.flags.profile_memory_enable = 0
-        self.assertEqual(baseline, profiled)
-        np.testing.assert_allclose(baseline_grad, profiled_grad, rtol=1e-5)
-        # Not just "the same both times": the answers have to be the right ones,
-        # or a query that returned a constant would satisfy the comparison.
-        leaves = [leaf for leaf, _ in baseline]
-        self.assertEqual(leaves[:3], [True, False, False])
-        self.assertEqual(leaves[4:], [True, False, False])
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            baseline, baseline_grad = self.snapshot()
+            _test_policy_stack.enter_context(jt.runtime.scope(profile_memory_enable=1))
+            try:
+                profiled, profiled_grad = self.snapshot()
+            finally:
+                _test_policy_stack.enter_context(jt.runtime.scope(profile_memory_enable=0))
+            self.assertEqual(baseline, profiled)
+            np.testing.assert_allclose(baseline_grad, profiled_grad, rtol=1e-5)
+            # Not just "the same both times": the answers have to be the right ones,
+            # or a query that returned a constant would satisfy the comparison.
+            leaves = [leaf for leaf, _ in baseline]
+            self.assertEqual(leaves[:3], [True, False, False])
+            self.assertEqual(leaves[4:], [True, False, False])
 
 
 if __name__ == "__main__":

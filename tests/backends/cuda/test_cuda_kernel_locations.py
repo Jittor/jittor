@@ -1,5 +1,7 @@
 """Execute CUDA implementations moved out of the shared operator sources."""
 
+from _helpers import capability as _test_capability
+
 import numpy as np
 import pytest
 
@@ -8,7 +10,7 @@ import pytest
 def cuda_runtime():
     import jittor as jt
 
-    if not jt.has_cuda:
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA runtime required")
     with jt.flag_scope(use_cuda=1, backend_fallback="error"):
         yield jt

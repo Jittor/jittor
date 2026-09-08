@@ -1,5 +1,7 @@
 """Getting hold of the cuTT ops, which are built on first use."""
 
+from _helpers import capability as _test_capability
+
 import os
 import unittest
 
@@ -20,7 +22,7 @@ def require_cutt_ops():
     Call this from ``setUpClass``, not at module scope: collecting a test file
     must not compile a backend.
     """
-    if not jt.has_cuda:
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         raise unittest.SkipTest("no CUDA on this machine, cuTT cannot be built")
     if os.environ.get("use_cutt", "1") != "1":
         raise unittest.SkipTest("cuTT is disabled by use_cutt=0")

@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -27,7 +29,7 @@ def setUpModule():
 #requires torch>=1.10.1
 @unittest.skipIf(skip_this_test, "No Torch found")
 class TestFFTOp(unittest.TestCase):
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
     def test_fft_forward(self):
         img = np.random.rand(256, 300)
@@ -49,7 +51,7 @@ class TestFFTOp(unittest.TestCase):
         assert(np.allclose(y_torch_real, y_jt_real, atol=1))
         assert(np.allclose(y_torch_imag, y_jt_imag, atol=1))
     
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
     def test_ifft_forward(self):
         img = np.random.rand(256, 300)
@@ -78,7 +80,7 @@ class TestFFTOp(unittest.TestCase):
         assert(np.allclose(y_ori_jt_real, X, atol=1))
         assert(np.allclose(y_ori_jt_real, y_ori_torch_real, atol=1))
 
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
     def test_fft_backward(self):
         img = np.random.rand(256, 300)
@@ -113,7 +115,7 @@ class TestFFTOp(unittest.TestCase):
         grad_x_jt = jt.grad(loss, x).data[:, :, :, 0]
         assert(np.allclose(grad_x_jt, grad_x_torch, atol=1))
 
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
     def test_ifft_backward(self):
         img = np.random.rand(256, 300)
@@ -148,7 +150,7 @@ class TestFFTOp(unittest.TestCase):
         grad_x_jt = jt.grad(loss, x).data[:, :, :, 0]
         assert(np.allclose(grad_x_jt, grad_x_torch))
 
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
     def test_fft_float64_forward(self):
         img = np.random.rand(256, 300)
@@ -170,7 +172,7 @@ class TestFFTOp(unittest.TestCase):
         assert(np.allclose(y_torch_real, y_jt_real, atol=1))
         assert(np.allclose(y_torch_imag, y_jt_imag, atol=1))
     
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
     def test_ifft_float64_forward(self):
         img = np.random.rand(256, 300)
@@ -199,7 +201,7 @@ class TestFFTOp(unittest.TestCase):
         assert(np.allclose(y_ori_jt_real, X, atol=1))
         assert(np.allclose(y_ori_jt_real, y_ori_torch_real, atol=1))
 
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
     def test_fft_float64_backward(self):
         img = np.random.rand(256, 300)
@@ -234,7 +236,7 @@ class TestFFTOp(unittest.TestCase):
         grad_x_jt = jt.grad(loss, x).data[:, :, :, 0]
         assert(np.allclose(grad_x_jt, grad_x_torch, atol=1))
 
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
     def test_ifft_float64_backward(self):
         img = np.random.rand(256, 300)

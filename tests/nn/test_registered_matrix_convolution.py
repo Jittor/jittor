@@ -1,5 +1,7 @@
 """The native Python matrix/conv entry points execute their registered selections."""
 
+from _helpers import capability as _test_capability
+
 from types import SimpleNamespace
 
 import numpy as np
@@ -11,7 +13,7 @@ def test_batched_matmul_calls_selected_library_and_filters_dtype(monkeypatch, us
     import jittor as jt
     from jittor.nn.functional import matrix
 
-    if use_cuda and not jt.has_cuda:
+    if use_cuda and not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA runtime required")
     calls = []
     lookups = []
@@ -48,7 +50,7 @@ def test_conv2d_priority_and_explicit_depthwise_disable(monkeypatch, use_cuda):
     from jittor.nn.backends import cudnn
     from jittor.nn.modules import depthwise
 
-    if use_cuda and not jt.has_cuda:
+    if use_cuda and not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA runtime required")
     monkeypatch.setattr(cudnn, "get_library_ops", lambda name: object())
     with jt.flag_scope(use_cuda=use_cuda):
@@ -79,7 +81,7 @@ def test_projected_rnn_declines_library_without_loading_it(monkeypatch):
 def test_rnn_internal_factories_follow_input_device(provide_hidden):
     import jittor as jt
 
-    if not jt.has_cuda or jt.get_device_count() < 2:
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled or _test_capability.device_count('cuda', backend=jt) < 2:
         pytest.skip("two CUDA devices are required")
     with jt.flag_scope(use_cuda=1, device_id=1, no_grad=1):
         model = jt.nn.RNN(3, 4, nonlinearity="tanh")
@@ -95,7 +97,7 @@ def test_rnn_internal_factories_follow_input_device(provide_hidden):
         with jt.flag_scope(device_id=0):
             actual_output, actual_hidden = model(x, hx)
             jt.sync_all(True)
-            assert jt.flags.device_id == 0
+            assert jt.introspection.policy.runtime.device_id == 0
             for value in (actual_output, actual_hidden):
                 assert value.device_id == 1
                 assert value.location() == "device"

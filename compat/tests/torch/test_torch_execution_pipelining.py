@@ -7,6 +7,8 @@ change what a model computes beyond floating-point regrouping.
 
 Run:  python -m pytest compat/tests/torch/test_torch_execution_pipelining.py
 """
+
+from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
@@ -14,7 +16,7 @@ import torch
 import jittor as jt
 
 
-_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if jt.has_cuda else [])
+_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if _test_capability.any_accelerator_enabled(backend=jt) else [])
 
 
 def both_devices(fn):

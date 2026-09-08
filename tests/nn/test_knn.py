@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -44,7 +46,7 @@ class TestKnnOp(unittest.TestCase):
         a2 *= -1
         np.testing.assert_allclose(a1.data, a2.data, atol=1e-4)
 
-        if jt.has_cuda:
+        if _test_capability.check_accelerator('cuda', backend=jt).enabled:
             with jt.flag_scope(use_cuda=1):
                 jt_a = jt.randn(32,512,3)
                 a1, b1 = jt.misc.knn(jt_a, jt_a, 16)

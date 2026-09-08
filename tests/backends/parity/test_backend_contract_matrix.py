@@ -33,6 +33,8 @@ column is reported as unverified with a reason. It does not skip itself, so it
 cannot become another entry that is only ever green because it did nothing.
 """
 
+from _helpers import capability as _test_capability
+
 import numpy as np
 import pytest
 
@@ -279,7 +281,7 @@ def test_a_cuda_build_actually_executed_its_cuda_column(snapshot):
     reason. Either way the outcome is stated rather than assumed.
     """
     accelerators = [row for row in snapshot.accelerator_rows if row.registered]
-    if not jt.has_cuda:
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         for row in accelerators:
             assert not row.runnable or row.devices > 0
         pytest.skip("no CUDA in this build; the accelerator column is "
@@ -309,7 +311,7 @@ def test_optional_libraries_are_loaded_before_the_registry_is_read(snapshot):
     unnamed = sorted(name for name, reason in snapshot.libraries.items()
                      if reason is not None and not reason.strip())
     assert not unnamed, "a library that did not load needs a reason: %s" % unnamed
-    if jt.has_cuda:
+    if _test_capability.check_accelerator('cuda', backend=jt).enabled:
         loaded = {name for name, reason in snapshot.libraries.items()
                   if reason is None}
         # cuTT is in this set deliberately. Its wrapper stopped compiling when

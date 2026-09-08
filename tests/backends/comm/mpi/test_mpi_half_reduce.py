@@ -25,6 +25,8 @@ SIMD path be selected, and once with JT_MPI_HALF_SIMD=0, which forces the
 scalar code -- i.e. the exact path a non-x86 host takes. Both must match the
 reference exactly, which is what "x86 and ARM agree" means operationally.
 """
+
+from _helpers import capability as _test_capability
 import os
 import unittest
 
@@ -100,7 +102,7 @@ class TestMpiHalfReduce(unittest.TestCase):
         np.testing.assert_array_equal(got.view("uint16"), want.view("uint16"))
 
 
-@unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")
+@_test_capability.library_required('mpi', backend=jt)
 class TestMpiHalfReduceEntry(unittest.TestCase):
     def test(self):
         saved = os.environ.get("JT_MPI_HALF_SIMD")

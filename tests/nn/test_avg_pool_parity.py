@@ -33,6 +33,8 @@ separate process over 48 combinations of rank/kernel/stride/padding/ceil_mode/
 count_include_pad (values and input gradients, max abs error < 2.4e-7).
 """
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -88,7 +90,7 @@ GEOMETRIES_2D = (
     (2, 2, 0), (2, 2, 1), (3, 1, 1), (3, 2, 1), (2, 3, 1), (3, 3, 0), (4, 2, 2),
 )
 GEOMETRIES_3D = ((2, 2, 0), (2, 2, 1), (3, 1, 1), (3, 2, 1), (2, 3, 1))
-DEVICES = [0] + ([1] if jt.has_cuda else [])
+DEVICES = [0] + ([1] if _test_capability.check_accelerator('cuda', backend=jt).enabled else [])
 
 
 def _spellings_2d(kernel, stride, padding, ceil_mode, count_include_pad):
@@ -300,7 +302,7 @@ class TestAvgPoolParityCPU(_AvgPoolParity, unittest.TestCase):
     use_cuda = 0
 
 
-@unittest.skipIf(not jt.has_cuda, "no CUDA")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "no CUDA")
 class TestAvgPoolParityCUDA(_AvgPoolParity, unittest.TestCase):
     use_cuda = 1
 

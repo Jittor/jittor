@@ -16,6 +16,7 @@ process starts ``mpirun -np 2`` and the assertions run inside the ranks.
 """
 import os
 import unittest
+from _helpers import capability as _test_capability
 
 import numpy as np
 
@@ -25,8 +26,7 @@ import jittor as jt
 from _helpers.child_process import run_mpi_python
 
 
-_HAS_MPI = bool(getattr(jt.compile_extern, "has_mpi", False))
-_INSIDE = bool(jt.compile_extern.inside_mpi()) if _HAS_MPI else False
+_INSIDE = bool(jt.compile_extern.inside_mpi())
 _RANKS = 2
 
 
@@ -68,7 +68,7 @@ def _fresh_ddp():
     return torch.nn.parallel.DistributedDataParallel(module), module
 
 
-@unittest.skipIf(not _HAS_MPI, "this Jittor build has no MPI")
+@_test_capability.library_required("mpi", backend=jt)
 @unittest.skipIf(not _INSIDE, "runs inside mpirun; see TestLaunch below")
 class TestDDPInsideMpi(unittest.TestCase):
     def test_construction_broadcasts_rank0_parameters(self):
@@ -152,7 +152,7 @@ class TestDDPInsideMpi(unittest.TestCase):
         self.assertAlmostEqual(max(_spread(g) for g in grads), 0.0, places=6)
 
 
-@unittest.skipIf(not _HAS_MPI, "this Jittor build has no MPI")
+@_test_capability.library_required("mpi", backend=jt)
 @unittest.skipIf(_INSIDE, "this is the launcher; the ranks run the class above")
 class TestLaunch(unittest.TestCase):
     def test_run_the_rank_tests_under_mpirun(self):

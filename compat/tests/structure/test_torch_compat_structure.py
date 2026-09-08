@@ -304,8 +304,10 @@ class TestTorchCompatStructure(unittest.TestCase):
                 self.assertIs(pickle.loads(payload), value)
 
     def test_install_is_idempotent(self):
-        self.assertTrue(torch._torch_compat_install_complete)
-        self.assertTrue(torch._torch_compat_install_context.complete)
+        from jittor.compat.shim.runtime import activation_status
+        status = activation_status(jittor)
+        self.assertTrue(status.active)
+        self.assertIs(status.result["torch"], torch)
         native = {name: getattr(jittor, name) for name in ("Var", "Module", "Function", "grad", "no_grad")}
         before = {
             "grad": torch.grad,

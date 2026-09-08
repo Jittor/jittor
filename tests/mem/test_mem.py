@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -19,7 +21,7 @@ class TestMem(unittest.TestCase):
         jt.clean()
         jt.gc()
 
-    @unittest.skipIf(not jt.has_cuda, "no cuda found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "no cuda found")
     @unittest.skipIf(skip_model_test, "skip_model_test")
     @jt.flag_scope(use_cuda=1)
     def test_oom(self):

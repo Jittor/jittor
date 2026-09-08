@@ -10,7 +10,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def restore_execution_mode():
-    with jt.flag_scope(use_cuda=jt.flags.use_cuda):
+    with jt.flag_scope(use_cuda=jt.introspection.policy.runtime.use_cuda):
         yield
 
 

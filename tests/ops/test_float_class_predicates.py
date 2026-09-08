@@ -24,6 +24,8 @@ compile this one kernel at ``-O2`` instead. The ACL path gets away with the
 comparisons because aclnn evaluates them, not a JIT kernel.
 """
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -173,7 +175,7 @@ class TestPredicatesCPU(_Predicates, unittest.TestCase):
     use_cuda = 0
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestPredicatesCUDA(_Predicates, unittest.TestCase):
     use_cuda = 1
 

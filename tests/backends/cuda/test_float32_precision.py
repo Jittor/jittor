@@ -32,6 +32,10 @@ calls the library, not inferred from numerics: on CUDA >= 11 the algorithm
 hint is advisory and several of these choices are invisible in the output
 values.
 """
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
@@ -73,14 +77,17 @@ def _capture(prefix, pattern, build):
     return found[-1]
 
 
+@_test_preserve_policy(jt, 'float32_matmul_precision')
 class TestFloat32PrecisionFlag(unittest.TestCase):
     """The flag itself. Core, so this half needs no GPU."""
 
     def setUp(self):
-        self._saved = jt.flags.float32_matmul_precision
+        self._saved = jt.introspection.policy.runtime.float32_matmul_precision
 
     def tearDown(self):
-        jt.flags.float32_matmul_precision = self._saved
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(float32_matmul_precision=self._saved))
 
     def test_default_is_highest(self):
         """The default has to stay the exact numerics 1.3.x shipped.
@@ -89,12 +96,14 @@ class TestFloat32PrecisionFlag(unittest.TestCase):
         ``use_tensorcore=0, cuda_allow_tf32=0, cuda_allow_cudnn_tf32=0``
         selected before this flag existed.
         """
-        self.assertEqual(jt.flags.float32_matmul_precision, "highest")
+        self.assertEqual(jt.introspection.policy.runtime.float32_matmul_precision, "highest")
 
     def test_each_tier_round_trips(self):
-        for tier in TIERS:
-            jt.flags.float32_matmul_precision = tier
-            self.assertEqual(jt.flags.float32_matmul_precision, tier)
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            for tier in TIERS:
+                _test_policy_stack.enter_context(jt.runtime.scope(float32_matmul_precision=tier))
+                self.assertEqual(jt.introspection.policy.runtime.float32_matmul_precision, tier)
 
     def test_a_bad_tier_is_rejected_and_changes_nothing(self):
         """A rejected setter must not leave a half-applied policy behind.
@@ -103,28 +112,32 @@ class TestFloat32PrecisionFlag(unittest.TestCase):
         without the rollback would leave ``float32_matmul_precision`` reading
         "fastest" while the ops still ran at whatever tier was parsed last.
         """
-        jt.flags.float32_matmul_precision = "high"
-        with self.assertRaises(Exception):
-            jt.flags.float32_matmul_precision = "fastest"
-        self.assertEqual(jt.flags.float32_matmul_precision, "high")
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(float32_matmul_precision="high"))
+            with self.assertRaises(Exception):
+                _test_policy_stack.enter_context(jt.runtime.scope(float32_matmul_precision="fastest"))
+            self.assertEqual(jt.introspection.policy.runtime.float32_matmul_precision, "high")
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@_test_preserve_policy(jt, 'use_cuda', 'use_tensorcore', 'cuda_allow_tf32', 'float32_matmul_precision')
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestCublasPrecision(unittest.TestCase):
     def setUp(self):
-        self._saved = (jt.flags.use_cuda, jt.flags.use_tensorcore,
-                       jt.flags.cuda_allow_tf32,
-                       jt.flags.float32_matmul_precision)
-        jt.flags.use_cuda = 1
-        jt.flags.use_tensorcore = 0
-        jt.flags.cuda_allow_tf32 = 0
-        jt.flags.float32_matmul_precision = "highest"
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._saved = (jt.introspection.policy.runtime.use_cuda, jt.introspection.policy.runtime.use_tensorcore,
+                       jt.introspection.policy.runtime.cuda_allow_tf32,
+                       jt.introspection.policy.runtime.float32_matmul_precision)
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
+        _test_policy_stack.enter_context(jt.runtime.scope(use_tensorcore=0))
+        _test_policy_stack.enter_context(jt.runtime.scope(cuda_allow_tf32=0))
+        _test_policy_stack.enter_context(jt.runtime.scope(float32_matmul_precision="highest"))
 
     def tearDown(self):
         jt.sync_all()
-        (jt.flags.use_cuda, jt.flags.use_tensorcore,
-         jt.flags.cuda_allow_tf32,
-         jt.flags.float32_matmul_precision) = self._saved
+        pass  # fixture cleanup restores the captured runtime policy
 
     # ---- the three ops, built so each one is the one that runs ----------
     def _matmul(self, dtype):
@@ -168,17 +181,19 @@ class TestCublasPrecision(unittest.TestCase):
     }
 
     def test_every_op_follows_the_same_table(self):
-        for dtype in ("float32", "float16", "bfloat16", "float64"):
-            for tier in TIERS:
-                jt.flags.float32_matmul_precision = tier
-                want_compute, want_algo = self.TABLE[(dtype, tier)]
-                for prefix, maker in self.OPS:
-                    got_tier, got_compute, got_algo = _capture(
-                        prefix, _GEMM_RE, getattr(self, maker)(dtype))
-                    where = "%s %s %s" % (prefix, dtype, tier)
-                    self.assertEqual(got_tier, tier, where)
-                    self.assertEqual(got_compute, want_compute, where)
-                    self.assertEqual(got_algo, want_algo, where)
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            for dtype in ("float32", "float16", "bfloat16", "float64"):
+                for tier in TIERS:
+                    _test_policy_stack.enter_context(jt.runtime.scope(float32_matmul_precision=tier))
+                    want_compute, want_algo = self.TABLE[(dtype, tier)]
+                    for prefix, maker in self.OPS:
+                        got_tier, got_compute, got_algo = _capture(
+                            prefix, _GEMM_RE, getattr(self, maker)(dtype))
+                        where = "%s %s %s" % (prefix, dtype, tier)
+                        self.assertEqual(got_tier, tier, where)
+                        self.assertEqual(got_compute, want_compute, where)
+                        self.assertEqual(got_algo, want_algo, where)
 
     def test_float16_accumulates_in_float32_on_every_path(self):
         """The defect this table exists to pin down.
@@ -189,24 +204,28 @@ class TestCublasPrecision(unittest.TestCase):
         picked. Stated on its own because the table above would still pass if
         all three agreed on the *wrong* value.
         """
-        for tier in TIERS:
-            jt.flags.float32_matmul_precision = tier
-            for prefix, maker in self.OPS:
-                _, compute, _ = _capture(prefix, _GEMM_RE,
-                                         getattr(self, maker)("float16"))
-                self.assertEqual(compute, "CUBLAS_COMPUTE_32F",
-                                 "%s at %s" % (prefix, tier))
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            for tier in TIERS:
+                _test_policy_stack.enter_context(jt.runtime.scope(float32_matmul_precision=tier))
+                for prefix, maker in self.OPS:
+                    _, compute, _ = _capture(prefix, _GEMM_RE,
+                                             getattr(self, maker)("float16"))
+                    self.assertEqual(compute, "CUBLAS_COMPUTE_32F",
+                                     "%s at %s" % (prefix, tier))
 
     # ---- the deprecated knobs still mean what they meant -----------------
     def test_use_tensorcore_maps_onto_the_tiers(self):
-        for value, tier in ((0, "highest"), (1, "high"), (2, "medium"),
-                            (3, "medium")):
-            jt.flags.use_tensorcore = value
-            got_tier, got_compute, _ = _capture(
-                "cublas_matmul", _GEMM_RE, self._matmul("float32"))
-            self.assertEqual(got_tier, tier, "use_tensorcore=%d" % value)
-            self.assertEqual(got_compute, self.TABLE[("float32", tier)][0])
-        jt.flags.use_tensorcore = 0
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            for value, tier in ((0, "highest"), (1, "high"), (2, "medium"),
+                                (3, "medium")):
+                _test_policy_stack.enter_context(jt.runtime.scope(use_tensorcore=value))
+                got_tier, got_compute, _ = _capture(
+                    "cublas_matmul", _GEMM_RE, self._matmul("float32"))
+                self.assertEqual(got_tier, tier, "use_tensorcore=%d" % value)
+                self.assertEqual(got_compute, self.TABLE[("float32", tier)][0])
+            _test_policy_stack.enter_context(jt.runtime.scope(use_tensorcore=0))
 
     def test_cuda_allow_tf32_raises_the_tier_but_cannot_lower_it(self):
         """An override raises; it never overrules a stricter policy downwards.
@@ -214,17 +233,19 @@ class TestCublasPrecision(unittest.TestCase):
         ``cuda_allow_tf32=1`` on top of ``medium`` must not drop the matmul
         back to tf32 -- the flag says "tf32 is acceptable", not "use tf32".
         """
-        jt.flags.cuda_allow_tf32 = 1
-        got_tier, got_compute, _ = _capture(
-            "cublas_matmul", _GEMM_RE, self._matmul("float32"))
-        self.assertEqual(got_tier, "high")
-        self.assertEqual(got_compute, "CUBLAS_COMPUTE_32F_FAST_TF32")
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(cuda_allow_tf32=1))
+            got_tier, got_compute, _ = _capture(
+                "cublas_matmul", _GEMM_RE, self._matmul("float32"))
+            self.assertEqual(got_tier, "high")
+            self.assertEqual(got_compute, "CUBLAS_COMPUTE_32F_FAST_TF32")
 
-        jt.flags.float32_matmul_precision = "medium"
-        got_tier, got_compute, _ = _capture(
-            "cublas_matmul", _GEMM_RE, self._matmul("float32"))
-        self.assertEqual(got_tier, "medium")
-        self.assertEqual(got_compute, "CUBLAS_COMPUTE_32F_FAST_16BF")
+            _test_policy_stack.enter_context(jt.runtime.scope(float32_matmul_precision="medium"))
+            got_tier, got_compute, _ = _capture(
+                "cublas_matmul", _GEMM_RE, self._matmul("float32"))
+            self.assertEqual(got_tier, "medium")
+            self.assertEqual(got_compute, "CUBLAS_COMPUTE_32F_FAST_16BF")
 
     def test_float16_accumulate_is_visible_in_the_result(self):
         """The same defect, read off the numbers instead of the log.
@@ -259,36 +280,40 @@ class TestCublasPrecision(unittest.TestCase):
         self.assertLess(err_plain, 0.3, "matmul error %.4f" % err_plain)
 
     def test_values_stay_correct_at_every_tier(self):
-        a = np.random.RandomState(0).randn(32, 48).astype("float32")
-        b = np.random.RandomState(1).randn(48, 64).astype("float32")
-        want = a @ b
-        for tier in TIERS:
-            jt.flags.float32_matmul_precision = tier
-            got = jt.matmul(jt.array(a), jt.array(b)).numpy()
-            # high and medium deliberately spend accuracy, so the tolerance
-            # has to admit tf32 and bfloat16 compute.
-            tol = 1e-4 if tier == "highest" else 3e-1
-            np.testing.assert_allclose(got, want, atol=tol, rtol=tol)
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            a = np.random.RandomState(0).randn(32, 48).astype("float32")
+            b = np.random.RandomState(1).randn(48, 64).astype("float32")
+            want = a @ b
+            for tier in TIERS:
+                _test_policy_stack.enter_context(jt.runtime.scope(float32_matmul_precision=tier))
+                got = jt.matmul(jt.array(a), jt.array(b)).numpy()
+                # high and medium deliberately spend accuracy, so the tolerance
+                # has to admit tf32 and bfloat16 compute.
+                tol = 1e-4 if tier == "highest" else 3e-1
+                np.testing.assert_allclose(got, want, atol=tol, rtol=tol)
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@_test_preserve_policy(jt, 'use_cuda', 'use_tensorcore', 'cuda_allow_tf32', 'cuda_allow_cudnn_tf32', 'float32_matmul_precision')
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestCudnnConvPrecision(unittest.TestCase):
     def setUp(self):
-        self._saved = (jt.flags.use_cuda, jt.flags.use_tensorcore,
-                       jt.flags.cuda_allow_tf32,
-                       jt.flags.cuda_allow_cudnn_tf32,
-                       jt.flags.float32_matmul_precision)
-        jt.flags.use_cuda = 1
-        jt.flags.use_tensorcore = 0
-        jt.flags.cuda_allow_tf32 = 0
-        jt.flags.cuda_allow_cudnn_tf32 = 0
-        jt.flags.float32_matmul_precision = "highest"
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._saved = (jt.introspection.policy.runtime.use_cuda, jt.introspection.policy.runtime.use_tensorcore,
+                       jt.introspection.policy.runtime.cuda_allow_tf32,
+                       jt.introspection.policy.runtime.cuda_allow_cudnn_tf32,
+                       jt.introspection.policy.runtime.float32_matmul_precision)
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
+        _test_policy_stack.enter_context(jt.runtime.scope(use_tensorcore=0))
+        _test_policy_stack.enter_context(jt.runtime.scope(cuda_allow_tf32=0))
+        _test_policy_stack.enter_context(jt.runtime.scope(cuda_allow_cudnn_tf32=0))
+        _test_policy_stack.enter_context(jt.runtime.scope(float32_matmul_precision="highest"))
 
     def tearDown(self):
         jt.sync_all()
-        (jt.flags.use_cuda, jt.flags.use_tensorcore,
-         jt.flags.cuda_allow_tf32, jt.flags.cuda_allow_cudnn_tf32,
-         jt.flags.float32_matmul_precision) = self._saved
+        pass  # fixture cleanup restores the captured runtime policy
 
     def _conv(self, dtype, backward=False):
         rng = np.random.RandomState(0)
@@ -307,14 +332,16 @@ class TestCudnnConvPrecision(unittest.TestCase):
         return _capture(op, _CONV_RE, self._conv(dtype, backward))
 
     def test_float32_conv_follows_the_policy(self):
-        for tier, math in (("highest", FMA),
-                           ("high", ALLOW_CONVERSION),
-                           ("medium", ALLOW_CONVERSION)):
-            jt.flags.float32_matmul_precision = tier
-            got_tier, compute, got_math = self._selection("cudnn_conv", "float32")
-            self.assertEqual(got_tier, tier)
-            self.assertEqual(compute, "CUDNN_DATA_FLOAT")
-            self.assertEqual(got_math, math, "float32 conv at %s" % tier)
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            for tier, math in (("highest", FMA),
+                               ("high", ALLOW_CONVERSION),
+                               ("medium", ALLOW_CONVERSION)):
+                _test_policy_stack.enter_context(jt.runtime.scope(float32_matmul_precision=tier))
+                got_tier, compute, got_math = self._selection("cudnn_conv", "float32")
+                self.assertEqual(got_tier, tier)
+                self.assertEqual(compute, "CUDNN_DATA_FLOAT")
+                self.assertEqual(got_math, math, "float32 conv at %s" % tier)
 
     def test_float16_conv_accumulates_in_float32_forward_and_backward(self):
         """The convolution half of the same defect.
@@ -340,17 +367,19 @@ class TestCudnnConvPrecision(unittest.TestCase):
         drop every downstream matmul to tf32 the moment a framework touched
         the cuDNN switch.
         """
-        jt.flags.cuda_allow_cudnn_tf32 = 1
-        conv_tier, _, conv_math = self._selection("cudnn_conv", "float32")
-        self.assertEqual(conv_tier, "high")
-        self.assertEqual(conv_math, ALLOW_CONVERSION)
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(cuda_allow_cudnn_tf32=1))
+            conv_tier, _, conv_math = self._selection("cudnn_conv", "float32")
+            self.assertEqual(conv_tier, "high")
+            self.assertEqual(conv_math, ALLOW_CONVERSION)
 
-        a = jt.random((32, 48))
-        b = jt.random((48, 64))
-        gemm_tier, gemm_compute, _ = _capture(
-            "cublas_matmul", _GEMM_RE, lambda: jt.matmul(a, b))
-        self.assertEqual(gemm_tier, "highest")
-        self.assertEqual(gemm_compute, "CUBLAS_COMPUTE_32F")
+            a = jt.random((32, 48))
+            b = jt.random((48, 64))
+            gemm_tier, gemm_compute, _ = _capture(
+                "cublas_matmul", _GEMM_RE, lambda: jt.matmul(a, b))
+            self.assertEqual(gemm_tier, "highest")
+            self.assertEqual(gemm_compute, "CUBLAS_COMPUTE_32F")
 
 
 if __name__ == "__main__":

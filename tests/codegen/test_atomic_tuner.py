@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -62,7 +64,7 @@ class TestAtomicTunerClass(unittest.TestCase):
         assert len(log_move)==len(std_log), (len(log_move), len(std_log))
         assert sorted(log_move) == sorted(std_log)
 
-    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
     def test_atomic_tuner(self):
         self.check(self.addNet, ['atomictuner: move atomicAdd to loop 1', 'atomictuner: move atomicAdd to loop 2'])

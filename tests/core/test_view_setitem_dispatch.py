@@ -1,5 +1,7 @@
 """Explicit view writeback accepts backend results without producer inspection."""
 
+from _helpers import capability as _test_capability
+
 import jittor as jt
 import numpy as np
 import pytest
@@ -47,7 +49,7 @@ def test_backend_updated_value_writes_through_recorded_slice(monkeypatch):
 @pytest.mark.parametrize("use_cuda", [0, 1])
 @pytest.mark.parametrize("dtype", ["float16", "bfloat16"])
 def test_basic_indexing_gradients_preserve_low_precision_assignments(use_cuda, dtype):
-    if use_cuda and not jt.has_cuda:
+    if use_cuda and not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA is unavailable")
     with jt.flag_scope(use_cuda=use_cuda, backend_fallback="error"):
         x = jt.array(np.arange(8, dtype="float32").reshape(2, 4)).cast(dtype)

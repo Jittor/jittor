@@ -1,4 +1,6 @@
 
+from _helpers import capability as _test_capability
+
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -43,12 +45,12 @@ class TestSparse(unittest.TestCase):
         check_unique_against_torch(np.array([[1, 3], [2, 3], [1, 3], [2, 3]]), 1)
 
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_unique_cuda(self):
         self.test_unique()
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_unique_dim_cuda(self):
         self.test_unique_dim()
@@ -85,12 +87,12 @@ class TestUniqueReturnCounts(unittest.TestCase):
         data = np.array([[1, 3], [2, 3], [1, 3], [2, 3]], dtype=np.int32)
         self._check(data, 0)
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_counts_flat_cuda(self):
         self.test_counts_flat()
 
-    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_counts_dim_cuda(self):
         self.test_counts_dim()

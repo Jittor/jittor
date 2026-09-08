@@ -25,6 +25,8 @@ numpy is the oracle: ``np.unique`` is an independent implementation of the same
 contract (sorted uniques, plus inverse and counts).
 """
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -112,7 +114,7 @@ class TestUniqueCPU(_Unique, unittest.TestCase):
     use_cuda = 0
 
 
-@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestUniqueCUDA(_Unique, unittest.TestCase):
     use_cuda = 1
 

@@ -1,4 +1,6 @@
 
+from _helpers import capability as _test_capability
+
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -125,7 +127,7 @@ class TestPad(unittest.TestCase):
 
     def test_save_image(self):
         arr = jt.array(np.random.randn(16,3,10,10))
-        jt.save_image(arr, jt.flags.cache_path+"/tmp/a.jpg")
+        jt.save_image(arr, jt.introspection.policy.startup.cache_path+"/tmp/a.jpg")
 
     def test_unbind(self):
         arr = np.random.randn(2,3,4)
@@ -239,7 +241,7 @@ class TestPad(unittest.TestCase):
         check(2,2,1,1,1)
         check(50,20,16,30,10)
 
-        if jt.has_cuda:
+        if _test_capability.check_accelerator('cuda', backend=jt).enabled:
             with jt.flag_scope(use_cuda=1):
                 check(2,2,1,1,1)
                 check(50,20,16,30,10)
@@ -248,7 +250,7 @@ class TestPad(unittest.TestCase):
 class TestOther(unittest.TestCase):
     def test_save(self):
         pp = [1,2,jt.array([1,2,3]), {"a":[1,2,3], "b":jt.array([1,2,3])}]
-        name = jt.flags.cache_path+"/xx.pkl"
+        name = jt.introspection.policy.startup.cache_path+"/xx.pkl"
         jt.save(pp, name)
         x = jt.load(name)
         assert x[:2] == [1,2]
@@ -277,7 +279,7 @@ class TestOther(unittest.TestCase):
         b = a.log_softmax(0)
         assert b.isfinite().all().item()
         print("test_softmax_precision cpu ok")
-        if not jt.has_cuda: return
+        if not _test_capability.check_accelerator('cuda', backend=jt).enabled: return
         with jt.flag_scope(use_cuda=1):
             a = -jt.array([1.0,2.0,1e5])
             b = a.log_softmax(0)
@@ -285,7 +287,7 @@ class TestOther(unittest.TestCase):
         print("test_softmax_precision gpu ok")
 
     def test_code_softmax(self):
-        if not jt.has_cuda: return
+        if not _test_capability.check_accelerator('cuda', backend=jt).enabled: return
         
         def softmax(x, dim = None, log=False):
             if dim is None:
@@ -333,7 +335,7 @@ class TestOther(unittest.TestCase):
         np.testing.assert_allclose(jt.isposinf(jt.array(a)).data, [0,0,1,0])
 
     def test_nan_cuda(self):
-        if not jt.has_cuda: return
+        if not _test_capability.check_accelerator('cuda', backend=jt).enabled: return
         with jt.flag_scope(use_cuda=1):
             self.test_nan()
 

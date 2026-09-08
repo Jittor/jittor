@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
@@ -90,7 +92,7 @@ class TestCore(unittest.TestCase):
 
     def test_var_holder(self):
         jt.clean()
-        self.assertEqual(jt.number_of_lived_vars(), 0)
+        self.assertEqual(jt.introspection.counters.live_vars, 0)
         expect_error(
             lambda: jt.matmul(1,1),
             exc_type=AttributeError,
@@ -106,7 +108,7 @@ class TestCore(unittest.TestCase):
             exc_type=AttributeError,
             match=r"'list' object has no attribute 'shape'",
         )
-        self.assertEqual(jt.number_of_lived_vars(), 0)
+        self.assertEqual(jt.introspection.counters.live_vars, 0)
         a = jt.matmul(jt.float32([[3]]), jt.float32([[4]])).data
         assert a.shape == (1,1) and a[0,0] == 12
         a = np.array([[1, 0], [0, 1]]).astype("float32")
@@ -122,7 +124,7 @@ class TestCore(unittest.TestCase):
         net = Net()
         assert list(net.state_dict().keys()) == ['conv1.weight', 'conv1.bias']
         assert list(net.conv1.state_dict().keys()) == ['weight', 'bias']
-        pkl_name = os.path.join(jt.flags.cache_path, "sub.pkl")
+        pkl_name = os.path.join(jt.introspection.policy.startup.cache_path, "sub.pkl")
         net.conv1.save(pkl_name)
         net.conv1.load(pkl_name)
 
@@ -196,7 +198,7 @@ class TestCore(unittest.TestCase):
             da.sync()
         check()
         jt.gc()
-        assert jt.liveness_info()['lived_vars'] == 0
+        assert jt.introspection.counters.live_vars == 0
 
     def test_out_hint1(self):
         a = jt.rand(10)
@@ -304,13 +306,13 @@ class TestCore(unittest.TestCase):
             for i in range(len(np_arrays)):
                 np.testing.assert_allclose(jt_arrays[i].numpy(), np_arrays[i])
 
-    @unittest.skipUnless(jt.has_cuda, "CUDA is required")
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA is required")
     @unittest.expectedFailure
     def test_swap_cuda(self):
         # KI-TEST-001: device swapping remains a reproduced failure.
         jt.gc()
         jt.display_memory_info()
-        if jt.has_cuda:
+        if _test_capability.check_accelerator('cuda', backend=jt).enabled:
             np_arrays = []
             jt_arrays = []
             jt.gc()

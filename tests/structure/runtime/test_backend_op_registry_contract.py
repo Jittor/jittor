@@ -43,7 +43,8 @@ def test_operator_domains_use_registered_device_selection():
 
 
 def test_device_selection_rule_detects_guards_but_not_flag_writes():
-    guards = ast.parse('if jt.flags.use_cuda or getattr(jt.compiler, "has_acl", False):\n    run()')
+    guards = ast.parse("""if jt.introspection.policy.runtime.use_cuda or getattr(jt.compiler, "has_acl", False):
+    run()""")
     assert len(list(_backend_reads(guards))) == 2
     assert not list(_backend_reads(ast.parse("jt.flags.use_cuda = 1")))
 

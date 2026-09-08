@@ -1,3 +1,5 @@
+
+from _helpers import capability as _test_capability
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -12,7 +14,7 @@ import jittor as jt
 import numpy as np
 from jittor import compile_extern
 from _helpers.assertions import expect_error
-if jt.has_cuda:
+if _test_capability.check_accelerator('cuda', backend=jt).enabled:
     from jittor.compile_extern import cublas_ops, cudnn_ops, cub_ops
 else:
     cublas_ops = cudnn_ops = cub_ops = None

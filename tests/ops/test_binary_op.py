@@ -1,3 +1,7 @@
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 import unittest
 
 import jittor as jt
@@ -14,17 +18,24 @@ class TestBinaryOpCuda(BinaryOpCases, cuda_test_case(2)):
     __test__ = True
 
 
+@_test_preserve_policy(jt, 'amp_reg')
 class TestBinaryOpCpuFp16(BinaryOpCases, unittest.TestCase):
     __test__ = True
 
     def setUp(self):
-        jt.flags.amp_reg = 2 | 4 | 8 | 16
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        _test_policy_stack.enter_context(jt.runtime.scope(amp_reg=2 | 4 | 8 | 16))
 
     def tearDown(self):
-        jt.flags.amp_reg = 0
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(amp_reg=0))
 
 
-@unittest.skipIf(not jt.has_cuda, "no cuda found")
+@_test_preserve_policy(jt, 'amp_reg', 'use_cuda')
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "no cuda found")
 class TestBinaryOpCudaFp16(BinaryOpCases, unittest.TestCase):
     __test__ = True
 
@@ -32,14 +43,19 @@ class TestBinaryOpCudaFp16(BinaryOpCases, unittest.TestCase):
         # Restore what was there rather than assuming 0. On a machine with a
         # GPU the default is 1, so hard-coding 0 here switches the accelerator
         # off for every test that runs after this class.
-        self._use_cuda = jt.flags.use_cuda
-        self._amp_reg = jt.flags.amp_reg
-        jt.flags.amp_reg = 2 | 4 | 8 | 16
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._use_cuda = jt.introspection.policy.runtime.use_cuda
+        self._amp_reg = jt.introspection.policy.runtime.amp_reg
+        _test_policy_stack.enter_context(jt.runtime.scope(amp_reg=2 | 4 | 8 | 16))
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
 
     def tearDown(self):
-        jt.flags.amp_reg = self._amp_reg
-        jt.flags.use_cuda = self._use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(amp_reg=self._amp_reg))
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._use_cuda))
 
 
 if __name__ == "__main__":

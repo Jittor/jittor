@@ -28,6 +28,8 @@ contributes one comm->compute dependency:
 | grouped, joins at the end | N+1  (one join per bucket)     |
 """
 
+from _helpers import capability as _test_capability
+
 import unittest
 
 import numpy as np
@@ -215,7 +217,7 @@ class TestNcclBucket(unittest.TestCase):
             np.testing.assert_allclose(c, a, rtol=0, atol=0)
 
 
-@unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")
+@_test_capability.library_required('mpi', backend=jt)
 class TestNcclBucketEntry(unittest.TestCase):
     def test(self):
         run_mpi_test(WORLD, "test_nccl_bucket_overlap")

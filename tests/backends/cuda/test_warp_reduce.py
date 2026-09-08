@@ -11,6 +11,10 @@ warp is present and every lane agrees on the index, and the generated code
 checks both at run time, so these cases cover the shapes that take the fast
 path and the shapes that fall back.
 """
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
@@ -18,14 +22,20 @@ import numpy as np
 import jittor as jt
 
 
-@unittest.skipIf(not jt.has_cuda, "No cuda found")
+@_test_preserve_policy(jt, 'use_cuda')
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
 class TestWarpReduce(unittest.TestCase):
     def setUp(self):
-        self._saved = jt.flags.use_cuda
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._saved = jt.introspection.policy.runtime.use_cuda
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
 
     def tearDown(self):
-        jt.flags.use_cuda = self._saved
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._saved))
 
     def _check(self, shape, dims, dtype="float32", tol=1e-5):
         data = np.random.RandomState(abs(hash((shape, tuple(dims)))) % 2**31)

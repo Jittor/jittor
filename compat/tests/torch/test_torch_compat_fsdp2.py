@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 import torch
 import jittor as jt
+from _helpers import capability as _test_capability
 from jittor.compat import fsdp2 as canonical_fsdp
 from jittor.compat.fsdp2 import grad_sync as fsdp_grad_sync
 from jittor.compat.fsdp2 import shard as fsdp_shard
@@ -686,23 +687,23 @@ class TestFSDP2Compat(unittest.TestCase):
         self.assertEqual(prefixed.get("step"), b"1")
         self.assertTrue(issubclass(TCPStore, Store))
         self.assertTrue(issubclass(FileStore, Store))
-        self.assertIs(jt._C._distributed_c10d.Store, Store)
-        self.assertIs(jt._C._distributed_c10d.TCPStore, TCPStore)
-        self.assertIs(jt._C._distributed_c10d.FileStore, FileStore)
-        self.assertIs(jt._C._distributed_c10d.PrefixStore, PrefixStore)
+        self.assertIs(torch._C._distributed_c10d.Store, Store)
+        self.assertIs(torch._C._distributed_c10d.TCPStore, TCPStore)
+        self.assertIs(torch._C._distributed_c10d.FileStore, FileStore)
+        self.assertIs(torch._C._distributed_c10d.PrefixStore, PrefixStore)
         self.assertEqual(Backend.NCCL, "nccl")
         # NCCL rides on CUDA, so its availability follows the build -- the CPU
         # session deliberately runs without a device, and asserting it
         # unconditionally only says which machine the suite last ran on.
         self.assertEqual(
-            is_backend_available("nccl"), bool(getattr(jt, "has_cuda", False)))
+            is_backend_available("nccl"), _test_capability.check_accelerator("cuda", backend=jt).enabled)
         self.assertFalse(is_backend_available("gloo"))
         self.assertFalse(is_gloo_available())
         self.assertEqual(is_nccl_available(), is_backend_available("nccl"))
         self.assertEqual(is_mpi_available(), is_backend_available("mpi"))
         self.assertEqual(
             is_backend_available("mpi"),
-            bool(getattr(jt.compile_extern, "has_mpi", False)),
+            _test_capability.library_enabled("mpi", backend=jt),
         )
         self.assertFalse(is_backend_available("unknown"))
         self.assertEqual(batch_isend_irecv([]), [])

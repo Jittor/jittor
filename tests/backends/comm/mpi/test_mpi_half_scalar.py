@@ -69,7 +69,7 @@ class TestMpiHalfScalarConversions(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.cc = getattr(jt.compiler, "cc_path", None) or "g++"
+        cls.cc = getattr(jt.introspection.policy.startup, "cc_path", None) or "g++"
 
     def test_conversions_are_ieee_exact(self):
         conversions = _extract_conversions()

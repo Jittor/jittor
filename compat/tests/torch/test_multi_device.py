@@ -11,6 +11,10 @@ returned 0 whatever you did, ``set_device(1)`` was refused as unimplemented,
 dropped the index, ``device="cuda:1"`` built on device 0, and
 ``torch.device("cuda:1")`` as a context manager did nothing.
 """
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 import gc
 import unittest
 
@@ -35,6 +39,7 @@ def _device_count():
 
 
 
+@_test_preserve_policy(jt, 'use_cuda')
 class _Case(unittest.TestCase):
     #: See tests/backends/cuda/test_multi_device.py: the device count is asked
     #: for at run time. A module-level query would make collection itself
@@ -46,7 +51,7 @@ class _Case(unittest.TestCase):
     def setUpClass(cls):
         if not _IS_SHIM:
             raise unittest.SkipTest("the torch facade is not installed here")
-        if not jt.has_cuda:
+        if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
             raise unittest.SkipTest("this machine has no CUDA build")
         if _device_count() < cls.min_devices:
             raise unittest.SkipTest(
@@ -54,18 +59,23 @@ class _Case(unittest.TestCase):
                 % (_device_count(), cls.min_devices))
 
     def setUp(self):
-        self._saved = (jt.flags.use_cuda, jt.current_device())
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._saved = (jt.introspection.policy.runtime.use_cuda, jt.current_device())
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
         torch.cuda.set_device(0)
 
     def tearDown(self):
         # The Modules built here hold Vars; without a collection the file is
         # reported as leaking process-wide state it merely has not freed yet.
-        gc.collect()
-        jt.sync_all(True)
-        if self._saved[1] >= 0:
-            jt.set_device(self._saved[1])
-        jt.flags.use_cuda = self._saved[0]
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            gc.collect()
+            jt.sync_all(True)
+            if self._saved[1] >= 0:
+                jt.set_device(self._saved[1])
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._saved[0]))
 
 
 class TestDeviceApi(_Case):

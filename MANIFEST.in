@@ -496,6 +496,7 @@ include docs/results/2026-09-08-independent-numerical-namespaces.md
 include docs/results/2026-09-08-independent-parameters.md
 include docs/results/2026-09-08-independent-tensor-module-install.md
 include docs/results/2026-09-08-independent-training-owners.md
+include docs/results/2026-09-08-introspection-consumers.md
 include docs/results/2026-09-08-jit-target-and-transpose-views.md
 include docs/results/2026-09-08-native-compat-bootstrap.md
 include docs/results/2026-09-08-packaging-ownership.md

@@ -1,3 +1,5 @@
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved.
 # Maintainers: Dun Liang <randonlang@gmail.com>.
@@ -21,13 +23,19 @@ def kernel_source(build):
         return f.read(), out
 
 
+@_test_preserve_policy(jt, 'use_cuda')
 class TestCpuParallelPass(unittest.TestCase):
     def setUp(self):
-        self.saved = jt.flags.use_cuda
-        jt.flags.use_cuda = 0
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self.saved = jt.introspection.policy.runtime.use_cuda
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
 
     def tearDown(self):
-        jt.flags.use_cuda = self.saved
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self.saved))
 
     def test_elementwise_is_parallelised(self):
         a = jt.random((512, 1024))

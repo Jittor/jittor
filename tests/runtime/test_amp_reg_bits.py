@@ -93,8 +93,8 @@ class TestAmpBitNames(unittest.TestCase):
         }
         for level, reg in expected.items():
             with amp_level(level):
-                self.assertEqual(jt.flags.amp_reg, reg,
-                                 f"level {level} -> amp_reg {jt.flags.amp_reg}, "
+                self.assertEqual(jt.introspection.policy.runtime.amp_reg, reg,
+                                 f"level {level} -> amp_reg {jt.introspection.policy.runtime.amp_reg}, "
                                  f"expected {reg}")
 
 
@@ -200,10 +200,10 @@ class TestConcatKeepsTheCallersPolicy(unittest.TestCase):
     def test_concat_does_not_leak_its_flag_scope(self):
         for level in (0, 4, 6):
             with amp_level(level):
-                before = jt.flags.amp_reg
+                before = jt.introspection.policy.runtime.amp_reg
                 a, b = self._pair()
                 jt.concat([a, b], dim=0).sync()
-                self.assertEqual(jt.flags.amp_reg, before)
+                self.assertEqual(jt.introspection.policy.runtime.amp_reg, before)
 
     def test_concat_values_survive_the_dtype_change(self):
         with amp_level(6):

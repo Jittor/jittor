@@ -1,5 +1,7 @@
 """Real deployed flash_attn adapter behavior on Jittor CUDA tensors."""
 
+from _helpers import capability as _test_capability
+
 import importlib.util
 import unittest
 
@@ -22,7 +24,7 @@ def _sdpa_reference(query, key, value, scale=None):
 
 
 @unittest.skipUnless(_HAS_FLASH_ATTN, "flash_attn adapter is not installed")
-@unittest.skipUnless(_native_jittor.compiler.has_cuda, "CUDA is required")
+@unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=_native_jittor).enabled, "CUDA is required")
 class TestFlashAttnCompat(unittest.TestCase):
     def setUp(self):
         self.random = np.random.RandomState(20260824)

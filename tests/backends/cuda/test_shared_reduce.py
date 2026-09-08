@@ -19,6 +19,10 @@ per warp. Tests pin the default warp path, the opt-in block path, and its
 one-global-write contract. Measurements live in
 agent/skills/cuda-reduction-strategy-comparison/.
 """
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
+from _helpers import capability as _test_capability
 import os
 import unittest
 
@@ -28,16 +32,22 @@ import jittor as jt
 from jittor_utils.backend_resources import backend_root
 
 
-@unittest.skipIf(not jt.has_cuda, "No cuda found")
+@_test_preserve_policy(jt, 'para_opt_level', 'use_cuda')
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
 class TestSharedReduce(unittest.TestCase):
     def setUp(self):
-        self._use_cuda = jt.flags.use_cuda
-        self._level = jt.flags.para_opt_level
-        jt.flags.use_cuda = 1
+        from contextlib import ExitStack as _TestPolicyStack
+        _test_policy_stack = _TestPolicyStack()
+        self.addCleanup(_test_policy_stack.close)
+        self._use_cuda = jt.introspection.policy.runtime.use_cuda
+        self._level = jt.introspection.policy.runtime.para_opt_level
+        _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
 
     def tearDown(self):
-        jt.flags.para_opt_level = self._level
-        jt.flags.use_cuda = self._use_cuda
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(para_opt_level=self._level))
+            _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._use_cuda))
 
     def _reduce(self, shape, dims, tag, **options):
         """Run one reduction and return (generated source, relative error)."""
@@ -59,19 +69,21 @@ class TestSharedReduce(unittest.TestCase):
         return source, error
 
     def test_off_at_the_default_level(self):
-        self.assertEqual(jt.flags.para_opt_level, 3)
+        self.assertEqual(jt.introspection.policy.runtime.para_opt_level, 3)
         source, error = self._reduce((8, 96, 32, 32), (0, 2, 3), 1)
         self.assertLess(error, 1e-5)
         self.assertNotIn("shared_reduce<", source)
         self.assertIn("_wr_mask", source)
 
     def test_level_4_uses_one_block_write(self):
-        jt.flags.para_opt_level = 4
-        source, error = self._reduce((8, 96, 32, 32), (0, 2, 3), 2)
-        self.assertLess(error, 1e-5)
-        self.assertIn("shared_reduce<", source)
-        self.assertIn("if (threadIdx.x == 0)", source)
-        self.assertNotIn("_wr_mask", source)
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(para_opt_level=4))
+            source, error = self._reduce((8, 96, 32, 32), (0, 2, 3), 2)
+            self.assertLess(error, 1e-5)
+            self.assertIn("shared_reduce<", source)
+            self.assertIn("if (threadIdx.x == 0)", source)
+            self.assertNotIn("_wr_mask", source)
 
     def test_shared_reduce_helper_is_two_stage(self):
         # The helper lives with the CUDA backend's kernel sources, not under
@@ -94,24 +106,28 @@ class TestSharedReduce(unittest.TestCase):
         # WarpReducePass runs after SharedReducePass and matches the same
         # atomicAdd. Inside "if (threadIdx.x == 0)" one lane is active, so its
         # shuffle path could never be taken; it must not be emitted at all.
-        jt.flags.para_opt_level = 4
-        source, error = self._reduce((8, 128, 32, 32), (0, 2, 3), 3)
-        self.assertLess(error, 1e-5)
-        self.assertIn("shared_reduce<", source)
-        self.assertNotIn("_wr_mask", source)
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(para_opt_level=4))
+            source, error = self._reduce((8, 128, 32, 32), (0, 2, 3), 3)
+            self.assertLess(error, 1e-5)
+            self.assertIn("shared_reduce<", source)
+            self.assertNotIn("_wr_mask", source)
 
     def test_values_match_over_several_shapes(self):
-        jt.flags.para_opt_level = 4
-        for index, (shape, dims) in enumerate((
-            ((8, 384, 32, 32), (0, 2, 3)),
-            ((8, 128, 64, 64), (0, 2, 3)),
-            ((4, 32, 64, 64), (2, 3)),
-            ((16, 8, 4, 4), (0, 2, 3)),
-            ((129, 37), (0,)),
-        )):
-            with self.subTest(shape=shape, dims=dims):
-                source, error = self._reduce(shape, dims, 10 + index)
-                self.assertLess(error, 1e-5)
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(para_opt_level=4))
+            for index, (shape, dims) in enumerate((
+                ((8, 384, 32, 32), (0, 2, 3)),
+                ((8, 128, 64, 64), (0, 2, 3)),
+                ((4, 32, 64, 64), (2, 3)),
+                ((16, 8, 4, 4), (0, 2, 3)),
+                ((129, 37), (0,)),
+            )):
+                with self.subTest(shape=shape, dims=dims):
+                    source, error = self._reduce(shape, dims, 10 + index)
+                    self.assertLess(error, 1e-5)
 
     def test_values_match_on_the_unet_reduction_shapes(self):
         # Every reduction the code generator emits for one step of
@@ -120,30 +136,34 @@ class TestSharedReduce(unittest.TestCase):
         # cuda-reduction-strategy-comparison). These are the shapes 3.22's
         # acceptance is measured on, so the block path has to be right on them
         # and not only on round synthetic ones.
-        jt.flags.para_opt_level = 4
-        for index, (shape, dims) in enumerate((
-            ((4, 256, 384), (0, 1)),      # linear bias gradients, 24 per step
-            ((4, 128, 64, 64), (2, 3)),   # time-embedding broadcast gradients
-            ((4, 384, 16, 16), (2, 3)),
-            ((4, 256, 32, 32), (2, 3)),
-            ((4, 384), (0,)),             # time-embedding linear bias gradient
-            ((4, 384, 256), (0, 2)),
-            ((4, 32, 12, 256), (2, 3)),   # the six attention GroupNorms that
-                                          # fall back to the code generator
-        )):
-            with self.subTest(shape=shape, dims=dims):
-                source, error = self._reduce(shape, dims, 30 + index)
-                self.assertIn("shared_reduce<", source)
-                self.assertLess(error, 1e-5)
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(para_opt_level=4))
+            for index, (shape, dims) in enumerate((
+                ((4, 256, 384), (0, 1)),      # linear bias gradients, 24 per step
+                ((4, 128, 64, 64), (2, 3)),   # time-embedding broadcast gradients
+                ((4, 384, 16, 16), (2, 3)),
+                ((4, 256, 32, 32), (2, 3)),
+                ((4, 384), (0,)),             # time-embedding linear bias gradient
+                ((4, 384, 256), (0, 2)),
+                ((4, 32, 12, 256), (2, 3)),   # the six attention GroupNorms that
+                                              # fall back to the code generator
+            )):
+                with self.subTest(shape=shape, dims=dims):
+                    source, error = self._reduce(shape, dims, 30 + index)
+                    self.assertIn("shared_reduce<", source)
+                    self.assertLess(error, 1e-5)
 
     def test_gradient_through_the_block_reduction(self):
-        jt.flags.para_opt_level = 4
-        value = np.random.RandomState(3).randn(4, 8, 16, 16).astype("float32")
-        x = jt.array(value, dtype="float32")
-        x.start_grad()
-        loss = (x * 2).sum([2, 3]).sum()
-        grad = jt.grad(loss, x).numpy()
-        np.testing.assert_allclose(grad, np.full_like(value, 2.0), rtol=1e-6)
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(para_opt_level=4))
+            value = np.random.RandomState(3).randn(4, 8, 16, 16).astype("float32")
+            x = jt.array(value, dtype="float32")
+            x.start_grad()
+            loss = (x * 2).sum([2, 3]).sum()
+            grad = jt.grad(loss, x).numpy()
+            np.testing.assert_allclose(grad, np.full_like(value, 2.0), rtol=1e-6)
 
 
 if __name__ == "__main__":
