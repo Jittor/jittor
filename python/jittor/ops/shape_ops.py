@@ -290,11 +290,17 @@ def split(d, split_size, dim=0):
             split_size = [split_size]*(shape//split_size)
         else:
             split_size = [split_size]*(shape//split_size)+[shape%split_size]
-    if isinstance(split_size, Iterable):
-        assert sum(split_size)==d.shape[dim]
-
     if dim<0:
         dim+=d.ndim
+    if dim < 0 or dim >= d.ndim:
+        raise ValueError("split: dim {} out of range for tensor with {} dimensions".format(dim, d.ndim))
+    if isinstance(split_size, Iterable):
+        if sum(split_size) != d.shape[dim]:
+            raise ValueError(
+                "split: split sizes must sum to dimension {}, got {}".format(
+                    d.shape[dim], sum(split_size)
+                )
+            )
 
     ans = []
     last = 0
