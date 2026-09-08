@@ -114,6 +114,7 @@ files = [
     "python/jittor/build/utils",
     "compat/shim/deploy.py",
     "compat/torch/contracts.py",
+    "compat/torch/_placeholder_context.py",
     "tools/lint/check_import_layering.py",
     "tools/release/pack_offline.py",
     "tests/structure/test_cleanup_structure.py",
