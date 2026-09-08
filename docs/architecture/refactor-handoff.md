@@ -63,6 +63,13 @@ launcher ABI 主机检查通过，已删除整头诊断过滤。但旧记录“�
 [注册表证据](../results/2026-09-08-acl-registry.md)与
 [属性通道及上机限制](../results/2026-09-08-acl-code-data-wire.md)。
 
+8.05 的纯功能迁移已在隔离 CUDA-config 热缓存完成：官方 oneDNN 3.9.1
+源码构建成功，v3 卷积前向/反向三方向与批量矩阵乘复用统一 runtime
+owner；执行前重绑 data handle，公开错误边界走可捕获 RuntimeError。
+显式 v3 `libdnnl.so` 路径和版本检查已接入，4 个功能节点真实 CPU
+执行通过。剩余仅是 primitive 缓存开销、更多 dtype、源码安装器完整
+验收及性能目标；不把未汇总的早期组合测试计入证据。
+
 7.19/7.20已完成native/Torch精度隔离及Op捕获，集中CUDA 17项通过；
 原生RNN权重打包在独立Torch下的梯度断链同步修复，见
 [精度验证](../results/2026-09-08-frontend-precision-isolation.md)。这批新增Op字段，
