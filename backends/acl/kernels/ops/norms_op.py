@@ -89,17 +89,14 @@ class GroupNormACL:
         self.num_groups = int(num_groups)
         self.eps = float(eps)
 
-    def _attr_code(self, name="GroupNorm"):
-        return attribute_program(
-            name,
-            {
+    def _attributes(self):
+        return {
                 "batch": self.batch,
                 "channels": self.channels,
                 "spatialSize": self.spatial_size,
                 "groups": self.num_groups,
                 "eps": self.eps,
-            },
-        )
+            }
 
     def __call__(self, x, weight, bias):
         self.batch = int(x.shape[0])
@@ -116,14 +113,14 @@ class GroupNormACL:
                 (self.batch, self.num_groups),
                 (self.batch, self.num_groups),
             ],
-            attr_code=self._attr_code(),
+            attributes=self._attributes(),
             multi_grad_src=code_program(
                 [
                     "\n            // aclop\n            GroupNormBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(in1, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
-                    self._attr_code("GroupNormBackward"),
                     "\n            op.run();\n            ",
                 ]
             ),
+            multi_grad_attributes=self._attributes(),
         )
         return result[0]
 
