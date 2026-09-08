@@ -40,3 +40,9 @@ no `trellis` distribution; TRELLIS requires its upstream source installation.
 
 No performance claim is made. A dedicated Jittor-vs-PyTorch UNet parity run
 still requires running the same compact model through the Torch shim.
+
+The compact `diffusers.UNet2DModel` probe was started with the isolated shim and
+existing CPU cache. Runtime initialization reached the optional
+`flash_attn` fallback, but forward/backward produced neither completion nor a
+Python exception within 90 seconds and was stopped. This is an inconclusive
+build/runtime prerequisite result, not a parity pass.
