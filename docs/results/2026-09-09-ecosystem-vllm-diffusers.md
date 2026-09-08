@@ -11,10 +11,11 @@ backward completed with output shape `(2, 4, 8, 8)` and a finite input gradient
 norm. A real PyTorch `diffusers.DDPMScheduler.add_noise` smoke also completed
 for a `(2, 4)` tensor.
 
-The dedicated PyTorch 2.12 environment does not contain `diffusers`; the
-installed package is only visible from the environment whose `python` entry
-point activates the Jittor shim. Consequently an actual PyTorch UNet
-forward/backward parity run was not available on this host.
+The isolated PyTorch 3.12 target now contains `diffusers==0.35.1`. With the
+incompatible torchvision package temporarily hidden, a real PyTorch compact
+`UNet2DModel` forward/backward completed on CPU: output `(1, 4, 8, 8)` and
+finite input-gradient norm `0.0134599`. This is a PyTorch smoke, not Jittor
+parity; the torchvision package is restored after each run.
 
 ## Compatibility status
 
@@ -37,6 +38,5 @@ manylinux x86_64), requiring Python 3.9--3.13 and exactly
 2.12.1+cu126 environment therefore was deliberately left unchanged. PyPI has
 no `trellis` distribution; TRELLIS requires its upstream source installation.
 
-No performance claim is made. The isolated PyTorch 3.12 target also imports
-`diffusers==0.35.1`; its UNet forward/backward still needs remaining model
-dependencies and a dedicated parity run.
+No performance claim is made. A dedicated Jittor-vs-PyTorch UNet parity run
+still requires running the same compact model through the Torch shim.
