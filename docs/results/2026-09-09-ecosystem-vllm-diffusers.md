@@ -97,3 +97,8 @@ With the optional package absent, the adapter lifecycle remains testable:
 pytest -q adapters/tests/vllm/test_plugin_lifecycle.py` passed 5 tests in 0.10
 seconds. This checks entry-point arming, no-import behavior, ownership, and
 rollback only; it is not vLLM numerical or CUDA-serving evidence.
+
+The companion arming and runtime ownership checks also pass without installing
+vLLM: the two files run with the same host-only shim command and report 4
+passed in 0.07 seconds. These checks cover import and ownership boundaries;
+numerical execution remains unverified.
