@@ -63,7 +63,7 @@ class PoolACL(jt.Function):
                         "poolDilations": [self.dilation[0], self.dilation[1]],
                         "poolCeil": bool(self.ceil_mode),
                         "countIncludePad": bool(self.count_include_pad),
-                    },
+                    }
         output_height, output_width = (
             _pool_output_size(size, kernel, stride, padding, self.ceil_mode)
             for size, kernel, stride, padding in zip(
@@ -111,7 +111,7 @@ class PoolACL(jt.Function):
                         "poolDilations": [self.dilation[0], self.dilation[1]],
                         "poolCeil": bool(self.ceil_mode),
                         "countIncludePad": bool(self.count_include_pad),
-                    },
+                    }
         output_shapes = [input.shape]
         output_dtypes = [input.dtype]
         if self.op == "maximum":
