@@ -117,6 +117,7 @@ files = [
     "compat/shim/deploy.py",
     "compat/torch/contracts.py",
     "compat/torch/core_install_api.py",
+    "compat/torch/frontend.py",
     "compat/torch/_placeholder_context.py",
     "compat/torch/namespace.py",
     "compat/torch/holder_registry.py",

@@ -157,7 +157,7 @@ def clone(input, *, memory_format=None):
             with backend.flag_scope(use_cuda=0):
                 result = backend.Var.copy(input)
                 result.sync()
-            result._jittor_torch_force_cpu = True
+                setattr(result, "_jittor_torch_force_cpu", True)
             return result
         return backend.Var.copy(input)
 
