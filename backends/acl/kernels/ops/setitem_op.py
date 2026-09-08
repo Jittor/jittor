@@ -99,13 +99,14 @@ class SetItemACL(jt.Function):
                     # bool reductions are not reliable on ACL, and a wrong zero
                     # count would silently turn a real assignment into a no-op.
                     value = jt.full((x.numel(),), value, dtype=x.dtype)
-                assert slices.shape == x.shape, "setitem shape not match"
-                assert len(value.shape) == 1, "value shape must be 1D"
+                if slices.shape != x.shape:
+                    raise ValueError("setitem mask shape must match input shape")
+                if len(value.shape) != 1:
+                    raise ValueError("setitem mask value must be 1D")
                 if self.value_var:
                     slices_len = slices.int32().sum().item()
-                    assert value.shape[0] == slices_len, (
-                        "value shape length must be equal to slices sum"
-                    )
+                    if value.shape[0] != slices_len:
+                        raise ValueError("setitem value length must equal selected elements")
                 self.type_ = "mask"
                 self.value_shape = value.shape
                 # base x is an explicit input so its data is materialized before
@@ -145,7 +146,8 @@ class SetItemACL(jt.Function):
                 dd, boardcast_shape = can_broadcast_and_shape(
                     boardcast_shape, caculate_shape(slices_list[ii])
                 )
-                assert dd is True, "can not broadcast"
+                if dd is not True:
+                    raise ValueError("setitem indices cannot be broadcast")
             value_shape = boardcast_shape
             value_shape += x.shape[slices_len:]
             if value_shape == []:
@@ -173,8 +175,9 @@ class SetItemACL(jt.Function):
                 )[0]
                 # result.sync()
                 return result
-            assert "not support"
-        assert contains_slice, "slice type error"
+            raise NotImplementedError("ACL setitem index form is not supported")
+        if not contains_slice:
+            raise TypeError("setitem expects at least one slice index")
         x_dim = len(x.shape)
         slices = list(slices)
         for s in slices:
