@@ -1,4 +1,4 @@
-"""FSDP2 compatibility tests for ``import jittor as torch``.
+"""FSDP2 compatibility tests for ``import torch``.
 
 Run:
     python -m pytest compat/tests/torch/test_torch_compat_fsdp2.py
@@ -9,7 +9,7 @@ import types
 from unittest import mock
 import numpy as np
 import pytest
-import jittor as torch
+import torch
 import jittor as jt
 from jittor.compat import fsdp2 as canonical_fsdp
 from jittor.compat.fsdp2 import grad_sync as fsdp_grad_sync

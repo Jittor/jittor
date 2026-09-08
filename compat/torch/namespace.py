@@ -1,7 +1,7 @@
 """Independent Torch namespace with explicit native implementation delegation.
 
-The default frontend owns its module identity, types and public writes.
-Legacy Jittor-alias activation is a separate, explicitly selected path.
+The frontend owns its module identity, types and public writes. Installation
+onto the native Jittor module is rejected by the activation boundary.
 """
 
 from __future__ import annotations

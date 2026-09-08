@@ -9,11 +9,21 @@ surface, and turning the debug switch on prints it with a traceback.
 """
 import io
 import unittest
+import sys
+from types import ModuleType
+from unittest import mock
 from contextlib import redirect_stderr
 
-import jittor as torch
+import torch
 
 from jittor.compat import diagnostics
+
+
+def _stats_owner():
+    from jittor._runtime.state import RuntimeContext, RuntimeState
+    owner = ModuleType("stats_runtime_owner")
+    owner.runtime = RuntimeState(RuntimeContext(ModuleType("flags")))
+    return owner
 
 
 class Base(unittest.TestCase):
@@ -83,23 +93,48 @@ class TestItIsReachableFromTheTorchSurface(Base):
             with self.subTest(api=name):
                 self.assertTrue(callable(getattr(torch, name, None)))
 
-    def test_sdpa_stats_facade_keeps_legacy_root_alias(self):
-        stats = diagnostics.sdpa_flash_stats(torch)
+    def test_sdpa_stats_facade_shares_runtime_without_root_aliases(self):
+        from jittor.compat.torch.namespace import TorchNamespace
+        owner = _stats_owner()
+        target = TorchNamespace(owner)
+        before = dict(vars(owner))
+        stats = diagnostics.sdpa_flash_stats(target)
         stats["hits"] = 3
-        self.assertIs(stats, torch._torch_sdpa_flash_stats)
-        self.assertEqual(diagnostics.sdpa_flash_stats(torch)["hits"], 3)
+        self.assertIs(stats, diagnostics.sdpa_flash_stats(owner))
+        self.assertEqual(diagnostics.sdpa_flash_stats(target)["hits"], 3)
 
         replacement = {"hits": 7, "misses": {}, "casts": {}, "backend": "mock"}
-        diagnostics.set_sdpa_flash_stats(replacement, torch)
-        self.assertIs(torch._torch_sdpa_flash_stats, replacement)
-        self.assertIs(diagnostics.sdpa_flash_stats(torch), replacement)
+        diagnostics.set_sdpa_flash_stats(replacement, target)
+        self.assertIs(diagnostics.sdpa_flash_stats(owner), replacement)
+        self.assertIs(diagnostics.sdpa_flash_stats(target), replacement)
+        self.assertEqual(vars(owner), before)
+        self.assertNotIn("_torch_sdpa_flash_stats", vars(owner))
+        self.assertNotIn("_torch_sdpa_flash_stats", vars(target))
 
-    def test_sdpa_stats_alias_removal_starts_a_fresh_run(self):
-        diagnostics.sdpa_flash_stats(torch)["hits"] = 9
-        del torch._torch_sdpa_flash_stats
-        stats = diagnostics.sdpa_flash_stats(torch)
-        self.assertEqual(stats["hits"], 0)
-        self.assertIs(stats, torch._torch_sdpa_flash_stats)
+    def test_sdpa_stats_reset_only_changes_the_selected_runtime(self):
+        first, second = _stats_owner(), _stats_owner()
+        previous = diagnostics.sdpa_flash_stats(first)
+        other = diagnostics.sdpa_flash_stats(second)
+        previous["hits"], other["hits"] = 9, 4
+        fresh = {"hits": 0, "misses": {}, "casts": {}, "backend": None}
+        diagnostics.set_sdpa_flash_stats(fresh, first)
+        self.assertIs(diagnostics.sdpa_flash_stats(first), fresh)
+        self.assertIs(diagnostics.sdpa_flash_stats(second), other)
+        self.assertEqual(other["hits"], 4)
+        self.assertEqual(previous["hits"], 9)
+
+    def test_sdpa_stats_default_owner_never_bootstraps_a_runtime(self):
+        owner = _stats_owner()
+        with mock.patch.dict(sys.modules, {"jittor": owner}):
+            self.assertIs(diagnostics.sdpa_flash_stats(), diagnostics.sdpa_flash_stats(owner))
+        with mock.patch.dict(sys.modules, {"jittor": None}), \
+                mock.patch("builtins.__import__", side_effect=AssertionError("unexpected bootstrap")):
+            with self.assertRaisesRegex(RuntimeError, "initialized Runtime"):
+                diagnostics.sdpa_flash_stats()
+        with self.assertRaisesRegex(RuntimeError, "initialized Runtime"):
+            diagnostics.sdpa_flash_stats(ModuleType("uninitialized"))
+        with self.assertRaises(TypeError):
+            diagnostics.set_sdpa_flash_stats(None, owner)
 
     def test_what_the_layer_swallows_shows_up_there(self):
         self._record("probe: something the layer continued past")

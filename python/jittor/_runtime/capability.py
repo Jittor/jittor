@@ -119,7 +119,7 @@ class Capability:
 
     @property
     def kind(self):
-        """``"accelerator"`` or ``"library"``."""
+        """``"accelerator"``, ``"backend"`` or ``"library"``."""
         return self._kind
 
     @property

@@ -424,8 +424,7 @@ def _update_bn(loader, model, device=None):
 
 
 def _install_lr_scheduler(g, registry=None):
-    """Torch-compatible torch.optim.lr_scheduler over jittor optimizers, on the
-    `import jittor as torch` path (the shim reuses this same namespace). jittor reads
+    """Torch-compatible schedulers over independent native-backed optimizers. Jittor reads
     lr from pg.get("lr", self.lr), so every step must update BOTH optimizer.lr and each
     param_group["lr"]. Schedulers follow torch's convention: __init__ applies the
     epoch-0 lr, last_epoch advances on step(). Covers the schedulers transformers /

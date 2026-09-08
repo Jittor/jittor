@@ -338,6 +338,8 @@ from ._runtime.capability import Capabilities as _Capabilities
 from ._runtime import backend_libraries as _backend_libraries
 capability = _Capabilities(compiler.build_config, compiler, core,
                            compile_extern, _backend_libraries)
+from ._runtime.introspection import Introspection as _Introspection
+introspection: _Introspection = _Introspection(capability, config, runtime, core)
 
 # Say, once, what the environment configured. Every static initializer and every
 # build variable has been read by now, which is why this cannot live in the
@@ -356,7 +358,7 @@ _ROOT_EXPORTS = (
     "init", "jittor_core", "kron", "linalg", "logsumexp", "lr_scheduler",
     "math_util", "matmul", "misc", "mkl_ops", "mpi", "mpi_ops", "nn",
     "numpy2cupy", "optim", "ops", "rank", "sparse", "tensordot",
-    "world_size", "config", "capability",
+    "world_size", "config", "capability", "introspection",
 )
 
 __all__ = tuple(sorted(set(

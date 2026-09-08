@@ -193,6 +193,14 @@ Snapshots contain detached Python values, including copies of mapping values.
 Execution and allocator counters are read-only through both runtime and legacy
 Flags objects.
 
+`jt.introspection` offers three supported read-only observation layers:
+capabilities query named backend/device registries and existing library evidence;
+policy views forward startup configuration and effective runtime settings;
+counters observe executor, allocator and native graph liveness services.
+There is no second Runtime state, implicit optional-library load, graph flush,
+or writable observation path. See [runtime introspection](runtime-introspection.md)
+for failure/UNPROBED handling, frozen snapshots and test-consumer mappings.
+
 Startup configuration includes compiler/tool paths, compiler flags, cache/source
 paths, CUDA architectures and the cache-lock policy. After backend post-processing
 and compatibility composition, a one-way native seal rejects writes through

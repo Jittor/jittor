@@ -1,4 +1,4 @@
-"""TorchMetrics smoke tests for the `import jittor as torch` path.
+"""TorchMetrics smoke tests for the `import torch` path.
 
 Run with:
   python -m pytest compat/tests/torch/test_torchmetrics_compat.py
@@ -12,7 +12,7 @@ import sys
 import unittest
 
 import numpy as np
-import jittor as torch
+import torch
 
 
 @unittest.skipIf(importlib.util.find_spec("torchmetrics") is None, "torchmetrics is not installed")

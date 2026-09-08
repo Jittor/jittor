@@ -18,16 +18,36 @@ import unittest, tempfile, numpy as np
 
 _REQUIRE_OPTIONAL_DEPS = os.environ.get("JITTOR_REQUIRE_OPTIONAL_DEPS") == "1"
 
+
+def _is_active_jittor_frontend(frontend, native):
+    from jittor.compat.torch.publication import namespace_owner
+    from jittor.compat.shim.runtime import activation_status
+    if frontend is native or namespace_owner(frontend) is not native:
+        return False
+    status = activation_status(native)
+    return bool(status.active and isinstance(status.result, dict)
+                and status.result.get("torch") is frontend
+                and frontend.Tensor is not native.Var)
+
 try:
-    import torch  # torch_shim -> jittor
+    import torch  # independent frontend sharing Jittor's native graph
     import jittor as jt
-    import jittor.nn as nn
+    from torch import nn
     from peft import LoraConfig, get_peft_model, PeftModel
-    _HAS = torch is jt and hasattr(torch, 'tensor')
+    _HAS = _is_active_jittor_frontend(torch, jt)
 except Exception:
     if _REQUIRE_OPTIONAL_DEPS:
         raise
     _HAS = False
+
+
+def test_active_jittor_frontend_detection_is_not_module_alias_detection():
+    import types
+    import torch
+    import jittor as jt
+    assert _is_active_jittor_frontend(torch, jt)
+    assert not _is_active_jittor_frontend(types.ModuleType("torch"), jt)
+    assert not _is_active_jittor_frontend(jt, jt)
 
 
 class _Tiny(nn.Module if _HAS else object):

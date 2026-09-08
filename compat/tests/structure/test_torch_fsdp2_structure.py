@@ -417,7 +417,11 @@ assert value is fsdp2.DeviceMesh
         )
 
     def test_registered_torch_modules_remain_idempotent(self):
-        fsdp.install(jt.distributed, jt.__dict__)
+        import torch
+        native_distributed = importlib.import_module("jittor.distributed")
+        native_before = dict(vars(native_distributed))
+        self.assertIsNot(torch.distributed, native_distributed)
+        fsdp.install(torch.distributed, vars(torch))
         before = {name: sys.modules[name] for name in _REGISTERED_MODULES}
         symbol_paths = (
             ("torch.distributed.fsdp.wrap", "enable_wrap"),
@@ -434,7 +438,8 @@ assert value is fsdp2.DeviceMesh
             path: getattr(importlib.import_module(path[0]), path[1])
             for path in symbol_paths
         }
-        fsdp.install(jt.distributed, jt.__dict__)
+        fsdp.install(torch.distributed, vars(torch))
+        self.assertEqual(dict(vars(native_distributed)), native_before)
         after = {name: sys.modules[name] for name in _REGISTERED_MODULES}
         symbols_after = {
             path: getattr(importlib.import_module(path[0]), path[1])

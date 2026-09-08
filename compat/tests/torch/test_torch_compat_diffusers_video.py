@@ -3,7 +3,7 @@
 import unittest
 
 import jittor as jt
-import jittor as torch
+import torch
 
 
 class TestDiffusersVideoCompat(unittest.TestCase):

@@ -7,30 +7,10 @@ from ..fidelity import Fidelity, register_api_bindings
 from ...diagnostics import EXPECTED, swallowed
 
 
-def _install_autograd_function(g):
-    Fn = getattr(g, "Function", None)
-    if Fn is None:
-        return
-    if not hasattr(Fn, "save_for_backward"):
-        Fn.save_for_backward = api.save_for_backward
-    if "saved_tensors" not in getattr(Fn, "__dict__", {}):
-        Fn.saved_tensors = property(api._saved_tensors)
-    if getattr(Fn.__call__, "_torch_records_inputs", False) is not True:
-        Fn.__call__ = api._call_record_inputs
-    if not hasattr(Fn, "set_materialize_grads"):
-        Fn.set_materialize_grads = api.set_materialize_grads
-    if "grad" not in getattr(Fn, "__dict__", {}):
-        Fn.grad = api.function_grad
-
-
 def _install_autograd(g, registry=None):
     ctx = get_install_context(g)
     registry = registry or ctx.registry
-    if g is ctx.native_backend:
-        autograd = ctx.native_backend.autograd
-        registry.publish("torch.autograd", autograd)
-    else:
-        autograd = registry.ensure("torch.autograd")
+    autograd = registry.ensure("torch.autograd")
     autograd.Function = g.Function
     autograd.no_grad = g.no_grad
     autograd.enable_grad = g.enable_grad
@@ -40,12 +20,9 @@ def _install_autograd(g, registry=None):
     g.autograd = autograd
     autograd.__path__ = getattr(autograd, "__path__", [])
     from jittor.autograd import functional as native_functional
-    if g is ctx.native_backend:
-        functional = native_functional
-    else:
-        functional = registry.ensure("torch.autograd.functional")
-        functional.__dict__.update({name: value for name, value in vars(native_functional).items()
-                                    if not name.startswith("__")})
+    functional = registry.ensure("torch.autograd.functional")
+    functional.__dict__.update({name: value for name, value in vars(native_functional).items()
+                                if not name.startswith("__")})
     registry.module_map["torch.autograd.functional"] = functional
     autograd.functional = functional
     profiler = registry.ensure("torch.autograd.profiler")
@@ -69,9 +46,7 @@ def install(ctx):
     ctx.state.setdefault("autograd_api", {
         "native_function_call": ctx.native_backend.Function.__call__,
     })
-    if g is not ctx.native_backend:
-        g.Function = api.Function
-    _install_autograd_function(g)
+    g.Function = api.Function
     _install_autograd(g, ctx.registry)
 
 

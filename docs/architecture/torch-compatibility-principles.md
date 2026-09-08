@@ -51,17 +51,24 @@ Jittor as the top-level `torch` module. Torch compatibility is activated by an
 explicit `jittor.compat.shim.activate()` call, `JITTOR_TORCH_SHIM=1`, the
 deployed `torch` entry point, or the historical `jittor.torch_compat` import.
 Merely spelling a local alias as `import jittor as torch` does not activate the
-shim. By default, `activate()` and the deployed entry publish an independent
+shim. All supported activation entries publish an independent
 Torch namespace with its own Tensor, Parameter, Module and NN types. Their
 native Var/Op graph is shared, while native Var methods remain unchanged.
 Use the returned `result["torch"]` or import `torch` after activation.
 
-The explicit `activate(independent_namespace=False)` path retains the legacy
-Jittor-alias mode. `JITTOR_TORCH_SHIM=1` alone also retains that import-time mode;
-the deployed entry additionally sets `JITTOR_TORCH_INDEPENDENT=1`. Activation
-records this mode for child processes and rejects switching modes after the
-first installation. The independent frontend applies and restores its autograd
-policy per call; this does not make all backend state thread-local.
+The native-as-Torch installation mode is removed. `activate(independent_namespace=False)`,
+`JITTOR_TORCH_INDEPENDENT=0` and direct `compat.torch.install(jittor)` calls fail
+explicitly. `JITTOR_TORCH_SHIM=1` alone selects the independent frontend; neither
+deployment nor activation needs a second mode variable. The retained keyword
+only provides a migration error for old callers and cannot enable a second path.
+The independent frontend applies and restores its autograd policy per call;
+native Var FollowRuntime behavior is unchanged.
+
+Use `import torch` for Torch tests and applications. Import `jittor` separately
+for native flags, compiler diagnostics or synchronization tools. Replace
+`torch.array(...)` with `torch.tensor(...)`; dtype casts use `tensor.to(dtype=...)`,
+while native Jittor keeps `jt.float32(...)`. Redeploy an old generated Torch entry
+when updating an existing environment. See the [removal record](../results/2026-09-08-single-torch-frontend.md).
 
 Native and compatibility tests therefore run in separate processes. A native
 test must not rely on a Torch wrapper installed by another collected test, and a

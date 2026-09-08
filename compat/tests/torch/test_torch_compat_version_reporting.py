@@ -1,6 +1,6 @@
 """Who owns what ``torch.__version__`` reports (task 7.14).
 
-``import jittor as torch`` means ``torch`` IS the jittor module, so
+``import torch`` means ``torch`` IS the jittor module, so
 ``torch.__version__ = x`` sets ``jittor.__version__`` for every user in the
 process.  The vLLM adapter used to do exactly that, from a package whose whole
 staging contract is "public Jittor APIs only" -- reading a public API is public
@@ -13,7 +13,7 @@ holds the other half: no staged adapter may assign to a torch/jittor attribute.
 import unittest
 
 import jittor as jt
-import jittor as torch
+import torch
 
 
 class TestTorchApiVersionReporting(unittest.TestCase):

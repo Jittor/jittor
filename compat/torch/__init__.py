@@ -1,4 +1,4 @@
-"""Install the canonical ``import jittor as torch`` compatibility surface.
+"""Install the independent Torch frontend over Jittor's native runtime.
 
 The implementation is split by ``torch.*`` family under :mod:`installers`.
 This module owns only public compatibility re-exports and deterministic install
@@ -216,6 +216,12 @@ def _abandon(transaction, context):
 
 def install(torch, strict=True, parent_transaction=None):
     """Install once on the explicit Torch target and return that target."""
+
+    from .namespace import TorchNamespace
+    if not isinstance(torch, TorchNamespace):
+        raise RuntimeError(
+            "Torch installation requires an independent TorchNamespace; "
+            "install(jittor) is no longer supported. Use shim.activate() and import torch.")
 
     from .tensor_state import (
         compatibility_owner, bind_tensor_state, snapshot_tensor_state,

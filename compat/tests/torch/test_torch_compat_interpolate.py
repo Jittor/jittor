@@ -1,4 +1,4 @@
-"""Torch-grade interpolate/upsample-semantics tests for ``import jittor as torch``.
+"""Torch-grade interpolate/upsample-semantics tests for ``import torch``.
 
 Part of the torch-grade test-suite rewrite (sibling of ``test_torch_compat_conv_pool.py``).
 Every check compares jittor-as-torch against an INDEPENDENT numpy reference computed from
@@ -24,7 +24,7 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_interpolate.py
 """
 import unittest
 import numpy as np
-import jittor as torch          # the whole point: jittor IS torch here
+import torch
 import jittor as jt
 import jittor.nn as nn
 
@@ -92,28 +92,28 @@ class TestInterpolateNearest(Base):
     def test_nearest_scale2_upsample(self):
         x = np.random.RandomState(40).randn(1, 2, 3, 3).astype("float32")
         def body(dev):
-            g = F.interpolate(torch.array(x), scale_factor=2, mode="nearest").numpy()
+            g = F.interpolate(torch.tensor(x), scale_factor=2, mode="nearest").numpy()
             self.ac(g, nearest_ref(x, 6, 6), atol=1e-5, msg=f"nearest x2 {dev}")
         both_devices(body)
 
     def test_nearest_size_upsample_noninteger(self):
         x = np.arange(16).reshape(1, 1, 4, 4).astype("float32")
         def body(dev):
-            g = F.interpolate(torch.array(x), size=(6, 6), mode="nearest").numpy()
+            g = F.interpolate(torch.tensor(x), size=(6, 6), mode="nearest").numpy()
             self.ac(g, nearest_ref(x, 6, 6), atol=1e-5, msg=f"nearest 4->6 {dev}")
         both_devices(body)
 
     def test_nearest_size_downsample(self):
         x = np.arange(16).reshape(1, 1, 4, 4).astype("float32")
         def body(dev):
-            g = F.interpolate(torch.array(x), size=(3, 3), mode="nearest").numpy()
+            g = F.interpolate(torch.tensor(x), size=(3, 3), mode="nearest").numpy()
             self.ac(g, nearest_ref(x, 3, 3), atol=1e-5, msg=f"nearest 4->3 {dev}")
         both_devices(body)
 
     def test_nearest_rectangular(self):
         x = np.random.RandomState(43).randn(2, 3, 4, 6).astype("float32")
         def body(dev):
-            g = F.interpolate(torch.array(x), size=(8, 3), mode="nearest").numpy()
+            g = F.interpolate(torch.tensor(x), size=(8, 3), mode="nearest").numpy()
             self.ac(g, nearest_ref(x, 8, 3), atol=1e-5, msg=f"nearest rect {dev}")
         both_devices(body)
 
@@ -125,7 +125,7 @@ class TestInterpolateBilinear(Base):
     def test_bilinear_align_corners_true(self):
         x = np.random.RandomState(41).randn(1, 2, 4, 4).astype("float32")
         def body(dev):
-            g = F.interpolate(torch.array(x), size=(8, 8), mode="bilinear",
+            g = F.interpolate(torch.tensor(x), size=(8, 8), mode="bilinear",
                               align_corners=True).numpy()
             self.ac(g, bilinear_ref(x, 8, 8, True), atol=1e-3,
                     msg=f"bilinear AC=True {dev}")
@@ -134,7 +134,7 @@ class TestInterpolateBilinear(Base):
     def test_bilinear_align_corners_false(self):
         x = np.random.RandomState(42).randn(1, 2, 4, 4).astype("float32")
         def body(dev):
-            g = F.interpolate(torch.array(x), size=(8, 8), mode="bilinear",
+            g = F.interpolate(torch.tensor(x), size=(8, 8), mode="bilinear",
                               align_corners=False).numpy()
             self.ac(g, bilinear_ref(x, 8, 8, False), atol=1e-3,
                     msg=f"bilinear AC=False {dev}")
@@ -143,7 +143,7 @@ class TestInterpolateBilinear(Base):
     def test_bilinear_scale_factor_upsample(self):
         x = np.random.RandomState(44).randn(1, 3, 5, 5).astype("float32")
         def body(dev):
-            g = F.interpolate(torch.array(x), scale_factor=2, mode="bilinear",
+            g = F.interpolate(torch.tensor(x), scale_factor=2, mode="bilinear",
                               align_corners=False).numpy()
             self.ac(g, bilinear_ref(x, 10, 10, False), atol=1e-3,
                     msg=f"bilinear scale2 {dev}")
@@ -152,7 +152,7 @@ class TestInterpolateBilinear(Base):
     def test_bilinear_rectangular_ac_true(self):
         x = np.random.RandomState(45).randn(1, 2, 4, 6).astype("float32")
         def body(dev):
-            g = F.interpolate(torch.array(x), size=(7, 9), mode="bilinear",
+            g = F.interpolate(torch.tensor(x), size=(7, 9), mode="bilinear",
                               align_corners=True).numpy()
             self.ac(g, bilinear_ref(x, 7, 9, True), atol=1e-3,
                     msg=f"bilinear rect AC=True {dev}")
@@ -168,7 +168,7 @@ class TestInterpolateBicubic(Base):
     def test_bicubic_constant_stays_constant(self):
         x = np.full((1, 2, 4, 4), 3.5, dtype="float32")
         def body(dev):
-            g = F.interpolate(torch.array(x), size=(7, 7), mode="bicubic",
+            g = F.interpolate(torch.tensor(x), size=(7, 7), mode="bicubic",
                               align_corners=False).numpy()
             self.ac(g, np.full((1, 2, 7, 7), 3.5), atol=1e-3,
                     msg=f"bicubic const {dev}")
@@ -177,7 +177,7 @@ class TestInterpolateBicubic(Base):
     def test_bicubic_shape(self):
         x = np.random.RandomState(46).randn(1, 3, 5, 5).astype("float32")
         def body(dev):
-            g = F.interpolate(torch.array(x), size=(9, 9), mode="bicubic",
+            g = F.interpolate(torch.tensor(x), size=(9, 9), mode="bicubic",
                               align_corners=True)
             self.assertEqual(tuple(g.shape), (1, 3, 9, 9), f"bicubic shape {dev}")
         both_devices(body)
@@ -190,7 +190,7 @@ class TestUpsampleModules(Base):
     def test_upsample_nearest_scale2(self):
         x = np.random.RandomState(47).randn(1, 2, 3, 4).astype("float32")
         def body(dev):
-            g = nn.Upsample(scale_factor=2, mode="nearest")(torch.array(x)).numpy()
+            g = nn.Upsample(scale_factor=2, mode="nearest")(torch.tensor(x)).numpy()
             self.ac(g, nearest_ref(x, 6, 8), atol=1e-5, msg=f"Upsample nearest {dev}")
         both_devices(body)
 
@@ -198,7 +198,7 @@ class TestUpsampleModules(Base):
         x = np.random.RandomState(48).randn(1, 2, 4, 4).astype("float32")
         def body(dev):
             g = nn.Upsample(scale_factor=2, mode="bilinear",
-                            align_corners=True)(torch.array(x)).numpy()
+                            align_corners=True)(torch.tensor(x)).numpy()
             self.ac(g, bilinear_ref(x, 8, 8, True), atol=1e-3,
                     msg=f"Upsample bilinear AC=True {dev}")
         both_devices(body)
@@ -206,7 +206,7 @@ class TestUpsampleModules(Base):
     def test_upsampling_nearest2d(self):
         x = np.random.RandomState(49).randn(1, 3, 4, 5).astype("float32")
         def body(dev):
-            g = nn.UpsamplingNearest2d(scale_factor=2)(torch.array(x)).numpy()
+            g = nn.UpsamplingNearest2d(scale_factor=2)(torch.tensor(x)).numpy()
             self.ac(g, nearest_ref(x, 8, 10), atol=1e-5,
                     msg=f"UpsamplingNearest2d {dev}")
         both_devices(body)
@@ -214,7 +214,7 @@ class TestUpsampleModules(Base):
     def test_upsampling_bilinear2d(self):
         x = np.random.RandomState(50).randn(1, 2, 4, 4).astype("float32")
         def body(dev):
-            g = nn.UpsamplingBilinear2d(scale_factor=2)(torch.array(x)).numpy()
+            g = nn.UpsamplingBilinear2d(scale_factor=2)(torch.tensor(x)).numpy()
             # UpsamplingBilinear2d implies align_corners=True in torch.
             self.ac(g, bilinear_ref(x, 8, 8, True), atol=1e-3,
                     msg=f"UpsamplingBilinear2d {dev}")

@@ -106,15 +106,19 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
 
     def test_compat_composition_keeps_native_core_implementations_available(self):
         import jittor
+        import torch
         from jittor._runtime import core_api
 
-        self.assertIsNot(jittor.grad, core_api.grad)
+        self.assertIs(jittor.grad, core_api.grad)
         self.assertEqual(
-            jittor.grad.__module__,
+            torch.grad.__module__,
             "jittor.compat.torch.installers.tensor",
         )
-        self.assertIsNot(jittor.save, core_api.save)
-        self.assertIsNot(jittor.load, core_api.load)
+        self.assertIs(jittor.save, core_api.save)
+        self.assertIs(jittor.load, core_api.load)
+        self.assertIsNot(torch.grad, jittor.grad)
+        self.assertIsNot(torch.save, jittor.save)
+        self.assertIsNot(torch.load, jittor.load)
         required = [
             report for report in jittor._compat_composition_report.torch_reports if report.required
         ]
@@ -124,8 +128,7 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
     def _run_mode_probe(self, source, torch_mode=False):
         env = os.environ.copy()
         env["PYTHONDONTWRITEBYTECODE"] = "1"
-        env["CUDA_VISIBLE_DEVICES"] = ""
-        env["nvcc_path"] = ""
+        # Preserve the caller's backend/cache: namespace ownership is not CPU-only.
         if torch_mode:
             env["JITTOR_TORCH_SHIM"] = "1"
         else:
@@ -178,8 +181,9 @@ print("RESULT=" + json.dumps({
 import json
 import sys
 import jittor as jt
+import torch
 
-x = jt.array([1.0, 2.0])
+x = torch.tensor([1.0, 2.0])
 data = x.data
 data.fill_(3.0)
 print("RESULT=" + json.dumps({
@@ -188,7 +192,8 @@ print("RESULT=" + json.dumps({
     "data_is_detached": data.is_stop_grad(),
     "shared_write": x.numpy().tolist(),
     "torch_is_jittor": sys.modules.get("torch") is jt,
-    "torch_installed": jt._torch_compat_install_complete,
+    "torch_installed": torch._torch_compat_install_complete,
+    "native_data_is_numpy": isinstance(jt.array([1.]).data, __import__('numpy').ndarray),
 }))
 ''', torch_mode=True)
         self.assertEqual(
@@ -198,8 +203,9 @@ print("RESULT=" + json.dumps({
                 "data_is_distinct": True,
                 "data_is_detached": True,
                 "shared_write": [3.0, 3.0],
-                "torch_is_jittor": True,
+                "torch_is_jittor": False,
                 "torch_installed": True,
+                "native_data_is_numpy": True,
             },
         )
 
@@ -221,8 +227,6 @@ print("RESULT=" + json.dumps({
 
             env = os.environ.copy()
             env["PYTHONDONTWRITEBYTECODE"] = "1"
-            env["CUDA_VISIBLE_DEVICES"] = ""
-            env["nvcc_path"] = ""
             env.pop("JITTOR_TORCH_SHIM", None)
             env.pop("JITTOR_TORCH_PROJECT_ROOT", None)
             env.pop("JITTOR_TORCH_RUNTIME_ROOT", None)
@@ -250,7 +254,7 @@ print("RESULT=" + json.dumps({
                 {
                     "torch_installed": False,
                     "median_owner": "jittor.ops.sorting",
-                    "triton_is_shim": True,
+                    "triton_is_shim": False,
                 },
             )
 
@@ -261,7 +265,8 @@ import torch
 import jittor as jt
 print("RESULT=" + json.dumps({
     "torch_is_jittor": torch is jt and sys.modules.get("torch") is jt,
-    "torch_installed": jt._torch_compat_install_complete,
+    "torch_installed": torch._torch_compat_install_complete,
+    "native_unpatched": '_torch_compat_install_context' not in vars(jt) and torch.Tensor is not jt.Var,
 }))
 '''],
                 env=env, inherit=False, merge_stderr=True)
@@ -271,7 +276,7 @@ print("RESULT=" + json.dumps({
             )
             self.assertEqual(
                 json.loads(explicit_line[len("RESULT="):]),
-                {"torch_is_jittor": True, "torch_installed": True},
+                {"torch_is_jittor": False, "torch_installed": True, "native_unpatched": True},
             )
 
             late = run_python_child(
@@ -280,12 +285,15 @@ import json, sys
 import numpy as np
 import jittor as jt
 native_data = jt.ones(2).data
+before = dict(vars(jt.Var))
 import torch
-torch_data = jt.ones(2).data
+torch_data = torch.ones(2).data
 print("RESULT=" + json.dumps({
     "native_data_is_numpy": isinstance(native_data, np.ndarray),
     "torch_data_is_var": isinstance(torch_data, jt.Var),
     "torch_is_jittor": torch is jt and sys.modules.get("torch") is jt,
+    "native_still_numpy": isinstance(jt.ones(2).data, np.ndarray),
+    "native_type_unchanged": dict(vars(jt.Var)) == before,
 }))
 '''],
                 env=env, inherit=False, merge_stderr=True)
@@ -298,7 +306,9 @@ print("RESULT=" + json.dumps({
                 {
                     "native_data_is_numpy": True,
                     "torch_data_is_var": True,
-                    "torch_is_jittor": True,
+                    "torch_is_jittor": False,
+                    "native_still_numpy": True,
+                    "native_type_unchanged": True,
                 },
             )
 

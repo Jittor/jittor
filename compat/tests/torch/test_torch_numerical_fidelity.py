@@ -2,7 +2,8 @@ import importlib
 import unittest
 
 import numpy as np
-import jittor as torch
+import torch
+import jittor as _native_jittor
 
 
 STACKING_NAMES = (
@@ -27,14 +28,14 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 self.assertIn("device", record.detail)
 
     def test_complex_family_cpu_round_trip_matches_numpy(self):
-        with torch.flag_scope(use_cuda=0):
-            real = torch.array([[1.0, -2.0], [3.5, 4.0]])
-            imag = torch.array([[0.5, 2.0], [-1.5, 0.0]])
+        with _native_jittor.flag_scope(use_cuda=0):
+            real = torch.tensor([[1.0, -2.0], [3.5, 4.0]])
+            imag = torch.tensor([[0.5, 2.0], [-1.5, 0.0]])
             value = torch.complex(real, imag)
             actual = torch.view_as_real(value).numpy()
             expected = np.stack((real.numpy(), imag.numpy()), axis=-1)
             np.testing.assert_array_equal(actual, expected)
-            rebuilt = torch.view_as_complex(torch.array(expected))
+            rebuilt = torch.view_as_complex(torch.tensor(expected))
             np.testing.assert_array_equal(
                 torch.view_as_real(rebuilt).numpy(), expected)
 
@@ -50,9 +51,9 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIn("device", record.detail)
 
     def test_polar_cpu_values_match_numpy(self):
-        with torch.flag_scope(use_cuda=0):
-            magnitude = torch.array([1.0, 2.0, 0.5])
-            phase = torch.array([0.0, np.pi / 2, np.pi])
+        with _native_jittor.flag_scope(use_cuda=0):
+            magnitude = torch.tensor([1.0, 2.0, 0.5])
+            phase = torch.tensor([0.0, np.pi / 2, np.pi])
             actual = torch.view_as_real(torch.polar(magnitude, phase)).numpy()
             expected = np.stack(
                 (magnitude.numpy() * np.cos(phase.numpy()),
@@ -73,9 +74,9 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 self.assertIn("device", record.detail)
 
     def test_complex_accessors_cpu_values(self):
-        with torch.flag_scope(use_cuda=0):
-            real = torch.array([1.0, -2.0])
-            imag = torch.array([0.5, 3.0])
+        with _native_jittor.flag_scope(use_cuda=0):
+            real = torch.tensor([1.0, -2.0])
+            imag = torch.tensor([0.5, 3.0])
             value = torch.complex(real, imag)
             np.testing.assert_array_equal(torch.real(value).numpy(), real.numpy())
             np.testing.assert_array_equal(torch.imag(value).numpy(), imag.numpy())
@@ -101,14 +102,14 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 self.assertIn("CPU", record.detail)
 
     def test_hann_window_cpu_values_match_numpy(self):
-        with torch.flag_scope(use_cuda=0):
+        with _native_jittor.flag_scope(use_cuda=0):
             actual = torch.hann_window(5, periodic=False).numpy()
             expected = np.hanning(5).astype(np.float32)
             np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-7)
 
     def test_stft_cpu_shape_and_values(self):
-        with torch.flag_scope(use_cuda=0):
-            wave = torch.array(np.arange(8, dtype=np.float32))
+        with _native_jittor.flag_scope(use_cuda=0):
+            wave = torch.tensor(np.arange(8, dtype=np.float32))
             actual = torch.stft(
                 wave, n_fft=4, hop_length=2, center=False,
                 return_complex=True).numpy()
@@ -129,14 +130,14 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIn("shape", record.detail)
 
     def test_equal_cpu_shape_and_values(self):
-        with torch.flag_scope(use_cuda=0):
-            a = torch.array([[1, 2], [3, 4]])
-            b = torch.array([[1, 2], [3, 4]])
-            c = torch.array([[1, 2, 3], [4, 5, 6]])
+        with _native_jittor.flag_scope(use_cuda=0):
+            a = torch.tensor([[1, 2], [3, 4]])
+            b = torch.tensor([[1, 2], [3, 4]])
+            c = torch.tensor([[1, 2, 3], [4, 5, 6]])
             self.assertIs(torch.equal(a, b), True)
             self.assertIs(torch.equal(a, a + 1), False)
             self.assertIs(torch.equal(a, c), False)
-            self.assertIs(torch.equal(torch.array([]), torch.array([])), True)
+            self.assertIs(torch.equal(torch.tensor([]), torch.tensor([])), True)
 
     def test_kron_logsumexp_are_stable_module_level_objects(self):
         numerical = importlib.import_module(
@@ -152,13 +153,13 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 self.assertIn("CPU", record.detail)
 
     def test_kron_logsumexp_cpu_values_match_numpy(self):
-        with torch.flag_scope(use_cuda=0):
-            a = torch.array([[1.0, 2.0]])
-            b = torch.array([[3.0], [4.0]])
+        with _native_jittor.flag_scope(use_cuda=0):
+            a = torch.tensor([[1.0, 2.0]])
+            b = torch.tensor([[3.0], [4.0]])
             np.testing.assert_array_equal(
                 torch.kron(a, b).numpy(), np.kron(a.numpy(), b.numpy()))
             values = np.array([[0.0, 1.0], [2.0, 3.0]], dtype=np.float32)
-            actual = torch.logsumexp(torch.array(values), dim=1).numpy()
+            actual = torch.logsumexp(torch.tensor(values), dim=1).numpy()
             expected = np.log(np.exp(values).sum(axis=1))
             np.testing.assert_allclose(actual, expected, rtol=1e-6)
 
@@ -176,9 +177,9 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 self.assertIn("keepdims", record.detail)
 
     def test_all_any_cpu_values_and_keepdims(self):
-        with torch.flag_scope(use_cuda=0):
-            values = torch.array([[1, 1], [1, 0]])
-            self.assertTrue(bool(torch.all(torch.array([[1, 1]])).item()))
+        with _native_jittor.flag_scope(use_cuda=0):
+            values = torch.tensor([[1, 1], [1, 0]])
+            self.assertTrue(bool(torch.all(torch.tensor([[1, 1]])).item()))
             self.assertFalse(bool(torch.all(values == 0).item()))
             all_rows = torch.all(values, axis=1, keepdims=True).numpy()
             any_rows = torch.any(values, dim=1, keepdim=True).numpy()
@@ -198,14 +199,14 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
 
     def test_tensor_split_take_cpu_values(self):
-        with torch.flag_scope(use_cuda=0):
+        with _native_jittor.flag_scope(use_cuda=0):
             values = np.arange(10, dtype=np.float32).reshape(2, 5)
-            tensor = torch.array(values)
+            tensor = torch.tensor(values)
             parts = torch.tensor_split(tensor, 3, dim=1)
             expected = np.array_split(values, 3, axis=1)
             for actual, reference in zip(parts, expected):
                 np.testing.assert_array_equal(actual.numpy(), reference)
-            index = torch.array([0, 4, 7], dtype=torch.int32)
+            index = torch.tensor([0, 4, 7], dtype=torch.int32)
             np.testing.assert_array_equal(
                 torch.take(tensor, index).numpy(), values.reshape(-1)[[0, 4, 7]])
 
@@ -228,20 +229,20 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
 
     def test_index_copy_cpu_values_and_non_inplace_behavior(self):
-        with torch.flag_scope(use_cuda=0):
-            base = torch.array([[1, 2], [3, 4], [5, 6]])
-            source = torch.array([[10, 20], [30, 40]])
-            index = torch.array([0, 2], dtype=torch.int32)
+        with _native_jittor.flag_scope(use_cuda=0):
+            base = torch.tensor([[1, 2], [3, 4], [5, 6]])
+            source = torch.tensor([[10, 20], [30, 40]])
+            index = torch.tensor([0, 2], dtype=torch.int32)
             actual = torch.index_copy(base, 0, index, source)
             np.testing.assert_array_equal(
                 actual.numpy(), np.array([[10, 20], [3, 4], [30, 40]]))
             np.testing.assert_array_equal(base.numpy(), np.array([[1, 2], [3, 4], [5, 6]]))
 
     def test_index_copy_inplace_cpu_values(self):
-        with torch.flag_scope(use_cuda=0):
-            base = torch.array([[1, 2], [3, 4], [5, 6]])
-            source = torch.array([[10, 20], [30, 40]])
-            index = torch.array([0, 2], dtype=torch.int32)
+        with _native_jittor.flag_scope(use_cuda=0):
+            base = torch.tensor([[1, 2], [3, 4], [5, 6]])
+            source = torch.tensor([[10, 20], [30, 40]])
+            index = torch.tensor([0, 2], dtype=torch.int32)
             result = torch.index_copy_(base, 0, index, source)
             self.assertIs(result, base)
             np.testing.assert_array_equal(
@@ -266,23 +267,23 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
 
     def test_index_put_cpu_values_and_non_inplace_behavior(self):
-        with torch.flag_scope(use_cuda=0):
-            base = torch.array([1, 2, 3, 4])
-            index = torch.array([1, 3], dtype=torch.int32)
-            values = torch.array([20, 40])
+        with _native_jittor.flag_scope(use_cuda=0):
+            base = torch.tensor([1, 2, 3, 4])
+            index = torch.tensor([1, 3], dtype=torch.int32)
+            values = torch.tensor([20, 40])
             actual = torch.index_put(base, (index,), values)
             np.testing.assert_array_equal(actual.numpy(), np.array([1, 20, 3, 40]))
             np.testing.assert_array_equal(base.numpy(), np.array([1, 2, 3, 4]))
 
     def test_index_put_inplace_cpu_values_and_duplicates(self):
-        with torch.flag_scope(use_cuda=0):
-            base = torch.array([1, 2, 3, 4])
-            index = torch.array([1, 3], dtype=torch.int32)
-            result = torch.index_put_(base, (index,), torch.array([20, 40]))
+        with _native_jittor.flag_scope(use_cuda=0):
+            base = torch.tensor([1, 2, 3, 4])
+            index = torch.tensor([1, 3], dtype=torch.int32)
+            result = torch.index_put_(base, (index,), torch.tensor([20, 40]))
             self.assertIs(result, base)
             np.testing.assert_array_equal(base.numpy(), np.array([1, 20, 3, 40]))
-            dup = torch.array([0, 0], dtype=torch.int32)
-            torch.index_put_(base, (dup,), torch.array([1, 2]), accumulate=True)
+            dup = torch.tensor([0, 0], dtype=torch.int32)
+            torch.index_put_(base, (dup,), torch.tensor([1, 2]), accumulate=True)
             np.testing.assert_array_equal(base.numpy(), np.array([4, 20, 3, 40]))
 
     def test_vmap_is_stable_and_registered(self):
@@ -294,8 +295,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
 
     def test_vmap_cpu_values(self):
-        with torch.flag_scope(use_cuda=0):
-            value = torch.array([1.0, 2.0, 3.0])
+        with _native_jittor.flag_scope(use_cuda=0):
+            value = torch.tensor([1.0, 2.0, 3.0])
             mapped = torch.vmap(lambda x: x + 1)(value)
             np.testing.assert_array_equal(mapped.numpy(), np.array([2., 3., 4.]))
 
@@ -308,10 +309,10 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
 
     def test_corrcoef_cpu_values_match_numpy(self):
-        with torch.flag_scope(use_cuda=0):
+        with _native_jittor.flag_scope(use_cuda=0):
             values = np.array([[1., 2., 3.], [2., 4., 8.]], dtype=np.float32)
             np.testing.assert_allclose(
-                torch.corrcoef(torch.array(values)).numpy(),
+                torch.corrcoef(torch.tensor(values)).numpy(),
                 np.corrcoef(values), rtol=1e-6, atol=1e-6)
 
     def test_reduction_extras_are_stable_module_level_objects(self):
@@ -340,8 +341,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
     def test_reduction_extras_cpu_values_and_var_delegates_match_numpy(self):
         values = np.array(
             [[1.0, -5.0, 0.0], [4.0, 2.0, 6.0]], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
-            tensor = torch.array(values)
+        with _native_jittor.flag_scope(use_cuda=0):
+            tensor = torch.tensor(values)
             full_max = torch.amax(tensor)
             dim_max = torch.amax(tensor, 1, keepdim=True)
             tuple_min = torch.amin(tensor, (0, 1))
@@ -360,8 +361,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
 
     def test_reduction_extras_keepdims_alias_matches_keepdim(self):
         values = np.arange(12, dtype="float32").reshape(3, 4)
-        with torch.flag_scope(use_cuda=0):
-            tensor = torch.array(values)
+        with _native_jittor.flag_scope(use_cuda=0):
+            tensor = torch.tensor(values)
             alias = torch.amax(tensor, 0, keepdims=True)
         np.testing.assert_array_equal(
             alias.numpy(), values.max(axis=0, keepdims=True))
@@ -393,9 +394,9 @@ class TestTorchNumericalFidelity(unittest.TestCase):
     def test_nan_to_num_default_bounds_match_numpy(self):
         values = np.array(
             [1.5, np.nan, np.inf, -np.inf, -2.0], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
-            actual = torch.nan_to_num(torch.array(values)).numpy()
-            method = torch.array(values).nan_to_num(nan=7.0).numpy()
+        with _native_jittor.flag_scope(use_cuda=0):
+            actual = torch.nan_to_num(torch.tensor(values)).numpy()
+            method = torch.tensor(values).nan_to_num(nan=7.0).numpy()
         np.testing.assert_array_equal(actual, np.nan_to_num(values))
         np.testing.assert_array_equal(method, np.nan_to_num(values, nan=7.0))
 
@@ -403,21 +404,21 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         # The documented deviation: a narrow posinf also pulls finite values
         # down to it, because the implementation is a clamp.
         values = np.array([np.inf, 500.0, 1.0], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
-            actual = torch.nan_to_num(torch.array(values), posinf=100.0).numpy()
+        with _native_jittor.flag_scope(use_cuda=0):
+            actual = torch.nan_to_num(torch.tensor(values), posinf=100.0).numpy()
         np.testing.assert_array_equal(
             actual, np.array([100.0, 100.0, 1.0], dtype="float32"))
 
     def test_logaddexp_matches_numpy_and_survives_overflow(self):
         left = np.array([-3.0, 0.0, 700.0], dtype="float32")
         right = np.array([2.0, 0.0, 701.0], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
+        with _native_jittor.flag_scope(use_cuda=0):
             actual = torch.logaddexp(
-                torch.array(left), torch.array(right)).numpy()
-            method = torch.array(left).logaddexp(torch.array(right)).numpy()
+                torch.tensor(left), torch.tensor(right)).numpy()
+            method = torch.tensor(left).logaddexp(torch.tensor(right)).numpy()
             # exp(700) overflows float32; the max-shifted form is the point.
             overflowing = torch.logaddexp(
-                torch.array([700.0]), torch.array([700.0])).numpy()
+                torch.tensor([700.0]), torch.tensor([700.0])).numpy()
         np.testing.assert_allclose(actual, np.logaddexp(left, right), rtol=1e-6)
         np.testing.assert_allclose(method, np.logaddexp(left, right), rtol=1e-6)
         np.testing.assert_allclose(
@@ -466,8 +467,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         caller used.
         """
         values = np.array([-3, 0, 5], dtype="int32")
-        with torch.flag_scope(use_cuda=0):
-            tensor = torch.array(values)
+        with _native_jittor.flag_scope(use_cuda=0):
+            tensor = torch.tensor(values)
             functional = torch.sign(tensor)
             method = tensor.sign()
         self.assertEqual(str(functional.dtype), "int32")
@@ -478,13 +479,13 @@ class TestTorchNumericalFidelity(unittest.TestCase):
     def test_unary_math_family_cpu_values_match_numpy(self):
         values = np.array([-2.5, -0.5, 0.0, 0.5, 3.25], dtype="float32")
         positive = np.array([0.5, 1.0, 100.0], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
-            tensor = torch.array(values)
+        with _native_jittor.flag_scope(use_cuda=0):
+            tensor = torch.tensor(values)
             actual_sign = torch.sign(tensor).numpy()
             actual_trunc = torch.trunc(tensor).numpy()
             actual_frac = tensor.frac().numpy()
             actual_exp2 = torch.exp2(tensor).numpy()
-            actual_log10 = torch.log10(torch.array(positive)).numpy()
+            actual_log10 = torch.log10(torch.tensor(positive)).numpy()
         np.testing.assert_array_equal(actual_sign, np.sign(values))
         np.testing.assert_array_equal(actual_trunc, np.trunc(values))
         np.testing.assert_allclose(
@@ -494,8 +495,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             actual_log10, np.log10(positive), rtol=1e-6)
 
     def test_sign_maps_nan_to_zero_like_torch(self):
-        with torch.flag_scope(use_cuda=0):
-            actual = torch.sign(torch.array([np.nan, -1.0, 1.0])).numpy()
+        with _native_jittor.flag_scope(use_cuda=0):
+            actual = torch.sign(torch.tensor([np.nan, -1.0, 1.0])).numpy()
         np.testing.assert_array_equal(actual, np.array([0.0, -1.0, 1.0]))
 
     def test_broadcast_shapes_is_stable_and_registered(self):
@@ -538,7 +539,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIn("device", record.detail)
 
     def test_eye_cpu_values_and_dtype(self):
-        with torch.flag_scope(use_cuda=0):
+        with _native_jittor.flag_scope(use_cuda=0):
             actual = torch.eye(2, 3, dtype=torch.float64)
             np.testing.assert_array_equal(
                 actual.numpy(), np.eye(2, 3, dtype=np.float64))
@@ -567,9 +568,9 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 self.assertIn("out", record.detail)
 
     def test_stacking_cpu_1d_matches_numpy(self):
-        with torch.flag_scope(use_cuda=0):
-            a = torch.array([1.0, 2.0, 3.0])
-            b = torch.array([4.0, 5.0, 6.0])
+        with _native_jittor.flag_scope(use_cuda=0):
+            a = torch.tensor([1.0, 2.0, 3.0])
+            b = torch.tensor([4.0, 5.0, 6.0])
             np_a = np.array([1.0, 2.0, 3.0])
             np_b = np.array([4.0, 5.0, 6.0])
             np.testing.assert_array_equal(
@@ -585,10 +586,10 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 np.column_stack([np_a, np_b]))
 
     def test_stacking_cpu_2d_and_mixed_inputs_match_numpy(self):
-        with torch.flag_scope(use_cuda=0):
-            a = torch.array([[1.0, 2.0, 3.0]])
-            b = torch.array([[4.0, 5.0, 6.0]])
-            one_d = torch.array([7.0, 8.0, 9.0])
+        with _native_jittor.flag_scope(use_cuda=0):
+            a = torch.tensor([[1.0, 2.0, 3.0]])
+            b = torch.tensor([[4.0, 5.0, 6.0]])
+            one_d = torch.tensor([7.0, 8.0, 9.0])
             np_a = np.array([[1.0, 2.0, 3.0]])
             np_b = np.array([[4.0, 5.0, 6.0]])
             np_one_d = np.array([7.0, 8.0, 9.0])
@@ -630,24 +631,24 @@ class TestTorchNumericalFidelity(unittest.TestCase):
 
     def test_movedim_cpu_positive_and_negative_single_axis_matches_numpy(self):
         values = np.arange(24).reshape(2, 3, 4).astype("float32")
-        with torch.flag_scope(use_cuda=0):
-            actual = torch.movedim(torch.array(values), 0, 2).numpy()
-            negative = torch.movedim(torch.array(values), -1, 0).numpy()
+        with _native_jittor.flag_scope(use_cuda=0):
+            actual = torch.movedim(torch.tensor(values), 0, 2).numpy()
+            negative = torch.movedim(torch.tensor(values), -1, 0).numpy()
         np.testing.assert_array_equal(actual, np.moveaxis(values, 0, 2))
         np.testing.assert_array_equal(negative, np.moveaxis(values, -1, 0))
 
     def test_moveaxis_cpu_multi_axis_matches_numpy(self):
         values = np.arange(24).reshape(2, 3, 4).astype("float32")
-        with torch.flag_scope(use_cuda=0):
+        with _native_jittor.flag_scope(use_cuda=0):
             actual = torch.moveaxis(
-                torch.array(values), (0, 1), (2, 0)).numpy()
+                torch.tensor(values), (0, 1), (2, 0)).numpy()
         np.testing.assert_array_equal(
             actual, np.moveaxis(values, (0, 1), (2, 0)))
 
     def test_movedim_var_methods_use_the_family_internal_implementation(self):
         values = np.arange(24).reshape(2, 3, 4).astype("float32")
-        with torch.flag_scope(use_cuda=0):
-            tensor = torch.array(values)
+        with _native_jittor.flag_scope(use_cuda=0):
+            tensor = torch.tensor(values)
             actual = tensor.movedim(0, 2).numpy()
             negative = tensor.moveaxis(-1, 0).numpy()
         np.testing.assert_array_equal(actual, np.moveaxis(values, 0, 2))
@@ -678,8 +679,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
 
     def test_shape_helpers_cpu_match_numpy(self):
         values = np.arange(24).reshape(2, 3, 4).astype("float32")
-        with torch.flag_scope(use_cuda=0):
-            tensor = torch.array(values)
+        with _native_jittor.flag_scope(use_cuda=0):
+            tensor = torch.tensor(values)
             flat_tensor = tensor.reshape(2, 12)
             unflattened = torch.unflatten(flat_tensor, 1, (3, 4))
             swapped = torch.swapaxes(tensor, 0, -1)
@@ -726,12 +727,12 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         signs = np.array([-1.0, 0.0, 1.0], dtype="float32")
         x_values = np.array([1.0, 2.0, 0.0], dtype="float32")
         y_values = np.array([2.0, 3.0, 0.0], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
+        with _native_jittor.flag_scope(use_cuda=0):
             actual_sign = torch.copysign(
-                torch.array(magnitude), torch.array(signs)).numpy()
+                torch.tensor(magnitude), torch.tensor(signs)).numpy()
             actual_xlogy = torch.xlogy(
-                torch.array(x_values), torch.array(y_values)).numpy()
-            method_sign = torch.array(magnitude).copysign(torch.array(signs)).numpy()
+                torch.tensor(x_values), torch.tensor(y_values)).numpy()
+            method_sign = torch.tensor(magnitude).copysign(torch.tensor(signs)).numpy()
         np.testing.assert_array_equal(actual_sign, np.copysign(magnitude, signs))
         with np.errstate(divide="ignore", invalid="ignore"):
             expected_xlogy = np.where(
@@ -742,12 +743,12 @@ class TestTorchNumericalFidelity(unittest.TestCase):
     def test_elementwise_sign_family_cpu_heaviside_and_signbit_matches_numpy(self):
         values = np.array([-1.0, 0.0, 2.0], dtype="float32")
         steps = np.array([3.0, 4.0, 5.0], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
+        with _native_jittor.flag_scope(use_cuda=0):
             actual_step = torch.heaviside(
-                torch.array(values), torch.array(steps)).numpy()
-            actual_signbit = torch.signbit(torch.array(values)).numpy()
-            method_step = torch.array(values).heaviside(torch.array(steps)).numpy()
-            method_signbit = torch.array(values).signbit().numpy()
+                torch.tensor(values), torch.tensor(steps)).numpy()
+            actual_signbit = torch.signbit(torch.tensor(values)).numpy()
+            method_step = torch.tensor(values).heaviside(torch.tensor(steps)).numpy()
+            method_signbit = torch.tensor(values).signbit().numpy()
         np.testing.assert_array_equal(actual_step, np.heaviside(values, steps))
         np.testing.assert_array_equal(actual_signbit, np.signbit(values))
         np.testing.assert_array_equal(method_step, np.heaviside(values, steps))
@@ -779,9 +780,9 @@ class TestTorchNumericalFidelity(unittest.TestCase):
     def test_matrix_family_cpu_trace_and_diag_embed_match_numpy(self):
         matrix = np.arange(9).reshape(3, 3).astype("float32")
         rows = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
-            actual_trace = torch.trace(torch.array(matrix)).numpy()
-            actual_embed = torch.diag_embed(torch.array(rows)).numpy()
+        with _native_jittor.flag_scope(use_cuda=0):
+            actual_trace = torch.trace(torch.tensor(matrix)).numpy()
+            actual_embed = torch.diag_embed(torch.tensor(rows)).numpy()
         np.testing.assert_array_equal(actual_trace, np.trace(matrix))
         np.testing.assert_array_equal(
             actual_embed, np.stack([np.diag(row) for row in rows]))
@@ -789,11 +790,11 @@ class TestTorchNumericalFidelity(unittest.TestCase):
     def test_matrix_family_cpu_diagflat_and_var_methods_match_numpy(self):
         values = np.array([[1.0, 2.0], [3.0, 4.0]], dtype="float32")
         rows = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
-            tensor = torch.array(values)
+        with _native_jittor.flag_scope(use_cuda=0):
+            tensor = torch.tensor(values)
             actual_diagflat = torch.diagflat(tensor).numpy()
-            actual_trace = torch.array(values).trace().numpy()
-            actual_embed = torch.array(rows).diag_embed().numpy()
+            actual_trace = torch.tensor(values).trace().numpy()
+            actual_embed = torch.tensor(rows).diag_embed().numpy()
         np.testing.assert_array_equal(actual_diagflat, np.diagflat(values))
         np.testing.assert_array_equal(actual_trace, np.trace(values))
         np.testing.assert_array_equal(
@@ -820,11 +821,11 @@ class TestTorchNumericalFidelity(unittest.TestCase):
     def test_float_power_cpu_matches_numpy_values_and_float64_dtype(self):
         base = np.array([1.5, 2.0, 3.0], dtype="float32")
         exponent = np.array([2.0, 0.5, 3.0], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
-            actual_scalar = torch.float_power(torch.array(base), 2.0)
+        with _native_jittor.flag_scope(use_cuda=0):
+            actual_scalar = torch.float_power(torch.tensor(base), 2.0)
             actual_tensor = torch.float_power(
-                torch.array(base), torch.array(exponent))
-            actual_method = torch.array(base).float_power(2.0)
+                torch.tensor(base), torch.tensor(exponent))
+            actual_method = torch.tensor(base).float_power(2.0)
         np.testing.assert_allclose(
             actual_scalar.numpy(), np.float_power(base, 2.0), rtol=1e-6)
         np.testing.assert_allclose(
@@ -860,13 +861,13 @@ class TestTorchNumericalFidelity(unittest.TestCase):
     def test_close_family_cpu_values_equal_nan_and_allclose_bool(self):
         left = np.array([1.0, 2.0, np.nan], dtype="float32")
         right = np.array([1.0, 2.00001, np.nan], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
+        with _native_jittor.flag_scope(use_cuda=0):
             actual = torch.isclose(
-                torch.array(left), torch.array(right), equal_nan=True).numpy()
+                torch.tensor(left), torch.tensor(right), equal_nan=True).numpy()
             all_false = torch.allclose(
-                torch.array(left), torch.array(right), equal_nan=False)
+                torch.tensor(left), torch.tensor(right), equal_nan=False)
             all_true = torch.allclose(
-                torch.array(left), torch.array(right), equal_nan=True)
+                torch.tensor(left), torch.tensor(right), equal_nan=True)
         np.testing.assert_array_equal(actual, np.isclose(left, right, equal_nan=True))
         self.assertIs(type(all_false), bool)
         self.assertIs(type(all_true), bool)
@@ -900,11 +901,11 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         left = np.array([[0.0, 1.0], [2.0, 3.0]], dtype="float32")
         right = np.array([[1.0, 1.0], [4.0, 5.0], [-1.0, 2.0]], dtype="float32")
         delta = left[:, None, :] - right[None, :, :]
-        with torch.flag_scope(use_cuda=0):
+        with _native_jittor.flag_scope(use_cuda=0):
             actual_p1 = torch.cdist(
-                torch.array(left), torch.array(right), p=1).numpy()
+                torch.tensor(left), torch.tensor(right), p=1).numpy()
             actual_p2 = torch.cdist(
-                torch.array(left), torch.array(right), p=2).numpy()
+                torch.tensor(left), torch.tensor(right), p=2).numpy()
         np.testing.assert_allclose(
             actual_p1, np.abs(delta).sum(axis=-1), rtol=1e-6)
         np.testing.assert_allclose(
@@ -913,11 +914,11 @@ class TestTorchNumericalFidelity(unittest.TestCase):
     def test_pairwise_search_family_cpu_bucketize_sides_match_numpy(self):
         values = np.array([0.0, 1.0, 3.0, 5.0], dtype="float32")
         boundaries = np.array([1.0, 3.0, 4.0], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
+        with _native_jittor.flag_scope(use_cuda=0):
             actual_left = torch.bucketize(
-                torch.array(values), torch.array(boundaries), right=False)
+                torch.tensor(values), torch.tensor(boundaries), right=False)
             actual_right = torch.bucketize(
-                torch.array(values), torch.array(boundaries), right=True,
+                torch.tensor(values), torch.tensor(boundaries), right=True,
                 out_int32=True)
         np.testing.assert_array_equal(
             actual_left.numpy(), np.searchsorted(boundaries, values, side="left"))
@@ -951,13 +952,13 @@ class TestTorchNumericalFidelity(unittest.TestCase):
 
     def test_nan_reduction_family_cpu_full_and_dim_keepdim_matches_numpy(self):
         values = np.array([[1.0, np.nan, 3.0], [np.nan, 5.0, 6.0]], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
-            actual_sum = torch.nansum(torch.array(values)).numpy()
-            actual_mean = torch.nanmean(torch.array(values)).numpy()
+        with _native_jittor.flag_scope(use_cuda=0):
+            actual_sum = torch.nansum(torch.tensor(values)).numpy()
+            actual_mean = torch.nanmean(torch.tensor(values)).numpy()
             sum_dim = torch.nansum(
-                torch.array(values), dim=0, keepdim=True).numpy()
+                torch.tensor(values), dim=0, keepdim=True).numpy()
             mean_dim = torch.nanmean(
-                torch.array(values), dim=1, keepdim=False).numpy()
+                torch.tensor(values), dim=1, keepdim=False).numpy()
         np.testing.assert_allclose(actual_sum, np.nansum(values), rtol=1e-6)
         np.testing.assert_allclose(actual_mean, np.nanmean(values), rtol=1e-6)
         np.testing.assert_allclose(
@@ -967,8 +968,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
 
     def test_nan_reduction_family_var_methods_keep_nan_count(self):
         values = np.array([[1.0, np.nan, 3.0], [np.nan, 5.0, 6.0]], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
-            tensor = torch.array(values)
+        with _native_jittor.flag_scope(use_cuda=0):
+            tensor = torch.tensor(values)
             actual_sum = tensor.nansum(dim=0).numpy()
             actual_mean = tensor.nanmean(dim=1, keepdim=True).numpy()
         np.testing.assert_allclose(actual_sum, np.nansum(values, axis=0), rtol=1e-6)
@@ -995,8 +996,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
 
     def test_aminmax_cpu_full_dim_keepdim_and_var_match_numpy(self):
         values = np.array([[1.0, 5.0, 3.0], [4.0, 2.0, 6.0]], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
-            tensor = torch.array(values)
+        with _native_jittor.flag_scope(use_cuda=0):
+            tensor = torch.tensor(values)
             full = torch.aminmax(tensor)
             dim = torch.aminmax(tensor, dim=1, keepdim=True)
             method = tensor.aminmax(dim=0)
@@ -1039,8 +1040,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         expected_p2 = np.array([
             np.linalg.norm(values[i] - values[j])
             for i in range(len(values)) for j in range(i + 1, len(values))])
-        with torch.flag_scope(use_cuda=0):
-            tensor = torch.array(values)
+        with _native_jittor.flag_scope(use_cuda=0):
+            tensor = torch.tensor(values)
             actual_p1 = torch.pdist(tensor, p=1)
             actual_p2 = torch.pdist(tensor, p=2)
             actual_method = tensor.pdist(p=2)
@@ -1072,10 +1073,10 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         values_1d = np.array([-1.0, 0.5, 2.0], dtype="float32")
         values_2d = np.array(
             [[-1.0, 0.5, 2.0], [1.5, -0.5, 3.0]], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
-            one_d = torch.logcumsumexp(torch.array(values_1d), 0).numpy()
-            two_d = torch.logcumsumexp(torch.array(values_2d), 1).numpy()
-            method = torch.array(values_2d).logcumsumexp(0).numpy()
+        with _native_jittor.flag_scope(use_cuda=0):
+            one_d = torch.logcumsumexp(torch.tensor(values_1d), 0).numpy()
+            two_d = torch.logcumsumexp(torch.tensor(values_2d), 1).numpy()
+            method = torch.tensor(values_2d).logcumsumexp(0).numpy()
         np.testing.assert_allclose(
             one_d, np.log(np.cumsum(np.exp(values_1d))), rtol=1e-5)
         np.testing.assert_allclose(
@@ -1103,12 +1104,12 @@ class TestTorchNumericalFidelity(unittest.TestCase):
 
     def test_quantile_cpu_q_values_dim_keepdim_match_numpy(self):
         values = np.array([[1.0, 5.0, 3.0], [4.0, 2.0, 6.0]], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
-            tensor = torch.array(values)
+        with _native_jittor.flag_scope(use_cuda=0):
+            tensor = torch.tensor(values)
             actual = [torch.quantile(tensor, q).numpy() for q in (0.0, 0.5, 1.0)]
             dim = torch.quantile(tensor, 0.5, dim=1, keepdim=True).numpy()
             dim_no_keep = torch.quantile(tensor, 0.5, dim=0).numpy()
-            tensor_q = torch.quantile(tensor, torch.array(0.5)).numpy()
+            tensor_q = torch.quantile(tensor, torch.tensor(0.5)).numpy()
         for got, q in zip(actual, (0.0, 0.5, 1.0)):
             np.testing.assert_allclose(got, np.quantile(values, q), rtol=1e-6)
         np.testing.assert_allclose(
@@ -1138,13 +1139,13 @@ class TestTorchNumericalFidelity(unittest.TestCase):
 
     def test_nanquantile_cpu_nan_q_values_dim_keepdim_match_numpy(self):
         values = np.array([[1.0, np.nan, 3.0], [np.nan, 5.0, 6.0]], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
-            tensor = torch.array(values)
+        with _native_jittor.flag_scope(use_cuda=0):
+            tensor = torch.tensor(values)
             actual = [torch.nanquantile(tensor, q).numpy()
                       for q in (0.0, 0.5, 1.0)]
             dim = torch.nanquantile(tensor, 0.5, dim=1, keepdim=True).numpy()
             dim_no_keep = torch.nanquantile(tensor, 0.5, dim=0).numpy()
-            tensor_q = torch.nanquantile(tensor, torch.array(0.5)).numpy()
+            tensor_q = torch.nanquantile(tensor, torch.tensor(0.5)).numpy()
         for got, q in zip(actual, (0.0, 0.5, 1.0)):
             np.testing.assert_allclose(got, np.nanquantile(values, q), rtol=1e-6)
         np.testing.assert_allclose(
@@ -1158,8 +1159,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")
         values = np.array([[1.0, 5.0, 3.0], [4.0, np.nan, 6.0]], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
-            tensor = torch.array(values)
+        with _native_jittor.flag_scope(use_cuda=0):
+            tensor = torch.tensor(values)
             quantile = tensor.quantile(0.5, dim=1, keepdim=True)
             nanquantile = tensor.nanquantile(0.5, dim=1, keepdim=True)
         np.testing.assert_allclose(
@@ -1198,8 +1199,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
 
     def test_std_mean_family_cpu_values_and_tuple_shapes_match_numpy(self):
         values = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype="float32")
-        with torch.flag_scope(use_cuda=0):
-            tensor = torch.array(values)
+        with _native_jittor.flag_scope(use_cuda=0):
+            tensor = torch.tensor(values)
             std_full, mean_full = torch.std_mean(tensor)
             var_dim, mean_dim = torch.var_mean(tensor, dim=1)
             std_dim, mean_keep = torch.std_mean(
@@ -1241,9 +1242,9 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         matrix = np.array([[1.0, 2.0], [3.0, 4.0]], dtype="float32")
         vector = np.array([2.0, -1.0], dtype="float32")
         expected = np.matmul(matrix, vector)
-        with torch.flag_scope(use_cuda=0):
-            matrix_tensor = torch.array(matrix)
-            vector_tensor = torch.array(vector)
+        with _native_jittor.flag_scope(use_cuda=0):
+            matrix_tensor = torch.tensor(matrix)
+            vector_tensor = torch.tensor(vector)
             actual = torch.mv(matrix_tensor, vector_tensor)
             out = torch.zeros(2)
             returned = torch.mv(matrix_tensor, vector_tensor, out=out)
@@ -1254,7 +1255,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_allclose(method.numpy(), expected, rtol=1e-6)
 
     def test_mv_invalid_rank_and_size_raise(self):
-        with torch.flag_scope(use_cuda=0):
+        with _native_jittor.flag_scope(use_cuda=0):
             with self.assertRaisesRegex(RuntimeError, "expected a 2-D"):
                 torch.mv(torch.ones((1, 2, 3)), torch.ones(3))
             with self.assertRaisesRegex(RuntimeError, "size mismatch"):
@@ -1284,10 +1285,10 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         mat2 = np.array([[2.0, 1.0], [3.0, 4.0]], dtype="float32")
         expected_default = bias + np.matmul(mat1, mat2)
         expected_scaled = 0.5 * bias + 2.0 * np.matmul(mat1, mat2)
-        with torch.flag_scope(use_cuda=0):
-            bias_tensor = torch.array(bias)
-            mat1_tensor = torch.array(mat1)
-            mat2_tensor = torch.array(mat2)
+        with _native_jittor.flag_scope(use_cuda=0):
+            bias_tensor = torch.tensor(bias)
+            mat1_tensor = torch.tensor(mat1)
+            mat2_tensor = torch.tensor(mat2)
             actual_default = torch.addmm(
                 bias_tensor, mat1_tensor, mat2_tensor)
             actual_scaled = torch.addmm(
@@ -1324,9 +1325,9 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         left = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype="float32")
         right = np.array([[2.0, -1.0], [0.5, 3.0], [4.0, 2.0]], dtype="float32")
         expected = np.matmul(left, right)
-        with torch.flag_scope(use_cuda=0):
-            left_tensor = torch.array(left)
-            right_tensor = torch.array(right)
+        with _native_jittor.flag_scope(use_cuda=0):
+            left_tensor = torch.tensor(left)
+            right_tensor = torch.tensor(right)
             actual = torch.mm(left_tensor, right_tensor)
             method = left_tensor.mm(right_tensor)
         self.assertEqual(tuple(actual.shape), expected.shape)
@@ -1360,9 +1361,9 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         coord = np.array([0.0, 0.5, 2.0], dtype="float32")
         expected_dx = np.trapz(values, dx=2.0, axis=1)
         expected_x = np.trapz(values, coord, axis=1)
-        with torch.flag_scope(use_cuda=0):
-            values_tensor = torch.array(values)
-            coord_tensor = torch.array(coord)
+        with _native_jittor.flag_scope(use_cuda=0):
+            values_tensor = torch.tensor(values)
+            coord_tensor = torch.tensor(coord)
             actual_dx = torch.trapz(values_tensor, dx=2.0, dim=1)
             actual_x = torch.trapezoid(values_tensor, coord_tensor, dim=1)
             method = values_tensor.trapz(coord_tensor, dim=1)
@@ -1373,8 +1374,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
     def test_trapz_cpu_out_identity(self):
         values = np.array([1.0, 2.0, 5.0], dtype="float32")
         expected = np.trapz(values, dx=0.5)
-        with torch.flag_scope(use_cuda=0):
-            values_tensor = torch.array(values)
+        with _native_jittor.flag_scope(use_cuda=0):
+            values_tensor = torch.tensor(values)
             out = torch.zeros(1)
             returned = torch.trapezoid(values_tensor, dx=0.5, out=out)
         self.assertIs(returned, out)
@@ -1402,9 +1403,9 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         values = np.array([[1.0, -2.0, 3.0], [4.0, 5.0, -6.0]], dtype="float32")
         mask = np.array([[True, False, True], [False, True, False]])
         expected = values[mask]
-        with torch.flag_scope(use_cuda=0):
-            values_tensor = torch.array(values)
-            mask_tensor = torch.array(mask)
+        with _native_jittor.flag_scope(use_cuda=0):
+            values_tensor = torch.tensor(values)
+            mask_tensor = torch.tensor(mask)
             actual = torch.masked_select(values_tensor, mask_tensor)
             method = values_tensor.masked_select(mask_tensor)
         np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-6)
@@ -1430,8 +1431,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
 
     def test_narrow_cpu_positive_negative_axes_and_var_delegate_match_numpy(self):
         values = np.arange(12, dtype="float32").reshape(3, 4)
-        with torch.flag_scope(use_cuda=0):
-            values_tensor = torch.array(values)
+        with _native_jittor.flag_scope(use_cuda=0):
+            values_tensor = torch.tensor(values)
             actual = torch.narrow(values_tensor, 1, 1, 2)
             actual_negative = torch.narrow(values_tensor, -1, -3, 2)
             method = values_tensor.narrow(0, -2, 2)
@@ -1460,8 +1461,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
     def test_tile_cpu_tuple_dims_and_var_delegate_match_numpy(self):
         values = np.array([[1.0, 2.0], [3.0, 4.0]], dtype="float32")
         expected = np.tile(values, (2, 3))
-        with torch.flag_scope(use_cuda=0):
-            values_tensor = torch.array(values)
+        with _native_jittor.flag_scope(use_cuda=0):
+            values_tensor = torch.tensor(values)
             actual = torch.tile(values_tensor, (2, 3))
             method = values_tensor.tile(2, 3)
         self.assertEqual(tuple(actual.shape), expected.shape)
@@ -1492,10 +1493,10 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         prepend = np.array([[0.0], [1.0]], dtype="float32")
         expected_1d = np.diff(values_1d, n=2)
         expected_2d = np.diff(np.concatenate([prepend, values_2d], axis=1), axis=1)
-        with torch.flag_scope(use_cuda=0):
-            v1 = torch.array(values_1d)
-            v2 = torch.array(values_2d)
-            p = torch.array(prepend)
+        with _native_jittor.flag_scope(use_cuda=0):
+            v1 = torch.tensor(values_1d)
+            v2 = torch.tensor(values_2d)
+            p = torch.tensor(prepend)
             actual_1d = torch.diff(v1, n=2)
             actual_2d = torch.diff(v2, dim=1, prepend=p)
             method = v2.diff(dim=1, prepend=p)
@@ -1524,8 +1525,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
     def test_square_cpu_values_and_var_delegate_match_numpy(self):
         values = np.array([[-2.0, -0.5], [1.5, 3.0]], dtype="float32")
         expected = np.square(values)
-        with torch.flag_scope(use_cuda=0):
-            values_tensor = torch.array(values)
+        with _native_jittor.flag_scope(use_cuda=0):
+            values_tensor = torch.tensor(values)
             actual = torch.square(values_tensor)
             method = values_tensor.square()
         np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-6)
@@ -1553,9 +1554,9 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         left = np.array([[1.0, 2.0], [3.0, 4.0]], dtype="float32")
         right = np.array([[0.0, 0.0], [1.0, 2.0]], dtype="float32")
         expected = np.linalg.norm(left - right, ord=2, axis=1)
-        with torch.flag_scope(use_cuda=0):
-            left_tensor = torch.array(left)
-            right_tensor = torch.array(right)
+        with _native_jittor.flag_scope(use_cuda=0):
+            left_tensor = torch.tensor(left)
+            right_tensor = torch.tensor(right)
             actual = torch.pairwise_distance(left_tensor, right_tensor)
             keepdim = torch.pairwise_distance(
                 left_tensor, right_tensor, keepdim=True)
@@ -1585,8 +1586,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         values = np.arange(12, dtype="float32").reshape(3, 4)
         sizes = [1, 3]
         expected = [values[:, :1], values[:, 1:]]
-        with torch.flag_scope(use_cuda=0):
-            values_tensor = torch.array(values)
+        with _native_jittor.flag_scope(use_cuda=0):
+            values_tensor = torch.tensor(values)
             actual = torch.split_with_sizes(values_tensor, sizes, dim=1)
             method = values_tensor.split(sizes, dim=1)
         self.assertEqual(len(actual), 2)
@@ -1619,9 +1620,9 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         right = np.array([[0.0, 1.0], [1.0, -1.0]], dtype="float32")
         expected = np.sum(left * right, axis=1) / (
             np.linalg.norm(left, axis=1) * np.linalg.norm(right, axis=1))
-        with torch.flag_scope(use_cuda=0):
-            left_tensor = torch.array(left)
-            right_tensor = torch.array(right)
+        with _native_jittor.flag_scope(use_cuda=0):
+            left_tensor = torch.tensor(left)
+            right_tensor = torch.tensor(right)
             actual = torch.cosine_similarity(left_tensor, right_tensor, dim=1)
         np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-6)
 
@@ -1646,8 +1647,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
     def test_svd_cpu_singular_values_match_numpy(self):
         values = np.array([[3.0, 0.0], [0.0, 2.0]], dtype="float32")
         expected = np.linalg.svd(values, full_matrices=False, compute_uv=True)[1]
-        with torch.flag_scope(use_cuda=0):
-            actual = torch.svd(torch.array(values))
+        with _native_jittor.flag_scope(use_cuda=0):
+            actual = torch.svd(torch.tensor(values))
         np.testing.assert_allclose(actual[1].numpy(), expected, rtol=1e-5)
 
     def test_svd_lowrank_is_a_stable_module_level_object(self):

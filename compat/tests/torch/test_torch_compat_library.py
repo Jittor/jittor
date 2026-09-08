@@ -6,7 +6,7 @@ import importlib
 import unittest
 from typing import get_args, List, Optional, Sequence, Tuple
 
-import jittor as torch
+import torch
 
 
 class TestInferSchema(unittest.TestCase):
@@ -40,14 +40,14 @@ class TestInferSchema(unittest.TestCase):
         self.assertIsInstance(packet, torch._ops.OpOverload)
         self.assertIsInstance(packet, torch._ops.OpOverloadPacket)
         self.assertEqual(packet._tags, (torch.Tag.pointwise,))
-        self.assertEqual(packet(torch.array([3.0]), 4.0).numpy().tolist(), [12.0])
+        self.assertEqual(packet(torch.tensor([3.0]), 4.0).numpy().tolist(), [12.0])
 
         def fake(value, factor=2.0):
             return value
 
         self.assertIsNone(library._register_fake("scale", fake))
         self.assertIs(packet._fake_impl, fake)
-        self.assertEqual(packet(torch.array([3.0]), 4.0).numpy().tolist(), [12.0])
+        self.assertEqual(packet(torch.tensor([3.0]), 4.0).numpy().tolist(), [12.0])
 
         def backward(_context, gradient):
             return gradient

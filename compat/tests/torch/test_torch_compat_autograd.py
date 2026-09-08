@@ -1,4 +1,4 @@
-"""Torch-grade autograd-semantics regression tests for ``import jittor as torch``.
+"""Torch-grade autograd-semantics regression tests for ``import torch``.
 
 Part of the torch-grade test-suite rewrite (round 3). Like ``test_torch_compat_ops.py``
 this is a structured ``unittest`` module: every check compares jittor-as-torch's autograd
@@ -23,10 +23,9 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_autograd.py
 """
 import unittest
 import numpy as np
-import jittor as torch          # the whole point: jittor IS torch here
+import torch
 import jittor as jt
 from jittor.autograd import EXPLICIT_REQUIRES_GRAD, policy_scope
-from jittor.compat.torch.installers.autograd import _install_autograd_function
 
 # Exercise CPU always; add CUDA when the build has it. NPU(ACL) reports has_cuda too.
 _DEVICES = [("cpu", 0)] + ([("cuda", 1)] if jt.has_cuda else [])
@@ -54,7 +53,6 @@ class Base(unittest.TestCase):
 
 class TestCustomFunctionCompatibility(Base):
     def test_native_function_skips_torch_context_recording(self):
-        _install_autograd_function(jt)
 
         class NativeFunction(jt.Function):
             def execute(self, value):
@@ -77,10 +75,9 @@ class TestCustomFunctionCompatibility(Base):
         # observable at all. So capture the ctx from inside execute() and
         # assert on it; asserting on `function` would be asserting that state
         # leaked back onto the shared instance.
-        _install_autograd_function(jt)
         seen = {}
 
-        class TorchStyleFunction(jt.Function):
+        class TorchStyleFunction(torch.autograd.Function):
             def execute(self, value, bias):
                 seen["ctx"] = self
                 self.seen_needs_input_grad = self.needs_input_grad
@@ -116,9 +113,7 @@ class TestCustomFunctionCompatibility(Base):
         # Function instance put them somewhere backward() never looks (the
         # context was copied from the instance before the call). backward()
         # then got None and the user's arithmetic raised.
-        _install_autograd_function(jt)
-
-        class TwoOutputs(jt.Function):
+        class TwoOutputs(torch.autograd.Function):
             def execute(self, value):
                 return value * 2, value * 3
 
@@ -134,9 +129,7 @@ class TestCustomFunctionCompatibility(Base):
     def test_a_second_call_does_not_steal_the_first_calls_context(self):
         # One instance, two calls with different shapes. Each call's backward
         # must use its OWN forward's input/output shapes.
-        _install_autograd_function(jt)
-
-        class TwoOutputs(jt.Function):
+        class TwoOutputs(torch.autograd.Function):
             def execute(self, value, bias):
                 return value + bias, value * 3
 

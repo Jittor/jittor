@@ -221,20 +221,7 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
             out = orig(*args)
             out._jittor_torch_ext_mutable = True
             return out
-    # torch device='cpu' must produce a host-resident Var (native exts
-    # check tensor.is_cpu()). Capture the device before dropping it and,
-    # when CPU is requested, build the Var under use_cuda=0 so its
-    # allocator is the host allocator (Var.location()=='cpu').
-    _requested_device = kwargs.get("device")
-    _want_cpu = _device_is_cpu(_requested_device)
-    _want_cuda = _device_is_cuda(_requested_device)
-    _cuda_index = None
-    if _want_cuda and g is jt:
-        _set_use_cuda()
-        # device="cuda:N" means "create it on N", not "create it here
-        # and copy it there": the copy would be a wasted transfer and,
-        # for a big weight, twice the peak memory.
-        _cuda_index = _cuda_index_of(_requested_device)
+    # _invoke_factory already established native construction placement.
     _requires_grad = bool(kwargs.get("requires_grad", False))
     for k in _DROP:
         kwargs.pop(k, None)
@@ -286,50 +273,12 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
             # ones_like / tril / triu have no dtype param in jittor; torch
             # accepts one. Pop it and cast the result instead.
             _cast_to = _dtype_to_str(kwargs.pop("dtype"))
-    if g is not jt:
-        out = orig(*args, **kwargs)
-        if _cast_to is not None:
-            out = out.cast(_cast_to)
-        out._jittor_torch_ext_mutable = True
-        out.requires_grad_(_requires_grad)
-        if _requires_grad:
-            _torch_register_leaf(out)
-        return out
-    if _want_cpu and jt.flags.use_cuda:
-        # Build on the host so the result is genuinely CPU-resident.
-        with jt.flag_scope(use_cuda=0):
-            out = orig(*args, **kwargs)
-            if _cast_to is not None:
-                out = out.cast(_cast_to)
-            out.sync()
-        try:
-            out._jittor_torch_ext_mutable = True
-            out._jittor_torch_force_cpu = True
-        except (AttributeError, TypeError) as exc:
-            swallowed("torch/installers/factories.py wrapped: out._jittor_torch_ext_mutable = True", exc)
-        if g is not jt:
-            out.requires_grad_(_requires_grad)
-        if _requires_grad:
-            out.requires_grad_(True)
-            _torch_register_leaf(out)
-        return out
-    if _cuda_index is not None and int(_cuda_index) >= 0:
-        with jt.flag_scope(device_id=int(_cuda_index)):
-            out = orig(*args, **kwargs)
-    else:
-        out = orig(*args, **kwargs)
+    out = orig(*args, **kwargs)
     if _cast_to is not None:
         out = out.cast(_cast_to)
-    if _want_cuda:
-        out = _make_cuda_resident(out, force=True)
-    try:
-        out._jittor_torch_ext_mutable = True
-    except (AttributeError, TypeError) as exc:
-        swallowed("torch/installers/factories.py wrapped: out._jittor_torch_ext_mutable = True", exc)
-    if g is not jt:
-        out.requires_grad_(_requires_grad)
+    out._jittor_torch_ext_mutable = True
+    out.requires_grad_(_requires_grad)
     if _requires_grad:
-        out.requires_grad_(True)
         _torch_register_leaf(out)
     return out
 

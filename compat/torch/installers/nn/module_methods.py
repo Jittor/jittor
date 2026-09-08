@@ -904,28 +904,6 @@ def _get_buffer(self, target):
     raise AttributeError(f"`{target}` is not a buffer")
 
 
-_ORIG_MODULE_SETATTR = nn.Module.__setattr__
-
-
-def _legacy_parameter_setattr(self, name, value):
-    # The optional legacy frontend consumes its own plain-tensor marker.
-    # Native Module registration never needs to know that marker exists.
-    if isinstance(value, jt.Var) and not name.startswith("_"):
-        attributes = vars(self)
-        parameters = attributes.setdefault("_parameter_names", set())
-        non_parameters = attributes.setdefault("_non_parameter_names", set())
-        if isinstance(value, nn.Parameter):
-            parameters.add(name)
-            non_parameters.discard(name)
-        elif (vars(value).get("_jt_plain_tensor") is True
-                and name not in attributes.get("_buffer_names", ())
-                and name not in parameters):
-            non_parameters.add(name)
-            object.__setattr__(self, name, value)
-            return
-    _ORIG_MODULE_SETATTR(self, name, value)
-
-
 def _register_parameter(self, name, param):
     """Torch's ``register_parameter``: an explicit "this is a parameter"."""
     # This is torch's explicit "this attribute is a parameter" call, so
@@ -1048,8 +1026,6 @@ def _install_module_methods(nn, registry=None):
     """
     registry = registry_for(jt, registry)
     M = nn.Module
-    if registry.target_namespace is registry.native_backend:
-        M.__setattr__ = _legacy_parameter_setattr
 
     # A fresh install re-reads the pipelining env var and forgets any threshold a
     # previous one had been asked for.

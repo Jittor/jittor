@@ -1,4 +1,4 @@
-"""Torch-grade optimizer / lr-scheduler parity for ``import jittor as torch``.
+"""Torch-grade optimizer / lr-scheduler parity for ``import torch``.
 
 One optimizer step on a known loss (loss = sum(w^2) -> grad = 2w) is checked against the
 exact analytic update rule. CPU+CUDA.
@@ -7,7 +7,7 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_optim.py
 """
 import unittest
 import numpy as np
-import jittor as torch
+import torch
 import jittor as jt
 
 _DEVICES = [("cpu", 0)] + ([("cuda", 1)] if jt.has_cuda else [])

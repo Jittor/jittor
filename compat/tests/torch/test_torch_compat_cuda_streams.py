@@ -2,7 +2,7 @@
 
 import unittest
 
-import jittor as torch
+import torch
 import torch.cuda.nvtx as nvtx
 from torch.cuda.memory import CUDAPluggableAllocator
 

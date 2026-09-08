@@ -8,8 +8,9 @@ Recheck when a dtype, array constructor, backend predicate, or serializer is add
 `torch.long` and `torch.int64` resolve to the same object. `str`, `repr`, and
 formatting produce `torch.int64`; comparison with either `"int64"` or
 `"torch.int64"` is false. Pickling returns the canonical object and accepts the
-former string-subclass pickle state. The explicit legacy Jittor-as-Torch mode
-retains callable dtype casts through its captured native converters.
+former string-subclass pickle state. Dtype objects are not callable. The removed
+native-as-Torch mode's captured cast-converter table no longer exists; use
+`tensor.to(dtype=...)`, or `jt.float32(...)` for native Jittor code.
 
 There are two different operations at the boundary:
 

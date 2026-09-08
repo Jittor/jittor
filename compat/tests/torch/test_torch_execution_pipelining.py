@@ -1,4 +1,4 @@
-"""Opt-in execution pipelining for ``import jittor as torch``.
+"""Opt-in execution pipelining for ``import torch``.
 
 A lazy graph reaches the device only at the next sync, so the GPU is idle for the
 whole of the Python-side construction. Pipelining launches the graph built so far
@@ -10,7 +10,7 @@ Run:  python -m pytest compat/tests/torch/test_torch_execution_pipelining.py
 import unittest
 
 import numpy as np
-import jittor as torch
+import torch
 import jittor as jt
 
 

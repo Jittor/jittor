@@ -6,7 +6,7 @@
 用户最新要求：后续改动不 push。已推送的最新批次是 `c618d841d`；此后的本地
 整合继续推进，未经新的用户指令不恢复推送。vLLM放本仓
 `adapters/jittor_adapters/vllm`，复用现有adapters发行物；外部提取目录先保留，
-不是交付前置。7.18、10.23已在本地收口，当前257条已合并、17条代码/性能未完成，
+不是交付前置。7.18、10.23、7.12已在本地收口，当前258条已合并、16条代码/性能未完成，
 远端仍是255条已合并；以后报进度须注明本地与远端区别。
 
 ## 当前开发底座
@@ -37,17 +37,19 @@ pytest/子进程合同仍需后续处理；不能把本批收口解释为全仓�
 ## 继续顺序
 
 先收齐独立前端、剩余 API 和第三方 adapter 边界，再处理剩余功能与性能。
-7.12 的剩余明确入口是 compat/shim/runtime.py 的 independent=False：它仍将
-安装指向 native owner，需删除该legacy原生别名模式并同步调用者；原生 native
-Var 的 FollowRuntime 语义继续保留，不应为删除legacy Torch模式而改变它。
+Torch现在只安装到独立namespace，旧False/0或install(jittor)在写状态前拒绝；
+原生Var的FollowRuntime语义继续保留。不能再用旧环境变量0运行所谓legacy门禁，
+native测试使用JITTOR_TORCH_SHIM=0，Torch测试使用1并通过import torch访问API。
 当前 CPU checkpoint 回归已去掉 xfail；CPU 0-D 与 CUDA 运算通过局部可导copy
 完成，不能恢复 force_cpu 显示标记或逐操作强同步绕过。
 测试布局已三方整合：native tests、compat/tests及adapters/tests共用
 tests/_helpers/pytest_policy.py，旧路径不再作为可执行选择器。386映射文件保留
 同期断言与新增测试，8318个原实际节点逐条对应；固定seed映射只用于原case输入，
 不修改pytest nodeid。布局与包证据见[记录](../results/2026-09-08-test-layout-integration.md)。
-legacy移除及只读introspection基座已在隔离树交付，接下来按新测试路径整合，
-不能把旧树测试整文件覆盖已合入的新路径/政策。
+legacy移除及只读introspection基座已按新测试路径整合，正式CPU-only入口7项
+通过，已有CUDA构建16项及27个相关兼容契约通过；详见
+[单一前端记录](../results/2026-09-08-single-torch-frontend.md)。10.20还需完成消费者迁移，
+8.12还需完成后端plan缓存的device生命周期，均在隔离树继续，不能按基座完成关闭整项。
 FSDP 的通信、mesh、
 原生 optimizer 复用和生命周期架构已实现；峰值显存性能仍未达，优化后移。
 缺硬件的 ACL/HCCL/NPU、ROCm/Corex 和多机验证继续按上机文档交接。

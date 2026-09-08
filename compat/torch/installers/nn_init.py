@@ -234,16 +234,11 @@ def _install_init_aliases(registry=None):
     import jittor.init as _native_init
     import jittor as _jt2
     import types as _types_init
-    if _registry.target_namespace is _registry.native_backend:
-        _init = _native_init
-    else:
-        # Only the spelling/adaptation namespace is copied. Native initializer
-        # callables retain their physical owners and the single mathematics.
-        _init = _types_init.ModuleType("torch.nn.init")
-        _init.__package__ = "torch.nn"
-        for _name, _value in vars(_native_init).items():
-            if not _name.startswith("__"):
-                setattr(_init, _name, _value)
+    _init = _types_init.ModuleType("torch.nn.init")
+    _init.__package__ = "torch.nn"
+    for _name, _value in vars(_native_init).items():
+        if not _name.startswith("__"):
+            setattr(_init, _name, _value)
     from jittor.init.scaling import _kaiming_uniform_
     # torch-style in-place initializers, tolerant of torch kwargs (e.g.
     # `generator=`, which jittor ignores). Each writes into `tensor` in place.

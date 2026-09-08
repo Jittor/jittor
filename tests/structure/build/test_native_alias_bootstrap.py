@@ -56,9 +56,14 @@ def test_legacy_alias_loads_its_optional_provider_on_demand():
 import sys
 import jittor as jt
 assert "jittor.compat" not in sys.modules
+before = {kind: dict(vars(kind)) for kind in (jt.Var, jt.Module, jt.Function)}
 import jittor.torch_compat
-assert sys.modules["torch"] is jt
-assert jt._torch_compat_install_complete
+import torch
+assert sys.modules["torch"] is torch and torch is not jt
+assert torch._torch_compat_install_complete
+assert torch.Tensor is not jt.Var and torch.nn.Module is not jt.Module
+assert all(dict(vars(kind)) == attributes for kind, attributes in before.items())
+assert "_torch_compat_install_context" not in vars(jt)
 import jittor.torch_shim
 import jittor.compat.shim
 assert jittor.torch_shim is jittor.compat.shim

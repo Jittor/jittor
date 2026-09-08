@@ -1,4 +1,4 @@
-"""Torch-grade RNN/LSTM/GRU parity for ``import jittor as torch``.
+"""Torch-grade RNN/LSTM/GRU parity for ``import torch``.
 
 Forward shapes (incl. batch_first), hidden-state shapes, finite backward, and a 1-step
 LSTM-cell check against an explicit numpy reference. CPU+CUDA.
@@ -8,7 +8,7 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_rnn.py
 import unittest
 import numpy as np
 import jittor as jt
-from jittor import nn
+from torch import nn
 
 _DEVICES = [("cpu", 0)] + ([("cuda", 1)] if jt.has_cuda else [])
 

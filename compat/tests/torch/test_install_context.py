@@ -30,6 +30,10 @@ def _runtime_module(name):
     return module
 
 
+def _frontend_module(name):
+    return TorchNamespace(_runtime_module(name))
+
+
 class TestInstallContext(unittest.TestCase):
     def context(self):
         root = _runtime_module("_stage7_context_root")
@@ -158,7 +162,7 @@ class TestInstallContext(unittest.TestCase):
                          ["optional.backend"])
 
     def test_completed_install_conflict_does_not_leak_global_lock(self):
-        root = _runtime_module("_stage7_completed_lock_conflict")
+        root = _frontend_module("_stage7_completed_lock_conflict")
         context = InstallContext.for_module(root)
         context.mark_complete()
         with mock.patch(
@@ -169,7 +173,7 @@ class TestInstallContext(unittest.TestCase):
         self.assertTrue(install_lock_is_free())
 
     def test_interrupted_install_releases_its_lock_and_restores_the_root(self):
-        root = _runtime_module("interrupted_install")
+        root = _frontend_module("interrupted_install")
         def interrupted(context):
             context.target_namespace.partial_api = object()
             raise KeyboardInterrupt()
@@ -192,7 +196,7 @@ class TestInstallContext(unittest.TestCase):
         the dead transaction stayed reachable through ``context.state``, where
         the runtime flag helpers still look for it.
         """
-        root = _runtime_module("_stage7_rollback_conflict_root")
+        root = _frontend_module("_stage7_rollback_conflict_root")
         seen = {}
 
         def steal(context):
@@ -356,7 +360,7 @@ class TestInstallContext(unittest.TestCase):
                 for name in tuple(sys.modules):
                     if name == "torch" or name.startswith("torch."):
                         sys.modules.pop(name, None)
-                root = _runtime_module("_stage7_completed_%s" % tamper)
+                root = _frontend_module("_stage7_completed_%s" % tamper)
                 context = InstallContext.for_module(root)
                 child = types.ModuleType("torch.nn")
                 context.registry.publish("torch", root)
@@ -473,21 +477,16 @@ from unittest import mock
 import jittor as jt
 from jittor.compat import torch as compat
 from jittor.compat.torch.context import InstallContext, InstallStepError
+from jittor.compat.torch.namespace import TorchNamespace
 
 baseline = compat._torch_namespace_snapshot()
-attrs = (
-    InstallContext.CONTEXT_ATTR,
-    InstallContext.MARKERS_ATTR,
-    InstallContext.COMPLETE_ATTR,
-)
-compat._restore_namespace({})
-for name in attrs:
-    if hasattr(jt, name):
-        delattr(jt, name)
+assert baseline == {}
+target = TorchNamespace(jt)
+native_var = dict(vars(jt.Var))
 
 def publish_partial(context):
-    context.registry.publish("torch", jt)
-    context.registry.publish("torch.nn", jt.nn)
+    context.registry.publish("torch", target)
+    context.registry.ensure("torch.nn")
 
 def fail_midway(_context):
     raise RuntimeError("injected midway failure")
@@ -498,47 +497,44 @@ with mock.patch.object(
     (("synthetic.partial", publish_partial), ("synthetic.failure", fail_midway)),
 ), mock.patch.object(compat, "_OPTIONAL_STEPS", ()):
     try:
-        compat.install(jt)
+        compat.install(target)
     except InstallStepError as error:
         assert error.step == "synthetic.failure"
     else:
         raise AssertionError("required failure did not propagate")
 
 assert compat._torch_namespace_snapshot() == {}
-assert not jt._torch_compat_install_complete
-assert compat._NAMESPACE_TRANSACTION in jt._torch_compat_install_context.state
+assert not target._torch_compat_install_complete
+assert compat._NAMESPACE_TRANSACTION in target._torch_compat_install_context.state
 
-assert compat.install(jt) is jt
+assert compat.install(target) is target
 after = compat._torch_namespace_snapshot()
-assert set(after) == set(baseline), (set(baseline) - set(after), set(after) - set(baseline))
-# A tripwire against the namespace growing by accident. Raise it only
-# alongside modules a change deliberately publishes -- the last move,
-# 197 to 199, came with torch._opaque_base and
-# torch.distributed.tensor.device_mesh.
-assert len(after) == 199, len(after)
-assert after["torch"] is jt
-assert after["torch.nn"] is jt.nn
-assert after["torch.nn.functional"] is jt.nn.functional
+published = target._torch_compat_install_context.registry._published
+assert all(published.get(name) is module for name, module in after.items())
+assert after["torch"] is target and target is not jt
+assert after["torch.nn"] is target.nn
+assert after["torch.nn.functional"] is target.nn.functional
+assert native_var == dict(vars(jt.Var))
 fsdp = after["torch.distributed.fsdp"]
 assert after["torch.distributed.fsdp.api"] is fsdp.api
-assert compat._NAMESPACE_TRANSACTION not in jt._torch_compat_install_context.state
+assert compat._NAMESPACE_TRANSACTION not in target._torch_compat_install_context.state
 '''
         env = os.environ.copy()
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         result = run_python_child(
-            ["-c", code], env=env, inherit=False, merge_stderr=True)
+            ["-c", code], env=env, inherit=False, merge_stderr=True, without_torch_mode=True)
         self.assertEqual(result.returncode, 0, result.stdout)
 
     def test_packaged_flash_attn_optional_step_completes(self):
         import importlib
         import pathlib
         import sys
-        import jittor as jt
+        import torch
         from jittor.compat.shim.preflight import resources_root
 
         reports = [
             report
-            for report in jt._torch_compat_install_context.reports
+            for report in torch._torch_compat_install_context.reports
             if report.step == "optional.flash-attn"
         ]
         self.assertTrue(reports)
@@ -561,7 +557,7 @@ assert compat._NAMESPACE_TRANSACTION not in jt._torch_compat_install_context.sta
                 mock.patch.object(compat, "_OPTIONAL_STEPS", ()):
             for strict in (False, True):
                 with self.subTest(strict=strict):
-                    root = _runtime_module(
+                    root = _frontend_module(
                         "_stage7_failed_install_root_%s" % int(strict)
                     )
                     with self.assertRaisesRegex(InstallStepError, "nn.required"):

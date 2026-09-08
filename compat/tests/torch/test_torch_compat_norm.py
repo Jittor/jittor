@@ -1,4 +1,4 @@
-"""Torch-grade normalization-layer parity for ``import jittor as torch``.
+"""Torch-grade normalization-layer parity for ``import torch``.
 
 Part of the torch-grade test-suite expansion. Like the sibling
 ``test_torch_compat_nn.py`` / ``test_torch_compat_math.py`` modules this is a structured
@@ -31,10 +31,10 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_norm.py
 import os
 import unittest
 import numpy as np
-import jittor as torch          # the whole point: jittor IS torch here
+import torch
 import jittor as jt
 from jittor._runtime.dispatch import override_kernel
-from jittor import nn
+from torch import nn
 from jittor.backends.cuda.kernels.nn.layer_norm_cuda import _layer_norm_no_grad_cuda
 
 F = nn.functional
@@ -49,7 +49,7 @@ def both_devices(fn):
 
 
 def t(a):
-    return torch.array(a)
+    return torch.tensor(a)
 
 
 class Base(unittest.TestCase):

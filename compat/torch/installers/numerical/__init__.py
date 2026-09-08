@@ -1106,9 +1106,8 @@ def install(ctx):
     # ``jittor.fft`` is the native owner. Torch mode publishes that same module
     # object under its historical namespace instead of carrying a duplicate DFT.
     from jittor import fft as _fft_ns
-    if g is not ctx.native_backend:
-        from ...namespace import native_module_facade
-        _fft_ns = native_module_facade(_fft_ns, "torch.fft")
+    from ...namespace import native_module_facade
+    _fft_ns = native_module_facade(_fft_ns, "torch.fft")
     g.fft = _fft_ns
     _modules["torch.fft"] = _fft_ns
     # torch.softmax / log_softmax / relu top-level function forms (convbert calls
@@ -1243,11 +1242,8 @@ def install(ctx):
 
     _bind_missing(g, "sparse_coo_tensor", sparse_coo_tensor)
     import jittor.sparse as _jt_sparse
-    if g is not ctx.native_backend:
-        from ...namespace import native_module_facade
-        sparse_namespace = native_module_facade(_jt_sparse, "torch.sparse")
-    else:
-        sparse_namespace = _jt_sparse
+    from ...namespace import native_module_facade
+    sparse_namespace = native_module_facade(_jt_sparse, "torch.sparse")
     g.sparse = sparse_namespace
     if not hasattr(sparse_namespace, "sum"):
         sparse_namespace.sum = _sparse_sum
@@ -1275,9 +1271,8 @@ def install_parity(ctx):
     g = ctx.jittor_module
     registry = ctx.registry
     import jittor.linalg as linalg
-    if g is not ctx.native_backend:
-        from ...namespace import native_module_facade
-        linalg = native_module_facade(linalg, "torch.linalg")
+    from ...namespace import native_module_facade
+    linalg = native_module_facade(linalg, "torch.linalg")
     registry.publish("torch.linalg", linalg)
     g.linalg = linalg
 

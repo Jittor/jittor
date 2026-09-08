@@ -17,7 +17,7 @@ a change to the mapping has to be made twice, on purpose.
 """
 import unittest
 
-import jittor as torch
+import torch
 import jittor as jt
 
 from jittor.compat.torch.installers import cuda as _cuda_installer

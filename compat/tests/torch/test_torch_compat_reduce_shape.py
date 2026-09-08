@@ -1,4 +1,4 @@
-"""Torch-grade reduction + shape-boundary regression tests for ``import jittor as torch``.
+"""Torch-grade reduction + shape-boundary regression tests for ``import torch``.
 
 Part of the torch-grade test-suite rewrite (round 2). Like ``test_torch_compat_ops.py``
 this is a structured ``unittest`` module: every check compares jittor-as-torch against an
@@ -19,7 +19,7 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_reduce_shape.py
 """
 import unittest
 import numpy as np
-import jittor as torch          # the whole point: jittor IS torch here
+import torch
 import jittor as jt
 
 # Exercise CPU always; add CUDA when the build has it. NPU(ACL) reports has_cuda too.
@@ -34,7 +34,7 @@ def both_devices(fn):
 
 
 def t(a):
-    return torch.array(a)
+    return torch.tensor(a)
 
 
 def np_logsumexp(a, axis, keepdims=False):
@@ -129,7 +129,7 @@ class TestVarStd(Base):
     def test_bincount_argwhere_segment_reduce(self):
         # Sparse TRELLIS paths use these module-level torch APIs.
         def body(dev):
-            idx = torch.array([0, 1, 1, 3])
+            idx = torch.tensor([0, 1, 1, 3])
             self.ae(torch.bincount(idx, minlength=5).numpy(),
                     np.array([1, 2, 0, 1, 0], dtype=np.int64),
                     msg=f"bincount minlength {dev}")
@@ -137,7 +137,7 @@ class TestVarStd(Base):
             self.ae(torch.argwhere(t(grid)).numpy(), np.argwhere(grid),
                     msg=f"argwhere {dev}")
             data = np.arange(6, dtype=np.float32)
-            lengths = torch.array([2, 4])
+            lengths = torch.tensor([2, 4])
             self.ac(torch.segment_reduce(t(data), "sum", lengths=lengths).numpy(),
                     np.array([1.0, 14.0], dtype=np.float32),
                     msg=f"segment_reduce sum lengths {dev}")

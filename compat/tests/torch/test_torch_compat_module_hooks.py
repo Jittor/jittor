@@ -2,7 +2,7 @@
 
 import unittest
 
-import jittor as torch
+import torch
 from torch.nn.modules.module import register_module_module_registration_hook
 
 

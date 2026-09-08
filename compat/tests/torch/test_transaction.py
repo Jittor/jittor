@@ -184,17 +184,19 @@ def test_core_install_flag_mutation_rolls_back_on_failure():
 def test_utilities_import_hook_rolls_back_and_detects_external_replacement():
     import builtins
     import jittor
+    from jittor.compat.torch.namespace import TorchNamespace
 
     tx = InstallTransaction("utilities.install")
     context = types.SimpleNamespace(state={"_install_transaction": tx})
-    previous_context = getattr(jittor, "_torch_compat_install_context", None)
+    target = TorchNamespace(jittor)
+    target._torch_compat_install_context = context
+    context.target_namespace = target
     original_import = builtins.__import__
 
     def replacement(*args, **kwargs):
         return original_import(*args, **kwargs)
 
     try:
-        jittor._torch_compat_install_context = context
         set_attr(builtins, "__import__", replacement, context=context)
         assert builtins.__import__ is replacement
         tx.rollback()
@@ -209,10 +211,6 @@ def test_utilities_import_hook_rolls_back_and_detects_external_replacement():
         assert builtins.__import__ is original_import
     finally:
         builtins.__import__ = original_import
-        if previous_context is None:
-            delattr(jittor, "_torch_compat_install_context")
-        else:
-            jittor._torch_compat_install_context = previous_context
 
 
 def test_shared_write_helpers_record_flag_env_and_attribute_mutations():
@@ -267,6 +265,7 @@ def test_installer_writes_ignore_a_ledger_that_has_already_closed(closed):
     """
     import builtins
     import jittor
+    from jittor.compat.torch.namespace import TorchNamespace
 
     tx = InstallTransaction("closed")
     if closed == "committed":
@@ -274,22 +273,20 @@ def test_installer_writes_ignore_a_ledger_that_has_already_closed(closed):
     else:
         tx.rollback()
 
-    previous = getattr(jittor, "_torch_compat_install_context", None)
+    target = TorchNamespace(jittor)
+    context = _context(tx)
+    target._torch_compat_install_context = context
+    context.target_namespace = target
     original_import = builtins.__import__
 
     def replacement(*args, **kwargs):
         return original_import(*args, **kwargs)
 
     try:
-        jittor._torch_compat_install_context = _context(tx)
-        set_attr(builtins, "__import__", replacement, context=_context(tx))
+        set_attr(builtins, "__import__", replacement, context=context)
         assert builtins.__import__ is replacement
     finally:
         builtins.__import__ = original_import
-        if previous is None:
-            delattr(jittor, "_torch_compat_install_context")
-        else:
-            jittor._torch_compat_install_context = previous
 
 
 def test_shared_write_helpers_ignore_a_closed_ledger_for_flags_too():

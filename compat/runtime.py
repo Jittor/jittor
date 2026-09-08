@@ -3,7 +3,6 @@
 from __future__ import absolute_import
 
 from dataclasses import dataclass
-import os
 
 from ._aliases import (
     install_aliases,
@@ -51,7 +50,6 @@ def compose(root_module, core_flags, strict=True, preflight=None):
             _root_module=root_module,
             _preflight_result=preflight,
             _composition=True,
-            independent_namespace=os.environ.get("JITTOR_TORCH_INDEPENDENT") == "1",
         )
         target = activation.get("torch", root_module) if isinstance(activation, dict) else root_module
         context = vars(target)["_torch_compat_install_context"]

@@ -1,4 +1,4 @@
-"""Torch-grade linalg parity tests for ``import jittor as torch``.
+"""Torch-grade linalg parity tests for ``import torch``.
 
 Part of the torch-grade test-suite rewrite. Compares jittor-as-torch linalg ops against
 numpy references. Uses gauge-invariant checks (reconstructions / singular values / |det|)
@@ -8,7 +8,7 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_linalg.py
 """
 import unittest
 import numpy as np
-import jittor as torch
+import torch
 import jittor as jt
 
 _DEVICES = [("cpu", 0)] + ([("cuda", 1)] if jt.has_cuda else [])

@@ -1,4 +1,4 @@
-"""Torch-grade conv/pool/norm-semantics regression tests for ``import jittor as torch``.
+"""Torch-grade conv/pool/norm-semantics regression tests for ``import torch``.
 
 Part of the torch-grade test-suite rewrite (sibling of ``test_torch_compat_ops.py``).
 Every check compares jittor-as-torch against an INDEPENDENT numpy reference computed
@@ -23,7 +23,7 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_conv_pool.py
 import math
 import unittest
 import numpy as np
-import jittor as torch          # the whole point: jittor IS torch here
+import torch
 import jittor as jt
 import jittor.nn as nn
 

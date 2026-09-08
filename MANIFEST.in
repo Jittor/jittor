@@ -306,6 +306,7 @@ include docs/architecture/refactor-handoff.md
 include docs/architecture/refactor-plan.md
 include docs/architecture/repository-layout.md
 include docs/architecture/runtime-hook-transactions.md
+include docs/architecture/runtime-introspection.md
 include docs/architecture/source-architecture.md
 include docs/architecture/storage-layout.md
 include docs/architecture/system-design-audit.md
@@ -490,6 +491,7 @@ include docs/results/2026-09-08-native-compat-bootstrap.md
 include docs/results/2026-09-08-packaging-ownership.md
 include docs/results/2026-09-08-parameter-and-holder-ownership.md
 include docs/results/2026-09-08-private-frontend-owner.md
+include docs/results/2026-09-08-single-torch-frontend.md
 include docs/results/2026-09-08-tensor-backend-placement.md
 include docs/results/2026-09-08-tensor-construction-dtypes.md
 include docs/results/2026-09-08-tensor-copy-boundaries.md

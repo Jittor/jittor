@@ -21,7 +21,7 @@ def _ddp_world_size():
     return _collectives._world_size()
 
 def _adapt_extra(template, registry):
-    if not issubclass(template, jt.Module) or registry.target_namespace is registry.native_backend:
+    if not issubclass(template, jt.Module):
         return template
     return get_install_context(registry.target_namespace).state["nn_class_adapter"](template)
 

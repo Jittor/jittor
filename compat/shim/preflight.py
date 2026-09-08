@@ -16,6 +16,20 @@ from ..diagnostics import EXPECTED, swallowed
 
 
 _TRUTHY = frozenset(("1", "true", "yes", "on"))
+
+
+def require_independent_frontend(independent_namespace=True, environ=None):
+    """Reject the removed frontend before environment or installation writes."""
+    if independent_namespace is not True:
+        raise RuntimeError(
+            "legacy Jittor-alias Torch installation was removed; "
+            "use activate() and import torch, leaving native jittor unchanged")
+    env = os.environ if environ is None else environ
+    requested = env.get("JITTOR_TORCH_INDEPENDENT")
+    if requested is not None and not is_truthy(requested):
+        raise RuntimeError(
+            "JITTOR_TORCH_INDEPENDENT=%r requests the removed legacy frontend; "
+            "remove this environment variable and import torch" % requested)
 _DRIVER_LIBRARY_CANDIDATES = (
     "/lib/x86_64-linux-gnu/libcuda.so.1",
     "/usr/lib/x86_64-linux-gnu/libcuda.so.1",
@@ -410,6 +424,8 @@ def prepare_import_environment(
     )
     if not active:
         return PreflightResult(False)
+
+    require_independent_frontend(environ=env)
 
     trigger = (
         "forced"

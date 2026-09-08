@@ -1,4 +1,4 @@
-"""Torch-grade dtype-semantics regression tests for ``import jittor as torch``.
+"""Torch-grade dtype-semantics regression tests for ``import torch``.
 
 Part of the torch-grade test-suite rewrite (round 3). Like ``test_torch_compat_ops.py``
 this is a structured ``unittest`` module: every check compares jittor-as-torch against an
@@ -33,7 +33,7 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_dtype.py
 """
 import unittest
 import numpy as np
-import jittor as torch          # the whole point: jittor IS torch here
+import torch
 import jittor as jt
 
 # Exercise CPU always; add CUDA when the build has it. NPU(ACL) reports has_cuda too.
@@ -222,7 +222,7 @@ class TestCastMethods(Base):
 
     def test_to_dtype(self):
         def body(dev):
-            x = torch.array(self.x)
+            x = torch.tensor(self.x)
             self.assertEqual(dts(x.to(torch.int32)), "int32", dev)
             self.assertEqual(dts(x.to(torch.float64)), "float64", dev)
             self.assertEqual(dts(x.to("float64")), "float64", dev)
@@ -234,27 +234,27 @@ class TestCastMethods(Base):
         # torch's .to('cuda') / .to(dtype, device) -- jittor has a single global
         # backend, so device moves are no-ops but dtype must still convert.
         def body(dev):
-            x = torch.array(self.x)
+            x = torch.tensor(self.x)
             self.assertEqual(dts(x.to("cuda")), "float32", dev)
             self.assertEqual(dts(x.to(torch.float64)), "float64", dev)
         both_devices(body)
 
     def test_astype(self):
         def body(dev):
-            x = torch.array(self.x)
+            x = torch.tensor(self.x)
             self.assertEqual(dts(x.astype("int64")), "int64", dev)
             self.assertEqual(dts(x.astype("float16")), "float16", dev)
         both_devices(body)
 
     def test_float_int_bool_double_half(self):
         def body(dev):
-            x = torch.array(self.x)
+            x = torch.tensor(self.x)
             self.assertEqual(dts(x.float()), "float32", dev)
             self.assertEqual(dts(x.int()), "int32", dev)
             self.assertEqual(dts(x.double()), "float64", dev)
             self.assertEqual(dts(x.half()), "float16", dev)
             # .bool(): nonzero -> True
-            b = torch.array(np.array([0.0, 1.0, 2.0], "float32")).bool()
+            b = torch.tensor(np.array([0.0, 1.0, 2.0], "float32")).bool()
             self.assertEqual(dts(b), "bool", dev)
             self.ae(b.numpy(), np.array([False, True, True]), dev)
             # round-trip int->float
@@ -267,7 +267,7 @@ class TestCastMethods(Base):
                    "verify-then-fix: point Var.long at int64 to match torch.")
     def test_long_returns_int64_like_torch(self):
         def body(dev):
-            x = torch.array(self.x)
+            x = torch.tensor(self.x)
             self.assertEqual(dts(x.long()), "int64", dev)
         both_devices(body)
 

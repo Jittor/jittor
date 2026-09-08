@@ -25,7 +25,7 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_distributions.py
 import math
 import unittest
 import numpy as np
-import jittor as torch          # the whole point: jittor IS torch here
+import torch
 import jittor as jt
 from jittor import distributions as D
 

@@ -18,7 +18,7 @@ import unittest
 
 import numpy as np
 
-import jittor as torch
+import torch
 import jittor as jt
 
 from _helpers.child_process import run_mpi_python

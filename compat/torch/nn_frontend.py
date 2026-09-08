@@ -133,9 +133,6 @@ class NNFrontendOwner:
 
 def prepare_nn_namespace(context):
     target, backend = context.target_namespace, context.native_backend
-    if target is backend:
-        context.state["Module"] = backend.nn.Module
-        return backend.nn
     existing = context.state.get("nn_frontend")
     if (existing is not None and context.state.get("nn_frontend_tensor")
             is context.state["Var"]):

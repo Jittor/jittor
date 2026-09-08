@@ -13,13 +13,12 @@ def _install_distribution_surface(ctx):
     g = ctx.jittor_module
     _modules = ctx.registry.module_map
     import jittor.distributions as _dist
-    if g is not ctx.native_backend:
-        from ..distribution_frontend import make_distribution_frontend
-        existing = vars(g).get("distributions")
-        if (existing is None or
-                getattr(existing, "_native_distribution_module", None) is not _dist):
-            existing = make_distribution_frontend(_dist, g)
-        _dist = existing
+    from ..distribution_frontend import make_distribution_frontend
+    existing = vars(g).get("distributions")
+    if (existing is None or
+            getattr(existing, "_native_distribution_module", None) is not _dist):
+        existing = make_distribution_frontend(_dist, g)
+    _dist = existing
     _dist.__path__ = getattr(_dist, "__path__", [])
     if not hasattr(_dist, "constraints"):
         _constraints = _types_dist.ModuleType("torch.distributions.constraints")

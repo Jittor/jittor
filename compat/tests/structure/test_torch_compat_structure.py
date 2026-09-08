@@ -11,6 +11,7 @@ import unittest
 
 import jittor
 import jittor.torch_compat as legacy_compat
+import torch
 from jittor.compat import torch as compat
 from jittor.compat.torch import functional
 from jittor.compat.torch import grad
@@ -184,21 +185,27 @@ class TestTorchCompatStructure(unittest.TestCase):
     def test_fresh_legacy_import_installs_without_warning(self):
         code = (
             "import sys\n"
+            "import jittor\n"
+            "before = {t: dict(vars(t)) for t in (jittor.Var, jittor.Module, jittor.Function)}\n"
             "import jittor.torch_compat as legacy\n"
             "from jittor.compat import torch as canonical\n"
             "import jittor\n"
             "assert legacy is canonical is jittor.torch_compat\n"
             "assert sys.modules['jittor.torch_compat'] is canonical\n"
-            "assert jittor._torch_compat_install_complete\n"
-            "assert jittor._torch_compat_install_context.complete\n"
-            "assert sys.modules['torch'] is jittor\n"
-            "assert sys.modules['torch.nn'] is jittor.nn\n"
-            "assert sys.modules['torch.nn.functional'] is jittor.nn.functional\n"
+            "import torch\n"
+            "assert torch._torch_compat_install_complete\n"
+            "assert torch._torch_compat_install_context.complete\n"
+            "assert sys.modules['torch'] is torch and torch is not jittor\n"
+            "assert sys.modules['torch.nn'] is torch.nn and torch.nn is not jittor.nn\n"
+            "assert sys.modules['torch.nn.functional'] is torch.nn.functional\n"
+            "assert torch.nn.functional is not jittor.nn.functional\n"
+            "assert all(dict(vars(t)) == state for t, state in before.items())\n"
+            "assert '_torch_compat_install_context' not in vars(jittor)\n"
         )
         env = os.environ.copy()
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         result = run_python_child(
-            ["-c", code], env=env, inherit=False, merge_stderr=True)
+            ["-c", code], env=env, inherit=False, merge_stderr=True, without_torch_mode=True)
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertNotIn("torch_compat not fully installed", result.stdout)
 
@@ -249,25 +256,29 @@ class TestTorchCompatStructure(unittest.TestCase):
             "SequentialLR", "ChainedScheduler", "ReduceLROnPlateau",
         )
         for name in scheduler_names:
-            value = getattr(jittor.optim.lr_scheduler, name)
+            value = getattr(torch.optim.lr_scheduler, name)
             with self.subTest(name=name):
                 self.assertEqual(value.__module__, "jittor.compat.torch.lr_scheduler")
         expected = (
-            (jittor.optim.LBFGS, "jittor.compat.torch.optimizer_api"),
-            (jittor.optim.swa_utils.SWALR, "jittor.compat.torch.lr_scheduler"),
-            (jittor.optim.swa_utils.AveragedModel, "jittor.compat.torch.lr_scheduler"),
-            (jittor.optim.swa_utils.get_swa_avg_fn, "jittor.compat.torch.lr_scheduler"),
-            (jittor.optim.swa_utils.get_ema_avg_fn, "jittor.compat.torch.lr_scheduler"),
-            (jittor.optim.swa_utils.update_bn, "jittor.compat.torch.lr_scheduler"),
-            (jittor.optim.Optimizer.state.fget, "jittor.compat.torch.optimizer_api"),
-            (jittor.optim.Adam.__init__, "jittor.compat.torch.optimizer_api"),
-            (jittor.optim.Adam.step, "jittor.compat.torch.optimizer_api"),
-            (jittor.optim.AdamW.step, "jittor.compat.torch.optimizer_api"),
-            (jittor.optim.SGD.step, "jittor.compat.torch.optimizer_api"),
+            (torch.optim.LBFGS, "torch.optim"),
+            (torch.optim.LBFGS.step, "jittor.compat.torch.optimizer_api"),
+            (torch.optim.swa_utils.SWALR, "jittor.compat.torch.lr_scheduler"),
+            (torch.optim.swa_utils.AveragedModel, "jittor.compat.torch.lr_scheduler"),
+            (torch.optim.swa_utils.get_swa_avg_fn, "jittor.compat.torch.lr_scheduler"),
+            (torch.optim.swa_utils.get_ema_avg_fn, "jittor.compat.torch.lr_scheduler"),
+            (torch.optim.swa_utils.update_bn, "jittor.compat.torch.lr_scheduler"),
+            (torch.optim.Optimizer.state.fget, "jittor.compat.torch.optimizer_api"),
+            (torch.optim.Adam.__init__, "jittor.compat.torch.optimizer_api"),
+            (torch.optim.Adam.step, "jittor.compat.torch.optimizer_api"),
+            (torch.optim.AdamW.step, "jittor.compat.torch.optimizer_api"),
+            (torch.optim.SGD.step, "jittor.compat.torch.optimizer_api"),
         )
         for value, module_name in expected:
             with self.subTest(name=value.__name__):
                 self.assertEqual(value.__module__, module_name)
+        self.assertTrue(issubclass(torch.optim.LBFGS, torch.optim.Optimizer))
+        self.assertIsNot(torch.optim.Optimizer, jittor.optim.Optimizer)
+        self.assertTrue(jittor.optim.Optimizer.__module__.startswith("jittor.optim"))
 
     def test_no_public_symbol_exposes_a_legacy_origin(self):
         for value in compat._COMPAT_PUBLIC_SYMBOLS:
@@ -293,18 +304,23 @@ class TestTorchCompatStructure(unittest.TestCase):
                 self.assertIs(pickle.loads(payload), value)
 
     def test_install_is_idempotent(self):
-        self.assertTrue(jittor._torch_compat_install_complete)
-        self.assertTrue(jittor._torch_compat_install_context.complete)
+        self.assertTrue(torch._torch_compat_install_complete)
+        self.assertTrue(torch._torch_compat_install_context.complete)
+        native = {name: getattr(jittor, name) for name in ("Var", "Module", "Function", "grad", "no_grad")}
         before = {
-            "grad": jittor.grad,
-            "no_grad": jittor.no_grad,
-            "interpolate": jittor.nn.functional.interpolate,
+            "grad": torch.grad,
+            "no_grad": torch.no_grad,
+            "interpolate": torch.nn.functional.interpolate,
         }
-        self.assertIs(compat.install(jittor), jittor)
-        self.assertIs(compat.install(jittor), jittor)
-        self.assertIs(jittor.grad, before["grad"])
-        self.assertIs(jittor.no_grad, before["no_grad"])
-        self.assertIs(jittor.nn.functional.interpolate, before["interpolate"])
+        self.assertIs(compat.install(torch), torch)
+        self.assertIs(compat.install(torch), torch)
+        self.assertIs(torch.grad, before["grad"])
+        self.assertIs(torch.no_grad, before["no_grad"])
+        self.assertIs(torch.nn.functional.interpolate, before["interpolate"])
+        for name, value in native.items():
+            self.assertIs(getattr(jittor, name), value)
+        with self.assertRaisesRegex(RuntimeError, "independent TorchNamespace"):
+            compat.install(jittor)
 
     def test_dtype_objects_preserve_jittor_constructors(self):
         self.assertTrue(callable(jittor.float32))
@@ -315,20 +331,30 @@ class TestTorchCompatStructure(unittest.TestCase):
         self.assertIsInstance(integer, jittor.Var)
         self.assertNotIsInstance(jittor.float32, str)
         self.assertNotIsInstance(jittor.int32, str)
-        self.assertIs(fp.dtype, jittor.float32)
-        self.assertIs(integer.dtype, jittor.int32)
-        self.assertEqual(str(fp.dtype), "torch.float32")
-        self.assertEqual(str(integer.dtype), "torch.int32")
-        self.assertIs(pickle.loads(pickle.dumps(fp.dtype)), fp.dtype)
+        self.assertNotIsInstance(fp.dtype, torch.dtype)
+        self.assertEqual(str(fp.dtype), "float32")
+        self.assertEqual(str(integer.dtype), "int32")
+        self.assertEqual(fp.numpy().tolist(), [1.0, 2.0])
+        self.assertEqual(integer.numpy().tolist(), [1, 2])
+        tensor = torch.tensor([1, 2], dtype=torch.float32)
+        self.assertIs(type(tensor), torch.Tensor)
+        self.assertIs(tensor.dtype, torch.float32)
+        self.assertEqual(str(tensor.dtype), "torch.float32")
+        self.assertIs(pickle.loads(pickle.dumps(tensor.dtype)), torch.float32)
+        self.assertFalse(callable(torch.float32))
 
     def test_real_nn_functional_receives_torch_semantics(self):
         jittor_functional = importlib.import_module("jittor.nn.functional")
         self.assertIs(jittor.nn.functional, jittor_functional)
-        self.assertIs(sys.modules["torch.nn.functional"], jittor_functional)
-        signature = inspect.signature(jittor_functional.interpolate)
+        self.assertIs(sys.modules["torch.nn.functional"], torch.nn.functional)
+        self.assertIsNot(torch.nn.functional, jittor_functional)
+        self.assertEqual(inspect.signature(jittor_functional.interpolate).parameters["mode"].default, "bilinear")
+        signature = inspect.signature(torch.nn.functional.interpolate)
         self.assertEqual(signature.parameters["mode"].default, "nearest")
-        x = jittor.array([[[[1.0, 2.0], [3.0, 4.0]]]])
-        actual = jittor_functional.interpolate(x, scale_factor=2).numpy()
+        x = torch.tensor([[[[1.0, 2.0], [3.0, 4.0]]]])
+        output = torch.nn.functional.interpolate(x, scale_factor=2)
+        self.assertIs(type(output), torch.Tensor)
+        actual = output.numpy()
         expected = [
             [
                 [1.0, 1.0, 2.0, 2.0],
@@ -342,12 +368,15 @@ class TestTorchCompatStructure(unittest.TestCase):
     def test_real_nn_modules_package_is_not_replaced(self):
         jittor_modules = importlib.import_module("jittor.nn.modules")
         self.assertIs(jittor.nn.modules, jittor_modules)
-        self.assertIs(sys.modules["torch.nn.modules"], jittor_modules)
+        self.assertIs(sys.modules["torch.nn.modules"], torch.nn.modules)
+        self.assertIsNot(torch.nn.modules, jittor_modules)
         self.assertEqual(jittor_modules.__name__, "jittor.nn.modules")
         self.assertIs(
             sys.modules["torch.nn.modules.module"].Module,
-            jittor.Module,
+            torch.nn.Module,
         )
+        self.assertIs(jittor_modules.Module, jittor.Module)
+        self.assertIsNot(torch.nn.Module, jittor.Module)
 
     def test_domain_modules_import_the_root_directly(self):
         package_root = Path(types.__file__).resolve().parent

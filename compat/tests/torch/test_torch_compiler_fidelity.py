@@ -1,7 +1,8 @@
 import importlib
 import unittest
 
-import jittor as torch
+import torch
+import jittor as _native_jittor
 
 
 API_NAMES = ("torch.compile", "torch.jit.script", "torch.jit.trace")
@@ -54,7 +55,7 @@ class TestTorchCompilerFidelity(unittest.TestCase):
             torch.compile(add_one, fullgraph=True)
         with self.assertRaises(NotImplementedError):
             torch.jit.trace(add_one, torch.ones(1), check_trace=True)
-        with torch.flag_scope(use_cuda=0):
+        with _native_jittor.flag_scope(use_cuda=0):
             self.assertEqual(add_one(torch.zeros(1)).item(), 1.0)
 
 

@@ -1,4 +1,4 @@
-"""Torch-grade attention/transformer parity for ``import jittor as torch``.
+"""Torch-grade attention/transformer parity for ``import torch``.
 
 The transformer surface is the core of the jittor-as-torch project. Compares
 F.scaled_dot_product_attention and nn.MultiheadAttention against explicit numpy references.
@@ -15,13 +15,28 @@ import threading
 from types import ModuleType
 from unittest import mock
 import numpy as np
-import jittor as torch
+import torch
 import jittor as jt
-from jittor import nn
+from torch import nn
+from jittor.compat import diagnostics as _diagnostics
+from jittor.compat.torch.installers.nn import attention as _attention_impl
 
 from _helpers.child_process import run_python_child
 
 _DEVICES = [("cpu", 0)] + ([("cuda", 1)] if jt.has_cuda else [])
+
+
+def _flash_stats(*, reset=False):
+    # Follow the actual producer's Runtime. Native and Torch namespaces share
+    # the service, without publishing a statistics alias on either root.
+    owner = _attention_impl.jt
+    if reset:
+        _diagnostics.set_sdpa_flash_stats(
+            {"hits": 0, "misses": {}, "casts": {}, "backend": None}, owner=owner)
+    stats = _diagnostics.sdpa_flash_stats(owner)
+    assert set(stats) >= {"hits", "misses", "casts", "backend"}
+    assert stats is _attention_impl._sdpa_flash_stats()
+    return stats
 
 
 def both_devices(fn):
@@ -84,6 +99,22 @@ class Base(unittest.TestCase):
 
 
 class TestSDPA(Base):
+    def test_flash_statistics_follow_the_producer_owner(self):
+        from jittor._runtime.state import RuntimeContext, RuntimeState
+        owner = ModuleType("attention_stats_owner")
+        owner.runtime = RuntimeState(RuntimeContext(ModuleType("flags")))
+        with mock.patch.object(_attention_impl, "jt", owner):
+            stats = _flash_stats(reset=True)
+            _attention_impl._sdpa_flash_hit("test_backend")
+            _attention_impl._sdpa_flash_miss("test_miss")
+            _attention_impl._sdpa_flash_cast("test_cast")
+            self.assertIs(_flash_stats(), stats)
+            self.assertEqual(stats, {"hits": 1, "misses": {"test_miss": 1},
+                                     "casts": {"test_cast": 1}, "backend": "test_backend"})
+            fresh = _flash_stats(reset=True)
+            self.assertIsNot(fresh, stats)
+            self.assertEqual(fresh["hits"], 0)
+
     def setUp(self):
         rng = np.random.RandomState(0)
         # (batch, heads, seq, dim)
@@ -228,8 +259,7 @@ class TestSDPA(Base):
                 mock.patch.dict(os.environ, env, clear=False), \
                 mock.patch.object(
                     flashattn_jittor, "load_backend_for") as loader:
-            if hasattr(jt, "_torch_sdpa_flash_stats"):
-                delattr(jt, "_torch_sdpa_flash_stats")
+            _flash_stats(reset=True)
             qv, kv, vv = (
                 jt.array(value).float16() for value in (q, k, v))
             out = torch.nn.functional.scaled_dot_product_attention(qv, kv, vv)
@@ -237,7 +267,7 @@ class TestSDPA(Base):
                 (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
             fetched = jt.fetch_sync(
                 [out.float32()] + [grad.float32() for grad in grads])
-            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+            stats = _flash_stats()
 
         loader.assert_not_called()
         self.assertEqual(stats.get("hits", 0), 0)
@@ -261,13 +291,12 @@ class TestSDPA(Base):
         os.environ["JITTOR_TORCH_INFERENCE"] = "1"
         try:
             with jt.flag_scope(use_cuda=1), jt.no_grad():
-                if hasattr(jt, "_torch_sdpa_flash_stats"):
-                    delattr(jt, "_torch_sdpa_flash_stats")
+                _flash_stats(reset=True)
                 out = torch.nn.functional.scaled_dot_product_attention(
                     jt.array(q).float16(), jt.array(k).float16(),
                     jt.array(v).float16())
                 got = out.float32().numpy()
-                stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+                stats = _flash_stats()
         finally:
             if old_inference is None:
                 os.environ.pop("JITTOR_TORCH_INFERENCE", None)
@@ -1174,12 +1203,11 @@ assert after == before + 1, (before, after)
         k = rng.randn(2, 4, 8, 8).astype("float32")
         v = rng.randn(2, 4, 8, 8).astype("float32")
         with jt.flag_scope(use_cuda=1), jt.no_grad():
-            if hasattr(jt, "_torch_sdpa_flash_stats"):
-                delattr(jt, "_torch_sdpa_flash_stats")
+            _flash_stats(reset=True)
             out = torch.nn.functional.scaled_dot_product_attention(
                 jt.array(q).float16(), jt.array(k).float16(), jt.array(v).float16())
             got = out.float32().numpy()
-            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+            stats = _flash_stats()
         self.assertGreaterEqual(stats.get("hits", 0), 1, "native flash-attn SDPA was not used")
         self.assertIn("flashattn_jittor", str(stats.get("backend", "")))
         self.ac(got, _sdpa_ref(q, k, v), atol=2e-3, rtol=2e-3, msg="sdpa native flash fp16 cuda")
@@ -1194,8 +1222,7 @@ assert after == before + 1, (before, after)
         v = rng.randn(1, 2, 8, 32).astype("float32")
         grad_out = rng.randn(1, 2, 8, 32).astype("float32")
         with jt.flag_scope(use_cuda=1):
-            if hasattr(jt, "_torch_sdpa_flash_stats"):
-                delattr(jt, "_torch_sdpa_flash_stats")
+            _flash_stats(reset=True)
             qv, kv, vv = (
                 jt.array(value).float16() for value in (q, k, v))
             out = torch.nn.functional.scaled_dot_product_attention(qv, kv, vv)
@@ -1203,7 +1230,7 @@ assert after == before + 1, (before, after)
                 (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
             fetched = jt.fetch_sync(
                 [out.float32()] + [grad.float32() for grad in grads])
-            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+            stats = _flash_stats()
 
         self.assertGreaterEqual(stats.get("hits", 0), 1)
         self.assertEqual(stats.get("misses", {}), {})
@@ -1227,8 +1254,7 @@ assert after == before + 1, (before, after)
         v = rng.randn(1, 2, 8, 32).astype("float32")
         grad_out = rng.randn(1, 2, 8, 32).astype("float32")
         with jt.flag_scope(use_cuda=1):
-            if hasattr(jt, "_torch_sdpa_flash_stats"):
-                delattr(jt, "_torch_sdpa_flash_stats")
+            _flash_stats(reset=True)
             qv, kv, vv = (
                 jt.array(value).bfloat16() for value in (q, k, v))
             out = torch.nn.functional.scaled_dot_product_attention(qv, kv, vv)
@@ -1236,7 +1262,7 @@ assert after == before + 1, (before, after)
                 (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
             fetched = jt.fetch_sync(
                 [out.float32()] + [grad.float32() for grad in grads])
-            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+            stats = _flash_stats()
 
         self.assertGreaterEqual(stats.get("hits", 0), 1)
         self.assertEqual(stats.get("misses", {}), {})
@@ -1263,8 +1289,7 @@ assert after == before + 1, (before, after)
             for name, mask, reference_mask in (
                     ("bool", jt.array(keep), bool_bias),
                     ("additive", jt.array(additive), additive)):
-                if hasattr(jt, "_torch_sdpa_flash_stats"):
-                    delattr(jt, "_torch_sdpa_flash_stats")
+                _flash_stats(reset=True)
                 qv, kv, vv = (
                     jt.array(value).to(dtype) for value in (q, k, v))
                 out = torch.nn.functional.scaled_dot_product_attention(
@@ -1273,7 +1298,7 @@ assert after == before + 1, (before, after)
                     (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
                 fetched = jt.fetch_sync(
                     [out.float32()] + [grad.float32() for grad in grads])
-                stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+                stats = _flash_stats()
 
                 self.assertEqual(stats.get("hits", 0), 0, name)
                 self.assertEqual(stats.get("misses", {}), {"mask": 1}, name)
@@ -1379,8 +1404,7 @@ assert after == before + 1, (before, after)
         v = rng.randn(1, 2, 8, 64).astype("float32")
         grad_out = rng.randn(1, 2, 8, 64).astype("float32")
         with jt.flag_scope(use_cuda=1):
-            if hasattr(jt, "_torch_sdpa_flash_stats"):
-                delattr(jt, "_torch_sdpa_flash_stats")
+            _flash_stats(reset=True)
             qv, kv, vv = (
                 jt.array(value).bfloat16() for value in (q, k, v))
             out = torch.nn.functional.scaled_dot_product_attention(qv, kv, vv)
@@ -1388,7 +1412,7 @@ assert after == before + 1, (before, after)
                 (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
             fetched = jt.fetch_sync(
                 [out.float32()] + [grad.float32() for grad in grads])
-            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+            stats = _flash_stats()
 
         self.assertGreaterEqual(stats.get("hits", 0), 1)
         self.assertEqual(stats.get("misses", {}), {})
@@ -1414,8 +1438,7 @@ assert after == before + 1, (before, after)
         v = rng.randn(1, 2, 8, 96).astype("float32")
         grad_out = rng.randn(1, 2, 8, 96).astype("float32")
         with jt.flag_scope(use_cuda=1):
-            if hasattr(jt, "_torch_sdpa_flash_stats"):
-                delattr(jt, "_torch_sdpa_flash_stats")
+            _flash_stats(reset=True)
             qv, kv, vv = (
                 jt.array(value).bfloat16() for value in (q, k, v))
             out = torch.nn.functional.scaled_dot_product_attention(qv, kv, vv)
@@ -1423,7 +1446,7 @@ assert after == before + 1, (before, after)
                 (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
             fetched = jt.fetch_sync(
                 [out.float32()] + [grad.float32() for grad in grads])
-            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+            stats = _flash_stats()
 
         self.assertGreaterEqual(stats.get("hits", 0), 1)
         self.assertEqual(stats.get("misses", {}), {})
@@ -1449,8 +1472,7 @@ assert after == before + 1, (before, after)
         v = rng.randn(1, 2, 8, 128).astype("float32")
         grad_out = rng.randn(1, 2, 8, 128).astype("float32")
         with jt.flag_scope(use_cuda=1):
-            if hasattr(jt, "_torch_sdpa_flash_stats"):
-                delattr(jt, "_torch_sdpa_flash_stats")
+            _flash_stats(reset=True)
             qv, kv, vv = (
                 jt.array(value).bfloat16() for value in (q, k, v))
             out = torch.nn.functional.scaled_dot_product_attention(qv, kv, vv)
@@ -1458,7 +1480,7 @@ assert after == before + 1, (before, after)
                 (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
             fetched = jt.fetch_sync(
                 [out.float32()] + [grad.float32() for grad in grads])
-            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+            stats = _flash_stats()
 
         self.assertGreaterEqual(stats.get("hits", 0), 1)
         self.assertEqual(stats.get("misses", {}), {})
@@ -1484,8 +1506,7 @@ assert after == before + 1, (before, after)
         v = rng.randn(1, 2, 8, 192).astype("float32")
         grad_out = rng.randn(1, 2, 8, 192).astype("float32")
         with jt.flag_scope(use_cuda=1):
-            if hasattr(jt, "_torch_sdpa_flash_stats"):
-                delattr(jt, "_torch_sdpa_flash_stats")
+            _flash_stats(reset=True)
             qv, kv, vv = (
                 jt.array(value).bfloat16() for value in (q, k, v))
             out = torch.nn.functional.scaled_dot_product_attention(qv, kv, vv)
@@ -1493,7 +1514,7 @@ assert after == before + 1, (before, after)
                 (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
             fetched = jt.fetch_sync(
                 [out.float32()] + [grad.float32() for grad in grads])
-            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+            stats = _flash_stats()
 
         self.assertGreaterEqual(stats.get("hits", 0), 1)
         self.assertEqual(stats.get("misses", {}), {})
@@ -1519,8 +1540,7 @@ assert after == before + 1, (before, after)
         v = rng.randn(1, 2, 8, 256).astype("float32")
         grad_out = rng.randn(1, 2, 8, 256).astype("float32")
         with jt.flag_scope(use_cuda=1):
-            if hasattr(jt, "_torch_sdpa_flash_stats"):
-                delattr(jt, "_torch_sdpa_flash_stats")
+            _flash_stats(reset=True)
             qv, kv, vv = (
                 jt.array(value).bfloat16() for value in (q, k, v))
             out = torch.nn.functional.scaled_dot_product_attention(qv, kv, vv)
@@ -1528,7 +1548,7 @@ assert after == before + 1, (before, after)
                 (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
             fetched = jt.fetch_sync(
                 [out.float32()] + [grad.float32() for grad in grads])
-            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+            stats = _flash_stats()
 
         self.assertGreaterEqual(stats.get("hits", 0), 1)
         self.assertEqual(stats.get("misses", {}), {})
@@ -1554,8 +1574,7 @@ assert after == before + 1, (before, after)
         v = rng.randn(1, 2, 8, 64).astype("float32")
         grad_out = rng.randn(1, 2, 8, 64).astype("float32")
         with jt.flag_scope(use_cuda=1):
-            if hasattr(jt, "_torch_sdpa_flash_stats"):
-                delattr(jt, "_torch_sdpa_flash_stats")
+            _flash_stats(reset=True)
             qv, kv, vv = (
                 jt.array(value).float16() for value in (q, k, v))
             out = torch.nn.functional.scaled_dot_product_attention(qv, kv, vv)
@@ -1563,7 +1582,7 @@ assert after == before + 1, (before, after)
                 (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
             fetched = jt.fetch_sync(
                 [out.float32()] + [grad.float32() for grad in grads])
-            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+            stats = _flash_stats()
 
         self.assertGreaterEqual(stats.get("hits", 0), 1)
         self.assertEqual(stats.get("misses", {}), {})
@@ -1589,8 +1608,7 @@ assert after == before + 1, (before, after)
         v = rng.randn(1, 2, 8, 96).astype("float32")
         grad_out = rng.randn(1, 2, 8, 96).astype("float32")
         with jt.flag_scope(use_cuda=1):
-            if hasattr(jt, "_torch_sdpa_flash_stats"):
-                delattr(jt, "_torch_sdpa_flash_stats")
+            _flash_stats(reset=True)
             qv, kv, vv = (
                 jt.array(value).float16() for value in (q, k, v))
             out = torch.nn.functional.scaled_dot_product_attention(qv, kv, vv)
@@ -1598,7 +1616,7 @@ assert after == before + 1, (before, after)
                 (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
             fetched = jt.fetch_sync(
                 [out.float32()] + [grad.float32() for grad in grads])
-            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+            stats = _flash_stats()
 
         self.assertGreaterEqual(stats.get("hits", 0), 1)
         self.assertEqual(stats.get("misses", {}), {})
@@ -1624,8 +1642,7 @@ assert after == before + 1, (before, after)
         v = rng.randn(1, 2, 8, 128).astype("float32")
         grad_out = rng.randn(1, 2, 8, 128).astype("float32")
         with jt.flag_scope(use_cuda=1):
-            if hasattr(jt, "_torch_sdpa_flash_stats"):
-                delattr(jt, "_torch_sdpa_flash_stats")
+            _flash_stats(reset=True)
             qv, kv, vv = (
                 jt.array(value).float16() for value in (q, k, v))
             out = torch.nn.functional.scaled_dot_product_attention(qv, kv, vv)
@@ -1633,7 +1650,7 @@ assert after == before + 1, (before, after)
                 (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
             fetched = jt.fetch_sync(
                 [out.float32()] + [grad.float32() for grad in grads])
-            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+            stats = _flash_stats()
 
         self.assertGreaterEqual(stats.get("hits", 0), 1)
         self.assertEqual(stats.get("misses", {}), {})
@@ -1659,8 +1676,7 @@ assert after == before + 1, (before, after)
         v = rng.randn(1, 2, 8, 192).astype("float32")
         grad_out = rng.randn(1, 2, 8, 192).astype("float32")
         with jt.flag_scope(use_cuda=1):
-            if hasattr(jt, "_torch_sdpa_flash_stats"):
-                delattr(jt, "_torch_sdpa_flash_stats")
+            _flash_stats(reset=True)
             qv, kv, vv = (
                 jt.array(value).float16() for value in (q, k, v))
             out = torch.nn.functional.scaled_dot_product_attention(qv, kv, vv)
@@ -1668,7 +1684,7 @@ assert after == before + 1, (before, after)
                 (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
             fetched = jt.fetch_sync(
                 [out.float32()] + [grad.float32() for grad in grads])
-            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+            stats = _flash_stats()
 
         self.assertGreaterEqual(stats.get("hits", 0), 1)
         self.assertEqual(stats.get("misses", {}), {})
@@ -1694,8 +1710,7 @@ assert after == before + 1, (before, after)
         v = rng.randn(1, 2, 8, 256).astype("float32")
         grad_out = rng.randn(1, 2, 8, 256).astype("float32")
         with jt.flag_scope(use_cuda=1):
-            if hasattr(jt, "_torch_sdpa_flash_stats"):
-                delattr(jt, "_torch_sdpa_flash_stats")
+            _flash_stats(reset=True)
             qv, kv, vv = (
                 jt.array(value).float16() for value in (q, k, v))
             out = torch.nn.functional.scaled_dot_product_attention(qv, kv, vv)
@@ -1703,7 +1718,7 @@ assert after == before + 1, (before, after)
                 (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
             fetched = jt.fetch_sync(
                 [out.float32()] + [grad.float32() for grad in grads])
-            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+            stats = _flash_stats()
 
         self.assertGreaterEqual(stats.get("hits", 0), 1)
         self.assertEqual(stats.get("misses", {}), {})
@@ -2077,14 +2092,13 @@ assert after == before + 1, (before, after)
         k = rng.randn(1, 2, 5, 32).astype("float32")
         v = rng.randn(1, 2, 5, 32).astype("float32")
         with jt.flag_scope(use_cuda=1), jt.no_grad():
-            if hasattr(jt, "_torch_sdpa_flash_stats"):
-                delattr(jt, "_torch_sdpa_flash_stats")
+            _flash_stats(reset=True)
             torch._torch_sdpa_flash_backend_cache.clear()
             out = torch.nn.functional.scaled_dot_product_attention(
                 jt.array(q).float16(), jt.array(k).float16(),
                 jt.array(v).float16(), enable_gqa=True)
             got = out.float32().numpy()
-            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+            stats = _flash_stats()
         expected = _sdpa_ref(
             q, np.repeat(k, 2, axis=1), np.repeat(v, 2, axis=1))
         self.assertGreaterEqual(stats.get("hits", 0), 1)
@@ -2104,13 +2118,12 @@ assert after == before + 1, (before, after)
         os.environ["JITTOR_FLASH_ATTN_CAST_FLOAT32"] = "fp16"
         try:
             with jt.flag_scope(use_cuda=1), jt.no_grad():
-                if hasattr(jt, "_torch_sdpa_flash_stats"):
-                    delattr(jt, "_torch_sdpa_flash_stats")
+                _flash_stats(reset=True)
                 out = torch.nn.functional.scaled_dot_product_attention(
                     jt.array(q), jt.array(k), jt.array(v))
                 self.assertEqual(str(out.dtype), "float32")
                 got = out.numpy()
-                stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+                stats = _flash_stats()
         finally:
             if old is None:
                 os.environ.pop("JITTOR_FLASH_ATTN_CAST_FLOAT32", None)

@@ -70,8 +70,7 @@ class TestTorchShimAliases(unittest.TestCase):
             entries.append(env["PYTHONPATH"])
         env["PYTHONPATH"] = os.pathsep.join(entries)
         env["PYTHONDONTWRITEBYTECODE"] = "1"
-        env["CUDA_VISIBLE_DEVICES"] = ""
-        env["nvcc_path"] = ""
+        # Namespace identity is backend-independent; retain the caller's warm core configuration.
         # These subprocesses check what plain Jittor does with the ``torch``
         # namespace. The parent session runs in Torch mode, and its preflight
         # exports JITTOR_TORCH_SHIM plus the project/runtime roots; inheriting
@@ -218,26 +217,27 @@ print('RESULT=' + json.dumps({'preserved': True}))
     @pytest.mark.xdist_group("torch_shim_module_graph")
     def test_compat_installer_remains_idempotent(self):
         from jittor.compat import torch as compat
+        import torch
 
         before_keys = {name for name in sys.modules if name.startswith("torch.")}
         before_objects = {
-            "grad": jt.grad,
-            "no_grad": jt.no_grad,
-            "nn": jt.nn,
-            "functional": jt.nn.functional,
-            "interpolate": jt.nn.functional.interpolate,
+            "grad": torch.grad,
+            "no_grad": torch.no_grad,
+            "nn": torch.nn,
+            "functional": torch.nn.functional,
+            "interpolate": torch.nn.functional.interpolate,
         }
-        self.assertIs(compat.install(jt), jt)
-        self.assertIs(compat.install(jt), jt)
+        self.assertIs(compat.install(torch), torch)
+        self.assertIs(compat.install(torch), torch)
         self.assertEqual(
             {name for name in sys.modules if name.startswith("torch.")}, before_keys
         )
         after_objects = {
-            "grad": jt.grad,
-            "no_grad": jt.no_grad,
-            "nn": jt.nn,
-            "functional": jt.nn.functional,
-            "interpolate": jt.nn.functional.interpolate,
+            "grad": torch.grad,
+            "no_grad": torch.no_grad,
+            "nn": torch.nn,
+            "functional": torch.nn.functional,
+            "interpolate": torch.nn.functional.interpolate,
         }
         for name, value in before_objects.items():
             self.assertIs(after_objects[name], value)
@@ -256,8 +256,13 @@ canonical = importlib.import_module('jittor.compat.shim.backends.flash_attention
 legacy = importlib.import_module('jittor.torch_shim.flashattn_jittor')
 assert canonical is legacy
 from jittor.compat import torch as compat
-compat.install(jittor); compat.install(jittor)
-assert sum(r.step == 'core' for r in jittor._torch_compat_install_context.reports) == 1
+import torch
+compat.install(torch); compat.install(torch)
+assert torch is not jittor
+assert torch.Tensor is not jittor.Var
+assert torch.nn.Module is not jittor.Module
+assert "_torch_compat_install_context" not in vars(jittor)
+assert sum(r.step == 'core' for r in torch._torch_compat_install_context.reports) == 1
 print('RESULT=' + json.dumps(sorted(k for k in sys.modules if k == 'torch' or k.startswith('torch.'))))
 """,
             """
@@ -267,8 +272,13 @@ import jittor
 canonical = importlib.import_module('jittor.compat.shim.backends.flash_attention')
 assert canonical is legacy
 from jittor.compat import torch as compat
-compat.install(jittor); compat.install(jittor)
-assert sum(r.step == 'core' for r in jittor._torch_compat_install_context.reports) == 1
+import torch
+compat.install(torch); compat.install(torch)
+assert torch is not jittor
+assert torch.Tensor is not jittor.Var
+assert torch.nn.Module is not jittor.Module
+assert "_torch_compat_install_context" not in vars(jittor)
+assert sum(r.step == 'core' for r in torch._torch_compat_install_context.reports) == 1
 print('RESULT=' + json.dumps(sorted(k for k in sys.modules if k == 'torch' or k.startswith('torch.'))))
 """,
         )
@@ -293,12 +303,17 @@ import json, sys
 import torch
 import jittor
 from jittor.compat import torch as compat
-compat.install(jittor); compat.install(jittor)
-assert torch is jittor is sys.modules['torch']
+import torch
+compat.install(torch); compat.install(torch)
+assert torch is not jittor
+assert torch.Tensor is not jittor.Var
+assert torch.nn.Module is not jittor.Module
+assert "_torch_compat_install_context" not in vars(jittor)
+assert torch is sys.modules['torch'] and torch is not jittor
 assert jittor.__version__ == '1.3.11.0'
-assert jittor.__torch_version__ == '2.11.0'
-assert jittor.version.__version__ == '2.11.0'
-assert sum(r.step == 'core' for r in jittor._torch_compat_install_context.reports) == 1
+assert torch.__torch_version__ == '2.11.0'
+assert torch.version.__version__ == '2.11.0'
+assert sum(r.step == 'core' for r in torch._torch_compat_install_context.reports) == 1
 print('RESULT=' + json.dumps(sorted(k for k in sys.modules if k == 'torch' or k.startswith('torch.'))))
 """,
                 [target],

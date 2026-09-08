@@ -3,7 +3,7 @@
 This module is shared by both entry points:
 
 * deployed ``import torch`` via ``jittor/compat/shim/resources/torch/__init__.py``
-* bare ``import jittor as torch`` via ``jittor.compat.torch``
+* explicit ``jittor.compat.shim.activate()`` followed by ``import torch``
 
 Keeping the facade here avoids two subtly different BuildExtension/load
 implementations for PyTorch-style CUDA extensions such as 3DGS' rasterizer.

@@ -13,7 +13,8 @@ import unittest
 
 import numpy as np
 
-import jittor as torch
+import torch
+import jittor as _native_jittor
 
 
 _HAS_MMCV = importlib.util.find_spec("mmcv") is not None
@@ -42,7 +43,7 @@ class TestCudaTypedTensorCompat(unittest.TestCase):
 
     @unittest.skipUnless(torch.cuda.is_available(), "needs CUDA or an accelerator backend")
     def test_cuda_dtype_constructor_executes_on_device(self):
-        previous = torch.flags.use_cuda
+        previous = _native_jittor.flags.use_cuda
         try:
             value = torch.cuda.FloatTensor([1.0, 2.0])
             self.assertTrue(value.is_cuda)
@@ -52,8 +53,8 @@ class TestCudaTypedTensorCompat(unittest.TestCase):
             self.assertTrue(result.is_cuda)
             np.testing.assert_allclose(result.numpy(), np.array([3.0, 6.0], dtype=np.float32))
         finally:
-            torch.sync_all()
-            torch.flags.use_cuda = previous
+            _native_jittor.sync_all()
+            _native_jittor.flags.use_cuda = previous
 
 
 @unittest.skipUnless(_HAS_MMCV and _HAS_MMENGINE, "needs mmcv-lite and mmengine")

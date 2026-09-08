@@ -36,7 +36,8 @@ import inspect
 import unittest
 
 import numpy as np
-import jittor as torch
+import torch
+import jittor as _native_jittor
 
 from _helpers import common as cu
 from _helpers.device_types import instantiate_device_type_tests
@@ -234,7 +235,7 @@ class TestReductionOwner(cu.JittorTestCase):
     # it into ``**kw`` and silently reduce over everything.
 
     def test_var_and_std_honour_the_axis_alias_like_the_method_does(self, device):
-        tensor = torch.array(MATRIX)
+        tensor = torch.tensor(MATRIX)
         for name, reference in (
                 ("var", np.var(MATRIX, axis=0, ddof=1)),
                 ("std", np.std(MATRIX, axis=0, ddof=1))):
@@ -246,7 +247,7 @@ class TestReductionOwner(cu.JittorTestCase):
                 np.testing.assert_array_equal(through_module, through_method)
 
     def test_max_and_min_honour_the_axis_alias_like_the_method_does(self, device):
-        tensor = torch.array(MATRIX)
+        tensor = torch.tensor(MATRIX)
         for name, values, indices in (
                 ("max", np.max(MATRIX, axis=0), np.argmax(MATRIX, axis=0)),
                 ("min", np.min(MATRIX, axis=0), np.argmin(MATRIX, axis=0))):
@@ -261,7 +262,7 @@ class TestReductionOwner(cu.JittorTestCase):
                     result.values.numpy())
 
     def test_argmax_and_argmin_accept_the_axis_alias(self, device):
-        tensor = torch.array(MATRIX)
+        tensor = torch.tensor(MATRIX)
         for name, reference in (
                 ("argmax", np.argmax(MATRIX, axis=0)),
                 ("argmin", np.argmin(MATRIX, axis=0))):
@@ -280,7 +281,7 @@ class TestReductionOwner(cu.JittorTestCase):
         the same call written ``torch.softmax(logits, -1, dtype=...)`` computed
         in the input's narrow dtype instead.
         """
-        tensor = torch.array(MATRIX)
+        tensor = torch.tensor(MATRIX)
         for name in ("softmax", "log_softmax"):
             with self.subTest(name=name):
                 through_module = getattr(torch, name)(
@@ -296,7 +297,7 @@ class TestReductionOwner(cu.JittorTestCase):
 
     def test_variance_defaults_to_the_unbiased_estimator(self, device):
         """Torch's default is ``correction=1``; Jittor's native var is biased."""
-        tensor = torch.array(MATRIX)
+        tensor = torch.tensor(MATRIX)
         np.testing.assert_allclose(
             torch.var(tensor, dim=1).numpy(),
             np.var(MATRIX, axis=1, ddof=1), rtol=1e-6)
@@ -312,7 +313,7 @@ class TestReductionOwner(cu.JittorTestCase):
     def test_variance_over_a_tuple_of_dims(self, device):
         """The native ``dim=`` slot is scalar-only, so this path is compat's."""
         cube = (np.arange(24, dtype="float32") * 0.5).reshape(2, 3, 4)
-        tensor = torch.array(cube)
+        tensor = torch.tensor(cube)
         np.testing.assert_allclose(
             tensor.var(dim=(1, 2)).numpy(),
             np.var(cube.reshape(2, -1), axis=1, ddof=1), rtol=1e-6)
@@ -323,15 +324,15 @@ class TestReductionOwner(cu.JittorTestCase):
     def test_std_has_no_floor_under_a_constant_row(self, device):
         """Jittor's native std clamps at 1e-6; Torch's is a real zero."""
         flat = np.full((2, 5), 3.0, dtype="float32")
-        actual = torch.array(flat).std(dim=1).numpy()
+        actual = torch.tensor(flat).std(dim=1).numpy()
         np.testing.assert_array_equal(actual, np.zeros(2, dtype="float32"))
 
     def test_max_and_min_keep_their_three_torch_shapes(self, device):
-        tensor = torch.array(MATRIX)
+        tensor = torch.tensor(MATRIX)
         np.testing.assert_array_equal(torch.max(tensor).numpy(), MATRIX.max())
         np.testing.assert_array_equal(torch.min(tensor).numpy(), MATRIX.min())
         flipped = MATRIX[::-1].copy()
-        other = torch.array(flipped)
+        other = torch.tensor(flipped)
         np.testing.assert_array_equal(
             torch.max(tensor, other).numpy(), np.maximum(MATRIX, flipped))
         np.testing.assert_array_equal(
@@ -341,7 +342,7 @@ class TestReductionOwner(cu.JittorTestCase):
 
     def test_max_keeps_the_values_only_keepdims_spelling_for_jittor(self, device):
         """jittor's own softmax/layernorm call ``x.max(dim, keepdims=True)``."""
-        tensor = torch.array(MATRIX)
+        tensor = torch.tensor(MATRIX)
         values = tensor.max(1, keepdims=True)
         self.assertNotIsInstance(values, tuple)
         np.testing.assert_array_equal(
@@ -352,8 +353,8 @@ class TestReductionOwner(cu.JittorTestCase):
         source = np.arange(int(mask.sum()), dtype="float32") + 100.0
         expected = MATRIX.copy()
         expected[mask] = source
-        actual = torch.array(MATRIX).masked_scatter(
-            torch.array(mask), torch.array(source))
+        actual = torch.tensor(MATRIX).masked_scatter(
+            torch.tensor(mask), torch.tensor(source))
         np.testing.assert_array_equal(actual.numpy(), expected)
         self.assertEqual(str(actual.dtype), "float32")
 
@@ -362,9 +363,9 @@ class TestReductionOwner(cu.JittorTestCase):
         source = np.arange(int(mask.sum()), dtype="float32") + 100.0
         expected = MATRIX.copy()
         expected[mask] = source
-        tensor = torch.array(MATRIX)
+        tensor = torch.tensor(MATRIX)
         returned = tensor.masked_scatter_(
-            torch.array(mask), torch.array(source))
+            torch.tensor(mask), torch.tensor(source))
         self.assertIs(returned, tensor)
         np.testing.assert_array_equal(tensor.numpy(), expected)
 
@@ -374,21 +375,21 @@ class TestReductionOwner(cu.JittorTestCase):
         source = np.arange(int(full.sum()), dtype="float32") + 100.0
         expected = MATRIX.copy()
         expected[full] = source
-        actual = torch.array(MATRIX).masked_scatter(
-            torch.array(mask), torch.array(source))
+        actual = torch.tensor(MATRIX).masked_scatter(
+            torch.tensor(mask), torch.tensor(source))
         np.testing.assert_array_equal(actual.numpy(), expected)
 
     def test_masked_select_flattens_the_selection(self, device):
         mask = MATRIX > 5
-        tensor = torch.array(MATRIX)
+        tensor = torch.tensor(MATRIX)
         np.testing.assert_array_equal(
-            torch.masked_select(tensor, torch.array(mask)).numpy(),
+            torch.masked_select(tensor, torch.tensor(mask)).numpy(),
             MATRIX[mask])
         np.testing.assert_array_equal(
-            tensor.masked_select(torch.array(mask)).numpy(), MATRIX[mask])
+            tensor.masked_select(torch.tensor(mask)).numpy(), MATRIX[mask])
 
     def test_unfold_slides_a_window_along_one_dim(self, device):
-        tensor = torch.array(MATRIX)
+        tensor = torch.tensor(MATRIX)
         actual = tensor.unfold(1, 2, 2).numpy()
         self.assertEqual(actual.shape, (3, 2, 2))
         np.testing.assert_array_equal(actual, MATRIX.reshape(3, 2, 2))
@@ -401,7 +402,7 @@ class TestReductionOwner(cu.JittorTestCase):
 
     def test_diagonal_matches_numpy_including_negative_axes(self, device):
         cube = np.arange(24, dtype="float32").reshape(2, 3, 4)
-        tensor = torch.array(cube)
+        tensor = torch.tensor(cube)
         for offset, dim1, dim2 in ((0, 0, 2), (1, 0, 2), (-1, 0, 2),
                                    (0, -2, -1), (2, 1, 2), (-5, 0, 1)):
             with self.subTest(offset=offset, dim1=dim1, dim2=dim2):
@@ -416,19 +417,19 @@ class TestReductionOwner(cu.JittorTestCase):
         first = np.array([[2.0, 4.0], [8.0, 16.0]], dtype="float32")
         second = np.array([[1.0, 2.0], [4.0, 8.0]], dtype="float32")
         base = MATRIX[:2, :2]
-        tensor = torch.array(base)
+        tensor = torch.tensor(base)
         np.testing.assert_allclose(
-            tensor.addcmul(torch.array(first), torch.array(second),
+            tensor.addcmul(torch.tensor(first), torch.tensor(second),
                            value=0.5).numpy(),
             base + 0.5 * (first * second), rtol=1e-6)
         np.testing.assert_allclose(
-            tensor.addcdiv(torch.array(first), torch.array(second),
+            tensor.addcdiv(torch.tensor(first), torch.tensor(second),
                            value=2).numpy(),
             base + 2 * (first / second), rtol=1e-6)
 
     def test_broadcast_to_expands_without_copying_values(self, device):
         row = np.array([[1.0, 2.0, 3.0]], dtype="float32")
-        tensor = torch.array(row)
+        tensor = torch.tensor(row)
         expected = np.broadcast_to(row, (4, 3))
         np.testing.assert_array_equal(
             torch.broadcast_to(tensor, (4, 3)).numpy(), expected)
@@ -447,14 +448,14 @@ class TestReductionOwner(cu.JittorTestCase):
         future kernel starts breaking ties differently, this test is where it
         shows up, rather than in a model that silently gathers other rows.
         """
-        tensor_here = torch.array(DUPLICATED)
+        tensor_here = torch.tensor(DUPLICATED)
         rows = np.arange(DUPLICATED.shape[0])
         for name in ("argmax", "argmin"):
             with self.subTest(name=name):
                 here = getattr(torch, name)(tensor_here, dim=1).numpy()
-                with torch.flag_scope(use_cuda=0):
+                with _native_jittor.flag_scope(use_cuda=0):
                     on_cpu = getattr(torch, name)(
-                        torch.array(DUPLICATED), dim=1).numpy()
+                        torch.tensor(DUPLICATED), dim=1).numpy()
                 np.testing.assert_array_equal(here, on_cpu)
                 np.testing.assert_array_equal(
                     DUPLICATED[rows, here],
@@ -462,9 +463,9 @@ class TestReductionOwner(cu.JittorTestCase):
         for name in ("max", "min"):
             with self.subTest(name=name):
                 here = getattr(torch, name)(tensor_here, dim=1)
-                with torch.flag_scope(use_cuda=0):
+                with _native_jittor.flag_scope(use_cuda=0):
                     on_cpu = getattr(torch, name)(
-                        torch.array(DUPLICATED), dim=1)
+                        torch.tensor(DUPLICATED), dim=1)
                     cpu_values = on_cpu.values.numpy()
                     cpu_indices = on_cpu.indices.numpy()
                 np.testing.assert_array_equal(here.values.numpy(), cpu_values)
@@ -482,9 +483,9 @@ class TestReductionOwner(cu.JittorTestCase):
         that both sides track the float64 reference, not bit equality.
         """
         reference = np.var(SPREAD.astype("float64"), axis=1, ddof=1)
-        here = torch.var(torch.array(SPREAD), dim=1).numpy()
-        with torch.flag_scope(use_cuda=0):
-            on_cpu = torch.var(torch.array(SPREAD), dim=1).numpy()
+        here = torch.var(torch.tensor(SPREAD), dim=1).numpy()
+        with _native_jittor.flag_scope(use_cuda=0):
+            on_cpu = torch.var(torch.tensor(SPREAD), dim=1).numpy()
         np.testing.assert_allclose(here, reference, rtol=1e-6)
         np.testing.assert_allclose(on_cpu, reference, rtol=1e-6)
         np.testing.assert_allclose(here, on_cpu, rtol=1e-5)
@@ -495,19 +496,19 @@ class TestReductionOwner(cu.JittorTestCase):
         source = np.arange(int(mask.sum()), dtype="float32")
 
         def scatter():
-            return torch.array(DUPLICATED).masked_scatter(
-                torch.array(mask), torch.array(source)).numpy()
+            return torch.tensor(DUPLICATED).masked_scatter(
+                torch.tensor(mask), torch.tensor(source)).numpy()
 
         def unfold():
-            return torch.array(DUPLICATED).unfold(1, 4, 2).numpy()
+            return torch.tensor(DUPLICATED).unfold(1, 4, 2).numpy()
 
         def diagonal():
-            return torch.array(DUPLICATED[:, :8]).diagonal(0, 0, 1).numpy()
+            return torch.tensor(DUPLICATED[:, :8]).diagonal(0, 0, 1).numpy()
 
         for probe in (scatter, unfold, diagonal):
             with self.subTest(probe=probe.__name__):
                 here = probe()
-                with torch.flag_scope(use_cuda=0):
+                with _native_jittor.flag_scope(use_cuda=0):
                     on_cpu = probe()
                 np.testing.assert_array_equal(here, on_cpu)
 

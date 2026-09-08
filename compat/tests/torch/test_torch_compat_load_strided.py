@@ -26,7 +26,7 @@ from collections import OrderedDict
 
 import numpy as np
 
-import jittor as torch
+import torch
 
 
 class _Global(object):

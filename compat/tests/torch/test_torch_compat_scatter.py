@@ -1,4 +1,4 @@
-"""Torch-grade scatter/gather/index-op-semantics tests for ``import jittor as torch``.
+"""Torch-grade scatter/gather/index-op-semantics tests for ``import torch``.
 
 Part of the torch-grade test-suite rewrite (sibling of ``test_torch_compat_indexing.py``).
 Every check compares jittor-as-torch against an INDEPENDENT numpy reference computed from
@@ -22,7 +22,7 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_scatter.py
 """
 import unittest
 import numpy as np
-import jittor as torch          # the whole point: jittor IS torch here
+import torch
 import jittor as jt
 
 F = jt.nn.functional
@@ -40,7 +40,7 @@ def both_devices(fn):
 
 def t(a):
     """np array -> jittor Var (keep dtype, including int32/int64/bool index tensors)."""
-    return torch.array(a)
+    return torch.tensor(a)
 
 
 # ---------------------------------------------------------------------------

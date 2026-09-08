@@ -1,10 +1,10 @@
-"""Unit tests for the `import jittor as torch` compatibility layer.
+"""Unit tests for the `import torch` compatibility layer.
 
 Run: python compat/tests/torch/_torch_compat_checks.py.
 These exercise the torch-API surface that transformers/LlamaFactory depend on.
 """
 import numpy as np
-import jittor as torch          # the whole point: jittor IS torch here
+import torch
 import jittor as jt
 
 PASS = FAIL = 0
@@ -445,7 +445,7 @@ _qv, _kv, _vv = jt.array(_q), jt.array(_k), jt.array(_v)
 _gq = jt.grad((_sdpa(_qv, _kv, _vv, is_causal=True) ** 2).sum(), [_qv])[0]
 ok(bool(jt.isfinite(_gq).all().item()) and float(jt.abs(_gq).sum().item()) > 0, "SDPA backward grad finite+nonzero")
 
-# torch.optim.lr_scheduler on the `import jittor as torch` path (was entirely missing;
+# torch.optim.lr_scheduler on the `import torch` path (was entirely missing;
 # the documented primary path). Schedulers drive jittor optimizers by updating both
 # optimizer.lr and each param_group["lr"]; verified against torch's exact formulas.
 import math as _math

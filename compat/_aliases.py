@@ -57,10 +57,12 @@ COMPAT_ALIASES = {
 _TORCH_PARENT_BINDING_EXCEPTIONS = frozenset(("torch.distributed._composable.fsdp.fully_shard",))
 
 
-def _activate_legacy(module):
+def _activate_torch_alias(module):
+    """Historical module spelling requests the same independent frontend."""
     root = sys.modules.get("jittor")
     if root is not None:
-        module.install(root)
+        from .shim.runtime import activate
+        activate(_root_module=root, _composition=True, verbose=False)
 
 
 _native.register_aliases(
@@ -70,7 +72,7 @@ _native.register_aliases(
         alias for alias in COMPAT_ALIASES
         if alias == "jittor.torch_compat" or alias.startswith("jittor.torch_fsdp2_compat.")
     ),
-    on_import={"jittor.torch_compat": _activate_legacy},
+    on_import={"jittor.torch_compat": _activate_torch_alias},
 )
 ALIASES = _native.ALIASES
 import_alias = _native.import_alias

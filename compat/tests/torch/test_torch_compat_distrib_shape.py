@@ -29,7 +29,7 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_distrib_shape.py
 """
 import unittest
 import numpy as np
-import jittor as torch          # the whole point: jittor IS torch here
+import torch
 import jittor as jt
 from jittor import distributions as D
 

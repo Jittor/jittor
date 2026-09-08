@@ -18,7 +18,7 @@ import unittest
 import numpy as np
 
 import jittor as jt
-import jittor as torch
+import torch
 
 
 _COUNTER = [0]

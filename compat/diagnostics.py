@@ -29,7 +29,7 @@ Writing it::
 
 Reading it back::
 
-    import jittor as torch
+    import torch
     torch.compat_swallowed()            # every record, in order
     torch.compat_swallowed("dtype")     # only records whose label matches
     torch.compat_swallowed_counts()     # {(label, exception): times}
@@ -90,44 +90,44 @@ LIMIT = 2048
 _records = collections.deque(maxlen=LIMIT)
 _counts = collections.Counter()
 _debug = None
-_sdpa_flash_stats = None
 
 
 def _new_sdpa_flash_stats():
     return {"hits": 0, "misses": {}, "casts": {}, "backend": None}
 
 
-def sdpa_flash_stats(owner=None):
-    """Return the canonical SDPA FlashAttention statistics mapping.
+def _new_sdpa_service():
+    return {"stats": _new_sdpa_flash_stats()}
 
-    ``owner`` is the legacy ``jittor`` module.  The mapping is owned by this
-    diagnostics facade; the historical ``owner._torch_sdpa_flash_stats``
-    attribute remains a live alias for callers that inspect or replace it.
-    If that alias is removed (as the compatibility tests do between runs), a
-    fresh mapping is published on the next access.
+
+def _sdpa_service(owner):
+    # Read materialized bindings only: querying diagnostics must not import
+    # Jittor, activate Torch, or invoke a namespace's fallback machinery.
+    if owner is None:
+        owner = sys.modules.get("jittor")
+    namespace = getattr(owner, "__dict__", {})
+    native = namespace.get("_torch_owner", owner)
+    runtime = getattr(native, "__dict__", {}).get("runtime")
+    if runtime is None or not callable(getattr(runtime, "service_state", None)):
+        raise RuntimeError("SDPA statistics require an initialized Runtime owner")
+    return runtime.service_state("compat.diagnostics.sdpa_flash", factory=_new_sdpa_service)
+
+
+def sdpa_flash_stats(owner=None):
+    """Return this owner's Runtime-local SDPA statistics, without root aliases.
+
+    Native and independent Torch owners backed by the same Runtime share the
+    mapping. With no explicit owner, only an already imported Jittor module is
+    consulted; missing Runtime initialization is an error, never a bootstrap.
     """
-    global _sdpa_flash_stats
-    if owner is not None:
-        legacy = getattr(owner, "_torch_sdpa_flash_stats", None)
-        if isinstance(legacy, dict):
-            if legacy is not _sdpa_flash_stats:
-                _sdpa_flash_stats = legacy
-        else:
-            _sdpa_flash_stats = _new_sdpa_flash_stats()
-            setattr(owner, "_torch_sdpa_flash_stats", _sdpa_flash_stats)
-    elif _sdpa_flash_stats is None:
-        _sdpa_flash_stats = _new_sdpa_flash_stats()
-    return _sdpa_flash_stats
+    return _sdpa_service(owner)["stats"]
 
 
 def set_sdpa_flash_stats(stats, owner=None):
-    """Replace SDPA statistics and optionally publish the legacy root alias."""
-    global _sdpa_flash_stats
+    """Replace only this Runtime's mapping; other runtimes remain untouched."""
     if not isinstance(stats, dict):
         raise TypeError("SDPA flash statistics must be a dict")
-    _sdpa_flash_stats = stats
-    if owner is not None:
-        setattr(owner, "_torch_sdpa_flash_stats", stats)
+    _sdpa_service(owner)["stats"] = stats
     return stats
 
 

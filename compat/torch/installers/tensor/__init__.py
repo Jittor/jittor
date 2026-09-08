@@ -456,31 +456,6 @@ def _index_select(input, dim, index, *, out=None):
     return result
 
 
-class _TensorMeta(type):
-    def __instancecheck__(cls, inst):
-        return isinstance(inst, (compatibility_owner(jt).Var, _NestedTensor))
-    def __subclasscheck__(cls, sub):
-        return issubclass(sub, (compatibility_owner(jt).Var, _NestedTensor))
-    def __call__(cls, *args, **kw):
-        if len(args) == 0:
-            return jt.empty((0,))
-        if all(isinstance(a, int) for a in args):   # torch.Tensor(*sizes)
-            return jt.empty(tuple(args))
-        # torch.Tensor(size) with a shape object (torch.Size / our Size / a
-        # jittor NanoVector, e.g. weight.size()) -> an uninitialized tensor of
-        # that shape, NOT data (mmdet SAConv2d: torch.Tensor(self.weight.size())).
-        if len(args) == 1 and isinstance(args[0], (jt.NanoVector, _TorchSize)):
-            return jt.empty(tuple(int(x) for x in args[0]))
-        data = args[0]
-        if isinstance(data, compatibility_owner(jt).Var):
-            return data.float32()
-        return jt.array(data).float32()
-
-
-class Tensor(metaclass=_TensorMeta):
-    pass
-
-
 class _TypedTensorMeta(type):
     def __instancecheck__(cls, obj):
         return isinstance(obj, compatibility_owner(jt).Var) and _jittor_dtype_name(obj.dtype) == cls._jdtype
@@ -569,17 +544,12 @@ def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
         if _device_is_cpu(device):
             v = _make_cpu_resident(v)
         elif _device_is_cuda(device):
-            if g is jt:
-                _set_use_cuda()
             v = _make_cuda_resident(v, force=True, device=device)
             v = _move_to_cuda_index(v, g.device(device))
-        if g is not jt:
-            v.requires_grad_(bool(requires_grad))
+        v.requires_grad_(bool(requires_grad))
         if requires_grad:
             v.requires_grad_(True)
             _torch_register_leaf(v)
-        if g is jt:
-            v._jt_plain_tensor = True  # Only the explicit legacy Module adapter reads this.
         return v
 
 
@@ -594,8 +564,6 @@ def as_tensor(data, dtype=None, device=None):
             if _device_is_cpu(device):
                 return _make_cpu_resident(r)
             if _device_is_cuda(device):
-                if g is jt:
-                    _set_use_cuda()
                 return _move_to_cuda_index(_make_cuda_resident(r, force=True, device=device), g.device(device))
             return r
         return tensor(data, dtype=dtype, device=device)
@@ -604,15 +572,12 @@ def as_tensor(data, dtype=None, device=None):
 def from_numpy(arr, *, device=None):
     g = compatibility_owner(jt)
     Var = g.Var
-    with tensor_frontend(Var, device=device if device is not None or g is jt else "cpu"):
+    with tensor_frontend(Var, device=device if device is not None else "cpu"):
         v = _array_keep_dtype(arr)
-        if g is not jt:
-            v.requires_grad_(False)
+        v.requires_grad_(False)
         if _device_is_cpu(device):
             return _make_cpu_resident(v)
         if _device_is_cuda(device):
-            if g is jt:
-                _set_use_cuda()
             return _move_to_cuda_index(_make_cuda_resident(v, force=True, device=device), g.device(device))
         return v
 
@@ -881,7 +846,7 @@ def install(ctx):
     # torch.Tensor(d0, d1, ...) makes an UNINITIALISED tensor of that shape (DETR's
     # _init_layers: torch.Tensor(num_levels, embed_dims)), while torch.Tensor(data)
     # builds from data. A metaclass gives us both without breaking isinstance(x, Var).
-    g.Tensor = Var if g is not ctx.native_backend else Tensor
+    g.Tensor = Var
     # torch's typed tensor classes (FloatTensor/LongTensor/...). jittor is dtype-typed
     # at the data level (no tensor subclasses), but we must NOT just alias them all to
     # Var: that makes isinstance(any_var, torch.LongTensor) always True, so libraries
