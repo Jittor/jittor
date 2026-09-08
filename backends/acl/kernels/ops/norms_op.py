@@ -203,10 +203,11 @@ namespace jittor {}
             cuda_src=code_program(
                 [
                     '\n// aclop\nRmsNormOpRunner norm_op;\nnorm_op.add(in0, true);\nnorm_op.add(in1, true);\nnorm_op.add(out1, false);\nnorm_op.add(out2, false);\nnorm_op.jt_name = "grouped_bfloat16_rms_norm";\n',
-                    attribute_program("RmsNorm", {"eps": eps}, variable="norm_op"),
+                    'apply_acl_code_attributes(norm_op, data, "acl_payload.norm.", "RmsNorm");\n',
                     '\nnorm_op.run();\n\nBinaryOpRunner multiply_op;\nmultiply_op.name = "Mul";\nmultiply_op.add(in2, true);\nmultiply_op.add(out1, true);\nmultiply_op.add(out0, false);\nmultiply_op.jt_name = "grouped_bfloat16_rms_norm";\nmultiply_op.run();\n',
                 ]
             ),
+            attribute_sets={"norm": ("RmsNorm", {"eps": eps})},
         )
         return result[0]
 
@@ -241,11 +242,12 @@ namespace jittor {}
             cuda_src=code_program(
                 [
                     '\n// aclop\nRmsNormOpRunner first_norm;\nfirst_norm.add(in0, true);\nfirst_norm.add(in2, true);\nfirst_norm.add(out2, false);\nfirst_norm.add(out4, false);\nfirst_norm.jt_name = "grouped_dual_bfloat16_rms_norm";\n',
-                    attribute_program("RmsNorm", {"eps": eps}, variable="first_norm"),
+                    'apply_acl_code_attributes(first_norm, data, "acl_payload.first_norm.", "RmsNorm");\n',
                     '\nfirst_norm.run();\n\nBinaryOpRunner first_multiply;\nfirst_multiply.name = "Mul";\nfirst_multiply.add(in4, true);\nfirst_multiply.add(out2, true);\nfirst_multiply.add(out0, false);\nfirst_multiply.jt_name = "grouped_dual_bfloat16_rms_norm";\nfirst_multiply.run();\n\nRmsNormOpRunner second_norm;\nsecond_norm.add(in1, true);\nsecond_norm.add(in3, true);\nsecond_norm.add(out3, false);\nsecond_norm.add(out5, false);\nsecond_norm.jt_name = "grouped_dual_bfloat16_rms_norm";\n',
-                    attribute_program("RmsNorm", {"eps": eps}, variable="second_norm"),
+                    'apply_acl_code_attributes(second_norm, data, "acl_payload.second_norm.", "RmsNorm");\n',
                     '\nsecond_norm.run();\n\nBinaryOpRunner second_multiply;\nsecond_multiply.name = "Mul";\nsecond_multiply.add(in5, true);\nsecond_multiply.add(out3, true);\nsecond_multiply.add(out1, false);\nsecond_multiply.jt_name = "grouped_dual_bfloat16_rms_norm";\nsecond_multiply.run();\n',
                 ]
             ),
+            attribute_sets={"first_norm": ("RmsNorm", {"eps": eps}), "second_norm": ("RmsNorm", {"eps": eps})},
         )
         return result[0], result[1]
