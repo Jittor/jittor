@@ -246,7 +246,10 @@ def meshgrid(*tensors, indexing=None):
     size = len(tensors)
     shape = []
     for i in range(size):
-        assert isinstance(tensors[i],Var) and tensors[i].ndim==1
+        if not isinstance(tensors[i], Var) or tensors[i].ndim != 1:
+            raise TypeError(
+                "meshgrid: tensor {} must be a one-dimensional Var".format(i)
+            )
         shape.append(tensors[i].shape[0])
     grids = []
     view_shape = [1]*size
@@ -420,7 +423,12 @@ Examples::
         shifts = (shifts,)
     if isinstance(dims, int):
         dims = (dims,)
-    assert len(dims) == len(shifts)
+    if len(dims) != len(shifts):
+        raise ValueError(
+            "roll: shifts and dims must have the same length, got {} and {}".format(
+                len(shifts), len(dims)
+            )
+        )
     ids = [ f'i{i}' for i in range(x.ndim) ]
     for i in range(len(dims)):
         shift = shifts[i]
