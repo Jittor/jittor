@@ -6,10 +6,13 @@ from jittor_core import Var
 def make_grid(x, nrow=8, padding=2, normalize=False, range=None, scale_each=False, pad_value=0):
     import jittor as jt
     from .numerical import normalize
-    assert isinstance(range, tuple) or range is None
-    assert scale_each == False
+    if not (isinstance(range, tuple) or range is None):
+        raise TypeError("make_grid: range must be a tuple or None")
+    if scale_each is not False:
+        raise ValueError("make_grid: scale_each=True is not supported")
     if isinstance(x, list): x = jt.stack(x)
-    assert isinstance(x, Var)
+    if not isinstance(x, Var):
+        raise TypeError("make_grid: x must be a Var or list of Vars")
     if normalize:
         if range is None: x = (x - x.min()) / (x.max() - x.min())
         else: x = (x - range[0]) / (range[1] - range[0])
