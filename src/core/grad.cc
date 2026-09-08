@@ -376,11 +376,23 @@ vector<VarPtr> grad(
         // returning zeros that look like a legitimate x.stop_grad().
         for (int i=int(gvars.size())-1; i>=0; i--)
             if (!held_vars.count(gvars[i]) && gvars[i]->liveness.backward.active()) {
+                LOGvvvv << "grad graph-free gvar" << gvars[i]
+                    << "name" << gvars[i]->name
+                    << "f/b/p" << gvars[i]->liveness.forward.count()
+                    << gvars[i]->liveness.backward.count()
+                    << gvars[i]->liveness.pending.count()
+                    << "stop" << gvars[i]->is_stop_grad();
                 gvars[i]->set_flag(VarFlags::_graph_freed);
                 gvars[i]->set_stop_grad();
             }
         for (int i=0; i<grads.size(); i++)
             if (grads[i]) {
+                LOGvvvv << "grad graph-free result" << grads[i]
+                    << "name" << grads[i]->name
+                    << "f/b/p" << grads[i]->liveness.forward.count()
+                    << grads[i]->liveness.backward.count()
+                    << grads[i]->liveness.pending.count()
+                    << "stop" << grads[i]->is_stop_grad();
                 grads[i]->set_flag(VarFlags::_graph_freed);
                 grads[i]->set_stop_grad();
             }
