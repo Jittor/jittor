@@ -11,10 +11,13 @@ from jittor_utils import LOG, run_cmd, simple_timer
 import json
 from collections import OrderedDict
 import glob
+from typing import Any, Dict, List, Optional, Tuple
+
+hash_to_key_map: Dict[int, str] = {}
 
 def parse_attrs(s):
     '''parse @attrs(..., x=y) syntax'''
-    attrs = {}
+    attrs: Dict[str, Any] = {}
     if s is None: return attrs
     for a in s.split(','):
         a = a.strip()
@@ -336,9 +339,8 @@ def get_def_code(df, scope_name, pyname, self_as_arg0=False):
         func_prepare
     )
 
-hash_to_key_map = {}
-
 def get_hash(s):
+    global hash_to_key_map
     mask = (1<<32)-1
     v=0
     mul = 1
@@ -521,14 +523,16 @@ def compile_src(src, h, basename):
         is_scope_def = False
         is_static = False
         scope_name = ""
-        if class_ranges != None:
+        if class_ranges is not None:
+            assert class_info is not None
             if class_ranges[0] < a and a < class_ranges[1]:
                 is_scope_def = True
-                scope_name = class_name
-        if submodule_ranges != None:
+                scope_name = class_name or ""
+        if submodule_ranges is not None:
+            assert submodule_info is not None
             if submodule_ranges[0] < a and a < submodule_ranges[1]:
                 is_scope_def = True
-                scope_name = submodule_name
+                scope_name = submodule_name or ""
                 is_static = True
         dec = src[end:b+1].strip()
         arr = src[end:a].strip().split()
@@ -638,7 +642,14 @@ def compile_src(src, h, basename):
     class_sets = OrderedDict()
     class_slots_code = []
     submodule_defs_code = []
-    def_targets = OrderedDict()
+    def_targets: "OrderedDict[str, List[Dict[str, Any]]]" = OrderedDict()
+    # A binding header may describe either a class or a submodule; the
+    # generated code below only reaches these paths after the corresponding
+    # declaration marker has been parsed.
+    if class_info is None:
+        class_info = {"pynames": [class_name or ""], "attrs": {}}
+    if submodule_info is None:
+        submodule_info = {"pynames": [submodule_name or ""], "attrs": {}}
     has_attr_dict = class_name in ["VarHolder"]
     for df in defs:
         for name in df["pynames"]:
@@ -671,7 +682,7 @@ def compile_src(src, h, basename):
         arr_func_prepare = []
         self_as_arg0 = False
         for df in dfs:
-            self_as_arg0 = class_info and \
+            self_as_arg0 = bool(class_info) and \
                 target_scope_name == class_info["pynames"][0] and \
                 df["scope_name"] == submodule_name \
                 and not name.startswith("__")
