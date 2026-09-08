@@ -320,7 +320,8 @@ class save_on_cpu(saved_tensors_hooks):
 
 def _normalize_index(idx):
     if isinstance(idx, jt.Var):
-        arr = np.asarray(idx.detach().cpu().numpy())
+        cpu = getattr(idx.detach(), "cpu")
+        arr = np.asarray(cpu().numpy())
         if arr.ndim == 0:
             return bool(arr.item()) if arr.dtype == np.bool_ else int(arr.item())
         if arr.dtype == np.bool_:
@@ -333,7 +334,7 @@ def _normalize_index(idx):
     return idx
 
 
-_call_record_inputs._torch_records_inputs = True
+    setattr(_call_record_inputs, "_torch_records_inputs", True)
 
 
 class Function(jt.Function):
