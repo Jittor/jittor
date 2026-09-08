@@ -68,8 +68,10 @@ def spmm(spase_x,y):
     O(rows * cols) memory and a dense matmul, which is what made this useless
     on any sparse matrix worth the name.
     """
-    assert isinstance(spase_x,SparseVar) and isinstance(y,jt.Var)
-    assert spase_x.ndim==2 and y.ndim==2 and spase_x.shape[-1]==y.shape[0]
+    if not isinstance(spase_x, SparseVar) or not isinstance(y, jt.Var):
+        raise TypeError("spmm requires a SparseVar and a dense Var")
+    if spase_x.ndim != 2 or y.ndim != 2 or spase_x.shape[-1] != y.shape[0]:
+        raise ValueError("spmm expects 2-D operands with matching inner dimensions")
 
     indices = spase_x.indices
     nnz = indices.shape[1]
