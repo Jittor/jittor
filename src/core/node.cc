@@ -239,6 +239,26 @@ void Node::own_forward_liveness() {
 
 void Node::release_backward_liveness() {
     CHECK_EXIST;
+    if (liveness.backward.count() <= 0) {
+        fprintf(stderr,
+            "JITTOR_LIVENESS_UNDERFLOW node=%p name=%s f=%d b=%d p=%d path=release_backward_liveness\\n",
+            (void*)this, is_var() ? ((Var*)this)->name.c_str() : ((Op*)this)->name(), liveness.forward.count(),
+            liveness.backward.count(), liveness.pending.count());
+        size_t duplicate = 0, pending = 0;
+        for (size_t qi = liveness_queue_front; qi < liveness_queue.size(); ++qi) {
+            auto entry = liveness_queue[qi];
+            if (entry.first == this && entry.second == &Node::release_backward_liveness)
+                ++duplicate;
+            if (entry.first == this) ++pending;
+        }
+        fprintf(stderr, "JITTOR_LIVENESS_QUEUE node=%p backward_entries=%zu all_entries=%zu inputs=%zu outputs=%zu\\n",
+            (void*)this, duplicate, pending, inputs().size(), outputs().size());
+        for (auto* in : inputs())
+            fprintf(stderr, "JITTOR_LIVENESS_INPUT node=%p f=%d b=%d p=%d\\n",
+                (void*)in, in->liveness.forward.count(), in->liveness.backward.count(),
+                in->liveness.pending.count());
+        fflush(stderr);
+    }
     bool became_dead = liveness.backward.release();
     if (became_dead) {
         int n = inputs().size(), i = 0;
