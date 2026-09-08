@@ -401,7 +401,7 @@ class GetItemACL(jt.Function):
                     s = slice(s, s + 1, 1)
                     squeeze_dims.append(dim)
                 if isinstance(s, jt.Var):
-                    assert False, "jt.Var not supported"
+                    raise NotImplementedError("ACL getitem does not support Var slice indices")
                 start, stop, step = s.indices(x.size(dim))
                 size = (stop - start - 1) // step + 1
                 # stride = self.stride(x, dim) * step
@@ -484,7 +484,7 @@ class GetItemACL(jt.Function):
                 slices = slices + (slice(None, None, None),)
                 expand_dim = True
             else:
-                assert False, "not supported"
+                raise NotImplementedError("ACL getitem slice form is not supported")
                 # x = x.unsqueeze(-1)
             if expand_dim:
                 grad_output = grad_output.unsqueeze(-1)
@@ -499,7 +499,7 @@ class GetItemACL(jt.Function):
                         s = slice(s, s + 1, 1)
                         # squeeze_dims.append(dim)
                     if isinstance(s, jt.Var):
-                        assert False, "jt.Var not supported"
+                        raise NotImplementedError("ACL getitem backward does not support Var slices")
                     start, stop, step = s.indices(self.x_shape[dim])
                     size = (stop - start - 1) // step + 1
                     # stride = self.stride(x, dim) * step
