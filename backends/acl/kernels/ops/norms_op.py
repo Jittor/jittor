@@ -55,14 +55,11 @@ class LayerNormACL:
         self.eps = eps
         self.elementwise_affine = elementwise_affine
 
-    def _attr_code(self, name):
-        return attribute_program(
-            runner_for_alias(name),
-            {
+    def _attributes(self):
+        return {
                 "eps": self.eps,
                 "normalizedShape": list(self.normalized_shape),
-            },
-        )
+            }
 
     def __call__(self, x, weight, bias):
         input_value = check_acl_float_dtype(x, "layernorm")
@@ -75,14 +72,14 @@ class LayerNormACL:
             inputs=[input_value, weight, bias],
             output_dtypes=[input_value.dtype] * 3,
             output_shapes=[input_value.shape, reduced_shape, reduced_shape],
-            attr_code=self._attr_code("layernorm"),
+            attributes=self._attributes(),
             multi_grad_src=code_program(
                 [
                     "\n            // aclop\n            LayerNormBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(in1, true);\n            op.add(in2, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
-                    self._attr_code("layernormbackward"),
                     "\n            op.run();\n            ",
                 ]
             ),
+            multi_grad_attributes=self._attributes(),
         )
         return result[0]
 
