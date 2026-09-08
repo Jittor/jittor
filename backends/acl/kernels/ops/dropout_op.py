@@ -26,38 +26,28 @@ class DropoutACL(jt.Function):
         num_elements = x.numel()
         aligned_elements = (num_elements + 127) // 128 * 128
         mask_shape = (aligned_elements // 8,)
-        attr_code = attribute_program(
-            "Dropout",
-            {
+        attributes = {
                 "p": p,
                 "train": bool(is_train),
                 "seed": 0,
                 "offset": 0,
-            },
-        )
+            }
         result = dropout_cmd(
             "Dropout",
             [x],
             output_dtypes=[x.dtype, "uint8"],
             output_shapes=[x.shape, mask_shape],
-            attr_code=attr_code,
+            attributes=attributes,
         )
         self.maskout = result[1]
         return result[0]
 
     def grad(self, grad_output):
-        attr_code = code_program(
-            [
-                '\n        op.jt_name = "dropoutbackward";\n        ',
-                attribute_program("DropoutBackward", {"scale": 1.0}, variable="op"),
-                "\n        ",
-            ]
-        )
         grad_input = dropout_cmd(
             "DropoutBackward",
             [grad_output, self.maskout],
             output_dtypes=[grad_output.dtype],
             output_shapes=[grad_output.shape],
-            attr_code=attr_code,
+            attributes={"scale": 1.0},
         )[0]
         return grad_input
