@@ -96,21 +96,12 @@ class SplitWithSizeACL:
             shape = list(x.shape)
             shape[dim] = size
             output_shapes.append(shape)
-        attr_code = code_program(
-            [
-                '\n        op.jt_name = "splitwithsize";\n        ',
-                attribute_program(
-                    "SplitWithSize", {"splitSize": list(split_sizes), "dim": dim}, variable="op"
-                ),
-                "\n        ",
-            ]
-        )
         return tuple(
             concat_cmd(
                 "SplitWithSize",
                 [x],
                 output_dtypes=[x.dtype] * len(split_sizes),
                 output_shapes=output_shapes,
-                attr_code=attr_code,
+                attributes={"splitSize": list(split_sizes), "dim": dim},
             )
         )
