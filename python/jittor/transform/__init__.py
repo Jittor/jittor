@@ -407,7 +407,8 @@ def image_normalize(img, mean, std):
     if not isinstance(img, (Image.Image, jt.Var, np.ndarray)):
         raise TypeError(f'Input type should be in (PIL Image, jt.Var, np.ndarray). Got {type(img)}.')
     elif isinstance(img, Image.Image):
-        assert img.mode == 'RGB', f"input image mode should be 'RGB'. Got {img.mode}."
+        if img.mode != "RGB":
+            raise ValueError("input image mode should be 'RGB'. Got {}".format(img.mode))
         img = (np.array(img).transpose((2, 0, 1)) \
                - mean * np.float32(255.)) \
                / (std * np.float32(255.))
