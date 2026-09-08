@@ -294,7 +294,7 @@ def cond(x, p=None):
             return smin / smax
         return smax / smin
     # p in {1, -1, inf, -inf, 'fro'} -> norm(x, p) * norm(inv(x), p)
-    assert x.shape[-2] == x.shape[-1], \
-        f"cond(p={p!r}) expects square matrices"
+    if x.shape[-2] != x.shape[-1]:
+        raise ValueError("cond(p={!r}) expects square matrices".format(p))
     xi = inv(x)
     return matrix_norm(x, ord=p, dim=(-2, -1)) * matrix_norm(xi, ord=p, dim=(-2, -1))
