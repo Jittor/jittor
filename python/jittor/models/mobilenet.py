@@ -27,7 +27,8 @@ class InvertedResidual(nn.Module):
     def __init__(self, inp, oup, stride, expand_ratio):
         super(InvertedResidual, self).__init__()
         self.stride = stride
-        assert (stride in [1, 2])
+        if stride not in (1, 2):
+            raise ValueError("MobileNet inverted residual stride must be 1 or 2")
         hidden_dim = int(round((inp * expand_ratio)))
         self.use_res_connect = ((self.stride == 1) and (inp == oup))
         layers = []
@@ -92,4 +93,3 @@ def mobilenet_v2(pretrained=False, **kwargs):
     model = MobileNetV2(**kwargs)
     if pretrained: model.load("jittorhub://mobilenet_v2.pkl")
     return model
-
