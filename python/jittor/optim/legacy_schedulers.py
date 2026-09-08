@@ -73,7 +73,8 @@ class ReduceLROnPlateau(object):
             raise ValueError('threshold mode ' + threshold_mode + ' is unknown!')
 
         if isinstance(min_lr, list) or isinstance(min_lr, tuple):
-            assert len(min_lr) == len(optimizer.param_groups), "expected {} min_lrs, got {}".format(len(optimizer.param_groups), len(min_lr))
+            if len(min_lr) != len(optimizer.param_groups):
+                raise ValueError("expected {} min_lrs, got {}".format(len(optimizer.param_groups), len(min_lr)))
             self.min_lrs = list(min_lr)
         else:
             self.min_lrs = [min_lr] * len(optimizer.param_groups)
