@@ -24,4 +24,17 @@ in-tree adapter test entry points with the isolated Torch shim currently reaches
 core-runtime construction and produced no result within the short validation
 window; this is recorded as an environment/build prerequisite, not as a pass.
 
+PyPI metadata exposes a `vllm==0.11.0` cp38-abi3 wheel, but it requires
+`torch==2.8.0`, matching torchaudio 2.8 and torchvision 0.23. The available
+oracle is `torch==2.12.1+cu126`, so installing vLLM into it would replace the
+reference runtime and invalidate the comparison; it was deliberately not
+installed. PyPI has no matching `trellis` distribution. TRELLIS therefore needs
+its upstream source installation on a target machine.
+
+An isolated wheel metadata probe found `vllm==0.11.0` (CPython 3.8 ABI,
+manylinux x86_64), requiring Python 3.9--3.13 and exactly
+`torch==2.8.0`/`torchvision==0.23.0`/`torchaudio==2.8.0`. The available Torch
+2.12.1+cu126 environment therefore was deliberately left unchanged. PyPI has
+no `trellis` distribution; TRELLIS requires its upstream source installation.
+
 No performance claim is made. No code or package was installed for this check.
