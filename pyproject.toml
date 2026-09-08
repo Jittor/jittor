@@ -123,6 +123,7 @@ files = [
     "compat/torch/holder_registry.py",
     "compat/torch/tensor_object_state.py",
     "compat/torch/distribution_frontend.py",
+    "compat/torch/distribution_adapters.py",
     "tools/lint/check_import_layering.py",
     "tools/release/pack_offline.py",
     "tests/structure/test_cleanup_structure.py",

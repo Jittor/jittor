@@ -2,6 +2,7 @@
 import inspect
 import pickle
 from types import MethodType
+from typing import Any, cast
 
 from .frontend import tensor_frontend
 
@@ -77,7 +78,7 @@ class DistributionMethod:
             return result
 
     def __reduce__(self):
-        key = (self.owner.__name__, self.__name__, self.role)
+        key = (cast(Any, self.owner).__name__, self.__name__, self.role)
         if resolve_distribution_member(*key) is not self:
             raise pickle.PicklingError("distribution member is not the currently published owner")
         return resolve_distribution_member, key
@@ -146,12 +147,12 @@ class DistributionAdapterState:
                     adapted = DistributionMethod(self, function, name, role) if function else None
                     accessors.append(adapted)
                     if adapted is not None:
-                        owned.append(adapted)
-                attributes[name] = property(*accessors, doc=descriptor.__doc__)
+                        cast(Any, owned).append(adapted)
+                attributes[name] = cast(Any, property)(*accessors, doc=descriptor.__doc__)
             elif inspect.isfunction(descriptor):
                 adapted = DistributionMethod(self, descriptor, name)
                 attributes[name] = adapted
-                owned.append(adapted)
+                cast(Any, owned).append(adapted)
             elif isinstance(descriptor, (dict, list, set)):
                 attributes[name] = descriptor.copy()
         result = type(original.__name__, bases, attributes)
