@@ -56,14 +56,7 @@ class PoolACL(jt.Function):
         from jittor.nn.functional.pooling import _pool_output_size
 
         self.input = input
-        attr_code = code_program(
-            [
-                '\n        op.jt_name  = "',
-                "avgpool" if self.op == "mean" else "maxpool",
-                '";\n        ',
-                attribute_program(
-                    runner_for_alias("avgpool" if self.op == "mean" else "maxpool"),
-                    {
+        attributes = {
                         "kernel_size": [self.kernel_size[0], self.kernel_size[1]],
                         "poolStrides": [self.stride[0], self.stride[1]],
                         "poolPads": [self.padding[0], self.padding[1]],
@@ -71,11 +64,6 @@ class PoolACL(jt.Function):
                         "poolCeil": bool(self.ceil_mode),
                         "countIncludePad": bool(self.count_include_pad),
                     },
-                    variable="op",
-                ),
-                "\n        ",
-            ]
-        )
         output_height, output_width = (
             _pool_output_size(size, kernel, stride, padding, self.ceil_mode)
             for size, kernel, stride, padding in zip(
@@ -93,7 +81,7 @@ class PoolACL(jt.Function):
                 inputs,
                 output_dtypes=[input.dtype, "int32"],
                 output_shapes=[output_shape, output_shape],
-                attr_code=attr_code,
+                attributes=attributes,
             )
         elif self.op == "mean":
             result = pool_cmd(
@@ -101,7 +89,7 @@ class PoolACL(jt.Function):
                 inputs,
                 output_dtypes=[input.dtype],
                 output_shapes=[output_shape],
-                attr_code=attr_code,
+                attributes=attributes,
             )
         else:
             raise ValueError("no this type pool")
@@ -116,14 +104,7 @@ class PoolACL(jt.Function):
 
     def grad(self, grad_output):
         input = self.input
-        attr_code = code_program(
-            [
-                '\n        op.jt_name = "',
-                "avgpoolbackward" if self.op == "mean" else "maxpoolbackward",
-                '";\n        ',
-                attribute_program(
-                    runner_for_alias("avgpoolbackward" if self.op == "mean" else "maxpoolbackward"),
-                    {
+        attributes = {
                         "kernel_size": [self.kernel_size[0], self.kernel_size[1]],
                         "poolStrides": [self.stride[0], self.stride[1]],
                         "poolPads": [self.padding[0], self.padding[1]],
@@ -131,11 +112,6 @@ class PoolACL(jt.Function):
                         "poolCeil": bool(self.ceil_mode),
                         "countIncludePad": bool(self.count_include_pad),
                     },
-                    variable="op",
-                ),
-                "\n        ",
-            ]
-        )
         output_shapes = [input.shape]
         output_dtypes = [input.dtype]
         if self.op == "maximum":
@@ -144,7 +120,7 @@ class PoolACL(jt.Function):
                 inputs=[grad_output, input, self.index],
                 output_dtypes=output_dtypes,
                 output_shapes=output_shapes,
-                attr_code=attr_code,
+                attributes=attributes,
             )[0]
         elif self.op == "mean":
             result = pool_cmd(
@@ -152,7 +128,7 @@ class PoolACL(jt.Function):
                 inputs=[grad_output, input],
                 output_dtypes=output_dtypes,
                 output_shapes=output_shapes,
-                attr_code=attr_code,
+                attributes=attributes,
             )[0]
         else:
             raise ValueError("no this type pool")
