@@ -3,6 +3,7 @@
 Its own module because it is its own family: a dozen in-place initialisers that
 share one assignment helper and nothing else with the rest of the nn surface.
 """
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 
@@ -51,7 +52,7 @@ def _install_init_aliases(registry=None):
         return not isinstance(t, _jt2.Var)
     def normal_(tensor, mean=0.0, std=1.0, generator=None):
         if _not_var(tensor): return tensor
-        return _assign(tensor, _jt2.normal(float(mean), float(std), tensor.shape).cast(str(tensor.dtype)))
+        return _assign(tensor, _jt2.normal(float(mean), float(std), tensor.shape).cast(_jittor_dtype_name(tensor.dtype)))
     def uniform_(tensor, a=0.0, b=1.0, generator=None, *, low=None, high=None):
         if low is not None:
             if a != 0.0 and a != low:
@@ -62,7 +63,7 @@ def _install_init_aliases(registry=None):
                 raise TypeError("uniform_ received conflicting values for b and high")
             b = high
         if _not_var(tensor): return tensor
-        return _assign(tensor, (_jt2.rand(tensor.shape) * (b - a) + a).cast(str(tensor.dtype)))
+        return _assign(tensor, (_jt2.rand(tensor.shape) * (b - a) + a).cast(_jittor_dtype_name(tensor.dtype)))
     def zeros_(tensor):
         if _not_var(tensor): return tensor
         return _assign(tensor, _jt2.zeros(tensor.shape, tensor.dtype))
@@ -85,7 +86,7 @@ def _install_init_aliases(registry=None):
         # simple clamp of a normal sample (no scipy dependency)
         x = _np.random.normal(mean, std, tensor.shape).astype("float32")
         x = _np.clip(x, mean + a * std, mean + b * std)
-        return _assign(tensor, _jt2.array(x).cast(str(tensor.dtype)))
+        return _assign(tensor, _jt2.array(x).cast(_jittor_dtype_name(tensor.dtype)))
     # override with the tolerant versions (also covers jittor's own names)
     for name, fn in [("normal_", normal_), ("uniform_", uniform_),
                      ("kaiming_uniform_", kaiming_uniform_),
@@ -163,7 +164,7 @@ def _install_init_aliases(registry=None):
             for g in range(groups):
                 for d in range(min_dim):
                     arr[(g * out_per_group + d, d) + centre] = 1.0
-            tensor.assign(jt.array(arr).cast(str(tensor.dtype)))
+            tensor.assign(jt.array(arr).cast(_jittor_dtype_name(tensor.dtype)))
             return tensor
         _init.dirac_ = _dirac
     if not hasattr(_init, "orthogonal_"):
@@ -193,7 +194,7 @@ def _install_init_aliases(registry=None):
             for col in range(cols):
                 zero_rows = rng.permutation(rows)[:num_zeros]
                 arr[zero_rows, col] = 0.0
-            tensor.assign(jt.array(arr).cast(str(tensor.dtype)))
+            tensor.assign(jt.array(arr).cast(_jittor_dtype_name(tensor.dtype)))
             return tensor
         _init.sparse_ = _sparse
 

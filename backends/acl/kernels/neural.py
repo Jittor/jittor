@@ -1,4 +1,5 @@
 """ACL neural-network kernels without Module or facade replacement."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from numbers import Integral
 
@@ -54,7 +55,7 @@ def resize_acl(input, size, mode="nearest", align_corners=False, tf_mode=False):
     if (
         mode == "nearest"
         and input.ndim == 4
-        and (str(input.dtype) in ("float16", "float32", "bfloat16"))
+        and (_jittor_dtype_name(input.dtype) in ("float16", "float32", "bfloat16"))
         and (not align_corners)
         and (not tf_mode)
         and all((int(value) > 0 for value in input.shape))
@@ -74,8 +75,8 @@ def leaky_relu(x, scale=0.01, inplace=False):
 
 
 def _silu_acl(x, inplace=False):
-    if isinstance(x, jt.Var) and str(x.dtype) in ("float32", "bfloat16"):
-        if str(x.dtype) == "bfloat16":
+    if isinstance(x, jt.Var) and _jittor_dtype_name(x.dtype) in ("float32", "bfloat16"):
+        if _jittor_dtype_name(x.dtype) == "bfloat16":
             return SwishACL()(x)
         return SiLUACL()(x)
     return None
@@ -85,7 +86,7 @@ def _silu_and_mul_acl(x):
     if (
         getattr(jt.flags, "no_grad", 0)
         and isinstance(x, jt.Var)
-        and (str(x.dtype) in ("float16", "bfloat16", "float32"))
+        and (_jittor_dtype_name(x.dtype) in ("float16", "bfloat16", "float32"))
         and (x.ndim > 0)
         and (int(x.shape[-1]) > 0)
         and (int(x.shape[-1]) % 2 == 0)
@@ -134,7 +135,7 @@ def pool_acl(
     if (
         op not in ("maximum", "mean")
         or not isinstance(input, jt.Var)
-        or str(input.dtype) not in ACL_FLOAT_DTYPES
+        or _jittor_dtype_name(input.dtype) not in ACL_FLOAT_DTYPES
         or input.ndim != 4
         or any(int(size) <= 0 for size in input.shape)
         or (return_indices and op != "maximum")
@@ -176,7 +177,7 @@ def _rotary_supported(x, freq_cos, freq_sin):
         return False
     if any(scale not in (1, size) for scale, size in zip(cos_shape, x_shape)):
         return False
-    return str(x.dtype) == str(freq_cos.dtype) == str(freq_sin.dtype) and str(x.dtype) in (
+    return _jittor_dtype_name(x.dtype) == _jittor_dtype_name(freq_cos.dtype) == _jittor_dtype_name(freq_sin.dtype) and _jittor_dtype_name(x.dtype) in (
         "float16",
         "float32",
         "bfloat16",
@@ -189,7 +190,7 @@ def rope_acl(xq, xk, freqs_cis=None, freq_sin=None, freq_cos=None):
     if freq_cos is None or freq_sin is None:
         return None
     if not getattr(jt.flags, "no_grad", 0) and (
-        str(xq.dtype) not in ("float32", "bfloat16") or str(xk.dtype) not in ("float32", "bfloat16")
+        _jittor_dtype_name(xq.dtype) not in ("float32", "bfloat16") or _jittor_dtype_name(xk.dtype) not in ("float32", "bfloat16")
     ):
         return None
     if not (

@@ -52,13 +52,18 @@ def sync_sharded_grads(module, loss=None, *, divide_by_world_size=True):
     return sharded
 
 
+@common._state_frontend
 def _sync_sharded_grads_from_full_grads(state, full_grads, *, divide_by_world_size=True):
+    replicate = getattr(state, "replicate_group", None)
+    if replicate is not None and replicate.size() > 1:
+        full_grads = [replicate._all_reduce(grad, "mean" if divide_by_world_size
+                                          else "sum") for grad in full_grads]
     if getattr(state, "true_fsdp_flat", False):
         flat_grad = common._pad_flat(
             jt.concat([common._flatten_var(grad) for grad in full_grads], dim=0),
             state.true_fsdp_flat_padded_numel,
         )
-        flat_shard_grad = common._reduce_scatter_padded(flat_grad)
+        flat_shard_grad = common._reduce_scatter_padded(flat_grad, getattr(state, "shard_group", None))
         if divide_by_world_size:
             flat_shard_grad = flat_shard_grad / max(int(state.true_fsdp_world_size), 1)
         flat_shard_grad = flat_shard_grad.stop_grad()
@@ -67,27 +72,35 @@ def _sync_sharded_grads_from_full_grads(state, full_grads, *, divide_by_world_si
             grad.stop_grad()
             for grad in shard._flat_entry_slices(state, flat_shard_grad)
         ]
+        for grad in sharded:
+            object.__setattr__(grad, "_fsdp_norm_group", getattr(state, "shard_group", None))
         state.true_fsdp_last_grads = sharded
         return sharded
     sharded = []
     for entry, grad in zip(state.true_fsdp_params, full_grads):
         flat = common._pad_flat(common._flatten_var(grad), entry.padded_numel)
-        shard_grad = common._reduce_scatter_padded(flat)
+        shard_grad = common._reduce_scatter_padded(flat, getattr(state, "shard_group", None))
         if divide_by_world_size:
             shard_grad = shard_grad / max(int(state.true_fsdp_world_size), 1)
         shard_grad = shard_grad.stop_grad()
         sharded.append(shard_grad)
+    for grad in sharded:
+        object.__setattr__(grad, "_fsdp_norm_group", getattr(state, "shard_group", None))
     state.true_fsdp_last_grads = sharded
     return sharded
 
 
-def _globally_used_grads(local_used):
+def _globally_used_grads(local_used, state=None):
     if common._world_size() <= 1:
         return list(local_used)
     flags = jt.array(np.asarray(local_used, dtype=np.int32))
     if not callable(getattr(flags, "mpi_all_reduce", None)):
         raise RuntimeError("FSDP2 unused-gradient synchronization requires all_reduce")
-    reduced = flags.mpi_all_reduce("sum")
+    group = getattr(state, "shard_group", None)
+    reduced = flags.mpi_all_reduce("sum") if group is None else group._all_reduce(flags, "sum")
+    replicate = getattr(state, "replicate_group", None)
+    if replicate is not None:
+        reduced = replicate._all_reduce(reduced, "sum")
     return [bool(value) for value in np.asarray(reduced.numpy()).reshape(-1)]
 
 
@@ -116,7 +129,7 @@ def _visible_full_grads_from_shards(state):
                 (int(state.true_fsdp_flat_shard_numel) - real_numel,),
                 dtype=state.true_fsdp_flat_shard.dtype))
         local_flat = parts[0] if len(parts) == 1 else jt.concat(parts, dim=0)
-        full_flat = local_flat if common._world_size() <= 1 else common._all_gather_shards(local_flat)
+        full_flat = local_flat if common._world_size() <= 1 else common._all_gather_shards(local_flat, getattr(state, "shard_group", None))
         return [
             common._slice_flat(full_flat, entry.flat_offset, entry.numel).reshape(entry.shape)
             if used else None
@@ -128,7 +141,7 @@ def _visible_full_grads_from_shards(state):
             out.append(None)
             continue
         local = getattr(entry.shard, "_torch_grad")
-        gathered = local if common._world_size() <= 1 else common._all_gather_shards(local)
+        gathered = local if common._world_size() <= 1 else common._all_gather_shards(local, getattr(state, "shard_group", None))
         gathered = common._slice_flat(common._flatten_var(gathered), 0, entry.numel)
         out.append(gathered.reshape(entry.shape))
     return out
@@ -144,11 +157,12 @@ def _local_grad_from_visible_full(state, entry, full_grad):
         overlap_end = min(
             rank_start + int(state.true_fsdp_flat_shard_numel), param_end)
         start_in_param = max(overlap_start - param_start, 0)
-        return common._slice_flat(flat, start_in_param, max(overlap_end - overlap_start, 0))
+        return jt.Var.copy(common._slice_flat(
+            flat, start_in_param, max(overlap_end - overlap_start, 0)))
     padded = common._pad_flat(flat, entry.padded_numel)
-    return common._slice_flat(
+    return jt.Var.copy(common._slice_flat(
         padded, int(state.true_fsdp_rank) * int(entry.shard_numel),
-        int(entry.shard_numel))
+        int(entry.shard_numel)))
 
 
 def _sync_visible_full_grads_to_optimizer(opt):
@@ -175,6 +189,7 @@ def _sync_visible_full_grads_to_optimizer(opt):
             if isinstance(existing, jt.Var) and list(existing.shape) == list(local.shape):
                 existing.update(local)
                 local = existing
+            object.__setattr__(local, "_fsdp_norm_group", getattr(state, "shard_group", None))
             grads[i] = local
             entry.last_grad = local
             object.__setattr__(entry.shard, "_torch_grad", local)
@@ -203,6 +218,9 @@ def refresh_visible_full_grads(opt):
                         and list(existing.shape) == list(full_grad.shape):
                     existing.update(full_grad)
                     full_grad = existing.stop_grad()
+                # A visible full gradient is already replicated, even though
+                # its parameter is FSDP-managed. Do not reduce its norm again.
+                object.__setattr__(full_grad, "_fsdp_norm_group", None)
                 object.__setattr__(full, "_torch_grad", full_grad)
                 entry.full_public_grad = full_grad
 
@@ -263,19 +281,12 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
         # reduce-scatter.  Keep only its identity-to-entry association so a
         # repeated call with the same grad map can still recognize a shared
         # parameter without retaining the full-size parameter itself.
-        full_param_entries = getattr(
-            state, "_jittor_fsdp_full_param_entries", None)
-        if full_param_entries is None:
-            full_param_entries = {}
-            object.__setattr__(
-                state, "_jittor_fsdp_full_param_entries", full_param_entries)
         full_grads = []
         local_used = []
         for entry in state.true_fsdp_params:
             full = getattr(entry, "full_param", None)
             if full is not None:
                 full_id = id(full)
-                full_param_entries[full_id] = entry
                 object.__setattr__(entry, "_jittor_fsdp_full_param_id", full_id)
             else:
                 full_id = getattr(entry, "_jittor_fsdp_full_param_id", None)
@@ -291,7 +302,7 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
             # skip it rather than reduce zeros over the shards and overwrite the
             # gradients a previous pass left in the state.
             continue
-        globally_used = _globally_used_grads(local_used)
+        globally_used = _globally_used_grads(local_used, state)
         sharded = _sync_sharded_grads_from_full_grads(
             state, full_grads, divide_by_world_size=divide_by_world_size)
         for entry, grad, used in zip(state.true_fsdp_params, sharded, globally_used):
@@ -337,6 +348,7 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
                     stored = existing.stop_grad()
                 else:
                     stored = grad.stop_grad()
+                object.__setattr__(stored, "_fsdp_norm_group", getattr(state, "shard_group", None))
                 grads_list[i] = stored
                 object.__setattr__(param, "_torch_grad", stored)
                 object.__setattr__(entry.shard, "_torch_grad", stored)

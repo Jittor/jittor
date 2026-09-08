@@ -11,6 +11,9 @@
 namespace jittor {
 
 struct BroadcastToOp : Op {
+    static constexpr bool accepts_storage_strides = true;
+    bool is_storage_view() const override { return true; }
+    void run() override;
     Var* x, * y, * z;
     NanoVector shape;
     uint16 bcast_mask;

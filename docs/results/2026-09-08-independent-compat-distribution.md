@@ -32,4 +32,4 @@ core-only隔离安装后冷编译207 TU，native前向/反向通过；随后在�
 换机源码开发：`python -m pip install -e . -e ./compat`。仅需native则只安装core。
 离线安装：将上述两wheel一起交给`pip install --no-deps`；依赖需事先按目标机器准备。
 使用`--target`时两个wheel必须同一次安装，避免后装时覆盖共同的jittor目录。
-完整用户入口说明见[Shim指南](../../docs/compatibility/torch-shim.md)。
+完整用户入口说明见[Shim指南](../compatibility/torch-shim.md)。

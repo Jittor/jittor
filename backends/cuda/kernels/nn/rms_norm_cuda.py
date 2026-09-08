@@ -1,4 +1,5 @@
 """CUDA inference kernels for multi-head RMS normalization."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import math
 
@@ -49,11 +50,11 @@ def _rms_norm_contract(x, gamma, epsilon, residual=None):
         return None
     if residual is not None and tuple(int(size) for size in residual.shape) != x_shape:
         return None
-    if str(x.dtype) not in ("float16", "bfloat16", "float32"):
+    if _jittor_dtype_name(x.dtype) not in ("float16", "bfloat16", "float32"):
         return None
-    if residual is not None and str(residual.dtype) != str(x.dtype):
+    if residual is not None and _jittor_dtype_name(residual.dtype) != _jittor_dtype_name(x.dtype):
         return None
-    if str(gamma.dtype) not in ("float16", "bfloat16", "float32"):
+    if _jittor_dtype_name(gamma.dtype) not in ("float16", "bfloat16", "float32"):
         return None
     if not math.isfinite(epsilon_value) or epsilon_value <= 0:
         return None
@@ -200,7 +201,7 @@ def _multihead_rms_norm_contract(x, gamma, scale=None, min_norm=1e-12):
         return None
     if _autocast_enabled():
         return None
-    if str(x.dtype) != "bfloat16" or str(gamma.dtype) != "float32":
+    if _jittor_dtype_name(x.dtype) != "bfloat16" or _jittor_dtype_name(gamma.dtype) != "float32":
         return None
 
     try:

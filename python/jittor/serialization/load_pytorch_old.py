@@ -1,4 +1,5 @@
 """Historical checkpoint reader, retained for explicit legacy callers."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import pickle
 import os
@@ -23,11 +24,11 @@ def load_tensor(contents, dtype, numel, key, location):
 
 def get_dtype_size(dtype):
     dtype = dtype.__str__()
-    if dtype == "float32" or dtype == "int32":
+    if _jittor_dtype_name(dtype) == "float32" or _jittor_dtype_name(dtype) == "int32":
         return 4
-    if dtype == "float64" or dtype == "int64":
+    if _jittor_dtype_name(dtype) == "float64" or _jittor_dtype_name(dtype) == "int64":
         return 8
-    if dtype == "float16" or dtype == "int16":
+    if _jittor_dtype_name(dtype) == "float16" or _jittor_dtype_name(dtype) == "int16":
         return 2
     return 1
 
@@ -72,7 +73,7 @@ class StorageType():
         self.dtype = _get_dtype_from_pickle_storage_type(name)
 
     def __str__(self):
-        return f'StorageType(dtype={self.dtype})'
+        return f'StorageType(dtype={_jittor_dtype_name(self.dtype)})'
 
 def jittor_rebuild(storage, storage_offset, size, stride, requires_grad, backward_hooks):
     if len(size) == 0:

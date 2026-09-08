@@ -14,6 +14,7 @@ should not.
 Each patch keeps vLLM's guard conditions and defers to the original method when
 they do not hold, so a configuration these primitives do not cover still runs.
 """
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 
@@ -125,7 +126,7 @@ def patch_qwen3_attention(module):
             and jt.flags.use_cuda
             and getattr(jt.flags, "no_grad", 0)
             and all(isinstance(value, jt.Var) for value in values)
-            and all(str(value.dtype) == "bfloat16" for value in values)
+            and all(_jittor_dtype_name(value.dtype) == "bfloat16" for value in values)
             and hasattr(self, "head_dim")
             and hasattr(self, "q_size")
             and hasattr(self, "kv_size")

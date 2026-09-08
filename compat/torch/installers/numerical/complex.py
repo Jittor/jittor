@@ -1,4 +1,5 @@
 """Torch numerical complex operations."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 def complex(real, imag, **kwargs):
     """Construct a native complex tensor from real and imaginary parts."""
@@ -30,7 +31,7 @@ def _is_complex_value(value):
     )
     complex_type = jt.nn.ComplexNumber
     return isinstance(value, complex_type) or (
-        isinstance(value, jt.Var) and "complex" in str(value.dtype)
+        isinstance(value, jt.Var) and "complex" in _jittor_dtype_name(value.dtype)
     )
 
 

@@ -3,6 +3,7 @@
 This module contains source moved from the former monolithic installer without
 changing the compatibility semantics.
 """
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import builtins as _builtins
 
@@ -495,7 +496,7 @@ def install(ctx):
     }
     class _TypedTensorMeta(type):
         def __instancecheck__(cls, obj):
-            return isinstance(obj, Var) and str(obj.dtype) == cls._jdtype
+            return isinstance(obj, Var) and _jittor_dtype_name(obj.dtype) == cls._jdtype
         def __call__(cls, *args, **kw):
             tensor_input = len(args) == 1 and isinstance(args[0], Var)
             if tensor_input:
@@ -545,7 +546,7 @@ def install(ctx):
         elif isinstance(data, (_np.ndarray, _np.generic)):
             # NumPy input carries its own dtype; explicit conversion happens
             # before the native array constructor can narrow it.
-            data = _np.asarray(data, dtype=storage_dtype)
+            data = _np.asarray(data, dtype=_jittor_dtype_name(storage_dtype))
             v = _array_keep_dtype(data)          # explicit numpy: preserve dtype (torch does too)
         else:
             # torch's tensor/as_tensor([t1, t2, ...]) flattens SCALAR tensors into a
@@ -558,14 +559,14 @@ def install(ctx):
                         for d in data]
             # Resolve Python defaults before constructing native storage. An
             # explicit float64 value must never pass through float32 first.
-            arr = _np.asarray(data, dtype=storage_dtype)
+            arr = _np.asarray(data, dtype=_jittor_dtype_name(storage_dtype))
             if ds is None and arr.dtype.kind in ("f", "c"):
                 getter = getattr(g, "get_default_dtype", None)
                 default_dtype = _dtype_to_str(getter()) if getter is not None else "float32"
                 if arr.dtype.kind == "c":
                     complex_dtype = {"float32": "complex64", "float64": "complex128"}.get(default_dtype)
                     if complex_dtype is None:
-                        raise NotImplementedError("complex construction for default dtype %s" % default_dtype)
+                        raise NotImplementedError("complex construction for default dtype %s" % _jittor_dtype_name(default_dtype))
                     ds = complex_dtype
                 else:
                     ds = default_dtype
@@ -586,7 +587,8 @@ def install(ctx):
         if requires_grad:
             v.requires_grad_(True)
             _torch_register_leaf(v)
-        v._jt_plain_tensor = True   # see _torch_style_registration (core_api)
+        if g is ctx.native_backend:
+            v._jt_plain_tensor = True  # Only the explicit legacy Module adapter reads this.
         return v
     tensor = frontend_factory(tensor, Var)
     g.tensor = tensor
@@ -594,7 +596,7 @@ def install(ctx):
     def as_tensor(data, dtype=None, device=None):
         if isinstance(data, ctx.native_backend.Var):
             r = data if isinstance(data, Var) else g.Tensor(data)
-            if dtype is not None and str(r.dtype) != _dtype_to_str(dtype):
+            if dtype is not None and _jittor_dtype_name(r.dtype) != _dtype_to_str(dtype):
                 r = r.cast(_dtype_to_str(dtype))
             if _device_is_cpu(device):
                 return _make_cpu_resident(r)
@@ -634,8 +636,8 @@ def install(ctx):
             v = from_numpy(_np.ascontiguousarray(arr))
         else:
             if np_dtype is None:
-                raise TypeError(f"torch.frombuffer unsupported dtype: {dtype}")
-            arr = _np.frombuffer(buffer, dtype=np_dtype, count=count, offset=offset)
+                raise TypeError(f"torch.frombuffer unsupported dtype: {_jittor_dtype_name(dtype)}")
+            arr = _np.frombuffer(buffer, dtype=_jittor_dtype_name(np_dtype), count=count, offset=offset)
             v = from_numpy(_np.ascontiguousarray(arr))
         if requires_grad:
             v.requires_grad_(True)
@@ -797,10 +799,10 @@ def install(ctx):
         # jittor's concat downcasts a uniform uint8 input to int8 (e.g. mask-rcnn-c4
         # builds a uint8 pos_inds mask via torch.cat of uint8 ones/zeros). torch keeps
         # the common input dtype; restore it so downstream byte-mask indexing works.
-        in_dtypes = {str(t.dtype) for t in fixed}
+        in_dtypes = {_jittor_dtype_name(t.dtype) for t in fixed}
         if len(in_dtypes) == 1:
             d = in_dtypes.pop()
-            if str(out_var.dtype) != d:
+            if _jittor_dtype_name(out_var.dtype) != d:
                 out_var = out_var.cast(d)
         return out_var
     g.cat = cat
@@ -865,7 +867,7 @@ def install_methods(ctx):
         itemsize = itemsize if isinstance(itemsize, int) else _dtype_itemsize_name(ds)
         old_itemsize = getattr(getattr(self, "dtype", None), "itemsize", None)
         if old_itemsize is None:
-            old_itemsize = _dtype_itemsize_name(str(self.dtype))
+            old_itemsize = _dtype_itemsize_name(_jittor_dtype_name(self.dtype))
         shape = list(self.shape)
         if len(shape) == 0:
             if old_itemsize != itemsize:
@@ -959,7 +961,7 @@ def install_methods(ctx):
             a = a[1:]
         if dt is not None:
             self = self.cast(_dtype_to_str(dt))
-        elif str(self.dtype) in ("uint8", "int8", "uint16"):
+        elif _jittor_dtype_name(self.dtype) in ("uint8", "int8", "uint16"):
             self = self.int32()
         result = _orig_var_sum(self, *a, **k)
         if out is not None:

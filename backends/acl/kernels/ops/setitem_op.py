@@ -1,3 +1,4 @@
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import os
 from jittor_utils import env_or_try_find
 import jittor_utils
@@ -167,7 +168,7 @@ class SetItemACL(jt.Function):
         if not isinstance(value, jt.Var):
             self.value_var = False
         if isinstance(slices, jt.Var):
-            if slices.dtype == "bool":
+            if _jittor_dtype_name(slices.dtype) == "bool":
                 if isinstance(value, int) or isinstance(value, float):
                     # ACL masked-scatter consumes only as many source elements
                     # as the mask selects. Avoid reducing the bool mask here:

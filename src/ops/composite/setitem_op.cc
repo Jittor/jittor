@@ -52,7 +52,7 @@ void SetitemOp::infer_shape() {
     StackVector<> i_to_o(nin);
     // shape return to use
     StackVector<> out_shape;
-    ((GetitemOp*)this)->infer_slices(i_to_vs, i_to_o, out_shape);
+    infer_index_slices(in, vs, first_oid_of_var, var_dim, i_to_vs, i_to_o, out_shape);
     // get broadcast mask of set value
     auto data_shape = data->shape;
     auto data_dim = data_shape.size();

@@ -20,6 +20,8 @@ struct PreparedIndex {
 };
 
 string shape_of(const Var* value, std::vector<size_t>& shape) {
+    if (!value->is_contiguous())
+        return "ACL indexed-copy planner requires contiguous storage; use contiguous() before indexed copy";
     shape.clear();
     for (int axis = 0; axis < value->shape.size(); ++axis) {
         const auto size = value->shape[axis];

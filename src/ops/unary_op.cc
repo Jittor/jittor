@@ -1063,7 +1063,9 @@ void UnaryOp::infer_shape() {
 void UnaryOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype()
         << "«Ty:" << y->dtype()
-        << "«OP:" << ns;
+        << "«OP:" << ns
+        << "«DIM=" << JK::hex1(x->shape.size())
+        << "«XSTRIDED=" << JK::hex1(!x->is_contiguous());
 }
 
 #else // JIT
@@ -1071,8 +1073,18 @@ void UnaryOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Ty>();
     index_t num = y->num;
-    for (index_t i=0; i<num; i++)
-        yp[i] = @expand_op(@OP, @Ty, xp[i], @Tx);
+    @if(XSTRIDED,
+        @for(d, 0, DIM, index_t xshape@d = x->shape[@d];)
+        @for(d, 0, DIM, index_t xstride@d = x->storage_stride(@d);)
+    )
+    for (index_t i=0; i<num; i++) {
+        index_t xi = i;
+        @if(XSTRIDED,
+            index_t rem = i; xi = 0;
+            @for(d, DIM-1, -1, -1, xi += (rem % xshape@d) * xstride@d; rem /= xshape@d;)
+        )
+        yp[i] = @expand_op(@OP, @Ty, xp[xi], @Tx);
+    }
 }
 #endif // JIT
 

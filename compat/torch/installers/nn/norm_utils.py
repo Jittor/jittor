@@ -17,8 +17,8 @@ def _clip_grads_with_norm_(parameters, max_norm, total_norm,
     if isinstance(parameters, _jt.Var):
         parameters = [parameters]
     params = list(parameters)
-    from ...tensor_state import compatibility_owner
-    opt = getattr(compatibility_owner(_jt), "_current_optimizer", None)
+    from ...tensor_state import latest_optimizer
+    opt = latest_optimizer(_jt)
     grads = []
     for parameter in params:
         grad = None

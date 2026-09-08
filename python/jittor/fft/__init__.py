@@ -5,6 +5,7 @@ works on every backend supported by the surrounding native complex bridge.  A
 Torch-mode process publishes this same module object as ``torch.fft``; it does
 not install a second FFT implementation.
 """
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import numpy as np
 from collections import OrderedDict
@@ -73,7 +74,7 @@ def _make_complex(real, imag):
 def _real_imag(value):
     if isinstance(value, _ComplexNumber):
         return value.real, value.imag
-    if isinstance(value, jt.Var) and "complex" in str(value.dtype):
+    if isinstance(value, jt.Var) and "complex" in _jittor_dtype_name(value.dtype):
         return value.real, value.imag
     return value, None
 
@@ -271,11 +272,11 @@ def _freq_common(api, np_fn, n, d, dtype, device, requires_grad, out, kwargs):
 
 def _np_dtype(dtype):
     """Accept the spellings jittor/torch users pass: 'float64', jt.float64, ..."""
-    name = getattr(dtype, "__name__", None) or str(dtype)
+    name = getattr(dtype, "__name__", None) or _jittor_dtype_name(dtype)
     name = name.replace("jittor.", "").replace("torch.", "")
     if name not in ("float16", "float32", "float64"):
         raise TypeError(
-            "fftfreq/rfftfreq need a floating dtype, got %r" % (dtype,))
+            "fftfreq/rfftfreq need a floating dtype, got %r" % (_jittor_dtype_name(dtype),))
     return name
 
 

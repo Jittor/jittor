@@ -1,4 +1,5 @@
 """Small functional operators with torch-compatible semantics."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 
@@ -35,7 +36,7 @@ def _torch_norm_impl(input, p="fro", dim=None, keepdim=False, dtype=None):
         elif pv == 1.0:
             r = x.abs().sum()
         elif pv == 2.0:
-            r = jt.sqrt((x.cast("float32") if str(x.dtype) not in ("float32", "float64") else x).sqr().sum())
+            r = jt.sqrt((x.cast("float32") if _jittor_dtype_name(x.dtype) not in ("float32", "float64") else x).sqr().sum())
         else:
             r = (x.abs() ** pv).sum() ** (1.0 / pv)
         return r

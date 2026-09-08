@@ -17,6 +17,14 @@ struct VarHolder;
 
 struct Var : Node {
     NanoVector shape;
+    // Element strides; empty means the canonical dense layout. Offset remains
+    // represented by mem_ptr relative to the shared allocation's base.
+    NanoVector storage_strides;
+    size_t storage_offset_bytes = 0;
+    int64 storage_stride(uint axis) const;
+    int64 storage_span_bytes() const;
+    bool is_contiguous() const;
+    void set_storage_strides(NanoVector strides);
     cstr name;
     fast_shared_ptr<loop_options_t> loop_options;
     static int64 number_of_lived_vars;
@@ -30,14 +38,11 @@ struct Var : Node {
     // or heap residue, which the "already shared in place" checks in
     // getitem_op/setitem_op compare for equality.
     size_t allocation = 0;
-    // The storage a Var occupies is (base, offset, shape), and strides are not
-    // stored because they are not free: every generated kernel derives
-    // `istride@i = istride@{i+1} * ishape@{i+1}` from `shape` at codegen time,
-    // so a Var whose strides did not follow from its shape could not be fed to
-    // one. Sharing is therefore restricted to sub-ranges that are themselves
-    // contiguous -- which is what getitem_contiguous_inplace in
-    // opt/gopt/setitem_gopt.cc checks before it offers an alias, and why an
-    // expanded (stride-0) var still has to be materialized.
+    // Allocation identity is (allocator, allocation); mem_ptr names the first
+    // logical element, at storage_offset_bytes from that allocation's origin.
+    // storage_strides maps logical indices to physical elements, including
+    // zero strides. size remains logical bytes; allocation/copy/free accounting
+    // uses storage_span_bytes(), never the expanded logical footprint.
     //
     // `share_src` and `share_offset` are that base and that byte offset while
     // the alias is still a *request*; alloc() serves it and clears them, and
@@ -94,7 +99,12 @@ struct Var : Node {
     int64 numel();
     void set_shape(NanoVector shape);
     bool alloc(Allocator* allocator);
-    inline void share_with(Var* x, size_t offset = 0) { CHECK_EXIST; share_src = x; share_offset = offset; }
+    inline void share_with(Var* x, size_t offset = 0) {
+        CHECK_EXIST;
+        share_src = x;
+        share_offset = offset;
+        storage_offset_bytes = x->storage_offset_bytes + offset;
+    }
     // Whether alloc() still owes this var an aliased buffer.
     inline bool is_sharing() const { CHECK_EXIST; return share_src != nullptr; }
     // Whether two distinct vars are members of the same established share ring.
@@ -171,5 +181,19 @@ struct VarPtr {
 std::ostream& operator<<(std::ostream& os, const Var& var);
 std::ostream& operator<<(std::ostream& os, const Var* var);
 std::ostream& operator<<(std::ostream& os, const VarPtr& v);
+
+VarPtr contiguous_storage(Var* value);
+template<class Operator>
+void adapt_storage_input(Var*& value, vector<VarPtr>& owners) {
+    if (Operator::accepts_storage_strides || !value || value->is_contiguous()) return;
+    USER_CHECK(!Operator::mutates_storage_inputs)
+        << "Writable kernel inputs require contiguous storage";
+    owners.emplace_back(contiguous_storage(value));
+    value = owners.back().ptr;
+}
+template<class Operator>
+void adapt_storage_input(vector<Var*>& values, vector<VarPtr>& owners) {
+    for (auto*& value : values) adapt_storage_input<Operator>(value, owners);
+}
 
 } // jittor

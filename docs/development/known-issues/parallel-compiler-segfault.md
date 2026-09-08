@@ -35,7 +35,7 @@ probes pass. A later complete nbclient smoke nevertheless died twice during a
 transformer attention workload with eight compile workers, including once with
 `JT_NO_SIGNAL_HANDLER=1`; the same smoke passed with serial compilation. The
 offline notebook gate therefore remains serial while this broader issue is
-open. See the [2026-08-21 verification report and 2026-08-22 addendum](../../../agent/results/2026-08-21-jupyter-sigchld.md).
+open. See the [2026-08-21 verification report and 2026-08-22 addendum](../../results/2026-08-21-jupyter-sigchld.md).
 
 ## Current hypothesis
 

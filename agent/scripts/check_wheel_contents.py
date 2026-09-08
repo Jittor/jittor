@@ -26,10 +26,10 @@ import sys
 import zipfile
 
 
-AGENT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_BASELINE = AGENT_ROOT / "baselines" / "wheel-contents-final.txt"
-DEFAULT_ADDITION_ALLOWLIST = AGENT_ROOT / "baselines" / "wheel-additions-final.txt"
-DEFAULT_CONTENT_CHANGE_ALLOWLIST = AGENT_ROOT / "baselines" / "wheel-content-changes-final.txt"
+BASELINE_ROOT = Path(__file__).resolve().parents[2] / "docs" / "results" / "baselines"
+DEFAULT_BASELINE = BASELINE_ROOT / "wheel-contents-final.txt"
+DEFAULT_ADDITION_ALLOWLIST = BASELINE_ROOT / "wheel-additions-final.txt"
+DEFAULT_CONTENT_CHANGE_ALLOWLIST = BASELINE_ROOT / "wheel-content-changes-final.txt"
 
 REQUIRED_MEMBERS = (
     "jittor/src/core/common.h",

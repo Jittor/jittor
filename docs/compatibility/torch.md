@@ -193,7 +193,7 @@ Two boundaries are architectural rather than missing work:
   PyTorch/Transformers exactly, at `0.109s` against `0.137s` for the four-token
   warm generate. verl rides on the same path -- its import, protocol, FSDP2 and
   PPO gates pass, including four-card FSDP2. See the
-  [current baseline](../../agent/results/2026-08-23-verl-vllm-trellis-current-baseline.md).
+  [current baseline](../results/2026-08-23-verl-vllm-trellis-current-baseline.md).
 
 TRELLIS.2 4B completes an aligned end-to-end pipeline on the same external
 adapter with four real CUDA extensions, but its warm pipeline median is

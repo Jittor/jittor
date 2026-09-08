@@ -1,5 +1,6 @@
 """FlashAttention adapter implementation."""
 from __future__ import annotations
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import pathlib
 from types import ModuleType
 from typing import Optional, Tuple
@@ -22,7 +23,7 @@ def _flashattn_result(result, return_attn_probs: bool = False):
 
 
 def _dtype_name(x) -> str:
-    return str(getattr(x, "dtype", ""))
+    return _jittor_dtype_name(getattr(x, "dtype", ""))
 
 
 def _native_supported_dtype(x) -> bool:

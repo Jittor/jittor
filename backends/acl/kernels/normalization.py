@@ -1,4 +1,5 @@
 """ACL normalization and grouped serving implementations."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import math
 from numbers import Real
@@ -35,7 +36,7 @@ def _batch_norm_eval_cuda_acl(x, weight, bias, running_mean, running_var, eps):
     values = (x, weight, bias, running_mean, running_var)
     if (
         all((isinstance(value, jt.Var) for value in values))
-        and all((str(value.dtype) == "float32" for value in values))
+        and all((_jittor_dtype_name(value.dtype) == "float32" for value in values))
         and isinstance(eps, Real)
     ):
         shape = tuple((int(size) for size in x.shape))
@@ -57,9 +58,9 @@ def _group_norm_cuda_acl(x, num_groups, weight, bias, eps):
         and isinstance(weight, jt.Var)
         and isinstance(bias, jt.Var)
         and isinstance(eps, Real)
-        and (str(x.dtype) == "float32")
-        and (str(weight.dtype) == "float32")
-        and (str(bias.dtype) == "float32")
+        and (_jittor_dtype_name(x.dtype) == "float32")
+        and (_jittor_dtype_name(weight.dtype) == "float32")
+        and (_jittor_dtype_name(bias.dtype) == "float32")
     ):
         shape = tuple((int(size) for size in x.shape))
         groups = int(num_groups)
@@ -82,8 +83,8 @@ def _rms_norm_cuda_acl(x, gamma, epsilon=1e-06):
     if isinstance(x, jt.Var) and isinstance(gamma, jt.Var) and isinstance(epsilon, Real):
         x_shape = tuple((int(size) for size in x.shape))
         gamma_shape = tuple((int(size) for size in gamma.shape))
-        x_dtype = str(x.dtype)
-        gamma_dtype = str(gamma.dtype)
+        x_dtype = _jittor_dtype_name(x.dtype)
+        gamma_dtype = _jittor_dtype_name(gamma.dtype)
         epsilon_value = float(epsilon)
         supported_gamma_dtypes = {
             "float32": ("float32",),
@@ -95,7 +96,7 @@ def _rms_norm_cuda_acl(x, gamma, epsilon=1e-06):
             and all((size > 0 for size in x_shape))
             and (gamma_shape == (x_shape[-1],))
             and (gamma_dtype in supported_gamma_dtypes.get(x_dtype, ()))
-            and (getattr(jt.flags, "no_grad", 0) or x_dtype in ("float32", "bfloat16"))
+            and (getattr(jt.flags, "no_grad", 0) or _jittor_dtype_name(x_dtype) in ("float32", "bfloat16"))
             and math.isfinite(epsilon_value)
             and (epsilon_value > 0)
         ):
@@ -119,8 +120,8 @@ def _grouped_add_rms_norm_acl(x, residual, weight, eps):
         or any((size <= 0 for size in shape))
         or tuple(residual.shape) != shape
         or (tuple(weight.shape) != (shape[-1],))
-        or (len({str(x.dtype), str(residual.dtype), str(weight.dtype)}) != 1)
-        or (str(x.dtype) not in ("float16", "bfloat16", "float32"))
+        or (len({_jittor_dtype_name(x.dtype), _jittor_dtype_name(residual.dtype), _jittor_dtype_name(weight.dtype)}) != 1)
+        or (_jittor_dtype_name(x.dtype) not in ("float16", "bfloat16", "float32"))
         or (not math.isfinite(epsilon))
         or (epsilon <= 0.0)
     ):
@@ -133,7 +134,7 @@ def _grouped_bfloat16_rms_norm_acl(x, unit_weight, weight, eps):
     if not (
         getattr(jt.flags, "no_grad", 0)
         and all((isinstance(value, jt.Var) for value in values))
-        and all((str(value.dtype) == "bfloat16" for value in values))
+        and all((_jittor_dtype_name(value.dtype) == "bfloat16" for value in values))
         and isinstance(eps, Real)
     ):
         return None
@@ -156,7 +157,7 @@ def _grouped_dual_bfloat16_rms_norm_acl(first, second, first_weight, second_weig
     if not (
         getattr(jt.flags, "no_grad", 0)
         and all((isinstance(value, jt.Var) for value in values))
-        and all((str(value.dtype) == "bfloat16" for value in values))
+        and all((_jittor_dtype_name(value.dtype) == "bfloat16" for value in values))
         and isinstance(eps, Real)
     ):
         return None
@@ -194,7 +195,7 @@ def _expand_rotary_cache_acl(cache, rotary_dim):
         and (int(cache.shape[-1]) == int(rotary_dim))
         and (int(rotary_dim) > 0)
         and (int(rotary_dim) % 2 == 0)
-        and (str(cache.dtype) in ("float16", "bfloat16", "float32"))
+        and (_jittor_dtype_name(cache.dtype) in ("float16", "bfloat16", "float32"))
     ):
         return ExpandRotaryCacheACL()(cache)
     return None
@@ -217,8 +218,8 @@ def _grouped_qk_rms_norm_rotary_acl(
         getattr(jt.flags, "no_grad", 0)
         and all((isinstance(value, jt.Var) for value in values))
         and isinstance(positions, jt.Var)
-        and all((str(value.dtype) == "bfloat16" for value in values))
-        and (str(positions.dtype) in ("int32", "int64"))
+        and all((_jittor_dtype_name(value.dtype) == "bfloat16" for value in values))
+        and (_jittor_dtype_name(positions.dtype) in ("int32", "int64"))
         and (int(positions.numel()) == 1)
         and is_neox
         and (int(head_size) == int(rotary_dim))

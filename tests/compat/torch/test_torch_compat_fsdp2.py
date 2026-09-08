@@ -45,7 +45,7 @@ class TestFSDP2Compat(unittest.TestCase):
         owner = types.SimpleNamespace()
         entries = []
         full_params = []
-        state = types.SimpleNamespace(
+        state = fsdp._common.StateRecord(
             true_fsdp_initialized=True,
             true_fsdp_flat=False,
             true_fsdp_rank=0,
@@ -57,7 +57,7 @@ class TestFSDP2Compat(unittest.TestCase):
             full = jt.array(np.asarray(value, dtype="float32"))
             shard = jt.array(np.asarray(value, dtype="float32"))
             attr = f"param_{i}"
-            entry = types.SimpleNamespace(
+            entry = fsdp._common.StateRecord(
                 name=attr,
                 owner=owner,
                 attr=attr,
@@ -85,7 +85,7 @@ class TestFSDP2Compat(unittest.TestCase):
         owner = types.SimpleNamespace()
         arrays = [np.asarray(value, dtype="float32") for value in values]
         flat = jt.array(np.concatenate([value.reshape(-1) for value in arrays]))
-        state = types.SimpleNamespace(
+        state = fsdp._common.StateRecord(
             true_fsdp_initialized=True,
             true_fsdp_flat=True,
             true_fsdp_rank=0,
@@ -103,7 +103,7 @@ class TestFSDP2Compat(unittest.TestCase):
         for i, value in enumerate(arrays):
             full = jt.array(value)
             attr = f"param_{i}"
-            entry = types.SimpleNamespace(
+            entry = fsdp._common.StateRecord(
                 name=attr,
                 owner=owner,
                 attr=attr,
@@ -135,7 +135,7 @@ class TestFSDP2Compat(unittest.TestCase):
             full_grads = [jt.ones_like(value) for value in full]
             with mock.patch.object(
                     canonical_fsdp._common, "_reduce_scatter_padded",
-                    side_effect=lambda value: value):
+                    side_effect=lambda value, group=None: value):
                 sharded = fsdp_grad_sync._sync_sharded_grads_from_full_grads(
                     state, full_grads)
             self.assertEqual(len(sharded), len(entries))

@@ -1,4 +1,5 @@
 """CUDA inference fast path for :func:`jittor.nn.layer_norm`."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import os
 
@@ -11,11 +12,11 @@ def _supports_layer_norm_inference(
         x, normalized_shape, weight, bias, eps, *, allow_bfloat16=False):
     if _output_requires_grad(x, weight, bias):
         return False
-    input_dtype = str(x.dtype)
+    input_dtype = _jittor_dtype_name(x.dtype)
     supported_dtypes = ("float16", "float32")
     if allow_bfloat16:
         supported_dtypes += ("bfloat16",)
-    if len(normalized_shape) != 1 or input_dtype not in supported_dtypes:
+    if len(normalized_shape) != 1 or _jittor_dtype_name(input_dtype) not in supported_dtypes:
         return False
     hidden = int(normalized_shape[0])
     var_affine = isinstance(weight, jt.Var) and isinstance(bias, jt.Var)

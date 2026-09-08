@@ -17,8 +17,8 @@ while its C++ and CUDA backend compiles and tunes operators for each workload.
 - [Models / 模型库](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
 - [API documentation / API 文档](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
 - [Forum / 论坛](https://discuss.jittor.org/)
-- [Awesome Jittor (English)](AWESOME-JITTOR-LIST.md) |
-  [Awesome Jittor (中文)](AWESOME-JITTOR-LIST.cn.md)
+- [Awesome Jittor (English)](docs/community/AWESOME-JITTOR-LIST.md) |
+  [Awesome Jittor (中文)](docs/community/AWESOME-JITTOR-LIST.cn.md)
 
 <a id="quickstart"></a>
 ## Quickstart / 快速开始

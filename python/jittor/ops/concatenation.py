@@ -1,4 +1,5 @@
 """Tensor concatenation operations."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from collections.abc import Sequence
 
@@ -97,12 +98,12 @@ def concat(arr, dim=0):
                             axis,
                         )
                     )
-            dtypes.append(str(value.dtype))
+            dtypes.append(_jittor_dtype_name(value.dtype))
 
         dtype = _merge_dtypes(dtypes)
         kernel = select_kernel("tensor.concat", arr, dim)
         if kernel is not None:
-            inputs = tuple(value if str(value.dtype) == str(dtype) else value.cast(dtype)
+            inputs = tuple(value if _jittor_dtype_name(value.dtype) == _jittor_dtype_name(dtype) else value.cast(dtype)
                            for value in arr)
             result = kernel(inputs, dim)
             if result is not None:

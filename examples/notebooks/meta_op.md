@@ -24,7 +24,7 @@ The meta-operators are consist of reindex, reindex-reduce and element-wise opera
 
 元算子由重索引算子，重索引化简算子和元素级算子组成。重索引算子，重索引化简算子都是一元算子。 重索引算子是其输入和输出之间的一对多映射。重索引简化算子是多对一映射。广播，填补, 切分算子是常见的重新索引算子。 而化简，累乘，累加算子是常见的索引化简算子。 元素级算子是元算子的第三部分，与前两个相比，元素算级子可能包含多个输入。 但是元素级算子的所有输入和输出形状必须相同，它们是一对一映射的。 例如，两个变量的加法是一个二进制的逐元素算子。
 
-> ![](./figs/mop.svg)
+> ![](figs/mop.svg)
 > The hierarchical architecture of meta-operators. The meta-operators are consist of reindex, reindex-reduce and element-wise operators. Reindex and reindex-reduce are each other's backward operators. The backward operators of element-wise operators are itself. Those meta-operators are fused into common DL operations, and these DL operators further constitute the model.
 >
 > 元算子的层级结构。元算子包含三类算子,重索引算子,重索引化简算子,元素级算子。元算

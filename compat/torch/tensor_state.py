@@ -3,17 +3,32 @@
 The compatibility package historically attached its leaf and ``retain_grad``
 registries directly to the public :mod:`jittor` module.  Keeping those maps in
 one state object makes their ownership explicit. A native backend resolves its
-explicit active compatibility owner; historical native attributes are aliases
-of that owner's state, including during transactional installation.
+explicit active compatibility owner through a private weak module binding.
+Independent installation publishes state only on its target namespace;
+historical native attributes are supported only by legacy initialization.
 """
 
 from __future__ import annotations
+
+from types import ModuleType
+from weakref import WeakKeyDictionary, ref
 
 from ..transaction import TransactionConflict, _MISSING
 from .holder_registry import HolderRegistry
 
 
-_OWNER_ATTR = "_torch_compat_owner"
+_OWNERS = WeakKeyDictionary()
+
+
+def _bound_owner(module):
+    binding = _OWNERS.get(module) if isinstance(module, ModuleType) else None
+    if binding is None:
+        return module
+    owner = binding()
+    if owner is None:
+        _OWNERS.pop(module, None)
+        return module
+    return owner
 
 class TorchTensorState(HolderRegistry):
     """Per-installed-module bookkeeping for Torch-facing tensor autograd.
@@ -40,10 +55,10 @@ class TorchTensorState(HolderRegistry):
 
 def compatibility_owner(module):
     """Resolve an explicitly bound owner, never an inferred sys.modules root."""
-    owner = vars(module).get(_OWNER_ATTR, module)
+    owner = _bound_owner(module)
     if owner is None or not hasattr(owner, "__dict__"):
         raise RuntimeError("invalid Torch compatibility owner binding")
-    if vars(owner).get(_OWNER_ATTR, owner) is not owner:
+    if _bound_owner(owner) is not owner:
         raise RuntimeError("Torch compatibility owner bindings must not form chains")
     return owner
 
@@ -90,7 +105,7 @@ def _publish_state(module, state, transaction=None):
 def get_tensor_state(jittor_module):
     """Return one active-owner state, retaining unbound legacy initialization."""
     owner = compatibility_owner(jittor_module)
-    bound = _OWNER_ATTR in vars(jittor_module) or _OWNER_ATTR in vars(owner)
+    bound = isinstance(owner, ModuleType) and owner in _OWNERS
     state = vars(owner).get("_torch_tensor_state") if bound else _existing_state(owner)
     if not isinstance(state, TorchTensorState):
         if bound:
@@ -104,17 +119,32 @@ def get_tensor_state(jittor_module):
     return state
 
 
+def latest_optimizer(module):
+    """Resolve the most recently registered live optimizer without owning it."""
+    state = _existing_state(compatibility_owner(module))
+    if state is None:
+        return None
+    registry = state.active_optimizers
+    for reference in reversed(registry):
+        optimizer = reference()
+        if optimizer is not None:
+            return optimizer
+    return None
+
+
 def bind_tensor_state(native_backend, target, transaction, state=None):
     """Provision one owner before installers run; every binding is reversible."""
     if transaction.state != "open":
         raise RuntimeError("tensor-state binding requires an open install transaction")
-    previous_owner = vars(native_backend).get(_OWNER_ATTR, native_backend)
+    if not isinstance(native_backend, ModuleType) or not isinstance(target, ModuleType):
+        raise TypeError("Torch owner binding requires module objects")
+    previous_owner = _bound_owner(native_backend)
     if previous_owner is not native_backend and previous_owner is not target:
         raise RuntimeError("native backend already has a different active Torch owner")
-    if vars(target).get(_OWNER_ATTR, target) is not target:
+    if _bound_owner(target) is not target:
         raise RuntimeError("target is already bound to a different Torch owner")
     for owner in (native_backend, target):
-        if _OWNER_ATTR in vars(owner):
+        if owner in _OWNERS:
             bound_owner = compatibility_owner(owner)
             if not isinstance(vars(bound_owner).get("_torch_tensor_state"), TorchTensorState):
                 raise RuntimeError("bound Torch owner has no local tensor state")
@@ -144,11 +174,12 @@ def bind_tensor_state(native_backend, target, transaction, state=None):
         # Preserve an existing empty optimizer list's identity as well.
         state = _adopt_legacy_state(sources[0] if sources else native_backend)
     _publish_state(target, state, transaction)
-    if target is not native_backend:
-        _publish_state(native_backend, state, transaction)
     for owner in (target,) if target is native_backend else (target, native_backend):
-        if vars(owner).get(_OWNER_ATTR, _MISSING) is not target:
-            transaction.mutate_attr(owner, _OWNER_ATTR, target)
+        previous = _OWNERS.get(owner, _MISSING)
+        if previous is _MISSING or previous() is not target:
+            binding = ref(target)
+            transaction.record(_OWNERS, owner, previous, binding)
+            _OWNERS[owner] = binding
     return state
 
 

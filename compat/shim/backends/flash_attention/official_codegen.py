@@ -1,5 +1,6 @@
 """FlashAttention official codegen implementation."""
 from __future__ import annotations
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import pathlib
 
 def _official_stub_source(build_dir: str, root: pathlib.Path) -> str:
@@ -11,7 +12,7 @@ def _official_stub_source(build_dir: str, root: pathlib.Path) -> str:
     split_lines = []
     bwd_lines = []
     for dtype in _facade._OFFICIAL_FLASH_ATTN_DTYPES:
-        ctype = "cutlass::half_t" if dtype == "fp16" else "cutlass::bfloat16_t"
+        ctype = "cutlass::half_t" if _jittor_dtype_name(dtype) == "fp16" else "cutlass::bfloat16_t"
         for dim in _facade._OFFICIAL_FLASH_ATTN_HEAD_DIMS:
             for causal in (False, True):
                 cbool = "true" if causal else "false"

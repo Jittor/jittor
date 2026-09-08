@@ -1,3 +1,4 @@
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import jittor as jt
 from jittor import nn
 from ...types import _dtype_to_str
@@ -122,7 +123,7 @@ def _install_functional(ctx):
             # label-smoothing). jittor's cross_entropy_loss only understands integer
             # class-index targets, so handle the soft case here.
             if (isinstance(target, jt.Var) and target.ndim == input.ndim
-                    and "int" not in str(target.dtype)):
+                    and "int" not in _jittor_dtype_name(target.dtype)):
                 Cc = int(input.shape[1]) if input.ndim >= 2 else int(input.shape[-1])
                 cdim = 1 if input.ndim >= 2 else -1
                 logp = nn.log_softmax(input, dim=cdim)

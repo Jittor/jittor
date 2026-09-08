@@ -15,6 +15,7 @@ The generator's pass is not modifiable from here, so the fast path is installed
 over ``Var.sum`` and ``Var.mean`` and declines -- returning ``None`` -- whenever
 its assumptions do not hold.
 """
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from functools import lru_cache
 
@@ -41,7 +42,7 @@ def _full_sum_cuda_cls(dtype, divisor):
     class FullSumCUDA(jt.Function):
         def execute(self, x):
             self.input_shape = tuple(int(size) for size in x.shape)
-            self.input_dtype = str(x.dtype)
+            self.input_dtype = _jittor_dtype_name(x.dtype)
             total = 1
             for size in self.input_shape:
                 total *= size
@@ -121,7 +122,7 @@ def _supports_full_reduce(x, divisor=None):
                  supports=_supports_full_reduce)
 def _full_reduce_cuda(x, divisor=None):
     """Fold ``x`` to a scalar; ``divisor`` turns the sum into a mean."""
-    return _full_sum_cuda_cls(str(x.dtype), divisor).apply(x)
+    return _full_sum_cuda_cls(_jittor_dtype_name(x.dtype), divisor).apply(x)
 
 
 def _is_full_reduction(args, kwargs):

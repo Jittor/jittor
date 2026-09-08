@@ -57,7 +57,7 @@ struct Swap {
 unordered_map<Allocator*, Swap> swaps;
 
 void swap_to_disk(Var* x, Swap& swap) {
-    swap_total += x->size;
+    swap_total += x->storage_span_bytes();
     ASSERT(!x->flag(VarFlags::_is_swapped));
     // "search share_with" on swap.h's TODO list: a var that is a sub-range of
     // another var's block cannot be swapped out on its own -- the block stays
@@ -69,14 +69,14 @@ void swap_to_disk(Var* x, Swap& swap) {
     if (x->allocator->is_cuda()) {
         // was a function-local `static char* buffer = new char[8MB]`: leaked,
         // and two threads swapping at once trampled each other's staging area
-        int64 buf_size = std::min(x->size, SWAP_BUF_SIZE);
+        int64 buf_size = std::min(x->storage_span_bytes(), SWAP_BUF_SIZE);
         std::unique_ptr<char[]> buf(new char[buf_size]);
         char* buffer = buf.get();
         auto* memptr = (char*)x->mem_ptr;
         auto* fd = fopen(path.c_str(), "wb");
         CHECK(fd) << "swap file open failed:" << path << x;
-        for (int64 i=0; i<x->size; i+=SWAP_BUF_SIZE) {
-            int64 cp_size = std::min(x->size-i, SWAP_BUF_SIZE);
+        for (int64 i=0; i<x->storage_span_bytes(); i+=SWAP_BUF_SIZE) {
+            int64 cp_size = std::min(x->storage_span_bytes()-i, SWAP_BUF_SIZE);
             // the return value used to be dropped: a failed D2H copy wrote the
             // staging buffer's previous contents to disk as if it were the var
             backend_copy(buffer, {}, memptr+i, allocation_device(x->allocator), cp_size);
@@ -92,14 +92,14 @@ void swap_to_disk(Var* x, Swap& swap) {
     {
         auto* fd = fopen(path.c_str(), "wb");
         CHECK(fd) << "swap file open failed:" << path << x;
-        auto res = fwrite(x->mem_ptr, x->size, 1, fd);
-        CHECK(res==1) << "failed to write swap file" << path << res << x->size << x;
+        auto res = fwrite(x->mem_ptr, x->storage_span_bytes(), 1, fd);
+        CHECK(res==1) << "failed to write swap file" << path << res << x->storage_span_bytes() << x;
         fclose(fd); 
     }
-    auto iter = swap.lived.find({x->size, x->id});
+    auto iter = swap.lived.find({x->storage_span_bytes(), x->id});
     ASSERT(iter != swap.lived.end());
     swap.lived.erase(iter);
-    x->allocator->free(x->mem_ptr, x->size, x->allocation);
+    x->allocator->free(x->mem_ptr, x->storage_span_bytes(), x->allocation);
     x->mem_ptr = nullptr;
     x->allocator = nullptr;
     x->allocation = 0;
@@ -115,18 +115,18 @@ bool alloc_with_swap(Var* x, Allocator* allocator, bool force) {
     if (x->mem_ptr || x->is_sharing()) {
         // shared memory, no need alloc
         if (x->alloc(allocator)) {
-            swap.lived[{x->size, x->id}] = x;
+            swap.lived[{x->storage_span_bytes(), x->id}] = x;
             return true;
         }
     }
     bool is_cpu = !allocator->is_cuda();
     int64 limit = is_cpu ? cpu_mem_limit : device_mem_limit;
     if (limit < 0) limit = 1ll<<60;
-    if (allocator->used_memory + allocator->unused_memory + x->size > limit)
+    if (allocator->used_memory + allocator->unused_memory + x->storage_span_bytes() > limit)
         allocator->gc();
-    if (force && allocator->used_memory + allocator->unused_memory + x->size > limit) {
-        auto iter = swap.lived.upper_bound({x->size, -1});
-        auto unused_target = allocator->unused_memory + x->size;
+    if (force && allocator->used_memory + allocator->unused_memory + x->storage_span_bytes() > limit) {
+        auto iter = swap.lived.upper_bound({x->storage_span_bytes(), -1});
+        auto unused_target = allocator->unused_memory + x->storage_span_bytes();
         while (iter != swap.lived.end()) {
             auto* var = iter->second;
             iter++;
@@ -139,10 +139,10 @@ bool alloc_with_swap(Var* x, Allocator* allocator, bool force) {
                     swap_to_disk(var, swap);
             } else
                 swap_to_disk(var, swap);
-            if (allocator->used_memory + allocator->unused_memory + x->size <= limit || allocator->unused_memory >= unused_target) break;
+            if (allocator->used_memory + allocator->unused_memory + x->storage_span_bytes() <= limit || allocator->unused_memory >= unused_target) break;
         }
         // if still no space, swap other smaller var
-        if (!(allocator->used_memory + allocator->unused_memory + x->size <= limit || allocator->unused_memory >= unused_target)) {
+        if (!(allocator->used_memory + allocator->unused_memory + x->storage_span_bytes() <= limit || allocator->unused_memory >= unused_target)) {
             auto iter = swap.lived.end();
             if (swap.lived.size()) iter = std::prev(iter);
             while (iter != swap.lived.end()) {
@@ -158,16 +158,16 @@ bool alloc_with_swap(Var* x, Allocator* allocator, bool force) {
                 } else
                     swap_to_disk(var, swap);
                 allocator->gc();
-                if (allocator->used_memory + allocator->unused_memory + x->size <= limit || allocator->unused_memory >= unused_target) break;
+                if (allocator->used_memory + allocator->unused_memory + x->storage_span_bytes() <= limit || allocator->unused_memory >= unused_target) break;
             }
-            if (!(allocator->used_memory + allocator->unused_memory + x->size <= limit || allocator->unused_memory >= unused_target)) {
+            if (!(allocator->used_memory + allocator->unused_memory + x->storage_span_bytes() <= limit || allocator->unused_memory >= unused_target)) {
                 display_memory_info();
                 LOGw << "unable to alloc var" << x;
             }
         }
     }
     if (x->alloc(allocator)) {
-        swap.lived[{x->size, x->id}] = x;
+        swap.lived[{x->storage_span_bytes(), x->id}] = x;
         return true;
     }
     return false;
@@ -181,10 +181,10 @@ void free_with_swap(Var* x) {
     } else {
         if (!x->mem_ptr) return;
         auto& swap = swaps[x->allocator];
-        auto iter = swap.lived.find({x->size, x->id});
+        auto iter = swap.lived.find({x->storage_span_bytes(), x->id});
         if (iter != swap.lived.end())
             swap.lived.erase(iter);
-        x->allocator->free(x->mem_ptr, x->size, x->allocation);
+        x->allocator->free(x->mem_ptr, x->storage_span_bytes(), x->allocation);
         x->mem_ptr = nullptr;
         x->allocator = nullptr;
         x->allocation = 0;
@@ -196,8 +196,8 @@ bool move_with_swap(Var* x, Allocator* allocator, bool force) {
     // same reason as swap_to_disk: moving one member of a share group breaks
     // the alias for the rest (see migrate_group in mem/allocator.cc)
     ASSERT(!x->share_next) << "cannot move an aliased var with swap" << x;
-    swap_total += x->size;
-    Allocation allocation(x->mem_ptr, x->allocation, x->size, x->allocator);
+    swap_total += x->storage_span_bytes();
+    Allocation allocation(x->mem_ptr, x->allocation, x->storage_span_bytes(), x->allocator);
     x->mem_ptr = nullptr;
     x->allocator = nullptr;
     x->allocation = 0;
@@ -213,14 +213,14 @@ bool move_with_swap(Var* x, Allocator* allocator, bool force) {
         string path = swap_file_path(x);
         #ifdef HAS_ACCELERATOR
         if (x->allocator->is_cuda()) {
-            int64 buf_size = std::min(x->size, SWAP_BUF_SIZE);
+            int64 buf_size = std::min(x->storage_span_bytes(), SWAP_BUF_SIZE);
             std::unique_ptr<char[]> buf(new char[buf_size]);
             char* buffer = buf.get();
             auto* memptr = (char*)x->mem_ptr;
             auto* fd = fopen(path.c_str(), "rb");
             CHECK(fd) << "swap file open failed:" << path << x;
-            for (int64 i=0; i<x->size; i+=SWAP_BUF_SIZE) {
-                int64 cp_size = std::min(x->size-i, SWAP_BUF_SIZE);
+            for (int64 i=0; i<x->storage_span_bytes(); i+=SWAP_BUF_SIZE) {
+                int64 cp_size = std::min(x->storage_span_bytes()-i, SWAP_BUF_SIZE);
                 auto res = fread(buffer, cp_size, 1, fd);
                 if (res != 1) {
                     fclose(fd);
@@ -234,7 +234,7 @@ bool move_with_swap(Var* x, Allocator* allocator, bool force) {
         {
             auto* fd = fopen(path.c_str(), "rb");
             CHECK(fd) << "swap file open failed:" << path << x;
-            auto res = fread(x->mem_ptr, x->size, 1, fd);
+            auto res = fread(x->mem_ptr, x->storage_span_bytes(), 1, fd);
             CHECK(res==1);
             fclose(fd); 
         }
@@ -244,11 +244,11 @@ bool move_with_swap(Var* x, Allocator* allocator, bool force) {
         x->set_flag(VarFlags::_is_swapped, 0);
     } else {
         backend_copy(x->mem_ptr, allocation_device(x->allocator), allocation.ptr,
-                     allocation_device(allocation.allocator), x->size);
+                     allocation_device(allocation.allocator), x->storage_span_bytes());
     }
     if (allocation.ptr) {
         auto& swap = swaps[allocation.allocator];
-        auto iter = swap.lived.find({x->size, x->id});
+        auto iter = swap.lived.find({x->storage_span_bytes(), x->id});
         if (iter != swap.lived.end())
             swap.lived.erase(iter);
     }
@@ -257,7 +257,7 @@ bool move_with_swap(Var* x, Allocator* allocator, bool force) {
 
 void registe_swap(Var* x) {
     auto& swap = swaps[x->allocator];
-    swap.lived[{x->size, x->id}] = x;
+    swap.lived[{x->storage_span_bytes(), x->id}] = x;
 }
 
 }

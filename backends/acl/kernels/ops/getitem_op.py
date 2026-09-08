@@ -1,3 +1,4 @@
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import os
 from jittor_utils import env_or_try_find
 import jittor_utils
@@ -21,7 +22,7 @@ _slice_zero_cache = OrderedDict()
 
 def _cached_slice_zero(shape, dtype):
     device_id = int(getattr(jt.flags, "device_id", -1))
-    key = (device_id, tuple(shape), str(dtype))
+    key = (device_id, tuple(shape), _jittor_dtype_name(dtype))
     value = _slice_zero_cache.get(key)
     if value is not None:
         _slice_zero_cache.move_to_end(key)
@@ -89,7 +90,7 @@ def basic_slice_acl(x, slices):
     """
 
     contiguous_last_axis = (
-        str(x.dtype) in ("float16", "bfloat16", "float32")
+        _jittor_dtype_name(x.dtype) in ("float16", "bfloat16", "float32")
         and all(
             begin == 0 and end == int(size) and step == 1
             for begin, end, step, size in zip(
@@ -231,7 +232,7 @@ class GetItemACL(jt.Function):
         tensor_index = slices[tensor_dim]
         if (
             tensor_index.ndim != 1
-            or str(tensor_index.dtype) not in ("int32", "int64")
+            or _jittor_dtype_name(tensor_index.dtype) not in ("int32", "int64")
         ):
             return None
 
@@ -282,7 +283,7 @@ class GetItemACL(jt.Function):
         return tuple(indices)
 
     def execute(self, x, slices, return_x=None):
-        if isinstance(slices, jt.Var) and slices.dtype == 'bool':
+        if isinstance(slices, jt.Var) and _jittor_dtype_name(slices.dtype) == 'bool':
             # A boolean mask whose shape only covers the leading dims of x
             # (e.g. a 1-D row mask on a 2-D tensor: x[mask]) is not handled by
             # the MaskedSelect path below, which requires x.shape == mask.shape.

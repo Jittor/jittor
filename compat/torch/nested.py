@@ -1,4 +1,5 @@
 """Nested tensor, tensor-size, and leaf-parameter compatibility."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import numpy as np
 import jittor as jt
@@ -125,12 +126,12 @@ class _NestedTensor:
             assert sample_shape[cat_dim] >= max_len, "output_size is smaller than the longest nested sample"
         else:
             sample_shape[cat_dim] = max_len
-        out = np.full((len(arrays), *sample_shape), padding, dtype=arrays[0].dtype)
+        out = np.full((len(arrays), *sample_shape), padding, dtype=_jittor_dtype_name(arrays[0].dtype))
         for i, arr in enumerate(arrays):
             sl = [i] + [slice(None)] * len(sample_shape)
             sl[1 + cat_dim] = slice(0, arr.shape[cat_dim])
             out[tuple(sl)] = arr
-        return jt.array(np.ascontiguousarray(out)).cast(str(self.dtype))
+        return jt.array(np.ascontiguousarray(out)).cast(_jittor_dtype_name(self.dtype))
 
     def __len__(self):
         return len(self._tensors)
@@ -211,7 +212,7 @@ class _NestedTensor:
         return [t.tolist() for t in self._tensors]
 
     def __reduce__(self):
-        return (_rebuild_nested_tensor, ([(t.numpy(), str(t.dtype)) for t in self._tensors], self._ragged_idx))
+        return (_rebuild_nested_tensor, ([(t.numpy(), _jittor_dtype_name(t.dtype)) for t in self._tensors], self._ragged_idx))
 
     def __repr__(self):
         return f"NestedTensor(values={self._values}, offsets={self._offsets})"
@@ -237,12 +238,12 @@ def _rebuild_var_from_numpy(np_arr, dtype_str=None):
     if target is not jt:
         return target.tensor(np_arr, dtype=dtype_str)
     v = jt.array(np_arr)
-    if dtype_str is not None and str(v.dtype) != dtype_str:
+    if dtype_str is not None and _jittor_dtype_name(v.dtype) != dtype_str:
         # numpy can't represent bfloat16 (.numpy() upcasts to float32); restore
         # the original dtype. Values are preserved (bf16->fp32 is lossless and
         # the original was already bf16-representable).
         try:
-            v = v.astype(dtype_str)
+            v = v.astype(_jittor_dtype_name(dtype_str))
         except EXPECTED as exc:
             swallowed("torch/nested.py _rebuild_var_from_numpy: v = v.astype(dtype_str)", exc,
                       "the tensor keeps the dtype numpy inferred, not the one that "

@@ -13,6 +13,7 @@ the Jittor repository while still using the normal ``import flash_attn`` API:
 No real PyTorch/libtorch package is imported or linked here.
 """
 from __future__ import annotations
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import hashlib
 import importlib
@@ -542,7 +543,7 @@ def backend_capability_miss(backend: Optional[ModuleType], head_dim: int,
     dtypes = set(getattr(backend, "_flashattn_jittor_dtypes", ()))
     if dims and int(head_dim) not in dims:
         return "backend_head_dim"
-    expected_dtype = {"float16": "fp16", "bfloat16": "bf16"}.get(str(dtype))
+    expected_dtype = {"float16": "fp16", "bfloat16": "bf16"}.get(_jittor_dtype_name(dtype))
     if dtypes and expected_dtype is not None and expected_dtype not in dtypes:
         return "backend_dtype"
     return None
@@ -565,10 +566,10 @@ def _merge_capability_env_list(primary: str, fallback: str, item: object) -> Non
 def _ensure_capability_compile_env(head_dim: int, dtype: str) -> None:
     _merge_capability_env_list(
         "JITTOR_FLASH_ATTN_HEAD_DIMS", "FLASH_ATTN_HEAD_DIMS", int(head_dim))
-    dtype_name = str(dtype).strip().lower()
-    if dtype_name in ("float16", "fp16", "half"):
+    dtype_name = _jittor_dtype_name(dtype).strip().lower()
+    if _jittor_dtype_name(dtype_name) in ("float16", "fp16", "half"):
         compile_dtype = "fp16"
-    elif dtype_name in ("bfloat16", "bf16"):
+    elif _jittor_dtype_name(dtype_name) in ("bfloat16", "bf16"):
         compile_dtype = "bf16"
     else:
         return

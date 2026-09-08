@@ -1,4 +1,5 @@
 """Shape ops tensor operations."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from collections.abc import Sequence, Iterable
 from jittor_core import Var
@@ -101,7 +102,7 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
     if index.shape[0] == 0:
         new_shape = list(x.shape); new_shape[dim] = 0
         return jt.zeros(new_shape, x.dtype)
-    if dim == 0 and n == 1 and x.ndim == 1 and str(x.dtype) in (
+    if dim == 0 and n == 1 and x.ndim == 1 and _jittor_dtype_name(x.dtype) in (
         "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"
     ):
         value = int(x.item())

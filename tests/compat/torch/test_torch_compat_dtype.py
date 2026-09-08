@@ -49,7 +49,7 @@ def both_devices(fn):
 
 def dts(v):
     """bare jittor dtype string for a Var ('float32', 'int64', ...)."""
-    return str(v.dtype)
+    return v.dtype.name
 
 
 def bfloat16_round(values):
@@ -105,8 +105,9 @@ class TestDtypeObjects(Base):
     def test_dtype_equality_against_str(self):
         x = torch.ones(2, dtype=torch.float32)
         self.assertTrue(x.dtype == torch.float32)
-        self.assertTrue(x.dtype == "float32")
-        self.assertTrue(x.dtype == "torch.float32")
+        self.assertFalse(isinstance(x.dtype, str))
+        self.assertFalse(x.dtype == "float32")
+        self.assertFalse(x.dtype == "torch.float32")
         self.assertFalse(x.dtype == torch.int32)
 
     def test_is_floating_point(self):

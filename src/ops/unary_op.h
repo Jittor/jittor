@@ -11,6 +11,7 @@
 namespace jittor {
 
 struct UnaryOp : Op {
+    static constexpr bool accepts_storage_strides = true;
     Var* x, * y;
     // @pybind(unary,cast)
     UnaryOp(Var* x, NanoString op);

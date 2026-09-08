@@ -1,4 +1,5 @@
 """Canonical scaled dot-product attention."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import math
 
@@ -16,20 +17,20 @@ def scaled_dot_product_attention(
     scale=None,
 ):
     """Compute scaled dot-product attention with Torch-compatible masks."""
-    query_dtype = str(query.dtype)
-    if str(key.dtype) != query_dtype or str(value.dtype) != query_dtype:
+    query_dtype = _jittor_dtype_name(query.dtype)
+    if _jittor_dtype_name(key.dtype) != query_dtype or _jittor_dtype_name(value.dtype) != query_dtype:
         raise RuntimeError("query, key and value must have the same dtype")
     probability = float(dropout_p or 0.0)
     if probability < 0.0 or probability > 1.0:
         raise ValueError("dropout probability must be between 0 and 1")
     if attn_mask is not None:
-        mask_dtype = str(attn_mask.dtype)
-        if mask_dtype != "bool" and "float" not in mask_dtype:
+        mask_dtype = _jittor_dtype_name(attn_mask.dtype)
+        if _jittor_dtype_name(mask_dtype) != "bool" and "float" not in _jittor_dtype_name(mask_dtype):
             raise AssertionError("only bool and floating attention masks are supported")
         allowed_mask_dtypes = {query_dtype}
-        if query_dtype in {"bfloat16", "float16", "float64"}:
+        if _jittor_dtype_name(query_dtype) in {"bfloat16", "float16", "float64"}:
             allowed_mask_dtypes.add("float32")
-        if mask_dtype != "bool" and mask_dtype not in allowed_mask_dtypes:
+        if _jittor_dtype_name(mask_dtype) != "bool" and _jittor_dtype_name(mask_dtype) not in allowed_mask_dtypes:
             raise RuntimeError("attention mask dtype must match query dtype or be float32")
     fast = try_dispatch(
         "nn.scaled_dot_product_attention", query, key, value,
@@ -65,7 +66,7 @@ def scaled_dot_product_attention(
             valid_positions = jt.logical_not(causal)
 
     if attn_mask is not None:
-        if str(attn_mask.dtype) == "bool":
+        if _jittor_dtype_name(attn_mask.dtype) == "bool":
             if not skip_row_valid:
                 valid_positions = (
                     attn_mask
@@ -104,10 +105,10 @@ def scaled_dot_product_attention(
         weights = jt.ternary(row_valid, weights, jt.zeros_like(weights))
     if probability > 0.0:
         weights = jt.nn.dropout(weights, p=probability, is_train=True)
-    if str(weights.dtype) != str(value.dtype):
+    if _jittor_dtype_name(weights.dtype) != _jittor_dtype_name(value.dtype):
         weights = weights.cast(value.dtype)
     output = jt.nn.matmul(weights, value)
-    return output if str(output.dtype) == query_dtype else output.cast(query_dtype)
+    return output if _jittor_dtype_name(output.dtype) == query_dtype else output.cast(query_dtype)
 
 
 __all__ = ["scaled_dot_product_attention"]

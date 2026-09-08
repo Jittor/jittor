@@ -409,7 +409,7 @@ allowing them to abort or stall the process:
   `jt.nn.rotary_emb`. Optimizer update, BF16 training, Qwen3-8B BF16 SDPA and
   training, sampling, quantization, and other model families remain separate
   capability gates. See the
-  [Qwen3 forward/backward report](../../agent/results/transformers/2026-08-30-qwen3-ascend-training.md);
+  [Qwen3 forward/backward report](../results/transformers/2026-08-30-qwen3-ascend-training.md);
 - ACL does not provide general float64 operator coverage, so float64 fallback
   is not accepted as evidence for an NPU operation.
 
@@ -417,14 +417,14 @@ Float16/float32 `arg_reduce` forward and value-output backward are maintained
 ACL capabilities. Forward uses CANN MaxDim/MinDim and backward scatters the
 upstream gradient to the selected first index; current real-device validation
 must reject fallback attempts through the native policy and counter. See the
-[focused verification report](../../agent/results/2026-08-30-npu-arg-reduce-backward.md).
+[focused verification report](../results/2026-08-30-npu-arg-reduce-backward.md).
 
 Full, single-axis, and multi-axis `prod` use CANN `aclnnProd`/`aclnnProdDim`.
 Multi-axis reductions are lowered to ordered single-axis device reductions.
 Float32 forward/backward and uint8/int8/int16/int32/int64 forward match
 independent NumPy references on a real NPU. Revalidation requires device
 residency and zero fallback attempts within the guarded computation. See the
-[product verification report](../../agent/results/2026-08-30-npu-product-reduction.md).
+[product verification report](../results/2026-08-30-npu-product-reduction.md).
 
 See the [active known-issues ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)
 for executable evidence and exit conditions.

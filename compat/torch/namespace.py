@@ -1,11 +1,7 @@
-"""An explicit module boundary for the eventual independent Torch package.
+"""Independent Torch namespace with explicit native implementation delegation.
 
-The current compatibility install still publishes Jittor as ``torch`` for
-backwards compatibility.  ``TorchNamespace`` provides the next boundary:
-it has a distinct module identity while delegating the native implementation
-to an explicitly supplied Jittor owner.  It is intentionally opt-in until
-the installer families have all stopped assuming that their owner is the
-native Jittor module.
+The default frontend owns its module identity, types and public writes.
+Legacy Jittor-alias activation is a separate, explicitly selected path.
 """
 
 from __future__ import annotations

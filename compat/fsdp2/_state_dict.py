@@ -34,22 +34,22 @@ def _load_full_state_dict(module, state_dict):
                     [common._flatten_var(value) for value in full_values], dim=0),
                 state.true_fsdp_flat_padded_numel,
             )
-            local = common._slice_flat(
+            local = jt.Var.copy(common._slice_flat(
                 flat,
                 int(state.true_fsdp_rank) * int(state.true_fsdp_flat_shard_numel),
                 int(state.true_fsdp_flat_shard_numel),
-            ).stop_grad()
+            )).stop_grad()
             state.true_fsdp_flat_shard.update(local)
             shard._refresh_flat_entry_shards(state)
         else:
             for entry, full in zip(state.true_fsdp_params, full_values):
                 padded = common._pad_flat(
                     common._flatten_var(full), entry.padded_numel)
-                local = common._slice_flat(
+                local = jt.Var.copy(common._slice_flat(
                     padded,
                     int(state.true_fsdp_rank) * int(entry.shard_numel),
                     int(entry.shard_numel),
-                ).stop_grad()
+                )).stop_grad()
                 entry.shard.update(local)
 
         for entry in state.true_fsdp_params:

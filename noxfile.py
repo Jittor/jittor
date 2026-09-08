@@ -862,7 +862,7 @@ def _asv_state_path(variable, fallback):
 
 
 def _write_asv_config(root, results_dir, html_dir):
-    config = json.loads((REPO_ROOT / "asv.conf.json").read_text(encoding="utf-8"))
+    config = json.loads((REPO_ROOT / "benchmarks" / "asv.conf.json").read_text(encoding="utf-8"))
     config.update(
         {
             "repo": str(REPO_ROOT),

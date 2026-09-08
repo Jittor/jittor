@@ -1,6 +1,6 @@
 """DeviceMesh and DTensor compatibility types and factories."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
-import os
 import types
 
 import numpy as np
@@ -12,63 +12,103 @@ from ..diagnostics import EXPECTED, swallowed
 
 
 class DeviceMesh:
+    """A rank matrix whose axes own real native process groups."""
+
     def __init__(self, device_type=None, mesh=None, *, mesh_dim_names=None,
                  _init_backend=True, **kwargs):
         self.device_type = device_type or ("cuda" if getattr(jt, "has_cuda", 0) else "cpu")
         if not isinstance(self.device_type, str):
             self.device_type = getattr(self.device_type, "type", "cpu")
-        self.mesh = mesh if mesh is not None else (0,)
-        if isinstance(self.mesh, int):
-            self.shape = (int(self.mesh),)
-        else:
-            try:
-                self.shape = tuple(int(x) for x in self.mesh)
-            except EXPECTED as exc:
-                swallowed("fsdp2/dtensor.py __init__: self.shape = tuple(int(x) for x in self.mesh)", exc)
-                self.shape = tuple(getattr(self.mesh, "shape", (1,)))
-        if not self.shape:
-            self.shape = (1,)
+        if hasattr(mesh, "numpy"):
+            mesh = mesh.numpy()
+        ranks = np.asarray([0] if mesh is None else mesh)
+        if ranks.ndim == 0 or ranks.size == 0 or ranks.dtype.kind not in "iu":
+            raise ValueError("DeviceMesh expects a nonempty integer rank array")
+        if len(set(int(v) for v in ranks.flat)) != ranks.size:
+            raise ValueError("DeviceMesh ranks must be unique")
+        if np.any(ranks < 0) or np.any(ranks >= common._world_size()):
+            raise ValueError("DeviceMesh rank is outside the distributed world")
+        self.mesh = ranks.astype(np.int64, copy=True)
+        self.mesh.setflags(write=False)
+        self.shape = self.mesh.shape
+        self.ndim = self.mesh.ndim
         self.mesh_dim_names = tuple(mesh_dim_names) if mesh_dim_names is not None else None
-        self.ndim = len(self.shape)
+        if self.mesh_dim_names is not None and (
+                len(self.mesh_dim_names) != self.ndim
+                or len(set(self.mesh_dim_names)) != self.ndim):
+            raise ValueError("mesh_dim_names must uniquely name every mesh dimension")
+        self._root = self
+        self._root_axes = tuple(range(self.ndim))
+        self._group_cache = {}
+        self._init_backend = bool(_init_backend)
+        # All world ranks create every group in the same order, including
+        # nonmembers. Native NCCL/HCCL creation shares this ordering contract.
+        for axis in range(self.ndim):
+            self._axis_groups((axis,))
+
+    def _axis_groups(self, axes):
+        from jittor.distributed.process_group import ProcessGroup
+
+        root = self._root
+        axes = tuple(axes)
+        fixed = tuple(i for i in range(root.ndim) if i not in axes)
+        ordered = root.mesh.transpose(fixed + axes)
+        width = common._prod(root.shape[i] for i in axes)
+        groups = []
+        for row in ordered.reshape((-1, width)):
+            ranks = tuple(int(v) for v in row)
+            group = root._group_cache.get(ranks)
+            if group is None:
+                if ranks == tuple(range(common._world_size())):
+                    group = ProcessGroup(name="mesh_world")
+                else:
+                    group = ProcessGroup(ranks, name="mesh_" + "_".join(map(str, ranks)))
+                    if root._init_backend:
+                        group._create_backend_communicator()
+                root._group_cache[ranks] = group
+            groups.append((ranks, group))
+        return groups
+
+    def _dim(self, dim):
+        if isinstance(dim, str):
+            if self.mesh_dim_names is None or dim not in self.mesh_dim_names:
+                raise KeyError("unknown mesh dimension %r" % (dim,))
+            return self.mesh_dim_names.index(dim)
+        dim = int(dim)
+        if not 0 <= dim < self.ndim:
+            raise IndexError("mesh dimension out of range")
+        return dim
 
     def __repr__(self):
         return "DeviceMesh(device_type=%r, mesh=%r, mesh_dim_names=%r)" % (
-            self.device_type, self.mesh, self.mesh_dim_names)
+            self.device_type, self.mesh.tolist(), self.mesh_dim_names)
 
     def __getitem__(self, key):
-        """Sub-mesh selection -- refused for a real multi-dimensional mesh.
-
-        This returned `self` for every key, so `mesh["dp"] is mesh["tp"]`: a 2D
-        parallel plan silently collapsed to one dimension and every collective
-        that should have run on one axis ran on all ranks instead.
-        """
-        if self.ndim <= 1 or common._world_size() <= 1:
-            return self
-        names = self.mesh_dim_names or ()
         keys = key if isinstance(key, (tuple, list)) else (key,)
-        if len(keys) == len(names) and all(k in names for k in keys):
-            return self
-        from ..stub_policy import unimplemented
-        return unimplemented(
-            "DeviceMesh[%r]" % (key,),
-            "hand back the FULL mesh for every axis, so `mesh['dp']` and "
-            "`mesh['tp']` are the same object and a 2-D parallel plan "
-            "collapses to one dimension without an error",
-            "Jittor has no communicator subgroups yet (task 8.08).",
-            stub_result=self)
+        dims = tuple(self._dim(k) for k in keys)
+        if not dims or len(set(dims)) != len(dims):
+            raise ValueError("mesh selection needs distinct dimensions")
+        axes = tuple(self._root_axes[d] for d in dims)
+        groups = self._axis_groups(axes)
+        rank = common._rank()
+        selected = next((ranks for ranks, _ in groups if rank in ranks), None)
+        if selected is None:
+            raise RuntimeError("current rank is not a member of this mesh")
+        result = object.__new__(DeviceMesh)
+        result.device_type = self.device_type
+        result.shape = tuple(self.shape[d] for d in dims)
+        result.ndim = len(dims)
+        result.mesh = np.asarray(selected, dtype=np.int64).reshape(result.shape)
+        result.mesh.setflags(write=False)
+        result.mesh_dim_names = (tuple(self.mesh_dim_names[d] for d in dims)
+                                if self.mesh_dim_names is not None else None)
+        result._root = self._root
+        result._root_axes = axes
+        return result
 
     def size(self, dim=None, *, mesh_dim=None):
-        if mesh_dim is not None:
-            dim = mesh_dim
-        if dim is None:
-            return common._prod(self.shape)
-        if isinstance(dim, str) and self.mesh_dim_names and dim in self.mesh_dim_names:
-            dim = self.mesh_dim_names.index(dim)
-        try:
-            return int(self.shape[int(dim)])
-        except EXPECTED as exc:
-            swallowed("fsdp2/dtensor.py size: return int(self.shape[int(dim)])", exc)
-            return 1
+        dim = mesh_dim if mesh_dim is not None else dim
+        return int(self.mesh.size) if dim is None else int(self.shape[self._dim(dim)])
 
     def __enter__(self):
         return self
@@ -76,62 +116,63 @@ class DeviceMesh:
     def __exit__(self, exc_type, exc, tb):
         return False
 
-    def get_rank(self, *args, **kwargs):
-        return common._rank() if self.size() > 1 else 0
+    def get_rank(self):
+        return common._rank()
 
-    def get_local_rank(self, *args, **kwargs):
-        try:
-            return int(os.environ.get("JT_NCCL_LOCAL_RANK",
-                                      os.environ.get("LOCAL_RANK", "0")))
-        except EXPECTED as exc:
-            swallowed("fsdp2/dtensor.py get_local_rank: return int(os.environ.get('JT_NCCL_LOCAL_RANK',", exc)
-            return 0
+    def get_local_rank(self, mesh_dim=None):
+        return self.get_group(mesh_dim).rank()
 
-    def get_group(self, *args, **kwargs):
-        """The process group backing a mesh dimension.
-
-        Returns None -- i.e. "the world group" to every caller -- which is only
-        true for a one-dimensional mesh that spans the whole world.
-        """
-        if self.ndim <= 1 or common._world_size() <= 1:
-            return None
-        from ..stub_policy import unimplemented
-        return unimplemented(
-            "DeviceMesh.get_group",
-            "return the WORLD group for a mesh axis, so a per-axis collective "
-            "silently reduces across every rank",
-            "Jittor has no communicator subgroups yet (task 8.08).",
-            stub_result=None)
+    def get_group(self, mesh_dim=None):
+        if mesh_dim is None:
+            if self.ndim != 1:
+                raise RuntimeError("mesh_dim is required for a multidimensional mesh")
+            mesh_dim = 0
+        axis = self._root_axes[self._dim(mesh_dim)]
+        for ranks, group in self._axis_groups((axis,)):
+            if common._rank() in ranks:
+                return group
+        raise RuntimeError("current rank is not a member of this mesh")
 
     def get_all_groups(self):
-        return [self.get_group()]
+        return [self.get_group(dim) for dim in range(self.ndim)]
 
     def get_coordinate(self):
-        return tuple(0 for _ in range(self.ndim))
+        coordinates = np.argwhere(self.mesh == common._rank())
+        return coordinates[0].tolist() if len(coordinates) else None
 
     def _flatten(self, mesh_dim_name=None):
-        return self
-
-    def _unflatten(self, mesh_dim_names=None):
-        if mesh_dim_names is not None:
-            self.mesh_dim_names = tuple(mesh_dim_names)
-        return self
-
-    @staticmethod
-    def _concatenate(meshes, mesh_dim_name=None):
-        meshes = list(meshes)
-        return meshes[0] if meshes else DeviceMesh("cpu", (1,))
+        groups = self._axis_groups(self._root_axes)
+        rank = common._rank()
+        selected = next((ranks for ranks, _ in groups if rank in ranks), None)
+        if selected is None:
+            raise RuntimeError("current rank is not a member of this mesh")
+        result = DeviceMesh.from_group(
+            next(group for ranks, group in groups if rank in ranks),
+            self.device_type, mesh=selected,
+            mesh_dim_names=(mesh_dim_name,) if mesh_dim_name else None)
+        return result
 
     @classmethod
     def from_group(cls, group, device_type=None, mesh=None, mesh_dim_names=None, **kwargs):
-        return cls(device_type=device_type, mesh=mesh, mesh_dim_names=mesh_dim_names, **kwargs)
+        if isinstance(group, (tuple, list)):
+            raise NotImplementedError("from_group currently accepts one process group")
+        ranks = (tuple(range(common._world_size())) if group.ranks is None
+                 else group.ranks)
+        if mesh is not None and tuple(np.asarray(mesh).reshape(-1)) != tuple(ranks):
+            raise ValueError("mesh ranks must match the supplied process group")
+        result = cls(device_type, ranks, mesh_dim_names=mesh_dim_names,
+                     _init_backend=False)
+        result._group_cache[tuple(ranks)] = group
+        return result
 
 
 def init_device_mesh(device_type=None, mesh_shape=None, *, mesh_dim_names=None, **kwargs):
+    shape = tuple(int(v) for v in (mesh_shape or (1,)))
+    if not shape or any(v <= 0 for v in shape):
+        raise ValueError("mesh_shape must have positive dimensions")
     return DeviceMesh(
-        device_type=device_type, mesh=mesh_shape or (1,),
+        device_type=device_type, mesh=np.arange(common._prod(shape)).reshape(shape),
         mesh_dim_names=mesh_dim_names, **kwargs)
-
 
 class Placement:
     def is_shard(self):
@@ -202,12 +243,11 @@ def _full_tensor(dtensor, *args, **kwargs):
 
 def _mark_dtensor(tensor, device_mesh=None, placements=None):
     mesh = device_mesh or DeviceMesh(
-        "cuda" if getattr(jt, "has_cuda", 0) else "cpu", (1,))
+        "cuda" if getattr(jt, "has_cuda", 0) else "cpu", (0,))
     pls = tuple(placements or (Replicate(),))
     try:
         object.__setattr__(tensor, "_dtensor_device_mesh", mesh)
         object.__setattr__(tensor, "_dtensor_placements", pls)
-        object.__setattr__(tensor, "_local_tensor", tensor)
         object.__setattr__(tensor, "device_mesh", mesh)
         object.__setattr__(tensor, "placements", pls)
         object.__setattr__(tensor, "_spec", types.SimpleNamespace(mesh=mesh, placements=pls))
@@ -238,7 +278,7 @@ class DTensor(metaclass=_DTensorMeta):
     def __init__(self, local_tensor, device_mesh=None, placements=None, **kwargs):
         self._local_tensor = local_tensor
         self.device_mesh = device_mesh or DeviceMesh(
-            "cuda" if getattr(jt, "has_cuda", 0) else "cpu", (1,))
+            "cuda" if getattr(jt, "has_cuda", 0) else "cpu", (0,))
         self.placements = tuple(placements or (Replicate(),))
         self._spec = types.SimpleNamespace(mesh=self.device_mesh, placements=self.placements)
 
@@ -264,7 +304,7 @@ class DTensor(metaclass=_DTensorMeta):
 
     def __array__(self, dtype=None):
         arr = self._local_tensor.numpy()
-        return arr.astype(dtype) if dtype is not None else arr
+        return arr.astype(_jittor_dtype_name(dtype)) if dtype is not None else arr
 
 
 def distribute_tensor(tensor, device_mesh=None, placements=None, src_data_rank=0, **kwargs):
@@ -297,7 +337,7 @@ def _shape_from_args(args):
 def _np_dtype(dtype=None):
     if dtype is None:
         return np.float32
-    name = getattr(dtype, "name", None) or str(dtype).split(".")[-1]
+    name = getattr(dtype, "name", None) or _jittor_dtype_name(dtype).split(".")[-1]
     if name in ("float", "float32"):
         return np.float32
     if name in ("double", "float64"):
@@ -319,11 +359,11 @@ def _dtensor_from_array(array, device_mesh=None, placements=None, dtype=None):
     tensor = jt.array(array)
     if dtype is not None:
         try:
-            tensor = tensor.astype(dtype)
+            tensor = tensor.astype(_jittor_dtype_name(dtype))
         except EXPECTED as exc:
             swallowed("fsdp2/dtensor.py _dtensor_from_array: tensor = tensor.astype(dtype)", exc)
             try:
-                tensor = tensor.astype(str(dtype).split(".")[-1])
+                tensor = tensor.astype(_jittor_dtype_name(dtype).split(".")[-1])
             except EXPECTED as exc:
                 swallowed("fsdp2/dtensor.py _dtensor_from_array: restore the saved dtype", exc,
                           "the DTensor keeps its source dtype, so a later op may promote "

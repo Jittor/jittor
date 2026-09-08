@@ -18,7 +18,7 @@ description: Jittor 开发任务的上下文路由入口。用于定位当前状
 - 架构与模块边界：[`../../../docs/architecture/source-architecture.md`](../../../docs/architecture/source-architecture.md)
 - Torch 兼容验收：[`../../../docs/architecture/torch-compatibility-principles.md`](../../../docs/architecture/torch-compatibility-principles.md)
 - 测试体系：[`../../../docs/testing/test-system.md`](../../../docs/testing/test-system.md)
-- 已有验证报告：[`../../results/README.md`](../../results/README.md)
+- 已有验证报告：[`docs/results/README.md`](../../../docs/results/README.md)
 
 ## 工作纪律速记
 
@@ -31,7 +31,7 @@ description: Jittor 开发任务的上下文路由入口。用于定位当前状
 7. **效率优先**：先跑最小复现和定向测试，再逐层扩大门禁
 8. **计算跑在 device 上**：torch_compat 里新加的计算要考虑效率，至少能跑在 device（GPU/NPU）上，不能只在 CPU
 9. 当前状态入口变化才更新 `project-context.md`；活跃缺陷更新 `known-issues.md`；
-   详细证据写入 `agent/results/`
+   详细证据写入 `docs/results/`
 10. **多用 subagent 提升效率**（并行验证、分卡并行等）
 
 ## 快速开工
@@ -39,5 +39,5 @@ description: Jittor 开发任务的上下文路由入口。用于定位当前状
 1. 读 `agent/manuals/project-context.md` 并打开任务相关链接
 2. 确认分支、提交和 dirty state：`git status --short --branch`
 3. 按 `agent/manuals/environment.md` 隔离缓存和运行状态
-4. 搜索 `agent/manuals/known-issues.md` 与 `agent/results/` 中的既有证据
+4. 搜索 `agent/manuals/known-issues.md` 与 `docs/results/` 中的既有证据
 5. 最小复现后再修改，按变更风险逐层扩大测试

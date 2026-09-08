@@ -1,4 +1,5 @@
 """PyTorch archive writer; imported only when serialization is requested."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 from jittor import nn
@@ -88,7 +89,7 @@ def save_pytorch(path, obj):
 
     def persistent_id(obj):
         if isinstance(obj, TensorStorage):
-            storage_type = dtype_map[str(obj.data.dtype)]
+            storage_type = dtype_map[_jittor_dtype_name(obj.data.dtype)]
             storage_key = len(serialized_storages)
             serialized_storages.append(obj.data)
             storage_numel = obj.data.numel()

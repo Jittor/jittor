@@ -3,6 +3,7 @@
 This module contains source moved from the former monolithic installer without
 changing the compatibility semantics.
 """
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 import numpy as np
@@ -286,7 +287,7 @@ def install(ctx):
     def _take_tensors(tensors, size_limit):
         buckets = {}
         for t in tensors:
-            key = str(getattr(t, "dtype", "object"))
+            key = _jittor_dtype_name(getattr(t, "dtype", "object"))
             b = buckets.setdefault(key, [[], 0])
             n = int(t.numel()) if hasattr(t, "numel") else 1
             b[0].append(t)

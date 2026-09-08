@@ -1537,7 +1537,7 @@ flag `jit_cache_size` 默认 4096），`jit_fused_ops` 值改 `shared_ptr<FusedO
 
 | 分区 | 结果 |
 | --- | --- |
-| `gates` | 新增 `agent/results/2026-09-04-cuda-availability-verification.md`：只读核验 `nvidia-smi` 与分区 `probe.json` 均确认开发机有 8 张 RTX 4090、CUDA 12.2.140、sm_89。此前“本机无 CUDA”只能解释为 CPU-only 进程配置，不再作为跳过 CUDA 实机验证的理由。 |
+| `gates` | 新增 `docs/results/2026-09-04-cuda-availability-verification.md`：只读核验 `nvidia-smi` 与分区 `probe.json` 均确认开发机有 8 张 RTX 4090、CUDA 12.2.140、sm_89。此前“本机无 CUDA”只能解释为 CPU-only 进程配置，不再作为跳过 CUDA 实机验证的理由。 |
 | `bindings` | 2.19 的历史静态证据没有被自动升级为运行时证据；后续应在独立缓存和 GPU 分区重新跑负向用例，再决定是否关闭聚合任务。 |
 | `device` | ACL/ROCm/Corex/NPU 与多机限制不变；CUDA 可用性报告不代表这些后端可用。 |
 
@@ -2560,7 +2560,7 @@ host 编译器编、却不走那条新管线的后端源码。** 逐层实测到
 `JITTOR_TEST_REQUIRE_CUDA=1`），但它挡的是「门禁跑了却没真用 CUDA」；这里的形态是**门禁根本
 没跑**——13 个提交连续推送、没有一次 CUDA 导入。**建议给 4.12／4.15 这类跨目录搬动加一条最低
 门槛：推之前带 CUDA 跑一次 `import jittor` 加一个 matmul（热缓存约 1 分钟）。** 冒烟脚本口径见
-`agent/results/2026-09-04-cuda-availability-verification.md` 的命令口径一节。
+`docs/results/2026-09-04-cuda-availability-verification.md` 的命令口径一节。
 
 ### 本波结果（`codegen`，3.22 收口）
 
@@ -2891,7 +2891,7 @@ warning；`tests/_helpers/cutt.py` 又把加载失败一律转成 `SkipTest`。�
 1. **原生 CPU 门禁现在收集期直接 error**：`14e5920e5 [4.14]` 同时加了 `tests/core/test_device_methods.py` 与 `tests/backends/cuda/test_device_methods.py`，basename 相同而两个目录都没有 `__init__.py`，pytest 默认 prepend 模式下第二个必然报 `import file mismatch`。整套门禁因此拿不到汇总行（`Interrupted: 1 error during collection`）。修法二选一：给其中一个改名，或给 `tests/` 配 `--import-mode=importlib`。**在修掉之前，原生门禁事实上一条用例都没跑**——这正是第 10 节说的「不在门禁里的测试不是覆盖，是装饰」的又一例，只不过这次整套都没跑。
 2. **CPU torch 门禁在 55% 处硬崩**，没有汇总行，两棵树同一位置。
 
-ROCm 那半（计划原文的「需 ROCm 硬件」）本机无卡，四条按序确认项写进 [`../manuals/deferred-hardware.md`](../manuals/deferred-hardware.md) 的 ROCm 一节，**未声称 ROCm 硬件验证完成**。ACL 描述符注册名 `acl_legacy` 与 `BackendId::Acl` 不一致这条改动面跨 4.12，已归 4.15。
+ROCm 那半（计划原文的「需 ROCm 硬件」）本机无卡，四条按序确认项写进 [`../manuals/deferred-hardware.md`](../../agent/manuals/deferred-hardware.md) 的 ROCm 一节，**未声称 ROCm 硬件验证完成**。ACL 描述符注册名 `acl_legacy` 与 `BackendId::Acl` 不一致这条改动面跨 4.12，已归 4.15。
 
 **2026-09-06（compat，7.03）：把任务形状从「再挑几个 cohort」换成「清空整个 installer」，两个 installer 归零。**
 `796b8e43c` 清空 `_install_reductions`（内嵌 def/class **14→0**、lambda **13→0**），
@@ -3368,7 +3368,7 @@ launcher ABI 断言 70 个（比上一波多 2 个，正是新增的 `aclnnProd`
 仍报 `ok`，**只有 `--check-launchers` 挡住**——skill 里那条坑是真的）。第 2 档合同换成不变量式并
 要求两个 ACL 根各自非空，机制在 `tests/_helpers/acl_launch_tails.py`。**设备侧一条指令都没跑**：
 `tests/backends/npu` 在本机是 `164 skipped, 0 executed -- explained: skipped: no acl found`，
-四条上机确认项与精确命令写进 [`../manuals/deferred-hardware.md`](../manuals/deferred-hardware.md)
+四条上机确认项与精确命令写进 [`../manuals/deferred-hardware.md`](../../agent/manuals/deferred-hardware.md)
 的 Ascend/CANN 一节，**未声称硬件验证完成**。
 
 三套门禁与改前同集合：CPU torch 模式 `tests/structure` 改前 15 failed / 887 passed，改后
@@ -3467,7 +3467,7 @@ CUDA 门禁**不含 `tests/ops`**：基线那一跑超时被杀，没有可比�
 
 | 项 | 结果 |
 | --- | --- |
-| 工作树里其实**没有代码改动** | `git status --short` 只有 `M agent/design/refactor-board.md`、`M agent/design/refactor-handoff.md`、`?? SALVAGE-FIRST-DO-NOT-DISCARD.md`；`git diff --numstat` 是 `2/0` 与 `31/5`。**没有 `D`、没有别的 `??`**，所以「未跟踪文件的删除不在 `git diff` 里」这个坑这次不涉及。这批改动全是**测量结果与分析结论的记录**，判据因此是「这些数字与结论能不能重现」，而不是「代码改对没有」。 |
+| 工作树里其实**没有代码改动** | `git status --short` 只有 `M docs/architecture/refactor-board.md`、`M docs/architecture/refactor-handoff.md`、`?? SALVAGE-FIRST-DO-NOT-DISCARD.md`；`git diff --numstat` 是 `2/0` 与 `31/5`。**没有 `D`、没有别的 `??`**，所以「未跟踪文件的删除不在 `git diff` 里」这个坑这次不涉及。这批改动全是**测量结果与分析结论的记录**，判据因此是「这些数字与结论能不能重现」，而不是「代码改对没有」。 |
 | **成立：CUDA 基线那一组，逐条重现** | 同一提交 `1fe23fe2c`、同一命令重跑 `tests/backends/cuda`：**5 failed / 274 passed / 35 skipped / 2 xfailed**，5 条 nodeid 与它记的完全一致。两次独立测量互证，已提交。 |
 | **成立：`precompile` 的可达性与「catch 会抹平迁移」** | 7 条 `jt.code(cpu_src=<坏 @ 语法>)` 探针重跑：**7/7 抛可捕获 `RuntimeError`、7/7 消息含 `Jit compiler error:`**，即那个 `catch (std::exception&)` 确实在路径上；而 `UserError : JittorError : std::runtime_error`（`log.h:162-172`）会被它接住是 C++ 类型关系。两半都有据，结论成立，已提交。 |
 | **不成立，已推翻：`:614` 是 bf16 死循环的路径** | 上一版写它「已知用户可达」。实测反向步长 `@for`（`@for(j,-2,-1,-1,...)`）**不抛任何异常**、按 `6.C33` 的意图展成空。`6.C33`（真实哈希 `68e8b97b2`）已经修掉病根，这条判断是它落地前的状态。**这是这一波唯一被推翻的结论。** |
@@ -3686,7 +3686,7 @@ CUDA 源码里带着 `expf` 与 `max`）正是手写 attention softmax——它�
 ## 9. 环境残留
 
 - 主树 `/`（`2.0` 分支）上有**三个属于别人的文件**不要提交：`agent/manuals/README.md`、
-  `tests/core/test_setitem.py`、`agent/results/2026-08-12-repository-modernization-review.md`。
+  `tests/core/test_setitem.py`、`docs/results/2026-08-12-repository-modernization-review.md`。
 - 停 agent 时清掉了 19 个超时的 python/pytest 残留进程。若发现构建整体变慢而非失败，先查有没有进程
   卡在编译锁上（ptrace 停住的 gdb、`futex_wait_queue` 里的 pytest 都出现过），症状是「所有人都变慢」。
 

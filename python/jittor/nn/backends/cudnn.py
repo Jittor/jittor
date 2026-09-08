@@ -1,4 +1,5 @@
 """cuDNN adapters shared by convolution functional implementations."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import os
 
@@ -75,7 +76,7 @@ def _try_cudnn_conv_transpose2d(x, weight, bias, stride, padding, output_padding
 _CUDNN_3D_HALF_DTYPES = ("float16", "bfloat16")
 
 def _cudnn_conv3d_fp16_safe(op, x, weight, *args):
-    xd, wd = str(x.dtype), str(weight.dtype)
+    xd, wd = _jittor_dtype_name(x.dtype), _jittor_dtype_name(weight.dtype)
     half = xd if xd in _CUDNN_3D_HALF_DTYPES else (wd if wd in _CUDNN_3D_HALF_DTYPES else None)
     if half is None:
         return op(x, weight, *args)

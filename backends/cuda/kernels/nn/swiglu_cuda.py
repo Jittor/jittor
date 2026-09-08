@@ -1,4 +1,5 @@
 """Private CUDA inference kernels for gated activations."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
@@ -12,7 +13,7 @@ def _silu_and_mul_supported(x):
         return False
     if _output_requires_grad(x):
         return False
-    if str(x.dtype) not in ("float16", "bfloat16", "float32"):
+    if _jittor_dtype_name(x.dtype) not in ("float16", "bfloat16", "float32"):
         return False
     try:
         shape = tuple(int(size) for size in x.shape)

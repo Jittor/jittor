@@ -1,4 +1,5 @@
 """Torch tensor scans ownership."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 def _assign_out(out, value):
     """Assign through the native view owner, including retained output views."""
@@ -14,7 +15,7 @@ def _cumulative(native, input, dim, dtype, out):
     # first matches Torch and dodges the crash.
     from importlib import import_module as _import_module
     _owner = _import_module(__package__)
-    if isinstance(input, _owner.jt.Var) and str(input.dtype) in ("bool", "uint8"):
+    if isinstance(input, _owner.jt.Var) and _jittor_dtype_name(input.dtype) in ("bool", "uint8"):
         input = input.cast("int64")
     result = native(input, dim)
     if dtype is not None:

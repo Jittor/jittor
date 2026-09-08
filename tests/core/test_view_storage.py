@@ -11,8 +11,8 @@ Two claims, both of which jittor answered with a silently wrong result before
   base observes the write, and that it observes it at any view depth and for
   any basic-index expression, not only for the chains of single integers that
   ``check_cascade_setitem`` used to infer from the op graph.
-* an expanded tensor is a stride-0 view and costs nothing.  This half is not
-  yet delivered; see ``test_expand_still_materializes``.
+* an expanded tensor is a stride-0 view and does not allocate its logical
+  footprint, including when it is explicitly synchronized before consumption.
 """
 
 import numpy as np
@@ -111,13 +111,6 @@ def test_expand_does_not_materialize_when_it_is_consumed():
     assert grew < 4096 * 4096, grew
 
 
-@pytest.mark.xfail(
-    reason="5.02 remaining half: a stride-0 view needs strides in generated "
-           "kernels, not just a base+offset in Var. Measured today: forcing an "
-           "expanded var to be an execution output allocates the full expanded "
-           "footprint (64 MB for this case).",
-    strict=True,
-)
 def test_expand_still_materializes():
     a = jt.ones((4096, 1))
     a.sync()

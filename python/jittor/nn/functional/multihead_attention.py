@@ -1,4 +1,5 @@
 """Canonical functional multi-head attention."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 
@@ -14,8 +15,8 @@ def _append_mask_column(mask):
 def _validate_mask_dtype(mask, name):
     if mask is None:
         return
-    dtype = str(mask.dtype)
-    if dtype != "bool" and "float" not in dtype:
+    dtype = _jittor_dtype_name(mask.dtype)
+    if _jittor_dtype_name(dtype) != "bool" and "float" not in _jittor_dtype_name(dtype):
         raise AssertionError("only bool and floating types of {} are supported".format(name))
 
 
@@ -208,7 +209,7 @@ def multi_head_attention_forward(
             attention_bias = None
             causal_hint = False
             if attn_mask is not None:
-                if str(attn_mask.dtype) == "bool":
+                if _jittor_dtype_name(attn_mask.dtype) == "bool":
                     zero = jt.zeros(attn_mask.shape, dtype=q.dtype)
                     attention_bias = jt.ternary(
                         attn_mask,
@@ -227,7 +228,7 @@ def multi_head_attention_forward(
                         source_length,
                     )
             if key_padding_mask is not None:
-                if str(key_padding_mask.dtype) == "bool":
+                if _jittor_dtype_name(key_padding_mask.dtype) == "bool":
                     zero = jt.zeros(key_padding_mask.shape, dtype=q.dtype)
                     padding_bias = jt.ternary(
                         key_padding_mask,
@@ -258,7 +259,7 @@ def multi_head_attention_forward(
     scores = jt.nn.matmul(q, k.transpose(1, 2))
     negative = jt.array(float("-inf")).cast(scores.dtype)
     if attn_mask is not None:
-        if str(attn_mask.dtype) == "bool":
+        if _jittor_dtype_name(attn_mask.dtype) == "bool":
             scores = jt.ternary(
                 attn_mask,
                 negative.broadcast(scores.shape),
@@ -271,7 +272,7 @@ def multi_head_attention_forward(
         padding = key_padding_mask.reshape(batch_size, 1, 1, source_length).broadcast(
             [batch_size, num_heads, target_length, source_length]
         )
-        if str(key_padding_mask.dtype) == "bool":
+        if _jittor_dtype_name(key_padding_mask.dtype) == "bool":
             scores = jt.ternary(
                 padding,
                 negative.broadcast(scores.shape),
@@ -284,7 +285,7 @@ def multi_head_attention_forward(
     weights = jt.nn.softmax(scores, dim=-1)
     if dropout_probability > 0.0 and training:
         weights = jt.nn.dropout(weights, p=dropout_probability, is_train=True)
-    if str(weights.dtype) != str(v.dtype):
+    if _jittor_dtype_name(weights.dtype) != _jittor_dtype_name(v.dtype):
         weights = weights.cast(v.dtype)
     output = jt.nn.matmul(weights, v)
     output = output.transpose(0, 1).reshape(target_length, batch_size, embed_dim)

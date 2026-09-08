@@ -9,6 +9,7 @@ Backends in `einops` are organized to meet the following requirements
     - this determines which methods (from_numpy/to_numpy or create_symbol/eval_symbol) should be defined
 - if backend can't (temporarily) provide symbols for shape dimensions, UnknownSize objects are used
 """
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import sys
 import warnings
@@ -165,7 +166,7 @@ class NumpyBackend(AbstractBackend):
         return self.np.tile(x, repeats)
 
     def is_float_type(self, x):
-        return x.dtype in ('float16', 'float32', 'float64', 'float128', 'bfloat16')
+        return _jittor_dtype_name(x.dtype) in ('float16', 'float32', 'float64', 'float128', 'bfloat16')
 
     def add_axis(self, x, new_position):
         return self.np.expand_dims(x, new_position)
@@ -254,7 +255,7 @@ class JittorBackend(AbstractBackend):
         return self.jittor.unsqueeze(x, new_position)
 
     def is_float_type(self, x):
-        return x.dtype in ["float16", "bfloat16", "float32", "float64"]
+        return _jittor_dtype_name(x.dtype) in ["float16", "bfloat16", "float32", "float64"]
 
     def layers(self):
         from jittor.contrib.einops.layers import jittor

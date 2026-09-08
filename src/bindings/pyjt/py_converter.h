@@ -9,6 +9,7 @@
 // ***************************************************************
 #pragma once
 #include "bindings/pyjt/py_obj_holder.h"
+#include "bindings/pyjt/py_dtype.h"
 #include "bindings/pyjt/py_tensor_frontend.h"
 #include "bindings/pyjt/numpy.h"
 #include "core/common.h"
@@ -334,14 +335,14 @@ EXTERN_LIB PyTypeObject PyjtNanoString;
 // attribute and would be a candidate dtype.
 DEF_IS(NanoString, bool) is_type(PyObject* obj) {
     if (Py_TYPE(obj) == &PyjtNanoString) return true;
-    // PyUnicode_Check (not CheckExact) so str SUBCLASSES are accepted too:
-    // torch_compat's `dtype` is a str subclass whose underlying value is the
-    // bare jittor name ("float32"), fed back into NanoString params by
-    // jittor's own python (contrib.concat/linalg/nn do str(var.dtype)).
+    if (is_python_dtype(obj)) return true;
+    // Keep native string/subclass spellings. Registered frontend dtype objects
+    // have their own branch above; prefixed names and placeholders are resolved
+    // through that registration rather than guessed from arbitrary attributes.
     if (PyUnicode_Check(obj)) {
         auto s = PyUnicode_AsUTF8(obj);
         if (!s) { PyErr_Clear(); return false; }
-        return ns_valid_name(s);
+        return ns_valid_name(s) || is_python_dtype_name(s);
     }
     // numpy scalar types (np.float32) and the python builtins (float, int,
     // bool) are spelled as type objects whose name is the dtype.  PyType_Check
@@ -386,8 +387,18 @@ DEF_IS(NanoString, PyObject*) to_py_object(T a) {
 DEF_IS(NanoString, T) from_py_object(PyObject* obj) {
     if (Py_TYPE(obj) == &PyjtNanoString)
         return *GET_RAW_PTR(T, obj);
-    if (PyUnicode_Check(obj))   // str or str subclass (e.g. torch_compat dtype)
-        return T(PyUnicode_AsUTF8(obj));
+    if (is_python_dtype(obj)) {
+        PyObjHolder name(python_dtype_name(obj));
+        return T(PyUnicode_AsUTF8(name.obj));
+    }
+    if (PyUnicode_Check(obj)) {
+        const char* name = PyUnicode_AsUTF8(obj);
+        CHECK(name);
+        if (ns_valid_name(name)) return T(name);
+        PyObjHolder dtype_object(python_dtype_from_name(name));
+        PyObjHolder compute_name(python_dtype_name(dtype_object.obj));
+        return T(PyUnicode_AsUTF8(compute_name.obj));
+    }
     // PyType
     if (PyType_Check(obj))
         return T(_PyType_Name((PyTypeObject *)obj));
@@ -472,16 +483,31 @@ DEF_IS(ArrayArgs, PyObject*) to_py_object(const T& a) {
     ));
     auto arr = (PyArray_Proxy*)(obj.obj);
     int64 size = PyArray_Size(arr);
+    auto offset = [&](int64 index) {
+        if (!a.storage_strides.size()) return index;
+        int64 result = 0;
+        for (int d=int(a.shape.size())-1; d>=0; --d) {
+            result += (index % a.shape[d]) * a.storage_strides[d];
+            index /= a.shape[d];
+        }
+        return result;
+    };
     if (a.dtype == ns_bfloat16) {
         // simple cast bfloat16 to float32
         auto ptr = (uint16*)a.ptr;
         auto ptr2 = (uint32*)arr->data;
         int64 num = size/4;
         for (int64 i=0; i<num; i++) {
-            ptr2[i] = ptr[i]<<16;
+            ptr2[i] = ptr[offset(i)]<<16;
         }
     } else {
-        memcpy((void*)arr->data, (void*)a.ptr, size);
+        if (!a.storage_strides.size()) {
+            memcpy((void*)arr->data, (void*)a.ptr, size);
+        } else {
+            const auto bytes = a.dtype.dsize();
+            for (int64 i=0; i<size/bytes; ++i)
+                memcpy(arr->data+i*bytes, (const char*)a.ptr+offset(i)*bytes, bytes);
+        }
     }
     return obj.release();
 }
@@ -617,6 +643,12 @@ struct DataView;
 struct VarHolder;
 EXTERN_LIB PyObject* new_var_data_owner(VarHolder* vh);
 DEF_IS(DataView, PyObject*) to_py_object(T a) {
+    vector<int64_t> byte_strides;
+    for (auto stride : a.storage_strides)
+        byte_strides.push_back(stride * a.dtype.dsize());
+    bool overlapping = false;
+    for (uint i=0; i<a.storage_strides.size(); ++i)
+        overlapping |= a.storage_strides[i] == 0 && a.shape[i] > 1;
 #if defined(__linux__) || defined(_WIN32)
     STACK_ALLOC(int64_t, dims, a.shape.size());
 #elif defined(__APPLE__)
@@ -629,10 +661,11 @@ DEF_IS(DataView, PyObject*) to_py_object(T a) {
         a.shape.size(), // nd
         dims, // dims
         get_typenum(a.dtype), // type_num
-        NULL, // strides
+        byte_strides.empty() ? NULL : byte_strides.data(), // strides
         a.ptr, // data
         0, // itemsize
-        NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_WRITEABLE, // flags
+        (byte_strides.empty() ? NPY_ARRAY_C_CONTIGUOUS : 0) |
+            (overlapping ? 0 : NPY_ARRAY_WRITEABLE), // flags
         NULL // obj
     ));
     if (a.vh) {

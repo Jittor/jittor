@@ -9,6 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 """Matrix and vector norms, ranks and condition numbers."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 
 def matrix_rank(x, tol=None, hermitian=False):
@@ -52,7 +53,7 @@ def matrix_rank(x, tol=None, hermitian=False):
     if tol is None:
         import numpy as _np
         try:
-            eps = float(_np.finfo(_np.dtype(str(x.dtype))).eps)
+            eps = float(_np.finfo(_np.dtype(_jittor_dtype_name(x.dtype))).eps)
         except Exception:
             eps = float(_np.finfo(_np.float32).eps)
         m, n = x.shape[-2], x.shape[-1]

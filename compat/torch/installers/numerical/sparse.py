@@ -1,4 +1,5 @@
 """Torch numerical sparse operations."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 class _SparseCOO:
     def __init__(self, dense):
@@ -31,8 +32,13 @@ def sparse_coo_tensor(indices, values, size=None, dtype=None, device=None,
         jt,
         np,
     )
+    from ...types import _dtype_to_str
+    selected = _dtype_to_str(dtype)
     if not isinstance(indices, jt.Var): indices = jt.array(indices)
-    if not isinstance(values, jt.Var): values = jt.array(values)
+    if not isinstance(values, jt.Var):
+        values = jt.array(values, dtype=selected)
+    elif selected is not None:
+        values = values.cast(selected)
     rank = int(indices.shape[0])
     nnz = int(indices.shape[1]) if indices.ndim == 2 else int(indices.shape[0])
     tail = [int(d) for d in values.shape[1:]]
@@ -49,7 +55,7 @@ def sparse_coo_tensor(indices, values, size=None, dtype=None, device=None,
     for s in range(rank - 1, -1, -1):
         linear = linear + idx_np[s] * stride
         stride *= int(sparse_shape[s])
-    flat = jt.zeros([prod] + tail_shape, dtype=str(values.dtype))
+    flat = jt.zeros([prod] + tail_shape, dtype=_jittor_dtype_name(values.dtype))
     if nnz > 0:
         flat.index_add_(0, jt.array(linear), values.reshape([nnz] + tail_shape))
     return _SparseCOO(flat.reshape(sparse_shape + tail_shape))

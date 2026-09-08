@@ -3,6 +3,7 @@
 This module contains source moved from the former monolithic installer without
 changing the compatibility semantics.
 """
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import collections as _collections_data
 import concurrent.futures as _futures_data
@@ -202,7 +203,7 @@ def install(ctx):
                     return result
             if isinstance(elem, (_np.ndarray, _np.generic)):
                 values = _np.stack(batch)
-                return g.as_tensor(values, dtype=str(values.dtype)).requires_grad_(False)
+                return g.as_tensor(values, dtype=_jittor_dtype_name(values.dtype)).requires_grad_(False)
             if isinstance(elem, bool):
                 return g.as_tensor(batch, dtype=g.bool).requires_grad_(False)
             if isinstance(elem, type(0)):

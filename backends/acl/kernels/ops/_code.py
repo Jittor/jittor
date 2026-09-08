@@ -1,3 +1,4 @@
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import jittor as jt
 
 # The float dtypes the ACL kernels accept. This is the set adamw_op.py and
@@ -17,10 +18,10 @@ def check_acl_float_dtype(x, op_name):
     nowhere. Declaring what is supported and failing on the rest is the
     behaviour the other 28 op files in this directory already have.
     """
-    dtype = str(x.dtype)
-    if dtype not in ACL_FLOAT_DTYPES:
+    dtype = _jittor_dtype_name(x.dtype)
+    if _jittor_dtype_name(dtype) not in ACL_FLOAT_DTYPES:
         raise TypeError("{} on ACL supports {}, got {}".format(
-            op_name, "/".join(ACL_FLOAT_DTYPES), dtype))
+            op_name, "/".join(ACL_FLOAT_DTYPES), _jittor_dtype_name(dtype)))
     return x
 
 

@@ -17,6 +17,10 @@ ReinterpretViewOp::ReinterpretViewOp(Var* x, NanoVector shape, NanoString dtype)
     set_flag(OpFlags::_cuda);
     set_flag(OpFlags::_manual_set_vnbb);
     USER_CHECK(dtype.is_dtype()) << "reinterpret_view expects dtype, got" << dtype;
+    USER_CHECK(x->is_contiguous())
+        << "reinterpret_view requires contiguous storage; call contiguous() explicitly";
+    USER_CHECK(x->storage_offset_bytes % dtype.dsize() == 0)
+        << "reinterpret_view requires an aligned storage offset";
     y = create_output(nullptr, dtype);
 }
 
@@ -24,7 +28,8 @@ VarPtr ReinterpretViewOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     if (!((x->dtype() == ns_complex64 && dtype == ns_float32) ||
           (x->dtype() == ns_float32 && dtype == ns_complex64)))
         return nullptr;
-    return make_reinterpret_view(dout, x->shape, x->dtype());
+    auto dense = contiguous_storage(dout);
+    return make_reinterpret_view(dense.ptr, x->shape, x->dtype());
 }
 
 void ReinterpretViewOp::infer_shape() {

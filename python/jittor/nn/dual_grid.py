@@ -1,4 +1,5 @@
 """Dual-grid mesh finalization entry point."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 from jittor.backends.cuda.kernels.nn import dual_grid as _cuda_kernels
@@ -24,9 +25,9 @@ def finalize_dual_grid_mesh_cuda(
     )
     if not all(isinstance(value, jt.Var) for value in tensors):
         return None
-    if str(quad_indices.dtype) not in ("int32", "int64"):
+    if _jittor_dtype_name(quad_indices.dtype) not in ("int32", "int64"):
         raise TypeError("quad_indices must use int32 or int64")
-    if str(valid_rows.dtype) not in ("int32", "int64"):
+    if _jittor_dtype_name(valid_rows.dtype) not in ("int32", "int64"):
         raise TypeError("valid_rows must use int32 or int64")
     return _cuda_kernels._finalize_dual_grid_mesh_cuda(*tensors)
 

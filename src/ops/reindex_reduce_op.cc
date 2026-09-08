@@ -92,8 +92,7 @@ void ReindexReduceOp::jit_run() {
     @for(i, 0, ESIZE,
         auto* __restrict__ extras@i@@p = extras[@i]->ptr<Te@i>();
         @for(j, 0, EDIM@i, index_t extras@i@@shape@j = extras[@i]->shape[@j];)
-        index_t extras@i@@stride@{EDIM@i-1} = 1;
-        @for(j, EDIM@i-2, -1, -1, auto extras@i@@stride@j = extras@i@@stride@{j+1} * extras@i@@shape@{j+1};)
+        @for(j, 0, EDIM@i, index_t extras@i@@stride@j = extras[@i]->storage_stride(@j);)
     )
     auto* __restrict__ xp = x->ptr<Tx>();
     // define x shape
@@ -104,8 +103,7 @@ void ReindexReduceOp::jit_run() {
     // define y shape
     @for(i, 0, YDIM, index_t yshape@i = y->shape[@i];)
     // define y stride
-    index_t ystride@{YDIM-1} = 1;
-    @for(i, YDIM-2, -1, -1, auto ystride@i = ystride@{i+1} * yshape@{i+1};)
+    @for(i, 0, YDIM, index_t ystride@i = y->storage_stride(@i);)
     // init
 
     @if(@strcmp(@OP, void)==0,, 

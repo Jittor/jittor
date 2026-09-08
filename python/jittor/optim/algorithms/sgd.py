@@ -7,6 +7,16 @@ from ..base import (
     _update_preserve_dtype,
 )
 
+def sgd_update(param, grad, velocity, *, lr, momentum=0, weight_decay=0,
+               dampening=0, nesterov=False):
+    """Native SGD arithmetic shared by full parameters and FSDP shards."""
+    dp = grad if weight_decay == 0 else param * weight_decay + grad
+    if momentum == 0 and dampening == 0 and not nesterov:
+        return param - dp * lr
+    _update_preserve_dtype(velocity, momentum * velocity + dp * (1 - dampening))
+    return param - (dp + momentum * velocity if nesterov else velocity) * lr
+
+
 class SGD(Optimizer):
     """ SGD Optimizer.
 
@@ -57,19 +67,10 @@ class SGD(Optimizer):
             # than quietly changing that. `v` is then left at whatever it held;
             # turning momentum on later resumes from zeros, which is what this
             # optimizer has always started from.
-            plain = momentum == 0 and dampening == 0 and not nesterov
             for p, g, v in zip(pg["params"], pg["grads"], pg["values"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
                 # `p * 0 + g` is a whole extra pass over the parameter.
-                dp = g if weight_decay == 0 else p * weight_decay + g
-                if plain:
-                    _update_preserve_dtype(p, p - dp * lr)
-                    continue
-                _update_preserve_dtype(
-                    v, momentum * v + dp * (1 - dampening))
-                if nesterov:
-                    _update_preserve_dtype(
-                        p, p - (dp + momentum * v) * lr)
-                else:
-                    _update_preserve_dtype(p, p - v * lr)
+                _update_preserve_dtype(p, sgd_update(
+                    p, g, v, lr=lr, momentum=momentum, weight_decay=weight_decay,
+                    dampening=dampening, nesterov=nesterov))
         self.post_step()

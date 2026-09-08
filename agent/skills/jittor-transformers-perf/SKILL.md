@@ -106,5 +106,5 @@ CUDA_VISIBLE_DEVICES=6 cache_name=softmax_boundary_gpu6 \
   --task softmax-case --length 50257 --rows 2 --dtype float32
 ```
 
-详细结果优先查 `agent/results/transformers/`；数值精度对拍仍使用
+详细结果优先查 `docs/results/transformers/`；数值精度对拍仍使用
 `agent/skills/jittor-torch-diff/`。

@@ -1,9 +1,10 @@
 """Torch tensor methods ownership."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # Var.dtype natively returns jittor's NanoString, which is unhashable and
-    # not == to torch dtype objects. Wrap it to return our hashable `dtype`
-    # (str subclass), so `t.dtype in {torch.float16, ...}` and dict keys work.
+    # not == to torch dtype objects. Return the canonical immutable frontend
+    # dtype so `t.dtype in {torch.float16, ...}` and dictionary keys work.
     from importlib import import_module as _import_module
     _owner = _import_module(__package__)
     _NativeVar = _owner.jt.Var
@@ -15,7 +16,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             if name in vars(base):
                 return vars(base)[name]
         return None
-    if _DTYPE_OBJS is not None and not getattr(Var, "_dtype_wrapped", False):
+    if _jittor_dtype_name(_DTYPE_OBJS) is not None and not getattr(Var, "_dtype_wrapped", False):
         try:
             _native_desc = _type_attribute("dtype")  # C getset_descriptor
             if _native_desc is not None:
@@ -142,7 +143,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 return self
             try:
                 mask = slices
-                if isinstance(mask, _NativeVar) and mask.dtype in ("bool", "uint8") \
+                if isinstance(mask, _NativeVar) and _jittor_dtype_name(mask.dtype) in ("bool", "uint8") \
                         and isinstance(value, _NativeVar) \
                         and len(mask.shape) < len(self.shape):
                     # Region selected by a lower-rank bool mask has shape
@@ -182,7 +183,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         return self
     def _copy_(self, other, non_blocking=False):
         src = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
-        return _ip(self, src.cast(str(self.dtype)) if hasattr(self, "dtype") else src)
+        return _ip(self, src.cast(_jittor_dtype_name(self.dtype)) if hasattr(self, "dtype") else src)
     if not hasattr(Var, "copy_"):
         Var.copy_ = _copy_
 
@@ -215,22 +216,22 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             _owner._torch_register_leaf(v)
         return v
     def _new_ones(self, *size, dtype=None, device=None, requires_grad=False, **kw):
-        dt = _owner._dtype_to_str(dtype) if dtype is not None else str(self.dtype)
+        dt = _owner._dtype_to_str(dtype) if dtype is not None else _jittor_dtype_name(self.dtype)
         return _new_finish(_owner.jt.ones(_norm_size(_resolve_size(size, kw)), dt), device, requires_grad)
     def _new_zeros(self, *size, dtype=None, device=None, requires_grad=False, **kw):
-        dt = _owner._dtype_to_str(dtype) if dtype is not None else str(self.dtype)
+        dt = _owner._dtype_to_str(dtype) if dtype is not None else _jittor_dtype_name(self.dtype)
         return _new_finish(_owner.jt.zeros(_norm_size(_resolve_size(size, kw)), dt), device, requires_grad)
     def _new_full(self, size, fill_value, dtype=None, device=None, requires_grad=False, **kw):
-        dt = _owner._dtype_to_str(dtype) if dtype is not None else str(self.dtype)
+        dt = _owner._dtype_to_str(dtype) if dtype is not None else _jittor_dtype_name(self.dtype)
         # size may be a tuple/list/torch.Size OR a jittor NanoVector (e.g. from
         # x.new_full(x.shape, v)); both are iterable with __len__.
         shp = tuple(int(s) for s in size) if hasattr(size, "__len__") else (int(size),)
         return _new_finish(_owner.jt.full(shp, fill_value).cast(dt), device, requires_grad)
     def _new_empty(self, *size, dtype=None, device=None, requires_grad=False, **kw):
-        dt = _owner._dtype_to_str(dtype) if dtype is not None else str(self.dtype)
+        dt = _owner._dtype_to_str(dtype) if dtype is not None else _jittor_dtype_name(self.dtype)
         return _new_finish(_owner.jt.empty(_norm_size(_resolve_size(size, kw)), dt), device, requires_grad)
     def _new_tensor(self, data, dtype=None, device=None, requires_grad=False, **kw):
-        dt = _owner._dtype_to_str(dtype) if dtype is not None else str(self.dtype)
+        dt = _owner._dtype_to_str(dtype) if dtype is not None else _jittor_dtype_name(self.dtype)
         # torch's new_tensor accepts a python list whose elements are 0-d tensors
         # (e.g. centernet_update_head builds start_coord_pre_level by accumulating
         # `_start = _start + batch * area_per_level[level]`, where the indexed term
@@ -294,13 +295,13 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     def _torch_ne(input, other):
         a = input if isinstance(input, _NativeVar) else _owner.jt.array(input)
         b = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
-        if str(a.dtype) == "bool":
+        if _jittor_dtype_name(a.dtype) == "bool":
             a = a.int32()
-        if isinstance(b, _NativeVar) and str(b.dtype) == "bool":
+        if isinstance(b, _NativeVar) and _jittor_dtype_name(b.dtype) == "bool":
             b = b.int32()
         diff = (a - b).abs()
         out = diff > 0
-        if "float" in str(a.dtype) or (isinstance(b, _NativeVar) and "float" in str(b.dtype)):
+        if "float" in _jittor_dtype_name(a.dtype) or (isinstance(b, _NativeVar) and "float" in _jittor_dtype_name(b.dtype)):
             try:
                 out = out | _owner.jt.isnan(a) | _owner.jt.isnan(b)
             except _owner.EXPECTED as exc:
@@ -335,8 +336,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         g.argwhere = lambda input: _nonzero(input, as_tuple=False)
     if not hasattr(Var, "argwhere"):
         Var.argwhere = lambda self: _nonzero(self, as_tuple=False)
-    Var.normal_ = lambda self, mean=0.0, std=1.0, generator=None: _ip(self, _owner.jt.normal(float(mean), float(std), self.shape).cast(str(self.dtype)))
-    Var.uniform_ = lambda self, a=0.0, b=1.0, generator=None: _ip(self, (_owner.jt.rand(self.shape)*(b-a)+a).cast(str(self.dtype)))
+    Var.normal_ = lambda self, mean=0.0, std=1.0, generator=None: _ip(self, _owner.jt.normal(float(mean), float(std), self.shape).cast(_jittor_dtype_name(self.dtype)))
+    Var.uniform_ = lambda self, a=0.0, b=1.0, generator=None: _ip(self, (_owner.jt.rand(self.shape)*(b-a)+a).cast(_jittor_dtype_name(self.dtype)))
 
     # torch tensors are hashable by identity (they define __eq__ elementwise but
     # keep an id-based __hash__). jittor's Var defines __eq__ and so becomes
@@ -356,7 +357,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     }
     if not hasattr(Var, "element_size"):
         def _element_size(self):
-            return _DTYPE_BYTES.get(str(self.dtype), 4)
+            return _DTYPE_BYTES.get(_jittor_dtype_name(self.dtype), 4)
         Var.element_size = _element_size
     if not hasattr(Var, "nelement"):
         Var.nelement = lambda self: int(self.numel())
@@ -369,11 +370,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                   "float8_e4m3fn", "float8_e4m3fnuz", "float8_e5m2",
                   "float8_e5m2fnuz", "float8_e8m0fnu", "float4_e2m1fn_x2"}
     if not hasattr(Var, "is_floating_point"):
-        Var.is_floating_point = lambda self: str(self.dtype) in _FP_DTYPES
+        Var.is_floating_point = lambda self: _jittor_dtype_name(self.dtype) in _FP_DTYPES
     if not hasattr(Var, "is_complex"):
-        Var.is_complex = lambda self: str(self.dtype) in ("complex64", "complex128")
+        Var.is_complex = lambda self: _jittor_dtype_name(self.dtype) in ("complex64", "complex128")
     if not hasattr(Var, "is_signed"):
-        Var.is_signed = lambda self: str(self.dtype) not in (
+        Var.is_signed = lambda self: _jittor_dtype_name(self.dtype) not in (
             "bool", "uint8", "uint16", "uint32", "uint64")
 
     # torch storage introspection: peft/safetensors call tensor.storage()
@@ -388,7 +389,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         def size(self):
             return int(self._var.numel())
         def nbytes(self):
-            return int(self._var.numel()) * _DTYPE_BYTES.get(str(self._var.dtype), 4)
+            return int(self._var.numel()) * _DTYPE_BYTES.get(_jittor_dtype_name(self._var.dtype), 4)
     if not hasattr(Var, "storage"):
         Var.storage = lambda self: _Storage(self)
     if not hasattr(Var, "untyped_storage"):
@@ -397,10 +398,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         # Tensor.data_ptr is the first element address, not Python object
         # identity. The native accessor synchronizes without migrating it.
         Var.data_ptr = lambda self: int(self._storage_address)
-    # torch tensors expose is_contiguous()/contiguous(); jittor Vars are always
-    # contiguous in the sense safetensors cares about.
+    # Query the physical layout, including stride-zero expanded storage.
     if not hasattr(Var, "is_contiguous"):
-        Var.is_contiguous = lambda self, *a, **k: True
+        Var.is_contiguous = lambda self, *a, **k: self._storage_is_contiguous()
 
     _native_add = g.add
     def _add(input, other, *, alpha=1, out=None):
@@ -422,9 +422,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # bitwise/logical operators torch supports on tensors
     if not hasattr(Var, "__invert__"):
         def _invert(self):
-            if str(self.dtype) == "bool":
+            if _jittor_dtype_name(self.dtype) == "bool":
                 return self.logical_not()
-            return _owner.jt.logical_not(self) if str(self.dtype) == "bool" else (-self - 1)
+            return _owner.jt.logical_not(self) if _jittor_dtype_name(self.dtype) == "bool" else (-self - 1)
         Var.__invert__ = _invert
 
     def _device(self):
@@ -551,7 +551,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             Var.__deepcopy__ = deepcopy_tensor
         else:
             Var.__reduce__ = lambda self: (
-                _owner._rebuild_var_from_numpy, (self.numpy(), str(self.dtype)))
+                _owner._rebuild_var_from_numpy, (self.numpy(), _jittor_dtype_name(self.dtype)))
         Var._reduce_wrapped = True
 
     # Leaf registry for the no-optimizer backward() path (below): torch's
@@ -974,7 +974,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 dev = a
             elif isinstance(a, _NativeVar):
                 # .to(other) copies other's dtype AND device.
-                ds = str(a.dtype)
+                ds = _jittor_dtype_name(a.dtype)
                 dev = a.device
             elif isinstance(a, str):
                 bare = a.replace("torch.", "")
@@ -1078,7 +1078,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         "double": "float64", "bfloat16": "bfloat16", "bool": "bool",
     }
     def _cast_if_needed(tensor, dtype):
-        return tensor if str(tensor.dtype) == dtype else tensor.cast(dtype)
+        return tensor if _jittor_dtype_name(tensor.dtype) == dtype else tensor.cast(dtype)
 
     for _mname, _mdt in _CAST_METHOD_DTYPE.items():
         setattr(Var, _mname, (lambda dt: lambda self: _cast_if_needed(self, dt))(_mdt))
@@ -1097,8 +1097,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                                for k, v in _DTYPE_TO_TYPENAME.items()})
     def _var_type(self, dst_type=None, non_blocking=False, **kw):
         if dst_type is None:
-            return _DTYPE_TO_TYPENAME.get(str(self.dtype), "torch.FloatTensor")
-        if isinstance(dst_type, str) and dst_type in _TYPENAME_TO_DTYPE:
+            return _DTYPE_TO_TYPENAME.get(_jittor_dtype_name(self.dtype), "torch.FloatTensor")
+        if isinstance(dst_type, str) and dst_type in _jittor_dtype_name(_TYPENAME_TO_DTYPE):
             return _cast_if_needed(self, _TYPENAME_TO_DTYPE[dst_type])
         ds = _owner._dtype_to_str(dst_type)
         return _cast_if_needed(self, ds) if ds is not None else self
@@ -1136,7 +1136,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             if isinstance(other, (complex, _owner.np.complexfloating)):
                 other = _complex_scalar_var(other)
             if isinstance(other, _NativeVar):
-                da, db = str(self.dtype), str(other.dtype)
+                da, db = _jittor_dtype_name(self.dtype), _jittor_dtype_name(other.dtype)
                 if da == db and not da.startswith("uint"):
                     return native(self, other)
                 res = g._torch_promote_pair(da, db)
@@ -1144,7 +1144,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 b = other if db == res else other.cast(res)
                 out = native(a, b)
                 # native may still mis-infer (unsigned -> signed); fix it up.
-                if isinstance(out, _NativeVar) and str(out.dtype) != res:
+                if isinstance(out, _NativeVar) and _jittor_dtype_name(out.dtype) != res:
                     out = out.cast(res)
                 return out
             # torch defers numeric ops against a Python sequence to the sequence's
@@ -1158,7 +1158,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             out = native(self, other)
             if isinstance(other, (bool, int, float)) and isinstance(out, _NativeVar):
                 expected = _owner._dtype_to_str(g.result_type(self, other))
-                if expected is not None and str(out.dtype) != expected:
+                if expected is not None and _jittor_dtype_name(out.dtype) != expected:
                     out = out.cast(expected)
             return out
         _op.__name__ = opname
@@ -1205,14 +1205,14 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             if isinstance(other, (complex, _owner.np.complexfloating)):
                 other = _complex_scalar_var(other)
             if isinstance(other, _NativeVar):
-                da, db = str(self.dtype), str(other.dtype)
+                da, db = _jittor_dtype_name(self.dtype), _jittor_dtype_name(other.dtype)
                 if da == db and da.startswith(("float", "bfloat", "complex")):
                     return native(self, other)
                 tgt = _truediv_target(da, db)
                 a = self if da == tgt else self.cast(tgt)
                 b = other if db == tgt else other.cast(tgt)
                 out = native(a, b)
-                if isinstance(out, _NativeVar) and str(out.dtype) != tgt:
+                if isinstance(out, _NativeVar) and _jittor_dtype_name(out.dtype) != tgt:
                     out = out.cast(tgt)
                 return out
             # python sequence: defer to it (torch returns NotImplemented), matching
@@ -1221,8 +1221,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 return NotImplemented
             sd = _scalar_dtype_name(other)
             if sd is not None:
-                tgt = _truediv_target(str(self.dtype), sd)
-                src_dt = str(self.dtype)
+                tgt = _truediv_target(_jittor_dtype_name(self.dtype), sd)
+                src_dt = _jittor_dtype_name(self.dtype)
                 # CPU/CUDA widen Python floats for PyTorch 1-ulp parity; torch_npu
                 # stays in the tensor dtype because ACL has no float64 arithmetic.
                 acl_active = bool(getattr(_owner.jt.compiler, "has_acl", 0)) and (
@@ -1232,7 +1232,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 a = self if src_dt == calc_dt else self.cast(calc_dt)
                 b = _owner.jt.array(other, dtype=calc_dt) if use_wide else other
                 out = native(a, b)
-                if isinstance(out, _NativeVar) and str(out.dtype) != tgt:
+                if isinstance(out, _NativeVar) and _jittor_dtype_name(out.dtype) != tgt:
                     out = out.cast(tgt)
                 return out
             return native(self, other)
@@ -1281,23 +1281,16 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             return self[tuple(sl)]
         Var.narrow = _narrow
 
-    # torch's Tensor.stride()/.as_strided(): jittor Vars are always materialized
-    # contiguous (row-major) -- `.contiguous` above is a no-op -- so a Var's strides
-    # are exactly the row-major strides of its shape (this matches torch's strides
-    # right after a `.view()`/`.reshape()`, which is where this is used, e.g.
-    # longformer's `_chunk` sliding-window attention).
+    # Tensor strides come from the native storage descriptor, not shape math.
     if not hasattr(Var, "stride"):
         def _stride(self, dim=None):
-            shape = self.shape
-            st = [1] * len(shape)
-            for i in range(len(shape) - 2, -1, -1):
-                st[i] = st[i + 1] * shape[i + 1]
+            st = tuple(self._storage_strides())
             if dim is None:
                 return tuple(st)
-            return st[dim if dim >= 0 else dim + len(shape)]
+            return st[dim]
         Var.stride = _stride
     if not hasattr(Var, "storage_offset"):
-        Var.storage_offset = lambda self: 0
+        Var.storage_offset = lambda self: int(self._storage_offset())
     # as_strided over a contiguous buffer == gather at linear offsets
     #   out[i0,i1,...] = flat[storage_offset + sum_d i_d * stride[d]]
     # Built with broadcast arange grids; routed through jittor advanced-indexing so

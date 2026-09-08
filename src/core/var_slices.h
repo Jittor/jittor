@@ -77,6 +77,15 @@ std::ostream& operator<<(std::ostream& os, const VarSlices& vs);
 std::ostream& operator<<(std::ostream& os, const VarSlice& s);
 std::ostream& operator<<(std::ostream& os, const Slice& s);
 
+inline void adapt_index_storage(VarSlices& slices, vector<VarPtr>& owners) {
+    for (int i=0; i<slices.n; ++i) {
+        auto& slice = slices.slices[i];
+        if (!slice.is_var() || slice.var->is_contiguous()) continue;
+        owners.emplace_back(contiguous_storage(slice.var));
+        slice.var = owners.back().ptr;
+    }
+}
+
 // @pyjt(_print_var_slice)
 inline void _print_var_slice(VarSlices&& vs) {
     LOGi << vs;

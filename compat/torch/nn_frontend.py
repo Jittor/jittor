@@ -1,4 +1,5 @@
 """Installation-owned NN modules sharing native layer mathematics."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import types
 import inspect
@@ -170,7 +171,7 @@ def prepare_nn_namespace(context):
                     or isinstance(parameter, Parameter)):
                 continue
             if id(parameter) not in replacements:
-                differentiable = str(parameter.dtype) in (
+                differentiable = _jittor_dtype_name(parameter.dtype) in (
                     "float16", "bfloat16", "float32", "float64", "complex64", "complex128")
                 replacements[id(parameter)] = Parameter(
                     parameter, requires_grad=not frozen and differentiable)

@@ -1,4 +1,5 @@
 """Stateful embedding modules exposed through :mod:`jittor.nn`."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 
@@ -33,7 +34,7 @@ class Embedding(jt.Module):
         if dtype is None:
             dtype = "float32"
         elif not isinstance(dtype, str):
-            dtype = str(dtype).replace("torch.", "") or "float32"
+            dtype = _jittor_dtype_name(dtype).replace("torch.", "") or "float32"
         if _weight is not None:
             self.weight = _weight if isinstance(_weight, jt.Var) else jt.array(_weight)
         else:

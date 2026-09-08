@@ -9,7 +9,7 @@
 
 This document records the durable contract for Jittor's native complex dtype.
 Implementation history and individual experiment transcripts belong in Git and
-`agent/results/`; they are intentionally not duplicated here.
+`docs/results/`; they are intentionally not duplicated here.
 
 ## Decision
 

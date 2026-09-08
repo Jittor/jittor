@@ -1,4 +1,5 @@
 """Search tensor operations."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import numpy as np
 from jittor_core import Var
@@ -70,7 +71,7 @@ namespace jittor {{
 inline static void searchsorted(
     int batch_num, int batch_id, int value_num, int value_id,
     int sorted_num, int batch_stride,
-    {sorted.dtype}* __restrict__  sort_p, {values.dtype}* __restrict__  value_p,
+    {_jittor_dtype_name(sorted.dtype)}* __restrict__  sort_p, {_jittor_dtype_name(values.dtype)}* __restrict__  value_p,
     {out_ctype}* __restrict__ index_p) {{
     int32 l = batch_id * batch_stride;
     int32 r = l + sorted_num;

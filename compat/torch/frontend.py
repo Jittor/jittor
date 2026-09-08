@@ -1,4 +1,5 @@
 """Python frontend types sharing the native VarHolder payload and graph."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from contextlib import contextmanager
 from functools import wraps
@@ -130,7 +131,7 @@ def make_parameter_type(backend, tensor_type):
 def reduce_tensor(value):
     return (
         rebuild_tensor,
-        (type(value), value.numpy(), str(value.dtype), value.requires_grad),
+        (type(value), value.numpy(), _jittor_dtype_name(value.dtype), value.requires_grad),
         value.__dict__.copy(),
     )
 
@@ -147,7 +148,7 @@ def rebuild_tensor(tensor_type, array, dtype, requires_grad):
 
 def deepcopy_tensor(value, memo):
     from copy import deepcopy
-    result = rebuild_tensor(type(value), value.numpy(), str(value.dtype), value.requires_grad)
+    result = rebuild_tensor(type(value), value.numpy(), _jittor_dtype_name(value.dtype), value.requires_grad)
     memo[id(value)] = result
     result.__dict__.update(deepcopy(value.__dict__, memo))
     return result

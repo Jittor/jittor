@@ -9,6 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 """Shared array algebra and native-complex bridges."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import numpy as np
 
 
@@ -40,7 +41,7 @@ def _complex_to_stack(x):
 def _is_native_complex(x):
     # A native complex64 Var (NOT an nn.ComplexNumber, which is a plain object).
     import jittor as jt
-    return isinstance(x, jt.Var) and "complex" in str(x.dtype)
+    return isinstance(x, jt.Var) and "complex" in _jittor_dtype_name(x.dtype)
 
 
 def _native_to_cn(z):

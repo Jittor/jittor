@@ -368,11 +368,13 @@ void Op::prepare_codegen_key(JK& jk) {
         //   check use_cuda_op from outputs may not be enough
         bool use_cuda_op = executes_on_accelerator();
         for (Var* var : inputs()) {
-            if (var->num >= std::numeric_limits<int32_t>::max())
+            if (var->num >= std::numeric_limits<int32_t>::max()
+                    || var->storage_span_bytes() / var->dsize() >= std::numeric_limits<int32_t>::max())
                 use_int64_t = true;
         }
         for (Var* var : outputs()) {
-            if (var->num >= std::numeric_limits<int32_t>::max())
+            if (var->num >= std::numeric_limits<int32_t>::max()
+                    || var->storage_span_bytes() / var->dsize() >= std::numeric_limits<int32_t>::max())
                 use_int64_t = true;
         }
         jk << "«JIT:1";
@@ -404,6 +406,7 @@ void Op::prepare_codegen_key(JK& jk) {
 void Op::prepare_execution(JK& jk) {
     JT_GBP_SCOPE(gbp_jit_key);
     jk.clear();
+    if (is_storage_view()) return;
     auto callback = codegen().prepare;
     USER_CHECK(callback) << "Missing codegen preparation for" << name();
     callback(this, jk);
@@ -415,6 +418,7 @@ void Op::prepare_execution(JK& jk) {
 }
 
 void Op::execute_prepared(JK& jk) {
+    if (is_storage_view()) return;
     const auto& kernel = implementation().kernel;
     if (!jk.empty()) {
         USER_CHECK(kernel.jit) << "Missing JIT kernel for" << name();

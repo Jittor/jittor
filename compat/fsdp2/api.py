@@ -162,62 +162,35 @@ def _inject_fsdp_methods(module):
     return module
 
 
-def _reject_unsupported_mesh(mesh, dp_mesh_dims):
-    """``fully_shard`` shards across the whole world; refuse a mesh that does not.
-
-    The mesh was stored on the state and then ignored: ``shard.py`` shards by
-    ``common._world_size()`` no matter what was passed. On 8 ranks with a
-    ``(2, 4)`` dp/tp mesh that means all 8 ranks take part in the shard and in
-    the reduce-scatter, so every parameter is split 8 ways and every gradient
-    averaged over 8 ranks, when the caller asked for 2. The model still trains
-    and the numbers are wrong -- there is no error and no warning.
-
-    Jittor has no communicator subgroups yet (task 8.08), so the only mesh this
-    can honour is one that describes the whole world. Anything else is refused
-    rather than silently reinterpreted.
-    """
+def _reject_unsupported_mesh(mesh, dp_mesh_dims=None):
+    """Validate the actual sharding/replication axes before mutating a module."""
     if mesh is None:
         return
-    world = int(common._world_size())
-    if world <= 1:
-        # Same rule 7.01 applied throughout this layer and that
-        # DeviceMesh.__getitem__ already follows: on one rank every mesh
-        # describes the same single group, so nothing can be silently
-        # reinterpreted and nothing is refused.
-        return
-    shape = tuple(getattr(mesh, "shape", ()) or ())
-    if len(shape) > 1:
-        from ..stub_policy import unimplemented
-        unimplemented(
-            "fully_shard(mesh=%r)" % (mesh,),
-            "shard across ALL %d ranks regardless of the mesh, so a %d-D "
-            "parallel plan collapses onto one axis and every parameter is "
-            "split the wrong number of ways" % (world, len(shape)),
-            "Jittor has no communicator subgroups yet (task 8.08). Pass a "
-            "1-D mesh covering the whole world, or omit mesh=.")
-        return
-    if shape:
-        requested = int(common._prod(shape))
-        if requested != world:
-            from ..stub_policy import unimplemented
-            unimplemented(
-                "fully_shard(mesh=%r) on %d ranks" % (mesh, world),
-                "shard across all %d ranks even though the mesh asks for %d, "
-                "so each shard is the wrong size and the reduce-scatter "
-                "averages over the wrong group" % (world, requested),
-                "Jittor has no communicator subgroups yet (task 8.08). The "
-                "mesh has to cover the whole world.")
-            return
-    names = tuple(getattr(mesh, "mesh_dim_names", None) or ())
-    selected = getattr(dp_mesh_dims, "shard_names", None) if dp_mesh_dims else None
-    if selected and names and set(selected) != set(names):
-        from ..stub_policy import unimplemented
-        unimplemented(
-            "fully_shard(dp_mesh_dims=%r) over mesh dims %r" % (selected, names),
-            "shard across every rank in the mesh rather than only the named "
-            "dimensions",
-            "Jittor has no communicator subgroups yet (task 8.08).")
+    if not isinstance(mesh, dtensor.DeviceMesh):
+        raise TypeError("fully_shard mesh must be a DeviceMesh")
+    if mesh.get_coordinate() is None:
+        raise RuntimeError("fully_shard called on a rank outside its mesh")
+    if mesh.ndim > 2 and dp_mesh_dims is None:
+        raise ValueError("fully_shard needs explicit dp_mesh_dims for more than two axes")
+    if dp_mesh_dims is not None:
+        shard_names = dp_mesh_dims.shard_names
+        replicate_names = dp_mesh_dims.replicate_names
+        names = tuple(mesh.mesh_dim_names or ())
+        selected = shard_names + replicate_names
+        if not shard_names or len(set(selected)) != len(selected) or set(selected) != set(names):
+            raise ValueError("dp_mesh_dims must partition mesh names into shard and replicate axes")
 
+
+def _mesh_groups(mesh, dp_mesh_dims):
+    if dp_mesh_dims is not None:
+        shard_mesh = mesh[dp_mesh_dims.shard_names]._flatten()
+        replicate_mesh = (mesh[dp_mesh_dims.replicate_names]._flatten()
+                          if dp_mesh_dims.replicate_names else None)
+        return shard_mesh.get_group(), (replicate_mesh.get_group()
+                                       if replicate_mesh is not None else None)
+    if mesh.ndim == 1:
+        return mesh.get_group(), None
+    return mesh.get_group(1), mesh.get_group(0)
 
 def fully_shard(module, *, mesh=None, reshard_after_forward=True,
                 shard_placement_fn=None, mp_policy=None, offload_policy=None,
@@ -234,11 +207,23 @@ def fully_shard(module, *, mesh=None, reshard_after_forward=True,
         raise TypeError("fully_shard() expects a torch.nn.Module-compatible object")
     _reject_unsupported_mesh(mesh, dp_mesh_dims)
     st = getattr(module, "_fsdp_state", None)
+    if st is not None and getattr(st, "true_fsdp_initialized", False) and mesh is not None:
+        previous = st.mesh
+        if previous.shape != mesh.shape or previous.mesh.tolist() != mesh.mesh.tolist():
+            raise ValueError("fully_shard cannot change an initialized parameter mesh")
     if st is None:
-        st = types.SimpleNamespace()
+        st = common.StateRecord()
         object.__setattr__(module, "_fsdp_state", st)
-    st.mesh = mesh or getattr(st, "mesh", None) or dtensor.DeviceMesh(
-        "cuda" if getattr(jt, "has_cuda", 0) else "cpu", (1,))
+    st.mesh = mesh or getattr(st, "mesh", None) or dtensor.init_device_mesh(
+        "cuda" if getattr(jt, "has_cuda", 0) else "cpu", (common._world_size(),))
+    shard_group, replicate_group = _mesh_groups(st.mesh, dp_mesh_dims)
+    if getattr(st, "true_fsdp_initialized", False):
+        previous_shard = st.shard_group
+        previous_replicate = st.replicate_group
+        if (previous_shard.ranks != shard_group.ranks or
+                getattr(previous_replicate, "ranks", ()) != getattr(replicate_group, "ranks", ())):
+            raise ValueError("fully_shard cannot change initialized sharding axes")
+    st.shard_group, st.replicate_group = shard_group, replicate_group
     st.reshard_after_forward = reshard_after_forward
     st.shard_placement_fn = shard_placement_fn
     st.mp_policy = (

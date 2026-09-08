@@ -11,7 +11,13 @@
 
 namespace jittor {
 
+void infer_index_slices(Var* input, VarSlices& slices, int& first_var_axis, int& var_rank,
+                        StackVector<>& input_to_slice, StackVector<>& input_to_output,
+                        StackVector<>& output_shape);
+
 struct GetitemOp : Op {
+    static constexpr bool accepts_storage_strides = true;
+    bool is_storage_view() const override { return storage_view; }
     static constexpr jittor::NanoString::Flags _inplace = (jittor::NanoString::Flags)0;
     VarSlices vs;
     // map i to related var slice
@@ -20,6 +26,7 @@ struct GetitemOp : Op {
     NanoVector i_to_o;
     NanoVector o_shape;
     int first_oid_of_var, var_dim;
+    bool storage_view = false;
 
     GetitemOp(Var* x, VarSlices&& slices);
     // @attrs(multiple_outputs)

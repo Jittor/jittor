@@ -13,6 +13,8 @@
 namespace jittor {
 
 struct ReshapeOp : Op {
+    static constexpr bool accepts_storage_strides = true;
+    bool is_storage_view() const override { return true; }
     Var* x, * y;
     NanoVector shape;
 

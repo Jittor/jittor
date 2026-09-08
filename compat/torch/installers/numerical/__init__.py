@@ -3,6 +3,7 @@
 This module contains source moved from the former monolithic installer without
 changing the compatibility semantics.
 """
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 
@@ -1209,7 +1210,7 @@ def install(ctx):
         result = func(*expanded)
         if (
             not isinstance(result, jt.Var)
-            or str(result.dtype) != "bool"
+            or _jittor_dtype_name(result.dtype) != "bool"
             or result.ndim > level_count
         ):
             return None

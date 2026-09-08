@@ -46,6 +46,13 @@ class TestDocsStructure(unittest.TestCase):
         self.assertTrue((self.docs_root / "index.md").is_file())
         retired = (
             "doc",
+            "agent/design",
+            "agent/results",
+            "agent/baselines",
+            "agent/README.md",
+            "asv.conf.json",
+            "AWESOME-JITTOR-LIST.md",
+            "AWESOME-JITTOR-LIST.cn.md",
             "README.src.md",
             "python/jittor_utils/translator.py",
             "tools/docs/legacy/make_doc.py",
@@ -103,6 +110,27 @@ class TestDocsStructure(unittest.TestCase):
         self.assertIn("nodes.literal_block", adapter)
         self.assertIn('"inventory.json"', adapter)
         self.assertNotIn("eval-rst", adapter)
+
+    def test_asv_config_preserves_repository_and_external_run_paths(self):
+        config_path = self.repo_root / "benchmarks" / "asv.conf.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        self.assertEqual((config_path.parent / config["repo"]).resolve(), self.repo_root)
+        self.assertEqual((self.repo_root / config["benchmark_dir"]).resolve(),
+                         self.repo_root / "benchmarks")
+        tree = ast.parse((self.repo_root / "noxfile.py").read_text())
+        writer = next(node for node in tree.body
+                      if isinstance(node, ast.FunctionDef) and node.name == "_write_asv_config")
+        namespace = {"json": json, "REPO_ROOT": self.repo_root}
+        exec(compile(ast.Module(body=[writer], type_ignores=[]), "noxfile.py", "exec"), namespace)
+        with TemporaryDirectory() as directory:
+            state = Path(directory)
+            generated = namespace["_write_asv_config"](state, state / "results", state / "html")
+            runtime = json.loads(generated.read_text())
+        self.assertEqual(runtime["repo"], str(self.repo_root))
+        self.assertEqual(runtime["benchmark_dir"], str(self.repo_root / "benchmarks"))
+        self.assertEqual(runtime["results_dir"], str(state / "results"))
+        self.assertEqual(runtime["html_dir"], str(state / "html"))
+        self.assertEqual(runtime["env_dir"], str(state / "asv-env"))
 
     def test_content_manifest_accounts_for_every_legacy_page(self):
         manifest = json.loads(
@@ -261,7 +289,8 @@ class TestDocsStructure(unittest.TestCase):
             self.repo_root / "noxfile.py",
             self.repo_root / "pyproject.toml",
         ]
-        candidates.extend(self.docs_root.rglob("*.md"))
+        candidates.extend(path for path in self.docs_root.rglob("*.md")
+                          if "results" not in path.relative_to(self.docs_root).parts)
         candidates.extend((self.repo_root / ".github").rglob("*.yml"))
         forbidden = (
             "doc/source",

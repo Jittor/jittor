@@ -146,7 +146,7 @@ static void migrate_empty_var(Var* var, Allocator* allocator) {
         share_group_unlink(var);
     Allocation target(allocator, 0);
     if (var->mem_ptr && var->allocator)
-        var->allocator->free(var->mem_ptr, var->size, var->allocation);
+        var->allocator->free(var->mem_ptr, var->storage_span_bytes(), var->allocation);
     var->mem_ptr = target.ptr;
     var->allocation = target.allocation;
     var->allocator = target.allocator;
@@ -210,11 +210,11 @@ static bool migrate_group(Var* var, Allocator* allocator, bool to_gpu) {
         return false;
     }
     char* base = (char*)var->mem_ptr;
-    char* end = base + var->size;
+    char* end = base + var->storage_span_bytes();
     for (auto* v : members) {
         char* vp = (char*)v->mem_ptr;
         if (vp < base) base = vp;
-        if (vp + v->size > end) end = vp + v->size;
+        if (vp + v->storage_span_bytes() > end) end = vp + v->storage_span_bytes();
     }
     size_t total = end - base;
     vector<size_t> offsets(members.size());
@@ -226,18 +226,19 @@ static bool migrate_group(Var* var, Allocator* allocator, bool to_gpu) {
     // Take one reference per extra member before touching any var, so a target
     // that cannot express sharing fails with the group still intact.
     for (size_t i=1; i<members.size(); i++)
-        CHECK(allocator->share_with(members[i]->size, a.allocation))
+        CHECK(allocator->share_with(members[i]->storage_span_bytes(), a.allocation))
             << "allocator" << allocator->name()
             << "cannot hold a share group; migrating one var of an aliased "
                "group would silently unshare it";
     for (size_t i=0; i<members.size(); i++) {
         auto* v = members[i];
         v->mem_ptr = (char*)a.ptr + offsets[i];
+        v->storage_offset_bytes = offsets[i];
         v->allocation = a.allocation;
         v->allocator = allocator;
     }
     for (size_t i=0; i<members.size(); i++)
-        old_allocator->free(base + offsets[i], members[i]->size, old_allocation);
+        old_allocator->free(base + offsets[i], members[i]->storage_span_bytes(), old_allocation);
     a.ptr = nullptr;
     return true;
 }
@@ -248,7 +249,7 @@ void migrate_to_cpu(Var* var, Allocator* allocator) {
     if (!use_cuda_managed_allocator)
         allocator = cpu_allocator;
     #endif
-    if (var->size == 0) {
+    if (var->storage_span_bytes() == 0) {
         migrate_empty_var(var, allocator);
         return;
     }
@@ -275,7 +276,7 @@ void migrate_to_cpu(Var* var, Allocator* allocator) {
     if (var->allocator == &delay_free) {
         var->allocator = allocator;
         delay_free.migrate_to_cpu(
-            var->mem_ptr, var->allocation, var->size, var->allocator
+            var->mem_ptr, var->allocation, var->storage_span_bytes(), var->allocator
         );
     } else
     if (!use_cuda_managed_allocator) {
@@ -283,13 +284,14 @@ void migrate_to_cpu(Var* var, Allocator* allocator) {
         // must be a device allocator. Issue the copy with the var's own
         // device current, so it is ordered after the kernels that produced it
         // rather than after whatever the current device happens to be running.
-        Allocation a(allocator, var->size);
+        Allocation a(allocator, var->storage_span_bytes());
         // backend_copy releases the GIL only for its blocking SDK call;
         // allocation and release bookkeeping stay under the GIL.
         backend_copy(a.ptr, allocation_device(allocator), var->mem_ptr,
-                     allocation_device(var->allocator), var->size);
-        var->allocator->free(var->mem_ptr, var->size, var->allocation);
+                     allocation_device(var->allocator), var->storage_span_bytes());
+        var->allocator->free(var->mem_ptr, var->storage_span_bytes(), var->allocation);
         var->mem_ptr = a.ptr;
+        var->storage_offset_bytes = 0;
         var->allocation = a.allocation;
         var->allocator = a.allocator;
         a.ptr = nullptr;
@@ -301,7 +303,7 @@ void migrate_to_cpu(Var* var, Allocator* allocator) {
 void migrate_to_gpu(Var* var, Allocator* allocator) {
     #ifdef HAS_ACCELERATOR
     // only happend when not using use_cuda_managed_allocator
-    if (var->size == 0) {
+    if (var->storage_span_bytes() == 0) {
         migrate_empty_var(var, allocator);
         return;
     }
@@ -320,13 +322,14 @@ void migrate_to_gpu(Var* var, Allocator* allocator) {
     if (PREDICT_BRANCH_NOT_TAKEN(var->share_next != nullptr)
         && var->mem_ptr && migrate_group(var, allocator, true))
         return;
-    Allocation a(allocator, var->size);
+    Allocation a(allocator, var->storage_span_bytes());
     // Upload onto the pool's own device: a cache hit inside the pool skips
     // cudaMalloc, so the current device is not guaranteed to be right here.
     backend_copy(a.ptr, allocation_device(allocator), var->mem_ptr,
-                 allocation_device(var->allocator), var->size);
-    var->allocator->free(var->mem_ptr, var->size, var->allocation);
+                 allocation_device(var->allocator), var->storage_span_bytes());
+    var->allocator->free(var->mem_ptr, var->storage_span_bytes(), var->allocation);
     var->mem_ptr = a.ptr;
+    var->storage_offset_bytes = 0;
     var->allocation = a.allocation;
     var->allocator = a.allocator;
     a.ptr = nullptr;

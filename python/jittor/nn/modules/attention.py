@@ -1,4 +1,5 @@
 """Stateful multi-head attention module."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 
@@ -6,11 +7,8 @@ import jittor as jt
 def _dtype_name(dtype):
     if dtype is None:
         return "float32"
-    if isinstance(dtype, str):
-        return dtype
-    if callable(dtype):
-        return dtype.__name__
-    return str(dtype).replace("torch.", "") or "float32"
+    from jittor._core.dtypes import dtype_for_compute
+    return dtype_for_compute(dtype)
 
 
 def _legacy_positional_dtype(device, dtype):
@@ -80,7 +78,7 @@ class MultiheadAttention(jt.Module):
             self.v_proj_weight = jt.empty((embed_dim, self.vdim), dtype=dtype_name)
         self.in_proj_bias = jt.empty((3 * embed_dim,), dtype=dtype_name) if bias else None
         self.out_proj = jt.nn.Linear(embed_dim, embed_dim, bias=bias)
-        if str(self.out_proj.weight.dtype) != dtype_name:
+        if _jittor_dtype_name(self.out_proj.weight.dtype) != dtype_name:
             self.out_proj.weight = self.out_proj.weight.cast(dtype_name)
             if self.out_proj.bias is not None:
                 self.out_proj.bias = self.out_proj.bias.cast(dtype_name)

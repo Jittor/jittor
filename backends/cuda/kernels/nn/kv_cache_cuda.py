@@ -1,4 +1,5 @@
 """Private CUDA inference kernels for paged KV caches."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
@@ -28,12 +29,12 @@ def _reshape_and_cache_cuda(key, value, kv_cache, slot_mapping):
         return None
     if int(slot_mapping.numel()) < key_shape[0]:
         return None
-    value_dtypes = {str(tensor.dtype) for tensor in (key, value, kv_cache)}
+    value_dtypes = {_jittor_dtype_name(tensor.dtype) for tensor in (key, value, kv_cache)}
     if len(value_dtypes) != 1 or value_dtypes.pop() not in (
         "float16", "bfloat16", "float32"
     ):
         return None
-    if str(slot_mapping.dtype) not in ("int32", "int64"):
+    if _jittor_dtype_name(slot_mapping.dtype) not in ("int32", "int64"):
         return None
 
     cuda_src = cached_source(r"""
@@ -113,13 +114,13 @@ def _paged_attention_decode_cuda(
         return None
     if table_shape[0] != requests or int(seq_lens.numel()) < requests:
         return None
-    if str(query.dtype) != str(kv_cache.dtype) or str(query.dtype) not in (
+    if _jittor_dtype_name(query.dtype) != _jittor_dtype_name(kv_cache.dtype) or _jittor_dtype_name(query.dtype) not in (
         "float16", "bfloat16", "float32"
     ):
         return None
-    if str(seq_lens.dtype) not in ("int32", "int64"):
+    if _jittor_dtype_name(seq_lens.dtype) not in ("int32", "int64"):
         return None
-    if str(block_table.dtype) not in ("int32", "int64"):
+    if _jittor_dtype_name(block_table.dtype) not in ("int32", "int64"):
         return None
     if not (scale > 0 and scale < float("inf")):
         return None

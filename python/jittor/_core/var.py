@@ -1,4 +1,7 @@
 """Native tensor factories, operations and Var protocol bindings."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._core.dtypes import dtype_for_compute as _dtype_for_compute
+from jittor._core.dtypes import is_dtype as _is_dtype
 
 import functools as _functools
 import numbers
@@ -66,14 +69,12 @@ def array(data, dtype=None):
         else:
             ret = cast(data, dtype)
     elif dtype is not None:
-        if isinstance(dtype, NanoString):
-            dtype = str(dtype)
-        # Torch-compatible dtype objects are callable str subclasses.  They are
-        # dtype names here, not Jittor's historical cast functions.
-        elif not isinstance(dtype, str) and callable(dtype):
-            dtype = dtype.__name__
+        dtype = _dtype_for_compute(dtype)
         with flag_scope(auto_convert_64_to_32=0):
-            ret = ops.array(np.array(data, dtype))
+            if dtype == "bfloat16":
+                ret = ops.array(np.array(data, "float32")).cast(dtype)
+            else:
+                ret = ops.array(np.array(data, dtype))
     else:
         ret = ops.array(data)
     # TODO: move those code to core
@@ -131,9 +132,9 @@ def _amp_array_preference(ret):
     if ret.numel() == 1 or not ret.dtype.is_float():
         return ret
     if amp_reg & amp_flags.prefer32:
-        return ret if ret.dtype == "float32" else ret.float32()
+        return ret if _jittor_dtype_name(ret.dtype) == "float32" else ret.float32()
     if amp_reg & amp_flags.prefer16:
-        return ret if ret.dtype == "float16" else ret.float16()
+        return ret if _jittor_dtype_name(ret.dtype) == "float16" else ret.float16()
     return ret
 
 def random(shape, dtype="float32", type="uniform"):
@@ -157,11 +158,8 @@ def random(shape, dtype="float32", type="uniform"):
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    if isinstance(dtype, NanoString):
-        dtype = str(dtype)
-    elif not isinstance(dtype, str) and callable(dtype):
-        dtype = dtype.__name__
-    if dtype in ("float16", "bfloat16"):
+    dtype = _dtype_for_compute(dtype)
+    if _jittor_dtype_name(dtype) in ("float16", "bfloat16"):
         # The CPU and accelerator random engines generate standard floating
         # types; low-precision outputs use their regular cast kernels.
         ret = ops.random(shape, "float32", type).cast(dtype)
@@ -226,7 +224,7 @@ def ones(*shape, dtype="float32"):
     :return: The output Var.
     :rtype: jittor.Var
     '''
-    if isinstance(shape, tuple) and isinstance(shape[-1], (str, NanoString)):
+    if isinstance(shape, tuple) and _is_dtype(shape[-1]):
         dtype = shape[-1]
         shape = shape[:-1]
     if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
@@ -261,7 +259,7 @@ def zeros(*shape, dtype="float32"):
     :return: The output Var.
     :rtype: jittor.Var
     '''
-    if isinstance(shape, tuple) and isinstance(shape[-1], (str, NanoString)):
+    if isinstance(shape, tuple) and _is_dtype(shape[-1]):
         dtype = shape[-1]
         shape = shape[:-1]
     if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
@@ -277,7 +275,7 @@ def new_zeros(x, size):
 Var.new_zeros = new_zeros
 
 def empty(*shape, dtype="float32"):
-    if isinstance(shape, tuple) and isinstance(shape[-1], (str, NanoString)):
+    if isinstance(shape, tuple) and _is_dtype(shape[-1]):
         dtype = shape[-1]
         shape = shape[:-1]
     if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
@@ -434,7 +432,7 @@ Var.norm = norm
 
 origin_reshape = reshape
 
-def reshape(x, *shape):
+def view(x, *shape):
     if len(shape) == 1 and isinstance(shape[0], (Sequence, NanoVector)):
         shape = shape[0]
     # torch accepts 0-d int tensors / numpy ints as shape elements (e.g. longformer's
@@ -451,11 +449,19 @@ def reshape(x, *shape):
             break
     if coerce:
         shape = tuple(pyint(s.item()) if isinstance(s, Var) else pyint(s) for s in shape)
-    return origin_reshape(x, shape)
+    result = origin_reshape(x, shape)
+    result._set_storage_view_of(x, False)
+    return result
+
+view.__doc__ = origin_reshape.__doc__
+
+def reshape(x, *shape):
+    source = x if x._storage_is_contiguous() else x.contiguous()
+    return view(source, *shape)
 
 reshape.__doc__ = origin_reshape.__doc__
-
-Var.view = Var.reshape = view = reshape
+Var.view = view
+Var.reshape = reshape
 
 _accelerator_transpose_tried = False
 
@@ -596,11 +602,11 @@ def _clamp_cpu(x, min_v=None, max_v=None):
     def prepare_bound(value, bound):
         if isinstance(bound, jt.Var):
             dtype = jt.binary_dtype_infer("add", value.dtype, bound.dtype)
-            if value.dtype != dtype:
+            if _jittor_dtype_name(value.dtype) != _jittor_dtype_name(dtype):
                 value = value.cast(dtype)
-            if bound.dtype != dtype:
+            if _jittor_dtype_name(bound.dtype) != _jittor_dtype_name(dtype):
                 bound = bound.cast(dtype)
-        elif "float" in str(value.dtype):
+        elif "float" in _jittor_dtype_name(value.dtype):
             bound = jt.unary(bound, value.dtype).stop_grad()
         elif isinstance(bound, numbers.Real) \
                 and not isinstance(bound, numbers.Integral):
@@ -630,7 +636,7 @@ def _clamp_cpu(x, min_v=None, max_v=None):
     def select_bound(value, bound, lower):
         keep = value >= bound if lower else value <= bound
         result = jt.ternary(keep, value, bound)
-        if "float" in str(value.dtype):
+        if "float" in _jittor_dtype_name(value.dtype):
             nan_value = value.clone().stop_grad()
             result = jt.ternary(value != value, nan_value, result)
         return result
@@ -859,7 +865,7 @@ def pow(x, y):
     if isinstance(x,Var) and isinstance(y, (ori_int, ori_float)):
         if y == 2:
             return x.sqr()
-        if y == 3 and str(x.dtype) == "float32":
+        if y == 3 and _jittor_dtype_name(x.dtype) == "float32":
             return x*x*x
     return core.ops.pow(x, y)
 
@@ -1067,7 +1073,7 @@ def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
     v = (jt.random(shape) * (high - low) + low).clamp(low, high-0.5)
     v = jt.floor_int(v)
-    return v.astype(dtype)
+    return v.astype(_jittor_dtype_name(dtype))
 
 def randint_like(x, low, high=None) -> Var:
     ''' samples random values from standard normal distribution with the same shape as x.
@@ -1193,7 +1199,7 @@ Example 2::
 Var.fetch = fetch
 
 def vtos(v):
-    data_str = f"jt.Var({v.numpy()}, dtype={v.dtype})"
+    data_str = f"jt.Var({v.numpy()}, dtype={_jittor_dtype_name(v.dtype)})"
     data_str = data_str.replace("\n", "\n       ")
     return data_str
 
@@ -1201,7 +1207,7 @@ Var.__str__ = vtos
 
 Var.__repr__ = vtos
 
-Var.peek = lambda x: f"{x.dtype}{x.shape}"
+Var.peek = lambda x: f"{_jittor_dtype_name(x.dtype)}{x.shape}"
 
 def size(v, dim=None):
     if dim is None:
@@ -1260,7 +1266,7 @@ def is_var(v):
 def _var__array__(self, dtype=None, copy=None):
     a = self.numpy()
     if dtype is not None:
-        a = a.astype(dtype)
+        a = a.astype(_jittor_dtype_name(dtype))
     return a
 
 Var.__array__ = _var__array__

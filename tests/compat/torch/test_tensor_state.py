@@ -7,6 +7,7 @@ import pytest
 from jittor.compat.torch.tensor_state import (
     TorchTensorState, get_tensor_state, compatibility_owner, bind_tensor_state,
     snapshot_tensor_state, record_tensor_state_changes,
+    latest_optimizer,
 )
 from jittor.compat.torch.namespace import TorchNamespace
 from jittor.compat.transaction import InstallTransaction, TransactionConflict
@@ -114,6 +115,48 @@ def test_tensor_state_binding_adopts_one_owner_and_rolls_back_aliases():
     assert "_torch_compat_owner" not in vars(target)
     assert "_torch_tensor_state" not in vars(target)
     assert get_tensor_state(native) is state
+
+
+def test_independent_binding_does_not_publish_state_on_native_module():
+    native = ModuleType("untouched_native_owner")
+    before = vars(native).copy()
+    target = TorchNamespace(native)
+    transaction = InstallTransaction("local-owner-only")
+    state = bind_tensor_state(native, target, transaction)
+    assert get_tensor_state(native) is get_tensor_state(target) is state
+    assert vars(native) == before
+    assert "_torch_compat_owner" not in vars(target)
+    transaction.rollback()
+    assert compatibility_owner(native) is native
+    assert vars(native) == before
+
+
+def test_owner_lookup_does_not_keep_an_unloaded_frontend_alive():
+    native = ModuleType("unloadable_native_owner")
+    target = TorchNamespace(native)
+    transaction = InstallTransaction("unloadable-owner")
+    bind_tensor_state(native, target, transaction)
+    transaction.commit()
+    reference = weakref.ref(target)
+    del target, transaction
+    gc.collect()
+    assert reference() is None
+    assert compatibility_owner(native) is native
+
+
+def test_latest_optimizer_lookup_does_not_prevent_collection():
+    module = ModuleType("optimizer_owner")
+    state = get_tensor_state(module)
+    class Optimizer:
+        pass
+    first, last = Optimizer(), Optimizer()
+    state.active_optimizers[:] = [weakref.ref(first), weakref.ref(last)]
+    assert latest_optimizer(module) is last
+    reference = weakref.ref(last)
+    del last
+    gc.collect()
+    assert reference() is None
+    assert latest_optimizer(module) is first
 
 
 def test_tensor_state_binding_rejects_conflicting_owners_and_states():

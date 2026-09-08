@@ -163,14 +163,29 @@ void BroadcastToOp::infer_shape() {
     NanoVector zshape;
     for (int i=0; i<zdim; i++) zshape.push_back(zz[i]);
     z->set_shape(zshape);
+    vector<int64> strides(zdim);
+    for (int i=int(zdim)-1, xi=int(xdim)-1; i>=0; --i) {
+        if (bcast_mask>>i&1) {
+            strides[i] = 0;
+            if (keepdims_mask>>i&1) --xi;
+        } else {
+            strides[i] = x->storage_stride(xi--);
+        }
+    }
+    z->set_storage_strides(NanoVector::make(strides.data(), strides.size()));
+    z->share_with(x);
+    set_type(OpType::other);
     z->set_flag(VarFlags::_is_scalar, x->flag(VarFlags::_is_scalar));
     LOGvvv << "Broadcast x(" >> x >> ") shape" << yshapes << "-> z(" >> z >> ")"; 
 }
 
 void BroadcastToOp::jit_prepare(JK& jk) {
-    jk << "«Tx:" << x->dtype()
-        << "«DIM=" << JK::hex1(z->shape.size())
-        << "«BCAST=" << JK::hex(bcast_mask);
+    // An expand is a storage descriptor. alloc() attaches the shared storage;
+    // there is no elementwise kernel and no logical-footprint allocation.
+}
+
+void BroadcastToOp::run() {
+    CHECK(z->mem_ptr == x->mem_ptr) << "Expanded storage was not shared";
 }
 
 #else // JIT

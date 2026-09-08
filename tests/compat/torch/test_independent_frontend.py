@@ -378,6 +378,10 @@ def test_independent_tensor_installation_preserves_native_type():
             alias[0].fill_(3.)
         np.testing.assert_array_equal(original.numpy(), [3., 2.])
         from jittor.compat.torch.tensor_object_state import get_tensor_object_state
+        assert not any(name in vars(jt) for name in (
+            "_torch_compat_owner", "_torch_tensor_state", "_torch_leaf_params",
+            "_torch_retained", "_active_optimizers",
+        ))
         import gc
         import weakref
         fresh = torch.tensor([1., 2.])

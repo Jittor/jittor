@@ -116,7 +116,7 @@ cannot mutate a NumPy view. Timed training preallocates multiple resident input
 slots and one loss-weight tensor. Jittor retains every requested gradient and
 explicitly synchronizes those Vars; neither runtime performs per-gradient D2H
 inside the timing window. See the
-[2026-08-23 ecosystem report](../../agent/results/2026-08-23-ecosystem-parity-performance.md).
+[2026-08-23 ecosystem report](../results/2026-08-23-ecosystem-parity-performance.md).
 
 Masked SDPA performance must preserve fully-masked-row semantics. On CUDA, the
 maintained attention path delegates explicit masks to the softmax kernel's
@@ -124,7 +124,7 @@ maintained attention path delegates explicit masks to the softmax kernel's
 two ternary graphs. Pure causal attention does not need that mode because every
 row contains its diagonal element. Profile comparisons must check graph rows as
 well as wall time; see the
-[CUDA masked SDPA report](../../agent/results/2026-08-23-cuda-masked-sdpa.md).
+[CUDA masked SDPA report](../results/2026-08-23-cuda-masked-sdpa.md).
 
 The result label must match the checkout. The nox sessions reject a dirty tree
 unless the caller deliberately sets `ASV_ALLOW_DIRTY=1`, which is intended only
@@ -171,15 +171,23 @@ commit:
 
 ```bash
 commit=$(git rev-parse HEAD)
-asv run --python=same --set-commit-hash "$commit"
+asv --config benchmarks/asv.conf.json run --python=same --set-commit-hash "$commit"
 ```
 
 For a comparison, create one dedicated benchmark worktree, switch that worktree
 only to the two or three reviewed revisions, and run the command above after
 each switch. Keep the same compiler, accelerator, dependency versions, cache
 warmup policy, and ASV results directory. Do not run `ALL` or an unbounded
-revision range. Use `asv compare <base> <candidate>` after both selected commits
+revision range. Use `asv --config benchmarks/asv.conf.json compare <base> <candidate>` after both selected commits
 have results.
+
+Run these direct commands from the repository root. The configuration is owned
+by `benchmarks/`; its `repo: ".."` resolves relative to the configuration file,
+while `benchmark_dir` and output directories resolve from the working directory.
+See the [ASV configuration reference](https://asv.readthedocs.io/en/v0.6.5/asv.conf.json.html).
+The maintained `nox -s benchmark` entry generates a configuration with absolute
+repository, benchmark and external-state paths, so relocating the source
+configuration does not redirect CI artifacts into the checkout.
 
 ## CI retention and cadence
 

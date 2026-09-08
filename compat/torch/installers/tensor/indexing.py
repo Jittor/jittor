@@ -1,4 +1,5 @@
 """Torch tensor indexing ownership."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 def masked_scatter(input, mask, source):
     """Copy ``source`` into the True positions of ``mask``, out of place.
@@ -22,8 +23,8 @@ def masked_scatter(input, mask, source):
     # clamp: the out-of-range entries sit where the mask is False and are dropped
     picked = picked.maximum(0).minimum(source.numel() - 1)
     gathered = source.reshape(-1)[picked].reshape(input.shape)
-    if str(gathered.dtype) != str(input.dtype):
-        gathered = gathered.cast(str(input.dtype))
+    if _jittor_dtype_name(gathered.dtype) != _jittor_dtype_name(input.dtype):
+        gathered = gathered.cast(_jittor_dtype_name(input.dtype))
     return _owner.jt.ternary(broadcast_mask, gathered, input)
 
 

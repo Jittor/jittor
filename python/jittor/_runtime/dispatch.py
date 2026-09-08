@@ -4,6 +4,8 @@ Registration has no bootstrap or driver side effects. Selection examines all
 tensor arguments without materializing them; selected implementations and
 capability predicates propagate their errors without trying another backend.
 """
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._core.dtypes import is_dtype as _is_dtype
 
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -81,7 +83,7 @@ def dispatch_context(*args, **kwargs):
     _collect_tensors(args, var_type, tensors, None)
     _collect_tensors(kwargs.values(), var_type, tensors, None)
     backend, device_id = native.core.dispatch_context(tensors)
-    return DispatchContext(_canonical_backend(backend), device_id, tuple(str(value.dtype) for value in tensors))
+    return DispatchContext(_canonical_backend(backend), device_id, tuple(_jittor_dtype_name(value.dtype) for value in tensors))
 
 
 def register_kernel(op, backend, implementation, *, dtypes=None,
@@ -94,7 +96,8 @@ def register_kernel(op, backend, implementation, *, dtypes=None,
     if dtypes is not None:
         if isinstance(dtypes, str):
             raise TypeError("kernel dtypes must be a collection of dtype names")
-        dtypes = frozenset(dtypes)
+        dtypes = frozenset(_jittor_dtype_name(value) if _is_dtype(value) else value
+                           for value in dtypes)
         if any(not isinstance(dtype, str) for dtype in dtypes):
             raise TypeError("kernel dtypes must contain dtype names")
     if isinstance(priority, bool) or not isinstance(priority, int):

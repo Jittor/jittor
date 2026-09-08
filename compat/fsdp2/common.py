@@ -1,6 +1,9 @@
 """Low-level sharding and collective helpers for FSDP2 compatibility."""
 
 import os
+from contextlib import nullcontext
+from functools import wraps
+import types
 
 import numpy as np
 
@@ -12,14 +15,65 @@ from ..diagnostics import EXPECTED, swallowed
 # the distributed installer depend on FSDP2. Re-exported so that every
 # `common._all_gather_shards(...)` inside fsdp2 keeps working unchanged.
 from ..collectives import (          # noqa: F401
-    _all_gather_shards,
+    _all_gather_shards as _world_all_gather_shards,
     _in_true_distributed,
     _nccl_ops,
     _rank,
-    _reduce_scatter_padded,
+    _reduce_scatter_padded as _world_reduce_scatter_padded,
     _slice_flat,
     _world_size,
 )
+
+
+class StateRecord(types.SimpleNamespace):
+    """Weak-referenceable FSDP metadata, owned by its module."""
+
+
+
+
+def _frontend_scope(state):
+    tensor_type = getattr(state, "frontend_type", None)
+    if tensor_type is None:
+        return nullcontext()
+    from ..torch.frontend import tensor_frontend
+    return tensor_frontend(tensor_type)
+
+
+def _state_frontend(function):
+    @wraps(function)
+    def invoke(state, *args, **kwargs):
+        with _frontend_scope(state):
+            return function(state, *args, **kwargs)
+    return invoke
+
+
+def _all_gather_shards(value, group=None):
+    if group is None or group.ranks is None:
+        return _world_all_gather_shards(value)
+    if group.rank() < 0:
+        raise RuntimeError("FSDP collective called by a nonmember")
+    if group.size() == 1:
+        return value
+    kind = group._get_backend_name()
+    ops = getattr(jt.compile_extern, kind + "_ops", None)
+    gather = getattr(ops, kind + "_all_gather", None)
+    if gather is None or group._backend_handle is None:
+        raise RuntimeError("FSDP mesh has no all_gather backend communicator")
+    return gather(value, group._backend_handle)
+
+
+def _reduce_scatter_padded(value, group=None):
+    if group is None or group.ranks is None:
+        return _world_reduce_scatter_padded(value)
+    if group.rank() < 0:
+        raise RuntimeError("FSDP collective called by a nonmember")
+    if group.size() == 1:
+        return value
+    if group._get_backend_name() == "nccl":
+        return _nccl_ops().nccl_reduce_scatter(value, group._backend_handle)
+    reduced = group._all_reduce(value, "sum")
+    size = int(reduced.shape[0]) // group.size()
+    return _slice_flat(reduced, group.rank() * size, size)
 
 
 def _prod(xs):
@@ -99,11 +153,8 @@ def _fsdp2_flat_enabled(world_size, total_numel):
     return int(world_size) <= max_world or int(total_numel) <= max_numel
 
 
-# The rank/world queries and the two collectives are re-exported above for the
-# fsdp2 code that says `common._all_gather_shards(...)`, but they are no longer
-# *owned* here -- they live in jittor/compat/collectives.py, below both fsdp2
-# and the distributed installer. Listing them here would make the fsdp2 package
-# re-publish somebody else's functions as its own.
+# WORLD helpers remain owned below FSDP; the wrappers above add explicit
+# process-group routing for mesh shards without changing those shared helpers.
 _EXPORTS = (
     "_prod",
     "_flatten_var",

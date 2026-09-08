@@ -1,3 +1,4 @@
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved.
 # Maintainers:
@@ -22,7 +23,7 @@ def _param_requires_grad(p):
     return bool(p.requires_grad)
 
 def _update_preserve_dtype(target, value):
-    if str(value.dtype) != str(target.dtype):
+    if _jittor_dtype_name(value.dtype) != _jittor_dtype_name(target.dtype):
         value = value.to(target.dtype)
     target.update(value)
 

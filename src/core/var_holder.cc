@@ -86,7 +86,7 @@ DataView VarHolder::data() {
         migrate_to_cpu(var, runtime_executor().allocator);
 #endif
     }
-    return {this, var->mem_ptr, var->shape, var->dtype()};
+    return {this, var->mem_ptr, var->shape, var->dtype(), var->storage_strides};
 }
 
 uint64 VarHolder::raw_ptr() {
@@ -101,6 +101,9 @@ uint64 VarHolder::raw_ptr() {
 void VarHolder::set_data(ArrayArgs&& array) {
     ExecutorEntryScope entry;
     sync(true);
+    for (uint i=0; i<var->shape.size(); ++i)
+        USER_CHECK(var->shape[i] <= 1 || var->storage_stride(i) != 0)
+            << "Dense data assignment requires non-overlapping storage";
     USER_CHECK(array.dtype.dsize() == var->dtype().dsize()
         && array.dtype.is_int() == var->dtype().is_int());
     int64 size = array.dtype.dsize();
@@ -110,7 +113,19 @@ void VarHolder::set_data(ArrayArgs&& array) {
 #ifdef HAS_ACCELERATOR
     migrate_to_cpu(var, runtime_executor().allocator);
 #endif
-    std::memcpy(var->mem_ptr, array.ptr, size);
+    if (var->is_contiguous()) {
+        std::memcpy(var->mem_ptr, array.ptr, size);
+    } else {
+        for (int64 i=0; i<var->num; ++i) {
+            int64 remainder=i, offset=0;
+            for (int d=int(var->shape.size())-1; d>=0; --d) {
+                offset += (remainder % var->shape[d]) * var->storage_stride(d);
+                remainder /= var->shape[d];
+            }
+            std::memcpy((char*)var->mem_ptr+offset*var->dsize(),
+                        (const char*)array.ptr+i*var->dsize(), var->dsize());
+        }
+    }
 }
 
 VarHolder::VarHolder(Var* v) : var(v) {
@@ -165,7 +180,13 @@ static auto make_setitem = op_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoS
 static auto make_getitem = op_constructor<VarPtr, Var*, VarSlices&&>("getitem");
 static auto make_transpose_view = op_constructor<VarPtr, Var*, NanoVector>("transpose");
 
+static auto make_storage_reshape = op_constructor<VarPtr, Var*, NanoVector>("reshape");
+static auto make_storage_broadcast = op_constructor<VarPtr, Var*, NanoVector, NanoVector>("broadcast_to");
 static VarPtr apply_view_step(Var* value, const VarViewStep& step) {
+    if (step.kind == VarViewStep::Expand)
+        return make_storage_broadcast(value, NanoVector(step.axes), NanoVector());
+    if (step.kind == VarViewStep::Reshape)
+        return make_storage_reshape(value, NanoVector(step.axes));
     if (step.kind == VarViewStep::Transpose)
         return make_transpose_view(value, NanoVector(step.axes));
     return make_getitem(value, VarSlices(step.slices));
@@ -263,6 +284,14 @@ bool VarHolder::is_last2_transpose_view() {
     return true;
 }
 
+VarHolder* VarHolder::set_storage_view_of(VarHolder* base, bool expand) {
+    USER_CHECK(base) << "Storage view requires a source";
+    drop_view();
+    attach_view(base, VarViewStep(expand ? VarViewStep::Expand : VarViewStep::Reshape,
+                                  NanoVector(var->shape)));
+    return this;
+}
+
 VarHolder* VarHolder::transpose_view_base() {
     USER_CHECK(is_last2_transpose_view()) << "tensor is not a live last-two-axis transpose view";
     VarPtr value(view->base->var);
@@ -277,10 +306,6 @@ VarHolder* VarHolder::transpose_view_base() {
 
 void VarHolder::refresh_transpose_views() {
     for (auto* record = views; record; record = record->next) {
-        bool transposed = false;
-        for (const auto& step : record->steps)
-            if (step.kind == VarViewStep::Transpose) transposed = true;
-        if (!transposed) continue;
         VarPtr value(var);
         for (const auto& step : record->steps)
             value = apply_view_step(value.ptr, step);
@@ -312,6 +337,10 @@ bool VarHolder::write_through_view(Var* value) {
             for (int j=0; j<axes.size(); ++j) inverse_values[axes[j]] = j;
             NanoVector inverse = NanoVector::make(inverse_values.data(), inverse_values.size());
             updated = make_transpose_view(value, move(inverse));
+        } else if (steps[i].kind == VarViewStep::Expand || steps[i].kind == VarViewStep::Reshape) {
+            USER_CHECK(value->num == target->num)
+                << "Cannot write to an expanded view with overlapping storage";
+            updated = make_storage_reshape(value, NanoVector(target->shape));
         } else {
             updated = make_setitem(target, VarSlices(steps[i].slices), value, ns_void);
         }
@@ -479,7 +508,9 @@ ArrayArgs VarHolder::fetch_sync() {
         if (save_mem || _HAS_ACCELERATOR)
             migrate_to_cpu(var, runtime_executor().allocator);
     }
-    return {var->mem_ptr, var->shape, var->dtype()};
+    ArrayArgs result{var->mem_ptr, var->shape, var->dtype()};
+    result.storage_strides = var->storage_strides;
+    return result;
 }
 
 inline static void cast_item_data(ItemData& data) {
@@ -577,6 +608,7 @@ vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh) {
         ret[i].ptr = vh[i]->var->mem_ptr;
         ret[i].shape = vh[i]->var->shape;
         ret[i].dtype = vh[i]->var->dtype();
+        ret[i].storage_strides = vh[i]->var->storage_strides;
     }
     return ret;
 }

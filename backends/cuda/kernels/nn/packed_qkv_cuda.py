@@ -1,4 +1,5 @@
 """CUDA inference preprocessing for packed QKV tensors."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import math
 
@@ -69,10 +70,10 @@ def packed_qkv_rms_rope_cuda(
     ):
         return None
     if (
-        str(qkv.dtype) != "bfloat16"
-        or str(q_gamma.dtype) != "float32"
-        or str(k_gamma.dtype) != "float32"
-        or str(phases.dtype) != "float32"
+        _jittor_dtype_name(qkv.dtype) != "bfloat16"
+        or _jittor_dtype_name(q_gamma.dtype) != "float32"
+        or _jittor_dtype_name(k_gamma.dtype) != "float32"
+        or _jittor_dtype_name(phases.dtype) != "float32"
     ):
         return None
     if (

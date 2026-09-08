@@ -1,8 +1,8 @@
 """FSDP2 optimizer updates and local sharded state helpers."""
 
-import numpy as np
-
 import jittor as jt
+from jittor.optim.algorithms.adam import adam_update
+from jittor.optim.algorithms.sgd import sgd_update
 
 from . import common, grad_sync, shard
 from .. import optimizer_kinds
@@ -95,15 +95,12 @@ def _sgd_hparams(opt, pg):
 
 def _sgd_update_for_param(opt, pg, state, entry, param, grad, value):
     lr, momentum, weight_decay, dampening, nesterov = _sgd_hparams(opt, pg)
-    dp = grad
-    if weight_decay != 0:
-        dp = dp + param * weight_decay
-    if momentum != 0:
-        if not isinstance(value, jt.Var) or list(value.shape) != list(dp.shape):
-            value = jt.zeros(dp.shape, dp.dtype).stop_grad()
-        value.update(momentum * value + dp * (1 - dampening))
-        dp = dp + momentum * value if nesterov else value
-    return (param - dp * lr).stop_grad(), value
+    if not isinstance(value, jt.Var) or list(value.shape) != list(param.shape):
+        value = jt.zeros(param.shape, param.dtype).stop_grad()
+    updated = sgd_update(
+        param, grad, value, lr=lr, momentum=momentum, weight_decay=weight_decay,
+        dampening=dampening, nesterov=nesterov)
+    return updated.stop_grad(), value
 
 
 def _adam_hparams(opt, pg):
@@ -118,22 +115,15 @@ def _adam_hparams(opt, pg):
 def _adam_update_for_param(opt, pg, param, grad, value, momentum, *,
                            decoupled_weight_decay, n_step):
     lr, eps, weight_decay, betas = _adam_hparams(opt, pg)
-    b0, b1 = betas
     if not isinstance(value, jt.Var) or list(value.shape) != list(param.shape):
         value = jt.zeros(param.shape, param.dtype).stop_grad()
     if not isinstance(momentum, jt.Var) or list(momentum.shape) != list(param.shape):
         momentum = jt.zeros(param.shape, param.dtype).stop_grad()
-    if weight_decay != 0 and decoupled_weight_decay:
-        param = param * (1 - lr * weight_decay)
-    elif weight_decay != 0:
-        grad = grad + param * weight_decay
-    momentum.update(b0 * momentum + (1 - b0) * grad)
-    value.update(b1 * value + (1 - b1) * grad * grad)
-    bias_correction1 = 1 - b0 ** float(n_step)
-    bias_correction2 = 1 - b1 ** float(n_step)
-    step_size = lr / bias_correction1
-    denom = jt.sqrt(value) / np.sqrt(bias_correction2) + eps
-    return (param - momentum * step_size / denom).stop_grad(), value, momentum
+    updated = adam_update(
+        param, grad, value, momentum, lr=lr, eps=eps, weight_decay=weight_decay,
+        betas=betas, step=n_step, decoupled_weight_decay=decoupled_weight_decay,
+        torch_math=True)
+    return updated.stop_grad(), value, momentum
 
 
 #: The update rules this module implements against a shard. Anything else has
@@ -171,18 +161,11 @@ def _unsupported_optimizer_message(opt, kind):
 
 
 def _optimizer_kind(opt):
-    """Which sharded update to run, or ``None`` when that is not knowable.
-
-    This selects *arithmetic to apply to the user's weights*, so it asks for
-    the strict answer: a subclass that replaces ``step()`` is not treated as
-    its base class. It used to substring-match the class name, which meant a
-    subclass named ``...Adam...`` with its own update rule silently got the
-    base AdamW update instead of its own. See jittor/compat/optimizer_kinds.py.
-    """
+    """Safe algorithm for a direct call that has not entered a base step."""
     return optimizer_kinds.kind_of(opt, require_unmodified_step=True)
 
 
-def optimizer_step(opt, loss=None, retain_graph=False):
+def optimizer_step(opt, loss=None, retain_graph=False, *, native_kind=None):
     """Apply one torch-style optimizer step for FSDP-managed parameters.
 
     Returns True when the optimizer contained FSDP parameters.  FSDP gradients are
@@ -205,7 +188,12 @@ def optimizer_step(opt, loss=None, retain_graph=False):
 
     grad_sync._sync_visible_full_grads_to_optimizer(opt)
 
-    kind = _optimizer_kind(opt)
+    # An installed base-step adapter may identify the algorithm after a
+    # custom subclass called super().step(). Direct calls remain strict:
+    # bypassing a user's override must never silently apply base arithmetic.
+    kind = _optimizer_kind(opt) if native_kind is None else native_kind
+    if native_kind is not None and optimizer_kinds.kind_of(opt) != native_kind:
+        raise ValueError("FSDP native optimizer adapter does not match its base algorithm")
     if kind not in _SHARDED_KINDS:
         raise NotImplementedError(_unsupported_optimizer_message(opt, kind))
     has_fsdp_grad = False

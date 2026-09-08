@@ -1,4 +1,5 @@
 """Numerical tensor operations."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import numpy as np
 import math
@@ -167,7 +168,7 @@ def _classify_value(dtype):
     float16/bfloat16 still widen to float. That direction is lossless, and
     neither type has a std::isnan overload to call instead.
     """
-    return "x" if dtype in ("float32", "float64") else "float(x)"
+    return "x" if _jittor_dtype_name(dtype) in ("float32", "float64") else "float(x)"
 
 
 def _classify(x, expr, acl_body, integral):
@@ -191,7 +192,7 @@ def _classify_acl(x, expr, acl_body):
 
 def _classify_code(x, expr, acl_body):
     import jittor as jt
-    return jt.misc._simple_for(x, expr(jt.misc._classify_value(str(x.dtype))))
+    return jt.misc._simple_for(x, expr(jt.misc._classify_value(_jittor_dtype_name(x.dtype))))
 
 
 def isnan(x):
@@ -236,7 +237,7 @@ def all_equal(a: Var, b: Var) -> bool:
 
 
 def _to_float(x: Var) -> Var:
-    if x.dtype != "float64": x = x.float()
+    if _jittor_dtype_name(x.dtype) != "float64": x = x.float()
     return x
 
 
@@ -248,12 +249,12 @@ bfloat16_finfo = Finfo()
 
 def finfo(dtype):
     import jittor as jt
-    if dtype == "bfloat16":
+    if _jittor_dtype_name(dtype) == "bfloat16":
         return jt.misc.bfloat16_finfo
     if callable(dtype) and hasattr(dtype, "__name__"):
         dtype = dtype.__name__.split('.')[-1]
     else:
-        dtype = str(dtype).split('.')[-1]
+        dtype = _jittor_dtype_name(dtype).split('.')[-1]
     return np.finfo(dtype)
 
 
@@ -261,7 +262,7 @@ def iinfo(dtype):
     if callable(dtype) and hasattr(dtype, "__name__"):
         dtype = dtype.__name__.split('.')[-1]
     else:
-        dtype = str(dtype).split('.')[-1]
+        dtype = _jittor_dtype_name(dtype).split('.')[-1]
     return np.iinfo(dtype)
 
 

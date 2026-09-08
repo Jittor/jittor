@@ -127,7 +127,7 @@ struct SFRLAllocator : Allocator {
     size_t align_size(size_t size);
     size_t allocation_size(size_t size);
     bool should_split(CachingBlock* block, size_t size);
-    void try_merge_two_blocks(CachingBlock* b1, CachingBlock* b2, CachingBlockPool& blocks);
+    void try_merge_two_blocks(CachingBlock* b1, CachingBlock* b2);
 
     inline SFRLAllocator(float free_ratio = 1, float min_free_size=0) : free_ratio(free_ratio), min_free_size(min_free_size) {
         small_blocks.ids = &id_space;
@@ -154,4 +154,3 @@ struct SFRLAllocator : Allocator {
 DECLARE_FLAG(int, use_sfrl_allocator);
 
 }//jittor
-

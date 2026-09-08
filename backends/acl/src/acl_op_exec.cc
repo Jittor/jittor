@@ -312,6 +312,7 @@ namespace jittor
     static string fused_acl_name(Op *op)
     {
         const string name = op->name();
+        if (name == "contiguous") return "Cast";
         if (name == "unary")
         {
             auto found = opname_map.find(op->ns);
@@ -350,7 +351,7 @@ namespace jittor
             auto found = aclOpFuncMap.find(name);
             if (found == aclOpFuncMap.end()) return "unregistered ACL launcher: " + name;
             INTERNAL_ASSERT(found->second.executeFunc) << "Empty registered ACL launcher:" << name;
-            if (op->name() == string("unary"))
+            if (op->name() == string("unary") || op->name() == string("contiguous"))
                 INTERNAL_ASSERT(name == "Cast" ? bool(found->second.getWorkspaceSizeFuncCast)
                                                : bool(found->second.getWorkspaceSizeFuncUnaryNonzero))
                     << "Wrong registered unary launcher signature:" << name;
@@ -438,7 +439,16 @@ namespace jittor
                     if (op_indeg[out] == 0)
                         queue.push(out);
                 }
-                if (current_op->name() == string("unary"))
+                if (current_op->name() == string("contiguous"))
+                {
+                    AclExecutionRunner<UnaryOpRunner> runner;
+                    runner.add(current_op->inputs().front(), true);
+                    runner.add(current_op->outputs().front(), false);
+                    runner.name = "Cast";
+                    runner.jt_name = current_op->name();
+                    runner.run();
+                }
+                else if (current_op->name() == string("unary"))
                 {
                     auto uop = (UnaryOp *)current_op;
                     AclExecutionRunner<UnaryOpRunner> op;
@@ -789,7 +799,7 @@ namespace jittor
         // primitive. Unsupported implementations stay explicit fallback entries;
         // other backends' OpDefs and constructors are never removed.
         static const set<string> primitives = {
-            "unary", "binary", "ternary", "broadcast_to", "fuse_transpose", "reduce"};
+            "unary", "binary", "ternary", "broadcast_to", "fuse_transpose", "reduce", "contiguous"};
         auto implementation = original;
         const auto &name = definition.name;
         // Backend-native extensions such as HCCL declare their own compiler

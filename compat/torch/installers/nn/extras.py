@@ -4,6 +4,7 @@ from ..nn_init import _install_init_aliases
 from ...grad import _clip_grad_norm_device
 from ...nn_modules import install_module_namespace
 from ...types import _dtype_to_str
+from ...tensor_state import latest_optimizer
 from ....diagnostics import EXPECTED, swallowed
 from .... import fsdp_hooks as _fsdp_hooks
 from .... import collectives as _collectives
@@ -265,7 +266,7 @@ def _install_nn_extras(nn, registry=None):
         _u = getattr(nn, "utils", None) or _t.ModuleType("torch.nn.utils")
         def _grads_of(params):
             params = list(params)
-            opt = getattr(_torch_target, "_current_optimizer", None)
+            opt = latest_optimizer(_torch_target)
             out = []
             for p in params:
                 gg = None
@@ -682,6 +683,9 @@ def _install_nn_extras(nn, registry=None):
             def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
                          activation="relu", layer_norm_eps=1e-5, batch_first=False,
                          norm_first=False, bias=True, device=None, dtype=None):
+                from jittor._core.dtypes import dtype_for_compute
+                if dtype is not None:
+                    dtype_for_compute(dtype)
                 super().__init__()
                 self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout,
                                                        batch_first=batch_first, bias=bias)
@@ -733,6 +737,9 @@ def _install_nn_extras(nn, registry=None):
             def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
                          activation="relu", layer_norm_eps=1e-5, batch_first=False,
                          norm_first=False, bias=True, device=None, dtype=None):
+                from jittor._core.dtypes import dtype_for_compute
+                if dtype is not None:
+                    dtype_for_compute(dtype)
                 super().__init__()
                 self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout,
                                                        batch_first=batch_first, bias=bias)
@@ -802,6 +809,9 @@ def _install_nn_extras(nn, registry=None):
                          activation="relu", custom_encoder=None, custom_decoder=None,
                          layer_norm_eps=1e-5, batch_first=False, norm_first=False,
                          bias=True, device=None, dtype=None):
+                from jittor._core.dtypes import dtype_for_compute
+                if dtype is not None:
+                    dtype_for_compute(dtype)
                 super().__init__()
                 self.batch_first = batch_first
                 self.d_model = d_model
@@ -834,6 +844,9 @@ def _install_nn_extras(nn, registry=None):
             @staticmethod
             def generate_square_subsequent_mask(sz, device=None, dtype=None):
                 # upper-triangular -inf mask (additive), like torch
+                from jittor._core.dtypes import dtype_for_compute
+                if dtype is not None:
+                    dtype_for_compute(dtype)
                 m = _jtm.triu(_jtm.ones((sz, sz)), 1) * (-1e30)
                 return m
         nn.Transformer = Transformer

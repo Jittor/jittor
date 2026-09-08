@@ -11,6 +11,7 @@ Every entry point takes an accelerator fused path when its preconditions hold --
 inference mode, a supported backend and dtype -- and otherwise computes the same
 result from ordinary ops, so the same call works on CPU and under autograd.
 """
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 from jittor._core.flags import _output_requires_grad, _stop_grad_outputs
@@ -74,8 +75,8 @@ def rms_norm(x, weight, eps=1e-6):
     if (
         dispatch_context(x, weight).backend == "acl"
         and not _output_requires_grad(x, weight)
-        and str(x.dtype) == "float32"
-        and str(weight.dtype) in ("float16", "bfloat16")
+        and _jittor_dtype_name(x.dtype) == "float32"
+        and _jittor_dtype_name(weight.dtype) in ("float16", "bfloat16")
     ):
         backend_weight = weight.__dict__.get("_serving_float32_weight")
         if backend_weight is None:
@@ -229,11 +230,11 @@ def _supports_rotary_embedding_acl(
         and is_neox
         and rotary_dim == head_size
         and head_size % 64 == 0
-        and str(positions.dtype) in ("int32", "int64")
+        and _jittor_dtype_name(positions.dtype) in ("int32", "int64")
         and cos_sin_cache.ndim == 2
         and int(cos_sin_cache.shape[-1]) >= rotary_dim
-        and str(query.dtype) == str(key.dtype) == str(cos_sin_cache.dtype)
-        and str(query.dtype) in ("float16", "bfloat16", "float32")
+        and _jittor_dtype_name(query.dtype) == _jittor_dtype_name(key.dtype) == _jittor_dtype_name(cos_sin_cache.dtype)
+        and _jittor_dtype_name(query.dtype) in ("float16", "bfloat16", "float32")
     ):
         return False
     return True

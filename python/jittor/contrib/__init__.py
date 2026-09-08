@@ -1,4 +1,5 @@
 """Contributed algorithms and the historical composition helpers."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from collections.abc import Sequence
 
@@ -21,7 +22,7 @@ def slice_var_index(x, slices):
     if not isinstance(slices, tuple):
         slices = (slices,)
     if isinstance(slices[0], jt.Var):
-        if len(slices) == 1 and slices[0].dtype == "bool":
+        if len(slices) == 1 and _jittor_dtype_name(slices[0].dtype) == "bool":
             return slice_var_index(x, tuple(slices[0].where()))
 
     broadcast_shapes = []

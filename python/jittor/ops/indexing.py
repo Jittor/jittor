@@ -1,4 +1,5 @@
 """Public Var indexing behavior and its installation boundary."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import numpy as np
 from jittor_core import Var
@@ -40,7 +41,7 @@ def _is_basic_index(index):
 
 def _native_bool_coordinates(slices):
     import jittor as jt
-    if isinstance(slices, jt.Var) and slices.dtype == "bool":
+    if isinstance(slices, jt.Var) and _jittor_dtype_name(slices.dtype) == "bool":
         return tuple(slices.where())
     return slices
 
@@ -89,7 +90,7 @@ def _dispatch_slices(slices):
         return jt.array(list(slices))
     if isinstance(slices, tuple):
         return tuple(
-            (item != 0) if isinstance(item, jt.Var) and item.dtype == "uint8"
+            (item != 0) if isinstance(item, jt.Var) and _jittor_dtype_name(item.dtype) == "uint8"
             else jt.array(list(item)) if isinstance(item, range)
             else item
             for item in slices
@@ -132,14 +133,14 @@ def _getitem_result(x, slices):
     """Apply Jittor indexing with the established Torch-compatible extensions."""
     import jittor as jt
 
-    if isinstance(slices, jt.Var) and slices.dtype == "uint8":
+    if isinstance(slices, jt.Var) and _jittor_dtype_name(slices.dtype) == "uint8":
         slices = slices != 0
     slices = _dispatch_slices(slices)
     if not _is_cascade_index(slices):
         result = try_dispatch("tensor.getitem", x, slices, None)
         if result is not None:
             return result
-    if isinstance(slices, jt.Var) and slices.dtype == "bool":
+    if isinstance(slices, jt.Var) and _jittor_dtype_name(slices.dtype) == "bool":
         return getitem(x, slices.where())
     if isinstance(slices, range):
         slices = jt.array(list(slices))
@@ -151,9 +152,9 @@ def _getitem_result(x, slices):
     if isinstance(slices, tuple):
         normalized = []
         for item in slices:
-            if isinstance(item, jt.Var) and item.dtype == "uint8":
+            if isinstance(item, jt.Var) and _jittor_dtype_name(item.dtype) == "uint8":
                 normalized.extend((item != 0).where())
-            elif isinstance(item, jt.Var) and item.dtype == "bool":
+            elif isinstance(item, jt.Var) and _jittor_dtype_name(item.dtype) == "bool":
                 normalized.extend(item.where())
             elif isinstance(item, range):
                 normalized.append(jt.array(list(item)))
@@ -167,18 +168,18 @@ def setitem(x, slices, value):
     """Apply Jittor assignment with the established mask and complex rules."""
     import jittor as jt
 
-    if x.dtype == "complex64" and isinstance(value, (complex, np.complexfloating)):
+    if _jittor_dtype_name(x.dtype) == "complex64" and isinstance(value, (complex, np.complexfloating)):
         value = jt.array(np.asarray([value], dtype=np.complex64))
     value = _acl_assignment_value(x, value)
 
-    if isinstance(slices, jt.Var) and slices.dtype == "uint8":
+    if isinstance(slices, jt.Var) and _jittor_dtype_name(slices.dtype) == "uint8":
         slices = slices != 0
     slices = _dispatch_slices(slices)
     result = try_dispatch("tensor.setitem", x, slices, value, None)
     if result is not None:
         # assign handles recorded views as well as ordinary tensor holders.
         return x.assign(result)
-    if isinstance(slices, jt.Var) and slices.dtype == "bool":
+    if isinstance(slices, jt.Var) and _jittor_dtype_name(slices.dtype) == "bool":
         if slices.shape == x.shape:
             if isinstance(value, (int, float)):
                 value = jt.array(value).broadcast(x.shape)
@@ -190,9 +191,9 @@ def setitem(x, slices, value):
     elif isinstance(slices, tuple):
         normalized = []
         for item in slices:
-            if isinstance(item, jt.Var) and item.dtype == "uint8":
+            if isinstance(item, jt.Var) and _jittor_dtype_name(item.dtype) == "uint8":
                 normalized.extend((item != 0).where())
-            elif isinstance(item, jt.Var) and item.dtype == "bool":
+            elif isinstance(item, jt.Var) and _jittor_dtype_name(item.dtype) == "bool":
                 normalized.extend(item.where())
             else:
                 normalized.append(item)

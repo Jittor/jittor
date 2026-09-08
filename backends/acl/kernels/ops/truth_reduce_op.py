@@ -1,3 +1,4 @@
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import jittor as jt
 
 
@@ -54,5 +55,5 @@ def _truth_reduce_cmd(input, dims, reduce_all):
 
 def truth_reduce(input, dim, reduce_all):
     dims = _normalize_dims(input, dim)
-    truth = input if input.dtype == "bool" else input != 0
+    truth = input if _jittor_dtype_name(input.dtype) == "bool" else input != 0
     return _truth_reduce_cmd(truth, dims, reduce_all)

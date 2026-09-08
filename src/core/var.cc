@@ -13,10 +13,17 @@
 #include "bindings/pybind/py_var_tracer.h"
 #include "mem/swap.h"
 #include "runtime/device.h"
+#include "ops/op_register.h"
 
 namespace jittor {
 
 int64 Var::number_of_lived_vars = 0;
+
+VarPtr contiguous_storage(Var* value) {
+    if (value->is_contiguous()) return value;
+    static auto make_contiguous = op_constructor<VarPtr, Var*>("contiguous");
+    return make_contiguous(value);
+}
 
 DEFINE_FLAG(fast_shared_ptr<loop_options_t>, compile_options, {}, 
     "Override the default loop transfrom options");
@@ -73,7 +80,7 @@ void free_var(Var* v) {
         v->mem_ptr = nullptr;
         v->allocator = nullptr;
         v->allocation = 0;
-        allocator->free(mem_ptr, v->size, allocation);
+        allocator->free(mem_ptr, v->storage_span_bytes(), allocation);
     }
 }
 
@@ -141,7 +148,40 @@ int64 Var::numel() {
 
 void Var::set_shape(NanoVector shape) {
     this->shape = shape;
+    storage_strides.clear();
     numel();
+}
+
+int64 Var::storage_stride(uint axis) const {
+    if (storage_strides.size()) return storage_strides[axis];
+    int64 stride = 1;
+    for (uint i=axis+1; i<shape.size(); ++i) stride *= std::abs(shape[i]);
+    return stride;
+}
+
+int64 Var::storage_span_bytes() const {
+    if (!storage_strides.size() || !num) return size;
+    int64 span = 1;
+    for (uint i=0; i<shape.size(); ++i)
+        span += (std::abs(shape[i])-1) * storage_strides[i];
+    return span * dsize();
+}
+
+bool Var::is_contiguous() const {
+    if (!storage_strides.size() || !num) return true;
+    int64 expected = 1;
+    for (int i=int(shape.size())-1; i>=0; --i) {
+        if (shape[i] != 1 && storage_strides[i] != expected) return false;
+        expected *= std::abs(shape[i]);
+    }
+    return true;
+}
+
+void Var::set_storage_strides(NanoVector strides) {
+    USER_CHECK(strides.size() == shape.size()) << "Storage stride rank must match shape";
+    for (auto stride : strides)
+        USER_CHECK(stride >= 0) << "Negative storage strides require an explicit offset view";
+    storage_strides = std::move(strides);
 }
 
 bool Var::alloc(Allocator* allocator) {
@@ -152,8 +192,9 @@ bool Var::alloc(Allocator* allocator) {
         // allocated first) called a virtual function through a null pointer.
         // With the request in its own field the source's state can be asked
         // about, and an unusable source simply falls through to a real alloc.
-        if (x->allocator && x->allocator->share_with(size, x->allocation)) {
+        if (x->allocator && x->allocator->share_with(storage_span_bytes(), x->allocation)) {
             mem_ptr = ((char*) x->mem_ptr) + share_offset;
+            storage_offset_bytes = x->storage_offset_bytes + share_offset;
             allocation = x->allocation;
             this->allocator = x->allocator;
             // The request is consumed. This is what overwriting `allocator`
@@ -171,8 +212,11 @@ bool Var::alloc(Allocator* allocator) {
         }
         share_src = nullptr;
         share_offset = 0;
+        USER_CHECK(size == 0 || (is_contiguous() && (!input() || !input()->is_storage_view())))
+            << "Allocator cannot represent shared strided storage";
     }
-    mem_ptr = allocator->alloc(size, allocation);
+    mem_ptr = allocator->alloc(storage_span_bytes(), allocation);
+    storage_offset_bytes = 0;
     this->allocator = allocator;
     // A failed allocation throws (see AlignedAllocator::alloc and
     // CudaDeviceAllocator::alloc), so a null pointer here only means a

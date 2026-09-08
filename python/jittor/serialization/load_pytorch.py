@@ -1,4 +1,5 @@
 """PyTorch checkpoint reader owned by the tensor runtime."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import pickle
 import os
@@ -71,7 +72,7 @@ class StorageType():
         self.dtype = _get_dtype_from_pickle_storage_type(name)
 
     def __str__(self):
-        return f'StorageType(dtype={self.dtype})'
+        return f'StorageType(dtype={_jittor_dtype_name(self.dtype)})'
 
 def expected_stride(size):
     """The stride torch gives a freshly allocated (contiguous) tensor of this size."""
@@ -343,7 +344,7 @@ def load_pytorch(fn_name):
             data_file = contents.read_var(prefix+"data.pkl")
            #import pdb; pdb.set_trace();
            #print(data_file)
-            if data_file.dtype == "uint8":
+            if _jittor_dtype_name(data_file.dtype) == "uint8":
                 data_file = data_file.numpy().tobytes()
             else:
                 data_file = data_file.data.tobytes()

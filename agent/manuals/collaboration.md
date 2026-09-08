@@ -8,7 +8,7 @@
    再通过 [`project-context.md`](project-context.md) 定位相关架构契约。
 2. **确认环境与问题**：按需阅读 [`environment.md`](environment.md) 和
    [`known-issues.md`](known-issues.md)，不要依赖个人机器路径或过期会话记录。
-3. **确认结果文档**：已有主题继续更新 `../results/` 中的报告；新主题使用
+3. **确认结果文档**：已有主题继续更新 `docs/results/` 中的报告；新主题使用
    `YYYY-MM-DD-topic.md`。
 4. **开始工作**，遵循下面的协作规范。
 
@@ -63,10 +63,12 @@ Jittor 使用文件锁串行化 JIT 编译。多个进程共享缓存并首次�
 
 ```
 agent/
-├── README.md                 # 总索引
 ├── manuals/                  # 协作、环境、问题总账和上下文索引
-├── results/                  # 人工整理的验证与性能报告
+├── scripts/                  # 仓库维护检查
 └── skills/                   # SKILL.md 与可复用工具
 ```
 
 长期设计资料不放在 `agent/manuals/` 的主题子目录，按语义写入根目录 `docs/`。
+设计与唯一看板位于 `docs/architecture/`，验证报告和历史基线位于 `docs/results/`。
+任务领取、状态和验收证据只更新 `docs/architecture/refactor-board.md`；
+接手步骤与分工分别维护于同目录的 `refactor-handoff.md` 和 `refactor-dispatch.md`。

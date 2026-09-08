@@ -1,3 +1,4 @@
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import os
 from jittor_utils import env_or_try_find
 import jittor_utils
@@ -278,9 +279,9 @@ def scaled_dot_product_attention_acl(
         return None
     if q_shape[-1] != k_shape[-1] or q_shape[-1] != v_shape[-1]:
         return None
-    if str(query.dtype) != str(key.dtype) or str(query.dtype) != str(value.dtype):
+    if _jittor_dtype_name(query.dtype) != _jittor_dtype_name(key.dtype) or _jittor_dtype_name(query.dtype) != _jittor_dtype_name(value.dtype):
         return None
-    if str(query.dtype) not in ("float32", "bfloat16"):
+    if _jittor_dtype_name(query.dtype) not in ("float32", "bfloat16"):
         return None
 
     query_heads = int(q_shape[-3])
@@ -292,7 +293,7 @@ def scaled_dot_product_attention_acl(
         if not enable_gqa or query_heads % key_heads != 0:
             return None
     if training and (
-            str(query.dtype) != "float32" or query_heads != key_heads):
+            _jittor_dtype_name(query.dtype) != "float32" or query_heads != key_heads):
         return None
     head_dim = int(q_shape[-1])
     if head_dim <= 0 or head_dim > 256 or head_dim % 8 != 0:
@@ -309,8 +310,8 @@ def scaled_dot_product_attention_acl(
             return None
         if training and not attn_mask.is_stop_grad():
             return None
-        mask_dtype = str(attn_mask.dtype)
-        if mask_dtype != "float32":
+        mask_dtype = _jittor_dtype_name(attn_mask.dtype)
+        if _jittor_dtype_name(mask_dtype) != "float32":
             return None
         mask_shape = tuple(attn_mask.shape)
         if len(mask_shape) == 2:
@@ -338,7 +339,7 @@ def scaled_dot_product_attention_acl(
             sparse_mode = 2
     scale_factor = (1.0 / math.sqrt(head_dim) if scale is None
                     else float(scale))
-    if (str(query.dtype) == "bfloat16" and query_length == 1
+    if (_jittor_dtype_name(query.dtype) == "bfloat16" and query_length == 1
             and attn_mask is None and not is_causal):
         scaled_dot_product_attention_acl.backend_name = \
             "acl_incre_flash_attention_v4"

@@ -4,6 +4,7 @@ The module still fabricates unknown torchvision submodules on demand so import
 probes succeed, but common image transforms, image saving and classification
 models are backed by real Jittor implementations.
 """
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import sys, types, importlib.abc, importlib.machinery
 import functools
 __version__ = "2.11.0"
@@ -54,7 +55,7 @@ def _to_tensor(pic):
     import numpy as _np
     from PIL import Image as _Im
     if isinstance(pic, _jt.Var):
-        return pic.float32() / 255.0 if "uint8" in str(pic.dtype) else pic.float32()
+        return pic.float32() / 255.0 if "uint8" in _jittor_dtype_name(pic.dtype) else pic.float32()
     if isinstance(pic, _Im.Image):
         arr = _np.asarray(pic)
     else:
@@ -83,7 +84,7 @@ def _resize(img, size, interpolation="bilinear", antialias=True, **k):
     else:
         nh, nw = int(size[0]), int(size[1])
     x = img if img.ndim == 4 else img.unsqueeze(0)
-    was_uint8 = "uint8" in str(x.dtype)
+    was_uint8 = "uint8" in _jittor_dtype_name(x.dtype)
     xf = x.float32()
     align = False if mode in ("bilinear", "bicubic") else None
     try:

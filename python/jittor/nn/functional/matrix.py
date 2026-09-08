@@ -1,4 +1,5 @@
 """Matrix multiplication and bilinear neural-network operations."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 from jittor._runtime.dispatch import register_kernel, select_kernel
@@ -88,7 +89,7 @@ def _cublas_batched_matmul(a, b, trans_a=False, trans_b=False):
 
 
 def _supports_mkl_batched(a, b, trans_a=False, trans_b=False):
-    if a.dtype != b.dtype or str(a.dtype) != "float32":
+    if a.dtype != b.dtype or _jittor_dtype_name(a.dtype) != "float32":
         return False
     ops = get_library_ops("mkl", load=True)
     return ops is not None and hasattr(ops, "mkl_batched_matmul")

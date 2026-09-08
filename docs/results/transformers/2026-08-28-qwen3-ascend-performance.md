@@ -337,4 +337,4 @@ Bfloat16 0.6B SDPA 的完整末 token logits 相对 `torch_npu` 最大绝对误�
 - Full maintained NPU gate: `362 passed, 11 skipped`
 
 可复现入口是
-[`benchmark_qwen3_ascend.py`](../../skills/jittor-transformers-perf/scripts/benchmark_qwen3_ascend.py)。
+[`benchmark_qwen3_ascend.py`](../../../agent/skills/jittor-transformers-perf/scripts/benchmark_qwen3_ascend.py)。

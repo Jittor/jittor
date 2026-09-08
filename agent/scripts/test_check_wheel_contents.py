@@ -139,7 +139,7 @@ class TestWheelContents(unittest.TestCase):
         )
 
     def test_final_modernization_transition_is_fully_accounted(self):
-        baselines = checker.AGENT_ROOT / "baselines"
+        baselines = checker.BASELINE_ROOT
         before = checker._read_hashed_path_list(
             baselines / "wheel-contents-stage7.txt", "Stage 7 baseline"
         )

@@ -18,8 +18,8 @@ def _task_ids(path):
 
 
 def test_board_task_ids_match_plan_without_duplicates():
-    plan = _task_ids(ROOT / "agent/design/refactor-plan.md")
-    board_path = ROOT / "agent/design/refactor-board.md"
+    plan = _task_ids(ROOT / "docs/architecture/refactor-plan.md")
+    board_path = ROOT / "docs/architecture/refactor-board.md"
     board = _task_ids(board_path)
 
     assert board == list(dict.fromkeys(board)), "duplicate task rows in board"
@@ -33,5 +33,5 @@ def test_board_task_ids_match_plan_without_duplicates():
 
 
 def test_board_has_no_two_column_acl_note_rows():
-    board = (ROOT / "agent/design/refactor-board.md").read_text().splitlines()
+    board = (ROOT / "docs/architecture/refactor-board.md").read_text().splitlines()
     assert not any(line.startswith("| 8.06 note |") for line in board)

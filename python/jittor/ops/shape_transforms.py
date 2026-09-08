@@ -123,4 +123,6 @@ Example::
     for i in range(len(x.shape)):
         if shape[offset + i] == -1:
             shape[offset + i] = x.shape[i]
-    return x.broadcast(shape)
+    result = x.broadcast(shape)
+    result._set_storage_view_of(x, True)
+    return result

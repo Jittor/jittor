@@ -35,35 +35,38 @@ JITTOR_HOME 使用独立 acl-move-cuda 缓存，不能与 CPU-only 的收集数�
 5.26 后续三域代码已迁为 `linalg/`、`distributions/`、`init/`，显式公开导出与
 旧 pickle 路径保留。Torch Kaiming 保持兼容抽样方式，调用期依赖与复数接口延迟
 导出避免增加导入环；循环模块仍为原上限164，未放宽门禁。源码 CPU/CUDA 与
-最终 wheel 安装自检证据见 `agent/results/2026-09-07-python-domain-packages.md`。
+最终 wheel 安装自检证据见 `docs/results/2026-09-07-python-domain-packages.md`。
 后续原生 `_core` 也已拆分接线：`_runtime/core_api.py` 只保留同对象旧别名，
 Module/Function/GradHooker 环通过调用期依赖解除，flags/var/hooks 不向包根发布同名
 对象。CPU/CUDA/shim 短运行通过，导入循环模块163；按用户最新要求，完整门禁与新
-wheel 留下一较大布局阶段统一验收，见 `agent/results/2026-09-07-native-core-packages.md`。
+wheel 留下一较大布局阶段统一验收，见 `docs/results/2026-09-07-native-core-packages.md`。
 misc/pool 后续也已迁代码：ops 包保留原生算子访问，misc 的六个子模块只做旧别名；
 tensor_ops 的127定义分到15个职责owner。pool数学归nn.functional.pooling，参数模块归
 nn.modules；旧AdaptiveAvgPool2d数值规则与类名保留，pool_use_code_op共用一份状态。
 CPU/CUDA/shim短检查通过，导入环158；完整门禁与wheel仍待较大阶段统一验收，见
-`agent/results/2026-09-07-ops-pooling-layout.md`。
+`docs/results/2026-09-07-ops-pooling-layout.md`。
 build/contrib 和根目录收缩代码也已完成：包根仅三个目标文件，native Python 文件均
 低于1500行。utils独立入口不启动框架，build.utils别名共用同一状态；compiler拆为
 启动state、codegen和compilation，生成器指纹覆盖三者。四个领域归contrib，旧import/
 pickle保留，igamma与class资源清单同步。CPU/CUDA/shim和真实自定义算子短验通过。
-原生阶段汇总见 `agent/results/2026-09-07-build-contrib-layout.md`。
+原生阶段汇总见 `docs/results/2026-09-07-build-contrib-layout.md`。
 2026-09-08 已将最后四个超长compat文件拆成职责包，整个python/jittor不再有超过
 1500行的.py，5.26布局正式收口。一次CPU结构门禁1407项中的7个新问题已修，8个
 定向节点通过；原有8个失败保留记录。新安装包1139生产文件逐字节核对、Torch视图/
 数据别名/反向短验通过。这是当时的布局证据；截至2026-09-08，默认Torch入口已使用
 独立namespace及Tensor/Parameter/Module/optimizer/Function类型，见
-`agent/results/2026-09-08-independent-default-entry.md`及后续看板记录。
-7.12不能因此关闭。按refactor-plan.md原条目，下一步必须推进：
+`docs/results/2026-09-08-independent-default-entry.md`及后续看板记录。
+当前跨层整合见[架构整合记录](../../docs/results/2026-09-08-architecture-integration.md)。
+真实dtype、storage/strides、动态提交与GIL边界已整合并通过CPU/CUDA验证；文档归位和
+两distribution打包核验已完成。7.12仍须按其余legacy/API边界复核，不能仅凭目录关闭。
 
 - 每个Tensor的显式状态归并：现有`TorchTensorState`仍是安装级leaf/retained/optimizer
   容器，不等于原计划要求的单Tensor字段owner。`TensorObjectState`已承载grad/data
   owner/path/scalar marker、设备提示、RMSNorm缓存与retain标志；独立Tensor的holder
   索引已改弱引用、叶子判断走内核，修复断连误删/retain过早清空/强持对象等缺陷。
-  仍需消除安装级状态向native namespace发布的旧别名与legacy activation路径，
-  不能把弱索引说成所有runtime状态已经归并。见[本批记录](../results/2026-09-08-parameter-and-holder-ownership.md)。
+  安装级状态向native namespace发布的旧别名也已退出独立模式：owner为compat私有弱
+  module binding，15项无JIT合同及CPU/CUDA整合通过。legacy activation/类型修改路径
+  路径仍需收口；完整storage/strides已在本批落地。见[参数记录](../../docs/results/2026-09-08-parameter-and-holder-ownership.md)。
 - 原生参数边界已完成：Parameter是真Var子类，Module按名字自持角色；native不再读写
   `_is_torch_parameter`或`_torch_parameter_class`。原生层仍可按名字注册普通Var，
   不再用假isinstance冒充Parameter；Torch前端层构造完成后会提升为真实Parameter。
@@ -72,11 +75,19 @@ pickle保留，igamma与class资源清单同步。CPU/CUDA/shim和真实自定�
 
 存储/stride与完整API验证仍保留，但不能用笼统“继续API收口”替代上述具体前置。
 
+2026-09-08执行调整：按用户要求最多root+3条实现线，整批推进依赖，不用提交数或
+测试node数代替需求完成。3.04/3.05/3.07、5.02及其子项、5.03与7.08已完成本批架构验收；
+7.13真实mesh/共享optimizer/生命周期已实现，四rank小模型通过，显存性能后移。
+1.05/2.23/3.24旧preflight阻塞已由后续冷构建解除，已核目录回填状态，
+不计为新增实现。见[JIT与视图记录](../../docs/results/2026-09-08-jit-target-and-transpose-views.md)。
+不要逐小改重跑完整test_independent_frontend：它虽仅2个node，本轮CUDA仍花319秒。
+普通状态变更使用无JIT合同加针对性短链路；C++变更合批编译并集中做相关CPU/CUDA验收。
+
 物理拆包前置已实现：`build/__init__.py`依赖的纯native别名表和loader已迁到
 `_runtime/import_aliases.py`；`jittor/__init__.py`经`_runtime/compat_bootstrap.py`
 仅在显式请求时加载compat preflight/compose，plain native import不再导入兼容域。
 阻止所有compat导入的native前向/反向、按需旧别名与独立入口短验证CPU11/CUDA6项通过。
-见[启动解耦记录](../results/2026-09-08-native-compat-bootstrap.md)。随后已整树移动到
+见[启动解耦记录](../../docs/results/2026-09-08-native-compat-bootstrap.md)。随后已整树移动到
 顶层`compat`：独占`jittor.compat`包、shim资源和torch/triton部署命令，core wheel
 排除这些文件。两wheel文件交集为0，Torch入口供打包和deploy复用。未安装compat的
 native前向/反向、两包安装后的torch-first/native-first入口通过；源码短验证21项，
@@ -84,10 +95,10 @@ native前向/反向、两包安装后的torch-first/native-first入口通过；�
 开发环境现在运行`python -m pip install -e . -e ./compat`；仅PYTHONPATH=python不再
 提供可选兼容包。换checkout时重装对应compat editable。下一批继续对象状态归并和
 native角色标记退出，不要退回逐API小修。安装命令、产物与边界见
-[独立发行物记录](../results/2026-09-08-independent-compat-distribution.md)。
+[独立发行物记录](../../docs/results/2026-09-08-independent-compat-distribution.md)。
 以下为此前单distribution历史产物，不再代表当前两包交付；旧兼容布局wheel SHA-256：
 `ddb76df749952bf7becfc31c8b0cab05f35c35cbd50833233d4a7d9f1b937244`。
-证据见 `agent/results/2026-09-08-compat-layout-and-view-ownership.md`。
+证据见 `docs/results/2026-09-08-compat-layout-and-view-ownership.md`。
 最终native打包检查：1111生产文件源码/sdist/wheel/install逐字节一致，隔离CPU冷构建
 205 TU及3步训练selftest通过。新wheel SHA-256为
 `b0bd4ecc36203b0de4bdc264a39a0908a8c2ec8ac1e58009339fe205d3ef980d`；
@@ -404,7 +415,7 @@ pool_size = min(16, max(int(mem_gib // 3), 1))
 重试前先 `git log --oneline origin/2.0-refactor -3` 确认自己那次是不是已经落地了。
 
 三个文件属于别人永不提交：`agent/manuals/README.md`、`tests/core/test_setitem.py`、
-`agent/results/2026-08-12-repository-modernization-review.md`。
+`docs/results/2026-08-12-repository-modernization-review.md`。
 
 ## 7bis. 在哪个工作树做
 

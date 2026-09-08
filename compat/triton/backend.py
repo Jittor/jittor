@@ -35,6 +35,7 @@ moves the launch onto jittor's own stream as a graph node. See the plan.
 This module is imported lazily (only when bridge mode is actually used), so
 importing :mod:`jittor.compat.triton` never imports jittor or triton eagerly.
 """
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import ctypes
 import os
 import threading
@@ -843,7 +844,7 @@ def run(jitfn, args, kwargs, grid):
         import sys as _sys
         for _a in list(args) + list(kwargs.values()):
             try:
-                if _is_var(_a) and tuple(_a.shape) == (64,) and "int" in str(_a.dtype):
+                if _is_var(_a) and tuple(_a.shape) == (64,) and "int" in _jittor_dtype_name(_a.dtype):
                     print("  PTRTRACE run() ENTRY sorted_idx-like rp=%x" % _tensor_ptr(_a),
                           file=_sys.stderr)
             except EXPECTED as exc:
@@ -901,7 +902,7 @@ def run(jitfn, args, kwargs, grid):
             continue
         if _is_tensor(val):
             if os.environ.get("JT_TRITON_PTRTRACE") and _is_var(val) and \
-               tuple(getattr(val, "shape", ())) == (64,) and "int" in str(val.dtype):
+               tuple(getattr(val, "shape", ())) == (64,) and "int" in _jittor_dtype_name(val.dtype):
                 import sys as _sys
                 print("  PTRTRACE arg %s rp=%x is_cuda=%r" % (
                     name, _tensor_ptr(val), _tensor_is_cuda(val)), file=_sys.stderr)

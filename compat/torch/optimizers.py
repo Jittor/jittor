@@ -1,4 +1,5 @@
 """Torch optimizer behavior layered over Jittor optimizers."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from collections.abc import Mapping
 
@@ -14,14 +15,14 @@ from .tensor_state import get_tensor_state
 
 
 def _install_optimizers(g, registry=None):
-    """Register every jittor optimizer instance as g._current_optimizer on
-    construction, and mirror lr into each param_group. This makes the
+    """Register optimizer instances weakly on construction and mirror lr into
+    each param_group. This makes the
     `loss.backward()` bridge (Var.backward) and torch-style LR schedulers work
     even when using `import jittor as torch` directly (no torch_shim wrapper)."""
     _registry = registry_for(g, registry)
     _modules = _registry.module_map
-    import math as _math
     from jittor import optim as _optim
+    from jittor.optim.algorithms.adam import adam_update
     if g is not _registry.native_backend:
         from .optim_frontend import make_optimizer_frontend
         existing = vars(g).get("optim")
@@ -48,7 +49,6 @@ def _install_optimizers(g, registry=None):
     _orig_init = Base.__init__
     def _init(self, *a, **k):
         _orig_init(self, *a, **k)
-        g._current_optimizer = self
         # Maintain a registry of ALL live optimizers (not just the last). torch
         # supports several optimizers active at once (3DGS has a Gaussian Adam +
         # an exposure Adam); loss.backward() must fill grads for every one. Hold
@@ -540,7 +540,7 @@ def _install_optimizers(g, registry=None):
         if not _optimizer_maybe_has_fsdp_params(opt):
             return None
         return _fsdp_hooks.provider()
-    def _wrap_step_accept_closure(_cls, _marker):
+    def _wrap_step_accept_closure(_cls, _marker, native_kind):
         if _cls is None or getattr(_cls, _marker, False):
             return
         _orig_step = _cls.step
@@ -559,7 +559,8 @@ def _install_optimizers(g, registry=None):
                     native_fsdp_loss = loss
                     loss.backward(retain_graph=retain_graph)
                     loss = None
-                if not _fsdp2_step.optimizer_step(self, None, retain_graph=retain_graph):
+                if not _fsdp2_step.optimizer_step(
+                        self, None, retain_graph=retain_graph, native_kind=native_kind):
                     raise NotImplementedError(
                         f"FSDP2 optimizer step is not implemented for {type(self).__name__}")
                 if not _fsdp2_step.optimizer_has_non_fsdp_params(self):
@@ -629,7 +630,9 @@ def _install_optimizers(g, registry=None):
                     native_fsdp_loss = loss
                     loss.backward(retain_graph=retain_graph)
                     loss = None
-                if not _fsdp2_step.optimizer_step(self, None, retain_graph=retain_graph):
+                if not _fsdp2_step.optimizer_step(
+                        self, None, retain_graph=retain_graph,
+                        native_kind="adamw" if decoupled_weight_decay else "adam"):
                     raise NotImplementedError(
                         f"FSDP2 optimizer step is not implemented for {type(self).__name__}")
                 if not _fsdp2_step.optimizer_has_non_fsdp_params(self):
@@ -694,25 +697,12 @@ def _install_optimizers(g, registry=None):
                     if not was_trainable or not isinstance(g, jt.Var) or list(g.shape) != list(p.shape):
                         continue
                     param_steps[i] = int(param_steps[i]) + 1
-                    param_step = float(param_steps[i])
-                    bias_correction1 = 1 - b0 ** param_step
-                    bias_correction2 = 1 - b1 ** param_step
-                    step_size = lr / bias_correction1
-                    state_dtype = _dtype_to_str(v.dtype)
-                    correction_value = _math.sqrt(bias_correction2)
-                    if state_dtype == "bfloat16":
-                        scalar = jt.array(np.float32(correction_value)).cast(state_dtype)
-                    else:
-                        scalar = jt.array(correction_value, dtype=state_dtype)
-                    bias_correction2_sqrt = scalar.stop_grad()
-                    if weight_decay != 0 and decoupled_weight_decay:
-                        _update_in_target_dtype(p, p * (1 - lr * weight_decay))
-                    elif weight_decay != 0:
-                        g = g + p * weight_decay
-                    _update_in_target_dtype(m, b0 * m + (1 - b0) * g)
-                    _update_in_target_dtype(v, b1 * v + (1 - b1) * g * g)
-                    denom = jt.sqrt(v) / bias_correction2_sqrt + eps
-                    _update_in_target_dtype(p, p - m * step_size / denom)
+                    _update_in_target_dtype(p, adam_update(
+                        p, g, v, m, lr=lr, eps=eps, weight_decay=weight_decay,
+                        betas=(b0, b1), step=param_steps[i],
+                        decoupled_weight_decay=decoupled_weight_decay,
+                        torch_math=True,
+                    ))
                     try:
                         if was_trainable and p.is_stop_grad():
                             p.start_grad()
@@ -736,8 +726,9 @@ def _install_optimizers(g, registry=None):
     if AdamW is not None and not getattr(AdamW, "_torch_adamw_step", False):
         AdamW.step = _make_adam_step_torch(True)
         AdamW._torch_adamw_step = True
-    for _cls_name in ("SGD", "RMSprop", "Adan"):
-        _wrap_step_accept_closure(getattr(_optim, _cls_name, None), "_torch_closure_step")
+    for _cls_name, _native_kind in (("SGD", "sgd"), ("RMSprop", "rmsprop"), ("Adan", "adan")):
+        _wrap_step_accept_closure(
+            getattr(_optim, _cls_name, None), "_torch_closure_step", _native_kind)
     Base._torch_compat_wrapped = True
     if not hasattr(_optim, "LBFGS"):
         class LBFGS(Base):

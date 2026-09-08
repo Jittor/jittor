@@ -52,12 +52,11 @@ GetitemOp::GetitemOp(Var* x, VarSlices&& slices, int _)
     ns.data = _;
 }
 
-void GetitemOp::infer_slices(
+void infer_index_slices(Var* in, VarSlices& vs, int& first_oid_of_var, int& var_dim,
     StackVector<>& __restrict__ i_to_vs, 
     StackVector<>& __restrict__ i_to_o,
     StackVector<>& __restrict__ out_shape
 ) {
-    auto in = inputs().front();
     auto in_shape = in->shape;
     auto nin = in_shape.size();
     i_to_vs.n = i_to_o.n = nin;
@@ -177,6 +176,12 @@ void GetitemOp::infer_slices(
 }
 
 
+void GetitemOp::infer_slices(StackVector<>& i_to_vs, StackVector<>& i_to_o,
+                            StackVector<>& out_shape) {
+    infer_index_slices(inputs().front(), vs, first_oid_of_var, var_dim,
+                       i_to_vs, i_to_o, out_shape);
+}
+
 void GetitemOp::infer_shape() {
     auto in = inputs().front();
     auto out = outputs().front();
@@ -188,6 +193,22 @@ void GetitemOp::infer_shape() {
     // shape return to use
     StackVector<> out_shape;
     infer_slices(i_to_vs, i_to_o, out_shape);
+    storage_view = outputs().size() == 1 && in->num >= 0;
+    vector<int64> storage_steps(out_shape.size(), 0);
+    int64 storage_offset = 0;
+    for (int i=0; i<nin && storage_view; ++i) {
+        const int vid = i_to_vs[i], oid = i_to_o[i];
+        if (vid < 0) {
+            storage_steps[oid] = in->storage_stride(i);
+        } else {
+            const auto& slice = vs.slices[vid];
+            if (slice.is_int()) storage_offset += slice.i * in->storage_stride(i);
+            else if (slice.is_slice() && slice.slice.step > 0) {
+                storage_offset += slice.slice.start * in->storage_stride(i);
+                storage_steps[oid] = slice.slice.step * in->storage_stride(i);
+            } else storage_view = false;
+        }
+    }
     
     // this will cause save checkpoint failed.
     // if (out_shape.n == 0)
@@ -218,6 +239,10 @@ void GetitemOp::infer_shape() {
     first_oid_of_var = fov;
 
     out->set_shape(out_shape.to_nano_vector());
+    if (storage_view) {
+        out->set_storage_strides(NanoVector::make(storage_steps.data(), storage_steps.size()));
+        out->share_with(in, storage_offset * in->dsize());
+    }
     if (!out_shape.size()) out->set_flag(VarFlags::_is_scalar);
 
     this->i_to_vs = i_to_vs.to_nano_vector();
@@ -226,6 +251,7 @@ void GetitemOp::infer_shape() {
     if (outputs().size() > 1) {
         auto out2 = output(1);
         out2->set_shape(in->shape);
+        out2->storage_strides = in->storage_strides;
     }
 
     LOGV(999) << "\ni_to_vs:" << i_to_vs
@@ -339,8 +365,7 @@ void GetitemOp::jit_run() {
         @if(IV@i==-1,oshape@{IO@i},
         @if(IV@i==-2,1,in->shape[@i]));
     )
-    index_t istride@{IDIM-1} = 1;
-    @for(i, IDIM-2, -1, -1, index_t istride@i = istride@{i+1} * ishape@{i+1};)
+    @for(i, 0, IDIM, index_t istride@i = in->storage_stride(@i);)
 
     
     @for(i, 0, IDIM, 

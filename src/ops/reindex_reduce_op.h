@@ -11,6 +11,7 @@
 namespace jittor {
 
 struct ReindexReduceOp : Op {
+    static constexpr bool accepts_storage_strides = true;
     Var* y, * x;
     NanoVector shape;
     vector<string> indexes;

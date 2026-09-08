@@ -10,90 +10,109 @@ from ..diagnostics import EXPECTED, swallowed
 _NATIVE_DTYPE_CONVERTERS = {}
 
 
-class dtype(str):
-    """A torch-like dtype that IS the jittor dtype string.
-
-    Subclasses str so it passes jittor's C++ type-dispatched constructors
-    (which require a str/NanoString) unchanged, while printing torch-style and
-    carrying is_floating_point like torch.dtype.
-    """
+class dtype:
+    """Immutable Torch dtype identity, independent of Python strings."""
+    __slots__ = ("name", "_is_fp")
     _registry = {}
+    _supported = frozenset({
+        "bool", "uint8", "uint16", "uint32", "uint64", "int8", "int16",
+        "int32", "int64", "float16", "bfloat16", "float32", "float64", "complex64",
+    })
 
     def __new__(cls, name, is_floating_point=False):
-        obj = super().__new__(cls, name)   # the str value is the bare jittor name
-        obj.name = name
-        obj._is_fp = is_floating_point
+        if not isinstance(name, str):
+            raise TypeError("dtype name must be a string")
+        if name in cls._registry:
+            return cls._registry[name]
+        obj = super().__new__(cls)
+        object.__setattr__(obj, "name", name)
+        object.__setattr__(obj, "_is_fp", name.startswith(("float", "bfloat")))
         cls._registry[name] = obj
         return obj
+
+    def __setattr__(self, name, value):
+        raise AttributeError("torch.dtype objects are immutable")
+
+    def __init_subclass__(cls, **kwargs):
+        raise TypeError("torch.dtype cannot be subclassed")
 
     @property
     def is_floating_point(self):
         return self._is_fp
 
     @property
+    def is_complex(self):
+        return self.name.startswith("complex")
+
+    @property
     def itemsize(self):
-        # bytes per element (torch.dtype.itemsize); used by vLLM weight transfer.
-        _sz = {"bool": 1, "uint8": 1, "uint1": 1, "uint2": 1, "uint3": 1, "uint4": 1,
-               "uint5": 1, "uint6": 1, "uint7": 1,
-               "int8": 1, "float8_e4m3fn": 1,
-               "float8_e5m2": 1, "float8_e4m3fnuz": 1, "float8_e5m2fnuz": 1,
-               "float8_e8m0fnu": 1, "qint8": 1, "quint8": 1,
-               "int16": 2, "uint16": 2, "float16": 2, "bfloat16": 2,
-               "int32": 4, "uint32": 4, "float32": 4, "complex32": 4, "qint32": 4,
-               "int64": 8, "uint64": 8, "float64": 8, "complex64": 8,
-               "complex128": 16}
-        return _sz.get(self.name, 4)
+        sizes = {
+            "bool": 1, "uint8": 1, "int8": 1, "uint16": 2, "int16": 2,
+            "float16": 2, "bfloat16": 2, "uint32": 4, "int32": 4,
+            "float32": 4, "uint64": 8, "int64": 8, "float64": 8,
+            "complex32": 4, "complex64": 8, "complex128": 16,
+            "qint8": 1, "quint8": 1, "qint32": 4, "quint4x2": 1, "quint2x4": 1,
+        }
+        if self.name.startswith(("float8_", "float4_", "uint")):
+            return sizes.get(self.name, 1)
+        return sizes[self.name]
     element_size = itemsize
 
-    # NanoString-compatible predicates: jittor internals call x.dtype.is_float()
-    # /is_int()/is_bool(). Since we now return this object from Var.dtype, it
-    # must answer them too.
     def is_float(self):
         return self._is_fp
+
     def is_bool(self):
         return self.name == "bool"
+
     def is_int(self):
         return self.name.startswith(("int", "uint"))
+
     def is_unsigned(self):
         return self.name.startswith("uint")
 
     def __repr__(self):
         return "torch." + self.name
 
-    # transformers' save_pretrained recovers the bare dtype name via
-    # `str(model.dtype).split(".")[1]`, relying on torch's
-    # `str(torch.float32) == "torch.float32"`. We cannot make the underlying str
-    # *value* torch-prefixed: jittor's own Python code (contrib.concat,
-    # linalg, nn) does `str(var.dtype)` and feeds the result straight back into
-    # jittor's C++ dtype dispatch, which only knows the bare names. So instead
-    # `__str__` returns the dtype object itself (a str whose value stays bare,
-    # which jittor accepts), and only a literal `.split(".")` is special-cased
-    # to surface the torch-style ["torch", name]. No jittor dtype name contains
-    # a dot, so every other split is the normal str split.
-    def __str__(self):
-        return self
-
-    def split(self, sep=None, maxsplit=-1):
-        if sep == ".":
-            return ["torch", self.name]
-        return str.split(self, sep, maxsplit)
+    __str__ = __repr__
 
     def __eq__(self, other):
-        if isinstance(other, dtype):
+        if type(other) is type(self):
             return self.name == other.name
-        if isinstance(other, str):
-            return self.name == other or ("torch." + self.name) == other
         return NotImplemented
 
     def __hash__(self):
-        return hash(self.name)
+        return hash((type(self), self.name))
+
+    def __reduce__(self):
+        return _restore_dtype, (self.name, self._is_fp)
+
+    def __setstate__(self, state):
+        # Old dtype(str) pickles stored these immutable fields in a dict.
+        # Validate that state rather than mutating the canonical singleton.
+        if (not isinstance(state, dict) or set(state) - {"name", "_is_fp"}
+                or state.get("name", self.name) != self.name
+                or state.get("_is_fp", self._is_fp) != self._is_fp):
+            raise ValueError("invalid serialized torch.dtype state")
+
+    @property
+    def _jittor_compute_name(self):
+        if self.name not in self._supported:
+            raise NotImplementedError(
+                "torch.%s is a metadata-only dtype; Jittor has no computation or allocation support"
+                % self.name)
+        return self.name
 
     def __call__(self, *args, **kwargs):
-        """Preserve Jittor's historical ``jt.float32(value)`` constructors."""
-        converter = _NATIVE_DTYPE_CONVERTERS.get(self.name)
+        # The explicit legacy jittor-as-torch path retains dtype cast spelling.
+        name = self._jittor_compute_name
+        converter = _NATIVE_DTYPE_CONVERTERS.get(name)
         if converter is None:
-            raise TypeError("dtype %s has no Jittor tensor constructor" % self.name)
+            raise TypeError("dtype %s has no Jittor tensor constructor" % name)
         return converter(*args, **kwargs)
+
+
+def _restore_dtype(name, is_floating_point):
+    return dtype(name, is_floating_point)
 
 
 def _make_dtypes(ns):
@@ -103,8 +122,7 @@ def _make_dtypes(ns):
         ("int8", False), ("int16", False), ("int32", False), ("int64", False),
         ("uint8", False), ("uint16", False), ("uint32", False), ("uint64", False),
         ("bool", False),
-        # complex types -- jittor has no native complex, but the dtype objects
-        # must exist (libraries index size tables by them). Best-effort names.
+        # complex64 is native; complex32/complex128 remain metadata-only.
         ("complex64", False), ("complex128", False), ("complex32", False),
         # quantized dtypes -- no compute support, but tensordict/torch index
         # dtype tables by them so the objects must exist + be distinct.
@@ -136,6 +154,8 @@ def _make_dtypes(ns):
     objs["cdouble"] = objs["complex128"]
     for k, v in objs.items():
         setattr(ns, k, v)
+    from jittor._core.dtypes import register_dtype_type
+    register_dtype_type(dtype)
     return objs
 
 
@@ -143,9 +163,11 @@ def _dtype_to_str(d):
     if d is None:
         return None
     if isinstance(d, dtype):
-        return d.name
+        return d._jittor_compute_name
     if isinstance(d, str):
-        return d.replace("torch.", "")
+        name = d.replace("torch.", "")
+        registered = dtype._registry.get(name)
+        return registered._jittor_compute_name if registered is not None else name
     if callable(d) and hasattr(d, "__name__"):
         return d.__name__
     return str(d)

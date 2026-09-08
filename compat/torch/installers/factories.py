@@ -7,6 +7,7 @@ the random samplers, whose torch signatures carry a ``generator=``.
 
 Split out of the tensor installer, which it runs as part of.
 """
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import functools
 
@@ -104,7 +105,8 @@ def _factory_implementation(value):
 
 def _empty_like_implementation(input, **kwargs):
     """Preserve the historical compiler fallback for ``torch.empty_like``."""
-    return jt.empty(input.shape, input.dtype)
+    selected = kwargs.get("dtype")
+    return jt.empty(input.shape, dtype=input.dtype if selected is None else _dtype_to_str(selected))
 
 
 def _install_empty_like(root):
@@ -214,7 +216,7 @@ def _wrap_constructors(g):
             _cast_to = None  # cast after construction when needed for torch dtype semantics
             if "dtype" not in kwargs and name in _DEFAULT_FLOAT_FACTORIES:
                 default_dtype = _dtype_to_str(g.get_default_dtype())
-                if default_dtype != "float32":
+                if _jittor_dtype_name(default_dtype) != "float32":
                     if _accepts_dtype:
                         kwargs["dtype"] = default_dtype
                     else:

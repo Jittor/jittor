@@ -17,6 +17,7 @@ struct ArrayArgs {
     NanoVector shape;
     NanoString dtype;
     unique_ptr<char[]> buffer;
+    NanoVector storage_strides;
 };
 
 struct ArrayOp : Op {

@@ -1,8 +1,12 @@
-# Agent 结果索引
+# 验证结果索引
 
 本目录只保存人工整理、可长期阅读的验证与性能报告。原始日志、JSONL、模型、
 图片、视频和编译缓存统一放在
-`${JITTOR_LAB_ROOT:-/home/zy/projects/jittor-lab}`，不纳入主仓库。
+`$JITTOR_LAB_ROOT/_state/`，不纳入主仓库；环境未设置时遵循
+[环境规则](../../agent/manuals/environment.md)。
+每份报告保留其原基线和验证边界，历史结果不代表当前分支已通过同一验收。
+只读打包基线位于 `baselines/`；当前任务状态唯一记录在
+[整改看板](../architecture/refactor-board.md)。
 
 ## 兼容性与功能验证
 
@@ -46,7 +50,7 @@
 - [2026-08-21 MMCV/MMEngine CUDA typed tensor 导入兼容](2026-08-21-mmcv-cuda-typed-tensors.md)
 - [2026-08-18 对拍框架、下游库覆盖与测试套件模式切分](2026-08-18-todo-parity-and-suite.md)
 - [2026-08-12 Python 3.12 与旧接口兼容验证](2026-08-12-python312-native-compatibility.md)
-- [2026-08-12 仓库结构现代化：交付验收报告（独立复核）](2026-08-12-repository-modernization-review.md)
+- 2026-08-12 仓库结构现代化：交付验收报告（独立复核）——原始文件不在当前仓库，暂不提供链接。
 - [2026-08-12 仓库结构现代化最终验收](2026-08-12-repository-modernization-final.md)
 - [2026-08-11 仓库结构现代化阶段 6：杂物清理与发行边界](2026-08-11-repository-modernization-cleanup.md)
 - [2026-08-11 仓库结构现代化阶段 5：测试外移与制品验收](2026-08-11-repository-modernization-test-migration.md)

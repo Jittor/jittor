@@ -30,6 +30,7 @@ VarPtr CloneOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 
 void CloneOp::infer_shape() {
     y->set_shape(x->shape);
+    y->storage_strides = x->storage_strides;
     y->share_with(x);
 }
 

@@ -1,4 +1,5 @@
 """Affine-grid construction and grid-sampling operations."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 import numpy as np
@@ -128,7 +129,7 @@ def affine_grid_generator_5D(theta, N, C, D, H, W, align_corners):
 
 
 def affine_grid(theta, size, align_corners=False):
-    assert str(theta.dtype) in ["float", "float32", "float64"]
+    assert _jittor_dtype_name(theta.dtype) in ["float", "float32", "float64"]
     assert min(size) > 0
     assert len(size) in [4, 5]
     if len(size) == 4:

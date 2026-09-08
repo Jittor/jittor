@@ -88,7 +88,7 @@ namespace jittor
         for (int idx = 0; idx < 2; idx++)
         {
             outputTensors.push_back(nullptr);
-            auto ret = CreateAclTensor(outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw);
+            auto ret = CreateAclTensor(outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw, out_[idx]);
             CHECK_RET(ret == ACL_SUCCESS, return);
         }
         // biasgrad nd format; no-bias joint gradients only request dx and dw.

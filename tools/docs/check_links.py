@@ -16,7 +16,7 @@ REFERENCE_LINK = re.compile(r"^\s*\[[^\]]+\]:\s*(\S+)")
 HTML_LINK = re.compile(r"\b(?:href|src)=[\"']([^\"']+)[\"']", re.IGNORECASE)
 DOC_ROLE = re.compile(r"\{(?:doc|download)\}`([^`]+)`")
 SCHEMES = frozenset(("data", "ftp", "http", "https", "mailto", "tel"))
-SKIPPED_AGENT_TREES = ("agent/baselines/", "agent/results/")
+HISTORICAL_TREES = ("docs/results/",)
 
 
 def _tracked_markdown(repo_root):
@@ -33,7 +33,11 @@ def _tracked_markdown(repo_root):
     for relative in result.stdout.decode("utf-8").split("\0"):
         if not relative.endswith(".md"):
             continue
-        if any(relative.startswith(prefix) for prefix in SKIPPED_AGENT_TREES):
+        if relative != "docs/results/README.md" and any(
+                relative.startswith(prefix) for prefix in HISTORICAL_TREES):
+            continue
+        # Cached paths may have been deleted or moved in the working tree.
+        if not (repo_root / relative).is_file():
             continue
         parts = Path(relative).parts
         if len(parts) == 1 or parts[0] in ("agent", "docs", "examples"):

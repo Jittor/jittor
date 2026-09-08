@@ -1,3 +1,4 @@
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import os
 from jittor_utils import env_or_try_find
 import jittor_utils
@@ -200,7 +201,7 @@ class RmsNormACL(jt.Function):
             attr_code='op.jt_name = "rmsnormgrad";',
         )
         grad_weight = result[1]
-        if str(self.weight.dtype) != "float32":
+        if _jittor_dtype_name(self.weight.dtype) != "float32":
             grad_weight = grad_weight.cast(self.weight.dtype)
         return result[0], grad_weight
 

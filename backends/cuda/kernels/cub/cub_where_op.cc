@@ -12,10 +12,10 @@
 #ifdef JIT_cuda
 #include "core/executor.h"
 #include "runtime/device.h"
+#include "runtime/backend.h"
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
 #include <assert.h>
-#include <executor.h>
 #include <cub/cub.cuh>
 #include <thrust/device_vector.h>
 #include <thrust/transform.h>

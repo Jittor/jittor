@@ -3,6 +3,7 @@
 This module contains source moved from the former monolithic installer without
 changing the compatibility semantics.
 """
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 
@@ -396,7 +397,7 @@ def install_misc(ctx):
     g.is_autocast_available = lambda *a, **k: True
     g.are_deterministic_algorithms_enabled = lambda: False
     g.use_deterministic_algorithms = lambda *a, **k: None
-    g.is_floating_point = lambda x: ("float" in str(x.dtype))
+    g.is_floating_point = lambda x: ("float" in _jittor_dtype_name(x.dtype))
 
     def where(condition, input=None, other=None, *, out=None):
         if input is None and other is None:
@@ -433,7 +434,7 @@ def install_misc(ctx):
             n = max(int(x.max().item()) + 1, ml)
             if weights is not None:
                 out = jt.zeros((n,), dtype=weights.dtype)
-                src = weights.reshape(-1).cast(str(weights.dtype))
+                src = weights.reshape(-1).cast(_jittor_dtype_name(weights.dtype))
             else:
                 out = jt.zeros((n,), dtype=jt.int64)
                 src = jt.ones((x.shape[0],), dtype=jt.int64)
@@ -598,7 +599,7 @@ def install_misc(ctx):
         def info(x):
             if isinstance(x, Var):
                 return (_dtype_to_str(x.dtype), False)
-            if isinstance(x, dtype) or (isinstance(x, str) and _dtype_to_str(x) in _DTYPE_OBJS):
+            if isinstance(x, dtype) or (isinstance(x, str) and _dtype_to_str(x) in _jittor_dtype_name(_DTYPE_OBJS)):
                 return (_dtype_to_str(x), False)
             if isinstance(x, bool):
                 return ("bool", True)

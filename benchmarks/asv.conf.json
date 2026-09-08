@@ -2,7 +2,7 @@
   "version": 1,
   "project": "Jittor",
   "project_url": "https://cg.cs.tsinghua.edu.cn/jittor/",
-  "repo": ".",
+  "repo": "..",
   "branches": ["2.0"],
   "show_commit_url": "https://github.com/Jittor/jittor/commit/",
   "environment_type": "existing",

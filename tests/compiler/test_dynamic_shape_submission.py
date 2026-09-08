@@ -76,3 +76,22 @@ def test_fetch_ready_and_backpressure_submit_after_construction():
             jt.fetch(x + i, lambda values: seen.append(float(values[0])))
         jt.sync_all(True)
         assert sorted(seen[1:]) == list(range(3, 28))
+
+
+@pytest.mark.cuda
+def test_cuda_dynamic_counts_and_fetch_readbacks():
+    if not jt.has_cuda:
+        pytest.skip("CUDA runtime required")
+    with jt.flag_scope(use_cuda=1, lazy_execution=1):
+        mask = jt.array([0, 1, 0, 1])
+        for where in (jt.core.ops.where, jt.compile_extern.cub_ops.cub_where):
+            indices, = where(mask)
+            assert tuple(indices.shape) == (2,)
+            np.testing.assert_array_equal((indices + 1).numpy(), [2, 4])
+        values = jt.array([[0., 0.], [1., 1.], [.5, .5]])
+        chosen = jt.candidate(values, "@x(j,0)>@x(i,0)")
+        np.testing.assert_array_equal(chosen.numpy(), [0, 1])
+        seen = []
+        jt.fetch(values.sum(), lambda array: seen.append(float(array)))
+        jt.sync_all(True)
+        assert seen == [3.0]

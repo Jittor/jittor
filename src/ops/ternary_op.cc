@@ -79,6 +79,8 @@ void TernaryOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype();
     jk << "«Ty:" << y->dtype();
     jk << "«Tz:" << z->dtype();
+    jk << "«DIM=" << JK::hex1(z->shape.size());
+    jk << "«STRIDED=" << JK::hex1(!x->is_contiguous() || !y->is_contiguous() || !cond->is_contiguous());
 }
 
 #else // JIT
@@ -88,10 +90,28 @@ void TernaryOp::jit_run() {
     auto* __restrict__ yp = y->ptr<Ty>();
     auto* __restrict__ zp = z->ptr<Tz>();
     index_t num = z->num;
+    @if(STRIDED,
+        @for(d, 0, DIM, index_t zstorage_shape@d = z->shape[@d];)
+        @for(d, 0, DIM, index_t xstride@d = x->storage_stride(@d);)
+        @for(d, 0, DIM, index_t ystride@d = y->storage_stride(@d);)
+        @for(d, 0, DIM, index_t cstride@d = cond->storage_stride(@d);)
+    )
     for (index_t i=0; i<num; i++) {
-        Tz xd_ = xp[i];
-        Tz yd_ = yp[i];
-        zp[i] = condp[i] ? xd_ : yd_;
+        index_t xi=i;
+        index_t yi=i;
+        index_t ci=i;
+        @if(STRIDED,
+            index_t rem=i; xi=0; yi=0; ci=0;
+            @for(d, DIM-1, -1, -1,
+                xi += (rem % zstorage_shape@d) * xstride@d;
+                yi += (rem % zstorage_shape@d) * ystride@d;
+                ci += (rem % zstorage_shape@d) * cstride@d;
+                rem /= zstorage_shape@d;
+            )
+        )
+        Tz xd_ = xp[xi];
+        Tz yd_ = yp[yi];
+        zp[i] = condp[ci] ? xd_ : yd_;
     }
 }
 #endif // JIT

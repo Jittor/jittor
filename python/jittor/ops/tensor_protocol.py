@@ -1,8 +1,9 @@
 """Tensor protocol tensor operations."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import numpy as np
 import builtins as _builtins
-from jittor_core import Var
+from jittor_core import Var, ops as _native_ops
 from .._runtime.dispatch import dispatch_context
 
 def __copy__(x):
@@ -45,7 +46,7 @@ def tolist(x):
     return x.numpy().tolist()
 
 
-def contiguous(x): return x.clone()
+def contiguous(x): return _native_ops.contiguous(x)
 
 
 def cpu(x):
@@ -108,7 +109,7 @@ def _parse_to(args, kwargs):
         if isinstance(first, Var):
             if device_given or dtype_given:
                 raise TypeError("to(other) cannot be combined with device or dtype")
-            target_dtype = str(first.dtype)
+            target_dtype = _jittor_dtype_name(first.dtype)
             dtype_given = True
             location = first.location()
             if location == "cpu":
@@ -157,7 +158,7 @@ def to(x, *args, **kwargs):
     """Convert dtype and/or device using torch's order-independent signature."""
     device, dtype, copy = _parse_to(args, kwargs)
     out = x
-    if dtype is not None and str(out.dtype) != str(getattr(dtype, "name", dtype)):
+    if dtype is not None and _jittor_dtype_name(out.dtype) != str(getattr(dtype, "name", dtype)):
         out = out.cast(dtype)
     if device is not None:
         kind, index = _device_spec(device)

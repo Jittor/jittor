@@ -267,7 +267,7 @@ cpu 35 个格子、cuda 38 个格子通过（共 73 个已验证格子）。
 
 两条原条目都不删，各自剩一半：Corex 的 `check()` 副作用与硬编码路径是 **8.14**（前置 4.12 现已满足）；
 ROCm 的**实机正确性**未验证——本机无 ROCm 卡，`nox -s rocm` 与确认项记在
-[`agent/manuals/deferred-hardware.md`](../../manuals/deferred-hardware.md) 的 ROCm 一节。
+[`agent/manuals/deferred-hardware.md`](../../../agent/manuals/deferred-hardware.md) 的 ROCm 一节。
 **未声称 ROCm 硬件验证完成。**
 
 `acl_legacy` 这条本波仍未改：改名要动 `backends/acl/src/backend.cc:645` 的描述符（C++ 核心重编）
@@ -282,7 +282,7 @@ ROCm 的**实机正确性**未验证——本机无 ROCm 卡，`nox -s rocm` 与
 
 **已修：`e5eaacfc2`。** 现枚举 60 条（C++ 28 + Python 32）并与源码树逐条相等；24 条本机真跑，
 36 条硬件延迟，`kind` 字段区分七种路线并全部登记进
-[`agent/manuals/deferred-hardware.md`](../../manuals/deferred-hardware.md)。
+[`agent/manuals/deferred-hardware.md`](../../../agent/manuals/deferred-hardware.md)。
 
 补两条执行时才知道的事实。一，**「缺硬件」和「缺用例」是两回事，原清单把它们混成一档**：
 七条即使有卡也测不到反向——`HcclAllGatherOp::grad()` 直接 `LOGf << "not implemented"`，

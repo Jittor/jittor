@@ -1,4 +1,5 @@
 """Gradient mode, clipping, autocast, and loss-scaling compatibility."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import numpy as np
 import jittor as jt
@@ -125,7 +126,7 @@ class _AutocastContext:
         self.cache_enabled = cache_enabled
         if dtype is None:
             dtype = _autocast_default_dtype(self.device_type)
-        name = getattr(dtype, "__name__", None) or str(dtype)
+        name = getattr(dtype, "__name__", None) or _jittor_dtype_name(dtype)
         name = name.split(".")[-1]
         self.fast_dtype = name
         self._saved = None
@@ -190,6 +191,22 @@ def _amp_passthrough_decorator(fn=None, **kwargs):
     return lambda f: f
 
 
+def _reduce_norm_group(value, how, group):
+    if group is None or group.size() == 1:
+        return value
+    if group.ranks is None:
+        return _collectives._reduce_scalar(value, how)
+    if group.rank() < 0:
+        raise RuntimeError("gradient norm called by a process-group nonmember")
+    kind = group._get_backend_name()
+    ops = getattr(jt.compile_extern, kind + "_ops", None)
+    gather = getattr(ops, kind + "_all_gather", None)
+    if gather is None or group._backend_handle is None:
+        raise RuntimeError("gradient norm requires the mesh communicator")
+    gathered = gather(value.reshape((1,)), group._backend_handle)
+    return getattr(gathered, how)()
+
+
 def _get_total_norm_device(grads, norm_type=2.0, error_if_nonfinite=False,
                            shard_reduce=False):
     """Compute the total norm for a list of gradient Vars on device.
@@ -210,32 +227,61 @@ def _get_total_norm_device(grads, norm_type=2.0, error_if_nonfinite=False,
     if not grads:
         return jt.array(0.0)
 
+    # Each shard set has its own communicator. Replicated gradients and
+    # ordinary parameters are counted once; combining all through WORLD
+    # would duplicate the replica axis and mix independent meshes.
+    if shard_reduce is True and any(hasattr(g, "_fsdp_norm_group") for g in grads):
+        groups = {}
+        for grad in grads:
+            group = getattr(grad, "_fsdp_norm_group", None)
+            groups.setdefault(group, []).append(grad)
+        norms = [_get_total_norm_device(values, norm_type, False,
+                                       shard_reduce=group if group is not None else False)
+                 for group, values in groups.items()]
+        values = jt.concat([norm.reshape((1,)) for norm in norms])
+        p = float(norm_type)
+        if p == float("inf"):
+            total = values.max()
+        elif p == float("-inf"):
+            total = values.min()
+        elif p == 0:
+            total = values.sum()
+        else:
+            total = (values ** p).sum() ** (1 / p)
+        if error_if_nonfinite and not _math.isfinite(float(total.item())):
+            raise RuntimeError("The total norm for gradients is non-finite")
+        return total
+
     def _across(value, how):
         if not shard_reduce:
             return value
+        if shard_reduce is not True:
+            return _reduce_norm_group(value, how, shard_reduce)
         return _collectives._reduce_scalar(value, how)
     p = float(norm_type)
-    acc_dtype = "float64" if any(str(g.dtype) == "float64" for g in grads) else "float32"
+    acc_dtype = "float64" if any(_jittor_dtype_name(g.dtype) == "float64" for g in grads) else "float32"
 
     if p == 0.0:
         # torch first computes each tensor's zero-norm, then the zero-norm of
         # those scalars: this counts tensors containing at least one nonzero.
         nonempty = []
         for g in grads:
-            x = g.abs() if "complex" in str(g.dtype) else g
-            nonempty.append((x != 0).sum().reshape((1,)))
-        total = _across((jt.concat(nonempty) != 0).sum().cast(acc_dtype), "sum")
+            x = g.abs() if "complex" in _jittor_dtype_name(g.dtype) else g
+            nonempty.append((_across((x != 0).sum(), "max") != 0).reshape((1,)))
+        total = jt.concat(nonempty).sum().cast(acc_dtype)
     else:
         parts = []
         for g in grads:
-            x = g.abs() if "complex" in str(g.dtype) else g
+            x = g.abs() if "complex" in _jittor_dtype_name(g.dtype) else g
             parts.append(x.cast(acc_dtype).reshape((-1,)))
         flat = jt.concat(parts)
         ax = flat.abs()
         if p == float("inf"):
-            total = _across(ax.max(), "max")
+            local = ax.max() if int(flat.numel()) else jt.array(float("-inf"), dtype=acc_dtype)
+            total = _across(local, "max")
         elif p == float("-inf"):
-            total = _across(ax.min(), "min")
+            local = ax.min() if int(flat.numel()) else jt.array(float("inf"), dtype=acc_dtype)
+            total = _across(local, "min")
         elif p == 1.0:
             total = _across(ax.sum(), "sum")
         elif p == 2.0:
@@ -263,18 +309,18 @@ def _clip_grads_with_norm_device(grads, max_norm, total_norm):
     if not grads:
         return
 
-    acc_dtype = "float64" if str(total_norm.dtype) == "float64" else "float32"
+    acc_dtype = "float64" if _jittor_dtype_name(total_norm.dtype) == "float64" else "float32"
     limit = float(max_norm)
     if limit == float("inf"):
         return
-    scalar_type = np.float64 if acc_dtype == "float64" else np.float32
+    scalar_type = np.float64 if _jittor_dtype_name(acc_dtype) == "float64" else np.float32
     raw_coef = scalar_type(limit) / (total_norm + scalar_type(1e-6))
     coef = jt.minimum(raw_coef, scalar_type(1.0))
     # CUDA fmin-style minimum may select the finite operand for NaN. Torch
     # propagates a NaN total norm into every gradient when errors are disabled.
     coef = jt.ternary(jt.isnan(raw_coef), raw_coef, coef)
     for g in grads:
-        g.update(g * coef.cast(str(g.dtype)))
+        g.update(g * coef.cast(_jittor_dtype_name(g.dtype)))
 
 
 def _clip_grad_norm_device(grads, max_norm, norm_type=2.0,
@@ -351,8 +397,8 @@ class _GradScaler:
             if not g.numel():
                 continue
             unscaled = g * inv
-            if str(unscaled.dtype) != str(g.dtype):
-                unscaled = unscaled.cast(str(g.dtype))
+            if _jittor_dtype_name(unscaled.dtype) != _jittor_dtype_name(g.dtype):
+                unscaled = unscaled.cast(_jittor_dtype_name(g.dtype))
             g.update(unscaled)
             flattened.append(unscaled.cast("float32").reshape((-1,)))
         # Optimizer.step still needs a host decision to skip state updates, but

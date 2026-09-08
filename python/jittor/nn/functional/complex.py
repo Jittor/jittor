@@ -1,4 +1,5 @@
 """Native complex tensor bridge operations."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import numpy as np
 
@@ -114,20 +115,20 @@ def view_as_real(x) -> jt.Var:
     # dtype (Phase 6 bridge, differentiable) and the legacy nn.ComplexNumber (real/imag pair).
     if isinstance(x, jt.nn.ComplexNumber):
         return jt.stack([x.value[..., 0], x.value[..., 1]], dim=-1)
-    assert "complex" in str(x.dtype), (
-        f"view_as_real expects a complex64 Var or ComplexNumber, got dtype {x.dtype}"
+    assert "complex" in _jittor_dtype_name(x.dtype), (
+        f"view_as_real expects a complex64 Var or ComplexNumber, got dtype {_jittor_dtype_name(x.dtype)}"
     )
     return _complex64_to_real2(x)
 
 
 def _var_real(self):
-    if "complex" in str(self.dtype):
+    if "complex" in _jittor_dtype_name(self.dtype):
         return jt.nn.view_as_real(self)[..., 0]
     return self
 
 
 def _var_imag(self):
-    if "complex" in str(self.dtype):
+    if "complex" in _jittor_dtype_name(self.dtype):
         return jt.nn.view_as_real(self)[..., 1]
     return jt.zeros_like(self)
 

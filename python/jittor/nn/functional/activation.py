@@ -1,4 +1,5 @@
 """Functional activation implementations exposed through :mod:`jittor.nn`."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import numpy as np
 
@@ -176,10 +177,10 @@ def gelu(x, approximate='none'):
         # PyTorch's GELU kernel uses a typed 1/sqrt(2) constant instead. Low
         # precision inputs compute in fp32 and cast back, matching torch's output
         # dtype while retaining the existing elementwise fusion opportunity.
-        input_dtype = str(x.dtype)
-        low_precision = input_dtype in ('float16', 'bfloat16')
+        input_dtype = _jittor_dtype_name(x.dtype)
+        low_precision = _jittor_dtype_name(input_dtype) in ('float16', 'bfloat16')
         compute_x = x.float32() if low_precision else x
-        scalar_type = np.float64 if input_dtype == 'float64' else np.float32
+        scalar_type = np.float64 if _jittor_dtype_name(input_dtype) == 'float64' else np.float32
         inv_sqrt2 = scalar_type(0.7071067811865476)
         half = scalar_type(0.5)
         one = scalar_type(1.0)

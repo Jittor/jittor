@@ -1,4 +1,5 @@
 """Functional normalization implementations exposed through :mod:`jittor.nn`."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from functools import lru_cache, wraps
 
@@ -263,7 +264,7 @@ def fp32_guard(func):
         need_cast = False
         dtype = None
         for arg in args:
-            if isinstance(arg, jt.Var) and arg.dtype in ("float16", "bfloat16"):
+            if isinstance(arg, jt.Var) and _jittor_dtype_name(arg.dtype) in ("float16", "bfloat16"):
                 dtype = arg.dtype
                 new_args.append(arg.float32())
                 need_cast = True
@@ -271,7 +272,7 @@ def fp32_guard(func):
                 new_args.append(arg)
         with jt.flag_scope(amp_level=0):
             result = func(*new_args, **kw)
-            if need_cast and isinstance(result, jt.Var) and result.dtype == "float32":
+            if need_cast and isinstance(result, jt.Var) and _jittor_dtype_name(result.dtype) == "float32":
                 result = result.cast(dtype)
         return result
 

@@ -53,6 +53,27 @@ void ReshapeOp::infer_shape() {
             yshape.push_back(a<0 ? uncertain_dim : a);
     }
     y->set_shape(yshape);
+    if (!x->is_contiguous() && x->num) {
+        vector<int64> strides(yshape.size());
+        int vd = int(yshape.size())-1;
+        int64 chunk_stride = x->storage_stride(x->shape.size()-1);
+        int64 old_count = 1, new_count = 1;
+        for (int d=int(x->shape.size())-1; d>=0; --d) {
+            old_count *= x->shape[d];
+            if (d && (x->shape[d-1] == 1 || x->storage_stride(d-1) == old_count*chunk_stride))
+                continue;
+            while (vd>=0 && (new_count<old_count || yshape[vd] == 1)) {
+                strides[vd] = new_count*chunk_stride;
+                new_count *= yshape[vd--];
+            }
+            USER_CHECK(new_count == old_count)
+                << "view shape is incompatible with storage strides; call contiguous() first";
+            if (d) chunk_stride = x->storage_stride(d-1);
+            old_count = new_count = 1;
+        }
+        USER_CHECK(vd == -1) << "view shape is incompatible with storage strides";
+        y->set_storage_strides(NanoVector::make(strides.data(), strides.size()));
+    }
     y->share_with(x);
 }
 } // jittor

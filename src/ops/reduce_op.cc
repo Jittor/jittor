@@ -376,8 +376,7 @@ void ReduceOp::jit_run() {
     @for(i, 0, DIM, index_t yshape@i = @if(REDUCE>>i&1,1,xshape@i);)
     index_t ystride@{DIM-1} = 1;
     @for(i, DIM-2, -1, -1, auto ystride@i = ystride@{i+1} * yshape@{i+1};)
-    index_t xstride@{DIM-1} = 1;
-    @for(i, DIM-2, -1, -1, auto xstride@i = xstride@{i+1} * xshape@{i+1};)
+    @for(i, 0, DIM, index_t xstride@i = x->storage_stride(@i);)
     Ty count = x->num*1.0 / y->num;
     Ty rcount = y->num*1.0 / x->num;
     @for(d, 0, DIM,@if(REDUCE>>d&1,, for (index_t xi@d=0; xi@d < xshape@d; xi@d++))) {

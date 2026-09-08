@@ -3,6 +3,7 @@
 This module contains source moved from the former monolithic installer without
 changing the compatibility semantics.
 """
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 import numpy as np
@@ -202,7 +203,7 @@ def _install_autograd_function(g):
         try:
             outs = out if isinstance(out, (tuple, list)) else (out,)
             ctx._fwd_outputs = [
-                (tuple(o.shape), str(o.dtype)) if isinstance(o, jt.Var) else None
+                (tuple(o.shape), _jittor_dtype_name(o.dtype)) if isinstance(o, jt.Var) else None
                 for o in outs]
         except EXPECTED as exc:
             swallowed("torch/installers/autograd.py _call_record_inputs: outs = out if isinstance(out, (tuple, list)) else (out,)", exc)

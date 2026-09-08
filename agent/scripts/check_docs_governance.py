@@ -14,8 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # These trees are historical evidence, not authoritative active documentation.
 EXCLUDED_PREFIXES = (
-    "agent/baselines/",
-    "agent/results/",
+    "docs/results/",
 )
 
 REQUIRED_DOCUMENTS = (
@@ -27,6 +26,14 @@ REQUIRED_DOCUMENTS = (
     "agent/manuals/known-issues.md",
     "docs/architecture/repository-layout.md",
     "docs/architecture/source-architecture.md",
+    "docs/architecture/refactor-board.md",
+    "docs/architecture/refactor-plan.md",
+    "docs/architecture/refactor-handoff.md",
+    "docs/architecture/refactor-dispatch.md",
+    "docs/architecture/target-layout.md",
+    "docs/results/README.md",
+    "agent/manuals/agent-index.md",
+    "benchmarks/asv.conf.json",
     "docs/architecture/torch-compatibility-principles.md",
     "docs/architecture/complex-dtype.md",
     "docs/testing/test-system.md",
@@ -48,6 +55,8 @@ def _relative(path):
 
 
 def _is_excluded(relative):
+    if relative == "docs/results/README.md":
+        return False
     return any(relative.startswith(prefix) for prefix in EXCLUDED_PREFIXES)
 
 
@@ -145,6 +154,10 @@ def check_contract(documents):
 
     if (REPO_ROOT / "agent" / "manuals" / "design").exists():
         errors.append("retired documentation path still exists: agent/manuals/design")
+    allowed_agent_entries = {"manuals", "skills", "scripts"}
+    for entry in (REPO_ROOT / "agent").iterdir():
+        if entry.name not in allowed_agent_entries:
+            errors.append("agent only owns manuals/skills/scripts; found: " + entry.name)
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     for token in (

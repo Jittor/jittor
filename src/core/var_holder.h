@@ -56,13 +56,15 @@ VarPtr device_copy(Var* x, int device);
  * this record would outlive.
  */
 struct VarViewStep {
-    enum Kind { Slice, Transpose } kind;
+    enum Kind { Slice, Transpose, Expand, Reshape } kind;
     VarSlices slices;
     NanoVector axes;
     explicit VarViewStep(VarSlices&& value)
         : kind(Slice), slices(move(value)) {}
     explicit VarViewStep(NanoVector value)
         : kind(Transpose), slices(0), axes(move(value)) {}
+    VarViewStep(Kind kind, NanoVector value)
+        : kind(kind), slices(0), axes(move(value)) {}
 };
 
 struct VarView {
@@ -80,6 +82,7 @@ struct DataView {
     void* ptr;
     NanoVector shape;
     NanoString dtype;
+    NanoVector storage_strides;
 };
 
 /** The base object for the numpy array `Var.data` returns.
@@ -558,6 +561,19 @@ struct VarHolder {
     // @pyjt(_set_transpose_view_of)
     // @attrs(return_self)
     VarHolder* set_transpose_view_of(VarHolder* base, NanoVector axes);
+    // @pyjt(_set_storage_view_of)
+    // @attrs(return_self)
+    VarHolder* set_storage_view_of(VarHolder* base, bool expand);
+    // @pyjt(_storage_is_contiguous)
+    bool storage_is_contiguous() { return var->is_contiguous(); }
+    // @pyjt(_storage_offset)
+    int64 storage_offset() { return var->storage_offset_bytes / var->dsize(); }
+    // @pyjt(_storage_strides)
+    NanoVector get_storage_strides() {
+        NanoVector strides;
+        for (uint i=0; i<var->shape.size(); ++i) strides.push_back(var->storage_stride(i));
+        return strides;
+    }
 
     // @pyjt(_is_last2_transpose_view)
     bool is_last2_transpose_view();

@@ -1,3 +1,4 @@
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import jittor as jt
 from jittor import nn
 from jittor.nn.backends import hooks as _backend_hooks
@@ -117,8 +118,8 @@ def install_attention(ctx):
             and int(q_shape[-1]) == 64
             and int(q_shape[-2]) == int(k_shape[-2]) == int(v_shape[-2])
             and int(q_shape[-2]) <= 64
-            and str(query.dtype) == str(key.dtype) == str(value.dtype)
-            and str(query.dtype) == "float16")
+            and _jittor_dtype_name(query.dtype) == _jittor_dtype_name(key.dtype) == _jittor_dtype_name(value.dtype)
+            and _jittor_dtype_name(query.dtype) == "float16")
         if short_square_math:
             _sdpa_flash_miss("short_square_math")
             return None
@@ -126,12 +127,12 @@ def install_attention(ctx):
         if template_dim is None:
             _sdpa_flash_miss("head_dim")
             return None
-        q_dtype, k_dtype, v_dtype = str(query.dtype), str(key.dtype), str(value.dtype)
+        q_dtype, k_dtype, v_dtype = _jittor_dtype_name(query.dtype), _jittor_dtype_name(key.dtype), _jittor_dtype_name(value.dtype)
         original_dtype = q_dtype
         cast_back = False
-        if not (q_dtype == k_dtype == v_dtype and q_dtype in ("float16", "bfloat16")):
+        if not (q_dtype == k_dtype == v_dtype and _jittor_dtype_name(q_dtype) in ("float16", "bfloat16")):
             cast_target = _sdpa_flash_float32_cast_target()
-            if cast_target is None or not (q_dtype == k_dtype == v_dtype == "float32"):
+            if cast_target is None or not (_jittor_dtype_name(q_dtype) == _jittor_dtype_name(k_dtype) == _jittor_dtype_name(v_dtype) == "float32"):
                 _sdpa_flash_miss("dtype")
                 return None
             query = query.to(cast_target)
@@ -253,7 +254,7 @@ def install_attention(ctx):
         out_axes = tuple(list(range(p)) + [p + 1, p, p + 2])
         _sdpa_flash_hit(_fa_jittor.backend_name())
         out = out.permute(*out_axes)
-        if cast_back and str(out.dtype) != original_dtype:
+        if cast_back and _jittor_dtype_name(out.dtype) != original_dtype:
             out = out.to(original_dtype)
         return out
 

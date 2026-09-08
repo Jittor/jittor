@@ -1,3 +1,4 @@
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import collections as _collections
 import functools as _functools
 import weakref
@@ -101,8 +102,8 @@ def _acl_bfloat16_rms_norm(value, weight, epsilon):
         getattr(jt.compiler, "has_acl", 0)
         and getattr(jt.flags, "use_acl", 0)
         and jt.flags.use_cuda
-        and str(value.dtype) == "bfloat16"
-        and str(weight.dtype) == "bfloat16"
+        and _jittor_dtype_name(value.dtype) == "bfloat16"
+        and _jittor_dtype_name(weight.dtype) == "bfloat16"
     ):
         return None
     unit_weight = getattr(weight, "_torch_acl_rms_norm_unit_weight", None)
@@ -371,8 +372,8 @@ def _preserve_target_dtypes_for_load(root, state_dict):
             continue
         if src.shape != target.shape:
             continue
-        target_dtype = str(target.dtype)
-        if str(src.dtype) == target_dtype:
+        target_dtype = _jittor_dtype_name(target.dtype)
+        if _jittor_dtype_name(src.dtype) == target_dtype:
             continue
         if converted is None:
             converted = dict(state_dict)
@@ -585,7 +586,7 @@ _MODULE_FLOAT_DTYPES = ("float16", "bfloat16", "float32", "float64")
 
 def _module_cast_var_if_needed(v, ds, copy=False):
     """Cast ``v`` to ``ds``, or return it as-is when that is already its dtype."""
-    if copy or str(v.dtype) != ds:
+    if copy or _jittor_dtype_name(v.dtype) != ds:
         return v.cast(ds)
     return v
 
@@ -597,7 +598,7 @@ def _module_cast_float_dtype(self, ds):
             self, _functools.partial(_module_to_conversion, ds, None, False))
     if ds is not None and ds in _MODULE_FLOAT_DTYPES:
         for p in self.parameters():
-            if p.dtype.is_float() if hasattr(p.dtype, "is_float") else ("float" in str(p.dtype)):
+            if p.dtype.is_float() if hasattr(p.dtype, "is_float") else ("float" in _jittor_dtype_name(p.dtype)):
                 new_p = _module_cast_var_if_needed(p, ds)
                 if new_p is not p:
                     p.assign(new_p)
@@ -716,7 +717,7 @@ def _module_to_conversion(ds, dev, copy, v):
     """
     out = v
     if ds is not None and ds in _MODULE_FLOAT_DTYPES:
-        is_float = v.dtype.is_float() if hasattr(v.dtype, "is_float") else ("float" in str(v.dtype))
+        is_float = v.dtype.is_float() if hasattr(v.dtype, "is_float") else ("float" in _jittor_dtype_name(v.dtype))
         if is_float:
             out = _module_cast_var_if_needed(out, ds, copy=copy)
     if _device_is_cpu(dev):
@@ -758,7 +759,7 @@ def _module_to(self, *args, **kwargs):
         elif isinstance(a, device):
             dev = a
         elif isinstance(a, jt.Var):
-            ds = str(a.dtype)
+            ds = _jittor_dtype_name(a.dtype)
             dev = a.device
         elif isinstance(a, str):
             bare = a.replace("torch.", "")
@@ -828,8 +829,8 @@ def _zero_grad(self, set_to_none=True):
     # The bridged optimizer runs first: its zero_grad clears the torch-visible
     # .grad as a side effect, so doing it afterwards would undo the zero tensors
     # that set_to_none=False is required to leave behind.
-    from ...tensor_state import compatibility_owner
-    opt = getattr(compatibility_owner(jt), "_current_optimizer", None)
+    from ...tensor_state import latest_optimizer
+    opt = latest_optimizer(jt)
     if opt is not None:
         try:
             opt.zero_grad()

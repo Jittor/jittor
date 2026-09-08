@@ -1,4 +1,5 @@
 """Sparse neural-network convolution primitives."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 from jittor.backends.cuda.kernels.sparse.neighbors import submanifold_neighbors_cuda_options
@@ -36,7 +37,7 @@ def build_submanifold_conv3d_neighbors(coords, kernel_size, dilation=1):
     shape = tuple(int(size) for size in coords.shape)
     if len(shape) != 2 or shape[1] != 4:
         raise ValueError("coords must have shape [points, 4]")
-    if str(coords.dtype) not in ("int32", "int64"):
+    if _jittor_dtype_name(coords.dtype) not in ("int32", "int64"):
         raise TypeError("coords must use int32 or int64")
     kernel = _triple(kernel_size, "kernel_size")
     dilation = _triple(dilation, "dilation")
@@ -188,7 +189,7 @@ def submanifold_conv3d(feats, coords, weight, bias=None, dilation=1, neighbors=N
             _triple(dilation, "dilation"))
     if tuple(int(size) for size in neighbors.shape) != (feat_shape[0], taps):
         raise ValueError("neighbors must have shape [points, kernel_volume]")
-    if str(neighbors.dtype) not in ("int32", "int64"):
+    if _jittor_dtype_name(neighbors.dtype) not in ("int32", "int64"):
         raise TypeError("neighbors must use int32 or int64")
 
     valid = neighbors >= 0

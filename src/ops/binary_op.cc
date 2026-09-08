@@ -632,7 +632,10 @@ void BinaryOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype()
         << "«Ty:" << y->dtype()
         << "«Tz:" << z->dtype()
-        << "«OP:" << ns;
+        << "«OP:" << ns
+        << "«DIM=" << JK::hex1(z->shape.size())
+        << "«XSTRIDED=" << JK::hex1(!x->is_contiguous())
+        << "«YSTRIDED=" << JK::hex1(!y->is_contiguous());
 }
 
 #else // JIT
@@ -641,8 +644,24 @@ void BinaryOp::jit_run() {
     auto* __restrict__ yp = y->ptr<Ty>();
     auto* __restrict__ zp = z->ptr<Tz>();
     index_t num = z->num;
-    for (index_t i=0; i<num; i++)
-        zp[i] = @expand_op(@OP, @Tz, xp[i], @Tx, yp[i], @Ty);
+    @if(XSTRIDED || YSTRIDED,
+        @for(d, 0, DIM, index_t zstorage_shape@d = z->shape[@d];)
+    )
+    @if(XSTRIDED, @for(d, 0, DIM, index_t xstride@d = x->storage_stride(@d);))
+    @if(YSTRIDED, @for(d, 0, DIM, index_t ystride@d = y->storage_stride(@d);))
+    for (index_t i=0; i<num; i++) {
+        index_t xi = i;
+        index_t yi = i;
+        @if(XSTRIDED,
+            index_t xrem = i; xi = 0;
+            @for(d, DIM-1, -1, -1, xi += (xrem % zstorage_shape@d) * xstride@d; xrem /= zstorage_shape@d;)
+        )
+        @if(YSTRIDED,
+            index_t yrem = i; yi = 0;
+            @for(d, DIM-1, -1, -1, yi += (yrem % zstorage_shape@d) * ystride@d; yrem /= zstorage_shape@d;)
+        )
+        zp[i] = @expand_op(@OP, @Tz, xp[xi], @Tx, yp[yi], @Ty);
+    }
 }
 #endif // JIT
 

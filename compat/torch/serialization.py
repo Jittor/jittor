@@ -1,4 +1,5 @@
 """Serialization adapters used by the torch compatibility layer."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import numpy as np
 import jittor as jt
@@ -35,10 +36,10 @@ def _install_safetensors_shim(registry=None):
     def _bytes_to_np(raw, st_dtype, shape):
         if st_dtype.startswith("F8_"):
             raise NotImplementedError(
-                "safetensors dtype %s has no supported Jittor decoder" % st_dtype)
+                "safetensors dtype %s has no supported Jittor decoder" % _jittor_dtype_name(st_dtype))
         npd, _itemsize = _ST[st_dtype]
         shape = tuple(shape)
-        if st_dtype == "BF16":
+        if _jittor_dtype_name(st_dtype) == "BF16":
             u16 = np.frombuffer(raw, dtype=np.uint16).astype(np.uint32)
             return (u16 << 16).view(np.float32).reshape(shape)
         return np.frombuffer(raw, dtype=npd).reshape(shape)
@@ -47,7 +48,7 @@ def _install_safetensors_shim(registry=None):
         array = np.asarray(array)
         if not array.flags.c_contiguous:
             array = np.ascontiguousarray(array)
-        dtype = "bfloat16" if st_dtype == "BF16" else array.dtype.name
+        dtype = "bfloat16" if _jittor_dtype_name(st_dtype) == "BF16" else array.dtype.name
         tensor = g.tensor(array, dtype=dtype, device="cpu", requires_grad=False)
         target_device = "cpu" if device is None else device
         if isinstance(target_device, (int, np.integer)) and not isinstance(target_device, bool):
@@ -138,15 +139,15 @@ def _install_safetensors_shim(registry=None):
         blobs = []
         offset = 0
         for key, value in tensors.items():
-            tensor_dtype = str(value.dtype) if isinstance(value, jt.Var) else None
+            tensor_dtype = _jittor_dtype_name(value.dtype) if isinstance(value, jt.Var) else None
             arr = value.numpy() if hasattr(value, "numpy") else np.asarray(value)
             arr = np.asarray(arr)
             shape = list(arr.shape)
             dtype = tensor_dtype or arr.dtype.name
             if dtype not in _NP_TO_ST:
-                raise NotImplementedError("safetensors cannot save dtype %s" % dtype)
+                raise NotImplementedError("safetensors cannot save dtype %s" % _jittor_dtype_name(dtype))
             st_dtype = _NP_TO_ST[dtype]
-            if st_dtype == "BF16":
+            if _jittor_dtype_name(st_dtype) == "BF16":
                 # Native BF16 numpy() exposes exact values in float32. Encode
                 # their upper 16 bits, not a float32 payload with a BF16 label.
                 bits = arr.astype(np.float32, copy=False).view(np.uint32)
@@ -205,12 +206,10 @@ def install(ctx):
     def _to_portable(obj, snapshots):
         if isinstance(obj, jt.Var):
             # Batched fetch supplies a host copy without moving live tensors.
-            # `str(obj.dtype)` returns the torch-compat dtype OBJECT (a str
-            # subclass), which pickles as a class reference. Store the bare
-            # name so a checkpoint carries no importable global at all.
+            # Persist the native name, not the frontend object's torch-prefixed
+            # display string or an importable Python dtype class reference.
             return {_VAR_TAG: True, "data": snapshots[id(obj)],
-                    "dtype": str.__str__(obj.dtype) if isinstance(obj.dtype, str)
-                             else str(obj.dtype),
+                    "dtype": _jittor_dtype_name(obj.dtype),
                     "requires_grad": bool(obj.requires_grad),
                     "parameter": isinstance(obj, g.nn.Parameter),
                     "device": str(getattr(obj, "device", "cpu"))}
@@ -302,7 +301,7 @@ def install(ctx):
     class _StorageMarker:
         def __init__(self, dtype_str): self.dtype_str = dtype_str
     def _np_from_storage(raw, dtype_str, numel):
-        if dtype_str == "bfloat16":
+        if _jittor_dtype_name(dtype_str) == "bfloat16":
             u16 = _np_pt.frombuffer(raw, dtype=_np_pt.uint16, count=numel).astype(_np_pt.uint32)
             return (u16 << 16).view(_np_pt.float32)   # widen bf16 -> f32 (ACL has no bf16 numpy)
         npd = {"float64": _np_pt.float64, "float32": _np_pt.float32, "float16": _np_pt.float16,

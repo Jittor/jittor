@@ -1,4 +1,5 @@
 """Native parameter holders and containers."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import collections
 
@@ -85,12 +86,12 @@ class Parameter(jt.Var):
 
     def __reduce_ex__(self, protocol):
         return (_rebuild_parameter,
-                (type(self), self.numpy(), str(self.dtype), self.requires_grad),
+                (type(self), self.numpy(), _jittor_dtype_name(self.dtype), self.requires_grad),
                 self.__dict__.copy())
 
     def __deepcopy__(self, memo):
         from copy import deepcopy
-        result = _rebuild_parameter(type(self), self.numpy(), str(self.dtype), self.requires_grad)
+        result = _rebuild_parameter(type(self), self.numpy(), _jittor_dtype_name(self.dtype), self.requires_grad)
         memo[id(self)] = result
         result.__dict__.update(deepcopy(self.__dict__, memo))
         return result

@@ -1,6 +1,6 @@
 # 上机验证：删除 HCCL 集合通信的 4 次同步（8.02 待实机部分）
 
-审计 [06-backends.md §分布式](../design/codebase-audit/06-backends.md) 里严重度为
+审计 [06-backends.md §分布式](../../docs/architecture/codebase-audit/06-backends.md) 里严重度为
 **关键**的一条：四个 HCCL 集合通信算子各自在调用前后都做
 `aclrtSynchronizeDevice()` + `aclrtSynchronizeStream(aclstream)`，**每次通信 4 次全设备
 或全流同步**，NPU 多卡训练的流水被彻底打断。

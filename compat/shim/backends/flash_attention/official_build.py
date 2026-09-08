@@ -1,5 +1,6 @@
 """FlashAttention official build implementation."""
 from __future__ import annotations
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import pathlib
 from types import ModuleType
 from typing import List, Optional, Tuple
@@ -152,7 +153,7 @@ def _official_sources(root: pathlib.Path) -> List[str]:
         for dim in _facade._official_head_dims(root):
             for dtype in _facade._official_dtypes():
                 for causal in ("", "_causal"):
-                    path = src_dir / ("%s_hdim%s_%s%s_sm80.cu" % (prefix, dim, dtype, causal))
+                    path = src_dir / ("%s_hdim%s_%s%s_sm80.cu" % (prefix, dim, _jittor_dtype_name(dtype), causal))
                     if path.is_file():
                         sources.append(path)
                     else:
@@ -161,7 +162,7 @@ def _official_sources(root: pathlib.Path) -> List[str]:
         for dtype in _facade._official_dtypes():
             for causal in ("", "_causal"):
                 path = src_dir / ("flash_bwd_hdim%s_%s%s_sm80.cu" % (
-                    dim, dtype, causal))
+                    dim, _jittor_dtype_name(dtype), causal))
                 if path.is_file():
                     sources.append(path)
                 else:
@@ -177,14 +178,14 @@ def _official_compiled_specs(root: pathlib.Path) -> set:
     for dim in _facade._official_head_dims(root):
         for dtype in _facade._official_dtypes():
             for causal_suffix, causal in (("", False), ("_causal", True)):
-                fwd = src_dir / ("flash_fwd_hdim%s_%s%s_sm80.cu" % (dim, dtype, causal_suffix))
-                split = src_dir / ("flash_fwd_split_hdim%s_%s%s_sm80.cu" % (dim, dtype, causal_suffix))
+                fwd = src_dir / ("flash_fwd_hdim%s_%s%s_sm80.cu" % (dim, _jittor_dtype_name(dtype), causal_suffix))
+                split = src_dir / ("flash_fwd_split_hdim%s_%s%s_sm80.cu" % (dim, _jittor_dtype_name(dtype), causal_suffix))
                 if fwd.is_file():
                     specs.add(("fwd", dtype, dim, causal))
                 if split.is_file():
                     specs.add(("split", dtype, dim, causal))
                 bwd = src_dir / ("flash_bwd_hdim%s_%s%s_sm80.cu" % (
-                    dim, dtype, causal_suffix))
+                    dim, _jittor_dtype_name(dtype), causal_suffix))
                 if bwd.is_file():
                     specs.add(("bwd", dtype, dim, causal))
     return specs

@@ -22,6 +22,12 @@ void display_max_memory_info();
 // @pyjt(get_max_memory_info)
 string get_max_memory_info();
 
+// Observed high-water mark of SFRL used allocations, excluding cached free
+// blocks. Includes both CPU and accelerator allocators; not driver-reserved
+// memory. Updated by the executor's existing memory-profiler checks.
+// @pyjt(get_peak_allocator_used_memory)
+int64 get_peak_allocator_used_memory();
+
 struct MemoryProfiler {
     std::map<pair<void*,void*>, size_t> allocations;
     // Max Infos

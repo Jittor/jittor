@@ -172,6 +172,11 @@ string MemoryProfiler::get_max_memory_info() {
     return out.str();
 }
 
+int64 get_peak_allocator_used_memory() {
+    ASSERT(profile_memory_enable);
+    return static_cast<int64>(memory_profiler.max_used_memory_size);
+}
+
 string get_max_memory_info() {
     ASSERT(profile_memory_enable);
     return memory_profiler.get_max_memory_info();

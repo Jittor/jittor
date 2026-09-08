@@ -66,7 +66,7 @@ CI requirements are documented in [`agent/manuals/environment.md`](agent/manuals
 ├── benchmarks/          # ASV performance suite
 ├── tools/               # build, release, install, and maintenance commands
 ├── docs/                # durable architecture, development, and release docs
-├── agent/               # maintainer/agent workflow and verification reports
+├── agent/               # operational manuals, skills and maintenance scripts
 ├── pyproject.toml       # authoritative package, tool, and pytest configuration
 └── noxfile.py           # reproducible local and CI sessions
 ```
@@ -179,7 +179,7 @@ values for concurrent jobs; do not run benchmarks and tests against one cache.
 - Put durable decisions under `docs/architecture/`, testing contracts under
   `docs/testing/`, development guidance under `docs/development/`, and research
   proposals under `docs/research/`.
-- Put reproducible maintainer evidence under `agent/results/`; keep raw logs and
+- Put reproducible maintainer evidence under `docs/results/`; keep raw logs and
   generated artifacts outside the source checkout.
 - Use relative links for repository files and run the structure gate after moves.
 
@@ -187,7 +187,7 @@ values for concurrent jobs; do not run benchmarks and tests against one cache.
   中英文共同维护。
 - 长期决策、测试契约、开发指南和研究提案分别放入 `docs/architecture/`、
   `docs/testing/`、`docs/development/` 与 `docs/research/`。
-- 可复现的维护者结论放入 `agent/results/`；原始日志与生成产物不进入源码仓库。
+- 可复现的维护者结论放入 `docs/results/`；原始日志与生成产物不进入源码仓库。
 - 仓库内文件使用相对链接，移动后执行结构门禁。
 
 ## Pull requests / 合并请求

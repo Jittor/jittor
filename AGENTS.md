@@ -9,6 +9,10 @@
 3. [`agent/manuals/project-context.md`](agent/manuals/project-context.md)：当前状态和主题索引。
 4. 与任务相关的架构文档、已知问题和既有结果报告。
 
+整改任务的唯一状态源是 [`docs/architecture/refactor-board.md`](docs/architecture/refactor-board.md)。
+按同目录的 [交接](docs/architecture/refactor-handoff.md)与
+[分工](docs/architecture/refactor-dispatch.md)协作，不在 agent/ 下另建看板或结果树。
+
 ## Working Method
 
 - verify-then-fix：先用最小复现确认问题，再修改。
@@ -50,7 +54,7 @@ python -m pytest -q tests/structure
   环境规则与问题总账分别维护在
   [`agent/manuals/environment.md`](agent/manuals/environment.md) 和
   [`agent/manuals/known-issues.md`](agent/manuals/known-issues.md)。
-- `agent/results/` 保存可复现的维护者验证结论，不复制成长篇项目历史。原始日志、缓存、
+- `docs/results/` 保存可复现的维护者验证结论，不复制成长篇项目历史。原始日志、缓存、
   二进制和 benchmark 数据不进入文档树。
 - 稳定结论注明状态、对应提交、验证范围、维护者和复查条件；过期信息应删除或归档，
   不在多个文件中重复维护。

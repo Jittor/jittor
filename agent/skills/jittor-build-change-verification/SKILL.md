@@ -173,7 +173,7 @@ EXPECT_JITTOR_SRC=$WT/python env $E \
 - 归因表的各项之和应当接近总时间。差得多说明漏了一层，别把差额记成「Python 启动开销」
   就算了。
 
-一份写完的归因表见 `agent/results/2026-09-04-import-jittor-cost-attribution.md`。
+一份写完的归因表见 `docs/results/2026-09-04-import-jittor-cost-attribution.md`。
 
 ## 2.6 给一个构建产物加「已经最新」的快路（构建戳）
 

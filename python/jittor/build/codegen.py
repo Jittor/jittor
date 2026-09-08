@@ -296,6 +296,19 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
             py_arg = py_arg.split("_a=")[1]
             cc_args_with_default.append(arg + "=" + py_arg)
         cc_args = cc_args_with_default
+        storage_inputs = []
+        for argument in cc_make_args:
+            if argument.startswith("VarSlices"):
+                argument_name = argument.split()[-1].split("=")[0]
+                storage_inputs.append(f"adapt_index_storage({argument_name}, _storage_owners);")
+            if argument.startswith(("Var*", "vector<Var*>")):
+                argument_name = argument.split()[-1].split("=")[0]
+                # Explicit output buffers must keep their identity. Their
+                # storage contract is validated by the operator itself.
+                if argument_name not in ("outputs", "out"):
+                    storage_inputs.append(
+                        f"adapt_storage_input<{op_name}>({argument_name}, _storage_owners);")
+        storage_setup = "vector<VarPtr> _storage_owners;\n" + "\n".join(storage_inputs)
         # steps of Op creation:
         # 1. new op
         # 2. new output var (create_output in op constructor)
@@ -306,6 +319,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
         if "multiple_outputs" not in attrs:
             jit_cc_src.append(f"""
             VarPtr make_{cc_func_name}({", ".join(cc_make_args)}) {{
+                {storage_setup}
                 auto _op = new {op_name}({", ".join(op_make_args)});
                 if (_op->outputs_holder.size() != 1) {{
                     delete _op;
@@ -332,6 +346,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
         else:
             jit_cc_src.append(f"""
             vector<VarPtr> make_{cc_func_name}({", ".join(cc_make_args)}) {{
+                {storage_setup}
                 auto _op = new {op_name}({", ".join(op_make_args)});
                 if (_op->flag(OpFlags::_forwarded)) {{
                     vector<VarPtr> _outs = move(_op->outputs_holder);

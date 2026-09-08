@@ -1,6 +1,7 @@
 """Adam-family optimizers."""
 
 import jittor as jt
+from ..._core.dtypes import dtype_name
 from ..._runtime.dispatch import register_kernel, select_kernel
 
 from ..base import (
@@ -29,6 +30,31 @@ def _acl_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
 
 
 register_kernel("optim.adamw_fused", "acl", _acl_fused_adamw_updates)
+
+
+def adam_update(param, grad, value, momentum, *, lr, eps, weight_decay,
+                betas, step, decoupled_weight_decay=False, torch_math=False):
+    """Shared Adam arithmetic; callers own gradient sourcing and step counters.
+
+    Native Adam historically puts epsilon before bias scaling. Torch and
+    AdamW put it after scaling; keep that policy explicit at the call site.
+    """
+    b0, b1 = betas
+    if weight_decay != 0 and decoupled_weight_decay:
+        param = (param * (1 - lr * weight_decay)).cast(param.dtype)
+    elif weight_decay != 0 or not torch_math and not decoupled_weight_decay:
+        grad = grad + param * weight_decay
+    _update_preserve_dtype(momentum, b0 * momentum + (1 - b0) * grad)
+    _update_preserve_dtype(value, b1 * value + (1 - b1) * grad * grad)
+    if torch_math or decoupled_weight_decay:
+        correction = (1 - b1 ** float(step)) ** 0.5
+        scalar = (jt.array(correction, dtype="float32" if dtype_name(value.dtype) == "bfloat16"
+                           else value.dtype).cast(value.dtype).stop_grad()
+                  if torch_math else jt.sqrt(1 - b1 ** float(step)))
+        denom = jt.sqrt(value) / scalar + eps
+        return param - momentum * (lr / (1 - b0 ** float(step))) / denom
+    step_size = lr * jt.sqrt(1 - b1 ** float(step)) / (1 - b0 ** float(step))
+    return param - momentum * step_size / (jt.sqrt(value) + eps)
 
 
 class Adam(Optimizer):
@@ -75,12 +101,9 @@ class Adam(Optimizer):
             b0, b1 = pg.get("betas", self.betas)
             for p, g, v, m in zip(pg["params"], pg["grads"], pg["values"], pg["m"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
-                g = p * weight_decay + g
-                _update_preserve_dtype(m, b0 * m + (1-b0) * g)
-                _update_preserve_dtype(v, b1 * v + (1-b1) * g * g)
-                step_size = lr * jt.sqrt(1-b1**n) / (1-b0 ** n)
-                _update_preserve_dtype(
-                    p, p - m * step_size / (jt.sqrt(v) + eps))
+                _update_preserve_dtype(p, adam_update(
+                    p, g, v, m, lr=lr, eps=eps, weight_decay=weight_decay,
+                    betas=(b0, b1), step=n))
         self.post_step()
 
 
@@ -147,12 +170,7 @@ class AdamW(Optimizer):
                 continue
             for p, g, v, m in zip(pg["params"], pg["grads"], pg["values"], pg["m"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
-                _update_preserve_dtype(p, p * (1 - lr * weight_decay))
-                bias_correction1 = 1 - b0 ** n
-                bias_correction2 = 1 - b1 ** n
-                _update_preserve_dtype(m, b0 * m + (1-b0) * g) #exp_avg
-                _update_preserve_dtype(v, b1 * v + (1-b1) * g * g) #exp_avg_sq
-                denom = jt.sqrt(v) / jt.sqrt(bias_correction2) + eps
-                step_size = lr / bias_correction1
-                _update_preserve_dtype(p, p - step_size * m / denom)
+                _update_preserve_dtype(p, adam_update(
+                    p, g, v, m, lr=lr, eps=eps, weight_decay=weight_decay,
+                    betas=(b0, b1), step=n, decoupled_weight_decay=True))
         self.post_step()

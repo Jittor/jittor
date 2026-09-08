@@ -1,4 +1,5 @@
 """ACL tensor adapters selected by the shared runtime dispatch table."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from collections.abc import Iterable
 from typing import Union
@@ -28,9 +29,9 @@ def _clamp_acl(input, min_value, max_value):
         isinstance(input, jt.Var)
         and isinstance(min_value, jt.Var)
         and isinstance(max_value, jt.Var)
-        and (str(input.dtype) == "float32")
-        and (str(min_value.dtype) == "float32")
-        and (str(max_value.dtype) == "float32")
+        and (_jittor_dtype_name(input.dtype) == "float32")
+        and (_jittor_dtype_name(min_value.dtype) == "float32")
+        and (_jittor_dtype_name(max_value.dtype) == "float32")
         and (min_value.numel() == 1)
         and (max_value.numel() == 1)
         and min_value.is_stop_grad()
@@ -97,8 +98,8 @@ def embedding_acl(
         or not isinstance(weight, jt.Var)
         or input.ndim < 1
         or (weight.ndim != 2)
-        or (str(input.dtype) not in ("int32", "int64"))
-        or (str(weight.dtype) not in ("float32", "bfloat16"))
+        or (_jittor_dtype_name(input.dtype) not in ("int32", "int64"))
+        or (_jittor_dtype_name(weight.dtype) not in ("float32", "bfloat16"))
         or (max_norm is not None)
         or sparse
         or (not isinstance(scale_grad_by_freq, (bool, np.bool_)))
@@ -145,7 +146,7 @@ def scatter_acl(input, dim, index, src, reduce="void"):
 
 
 def arg_reduce_acl(input, op, dim, keepdims=False):
-    if str(input.dtype) not in ("float16", "float32"):
+    if _jittor_dtype_name(input.dtype) not in ("float16", "float32"):
         return None
     return ArgReduceACL(jt.ops.arg_reduce)(input, op, dim, keepdims)
 
@@ -229,7 +230,7 @@ def transpose_acl(x, *dim):
 def _roll_acl(x, shifts, dims=None):
     if not (
         isinstance(x, jt.Var)
-        and str(x.dtype)
+        and _jittor_dtype_name(x.dtype)
         in ("bfloat16", "float16", "float32", "int8", "uint8", "int32", "uint32", "bool")
     ):
         return None
@@ -257,7 +258,7 @@ def _split_acl(x, split_size, dim=0):
     if (
         not getattr(jt.flags, "no_grad", 0)
         or not isinstance(x, jt.Var)
-        or str(x.dtype) not in ("float16", "bfloat16", "float32")
+        or _jittor_dtype_name(x.dtype) not in ("float16", "bfloat16", "float32")
         or (not isinstance(dim, (int, np.integer)))
         or isinstance(dim, (bool, np.bool_))
     ):

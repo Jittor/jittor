@@ -300,7 +300,7 @@ separate gates and are not claimed by this report.
 
 ## User documentation
 
-The bilingual [Ascend 910B setup and validation guide](../../docs/guides/ascend-910b.md)
+The bilingual [Ascend 910B setup and validation guide](../guides/ascend-910b.md)
 records the portable CANN initialization, source installation, cache isolation,
 real ACL probe, maintained nox command, troubleshooting steps, and current
 limitations. It does not embed the validation host's personal paths or device

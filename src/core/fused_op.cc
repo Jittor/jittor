@@ -207,7 +207,8 @@ void FusedOp::prepare_fused_key(JK& jk) {
     bool use_int64_t = false;
     for (auto& vi : vars) {
         jk << JK::hex1(vi.type) << JK::hex1(vi.var->shape.size());
-        if (vi.type != 1 && vi.var->num >= std::numeric_limits<int32_t>::max())
+        if (vi.type != 1 && (vi.var->num >= std::numeric_limits<int32_t>::max()
+                || vi.var->storage_span_bytes() / vi.var->dsize() >= std::numeric_limits<int32_t>::max()))
             use_int64_t = true;
     }
     if (use_int64_t)

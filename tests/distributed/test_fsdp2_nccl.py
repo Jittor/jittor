@@ -56,7 +56,7 @@ class TestFSDP2Nccl(unittest.TestCase):
                 self.inner = nn.Linear(4, 3)
                 self.output_bias = jt.ones((3,))
 
-            def forward(self, value):
+            def execute(self, value):
                 return self.inner(value) + self.output_bias
 
         model = NestedModel()
@@ -193,6 +193,113 @@ class TestFSDP2Nccl(unittest.TestCase):
         np.testing.assert_array_equal(
             world_value.numpy(), np.asarray([total], dtype="float32")
         )
+
+    @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
+    def test_two_dimensional_mesh_hybrid_gradient(self):
+        from jittor.compat.fsdp2.dtensor import init_device_mesh
+
+        world = int(jt.world_size)
+        if world < 4 or world % 2:
+            self.skipTest("requires an even world of at least four ranks")
+        mesh = init_device_mesh("cuda", (world // 2, 2), mesh_dim_names=("replicate", "shard"))
+        jt.seed(932)
+        model = nn.Linear(4, 3)
+        initial = {name: np.array(param.numpy(), copy=True)
+                   for name, param in model.named_parameters()}
+        fsdp2.fully_shard(model, mesh=mesh)
+        state = model._fsdp_state
+        self.assertEqual(state.true_fsdp_world_size, 2)
+        self.assertEqual(state.true_fsdp_rank, int(jt.rank) % 2)
+        inputs, target = _rank_data(int(jt.rank))
+        output = model(jt.array(inputs))
+        loss = ((output - jt.array(target)) ** 2).mean()
+        model.sharded_sgd_step(loss, lr=0.03)
+        gradients = [_linear_grads(initial["weight"], initial["bias"], *_rank_data(rank))
+                     for rank in range(world)]
+        expected = {name: initial[name] - 0.03 * np.mean([g[index] for g in gradients], axis=0)
+                    for index, name in enumerate(("weight", "bias"))}
+        for entry in state.true_fsdp_params:
+            np.testing.assert_allclose(entry.shard.full_tensor().numpy(), expected[entry.name],
+                                       rtol=2e-5, atol=2e-5)
+
+    @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
+    def test_mesh_norm_combines_groups_without_replicating(self):
+        from jittor.compat.fsdp2.dtensor import init_device_mesh
+        from jittor.compat.torch.grad import _get_total_norm_device
+
+        world = int(jt.world_size)
+        mesh = init_device_mesh("cuda", (world, 1), mesh_dim_names=("replicate", "shard"))
+        singleton = mesh["shard"].get_group()
+        world_group = mesh["replicate"].get_group()
+        replicated = jt.array([3.0])
+        sharded = jt.array([float(int(jt.rank) + 1)])
+        object.__setattr__(replicated, "_fsdp_norm_group", singleton)
+        object.__setattr__(sharded, "_fsdp_norm_group", world_group)
+        norm = _get_total_norm_device([replicated, sharded], 2, shard_reduce=True)
+        expected = math.sqrt(9 + sum(rank * rank for rank in range(1, world + 1)))
+        self.assertAlmostEqual(float(norm.item()), expected, places=5)
+        zero_norm = _get_total_norm_device([replicated, sharded], 0, shard_reduce=True)
+        self.assertEqual(float(zero_norm.item()), 2.0)
+
+    @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
+    def test_mesh_reordered_shards_custom_adam_and_lifetime(self):
+        import weakref
+        import torch
+        from jittor.compat.fsdp2.dtensor import DeviceMesh
+        from jittor.compat.fsdp2.common import StateRecord
+
+        class CustomAdam(torch.optim.Adam):
+            def step(self, *args, **kwargs):
+                self.custom_calls = getattr(self, "custom_calls", 0) + 1
+                return super().step(*args, **kwargs)
+
+        def lifetime_ref(tensor):
+            # Native Var lacks a weakref slot. A marker owned only by its
+            # instance dict tracks the same lifetime without retaining it.
+            marker = StateRecord()
+            object.__setattr__(tensor, "_fsdp_lifetime_probe", marker)
+            return weakref.ref(marker)
+
+        jt.seed(1234)
+        model = torch.nn.Linear(4, 3)
+        initial = {name: np.array(param.numpy(), copy=True)
+                   for name, param in model.named_parameters()}
+        ranks = list(reversed(range(int(jt.world_size))))
+        mesh = DeviceMesh("cuda", ranks)
+        fsdp2.fully_shard(model, mesh=mesh)
+        state = model._fsdp_state
+        self.assertEqual(state.true_fsdp_rank, ranks.index(int(jt.rank)))
+        self.assertFalse(state.true_fsdp_flat_shard._is_view(),
+                         "a local owned shard must not retain the full allocation as a view")
+        opt = CustomAdam(model.parameters(), lr=0.01, eps=1e-6)
+        expected = initial
+        moment = {name: np.zeros_like(v) for name, v in expected.items()}
+        variance = {name: np.zeros_like(v) for name, v in expected.items()}
+        for step in range(1, 4):
+            opt.zero_grad()
+            x, target = _rank_data(int(jt.rank))
+            output = model(torch.tensor(x))
+            loss = ((output - torch.tensor(target)) ** 2).mean()
+            loss.backward()
+            old_shards = [lifetime_ref(entry.shard) for entry in state.true_fsdp_params]
+            opt.step()
+            jt.sync_all(True)
+            del output, loss
+            gradients = [_linear_grads(expected["weight"], expected["bias"], *_rank_data(rank))
+                         for rank in ranks]
+            for index, name in enumerate(("weight", "bias")):
+                grad = np.mean([g[index] for g in gradients], axis=0)
+                moment[name] = 0.9 * moment[name] + 0.1 * grad
+                variance[name] = 0.999 * variance[name] + 0.001 * grad * grad
+                expected[name] -= (0.01 / (1 - 0.9 ** step)) * moment[name] / (
+                    np.sqrt(variance[name]) / np.sqrt(1 - 0.999 ** step) + 1e-6)
+            for entry in state.true_fsdp_params:
+                np.testing.assert_allclose(entry.shard.full_tensor().numpy(), expected[entry.name],
+                                           rtol=2e-5, atol=2e-5)
+                self.assertIsNone(entry.full_param)
+            # Superseded views must drop promptly, without forcing cyclic GC.
+            self.assertTrue(all(ref() is None for ref in old_shards))
+        self.assertEqual(opt.custom_calls, 3)
 
     @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
     def test_nccl_all_gather_autograd(self):

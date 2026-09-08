@@ -72,7 +72,7 @@ and CPU-to-accelerator parity. See [test system](../../docs/testing/test-system.
 The complete CPU repository gate is
 [`tools/run_test_suite.py`](../../tools/run_test_suite.py), which owns separate
 native and Torch-mode processes, JIT caches, temporary directories, and process
-mode variables. Current AArch64 verification passes native `768 passed, 738 skipped`, Torch `1591 passed, 536 skipped`, and clean structure `232 passed, 2 skipped`; see the [current CPU suite](../results/2026-09-01-current-cpu-suite.md) and the [ARM CPU stability report](../results/2026-08-30-arm-cpu-suite-stability.md).
+mode variables. Current AArch64 verification passes native `768 passed, 738 skipped`, Torch `1591 passed, 536 skipped`, and clean structure `232 passed, 2 skipped`; see the [current CPU suite](../../docs/results/2026-09-01-current-cpu-suite.md) and the [ARM CPU stability report](../../docs/results/2026-08-30-arm-cpu-suite-stability.md).
 The maintained CUDA gate also passes on a real RTX 4090 and covers the complete CUDA backend
 directory, dtype coverage, CPU/CUDA device parity, TF32 controls, and strict
 OpInfo CUDA references. The maintained CPU gate also passes with a fail-closed
@@ -84,31 +84,31 @@ Transformers 4.56.2 Qwen3-8B float32 loads all 8,190,735,360 parameters; SDPA,
 greedy `arg_reduce`, and mask `all` run on ACL without CPU fallback. A native-shape `empty`
 fast path brings 0.6B decode to 15.90 token/s versus native `torch_npu` 16.19 token/s.
 Qwen3-0.6B BF16 SDPA passes zero-fallback generation at 14.92 token/s versus native 15.31 token/s.
-Qwen3-0.6B FP32 eager forward/loss/backward also passes zero-fallback at `1.07x-1.12x` native `torch_npu`. Transformers 5.5.3 BF16 completes forward, backward, and AdamW without CPU fallback; explicit fused AdamW matches CANN/PyTorch for two fixed-gradient steps. BF16 embedding/RMSNorm/RoPE training kernels pass independent real-NPU references. After correcting Python-scalar promotion, RMSNorm rounding order, and BF16 SiLU, all 29 hidden states and logits match native `torch_npu` elementwise for the maintained one-step input. Eliminating 57 no-op full-slice gradients and lowering 112 continuous last-axis gradients to cached-zero CANN Cat preserves the exact snapshot and brings the current same-device protocol from `1.195x` to about `1.063x`; direct CANN RoPE reaches `0.988x` but is rejected because its logits and gradient trajectory differ. Cross-framework long training parity and the exact-path performance gate remain open. See the [training report](../results/transformers/2026-08-30-qwen3-ascend-training.md).
-See the [Ascend guide](../../docs/guides/ascend-910b.md), [validation report](../results/2026-08-28-ascend-910b-validation.md), [arg-reduce](../results/2026-08-30-npu-arg-reduce-backward.md)/[product](../results/2026-08-30-npu-product-reduction.md) follow-ups, [Qwen3 inference report](../results/transformers/2026-08-28-qwen3-ascend-performance.md), complete [CPU](../results/2026-08-22-complete-cpu-test-suite.md)/[CUDA](../results/2026-08-22-cuda-test-suite.md) reports, and the [parallel follow-up](../results/2026-08-22-cuda-parallel-range-network-oracle.md).
+Qwen3-0.6B FP32 eager forward/loss/backward also passes zero-fallback at `1.07x-1.12x` native `torch_npu`. Transformers 5.5.3 BF16 completes forward, backward, and AdamW without CPU fallback; explicit fused AdamW matches CANN/PyTorch for two fixed-gradient steps. BF16 embedding/RMSNorm/RoPE training kernels pass independent real-NPU references. After correcting Python-scalar promotion, RMSNorm rounding order, and BF16 SiLU, all 29 hidden states and logits match native `torch_npu` elementwise for the maintained one-step input. Eliminating 57 no-op full-slice gradients and lowering 112 continuous last-axis gradients to cached-zero CANN Cat preserves the exact snapshot and brings the current same-device protocol from `1.195x` to about `1.063x`; direct CANN RoPE reaches `0.988x` but is rejected because its logits and gradient trajectory differ. Cross-framework long training parity and the exact-path performance gate remain open. See the [training report](../../docs/results/transformers/2026-08-30-qwen3-ascend-training.md).
+See the [Ascend guide](../../docs/guides/ascend-910b.md), [validation report](../../docs/results/2026-08-28-ascend-910b-validation.md), [arg-reduce](../../docs/results/2026-08-30-npu-arg-reduce-backward.md)/[product](../../docs/results/2026-08-30-npu-product-reduction.md) follow-ups, [Qwen3 inference report](../../docs/results/transformers/2026-08-28-qwen3-ascend-performance.md), complete [CPU](../../docs/results/2026-08-22-complete-cpu-test-suite.md)/[CUDA](../../docs/results/2026-08-22-cuda-test-suite.md) reports, and the [parallel follow-up](../../docs/results/2026-08-22-cuda-parallel-range-network-oracle.md).
 The current fail-closed optional CUDA base gate passes 16 TorchMetrics,
 MMCV/MMEngine, PEFT, TensorDict, and FlashAttention-adapter tests from one
 retained cache; TorchMetrics is split by domain so cold compilation does not
 consume one monolithic test timeout. See the
-[optional CUDA report](../results/2026-08-24-optional-compat-cuda-gate.md).
+[optional CUDA report](../../docs/results/2026-08-24-optional-compat-cuda-gate.md).
 Compact ResNet18, ViT, GPT-2, and diffusion UNet now also pass three-step SGD
 loss, complete trainable-parameter, and shared-buffer trajectories on CPU and
 real CUDA. A bilingual native-Jittor ResNet tutorial executes the same three-step
 training/state-restore workflow in the maintained offline CPU notebook gate. See the
-[common-network trajectory report](../results/2026-08-26-common-network-training-trajectories.md).
+[common-network trajectory report](../../docs/results/2026-08-26-common-network-training-trajectories.md).
 The same report records the real-scale follow-up: UNet is accepted at `0.79x`,
 ConvNet improved to `1.08x`, and ViT remains open at about `1.33x` because its
 dominant CUDA GEMMs lag the PyTorch reference.
 Performance work uses isolated caches, synchronization, and exact commit labels.
 The ecosystem harness verifies twelve Transformers/Diffusers/PEFT/ms-swift/MMCV/MMEngine CPU/CUDA cases; its NPU scope verifies Diffusers UNet2D, MMCV/MMEngine, and ms-swift LoRA Llama forward and every gradient against `torch_npu` with zero CPU paths.
-Diffusers correctness and maintained float32 performance are accepted at `0.964x` native `torch_npu`; the tiny OpenMMLab NPU cases now pass at `0.927x/0.796x`. See the [Diffusers](../results/2026-08-30-diffusers-ascend-parity-performance.md) and [OpenMMLab](../results/2026-08-30-mmcv-mmengine-ascend-parity.md) reports. The tiny ms-swift LoRA case uses fused float32 causal SDPA training and passes at `0.969x`; see the [ms-swift Ascend report](../results/2026-08-31-ms-swift-ascend-parity-performance.md).
+Diffusers correctness and maintained float32 performance are accepted at `0.964x` native `torch_npu`; the tiny OpenMMLab NPU cases now pass at `0.927x/0.796x`. See the [Diffusers](../../docs/results/2026-08-30-diffusers-ascend-parity-performance.md) and [OpenMMLab](../../docs/results/2026-08-30-mmcv-mmengine-ascend-parity.md) reports. The tiny ms-swift LoRA case uses fused float32 causal SDPA training and passes at `0.969x`; see the [ms-swift Ascend report](../../docs/results/2026-08-31-ms-swift-ascend-parity-performance.md).
 On a real 910B3, the locked verl core algorithms pass exact loss/gradient parity
 against `torch_npu` for vanilla PPO, GSPO, SAPO, GPG, geometric-mean, CISPO, and
 GRPO with zero CPU fallback; only GPG passes the NPU micro-performance protocol,
 while full NPU workers/FSDP2/rollout/PPO remain open. The CPU/CUDA gate passes
-four-rank NCCL/FSDP2 and tiny Qwen3 PPO; see the [Ascend core report](../results/2026-09-02-verl-ascend-core-algorithms.md)
-and [CUDA PPO report](../results/2026-08-24-verl-weight-transfer.md).
-The external NPU vLLM adapter on current HEAD passes public `vllm.LLM.generate` for Qwen3-0.6B with exact four-token parity, zero CPU fallback, and no loaded `torch_npu`/`vllm_ascend`. Preserving BF16 parameters and grouping the maintained CANN serving operations, including the exact Q/K RMSNorm and RoPE sequence, reduce its pooled warm-request median from about `0.615s` to `0.36330s`. The current comparable native `vllm-ascend` baseline is `0.38998s`, so restricted single-request, short-context, unquantized TP=1 correctness and performance are accepted; broader serving coverage remains open. See the [vLLM Ascend report](../results/2026-08-31-vllm-ascend-jittor-bootstrap.md).
+four-rank NCCL/FSDP2 and tiny Qwen3 PPO; see the [Ascend core report](../../docs/results/2026-09-02-verl-ascend-core-algorithms.md)
+and [CUDA PPO report](../../docs/results/2026-08-24-verl-weight-transfer.md).
+The external NPU vLLM adapter on current HEAD passes public `vllm.LLM.generate` for Qwen3-0.6B with exact four-token parity, zero CPU fallback, and no loaded `torch_npu`/`vllm_ascend`. Preserving BF16 parameters and grouping the maintained CANN serving operations, including the exact Q/K RMSNorm and RoPE sequence, reduce its pooled warm-request median from about `0.615s` to `0.36330s`. The current comparable native `vllm-ascend` baseline is `0.38998s`, so restricted single-request, short-context, unquantized TP=1 correctness and performance are accepted; broader serving coverage remains open. See the [vLLM Ascend report](../../docs/results/2026-08-31-vllm-ascend-jittor-bootstrap.md).
 Qwen3-0.6B vLLM real-CUDA inference
 now runs about 20.5% faster than its real-PyTorch reference on the maintained
 4-token protocol; TRELLIS.2 improved from about 1.20x to 1.093x slower, so its
@@ -119,10 +119,10 @@ math-attention path remains `1.13x/1.22x` slower for GPT-2/Llama; with explicitl
 configured native FlashAttention and float32-to-fp16 cast, GPT-2 reaches
 `0.90-0.94x`, while Llama retains a conservative `3-4%` gap. See
 [benchmarking](../../docs/performance/benchmarking.md) and the
-[ecosystem parity/performance report](../results/2026-08-23-ecosystem-parity-performance.md),
-the [verl/vLLM/TRELLIS current-baseline report](../results/2026-08-23-verl-vllm-trellis-current-baseline.md),
-the [CUDA masked SDPA report](../results/2026-08-23-cuda-masked-sdpa.md), and the
-[Transformer normalization follow-up](../results/2026-08-26-transformers-training-normalization.md).
+[ecosystem parity/performance report](../../docs/results/2026-08-23-ecosystem-parity-performance.md),
+the [verl/vLLM/TRELLIS current-baseline report](../../docs/results/2026-08-23-verl-vllm-trellis-current-baseline.md),
+the [CUDA masked SDPA report](../../docs/results/2026-08-23-cuda-masked-sdpa.md), and the
+[Transformer normalization follow-up](../../docs/results/2026-08-26-transformers-training-normalization.md).
 
 ### Agent-operable optimization
 
@@ -135,7 +135,7 @@ research only; no autonomous mutation path is implemented. See
 1. Read [collaboration rules](collaboration.md).
 2. Configure a portable, isolated run from [environment](environment.md).
 3. Search the [active known-issues ledger](known-issues.md) and
-   [`agent/results/`](../results/README.md) for existing evidence.
+   [`docs/results/`](../../docs/results/README.md) for existing evidence.
 4. Confirm the branch, exact commit, dirty state, and target backend.
 5. Run the smallest reproduction before editing.
 
@@ -170,7 +170,7 @@ owner, executable evidence, workaround, and exit condition.
 - Update this index only when its current-state summary or links change.
 - Put durable architectural decisions under `docs/`.
 - Put compact, reproducible verification and performance conclusions in a dated
-  `agent/results/YYYY-MM-DD-topic.md` report.
+  `docs/results/YYYY-MM-DD-topic.md` report.
 - Keep raw logs, generated source, caches, wheels, profiles, and large benchmark
   data under `$JITTOR_LAB_ROOT/_state/`.
 - A report names the exact commit, environment, commands, results, limitations,

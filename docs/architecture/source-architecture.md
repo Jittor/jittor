@@ -1,8 +1,8 @@
 # Source Architecture and Module Boundaries
 
 - Status: Accepted
-- Last reviewed: 2026-08-31
-- Baseline: `f5e8e944` plus the boundary documentation changes described here
+- Last reviewed: 2026-09-08
+- Baseline: [architecture integration](../results/2026-09-08-architecture-integration.md)
 - Owner: Jittor core maintainers
 - Review when: a public module moves, an implementation domain is added, or a
   runtime resource path changes
@@ -600,7 +600,7 @@ binding routes leaf, retained-gradient and optimizer bookkeeping to one state.
 Legacy native attributes alias that state, and rolled-back installation steps
 are replayed against the same state on retry.
 
-The optional TorchNamespace owns its public writes and deletions. Missing reads
+The TorchNamespace owns its public writes and deletions. Missing reads
 may still use its native owner; deletion masks that fallback locally. Transaction
 rollback restores the exact local binding and deletion state. InstallContext
 separates the installation target from its native backend and never inherits
@@ -608,6 +608,9 @@ install markers through namespace fallback. Publication keeps the root self-alia
 consistent in the registry and import mapping. Independent activation owns real
 Tensor/Parameter subclasses and Module/NN adapters, reusing the native Var/Op
 graph and mathematics without installing those APIs on native classes.
+State lookup uses private weak module bindings, with transactional rollback;
+independent activation does not publish leaf/retained/optimizer state aliases
+on the native module or keep an unloaded frontend alive through owner lookup.
 
 The canonical Torch-style implementation is `jittor.compat.torch`. The legacy
 attribute/module spelling `jittor.torch_compat` loads its optional alias provider
@@ -676,6 +679,11 @@ See [Torch compatibility principles](torch-compatibility-principles.md) for the
 behavioral decision rules.
 
 ## Import and initialization rules
+
+Torch dtype objects and their native/NumPy consumption points follow the
+[dtype boundary contract](torch-dtype-boundary.md). Frontend dtypes are immutable
+objects; native code uses the core-owned name normalizer for metadata and the
+checked native converter for computation, including placeholder rejection.
 
 - Module imports must not compile kernels, download assets, mutate the source
   checkout, or silently install external packages.

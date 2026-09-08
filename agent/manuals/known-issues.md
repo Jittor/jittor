@@ -7,7 +7,7 @@
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
 This ledger contains reproduced, currently relevant defects and explicit
-limitations. Historical fixes remain in Git and dated `agent/results/` reports;
+limitations. Historical fixes remain in Git and dated `docs/results/` reports;
 they are not copied here. Every entry needs executable evidence and an exit
 condition. Environment outages are recorded in result reports rather than as
 framework defects.
@@ -56,7 +56,7 @@ framework defects.
   ownership. A later complete notebook smoke still reproduced a separate death
   with eight compile workers, including with Jittor's signal handler disabled,
   so the maintained notebook gate remains serial. See the
-  [SIGCHLD verification and addendum](../results/2026-08-21-jupyter-sigchld.md).
+  [SIGCHLD verification and addendum](../../docs/results/2026-08-21-jupyter-sigchld.md).
 - Review/expiry condition: remove only after sanitizer-backed root cause and
   repeated cold/warm stress, deadlock, multiprocess-cache, and performance gates
 
@@ -87,7 +87,7 @@ framework defects.
 - Status: NPU skip
 - Owner: binary operator and ACL backend maintainers
 - Evidence: [`pointwise_binary.py`](../../tests/opinfo/definitions/pointwise_binary.py)
-  and [Ascend 910B validation](../results/2026-08-28-ascend-910b-validation.md)
+  and [Ascend 910B validation](../../docs/results/2026-08-28-ascend-910b-validation.md)
 - Symptom: the maintained float32 `atan2` composition can terminate the process
   with an ACL vector-core exception on a real 910B3
 - Workaround: run this operation on a backend with a maintained `atan2` kernel;
@@ -101,7 +101,7 @@ framework defects.
 - Status: NPU skip
 - Owner: FFT and ACL backend maintainers
 - Evidence: [`fft.py`](../../tests/opinfo/definitions/fft.py) and
-  [Ascend 910B validation](../results/2026-08-28-ascend-910b-validation.md)
+  [Ascend 910B validation](../../docs/results/2026-08-28-ascend-910b-validation.md)
 - Symptom: the complex-to-real inverse FFT does not complete within 600 seconds
   on a real 910B3, and the stalled native call is not interrupted reliably by
   pytest's signal timeout
@@ -116,7 +116,7 @@ framework defects.
 - Owner: binary operator maintainers
 - Evidence: [`test_floor_divide.py`](../../tests/core/test_floor_divide.py),
   [`sample_floor_divide`](../../tests/opinfo/definitions/pointwise_binary.py), and
-  [2026-08-21 verification](../results/2026-08-21-floor-divide.md)
+  [2026-08-21 verification](../../docs/results/2026-08-21-floor-divide.md)
 - Previous symptom: C++ integer division made negative quotients truncate toward
   zero instead of flooring toward negative infinity
 - Current implementation: shared CPU/CUDA codegen subtracts one exactly when a
@@ -135,8 +135,8 @@ framework defects.
 - Owner: compiler and comparison-operator maintainers
 - Evidence: [`test_nan_self_comparisons_across_dtypes`](../../tests/compiler/test_kernel_traps.py),
   [`test_float_comparisons_with_nan`](../../tests/ops/test_fusion_correctness.py),
-  [2026-08-21 verification](../results/2026-08-21-ieee-nan-comparisons.md), and
-  [Ascend 910B validation](../results/2026-08-28-ascend-910b-validation.md)
+  [2026-08-21 verification](../../docs/results/2026-08-21-ieee-nan-comparisons.md), and
+  [Ascend 910B validation](../../docs/results/2026-08-28-ascend-910b-validation.md)
 - Previous symptom: CPU JIT kernels inherited `-Ofast`, allowing both same-object
   and distinct floating comparisons to violate IEEE NaN behavior; low-precision
   `!=`, `<=`, and `>=` could also fail to compile on CPU
@@ -170,7 +170,7 @@ framework defects.
 - Status: Withdrawn 2026-08-21; the old aggregate outcome is not reproducible on
   the current implementation
 - Owner: FFT and Torch-compat maintainers
-- Evidence: [CUDA rFFT sequence review](../results/2026-08-21-rfft-sequence-review.md)
+- Evidence: [CUDA rFFT sequence review](../../docs/results/2026-08-21-rfft-sequence-review.md)
   and
   [`test_rfft_after_complex_forward_backward_sequence`](../../tests/compat/torch/test_torch_compat_fft_einsum.py)
 - What it claimed: complex forward/gradient work earlier in one CUDA process could
@@ -215,7 +215,7 @@ framework defects.
   rewrite to CUDA double-accumulated launch bit boundaries and left large fused
   outputs partially unwritten. `0a3458b3` limits the rewrite to `JIT_cpu`; the
   complete CPU and CUDA gates and compact network parity now pass. See the
-  [parallel-range follow-up](../results/2026-08-22-cuda-parallel-range-network-oracle.md).
+  [parallel-range follow-up](../../docs/results/2026-08-22-cuda-parallel-range-network-oracle.md).
 - Lesson for the next probe: never use `.data` to force evaluation inside a
   `log_capture_scope`; call `jt.sync_all()` and keep a reference to the Var.
 

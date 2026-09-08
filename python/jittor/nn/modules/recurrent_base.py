@@ -1,4 +1,5 @@
 """Shared parameter layout, recurrence scheduling, and cuDNN RNN dispatch."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from abc import abstractmethod
 import math
@@ -89,7 +90,7 @@ class RNNBase(jt.Module):
             raise RuntimeError("Not Cudnn found")
         # Offsets are element indices in the parameters' dtype, not bytes or
         # indices into an unconditional float32 buffer.
-        dtype = str(self.weight_ih_l0.dtype)
+        dtype = _jittor_dtype_name(self.weight_ih_l0.dtype)
         if getattr(self, '_cudnn_weight_dtype', None) != dtype:
             offset_array = library.cudnn_rnn_weight_offset(
                 cudnn_mode,

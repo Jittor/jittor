@@ -13,7 +13,7 @@ class TestTorchShimStructure(unittest.TestCase):
     def setUpClass(cls):
         cls.repo_root = Path(__file__).resolve().parents[2]
         cls.shim_root = cls.repo_root / "compat" / "shim"
-        cls.manifest = cls.repo_root / "agent" / "baselines" / "torch-shim-resources-stage7.txt"
+        cls.manifest = cls.repo_root / "docs" / "results" / "baselines" / "torch-shim-resources-stage7.txt"
 
     def test_legacy_physical_package_is_absent(self):
         self.assertFalse((self.repo_root / "python" / "jittor" / "torch_shim").exists())

@@ -1,4 +1,5 @@
 """CUDA inference kernels for rotary position embeddings."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
@@ -43,12 +44,12 @@ def _rotary_embedding_contract(
         return None
     if cache_shape[0] <= 0 or cache_shape[1] != rotary_dim:
         return None
-    value_dtypes = {str(value.dtype) for value in (q, k, cos_sin_cache)}
+    value_dtypes = {_jittor_dtype_name(value.dtype) for value in (q, k, cos_sin_cache)}
     if len(value_dtypes) != 1 or value_dtypes.pop() not in (
         "float16", "bfloat16", "float32"
     ):
         return None
-    if str(positions.dtype) not in ("int32", "int64"):
+    if _jittor_dtype_name(positions.dtype) not in ("int32", "int64"):
         return None
     return q_shape, k_shape, cache_shape, head_size, rotary_dim
 
@@ -146,7 +147,7 @@ def _partial_rotary_embedding_contract(q, k, cos, sin, *, prefix_tokens, rotary_
         return None
     if _output_requires_grad(tensors):
         return None
-    dtypes = tuple(str(value.dtype) for value in tensors)
+    dtypes = tuple(_jittor_dtype_name(value.dtype) for value in tensors)
     if len(set(dtypes)) != 1 or dtypes[0] != "float32":
         return None
     try:

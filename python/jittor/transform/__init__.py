@@ -1,3 +1,4 @@
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 # ***************************************************************
 # Copyright (c) 2023 Jittor.
 # All Rights Reserved. 
@@ -233,7 +234,7 @@ def to_tensor(pic):
             pic = pic[None, :, :]
 
         # backward compatibility
-        if pic.dtype == 'uint8':
+        if _jittor_dtype_name(pic.dtype) == 'uint8':
             return np.float32(pic) * np.float32(1/255.0)
         else:
             return pic
@@ -253,7 +254,7 @@ def to_tensor(pic):
     # put it from HWC to CHW format
     img = img.reshape(pic.size[1], pic.size[0], len(pic.getbands()))
     img = img.transpose(2, 0, 1)
-    if img.dtype == 'uint8':
+    if _jittor_dtype_name(img.dtype) == 'uint8':
         return np.float32(img) * np.float32(1/255.0)
     else:
         return img
@@ -286,7 +287,7 @@ def _to_jittor_array(pic):
 
         img = jt.array(pic.transpose((2, 0, 1)))
         # backward compatibility
-        if img.dtype == 'uint8':
+        if _jittor_dtype_name(img.dtype) == 'uint8':
             return img.float().divide(255)
         else:
             return img
@@ -306,7 +307,7 @@ def _to_jittor_array(pic):
     # put it from HWC to CHW format
     img = img.reshape(pic.size[1], pic.size[0], len(pic.getbands()))
     img = img.permute((2, 0, 1))
-    if img.dtype == 'uint8':
+    if _jittor_dtype_name(img.dtype) == 'uint8':
         return img.float().divide(255)
     else:
         return img
@@ -338,7 +339,7 @@ def to_pil_image(pic, mode=None):
             pic = pic.transpose((1, 2, 0))
 
     npimg = pic
-    if 'float' in str(pic.dtype) and mode != 'F' and npimg.shape[2] != 1:
+    if 'float' in _jittor_dtype_name(pic.dtype) and mode != 'F' and npimg.shape[2] != 1:
         npimg = np.uint8(pic * 255)
     # npimg = np.transpose(pic, (1, 2, 0))
 
@@ -359,7 +360,7 @@ def to_pil_image(pic, mode=None):
             expected_mode = 'F'
         if mode is not None and mode != expected_mode:
             raise ValueError("Incorrect mode ({}) supplied for input type {}. Should be {}"
-                             .format(mode, np.dtype, expected_mode))
+                             .format(mode, _jittor_dtype_name(np.dtype), expected_mode))
         mode = expected_mode
 
     elif npimg.shape[2] == 2:
@@ -385,7 +386,7 @@ def to_pil_image(pic, mode=None):
             mode = 'RGB'
 
     if mode is None:
-        raise TypeError('Input type {} is not supported'.format(npimg.dtype))
+        raise TypeError('Input type {} is not supported'.format(_jittor_dtype_name(npimg.dtype)))
 
     return Image.fromarray(npimg, mode=mode)
 

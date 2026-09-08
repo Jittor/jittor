@@ -1,8 +1,8 @@
 # Dynamic shapes and submission boundaries
 
 Status: implementation contract for refactor task 3.05. CPU construction,
-composition, scalar readback and fetch tests cover the boundary. CUDA changes
-require the coordinator's real-device validation before hardware acceptance.
+composition, scalar readback and fetch tests cover the boundary. The integrated
+CUDA where, CUB where, candidate and fetch readbacks passed real-device checks.
 
 Operator constructors and `Op::init()` build edges, infer shape metadata and
 capture autograd policy. They do not submit work or invoke callbacks. A negative

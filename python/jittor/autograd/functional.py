@@ -1,4 +1,5 @@
 """Functional automatic-differentiation operations."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 # Reference: PyTorch torch/autograd/functional.py at commit 8ea5b572.
 import jittor as jt
@@ -38,7 +39,7 @@ def _reject_strict(api, strict):
 def _is_native_complex(x):
     # A native complex64/complex128 jt.Var (the new first-class complex dtype), as
     # opposed to the legacy jt.nn.ComplexNumber real/imag-pair simulation (not a Var).
-    return isinstance(x, jt.Var) and "complex" in str(x.dtype)
+    return isinstance(x, jt.Var) and "complex" in _jittor_dtype_name(x.dtype)
 
 
 def _zeros_seed_like(out):

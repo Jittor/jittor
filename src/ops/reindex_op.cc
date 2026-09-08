@@ -112,8 +112,7 @@ void ReindexOp::jit_run() {
     @for(i, 0, ESIZE,
         auto* __restrict__ extras@i@@p = extras[@i]->ptr<Te@i>();
         @for(j, 0, EDIM@i, index_t extras@i@@shape@j = extras[@i]->shape[@j];)
-        index_t extras@i@@stride@{EDIM@i-1} = 1;
-        @for(j, EDIM@i-2, -1, -1, auto extras@i@@stride@j = extras@i@@stride@{j+1} * extras@i@@shape@{j+1};)
+        @for(j, 0, EDIM@i, index_t extras@i@@stride@j = extras[@i]->storage_stride(@j);)
     )
     auto* __restrict__ yp = y->ptr<Tx>();
     // define y shape
@@ -124,8 +123,7 @@ void ReindexOp::jit_run() {
     // define x shape
     @for(i, 0, XDIM, index_t xshape@i = x->shape[@i];)
     // define x stride
-    index_t xstride@{XDIM-1} = 1;
-    @for(i, XDIM-2, -1, -1, auto xstride@i = xstride@{i+1} * xshape@{i+1};)
+    @for(i, 0, XDIM, index_t xstride@i = x->storage_stride(@i);)
     // generate d-for loop
     @for(d, 0, YDIM, for (index_t i@d=0; i@d < yshape@d; i@d++)) {
         auto yid = @for(d, 0, YDIM, + i@d * ystride@d);

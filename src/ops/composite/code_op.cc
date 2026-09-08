@@ -244,6 +244,9 @@ static const string& code_op_key_tail(const string& header, const string& src) {
 }
 
 void CodeOp::jit_prepare(JK& jk) {
+    for (auto* output : _outputs)
+        USER_CHECK(output->is_contiguous())
+            << "CodeOp output buffers require contiguous storage";
     if (!backend.empty()) {
         if (executes_on_accelerator()) {
             auto expected = backend == "cuda" ? BackendId::Cuda

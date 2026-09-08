@@ -1,4 +1,5 @@
 """Private ACL tensor paths for paged key/value caches."""
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
@@ -30,14 +31,14 @@ def _reshape_and_cache_acl(key, value, kv_cache, slot_mapping, slots=None):
         return None
     if int(slot_mapping.numel()) < key_shape[0]:
         return None
-    value_dtypes = {str(tensor.dtype) for tensor in (key, value, kv_cache)}
+    value_dtypes = {_jittor_dtype_name(tensor.dtype) for tensor in (key, value, kv_cache)}
     if len(value_dtypes) != 1 or value_dtypes.pop() not in (
         "float16",
         "bfloat16",
         "float32",
     ):
         return None
-    if str(slot_mapping.dtype) not in ("int32", "int64"):
+    if _jittor_dtype_name(slot_mapping.dtype) not in ("int32", "int64"):
         return None
 
     token_count = key_shape[0]
@@ -83,7 +84,7 @@ def _gather_cache_blocks_acl(kv_cache, block_ids):
     cache_shape = tuple(int(size) for size in kv_cache.shape)
     if len(cache_shape) != 5 or cache_shape[1] != 2:
         return None
-    if str(block_ids.dtype) not in ("int32", "int64"):
+    if _jittor_dtype_name(block_ids.dtype) not in ("int32", "int64"):
         return None
     block_count = int(block_ids.numel())
     index_shape = (block_count,) + cache_shape[1:]
@@ -99,7 +100,7 @@ def _gather_block_table_acl(block_table, request_count, block_count, request=Non
         return None
     if _output_requires_grad(block_table):
         return None
-    if block_table.ndim != 2 or str(block_table.dtype) not in ("int32", "int64"):
+    if block_table.ndim != 2 or _jittor_dtype_name(block_table.dtype) not in ("int32", "int64"):
         return None
     if request is None:
         row_ids = jt.index((request_count, block_count), dim=0, dtype="int32")
@@ -188,9 +189,7 @@ def _decode_attention_acl(query, key, value, scale):
         or query_shape[1] % key_shape[1] != 0
     ):
         return None
-    if str(key.dtype) not in ("bfloat16", "float32") or str(value.dtype) != str(
-        key.dtype
-    ):
+    if _jittor_dtype_name(key.dtype) not in ("bfloat16", "float32") or _jittor_dtype_name(value.dtype) != _jittor_dtype_name(key.dtype):
         return None
 
     from jittor.backends.acl.kernels.ops.flashattention_op import (
@@ -248,8 +247,8 @@ def _paged_attention_decode_acl(query, kv_cache, block_table, scale,
         or cache_shape[2] != 128
         or len(table_shape) != 2
         or table_shape[0] != batch
-        or str(kv_cache.dtype) != "bfloat16"
-        or str(block_table.dtype) != "int32"
+        or _jittor_dtype_name(kv_cache.dtype) != "bfloat16"
+        or _jittor_dtype_name(block_table.dtype) != "int32"
         or query_shape[2] != cache_shape[4]
         or query_shape[1] % cache_shape[3] != 0
     ):

@@ -8,14 +8,20 @@ def hann_window(window_length, periodic=True, *, dtype=None, device=None,
         np,
     )
     from ...tensor_state import compatibility_owner
+    from ...types import _dtype_to_str
     owner = compatibility_owner(jt)
+    selected = _dtype_to_str(dtype if dtype is not None else owner.get_default_dtype())
+    if selected not in ("float16", "bfloat16", "float32", "float64"):
+        raise RuntimeError("hann_window requires a floating point dtype")
     length = int(window_length)
     if length <= 1:
-        return owner.from_numpy(np.ones(max(length, 0), np.float32))
-    denominator = length if periodic else (length - 1)
-    index = np.arange(length, dtype=np.float64)
-    window = 0.5 - 0.5 * np.cos(2.0 * np.pi * index / denominator)
-    return owner.from_numpy(window.astype(np.float32))
+        window = np.ones(max(length, 0), np.float64)
+    else:
+        denominator = length if periodic else (length - 1)
+        index = np.arange(length, dtype=np.float64)
+        window = 0.5 - 0.5 * np.cos(2.0 * np.pi * index / denominator)
+    return owner.tensor(window, dtype=selected, device=device,
+                        requires_grad=requires_grad)
 
 
 def stft(input, n_fft, hop_length=None, win_length=None, window=None,

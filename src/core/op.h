@@ -25,6 +25,11 @@ struct ExecutionBackendScope {
     ExecutionBackendScope& operator=(const ExecutionBackendScope&) = delete;
 };
 struct Op : Node {
+    // Dense-only kernels receive explicit contiguous graph inputs at the
+    // generated construction boundary, before storing their Var members.
+    static constexpr bool accepts_storage_strides = false;
+    static constexpr bool mutates_storage_inputs = false;
+    virtual bool is_storage_view() const { return false; }
     static constexpr uint32 backend_mask = OpBackendAny;
     vector<VarPtr> outputs_holder;
     static int64 number_of_lived_ops;

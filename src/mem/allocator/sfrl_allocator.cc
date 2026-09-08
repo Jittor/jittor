@@ -170,12 +170,10 @@ size_t SFRLAllocator::allocation_size(size_t size) {
 }
 
 bool SFRLAllocator::should_split(CachingBlock* block, size_t size) {
-    size_t rest = block->size - size;
-    if (block->blocks == &small_blocks) {
-        return rest >= ALIGN_SIZE;
-    } else {
-        return rest > SMALL_BLOCK_SIZE;
-    }
+    // A small tail of a large segment is reusable by the small pool. Keeping
+    // it occupied charged almost 1 MiB of waste to slightly-over-1-MiB flat
+    // FSDP buffers. split/free both maintain pool ownership by current size.
+    return block->size - size >= ALIGN_SIZE;
 }
 
 size_t CachingBlockPool::free_all_cached_blocks(Allocator* underlying, long long free_size) {
@@ -203,7 +201,7 @@ size_t CachingBlockPool::free_all_cached_blocks(Allocator* underlying, long long
     return freed_memory;
 }
 
-void SFRLAllocator::try_merge_two_blocks(CachingBlock* dst, CachingBlock* src, CachingBlockPool& blocks) {
+void SFRLAllocator::try_merge_two_blocks(CachingBlock* dst, CachingBlock* src) {
     if (!src || src->occupied) {
         return;
     }
@@ -222,7 +220,7 @@ void SFRLAllocator::try_merge_two_blocks(CachingBlock* dst, CachingBlock* src, C
         }
     }
     dst->size += src->size;
-    blocks.erase(src);
+    src->blocks->erase(src);
     delete src;
 }
 
@@ -275,7 +273,8 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
         unused_memory -= block->size;
     }
     if (should_split(block, size)) {
-        CachingBlock* rest = new CachingBlock(block->size - size, block->origin_size, block->blocks, static_cast<char*>(block->memory_ptr) + size);
+        CachingBlock* rest = new CachingBlock(block->size - size, block->origin_size,
+            get_blocks(block->size - size), static_cast<char*>(block->memory_ptr) + size);
         rest->allocation = block->allocation;   // same underlying segment
         block->size = size;
         if (block->next) {
@@ -284,7 +283,7 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
         rest->next = block->next;
         rest->prev = block;
         block->next = rest;
-        blocks->insert(rest);
+        rest->blocks->insert(rest);
         unused_memory += rest->size;
     }
     block->occupied = true;
@@ -306,16 +305,15 @@ void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
         ASSERT((char*)mem_ptr >= (char*)block->memory_ptr &&
                (char*)mem_ptr <= (char*)block->memory_ptr + block->size)
             << "mem_ptr does not belong to allocation:" << allocation;
-    auto* blocks = block->blocks;
     if (block->share_times == 0) {
         id_space.erase_occupied(allocation);
         used_memory -= block->size;
         unused_memory += block->size;
         block->occupied = false;
-        auto& block_list = *block->blocks;
-        try_merge_two_blocks(block, block->prev, block_list);
-        try_merge_two_blocks(block, block->next, block_list);
-        block_list.insert(block);
+        try_merge_two_blocks(block, block->prev);
+        try_merge_two_blocks(block, block->next);
+        block->blocks = get_blocks(block->size);
+        block->blocks->insert(block);
     } else {
         --block->share_times;
     }
