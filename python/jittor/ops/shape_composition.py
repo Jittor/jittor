@@ -103,7 +103,8 @@ def cartesian_prod(*tensors):
     for t in tensors:
         if not isinstance(t, jt.Var):
             t = jt.array(t)
-        assert t.ndim == 1, "cartesian_prod only accepts 1-D Vars"
+        if t.ndim != 1:
+            raise ValueError("cartesian_prod only accepts 1-D Vars")
         norm.append(t)
     if len(norm) == 1:
         return norm[0]
