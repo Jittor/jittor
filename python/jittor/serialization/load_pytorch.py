@@ -271,7 +271,8 @@ def _should_read_directly(f):
 
 def persistent_load_direct(saved_id):
     global deserialized_objects
-    assert isinstance(saved_id, tuple)
+    if not isinstance(saved_id, tuple):
+        raise TypeError("persistent_load_direct: saved id must be a tuple")
     typename = _maybe_decode_ascii(saved_id[0])
     data = saved_id[1:]
     if typename == 'module':
