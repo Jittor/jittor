@@ -13,11 +13,12 @@ dependencies = ["jittor-torch==1.3.11.0"]
 [project.entry-points."jittor.module_patches"]
 jittor_transformers = "jittor_adapters.transformers:register"
 jittor_torchmetrics = "jittor_adapters.torchmetrics:register"
+jittor_vllm = "jittor_adapters.vllm:register"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["jittor_adapters*"]
 
 [tool.jittor.sdist]
-include = ["README.md"]
+include = ["README.md", "tests/**/*.py"]
 exclude = ["build/**", "dist/**"]

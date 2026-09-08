@@ -43,6 +43,34 @@ class RuntimeHookOwnership(unittest.TestCase):
         thread.join(2)
         self.assertEqual(acquired, [True])
 
+    def test_optional_vllm_discovery_is_named_and_absence_is_not_failure(self):
+        context = object()
+        install = self.source_function(
+            "torch/__init__.py", "_install_optional_vllm",
+            dict(__package__=_PACKAGE + ".torch", active_transaction=lambda value: None))
+        unrelated = types.SimpleNamespace(name="unrelated", value="foreign:register")
+        unrelated.load = mock.Mock(side_effect=AssertionError("unselected plugin loaded"))
+        original_meta = list(sys.meta_path)
+        original_finder = patcher._FINDER
+        original_registry = {key: list(value) for key, value in patcher._REGISTRY.items()}
+        original_loaded = set(patcher._ENTRY_POINTS_LOADED)
+        try:
+            patcher._REGISTRY.clear()
+            patcher._ENTRY_POINTS_LOADED.clear()
+            with mock.patch.object(patcher, "_entry_points", return_value=[unrelated]):
+                report = install(context)
+            self.assertTrue(report.ok)
+            self.assertTrue(any(item.name == "jittor_vllm" and item.status == "unavailable"
+                                for item in report.results))
+            unrelated.load.assert_not_called()
+        finally:
+            sys.meta_path[:] = original_meta
+            patcher._FINDER = original_finder
+            patcher._REGISTRY.clear()
+            patcher._REGISTRY.update(original_registry)
+            patcher._ENTRY_POINTS_LOADED.clear()
+            patcher._ENTRY_POINTS_LOADED.update(original_loaded)
+
     def test_failed_hook_restores_descriptor_module_and_lock(self):
         class Base:
             value = staticmethod(lambda: 1)
@@ -317,52 +345,7 @@ class RuntimeHookOwnership(unittest.TestCase):
                 self.assertIs(sys.modules[name], old)
             self.assert_lock_available(tx.InstallTransaction._lock)
 
-    def test_flash_bundle_conflict_rolls_back_first_publication(self):
-        bundle, interface = self.name(), self.name()
-        foreign = types.ModuleType(interface)
-        namespace = dict(sys=sys, PermissiveModule=types.ModuleType,
-                         _BUNDLE=bundle, _INTERFACE=interface,
-                         flash_attn_varlen_func=object(), flash_attn_with_kvcache=object(),
-                         _no_scheduler_metadata=object(), owned_runtime_hook=tx.owned_runtime_hook,
-                         active_transaction=tx.active_transaction,
-                         runtime_owns_module=tx.runtime_owns_module,
-                         install_permissive_package=lambda *a, **kw: None)
-        install = self.source_function("vllm/flash_attn.py", "install", namespace)
-        with mock.patch.dict(sys.modules, {interface: foreign}):
-            with self.assertRaises(tx.TransactionConflict):
-                install()
-            self.assertNotIn(bundle, sys.modules)
-            self.assertIs(sys.modules[interface], foreign)
-        self.assert_lock_available(tx.InstallTransaction._lock)
 
-    def test_vllm_operator_failure_rolls_back_partial_registry(self):
-        class Dispatcher:
-            def __init__(self):
-                self._namespaces = {}
-            def __getattr__(self, name):
-                return self._namespaces.setdefault(name, types.SimpleNamespace(_ops={}))
-        dispatcher = Dispatcher()
-        class Library:
-            def __init__(self, namespace, kind):
-                self.namespace = getattr(dispatcher, namespace)
-            def define(self, schema):
-                name = schema.split("(")[0]
-                self.namespace._ops[name] = types.SimpleNamespace(schema=schema, impls={})
-            def impl(self, name, function):
-                self.namespace._ops[name].impls["default"] = function
-                if name == "second":
-                    raise ValueError("registration failed")
-        namespace = dict(__name__=_PACKAGE + ".vllm.custom_ops",
-                         __package__=_PACKAGE + ".vllm",
-                         _OPERATORS=(("first", "first()"), ("second", "second()")),
-                         _IMPLEMENTATIONS={"first": lambda: 1, "second": lambda: 2},
-                         _CAPABILITY_PROBES=())
-        register = self.source_function("vllm/custom_ops.py", "register", namespace)
-        target = types.SimpleNamespace(ops=dispatcher, library=types.SimpleNamespace(Library=Library))
-        with self.assertRaisesRegex(ValueError, "registration failed"):
-            with tx.runtime_hook(self.name()):
-                register(target)
-        self.assertEqual(dispatcher._namespaces, {})
 
 
 if __name__ == "__main__":

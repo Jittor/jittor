@@ -19,10 +19,9 @@ extension from inside its own package body, so anything that waits for a module
 to finish executing is already too late. A finder is consulted before the body
 runs, so this arms itself from the first import of anything under ``vllm``.
 
-This package is staged inside the repository for convenience while both sides
-are moving. It talks to Jittor only through public APIs, so moving it out later
-is a directory move plus a ``jittor.module_patches`` entry point -- nothing
-here has to change.
+This independently installed adapter uses the public Jittor primitives and
+compatibility hook contracts. Its entry point arms the pre-import finder and
+registers post-import layer callbacks without importing vLLM.
 """
 
 import importlib.abc
@@ -33,7 +32,6 @@ import types
 from jittor.compat.module_patcher import register_module_patch
 from jittor.compat.transaction import TransactionConflict, owned_runtime_hook, active_transaction, set_attr
 
-from . import backend, custom_ops, flash_attn, layers
 
 # The compiled bundles vLLM tries to import. Being importable-but-empty is what
 # tells vLLM its kernels are present, which is the question that leads it to
@@ -58,6 +56,7 @@ def install():
     if _installed:
         return False
     import torch
+    from . import custom_ops, flash_attn
 
     # vLLM decides what it may use from `torch.__version__`, and needs the
     # torch API level there rather than Jittor's own version.
@@ -111,7 +110,7 @@ class _ArmOnFirstImport(importlib.abc.MetaPathFinder):
         return None
 
 
-def register(transaction=None):
+def arm(transaction=None, *, register_callback=None):
     """Arm vLLM compatibility. Nothing runs until vLLM is actually imported.
 
     Two mechanisms, because the work happens at two different moments. The
@@ -124,6 +123,9 @@ def register(transaction=None):
     particular call did the work -- callers record it in a status report that
     has to read the same every time it is taken.
     """
+
+    from . import backend, layers, flash_attn
+    registrar = register_module_patch if register_callback is None else register_callback
 
     if not any(isinstance(finder, _ArmOnFirstImport) for finder in sys.meta_path):
         finder = _ArmOnFirstImport()
@@ -145,5 +147,5 @@ def register(transaction=None):
             transaction.record_undo(restore_finder)
     for patches in (backend.PATCHES, layers.PATCHES, flash_attn.PATCHES):
         for path, patch in patches.items():
-            register_module_patch(path, patch)
+            registrar(path, patch)
     return True

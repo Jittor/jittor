@@ -3,7 +3,7 @@
 import types
 import unittest
 
-from jittor.compat.vllm import backend
+from jittor_adapters.vllm import backend
 
 
 def _module(shape_fn, stride_fn=None, head_sizes=None):

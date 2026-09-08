@@ -173,7 +173,7 @@ def _register_entry_point_value(value: object) -> None:
         _register_entry_point_value(result)
 
 
-def _load_entry_point_patches() -> List[PatchResult]:
+def _load_entry_point_patches(names=None) -> List[PatchResult]:
     results = []
     try:
         entry_points = _entry_points(MODULE_PATCH_ENTRY_POINT)
@@ -181,6 +181,8 @@ def _load_entry_point_patches() -> List[PatchResult]:
         swallowed("module_patcher.py _load_entry_point_patches: entry_points = _entry_points(MODULE_PATCH_ENTRY_POINT)", exc)
         return [PatchResult("entry_point", MODULE_PATCH_ENTRY_POINT, "discovery", "failed", repr(exc))]
     for entry_point in entry_points:
+        if names is not None and getattr(entry_point, "name", "") not in names:
+            continue
         key = (getattr(entry_point, "name", ""), getattr(entry_point, "value", repr(entry_point)))
         if key in _ENTRY_POINTS_LOADED:
             results.append(PatchResult("entry_point", key[0], key[1], "already_loaded"))
@@ -258,15 +260,25 @@ class _ModulePatchFinder(importlib.abc.MetaPathFinder):
 
 
 def install_module_patches(load_entry_points: bool = True, transaction=None,
-                           expected_entry_points=()) -> PatchReport:
-    """Load adapter registrations, patch loaded modules, and install one finder."""
+                           expected_entry_points=(), entry_point_names=None) -> PatchReport:
+    """Load selected adapters, patch loaded modules, and install one finder.
+
+    ``entry_point_names`` limits discovery before importing any plugin. When
+    omitted, nonempty ``expected_entry_points`` also selects those names;
+    omitting both retains explicit load-all behavior. Missing expected names
+    produce an unavailable report, not a required-install failure.
+    """
 
     global _FINDER, _LAST_REPORT
     with InstallTransaction._lock, _LOCK:
         old_registry = {path: list(callbacks) for path, callbacks in _REGISTRY.items()}
         old_loaded = set(_ENTRY_POINTS_LOADED)
         old_finder = _FINDER
-        results = _load_entry_point_patches() if load_entry_points else []
+        # Named optional installation must not activate unrelated adapters at
+        # an earlier composition stage. Omitting both lists retains load-all.
+        selected = (tuple(entry_point_names) if entry_point_names is not None
+                    else tuple(expected_entry_points) or None)
+        results = _load_entry_point_patches(selected) if load_entry_points else []
         present = {result.name for result in results if result.kind == "entry_point"}
         for name in expected_entry_points:
             if name not in present:

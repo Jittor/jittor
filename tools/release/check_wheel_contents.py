@@ -80,6 +80,9 @@ FORBIDDEN_TOP_LEVEL_NAMES = frozenset(
 )
 
 FORBIDDEN_MEMBER_PREFIXES = (
+    "jittor/compat/vllm/",
+    "jittor_vllm/",
+    "jittor_adapters/",
     "jittor/_misc/",
     "jittor/_nn/",
     "jittor/_pool/",

@@ -398,7 +398,7 @@
 | 7.15 | `_rebuild_tensor_v2` 按 stride 还原或报错（`serialization.py:260-268`） | 5.02 | [兼容](codebase-audit/03-compat-shim.md)§看起来支持其实是空操作 | 非连续视图保存的权重读出正确 |
 | 7.16 | compat/ 内 129 个 `except: pass` 与 258 个宽泛 except 限定异常类型并至少 debug 打点 | 7.03 | [兼容](codebase-audit/03-compat-shim.md)§代码结构与测试 | `grep "except: pass"` 于 compat 为 0 |
 | 7.17 | `runtime.enable()` 只把 shim 的 site 目录加进 sys.path 不插项目目录（`runtime.py:95-97`）；`_ensure_dir` 的 PermissionError 改明确诊断（`preflight.py:142`） | 7.04 | [兼容](codebase-audit/03-compat-shim.md)§vLLM / shim | 只读 HOME 下 import 给出可操作错误 |
-| 7.18 | 布局收尾：`python/jittor/compat/` 搬到顶层 `compat/` 成独立 distribution `jittor-torch`（含 torch/shim/fsdp2/triton；vllm 适配器按既定方向分到自己的仓库）；`compat/shim/cpp_extension/src` 的打包随之迁移 | 7.12、0.19 | [布局](target-layout.md)§3；vLLM 适配器边界（路线图） | `pip install jittor` 不带 compat；`jittor-torch` 单独可装 |
+| 7.18 | 布局收尾：`python/jittor/compat/` 搬到顶层 `compat/` 成独立 distribution `jittor-torch`（含 torch/shim/fsdp2/triton）；按用户2026-09-08最新要求，vLLM实现放本仓`adapters/jittor_adapters/vllm`、复用`jittor-torch-adapters`，不要求独立仓库或远端发布；`compat/shim/cpp_extension/src`的打包随之迁移 | 7.12、0.19 | [布局](target-layout.md)§3；用户明确修订vLLM归属 | `pip install jittor`不带compat；`jittor-torch`单独可装；vLLM实现只随adapters包分发 |
 | 7.21 | **`compat/vllm` 只经公开入口使用 jittor**。`layers.py:19` 直接 `from jittor.nn.backends import hooks`，伸进 `nn` 的私有 backend 注册表，`test_vllm_compat_structure.py::test_it_imports_jittor_only_through_its_public_entry_points` 因此为红。该规则的意思是这个包必须能搬出仓库——仓库外的插件导不到那个模块。按 `serving_ops` 自己的范式修：`nn` 实现读 hook，调用者用公开入口 | 7.14 | 2026-09-04 由清理 `tests/structure` 既存失败的执行者派生 | `compat/vllm` 内对 jittor 的 import 只出现在允许清单里；融合快路径的「有没有」与「调用」分成两个公开入口，使非融合路径不必为问一句而先付一次 cos/sin cache 的 cast |
 
 ## 11. 阶段 8 · 后端库与分布式（结构性）

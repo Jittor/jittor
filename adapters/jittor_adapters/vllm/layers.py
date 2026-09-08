@@ -16,7 +16,7 @@ they do not hold, so a configuration these primitives do not cover still runs.
 """
 
 import jittor as jt
-from ..transaction import set_attr
+from jittor.compat.transaction import set_attr
 
 _PATCHED = "_jittor_fused_forward"
 

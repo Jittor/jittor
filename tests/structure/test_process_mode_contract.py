@@ -31,7 +31,7 @@ from _helpers.child_process import run_python_child  # noqa: E402
 
 #: A native file, and a Torch-mode file that is cheap to collect.
 _NATIVE_TARGET = "tests/core/test_flags.py"
-_TORCH_TARGET = "tests/compat/vllm"
+_TORCH_TARGET = "tests/compat/torch/test_torch_compiler_fidelity.py"
 
 
 def _collect(targets, torch_mode=None):

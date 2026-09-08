@@ -86,7 +86,6 @@ python/
 │   │   ├── fsdp2/               # distributed FSDP2 compatibility
 │   │   ├── triton/              # Triton API bridge and deployment command
 │   │   ├── shim/                # Torch shim runtime and deployment command
-│   │   ├── vllm/                # staged, relocatable vLLM integration
 │   │   ├── module_patcher.py
 │   │   └── external_backend.py
 │   ├── selftest.py              # installed smoke test
@@ -666,13 +665,17 @@ Torch installer runs after an explicit Torch-mode preflight, through a deployed
 imported. This prevents class-level Torch adaptations from changing native
 Jittor APIs in unrelated processes.
 
-`jittor.compat.vllm` is a staged exception to the normal rule that
-project/version glue lives in an optional integration distribution. It may use
-only public Jittor APIs plus the public module-patcher mechanism, must remain
-relocatable, and activates only when vLLM is imported. Its exit condition is a
-versioned, installable vLLM plugin that preserves the maintained structure,
-correctness, and performance gates. The device platform and worker adapter stay
-outside the core repository while this extraction is incomplete.
+vLLM implementation and its dedicated tests live under the main repository's
+`adapters/jittor_adapters/vllm` and `adapters/tests/vllm`, shipped by the existing
+`jittor-torch-adapters` distribution, not by Jittor or jittor-torch.
+The optional Torch stage selects its `jittor.module_patches` entry point named
+`jittor_vllm`, targeting `jittor_adapters.vllm:register`. Its
+`register(callback) -> None` registrar arms the before-import
+extension setup and registers after-import layer patches through the shared
+transaction mechanism. Missing installation reports `unavailable` without
+breaking Torch. Public Jittor primitives remain the mathematical implementation.
+This extraction does not contain the separately maintained Ascend platform and
+worker sources, and does not claim complete NPU serving or hardware validation.
 
 The ownership order is:
 

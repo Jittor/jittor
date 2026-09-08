@@ -3,10 +3,16 @@
 2026-09-08 更新。只按本节、[看板任务行](refactor-board.md)与当前代码继续；
 下方折叠的历史正文保留证据，其中旧任务数、旧路径和“工作树全部干净”不代表现在。
 
+用户最新要求：后续改动不 push。已推送的最新批次是 `c618d841d`；此后的本地
+整合继续推进，未经新的用户指令不恢复推送。vLLM放本仓
+`adapters/jittor_adapters/vllm`，复用现有adapters发行物；外部提取目录先保留，
+不是交付前置。7.18已在本地收口，当前256条已合并、18条代码/性能未完成，
+远端仍是255条已合并；以后报进度须注明本地与远端区别。
+
 ## 当前开发底座
 
-- 在 `$JITTOR_LAB_ROOT/refactor/coord` 的 `wk/coord` 工作，整合后推送远端
-  `2.0-refactor`。本批以 `b2e03162b` 为起点，最新提交以远端分支为准。
+- 在 `$JITTOR_LAB_ROOT/refactor/coord` 的 `wk/coord` 工作；本批以
+  `b2e03162b`为起点，原生批已合入`c618d841d`，后续本地vLLM提交见Git历史，不能只看远端。
 - 物理源码固定为顶层 `src/`、`backends/`；`python/jittor/{src,extern}` 已不存在。
   Var/Op 统一图和七个元算子保留。真实 strides/storage、dtype/C++ 边界、
   动态形状提交与 GIL 前置见[上一批记录](../results/2026-09-08-architecture-integration.md)。
@@ -36,8 +42,9 @@ pytest/子进程合同仍需后续处理；不能把本批收口解释为全仓�
 Var 的 FollowRuntime 语义继续保留，不应为删除legacy Torch模式而改变它。
 当前 CPU checkpoint 回归已去掉 xfail；CPU 0-D 与 CUDA 运算通过局部可导copy
 完成，不能恢复 force_cpu 显示标记或逐操作强同步绕过。
-测试布局整批已在隔离树重排并共享 pytest 策略，vLLM 提取已准备独立本地项目；
-两项均待合入，先核对 agent 交付和实际diff，不能仅凭隔离树完成就关闭看板。
+测试布局整批已在隔离树重排并共享pytest策略，vLLM已整合到本地adapters工作区。
+前者须将rename/edit三方合到c618，保留同期断言与新增测试，不能用旧文件覆盖新base。
+legacy移除另在隔离树推进；先核对agent交付和实际diff，不按隔离树完成就关闭看板。
 FSDP 的通信、mesh、
 原生 optimizer 复用和生命周期架构已实现；峰值显存性能仍未达，优化后移。
 缺硬件的 ACL/HCCL/NPU、ROCm/Corex 和多机验证继续按上机文档交接。

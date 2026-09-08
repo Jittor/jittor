@@ -7,7 +7,7 @@ import numpy as np
 import jittor as jt
 
 torch = jt
-from jittor.compat.vllm import flash_attn
+from jittor_adapters.vllm import flash_attn
 
 
 def _softmax(values, axis=-1):

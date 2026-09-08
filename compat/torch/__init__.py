@@ -127,15 +127,10 @@ def _install_optional_vllm(context):
     """Arm vLLM compatibility, which fires only if vLLM is imported later."""
 
     from ..module_patcher import install_module_patches
-    from ..vllm import register
-
-    register(transaction=active_transaction(context))
-    # Registering fills the patch table; the finder that consults it has to be
-    # live before vLLM is imported. Entry points stay out of it -- scanning
-    # them here would drag unrelated adapters into every import of the shim.
-    install_module_patches(
-        load_entry_points=False,
+    return install_module_patches(
         transaction=active_transaction(context),
+        expected_entry_points=("jittor_vllm",),
+        entry_point_names=("jittor_vllm",),
     )
 
 

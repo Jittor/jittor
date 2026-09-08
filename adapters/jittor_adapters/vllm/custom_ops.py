@@ -108,7 +108,7 @@ def register(torch_module):
     library = getattr(torch_module, "library", None)
     if library is None or not hasattr(library, "Library"):
         return ()
-    from ..transaction import current_runtime_hook, TransactionConflict
+    from jittor.compat.transaction import current_runtime_hook, TransactionConflict
     hook = current_runtime_hook()
     table = getattr(getattr(torch_module, "ops", None), "__dict__", {}).get("_namespaces")
     namespace_before_creation = table.get("_C") if isinstance(table, dict) else None

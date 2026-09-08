@@ -62,7 +62,7 @@ AWESOME 列表、asv 配置在根目录。
 │   ├── distributed/          # 启动器、process group、多机 rendezvous 的 Python 面
 │   ├── contrib/              # ccl loss3d math_util einops：领域算法与 vendored 库，或直接分出去
 │   └── tools/                # nvtx jtune tracer：真正给用户的工具
-├── compat/                   # 独立发行物 jittor-torch：torch shim fsdp2 vllm triton
+├── compat/                   # 独立发行物 jittor-torch：torch shim fsdp2 triton；vLLM 属 adapters/jittor_adapters/vllm
 ├── tools/                    # 仓库工具：gen_pyi local_doc_builder dumpdef release benchmarks
 ├── tests/                    # 目录镜像源码：tests/core ↔ src/core，tests/backends/<name> ↔ backends/<name>
 ├── docs/                     # 唯一的文档树；agent/design 并入 docs/architecture

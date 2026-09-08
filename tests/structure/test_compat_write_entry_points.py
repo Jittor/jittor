@@ -236,8 +236,6 @@ CLASSIFIED = {
     (C + "module_patcher.py", "uninstall_module_patches", "sys.meta_path"): "ledger",
     (C + "permissive.py", "install_permissive_package", "sys.meta_path"): "ledger",
     (C + "permissive.py", "restore_finder", "sys.meta_path"): "ledger",
-    (C + "vllm/__init__.py", "register", "sys.meta_path"): "ledger",
-    (C + "vllm/__init__.py", "restore_finder", "sys.meta_path"): "ledger",
     # Activation transaction: mutate_path / publish_module / mutate_flag.
     (C + "shim/runtime.py", "_activate_once", "flags"): "ledger",
     (C + "shim/runtime.py", "_activate_once", "sys.modules"): "ledger",

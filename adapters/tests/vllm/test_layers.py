@@ -7,7 +7,7 @@ import numpy as np
 
 import jittor as jt
 
-from jittor.compat.vllm import layers
+from jittor_adapters.vllm import layers
 
 
 def _rotary_module(returns_cache):

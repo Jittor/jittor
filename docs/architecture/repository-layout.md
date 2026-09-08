@@ -157,7 +157,7 @@ stood after the 2.0 domain-package migration rather than where it should go.
 │   ├── nn/  optim/  autograd/  fft/  sparse/  dataset/  transform/  models/
 │   ├── linalg/  distributions/  init/
 │   ├── distributed/  contrib/  tools/
-├── compat/                   # separate distribution (jittor-torch): torch shim fsdp2 vllm triton
+├── compat/                   # separate distribution (jittor-torch): torch shim fsdp2 triton; vLLM belongs to adapters/
 ├── tools/  tests/  docs/  examples/  benchmarks/
 └── agent/                    # manuals/ skills/ only
 ```
@@ -271,12 +271,16 @@ Torch compatibility is separated by ownership rather than downstream project:
    entry points. Mainline Jittor does not install a permanent TRELLIS or Gaussian
    Splatting finder for every process.
 
-`jittor.compat.vllm` is the explicit staged exception while the vLLM integration
-and its external device plugin are still converging. Structure tests constrain
-it to public Jittor APIs and the module-patcher entry point so extraction does
-not require a core API rewrite. It must move to a versioned, installable plugin
-once that plugin preserves the maintained correctness and performance gates;
-the external platform and worker adapter are not owned by `python/jittor`.
+vLLM glue and its dedicated tests are owned by the main repository's
+`adapters/jittor_adapters/vllm` and `adapters/tests/vllm`, shipped in the existing
+`jittor-torch-adapters` distribution. No separate repository or publication
+is required. Neither core nor `jittor-torch` bundles this implementation or
+the former `jittor.compat.vllm` package. The optional
+Torch stage discovers only the named `jittor_vllm` module-patch entry point;
+absence remains optional. The adapter preserves before-import extension setup
+and after-import patches with the shared owner-aware rollback mechanism.
+The separate historical Ascend platform/worker sources are unavailable here;
+their absence is an explicit hardware integration gap, not part of this package.
 
 Installers must report each attempted patch independently. A broad
 `try/except Exception: pass` around a chain of patches is forbidden because one

@@ -19,9 +19,9 @@ import weakref
 
 import jittor as jt
 
-from ..permissive import PermissiveModule, install_permissive_package
-from ..diagnostics import EXPECTED, swallowed
-from ..transaction import owned_runtime_hook, active_transaction, set_attr, runtime_owns_module
+from jittor.compat.permissive import PermissiveModule, install_permissive_package
+from jittor.compat.diagnostics import EXPECTED, swallowed
+from jittor.compat.transaction import owned_runtime_hook, active_transaction, set_attr, runtime_owns_module
 
 # torch is the shim itself, and this module is imported while the shim is still
 # installing, so it cannot be reached at module scope -- only from a call, by

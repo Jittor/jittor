@@ -1,17 +1,11 @@
-"""The vLLM compatibility package is staged here, so pin what lets it leave.
-
-It is meant to become a plugin in its own repository. That move is only a
-directory move plus an entry-point declaration for as long as the package
-depends on nothing a plugin could not reach: public Jittor APIs and the module
-patcher. These rules fail the moment that stops being true.
-"""
+"""The independent adapter may consume public framework/hook contracts only."""
 
 import ast
 import unittest
 from pathlib import Path
 
 import jittor
-from jittor.compat import vllm as vllm_compat
+from jittor_adapters.vllm import bootstrap as vllm_compat
 
 _PACKAGE = Path(vllm_compat.__file__).resolve().parent
 
@@ -25,6 +19,7 @@ _ALLOWED_JITTOR_IMPORTS = {
     # than skip it. The exception type is part of that contract, exactly as it
     # is for the two finders above -- both of which raise it too.
     "jittor.compat.transaction",
+    "jittor.compat.diagnostics",
 }
 
 
@@ -34,9 +29,8 @@ def _sources():
     return sorted(_PACKAGE.rglob("*.py"))
 
 
-# `import jittor as torch` is the whole premise of this compatibility layer, so
-# a name rooted at `torch` reaches exactly the same module object as one rooted
-# at `jittor`. Any rule about touching the framework has to treat them alike.
+# Both the independent Torch namespace and the native Jittor namespace are
+# owned by the framework; adapters must not mutate either through an alias.
 _FRAMEWORK_ROOTS = ("jt", "jittor", "torch")
 
 
@@ -68,13 +62,11 @@ def _imported_names(tree):
 
 
 class TestVllmCompatIsRelocatable(unittest.TestCase):
-    def test_architecture_records_the_staged_plugin_boundary(self):
-        repo = Path(__file__).resolve().parents[2]
-        source = (
-            repo / "docs" / "architecture" / "source-architecture.md"
-        ).read_text(encoding="utf-8")
-        self.assertIn("`jittor.compat.vllm` is a staged exception", source)
-        self.assertIn("versioned, installable vLLM plugin", source)
+    def test_architecture_records_the_independent_plugin_boundary(self):
+        source = (Path(__file__).resolve().parents[2] / "README.md").read_text(encoding="utf-8")
+        self.assertIn("jittor.module_patches", source)
+        self.assertIn("before", source)
+        self.assertIn("after", source)
 
     def test_the_package_is_present(self):
         # What the file names are, and how long each file is, says nothing about
@@ -191,14 +183,14 @@ class TestVllmCompatArmsItselfWithoutRunning(unittest.TestCase):
     def test_arming_puts_exactly_one_finder_on_the_import_path(self):
         import sys
 
-        vllm_compat.register()
-        vllm_compat.register()
+        vllm_compat.arm()
+        vllm_compat.arm()
         finders = [finder for finder in sys.meta_path
                    if type(finder).__name__ == "_ArmOnFirstImport"]
         self.assertEqual(len(finders), 1)
 
     def test_the_finder_ignores_everything_that_is_not_vllm(self):
-        vllm_compat.register()
+        vllm_compat.arm()
         import sys
 
         finder = next(f for f in sys.meta_path
@@ -208,13 +200,13 @@ class TestVllmCompatArmsItselfWithoutRunning(unittest.TestCase):
                 self.assertIsNone(finder.find_spec(name))
 
     def test_the_operator_table_names_what_it_registers(self):
-        from jittor.compat.vllm import custom_ops
+        from jittor_adapters.vllm import custom_ops
 
         declared = {name for name, _ in custom_ops._OPERATORS}
         self.assertEqual(declared, set(custom_ops._IMPLEMENTATIONS))
 
     def test_every_layer_patch_is_registered_against_a_vllm_module(self):
-        from jittor.compat.vllm import flash_attn, layers
+        from jittor_adapters.vllm import flash_attn, layers
 
         for source in (layers.PATCHES, flash_attn.PATCHES):
             self.assertTrue(source)
@@ -225,9 +217,9 @@ class TestVllmCompatArmsItselfWithoutRunning(unittest.TestCase):
 
     def test_arming_registers_every_layer_patch(self):
         from jittor.compat.module_patcher import registered_module_patches
-        from jittor.compat.vllm import flash_attn, layers
+        from jittor_adapters.vllm import flash_attn, layers
 
-        vllm_compat.register()
+        vllm_compat.arm()
         registry = registered_module_patches()
         for source in (layers.PATCHES, flash_attn.PATCHES):
             for path, patch in source.items():

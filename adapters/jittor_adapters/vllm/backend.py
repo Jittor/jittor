@@ -1,5 +1,5 @@
-from ..diagnostics import EXPECTED, swallowed
-from ..transaction import set_attr
+from jittor.compat.diagnostics import EXPECTED, swallowed
+from jittor.compat.transaction import set_attr
 """What this backend's substituted attention implementation actually does.
 
 vLLM's FlashAttention backend declares the shape of the cache vLLM then

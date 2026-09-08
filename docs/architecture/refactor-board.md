@@ -1,6 +1,6 @@
 # 整改看板
 
-2026-09-08 最新：本批收口 7.03、11.04，任务表已有253→255条“已合并”，剩19条代码/性能记录，另有9条硬件验收、5条并入其他任务和3条已合并但验收有保留的记录；父项与派生项存在重叠。NN/distribution/Parameter类型工厂的真实行为已归模块级owner；原生TensorPlacement接通图传播、执行和工厂/to/load，真实CPU与双卡CUDA集中9项通过，解决CPU checkpoint及显式scalar被迁移的问题。7.12仍需删除显式legacy原生别名安装路径。证据及仍红的全仓结构门禁见[本批记录](../results/2026-09-08-frontend-placement-integration.md)。下一批继续完整测试布局迁移及vLLM独立项目提取，性能调优后移，不以提交数代表完成程度。
+2026-09-08 最新：本地收口7.18，已有256条“已合并”，剩18条代码/性能记录，另有9条硬件验收、5条并入其他任务和3条已合并但验收有保留的记录；父项与派生项存在重叠。按用户最新要求，vLLM放本仓adapters/jittor_adapters/vllm，不需要独立repo，后续不push；远端c618d841d仍为255条已合并。本地包边界见[vLLM记录](../results/2026-09-08-vllm-independent-distribution.md)。此前7.03、11.04与原生CPU/CUDA放置已合入，见[原生与类型整合](../results/2026-09-08-frontend-placement-integration.md)。下一批继续完整测试布局与7.12的legacy原生别名清理，性能调优后移，不以提交数代表完成程度。
 
 下方早期波次记录为历史证据，当前关闭状态以任务表为准；Tensor 子类底层前置见 [类型边界记录](../results/2026-09-08-tensor-frontend-types.md)。
 
@@ -725,7 +725,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.15 | `_rebuild_tensor_v2` 按 stride 还原或报错 | 已合并 | | 7e7877c8 |
 | 7.16 | compat/ 内 129 个 `except: pass` 与 258 个宽泛 except … | 已合并 | 兼容层分区 | 72dbc22d（+ 一次修复：`93b48a8e` [4.02 3/3] rebase 时把 cuda.py/types.py 整段解回 7.16 之前，`swallowed()` 24→0、16→0，全树违规回到 47 条；已用三方合并恢复，见提交说明） |
 | 7.17 | `runtime.enable()` 只把 shim 的 site 目录加进 sys.path … | 已合并 | 兼容层分区 | d5c769fb |
-| 7.18 | 布局收尾 | 待领 | compat | 顶层compat独立distribution与扩展资源打包已完成；core/compat wheel无文件交集，compat直接wheel与sdist重建151文件逐字节相同，隔离core-only及两包安装入口通过。仍缺原计划要求的vLLM适配器提取到独立仓库，7.12整体也未完成。见[发行物记录](../results/2026-09-08-independent-compat-distribution.md)。 |
+| 7.18 | 布局收尾 | 已合并 | coord（本地） | 顶层compat独立distribution与扩展资源打包已完成。按用户2026-09-08修订，vLLM七个生产文件已移入adapters/jittor_adapters/vllm，复用jittor-torch-adapters；独立repo/远端发布不是前置。具名EP保留before/after import与事务，core/compat不带vLLM实现。三包构建与文件交集检查、20个host节点和原adapters4项通过；整合后真实jt.nn公开接口节点1passed。按用户要求仅本地合并，不push；7.12的legacy语义清理仍独立跟踪，不由包布局完成代替。见[提取记录](../results/2026-09-08-vllm-independent-distribution.md)。 |
 | 7.21 | `compat/vllm` 只经公开入口使用 jittor | 已合并 | gatecheck | `71adc134`。新增 `jt.nn.qk_rms_norm_rotary` 与 `jt.nn.has_qk_rms_norm_rotary`，`compat/vllm/layers.py` 不再 import `jittor.nn.backends.hooks`。拆成两个入口是为了让非融合路径不必为「问一句有没有」先付一次 cos/sin cache 的 cast。`tests/nn/test_serving_ops.py` 12 passed（新增 3 条覆盖无后端／后端按序收到全部实参／后端拒绝输入）、vllm 与 nn 结构合计 29 passed。本机无 CANN/NPU，ACL 融合分支未实机执行，行为与改前一致（两处都在 hook 为 None 时短路） |
 | 7.19 | 精度策略接线：Jittor 一档、torch 两档，底层 matmul/conv 分字段 | 待领 | | 依赖 8.03、7.08；需保持 shim 的卷积与 matmul 语义分离 |
 | 7.20 | fp32 RNN 默认精度与 torch `cudnn.allow_tf32` 映射 | 待领 | | 依赖 8.03、7.19；需 CPU 递推与真实 CUDA 对拍 |
