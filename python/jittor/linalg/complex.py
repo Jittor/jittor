@@ -111,9 +111,12 @@ def complex_eigh(x:ComplexNumber):
     :return: w (...,M) eigenvalues, v (...,M,M) eigenvectors.
     """
     import jittor as jt
-    assert isinstance(x, ComplexNumber), "complex_eigh is implemented for nn.ComplexNumber"
-    assert _jittor_dtype_name(x.real.dtype) == "float32" and _jittor_dtype_name(x.imag.dtype) == "float32", "real and imag in ComplexNumber should be jt.float32"
-    assert x.shape[-2] == x.shape[-1], "only square matrix is supported for complex_eigh"
+    if not isinstance(x, ComplexNumber):
+        raise TypeError("complex_eigh is implemented for nn.ComplexNumber")
+    if not (_jittor_dtype_name(x.real.dtype) == "float32" and _jittor_dtype_name(x.imag.dtype) == "float32"):
+        raise TypeError("real and imag in ComplexNumber should be jt.float32")
+    if x.shape[-2] != x.shape[-1]:
+        raise ValueError("only square matrix is supported for complex_eigh")
     def forward_code(np, data):
         a = _stack_to_complex(data["inputs"][0])
         w, v = data["outputs"]
