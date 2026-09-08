@@ -55,8 +55,10 @@ def calculate_std(var, mode, nonlinearity, param=0.01):
     raises the same ValueError from the same place no matter which way in you
     came.
     """
-    assert isinstance(param,(int,float))
-    assert var.ndim>=2
+    if not isinstance(param, (int, float)):
+        raise TypeError("calculate_std: param must be int or float")
+    if var.ndim < 2:
+        raise ValueError("calculate_std: tensor must have at least two dimensions")
     fan = _fan_for_mode(var.shape, mode)
     gain = calculate_gain(nonlinearity, param)
     std = gain/math.sqrt(fan)
