@@ -175,10 +175,11 @@ namespace jittor {}
             cuda_src=code_program(
                 [
                     '\n// aclop\nBinaryOpRunner add_op;\nadd_op.name = "Add";\nadd_op.add(in0, true);\nadd_op.add(in1, true);\nadd_op.add(out1, false);\nadd_op.jt_name = "grouped_add_rms_norm";\nadd_op.run();\n\nRmsNormOpRunner norm_op;\nnorm_op.add(out1, true);\nnorm_op.add(in2, true);\nnorm_op.add(out0, false);\nnorm_op.add(out2, false);\nnorm_op.jt_name = "grouped_add_rms_norm";\n',
-                    attribute_program("RmsNorm", {"eps": eps}, variable="norm_op"),
+                    'apply_acl_code_attributes(norm_op, data, "acl_payload.norm.", "RmsNorm");\n',
                     "\nnorm_op.run();\n",
                 ]
             ),
+            attribute_sets={"norm": ("RmsNorm", {"eps": eps})},
         )
         return result[0], result[1]
 

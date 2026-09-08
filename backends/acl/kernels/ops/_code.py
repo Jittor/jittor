@@ -13,6 +13,7 @@ def code_with_attributes(*args, **kwargs):
     from ._attributes import AttributeCode, code_program
 
     fragments = []
+    attribute_sets = kwargs.pop("attribute_sets", None)
     for key in ("cuda_src", "cpu_src"):
         value = kwargs.get(key)
         if isinstance(value, AttributeCode):
@@ -35,6 +36,13 @@ def code_with_attributes(*args, **kwargs):
         kwargs["cuda_header"] = (
             kwargs.get("cuda_header", "") + '\n#include "aclops/acl_code_attributes.h"\n'
         )
+    if attribute_sets:
+        from ._attributes import attribute_payloads
+        data = dict(kwargs.get("data") or {})
+        data.update(attribute_payloads(attribute_sets))
+        kwargs["data"] = data
+        kwargs["cuda_header"] = kwargs.get("cuda_header", "") + \
+            '\n#include "aclops/acl_code_attributes.h"\n'
     return jt.code(*args, **kwargs)
 
 

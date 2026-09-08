@@ -144,6 +144,14 @@ def test_concat_forward_uses_typed_data_channel(pipeline):
     assert "op.jt_name = \"concat\"" not in calls[-1]["cuda_src"]
 
 
+def test_grouped_add_rms_norm_uses_named_attribute_set(pipeline):
+    load, Tensor, calls = pipeline
+    load("norms_op").GroupedAddRmsNormACL()(Tensor((2, 4, 8)), Tensor((2, 4, 8)), Tensor((8,)), 0.125)
+    payload = calls[-1]["data"]
+    assert payload["acl_payload.norm.field.0.value"] == 0.125
+    assert "acl_payload.norm." in calls[-1]["cuda_src"]
+
+
 def test_generated_and_runtime_attribute_sources_cannot_be_mixed(pipeline):
     load, Tensor, calls = pipeline
     code = load("_code").acl_code
