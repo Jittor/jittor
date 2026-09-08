@@ -73,3 +73,16 @@ python -m pip install ./adapters
 
 The in-tree entry point is `jittor_vllm = jittor_adapters.vllm:register` and
 importing the adapter package alone is inert.
+
+## Tiny UNet shim probe
+
+A reproducible compact `UNet2DModel` probe (sample size 4, one channel and one
+block) exposed two configuration-boundary incompatibilities before a complete
+forward/backward run. With diffusers defaults, `attention_head_dim=8` and four
+channels produce zero attention input features and a `ZeroDivisionError` in
+Jittor's `invariant_uniform` initializer. Setting `attention_head_dim=4` then
+reaches default `norm_num_groups=32` with four channels and raises the native
+GroupNorm divisibility assertion. With both values valid
+(`attention_head_dim=4`, `norm_num_groups=1`), runtime initialization produced
+no result within the 30-second bounded probe. These are compatibility/runtime
+blockers; no runtime code was changed.
