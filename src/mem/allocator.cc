@@ -16,7 +16,6 @@
 #include "mem/allocator/nfef_allocator.h"
 #include "mem/allocator/temp_allocator.h"
 #include "mem/swap.h"
-#include "runtime/executor_entry.h"
 #include "runtime/traversal_epoch.h"
 #include "core/var.h"
 
@@ -285,17 +284,10 @@ void migrate_to_cpu(Var* var, Allocator* allocator) {
         // device current, so it is ordered after the kernels that produced it
         // rather than after whatever the current device happens to be running.
         Allocation a(allocator, var->size);
-        {
-            // The other half of `.numpy()`/`.data`'s wait, after the device
-            // sync inside run_sync: a whole tensor over PCIe, blocking. Only
-            // the transfer is in the scope -- the allocation above and the free
-            // below mutate pools that another thread's batch would also touch,
-            // and DeviceWaitScope releasing nothing unless the executor lock is
-            // held is what keeps that from becoming a race.
-            DeviceWaitScope wait;
-            backend_copy(a.ptr, allocation_device(allocator), var->mem_ptr,
-                         allocation_device(var->allocator), var->size);
-        }
+        // backend_copy releases the GIL only for its blocking SDK call;
+        // allocation and release bookkeeping stay under the GIL.
+        backend_copy(a.ptr, allocation_device(allocator), var->mem_ptr,
+                     allocation_device(var->allocator), var->size);
         var->allocator->free(var->mem_ptr, var->size, var->allocation);
         var->mem_ptr = a.ptr;
         var->allocation = a.allocation;

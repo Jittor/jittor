@@ -514,6 +514,9 @@ inline static void cast_item_data(ItemData& data) {
 }
 
 ItemData VarHolder::item() {
+    // Keep the entry lock through the final scalar copy, including managed
+    // allocations which migrate_to_cpu deliberately leaves on the device.
+    ExecutorEntryScope entry;
     USER_CHECK(var->num==1) << "Item var size should be 1, but got" << var->num;
     // Value-initialize: only dsize bytes are written below, and the converter
     // may read all 8 (unsigned dtypes go through PyLong_FromUnsignedLongLong).
@@ -522,7 +525,6 @@ ItemData VarHolder::item() {
     auto dsize = data.dtype.dsize();
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
         // A blocking backend host copy waits for its producer stream.
-        ExecutorEntryScope entry;
         sync();
         if (save_mem || _HAS_ACCELERATOR)
             migrate_to_cpu(var, runtime_executor().allocator);

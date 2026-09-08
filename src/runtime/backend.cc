@@ -1,5 +1,6 @@
 #include "runtime/backend.h"
 #include "runtime/runtime.h"
+#include "runtime/executor_entry.h"
 #include "mem/allocator.h"
 #include <stdexcept>
 
@@ -60,8 +61,17 @@ void backend_copy(void* dst, Device dst_device, const void* src,
                   Device src_device, size_t size, bool ordered) {
     if (!size) return;
     USER_CHECK(dst && src) << "Backend copy requires non-null storage";
-    backend_ops(copy_backend(dst_device, src_device)).copy(
-        dst, dst_device, src, src_device, size, ordered);
+    const auto id = copy_backend(dst_device, src_device);
+    const auto copy = backend_ops(id).copy;
+    if (id == BackendId::Cpu) {
+        copy(dst, dst_device, src, src_device, size, ordered);
+    } else {
+        // All blocking accelerator transfers share this boundary, including
+        // alias-group and delayed-free migration. Pool bookkeeping remains
+        // outside; callers must own the executor before the GIL can drop.
+        DeviceWaitScope wait;
+        copy(dst, dst_device, src, src_device, size, ordered);
+    }
 }
 
 void backend_copy_async(void* dst, Device dst_device, const void* src,

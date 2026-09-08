@@ -60,8 +60,9 @@ bool inside_executor();
 // Does nothing unless this thread holds the executor lock. That is not an
 // optimization -- it is what keeps the release safe. The lock is the reason no
 // other thread can be inside the executor during the window, so a device wait
-// reached without it (there is none today; the check is a guard against the
-// next caller) keeps the GIL and stays serialized the old way.
+// reached without it keeps the GIL and stays serialized the old way. The
+// backend_copy gateway uses this for every blocking accelerator transfer;
+// callers outside an executor/readback entry never release implicitly.
 //
 // What must *not* go inside such a segment:
 //
