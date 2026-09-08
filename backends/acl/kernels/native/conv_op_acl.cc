@@ -89,7 +89,7 @@ namespace jittor
         {
             outputTensors.push_back(nullptr);
             auto ret = CreateAclTensor(outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw, out_[idx]);
-            CHECK_RET(ret == ACL_SUCCESS, return);
+            if (ret != ACL_SUCCESS) LOGf << name << ": convolution gradient tensor creation failed. ERROR:" << ret;
         }
         // biasgrad nd format; no-bias joint gradients only request dx and dw.
         if (output_num == 2)
@@ -100,7 +100,7 @@ namespace jittor
         {
             outputTensors.push_back(nullptr);
             auto ret = CreateAclTensor(outputShapes[2], out_[2]->mem_ptr, out_[2]->size, get_dtype(out_[2]->dtype()), &outputTensors[2], false);
-            CHECK_RET(ret == ACL_SUCCESS, return);
+            if (ret != ACL_SUCCESS) LOGf << name << ": bias gradient tensor creation failed. ERROR:" << ret;
         }
     }
 
