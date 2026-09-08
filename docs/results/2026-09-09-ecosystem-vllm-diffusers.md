@@ -37,4 +37,6 @@ manylinux x86_64), requiring Python 3.9--3.13 and exactly
 2.12.1+cu126 environment therefore was deliberately left unchanged. PyPI has
 no `trellis` distribution; TRELLIS requires its upstream source installation.
 
-No performance claim is made. No code or package was installed for this check.
+No performance claim is made. The isolated PyTorch 3.12 target also imports
+`diffusers==0.35.1`; its UNet forward/backward still needs remaining model
+dependencies and a dedicated parity run.

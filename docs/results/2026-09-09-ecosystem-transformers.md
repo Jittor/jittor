@@ -16,4 +16,7 @@ Jittor shim forward 可运行，但 backward 在复杂 residual/attention/tied l
 关闭检查或改变测试期望掩盖。
 
 生态测试已修复 oracle 环境隔离与可选 torchvision 处理，避免把 Jittor facade 当成 PyTorch
-参考实现。当前没有速度结论；vLLM/TRELLIS/verl/ms-swift 需在安装匹配依赖的环境重新验证。
+参考实现。独立 PyTorch 3.12 隔离目录已安装 `diffusers==0.35.1`、
+`ms-swift==3.8.0`、`verl==0.9.0`：diffusers 可导入；ms-swift 仍缺
+`modelscope`，verl 仍缺 `ray`，所以两者尚未可运行。当前没有速度结论；
+vLLM/TRELLIS 需匹配版本或上游源码环境后重新验证。
