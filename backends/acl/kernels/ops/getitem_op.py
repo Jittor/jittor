@@ -173,7 +173,7 @@ def caculate_shape(tensors):
         sub_shape = caculate_shape(tensors[0])
         return [len(tensors)] + sub_shape
     else:
-        assert False, f"not implemented for {type(tensors)}"
+        raise TypeError("getitem does not support shape metadata for {}".format(type(tensors)))
 
 
 def can_broadcast_and_shape(shape1, shape2):
