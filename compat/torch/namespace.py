@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import types
+from typing import Any, cast
 
 
 def native_module_facade(source, name):
@@ -37,7 +38,7 @@ def native_module_facade(source, name):
             value = value.copy()
         setattr(facade, key, value)
         exported.append(key)
-    facade.__all__ = tuple(exported)
+    cast(Any, facade).__all__ = tuple(exported)
     return facade
 
 
