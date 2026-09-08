@@ -678,7 +678,7 @@ def compile_src(src, h, basename):
         arr_func_args_convert = []
         arr_fill_with_default = []
         arr_func_call = []
-        arr_has_return = []
+        arr_has_return: List[Any] = []
         arr_func_prepare = []
         self_as_arg0 = False
         for df in dfs:
