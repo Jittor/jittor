@@ -14,6 +14,7 @@ from collections.abc import Sequence, Iterable
 
 from ._code import acl_code as silu_cmd
 from ._code import check_acl_float_dtype
+from ._attributes import attribute_program
 
 
 class SiLUACL:
@@ -82,8 +83,5 @@ class SwiGluACL:
             inputs=[x],
             output_dtypes=[x.dtype],
             output_shapes=[output_shape],
-            attr_code=f'''
-op.jt_name = "swiglu";
-op.dim = {axis};
-''',
+            attributes={"dim": axis},
         )[0]

@@ -6,6 +6,7 @@ from .acl_data import AclDataInternalError, SCHEMA_VERSION, encode_code_data
 SCHEMAS = {
     "Softmax": {"dim": {"type": "int64"}},
     "SoftmaxBackward": {"dim": {"type": "int64"}},
+    "SwiGlu": {"dim": {"type": "int64"}},
     "Triu": {"diagonal": {"type": "int64"}},
     "Flip": {"axes": {"type": "int64[]"}},
     "Transpose": {"axes": {"type": "int64[]"}},
