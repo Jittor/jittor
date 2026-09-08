@@ -136,7 +136,6 @@ include backends/comm/nccl/ops/nccl_test_op.h
 include backends/comm/nccl/src/nccl_wrapper.cc
 include backends/corex/include/jittor_accelerator.h
 include backends/corex/runtime/corex_backend.cc
-include backends/cpu/libraries/mkl/cpu_cnn_inference_f32.cpp
 include backends/cpu/libraries/mkl/mkl_batched_matmul_op.cc
 include backends/cpu/libraries/mkl/mkl_batched_matmul_op.h
 include backends/cpu/libraries/mkl/mkl_capabilities.cc
@@ -148,8 +147,11 @@ include backends/cpu/libraries/mkl/mkl_conv_op.cc
 include backends/cpu/libraries/mkl/mkl_conv_op.h
 include backends/cpu/libraries/mkl/mkl_matmul_op.cc
 include backends/cpu/libraries/mkl/mkl_matmul_op.h
+include backends/cpu/libraries/mkl/mkl_selftest.cc
 include backends/cpu/libraries/mkl/mkl_test_op.cc
 include backends/cpu/libraries/mkl/mkl_test_op.h
+include backends/cpu/libraries/mkl/onednn_runtime.cc
+include backends/cpu/libraries/mkl/onednn_runtime.h
 include backends/cuda/include/cache_device_scope.h
 include backends/cuda/include/device_plan_cache.h
 include backends/cuda/include/fp16_dev.h
@@ -476,6 +478,7 @@ include docs/results/2026-09-07-native-core-packages.md
 include docs/results/2026-09-07-ops-pooling-layout.md
 include docs/results/2026-09-07-python-domain-packages.md
 include docs/results/2026-09-08-acl-code-data-wire.md
+include docs/results/2026-09-08-acl-owner-attribute-data.md
 include docs/results/2026-09-08-acl-registry.md
 include docs/results/2026-09-08-api-owner-closure.md
 include docs/results/2026-09-08-api-runtime-integration.md
@@ -514,6 +517,7 @@ include docs/results/2026-09-08-test-layout-integration.md
 include docs/results/2026-09-08-torch-installation-target.md
 include docs/results/2026-09-08-torch-namespace-local-ownership.md
 include docs/results/2026-09-08-vllm-independent-distribution.md
+include docs/results/2026-09-09-onednn-v3-runtime.md
 include docs/results/README.md
 include docs/results/baselines/torch-shim-resources-stage7.txt
 include docs/results/baselines/wheel-additions-final-modernization.txt
