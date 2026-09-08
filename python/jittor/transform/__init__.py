@@ -596,7 +596,8 @@ class Lambda:
     """
 
     def __init__(self, lambd):
-        assert callable(lambd), repr(type(lambd).__name__) + " object is not callable"
+        if not callable(lambd):
+            raise TypeError(repr(type(lambd).__name__) + " object is not callable")
         self.lambd = lambd
 
     def __call__(self, img):
