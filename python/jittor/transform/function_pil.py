@@ -665,10 +665,11 @@ def affine(img, angle, translate, scale, shear, resample=0, fillcolor=None):
     if not _is_pil_image(img):
         raise TypeError('img should be PIL Image. Got {}'.format(type(img)))
 
-    assert isinstance(translate, (tuple, list)) and len(translate) == 2, \
-        "Argument translate should be a list or tuple of length 2"
+    if not isinstance(translate, (tuple, list)) or len(translate) != 2:
+        raise ValueError("Argument translate should be a list or tuple of length 2")
 
-    assert scale > 0.0, "Argument scale should be positive"
+    if scale <= 0.0:
+        raise ValueError("Argument scale should be positive")
 
     output_size = img.size
     center = (img.size[0] * 0.5 + 0.5, img.size[1] * 0.5 + 0.5)
