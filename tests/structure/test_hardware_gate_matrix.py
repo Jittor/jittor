@@ -41,7 +41,7 @@ def test_cuda_session_requires_real_device_and_an_executed_accelerator_case():
     assert 'env["JITTOR_TEST_REQUIRE_CUDA"] = "1"' in cuda
     assert 'env["JITTOR_TEST_ACCELERATOR_MIN_EXECUTED"] = "1"' in cuda
 
-    policy = (REPO_ROOT / "tests" / "conftest.py").read_text(encoding="utf-8")
+    policy = (REPO_ROOT / "tests/_helpers/pytest_policy.py").read_text(encoding="utf-8")
     assert "has_cuda is false" in policy
     assert "_ACCELERATOR_EXECUTED < required_accelerator" in policy
 
@@ -54,7 +54,7 @@ def test_npu_session_requires_real_acl_and_an_executed_accelerator_case():
     assert 'env["JITTOR_TEST_REQUIRE_ACL"] = "1"' in npu
     assert 'env["JITTOR_TEST_ACCELERATOR_MIN_EXECUTED"] = "1"' in npu
 
-    policy = (REPO_ROOT / "tests" / "conftest.py").read_text(encoding="utf-8")
+    policy = (REPO_ROOT / "tests/_helpers/pytest_policy.py").read_text(encoding="utf-8")
     assert "JITTOR_TEST_REQUIRE_ACL" in policy
     assert "has_acl is false" in policy
     assert "_ACCELERATOR_EXECUTED < required_accelerator" in policy
@@ -68,12 +68,12 @@ def test_nccl_session_rejects_an_all_skipped_communication_gate():
     assert 'env["JITTOR_TEST_REQUIRE_EXECUTION"] = "1"' in nccl
     assert 'env["JITTOR_TEST_ACCELERATOR_MIN_EXECUTED"] = "1"' in nccl
 
-    policy = (REPO_ROOT / "tests" / "conftest.py").read_text(encoding="utf-8")
+    policy = (REPO_ROOT / "tests/_helpers/pytest_policy.py").read_text(encoding="utf-8")
     assert '"nccl", "hccl"' in policy
 
 
 def test_accelerator_execution_counter_uses_cuda_nodeids(monkeypatch):
-    import conftest as policy
+    from _helpers import pytest_policy as policy
 
     class Report:
         nodeid = "tests/backends/cuda/test_matmul.py::test_forward"
@@ -85,7 +85,7 @@ def test_accelerator_execution_counter_uses_cuda_nodeids(monkeypatch):
     assert not policy._is_accelerator_case(CpuReport())
 
     class NcclReport:
-        nodeid = "tests/distributed/test_nccl_comm_stream.py::test_all_reduce"
+        nodeid = "tests/backends/comm/nccl/test_nccl_comm_stream.py::test_all_reduce"
 
     assert policy._is_accelerator_case(NcclReport())
     monkeypatch.setenv("JITTOR_TEST_ACCELERATOR_MIN_EXECUTED", "2")

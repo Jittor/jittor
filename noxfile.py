@@ -28,8 +28,8 @@ try:
     )
     from _helpers.tiers import (  # noqa: E402
         apply_worker_thread_budget, budget_report, effective_cpu_count,
-        runtime_workers, worker_thread_budget, THREAD_POOL_ENV_NAMES)
-    from _helpers.process_modes import TORCH_MODE_PATHS  # noqa: E402
+        runtime_workers, THREAD_POOL_ENV_NAMES)
+    from _helpers.process_modes import NATIVE_MODE_PATHS, is_torch_mode_path  # noqa: E402
 finally:
     sys.path.remove(str(REPO_ROOT / "tests"))
 
@@ -134,6 +134,16 @@ NN_MIGRATION_FILES = (
     "tests/nn/test_nn_capabilities.py",
 )
 
+PYTEST_POLICY_FILES = (
+    "tests/conftest.py",
+    "compat/tests/conftest.py",
+    "adapters/tests/conftest.py",
+    "tests/_helpers/pytest_policy.py",
+    "tests/_helpers/paths.py",
+    "tests/_helpers/layout_seed.py",
+    "tests/_helpers/seed_case_identity.py",
+)
+
 RATCHET_FILES = (
     *NN_MIGRATION_FILES,
     "noxfile.py",
@@ -142,11 +152,11 @@ RATCHET_FILES = (
     "docs/_myst_autodoc.py",
     "docs/conf.py",
     "python/jittor/selftest.py",
-    "python/jittor_utils/cuda_wheel.py",
+    "python/jittor/build/utils/cuda_wheel.py",
     "compat/shim/deploy.py",
     "tests/_helpers/torch_runtime.py",
-    "tests/compat/torch/test_torchmetrics_compat.py",
-    "tests/conftest.py",
+    "compat/tests/torch/test_torchmetrics_compat.py",
+    *PYTEST_POLICY_FILES,
     "tools/release/pack_offline.py",
     "tools/docs/check_build.py",
     "tools/docs/check_catalogs.py",
@@ -170,7 +180,7 @@ FORMAT_FILES = (
     "docs/conf.py",
     "python/jittor/selftest.py",
     "tests/_helpers/torch_runtime.py",
-    "tests/conftest.py",
+    *PYTEST_POLICY_FILES,
     "tools/release/pack_offline.py",
     "tools/docs/check_build.py",
     "tools/docs/check_catalogs.py",
@@ -182,7 +192,7 @@ FORMAT_FILES = (
     "tests/structure/test_docs_structure.py",
     "tests/structure/test_import_layering.py",
     "tests/structure/test_packaging_structure.py",
-    "tests/structure/test_torch_shim_structure.py",
+    "compat/tests/structure/test_torch_shim_structure.py",
     "tests/structure/test_pytest_contract.py",
     "tests/structure/test_selftest_structure.py",
     "tests/structure/test_stage2_delivery.py",
@@ -191,6 +201,8 @@ STRUCTURE_TESTS = (
     "tools/release/test_check_sdist_contents.py",
     "tools/release/test_check_wheel_contents.py",
     "tests/structure",
+    "compat/tests/structure",
+    "adapters/tests/vllm/test_structure.py",
 )
 # No CPU_TESTS list any more. The CPU gate runs the whole tree in two
 # processes -- native semantics and Torch-compatibility semantics cannot share
@@ -222,7 +234,7 @@ CUDA_TESTS = (
     # cases at about a minute each. It stays in one process; the `cuda` session
     # below carries the measurement that says why.
     "tests/backends/parity/test_device_parity.py",
-    "tests/compat/torch/test_torch_compat_cuda_tf32.py",
+    "compat/tests/torch/test_torch_compat_cuda_tf32.py",
     "tests/ops/test_ops.py",
     "tests/models/test_network_training_parity.py",
 )
@@ -236,94 +248,94 @@ OPTIONAL_COMPAT_PACKAGES = (
     "flash_attn",
 )
 OPTIONAL_COMPAT_TESTS = (
-    "tests/compat/torch/test_torchmetrics_compat.py",
-    "tests/compat/torch/test_mmcv_compat.py",
-    "tests/compat/torch/test_peft.py",
-    "tests/compat/torch/test_tensordict_compat.py",
-    "tests/compat/torch/test_flash_attn_compat.py",
+    "compat/tests/torch/test_torchmetrics_compat.py",
+    "compat/tests/torch/test_mmcv_compat.py",
+    "compat/tests/torch/test_peft.py",
+    "compat/tests/torch/test_tensordict_compat.py",
+    "compat/tests/torch/test_flash_attn_compat.py",
 )
 OPTIONAL_NATIVE_FLASH_TESTS = (
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_fp16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_fp16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_dropout_replays_seed_and_backward",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_varlen_backward_fp16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_qkvpacked_backward_matches_dense",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_mask_fallback_fp16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_short_training_prefers_math",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_training_reuses_capability_checked_backend",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_higher_order_rejected_fp16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_gqa_fp16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_float32_opt_in_cast_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_fp16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_fp16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_dropout_replays_seed_and_backward",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_varlen_backward_fp16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_qkvpacked_backward_matches_dense",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_mask_fallback_fp16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_short_training_prefers_math",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_training_reuses_capability_checked_backend",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_higher_order_rejected_fp16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_gqa_fp16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_float32_opt_in_cast_cuda",
 )
 OPTIONAL_NATIVE_FLASH_BF16_TESTS = (
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_bf16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_dropout_replays_seed_and_backward_bf16",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_varlen_backward_bf16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_qkvpacked_backward_matches_dense_bf16",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_mask_fallback_bf16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_bf16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_dropout_replays_seed_and_backward_bf16",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_varlen_backward_bf16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_qkvpacked_backward_matches_dense_bf16",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_mask_fallback_bf16_cuda",
 )
 OPTIONAL_NATIVE_FLASH_BF16_HDIM64_TESTS = (
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim64_bf16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_dropout_hdim64_bf16",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_varlen_backward_hdim64_bf16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_qkvpacked_backward_hdim64_bf16",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim64_bf16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_dropout_hdim64_bf16",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_varlen_backward_hdim64_bf16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_qkvpacked_backward_hdim64_bf16",
 )
 OPTIONAL_NATIVE_FLASH_BF16_HDIM96_TESTS = (
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim96_bf16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_training_variants_hdim96_bf16",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim96_bf16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_training_variants_hdim96_bf16",
 )
 OPTIONAL_NATIVE_FLASH_BF16_HDIM128_TESTS = (
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim128_bf16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_training_variants_hdim128_bf16",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim128_bf16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_training_variants_hdim128_bf16",
 )
 OPTIONAL_NATIVE_FLASH_BF16_HDIM192_TESTS = (
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim192_bf16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_training_variants_hdim192_bf16",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim192_bf16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_training_variants_hdim192_bf16",
 )
 OPTIONAL_NATIVE_FLASH_BF16_HDIM256_TESTS = (
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim256_bf16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_training_variants_hdim256_bf16",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim256_bf16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_training_variants_hdim256_bf16",
 )
 OPTIONAL_NATIVE_FLASH_HDIM64_TESTS = (
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim64_fp16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_dropout_hdim64_fp16",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_varlen_backward_hdim64_fp16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_qkvpacked_backward_hdim64_fp16",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim64_fp16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_dropout_hdim64_fp16",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_varlen_backward_hdim64_fp16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_qkvpacked_backward_hdim64_fp16",
 )
 OPTIONAL_NATIVE_FLASH_HDIM96_TESTS = (
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim96_fp16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_training_variants_hdim96_fp16",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim96_fp16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_training_variants_hdim96_fp16",
 )
 OPTIONAL_NATIVE_FLASH_HDIM128_TESTS = (
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim128_fp16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_training_variants_hdim128_fp16",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim128_fp16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_training_variants_hdim128_fp16",
 )
 OPTIONAL_NATIVE_FLASH_HDIM192_TESTS = (
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim192_fp16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_training_variants_hdim192_fp16",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim192_fp16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_training_variants_hdim192_fp16",
 )
 OPTIONAL_NATIVE_FLASH_HDIM256_TESTS = (
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim256_fp16_cuda",
-    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_training_variants_hdim256_fp16",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim256_fp16_cuda",
+    "compat/tests/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_training_variants_hdim256_fp16",
 )
 NPU_TESTS = (
-    "tests/backends/npu/test_acl.py",
-    "tests/backends/npu/test_acl_torch_compat.py",
-    "tests/backends/npu/test_aclop.py",
-    "tests/backends/npu/test_acl_indexing.py",
+    "tests/backends/acl/test_acl.py",
+    "tests/backends/acl/test_acl_torch_compat.py",
+    "tests/backends/acl/test_aclop.py",
+    "tests/backends/acl/test_acl_indexing.py",
     "tests/ops/test_ops.py",
-    "tests/core/test_floor_divide.py::TestFloorDivideNPU",
-    "tests/compiler/test_kernel_traps.py::TestKernelTraps::test_nan_handling_isfinite_isnan_isinf",
+    "tests/ops/test_floor_divide.py::TestFloorDivideNPU",
+    "tests/debug/test_kernel_traps.py::TestKernelTraps::test_nan_handling_isfinite_isnan_isinf",
     "tests/ops/test_fusion_correctness.py::TestFusionCorrectness::test_float_comparisons_with_nan",
 )
 ROCM_TESTS = ("tests/backends/rocm/test_rocm.py",)
 MPI_TESTS = (
-    "tests/distributed/test_mpi.py",
-    "tests/distributed/test_mpi_batchnorm.py",
-    "tests/distributed/test_mpi_op.py",
+    "tests/backends/comm/mpi/test_mpi.py",
+    "tests/backends/comm/mpi/test_mpi_batchnorm.py",
+    "tests/backends/comm/mpi/test_mpi_op.py",
     "tests/distributed/test_single_process_scope.py",
 )
-NCCL_TESTS = ("tests/distributed/test_fsdp2_nccl.py",)
+NCCL_TESTS = ("compat/tests/fsdp2/test_fsdp2_nccl.py",)
 
 NOX_STATE_ROOT.mkdir(parents=True, exist_ok=True)
 nox.options.envdir = str(NOX_STATE_ROOT / "envs")
@@ -558,7 +570,7 @@ def _mode_env(env, args):
     """
     paths = [str(item).split("::", 1)[0] for item in args
              if not str(item).startswith("-")]
-    mode = "1" if any(path.startswith(TORCH_MODE_PATHS) for path in paths) else "0"
+    mode = "1" if any(is_torch_mode_path(path) for path in paths) else "0"
     if env.get("JITTOR_TORCH_SHIM") == mode:
         return env
     scoped = env.copy()
@@ -579,7 +591,7 @@ def _by_process_mode(targets):
     torch: list = []
     for target in targets:
         path = str(target).split("::", 1)[0]
-        (torch if path.startswith(TORCH_MODE_PATHS) else native).append(target)
+        (torch if is_torch_mode_path(path) else native).append(target)
     return native, torch
 
 
@@ -1087,6 +1099,12 @@ def structure(session):
     session.run("bash", "tools/check_repo_layout.sh", external=True, env=env)
     _install_compat_source(session, env)
     test_paths = tuple(session.posargs) or STRUCTURE_TESTS
+    if not session.posargs:
+        native_env = env.copy()
+        native_env["JITTOR_TORCH_SHIM"] = "0"
+        session.run("python", "-m", "pytest", "-v", "--timeout=600",
+                    *NATIVE_MODE_PATHS, env=native_env)
+    env = _mode_env(env, test_paths)
     session.run(
         "python",
         "-m",
@@ -1822,8 +1840,8 @@ def full(session):
 
 #: The ecosystem comparison: numbers first, then wall clock.
 ECOSYSTEM_TESTS = (
-    "tests/compat/torch/test_ecosystem_parity.py",
-    "tests/compat/torch/test_ecosystem_speed.py",
+    "compat/tests/torch/test_ecosystem_parity.py",
+    "compat/tests/torch/test_ecosystem_speed.py",
 )
 
 #: Speed ceiling for the nightly ecosystem gate: Jittor may take at most this

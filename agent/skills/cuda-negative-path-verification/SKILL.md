@@ -95,7 +95,7 @@ Foo::~Foo() {
 }
 ```
 
-**结构测试查不出这一类。** `tests/structure/test_destructor_and_handler_contract.py`
+**结构测试查不出这一类。** `tests/structure/core/test_destructor_and_handler_contract.py`
 扫的是析构体里**字面出现**的 `ASSERT` / `CHECK` / `LOGf`。经由一次函数调用抛出来的
 （`~VarHolder` → `release_both_liveness` → `ASSERT`）它看不见，于是**门禁是绿的而进程
 会 abort**。判据：**析构里只要调用了非 `noexcept` 的东西，静态扫描就已经不作数了，

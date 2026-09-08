@@ -150,7 +150,9 @@ notebook_metadata_filter = "jupytext,kernelspec"
 cell_metadata_filter = "tags"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "compat/tests", "adapters/tests"]
+# build is a maintained test domain; pytest's default excludes it recursively.
+norecursedirs = ["*.egg", ".*", "_darcs", "CVS", "dist", "node_modules", "venv", "{arch}"]
 # No `pythonpath` here: tests/conftest.py decides which checkout to import,
 # so JITTOR_SOURCE_ROOT can point a run at a copy of the tree without
 # `-o pythonpath=...` on every invocation.

@@ -31,18 +31,18 @@ ALTERNATIVE_COVERAGE = {
         "reason": "setitem mutates and returns None; its dedicated battery covers forward and gradients",
     },
     "index_put": {
-        "nodeid": "tests/compat/torch/test_torch_compat.py::test_torch_compat",
+        "nodeid": "compat/tests/torch/test_torch_compat.py::test_torch_compat",
         "reason": "index_put is a Torch-shim alias with mutation and duplicate-index accumulation contracts",
     },
     "bincount": {
         "nodeid": (
-            "tests/compat/torch/test_torch_compat_reduce_shape.py::"
+            "compat/tests/torch/test_torch_compat_reduce_shape.py::"
             "TestVarStd::test_bincount_argwhere_segment_reduce"
         ),
         "reason": "bincount is a Torch-shim API and its output-length semantics have a direct NumPy oracle",
     },
     "ctc_loss": {
-        "nodeid": "tests/core/test_misc_op.py::TestPad::test_ctc_loss",
+        "nodeid": "tests/ops/test_misc_op.py::TestPad::test_ctc_loss",
         "reason": "CTC uses ragged lengths and a dynamic-programming oracle outside the generic OpInfo shape",
     },
     "rotary_embedding": {

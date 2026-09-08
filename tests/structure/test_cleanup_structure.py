@@ -298,39 +298,39 @@ class TestCleanupStructure(unittest.TestCase):
         )
         intentional_compatibility_imports = [
             (
-                "tests/compat/torch/test_torch_shim_aliases.py",
+                "compat/tests/torch/test_torch_shim_aliases.py",
                 "jittor.torch_shim.flashattn_jittor",
             ),
             (
-                "tests/compat/torch/test_torch_shim_aliases.py",
+                "compat/tests/torch/test_torch_shim_aliases.py",
                 "jittor.triton_shim",
             ),
             (
-                "tests/structure/test_nn_structure.py",
+                "tests/structure/nn/test_nn_structure.py",
                 "jittor.depthwise_conv",
             ),
             (
-                "tests/structure/test_torch_compat_structure.py",
+                "compat/tests/structure/test_torch_compat_structure.py",
                 "jittor.torch_compat",
             ),
             (
-                "tests/structure/test_torch_compat_structure.py",
+                "compat/tests/structure/test_torch_compat_structure.py",
                 "jittor.torch_compat",
             ),
             (
-                "tests/structure/test_torch_fsdp2_structure.py",
+                "compat/tests/structure/test_torch_fsdp2_structure.py",
                 "jittor.torch_fsdp2_compat",
             ),
             (
-                "tests/structure/test_torch_fsdp2_structure.py",
+                "compat/tests/structure/test_torch_fsdp2_structure.py",
                 "jittor.torch_fsdp2_compat.api",
             ),
             (
-                "tests/structure/test_triton_structure.py",
+                "compat/tests/structure/test_triton_structure.py",
                 "jittor.triton_shim",
             ),
             (
-                "tests/structure/test_triton_structure.py",
+                "compat/tests/structure/test_triton_structure.py",
                 "jittor.triton_shim.*",
             ),
         ]

@@ -55,7 +55,8 @@ _ALSO_SCANNED = (
 
 
 def _python_files():
-    return sorted(TEST_ROOT.rglob("*.py")) + [
+    from _helpers.paths import iter_test_files
+    return iter_test_files("*.py") + [
         path for path in _ALSO_SCANNED if path.is_file()]
 
 

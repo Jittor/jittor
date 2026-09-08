@@ -58,7 +58,7 @@ E   SystemExit: 0
 这**不是**你的改动有问题：jittor 重新生成了 `jit_utils` 之后要求换一个新进程。
 **原样重跑同一条命令**即可。不要因为这个去改代码。
 
-同一类的第二种假失败：**rebase 之后 `tests/compiler/test_cache_dependencies.py` 会红
+同一类的第二种假失败：**rebase 之后 `tests/build/test_cache_dependencies.py` 会红
 一次**。它断言同一个头文件在所有缓存条目里记的哈希一致，而 rebase 会带进别人对
 `var.h` 这类头文件的改动，缓存里还留着 rebase 之前记录的条目：
 
@@ -215,7 +215,7 @@ dump 脚本按分区放在自己的 `$TMPDIR` 下，不要提交；把 diff 摘�
 
 `jt.core.op_compiler.precompile` 与 `.eval` 是导出的：展开器可以直接喂字符串、直接比对
 展开结果，**毫秒级，不编译任何算子**。改 `op_compiler.cc` 里 `@for`/`@if`/`@expand_macro`
-这类展开逻辑时，判据先写在这一层（`tests/compiler/test_op_compiler.py`），再补**一条**
+这类展开逻辑时，判据先写在这一层（`tests/codegen/test_op_compiler.py`），再补**一条**
 端到端用例证明真实算子路径通了。反过来只写端到端用例的代价是每轮 90 秒起，而且报错是
 一长串嵌套的 `op_compiler.cc:813`，看不出是哪条展开规则。
 
@@ -286,7 +286,7 @@ done
 键写超了就 SIGSEGV。把这类「进程级防线」换成「检查 + 可捕获异常」时：
 
 1. **先 grep 谁在断言那次崩溃。** 这里有两处，漏一处就是「修对了但门禁红」：
-   `tests/compiler/test_jit_tests.py` 的 `CRASHING_TESTS` 拿子进程退出码断言输出里有
+   `tests/codegen/test_jit_tests.py` 的 `CRASHING_TESTS` 拿子进程退出码断言输出里有
    "Accessing protect pages"，`utils/log.cc` 的 SIGSEGV 处理器里有一段专门认那个页。
 2. **找到所有写入口，确认它们汇成一个漏斗。** `JitKey` 上百个 `operator<<` 最终只有四个
    真的动内存（`jk_put_str_with_len`、`operator<<(const string&)`、`operator<<(char)`、
@@ -311,7 +311,7 @@ done
 而它给出的是「heap-use-after-free，栈顶是 `find`，释放点是
 `vector<string>::_M_realloc_insert`」这种没法争辩的东西。
 
-这棵树上能用的编译命令（抄自 `tests/structure/test_shared_backend_consumers.py`，
+这棵树上能用的编译命令（抄自 `tests/structure/runtime/test_shared_backend_consumers.py`，
 `-I` 两个就够，**不需要生成的 cfg 目录**）：
 
 ```bash
@@ -324,7 +324,7 @@ ASAN_OPTIONS=detect_leaks=0 ./case
 四件必须做的事：
 
 1. **把它变成常驻用例，不要跑一次就扔。** 3.03 落成
-   `tests/compiler/test_jit_cache_map_asan.py`：编译 `utils/jit_cache_map.h`、跑场景、
+   `tests/codegen/test_jit_cache_map_asan.py`：编译 `utils/jit_cache_map.h`、跑场景、
    断言输出里没有 `AddressSanitizer`。
 2. **给这个用例装牙齿：同一个文件里再编一份「修之前那个写法」，断言 ASan 抓得到它。**
    否则 libasan 缺失、场景根本没触发缺陷、`-fsanitize=address` 被忽略——三种情况下第一条
@@ -364,7 +364,7 @@ ASAN_OPTIONS=detect_leaks=0 ./case
 还有一条不是 UB 而是「测不到」：**容量做成 flag，端到端的淘汰路径才跑得起来**。
 默认 4096 条的表，要在真实负载里逼出淘汰得有四千多个不同 kernel；把
 `jit_cache_size` 调成 4 再跑几十个不同形状，一秒之内就把「淘汰后重查」走了几百遍
-（`tests/compiler/test_jit_cache_bound.py`）。上面三条里的前两条只有在淘汰真的发生时
+（`tests/codegen/test_jit_cache_bound.py`）。上面三条里的前两条只有在淘汰真的发生时
 才是 bug，所以没有这个 flag 就只有单元测试覆盖模板、没有任何东西覆盖那三张真表。
 
 ## 8. 怎么跑出「修前失败」这一轮（禁止 `git stash`）

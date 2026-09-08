@@ -70,7 +70,7 @@ $JT -m pytest tests/ops/test_ops.py -v          # op battery (fwd all devices, g
 $JT -m pytest tests/ops/test_ops.py -k layer_norm
 $JT -m pytest tests/nn/test_norm.py
 $JT -m pytest tests/core/test_regression.py
-$JT -m pytest tests/compiler/test_kernel_traps.py
+$JT -m pytest tests/debug/test_kernel_traps.py
 PYTHONPATH=tests $JT -m opinfo.report            # coverage matrix
 JITTOR_TEST_DEVICES=cpu ...                     # restrict device matrix
 cache_name=cardN CUDA_VISIBLE_DEVICES=N ...     # isolate parallel runs (no cache contention)

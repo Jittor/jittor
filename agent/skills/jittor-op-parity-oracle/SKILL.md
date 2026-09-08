@@ -497,7 +497,7 @@ jittor 的融合内核用 `-Ofast` 编译（`compiler.py` 里 `kernel_opt_flags 
    下划线开头的名字要写进那份**显式再导出清单**才存在；而 `tensor_ops.py` 内部正是靠
    `jt.misc._foo` 做晚绑定的。新加私有 helper 忘了加清单，报的是
    `AttributeError: module 'jittor.misc' has no attribute '_foo'`，而且只在真正调用时才炸。
-   `tests/structure/test_misc_structure.py` 只校验**非**下划线的公开面，挡不住这个。
+   `tests/structure/ops/test_misc_structure.py` 只校验**非**下划线的公开面，挡不住这个。
 
 ## 18. 索引 dtype 的取证：dtype 本身就是那个错答案
 

@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from core.test_native_backend_registry import _backend_probe
+from _helpers.backend_probe import _backend_probe
 
 
 def test_cuda_execution_uses_backend_allocation_copy_and_sync_callbacks():

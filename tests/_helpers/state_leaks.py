@@ -4,7 +4,7 @@ Three failures in this tree were the same failure. Each looked like a bug in the
 test that reported it, and in each case the state had been left behind by a file
 that had already passed:
 
-* ``tests/compiler/test_fused_op.py::TestFusedOp::test_add`` asserts
+* ``tests/core/test_fused_op.py::TestFusedOp::test_add`` asserts
   ``number_of_hold_vars() == 0``. It passes alone and fails after
   ``tests/core`` and ``tests/ops`` have run.
 * ``test_torch_compat_fsdp2::test_single_rank_fully_shard_preserves_math_and_state``

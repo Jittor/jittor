@@ -22,12 +22,13 @@ if str(TEST_ROOT) not in sys.path:
     sys.path.insert(0, str(TEST_ROOT))
 
 from _helpers import gate_scope  # noqa: E402
+from _helpers.paths import iter_test_files as all_test_files
 
 
 def _all_test_files():
     return {
         path.relative_to(REPO_ROOT).as_posix()
-        for path in TEST_ROOT.rglob("test_*.py")
+        for path in all_test_files()
     }
 
 
@@ -56,8 +57,8 @@ def test_core_property_tests_are_owned_by_the_cpu_gate():
     """
     required = {
         "tests/core/test_traversal_state_isolation.py",
-        "tests/core/test_pyjt_binding_protocol.py",
-        "tests/core/test_autograd_engine.py",
+        "tests/bindings/test_pyjt_binding_protocol.py",
+        "tests/autograd/test_autograd_engine.py",
         # The graph/liveness property sweep. It is the only thing standing
         # between the known backward-liveness over-release (2.10) and a silent
         # return of it, and one of its cases is a strict xfail that has to run
@@ -67,7 +68,7 @@ def test_core_property_tests_are_owned_by_the_cpu_gate():
         # node, which is where the executor-plan properties live. Losing it
         # would take 86 C++ unit tests out of the gate at once, and the file
         # itself is the only thing that would notice.
-        "tests/compiler/test_jit_tests.py",
+        "tests/codegen/test_jit_tests.py",
     }
     native = gate_scope.selected_files(REPO_ROOT, gate_scope.native_arguments())
     torch = gate_scope.selected_files(REPO_ROOT, gate_scope.torch_arguments())
@@ -237,7 +238,7 @@ def test_full_nox_session_is_the_periodic_complete_gate():
 
 def test_skip_reason_buckets_are_stable_and_other_is_counted(monkeypatch):
     """10.05: accepted environment reasons are separated from unexplained ones."""
-    import conftest as policy
+    from _helpers import pytest_policy as policy
 
     previous = policy._SKIP_REASON_BUCKETS.copy()
     try:
@@ -259,7 +260,7 @@ def test_skip_reason_buckets_are_stable_and_other_is_counted(monkeypatch):
 
 def test_skip_reason_summary_and_threshold_are_wired():
     """10.05: CI summary prints buckets and the execution gate rejects other>0."""
-    source = (REPO_ROOT / "tests" / "conftest.py").read_text(encoding="utf-8")
+    source = (REPO_ROOT / "tests/_helpers/pytest_policy.py").read_text(encoding="utf-8")
     assert "_report_skip_reason_buckets(terminalreporter)" in source
     assert "other skipped:" in source
     assert "_other_skip_count() > 0" in source

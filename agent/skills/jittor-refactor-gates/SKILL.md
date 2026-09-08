@@ -37,7 +37,7 @@ CUDA 那套的 6 次调用各自的基线，缺一不可：
 | `tests/backends/cuda` | 112 passed, 1 skipped |
 | `tests/backends/parity/test_dtype_coverage.py` | 6 passed |
 | `tests/backends/parity/test_device_parity.py` | 227 passed（约 1 小时 50 分，占整套的 80%） |
-| `tests/compat/torch/test_torch_compat_cuda_tf32.py` | 2 passed |
+| `compat/tests/torch/test_torch_compat_cuda_tf32.py` | 2 passed |
 | `tests/ops/test_ops.py` | 227 passed |
 | `tests/models/test_network_training_parity.py` | **8 skipped，零 passed** |
 
@@ -185,8 +185,8 @@ if flock -n 9 9>$G/native.lock; then echo "没在跑"; else echo "在跑"; fi
 
 | 用例 | 症状 | 状态 |
 | --- | --- | --- |
-| `tests/compat/torch/test_torch_compat.py` | 段错误 | 分支起点就存在，非任何 agent 引入 |
-| `tests/compiler/test_atomic_tuner.py::test_atomic_tuner` | 第 4 项抓到 0 条 `to loop -1` 日志 | 起点就存在；根因 `032ecfe1` 全归约快路径绕开 JIT，是过期断言 |
+| `compat/tests/torch/test_torch_compat.py` | 段错误 | 分支起点就存在，非任何 agent 引入 |
+| `tests/codegen/test_atomic_tuner.py::test_atomic_tuner` | 第 4 项抓到 0 条 `to loop -1` 日志 | 起点就存在；根因 `032ecfe1` 全归约快路径绕开 JIT，是过期断言 |
 
 对照起点的办法（`git stash` 已禁用，别用它切来切去）：另开一个只读的 worktree 钉在起点上，
 在里面跑同一条用例：
@@ -262,7 +262,7 @@ AtomicTunerPass **之后**，原子调优早已打完日志才轮到它改写。
 - 门禁 agent 这边：`passed` 只涨不跌之外，还要盯**收集总数**和排除清单。一条从没被任何 session
   收集过的用例，和一条删掉的用例，效果完全一样。
 
-同类的活口（本轮实测）：`tests/core/test_type_system.py` 在 `TORCH_MODE_PATHS` 里，所以原生门禁
+同类的活口（本轮实测）：`tests/type/test_type_system.py` 在 `TORCH_MODE_PATHS` 里，所以原生门禁
 （`pytest tests`，conftest 的 `pytest_ignore_collect` 会整片丢掉这些路径）不收它；而它又不在
 `noxfile.py` 任何一个 session 的清单里。**它现在一套门禁都不跑。**
 

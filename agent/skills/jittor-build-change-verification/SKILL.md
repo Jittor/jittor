@@ -216,7 +216,7 @@ compile_if_stale(what, cc, flags, sources, output)    # 裸 compile() 的带戳�
 
 写法：让被测头文件参与**数值**（`x[i] = i * FACTOR`），起子进程一，断言 factor=2 的结果；
 改头文件为 3，起子进程二，断言结果是 3。见
-`tests/compiler/test_import_bootstrap_laziness.py::test_editing_an_unnamed_header_changes_the_answer`。
+`tests/build/test_import_bootstrap_laziness.py::test_editing_an_unnamed_header_changes_the_answer`。
 
 另外两条断言也要有，否则测试会**空转通过**：
 
@@ -435,7 +435,7 @@ subprocess.run("%s %s" % (sys.executable, path), shell=True, env=child_env(),
 
 ## 7. 推之前
 
-- 跑 `tests/compiler`（构建系统的回归都在这里），至少和你改动前的结果对齐。
+- 跑 `tests/build` 与 `tests/codegen`（分别覆盖构建工具和代码生成），至少和你改动前的结果对齐。
   **先记录一份改动前的失败清单**：这个目录本来就带着与你无关的失败（例如别人改了
   归约实现之后 `test_atomic_tuner` 就红了），不先记就会花一小时查一个不是你的 bug。
 - 提交说明里必须写一句「**其他 agent 需要做什么**」：要不要清缓存、会不会触发一次全量

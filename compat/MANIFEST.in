@@ -35,4 +35,5 @@ include shim/resources/torch/__init__.py
 include shim/resources/torch_dist_info/METADATA
 prune build
 prune dist
+prune tests
 global-exclude *.py[cod] *.ipynb *.mo .DS_Store

@@ -62,7 +62,7 @@ python -c 'import jittor; print(jittor.__file__)'   # 必须打印本目录的�
 ```
 
 测试里起子进程时，把父进程的包目录传下去（本仓库
-`tests/core/test_pyjt_binding_protocol.py:run_in_subprocess` 就是这么写的）：
+`tests/bindings/test_pyjt_binding_protocol.py:run_in_subprocess` 就是这么写的）：
 
 ```python
 env = dict(os.environ)
@@ -158,7 +158,7 @@ render + diff，确认变的只有你想变的那几处。
 
 ### 生成器可以脱离核心单独测
 
-`pyjt_compiler.py` 只依赖 `jittor_utils`，`tests/core/test_pyjt_compiler_parser.py`
+`pyjt_compiler.py` 只依赖 `jittor_utils`，`tests/bindings/test_pyjt_compiler_parser.py`
 用 `importlib` 按路径直接加载它，整个文件不到一秒跑完。新增一种绑定写法就在那里
 加一个用例——那份文件的每个用例都对应一种「合法但曾经被解析错」的写法。
 
@@ -223,8 +223,8 @@ CPU 与 CUDA 是两份缓存，两边都要跑一次；CPU-only 用
 ## 7. 选测试文件时别把整个进程翻成 torch 模式
 
 `tests/conftest.py` 会看你在命令行上点了哪些文件：只要其中任何一个属于
-`tests/_helpers/process_modes.py` 的 `TORCH_MODE_PATHS`（`tests/core/test_type_system.py`、
-`tests/core/test_regression.py`、`tests/ops/test_ops.py`、`tests/compat/torch/…` 等），
+`tests/_helpers/process_modes.py` 的 `TORCH_MODE_PATHS`（`tests/type/test_type_system.py`、
+`tests/core/test_regression.py`、`tests/ops/test_ops.py`、`compat/tests/torch/…` 等），
 它就给**整个 pytest 进程**设上 `JITTOR_TORCH_SHIM=1`。torch 模式改的是全局语义
 （惰性执行、归约默认值、梯度语义、`finfo`/`iinfo` 的形状），于是同一条命令里的原生
 用例会成片地假失败——症状是 `TypeError: all() got ...`、`'finfo' object has no attribute`、
@@ -238,8 +238,8 @@ CPU 与 CUDA 是两份缓存，两边都要跑一次；CPU-only 用
 给生成的类型加字段（改 `tp_basicsize`）或改 `tp_flags` 之后，除了新测试还要跑：
 
 - `tests/core/test_var.py`、`tests/core/test_array.py`（`VarHolder` 的创建与释放路径）
-- `tests/compiler/test_ring_buffer.py`、`tests/compiler/test_ring_buffer2.py`
-- `tests/core/test_pyjt_binding_protocol.py`（本层的协议用例都在这里）
+- `tests/build/test_ring_buffer.py`、`tests/build/test_ring_buffer2.py`
+- `tests/bindings/test_pyjt_binding_protocol.py`（本层的协议用例都在这里）
 
 `VarHolder` 的 PyObject 不只从 `tp_new` 来：`py_converter.h` 里的 `to_py_object`
 用 `_PyObject_New` 直接建，**那块内存不清零**。任何依赖「新对象字段为 0」的设计

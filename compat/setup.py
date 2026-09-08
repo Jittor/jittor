@@ -16,7 +16,7 @@ class BuildCompatPython(build_py):
 
 # The public torch entry and deploy both use resources/torch/__init__.py.
 # Exclude its internal spelling so it is an entrypoint, not a second API owner.
-packages = find_packages(".", exclude=("shim.resources.torch", "shim.resources.torch.*"))
+packages = find_packages(".", exclude=("shim.resources.torch", "shim.resources.torch.*", "tests", "tests.*"))
 setup(
     packages=["jittor.compat", "torch"] + ["jittor.compat." + name for name in packages],
     cmdclass={"build_py": BuildCompatPython},

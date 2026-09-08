@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from _helpers.child_process import run_python_child
+from _helpers.paths import iter_test_files as all_test_files, relative_test_path
 
 
 try:
@@ -23,7 +24,7 @@ TEST_ROOT = REPO_ROOT / "tests"
 
 _ALLOWED_COLLECTION_GENERATORS = {
     ("backends/parity/test_device_parity.py", "_install"),
-    ("compiler/test_jit_tests.py", "_install_jit_tests"),
+    ("codegen/test_jit_tests.py", "_install_jit_tests"),
 }
 _PURE_COLLECTION_QUERIES = {
     "bool",
@@ -60,7 +61,7 @@ _PROHIBITED_COLLECTION_CALL_SUFFIXES = (".exec_module", ".mkdir")
 
 
 def _test_files():
-    return sorted(TEST_ROOT.rglob("test_*.py"))
+    return all_test_files()
 
 
 def _dotted_name(node):
@@ -114,7 +115,7 @@ def _pytest_config():
 
 
 def _load_test_conftest():
-    path = TEST_ROOT / "conftest.py"
+    path = TEST_ROOT / "_helpers/pytest_policy.py"
     spec = importlib.util.spec_from_file_location("jittor_test_conftest_contract", str(path))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -231,7 +232,7 @@ def _automatic_markers(relative, device=None, selected=None):
 
 def test_pytest_owns_collection_and_strict_xfail_policy():
     config = _pytest_config()
-    assert config["testpaths"] == ["tests"]
+    assert config["testpaths"] == ["tests", "compat/tests", "adapters/tests"]
     assert config["xfail_strict"] is True
     markers = {entry.split(":", 1)[0] for entry in config["markers"]}
     assert markers == {
@@ -294,7 +295,7 @@ def test_torch_semantic_core_suites_run_in_the_torch_process():
     required = {
         "tests/backends/parity/test_device_parity.py",
         "tests/core/test_regression.py",
-        "tests/core/test_type_system.py",
+        "tests/type/test_type_system.py",
     }
     assert required <= set(module.TORCH_MODE_PATHS)
 
@@ -394,7 +395,7 @@ def test_complete_suite_runner_uses_the_last_summary():
 
 
 def test_network_access_is_explicitly_marked():
-    path = TEST_ROOT / "compiler" / "test_trace_var.py"
+    path = TEST_ROOT / "bindings" / "test_trace_var.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     functions = {
         node.name: {_dotted_name(decorator) for decorator in node.decorator_list}
@@ -536,7 +537,9 @@ def _fixtures_declared_in(tree):
 
 
 def _fixtures_from_conftests(path):
-    names = set()
+    # Both root adapters register this one plugin before collection.
+    policy = TEST_ROOT / "_helpers/pytest_policy.py"
+    names = _fixtures_declared_in(ast.parse(policy.read_text(encoding="utf-8")))
     directory = path.parent
     while True:
         conftest = directory / "conftest.py"
@@ -587,7 +590,7 @@ def test_module_level_helpers_are_not_named_like_tests():
     -- seven of them, all legitimate -- which is what kept this gate red.
     """
     offenders = []
-    for path in sorted(TEST_ROOT.rglob("test_*.py")):
+    for path in all_test_files():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         available = (_BUILTIN_FIXTURES | _fixtures_declared_in(tree)
                      | _fixtures_from_conftests(path))
@@ -699,7 +702,7 @@ def test_test_modules_do_not_import_other_test_modules():
                 is_legacy = stripped == "jittor.test" or stripped.startswith("jittor.test.")
                 targets_test = any(part in test_module_stems for part in parts)
                 if is_legacy or targets_test:
-                    relative = path.relative_to(TEST_ROOT)
+                    relative = relative_test_path(path)
                     violations.append("{}:{} imports {}".format(relative, node.lineno, module))
     assert not violations, "test modules must depend on _helpers/opinfo, not tests:\n" + "\n".join(
         violations
@@ -709,7 +712,7 @@ def test_test_modules_do_not_import_other_test_modules():
 def test_test_modules_avoid_collection_time_backend_side_effects():
     violations = []
     for path in _test_files():
-        relative = path.relative_to(TEST_ROOT)
+        relative = relative_test_path(path)
         relative_text = relative.as_posix()
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         local_functions = {

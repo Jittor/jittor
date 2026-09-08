@@ -81,7 +81,7 @@ except Exception:
 
 ## 5. 现成的实现
 
-`tests/compiler/test_parallel_compile_attribution.py`（CPU）。
+`tests/codegen/test_parallel_compile_attribution.py`（CPU）。
 要改电池组的并行策略之前，先跑它一遍；要新增一种「编译失败该怎么报」的契约，
 加在那里而不是新开一个文件。
 

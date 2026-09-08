@@ -248,7 +248,7 @@ contextmanager 即可。
 - `JITTOR_TORCH_SHIM=1 pytest tests/structure -q`——**注意它不是 3 秒、也不是全绿**：
   本机实测约 2 分 15 秒，HEAD 上就有 15 条红。判据是**与改前逐条同集合**，
   不是「全绿」。先在改前跑一次留基线。
-- 每个测试目录单独一条 pytest 命令；`tests/structure` 与 `tests/compat/torch`
+- 每个测试目录单独一条 pytest 命令；`tests/structure` 与 `compat/tests/torch`
   合并会因 `conftest` 模块名被抢而报假错。
 - 禁止 `git stash` 的前提下要拿改前基线：`cp <文件> $TMPDIR/<文件>.wip`
   → `git checkout -- <文件>` → 跑 → `cp` 回来。**不要用 `git apply`**，它会写索引，

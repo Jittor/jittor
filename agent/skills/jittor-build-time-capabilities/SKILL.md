@@ -20,7 +20,7 @@ with MPI compiled out.
 
 ## The symptom, and why it is easy to misread
 
-    $ pytest tests/distributed/test_mpi.py -q
+    $ pytest tests/backends/comm/mpi/test_mpi.py -q
     12 skipped     # "skipped: no mpi found"
 
 A wall of skips reads like "the machine does not have it". It actually means
@@ -60,7 +60,7 @@ to run (`mpirun`) has to be findable.
 
 Confirm it took, with a test that executes rather than skips:
 
-    pytest tests/distributed/test_mpi.py -q        # expect "1 passed", not all-skipped
+    pytest tests/backends/comm/mpi/test_mpi.py -q        # expect "1 passed", not all-skipped
 
 `1 passed, 6 skipped` is the healthy shape: the one that passes is the launcher
 test that spawns `mpirun -np N`; the six that skip only run *inside* a rank.

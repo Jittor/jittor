@@ -13,7 +13,7 @@ invariants and the allocator checks its CUDA calls.
 A destructor is implicitly ``noexcept``, so an error that escapes one is
 ``std::terminate`` *at the destructor's own frame*.  The generated
 ``tp_dealloc`` does wrap the ``~VarHolder()`` call in a ``try`` (see
-``tests/core/test_pyjt_compiler_parser.py``), but that catch sits below the
+``tests/bindings/test_pyjt_compiler_parser.py``), but that catch sits below the
 frame where ``terminate`` is called and never runs -- which is why "the
 destructor half is done" needed a run on real hardware before it could be
 believed.

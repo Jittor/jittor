@@ -496,6 +496,7 @@ include docs/results/2026-09-08-tensor-copy-boundaries.md
 include docs/results/2026-09-08-tensor-frontend-types.md
 include docs/results/2026-09-08-tensor-object-state.md
 include docs/results/2026-09-08-tensor-to-copy.md
+include docs/results/2026-09-08-test-layout-integration.md
 include docs/results/2026-09-08-torch-installation-target.md
 include docs/results/2026-09-08-torch-namespace-local-ownership.md
 include docs/results/2026-09-08-vllm-independent-distribution.md
@@ -547,6 +548,7 @@ include docs/results/transformers/2026-08-30-qwen3-ascend-training.md
 include docs/testing/async-error-diagnostics.md
 include docs/testing/error-categories.md
 include docs/testing/index.md
+include docs/testing/test-layout.md
 include docs/testing/test-system.md
 include docs/testing/torch-install-state-boundary.md
 include docs/tutorials/index.md

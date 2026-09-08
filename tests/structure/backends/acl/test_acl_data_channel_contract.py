@@ -1,0 +1,478 @@
+"""Host-only compile and behavior contract for the ACL data-channel boundary."""
+
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[4]
+HEADER = ROOT / "backends/acl/include/aclops/acl_data_channel.h"
+SRC_INCLUDE = ROOT / "src"
+
+
+def _compile(source, output=None):
+    with tempfile.TemporaryDirectory(prefix="jittor-acl-data-") as directory:
+        probe = Path(directory) / "probe.cc"
+        probe.write_text(source, encoding="utf-8")
+        command = [
+            os.environ.get("CXX", "g++"), "-std=c++14", "-I", str(ROOT),
+            "-I", str(SRC_INCLUDE),
+        ]
+        if output is None:
+            command += ["-fsyntax-only"]
+        else:
+            command += ["-o", str(output)]
+        command.append(str(probe))
+        subprocess.run(command, check=True, stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE, text=True)
+
+
+def test_acl_data_channel_header_is_cann_free_and_compilable():
+    text = HEADER.read_text(encoding="utf-8")
+    assert "#include <acl/" not in text
+    assert "AclDataRecord" in text
+    assert "AclDecodedData decode_acl_data" in text
+    assert "class AclDataOwner" in text
+    assert "class AclDataView" in text
+    assert "class AclAttrRunnerContract" in text
+    assert "AclAttrBinding" in text
+    assert "void consume(const AclDataRecord& record" in text
+    assert "const AclAttrSchema& schema() const" in text
+    assert "ACL data owner name must be non-empty" in text
+    _compile('#include "backends/acl/include/aclops/acl_data_channel.h"\n')
+
+
+def test_acl_descriptor_release_does_not_delete_rebuilt_entry():
+    source = r'''
+#include "backends/acl/include/aclops/acl_data_channel.h"
+int main() {
+    using namespace jittor::acl_data;
+    AclAttrSchema schema;
+    AclAttrField dim;
+    dim.type = AclDataType::int64;
+    schema.emplace("dim", dim);
+    AclDataRecord record;
+    record.op = "Scale";
+    record.fields.emplace("dim", AclDataValue::int64_value(1));
+    std::string key;
+    auto decoded = decode_acl_data(record, "Scale", schema, key);
+    auto descriptor_key = make_descriptor_key(decoded, {2}, "float32", "contiguous", "npu:0");
+    AclDescriptorCache<std::string> cache;
+    cache.get_or_create(descriptor_key, [](const AclDescriptorKey&) { return std::string("first"); });
+    auto old = cache.acquire(descriptor_key);
+    if (!cache.release(old) || cache.size() != 0) return 1;
+    cache.get_or_create(descriptor_key, [](const AclDescriptorKey&) { return std::string("replacement"); });
+    if (cache.release(old)) return 2;
+    auto fresh = cache.acquire(descriptor_key);
+    if (cache.get(fresh) != "replacement") return 3;
+    if (!cache.release(fresh) || cache.size() != 0) return 4;
+    return 0;
+}
+'''
+    with tempfile.TemporaryDirectory(prefix="jittor-acl-release-run-") as directory:
+        binary = Path(directory) / "probe"
+        _compile(source, binary)
+        subprocess.run([str(binary)], check=True)
+
+
+def test_acl_data_view_is_borrowed_and_noncopyable():
+    source = r'''
+#include "backends/acl/include/aclops/acl_data_channel.h"
+#include <type_traits>
+static_assert(!std::is_copy_constructible<jittor::acl_data::AclDataView>::value,
+              "ACL consumer views must not escape their consume callback");
+static_assert(!std::is_move_constructible<jittor::acl_data::AclDataView>::value,
+              "ACL consumer views must not be moved out of their callback");
+int main() { return 0; }
+'''
+    _compile(source)
+
+
+def test_acl_data_channel_decodes_defaults_and_has_stable_key():
+    source = r'''
+#include "backends/acl/include/aclops/acl_data_channel.h"
+#include <string>
+int main() {
+    using namespace jittor::acl_data;
+    AclAttrSchema schema;
+    AclAttrField dim;
+    dim.type = AclDataType::int64;
+    schema.emplace("dim", dim);
+    AclAttrField keep;
+    keep.type = AclDataType::boolean;
+    keep.required = false;
+    keep.has_default = true;
+    keep.default_value = AclDataValue::bool_value_of(false);
+    schema.emplace("keepdim", keep);
+    AclDataRecord record;
+    record.op = "Softmax";
+    record.fields.emplace("dim", AclDataValue::int64_value(-1));
+    std::string key;
+    auto result = decode_acl_data(record, "Softmax", schema, key);
+    if (result.fields.at("keepdim").bool_value) return 1;
+    if (key != result.cache_key) return 2;
+    if (key.find("0x") != std::string::npos) return 3;
+    try {
+        record.fields.emplace("unknown", AclDataValue::int64_value(1));
+        decode_acl_data(record, "Softmax", schema, key);
+        return 4;
+    } catch (const jittor::UserError&) {
+        return 0;
+    }
+}
+'''
+    with tempfile.TemporaryDirectory(prefix="jittor-acl-data-run-") as directory:
+        binary = Path(directory) / "probe"
+        _compile(source, binary)
+        subprocess.run([str(binary)], check=True)
+
+
+def test_acl_data_channel_cache_key_ignores_process_numeric_locale():
+    source = r'''
+#include "backends/acl/include/aclops/acl_data_channel.h"
+#include <locale>
+#include <string>
+
+class comma_punct : public std::numpunct<char> {
+protected:
+    char do_decimal_point() const override { return ','; }
+};
+
+int main() {
+    using namespace jittor::acl_data;
+    AclAttrSchema schema;
+    AclAttrField scale;
+    scale.type = AclDataType::float64;
+    schema.emplace("scale", scale);
+    AclDataRecord record;
+    record.op = "Scale";
+    record.fields.emplace("scale", AclDataValue::float64_value(1.5));
+    std::locale previous = std::locale::global(
+        std::locale(std::locale::classic(), new comma_punct()));
+    std::string key;
+    decode_acl_data(record, "Scale", schema, key);
+    std::locale::global(previous);
+    if (key.find("1.5") == std::string::npos) return 1;
+    if (key.find("1,5") != std::string::npos) return 2;
+    return 0;
+}
+'''
+    with tempfile.TemporaryDirectory(prefix="jittor-acl-locale-run-") as directory:
+        binary = Path(directory) / "probe"
+        _compile(source, binary)
+        subprocess.run([str(binary)], check=True)
+
+
+def test_acl_descriptor_key_separates_shape_layout_and_device_without_cann():
+    source = r'''
+#include "backends/acl/include/aclops/acl_data_channel.h"
+#include <string>
+int main() {
+    using namespace jittor::acl_data;
+    AclAttrSchema schema;
+    AclAttrField dim;
+    dim.type = AclDataType::int64;
+    schema.emplace("dim", dim);
+    AclDataRecord record;
+    record.op = "Softmax";
+    record.fields.emplace("dim", AclDataValue::int64_value(-1));
+    std::string attribute_key;
+    auto decoded = decode_acl_data(record, "Softmax", schema, attribute_key);
+    auto first = make_descriptor_key(decoded, {2, 4}, "float32", "contiguous", "npu:0");
+    auto same = make_descriptor_key(decoded, {2, 4}, "float32", "contiguous", "npu:0");
+    auto other_shape = make_descriptor_key(decoded, {4, 2}, "float32", "contiguous", "npu:0");
+    auto other_device = make_descriptor_key(decoded, {2, 4}, "float32", "contiguous", "npu:1");
+    if (canonical_descriptor_key(first) != canonical_descriptor_key(same)) return 1;
+    if (canonical_descriptor_key(first) == canonical_descriptor_key(other_shape)) return 2;
+    if (canonical_descriptor_key(first) == canonical_descriptor_key(other_device)) return 3;
+    AclDescriptorCache<std::string> cache;
+    int builds = 0;
+    auto& a = cache.get_or_create(first, [&](const AclDescriptorKey&) {
+        ++builds;
+        return std::string("descriptor-0");
+    });
+    auto& b = cache.get_or_create(same, [&](const AclDescriptorKey&) {
+        ++builds;
+        return std::string("wrong");
+    });
+    if (&a != &b || a != "descriptor-0" || builds != 1 || cache.size() != 1) return 4;
+    if (cache.device_generation("npu:0") != 0) return 5;
+    if (cache.device_size("npu:0") != 1 || cache.device_size("npu:1") != 0) return 5;
+    cache.get_or_create(other_shape, [&](const AclDescriptorKey&) {
+        ++builds;
+        return std::string("descriptor-1");
+    });
+    if (builds != 2 || !cache.contains(other_shape)) return 6;
+    if (cache.device_generation("npu:0") != 0) return 7;
+    if (!cache.erase(first) || cache.erase(first) || cache.size() != 1) return 7;
+    if (!cache.contains(other_shape)) return 8;
+    auto device_one = make_descriptor_key(decoded, {2, 4}, "float32", "contiguous", "npu:1");
+    cache.get_or_create(device_one, [&](const AclDescriptorKey&) {
+        ++builds;
+        return std::string("descriptor-2");
+    });
+    if (cache.size() != 2 || cache.erase_device("npu:1") != 1) return 9;
+    if (cache.device_size("npu:1") != 0 || cache.device_size("npu:0") != 1) return 9;
+    if (cache.device_generation("npu:1") != 1) return 10;
+    if (cache.contains(device_one) || !cache.contains(other_shape)) return 11;
+    if (cache.erase_device("npu:1") != 0 || cache.device_generation("npu:1") != 2) return 12;
+    if (cache.device_size("npu:1") != 0) return 12;
+    try {
+        make_descriptor_key(decoded, {-1}, "float32", "contiguous", "npu:0");
+        return 13;
+    } catch (const jittor::UserError&) {
+    }
+    try {
+        cache.erase_device("");
+        return 14;
+    } catch (const jittor::InternalInvariantError&) {
+        return 0;
+    }
+}
+'''
+    with tempfile.TemporaryDirectory(prefix="jittor-acl-descriptor-run-") as directory:
+        binary = Path(directory) / "probe"
+        _compile(source, binary)
+        subprocess.run([str(binary)], check=True)
+
+
+def test_acl_descriptor_handle_lifecycle_rejects_stale_entries_without_cann():
+    source = r'''
+#include "backends/acl/include/aclops/acl_data_channel.h"
+#include <string>
+int main() {
+    using namespace jittor::acl_data;
+    AclDescriptorKey key;
+    key.attribute_key = "v1|op=5:Scale";
+    key.shape = {2};
+    key.dtype = "float32";
+    key.layout = "contiguous";
+    key.device = "npu:0";
+    AclDescriptorCache<std::string> cache;
+    cache.get_or_create(key, [](const AclDescriptorKey&) {
+        return std::string("descriptor");
+    });
+    auto handle = cache.acquire(key);
+    if (!cache.is_current(handle) || cache.get(handle) != "descriptor") return 1;
+    if (!cache.erase(key) || cache.is_current(handle)) return 2;
+    try {
+        cache.get(handle);
+        return 3;
+    } catch (const jittor::InternalInvariantError&) {
+    }
+    cache.get_or_create(key, [](const AclDescriptorKey&) {
+        return std::string("descriptor-2");
+    });
+    if (cache.is_current(handle)) return 6;
+    try {
+        cache.get(handle);
+        return 7;
+    } catch (const jittor::InternalInvariantError&) {
+    }
+    auto fresh = cache.acquire(key);
+    cache.erase_device("npu:0");
+    if (cache.is_current(fresh)) return 8;
+    try {
+        cache.get(fresh);
+        return 9;
+    } catch (const jittor::InternalInvariantError&) {
+        return 0;
+    }
+}
+'''
+    with tempfile.TemporaryDirectory(prefix="jittor-acl-handle-run-") as directory:
+        binary = Path(directory) / "probe"
+        _compile(source, binary)
+        subprocess.run([str(binary)], check=True)
+
+
+def test_acl_data_owner_binds_identity_and_schema_for_future_registry():
+    source = r'''
+#include "backends/acl/include/aclops/acl_data_channel.h"
+int main() {
+    using namespace jittor::acl_data;
+    AclAttrSchema schema;
+    AclAttrField axis;
+    axis.type = AclDataType::int64;
+    schema.emplace("axis", axis);
+    AclAttrField keep;
+    keep.type = AclDataType::boolean;
+    keep.required = false;
+    keep.has_default = true;
+    keep.default_value = AclDataValue::bool_value_of(true);
+    schema.emplace("keepdim", keep);
+    AclDataOwner owner("Softmax", schema);
+    if (owner.op() != "Softmax" || owner.schema().size() != 2) return 1;
+    AclDataRecord record;
+    record.op = "Softmax";
+    record.fields.emplace("axis", AclDataValue::int64_value(-1));
+    std::string key;
+    auto decoded = owner.decode(record, key);
+    if (!decoded.fields.at("keepdim").bool_value) return 2;
+    if (key != decoded.cache_key || key.find("0x") != std::string::npos) return 3;
+    record.op = "Triu";
+    try {
+        owner.decode(record, key);
+        return 4;
+    } catch (const jittor::UserError&) {
+    }
+    try {
+        AclDataOwner invalid("", AclAttrSchema());
+        return 5;
+    } catch (const jittor::InternalInvariantError&) {
+        return 0;
+    }
+}
+'''
+    with tempfile.TemporaryDirectory(prefix="jittor-acl-owner-run-") as directory:
+        binary = Path(directory) / "probe"
+        _compile(source, binary)
+        subprocess.run([str(binary)], check=True)
+
+
+def test_acl_data_owner_exposes_validated_read_only_consumer_view():
+    source = r'''
+#include "backends/acl/include/aclops/acl_data_channel.h"
+#include <vector>
+int main() {
+    using namespace jittor::acl_data;
+    AclAttrSchema schema;
+    AclAttrField dim;
+    dim.type = AclDataType::int64;
+    schema.emplace("dim", dim);
+    AclAttrField axes;
+    axes.type = AclDataType::int64_vector;
+    schema.emplace("axes", axes);
+    AclAttrField keep;
+    keep.type = AclDataType::boolean;
+    keep.required = false;
+    keep.has_default = true;
+    keep.default_value = AclDataValue::bool_value_of(false);
+    schema.emplace("keepdim", keep);
+    AclDataOwner owner("Softmax", schema);
+    AclDataRecord record;
+    record.op = "Softmax";
+    record.fields.emplace("dim", AclDataValue::int64_value(-1));
+    record.fields.emplace("axes", AclDataValue::int64_vector({1, 3}));
+    std::string key;
+    int callback_count = 0;
+    owner.consume(record, key, [&](const AclDataView& attrs) {
+        ++callback_count;
+        if (attrs.op() != "Softmax" || attrs.schema_version() != 1) return;
+        if (attrs.int64("dim") != -1) return;
+        if (attrs.int64_vector("axes") != std::vector<int64_t>({1, 3})) return;
+        if (!attrs.has("keepdim") || attrs.boolean("keepdim")) return;
+        if (attrs.cache_key() != key || key.find("0x") != std::string::npos) return;
+        try {
+            attrs.float64("dim");
+            return;
+        } catch (const jittor::InternalInvariantError&) {
+            ++callback_count;
+        }
+    });
+    return callback_count == 2 ? 0 : 1;
+}
+'''
+    with tempfile.TemporaryDirectory(prefix="jittor-acl-consumer-run-") as directory:
+        binary = Path(directory) / "probe"
+        _compile(source, binary)
+        subprocess.run([str(binary)], check=True)
+
+
+def test_acl_attr_runner_contract_freezes_bindings_before_consumer():
+    source = r'''
+#include "backends/acl/include/aclops/acl_data_channel.h"
+int main() {
+    using namespace jittor::acl_data;
+    AclAttrSchema schema;
+    AclAttrField dim;
+    dim.type = AclDataType::int64;
+    schema.emplace("dim", dim);
+    AclAttrField keep;
+    keep.type = AclDataType::boolean;
+    keep.required = false;
+    keep.has_default = true;
+    keep.default_value = AclDataValue::bool_value_of(false);
+    schema.emplace("keepdim", keep);
+    AclAttrField implementation_only;
+    implementation_only.type = AclDataType::int64;
+    implementation_only.required = false;
+    implementation_only.has_default = true;
+    implementation_only.default_value = AclDataValue::int64_value(7);
+    schema.emplace("implementation_only", implementation_only);
+    AclAttrRunnerContract contract("Softmax", schema, {
+        {"dim", AclDataType::int64},
+        {"keepdim", AclDataType::boolean},
+    });
+    AclDataRecord record;
+    record.op = "Softmax";
+    record.fields.emplace("dim", AclDataValue::int64_value(-1));
+    std::string key;
+    int calls = 0;
+    contract.consume(record, key, [&](const AclDataView& attrs) {
+        if (attrs.int64("dim") == -1 && !attrs.boolean("keepdim"))
+            ++calls;
+        if (attrs.has("implementation_only"))
+            ++calls;
+        try {
+            attrs.int64("implementation_only");
+            ++calls;
+        } catch (const jittor::InternalInvariantError&) {
+            ++calls;
+        }
+    });
+    if (calls != 2)
+        return 1;
+    try {
+        AclAttrRunnerContract duplicate("Softmax", schema, {
+            {"dim", AclDataType::int64}, {"dim", AclDataType::int64},
+        });
+        return 2;
+    } catch (const jittor::InternalInvariantError&) {
+    }
+    try {
+        AclAttrRunnerContract wrong_type("Softmax", schema, {
+            {"dim", AclDataType::boolean},
+        });
+        return 3;
+    } catch (const jittor::InternalInvariantError&) {
+    }
+    try {
+        AclAttrRunnerContract missing("Softmax", schema, {
+            {"axis", AclDataType::int64},
+        });
+        return 4;
+    } catch (const jittor::InternalInvariantError&) {
+        return 0;
+    }
+}
+'''
+    with tempfile.TemporaryDirectory(prefix="jittor-acl-runner-contract-") as directory:
+        binary = Path(directory) / "probe"
+        _compile(source, binary)
+        subprocess.run([str(binary)], check=True)
+
+
+def test_acl_schema_rejects_invalid_type_without_default():
+    source = r'''
+#include "backends/acl/include/aclops/acl_data_channel.h"
+int main() {
+    using namespace jittor::acl_data;
+    AclAttrSchema schema;
+    AclAttrField invalid;
+    invalid.type = static_cast<AclDataType>(99);
+    invalid.required = true;
+    schema.emplace("dim", invalid);
+    try {
+        AclDataOwner owner("Softmax", schema);
+        return 1;
+    } catch (const jittor::InternalInvariantError&) {
+        return 0;
+    }
+}
+'''
+    with tempfile.TemporaryDirectory(prefix="jittor-acl-schema-invalid-") as directory:
+        binary = Path(directory) / "probe"
+        _compile(source, binary)
+        subprocess.run([str(binary)], check=True)

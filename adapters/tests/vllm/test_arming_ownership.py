@@ -33,8 +33,6 @@ def test_vllm_arming_finder_rollback_rejects_an_external_replacement():
     finally:
         sys.meta_path[:] = original_meta_path
         vllm._installed = original_installed
-
-
 def test_vllm_arming_finder_rollback_removes_the_entry_it_owns():
     from jittor_adapters.vllm import bootstrap as vllm
 
@@ -54,5 +52,4 @@ def test_vllm_arming_finder_rollback_removes_the_entry_it_owns():
     finally:
         sys.meta_path[:] = original_meta_path
         vllm._installed = original_installed
-
 

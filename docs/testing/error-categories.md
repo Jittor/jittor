@@ -10,7 +10,7 @@ The 2.19 split has two explicit entry points:
 
 CUDA backend checks that report failed plans, CUDA/NCCL/CUDNN status, or test
 harness failures are classified as internal invariants. They are tracked by
-the structure gate in `tests/structure/test_error_categories.py` so future
+the structure gate in `tests/structure/core/test_error_categories.py` so future
 error-boundary migrations do not accidentally weaken backend diagnostics.
 This includes CUB test-kernel CUDA status assertions, which are not user input
 validation and therefore remain `ASSERT` checks.

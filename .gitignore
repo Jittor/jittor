@@ -20,6 +20,9 @@ htmlcov/
 build/
 # The runtime build package contains maintained source, not build output.
 !/python/jittor/build/
+# Test domains mirror maintained build sources, not generated build products.
+!/tests/build/
+!/tests/structure/build/
 # This is a source-owned tool category, not a generated build directory.
 !/tools/build/
 !/tools/build/**

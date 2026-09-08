@@ -68,7 +68,7 @@ from ..core import OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo
 
 # ------------------------------------------------------------------- numpy refs
 # Adapted verbatim (then float64-tightened) from the validated source-index maps in
-# tests/compat/torch/test_torch_compat_interpolate.py.
+# compat/tests/torch/test_torch_compat_interpolate.py.
 
 def _nearest_ref(x, Oh, Ow):
     """torch/jittor nearest: src = floor(i * in/out), clamped to [0, in-1]."""

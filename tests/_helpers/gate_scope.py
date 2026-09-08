@@ -28,11 +28,12 @@ native behaviour, and one ``pytest tests`` run cannot cover both. That is a
 split, not an exclusion -- every file is still run, in the session that owns it.
 """
 
-from _helpers.process_modes import TORCH_MODE_PATHS
+from _helpers.process_modes import TORCH_MODE_PATHS, NATIVE_MODE_PATHS
 
 
 #: The root every gate starts from.
 TEST_ROOT = "tests"
+TEST_ROOTS = (TEST_ROOT, "compat/tests", "adapters/tests")
 
 #: ``(path, reason)`` -- a path no CPU gate runs, and why it cannot.
 #:
@@ -110,14 +111,28 @@ def _ignores(paths):
 
 def native_arguments():
     """pytest arguments for the session that owns native semantics."""
-    return (TEST_ROOT,) + _ignores(tuple(TORCH_MODE_PATHS) + excluded_paths())
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    pending = list(TORCH_MODE_PATHS)
+    ignored = []
+    while pending:
+        path = pending.pop()
+        if path in NATIVE_MODE_PATHS:
+            continue
+        if any(item.startswith(path.rstrip("/") + "/") for item in NATIVE_MODE_PATHS):
+            pending.extend(child.relative_to(root).as_posix()
+                           for child in sorted((root / path).iterdir())
+                           if child.name != "__pycache__")
+        else:
+            ignored.append(path)
+    return TEST_ROOTS + _ignores(tuple(sorted(ignored)) + excluded_paths())
 
 
 def torch_arguments():
     """pytest arguments for the session that owns Torch compatibility mode."""
     excluded = excluded_paths()
     selected = tuple(path for path in TORCH_MODE_PATHS if path not in excluded)
-    return selected + _ignores(excluded)
+    return selected + _ignores(excluded + NATIVE_MODE_PATHS)
 
 
 def selected_files(repo_root, arguments):

@@ -182,9 +182,9 @@ pytest tests/backends/cuda/test_cuda_multi_device.py -q
 # the cross-device copy op
 pytest tests/backends/cuda/test_device_copy.py -q
 # the torch facade -- separate command, shim mode is process-global
-JITTOR_TORCH_SHIM=1 pytest tests/compat/torch/test_multi_device.py -q
+JITTOR_TORCH_SHIM=1 pytest compat/tests/torch/test_multi_device.py -q
 ```
 
-Never put `tests/compat/torch` and a native path in one pytest command: the
+Never put `compat/tests/torch` and a native path in one pytest command: the
 shim is process-global and switches the whole tree into torch semantics
 (`AGENT-BRIEF.md` §4, board §"正确跑法").

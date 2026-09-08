@@ -83,5 +83,3 @@ class RuntimeHookOwnership(unittest.TestCase):
             with tx.runtime_hook(self.name()):
                 register(target)
         self.assertEqual(dispatcher._namespaces, {})
-
-

@@ -20,14 +20,14 @@ TESTS = pathlib.Path(__file__).resolve().parents[1]
 
 
 def _test_files():
-    return [path for path in TESTS.rglob("test_*.py")
-            if "__pycache__" not in path.parts]
+    from _helpers.paths import iter_test_files
+    return iter_test_files()
 
 
 def test_no_two_test_files_share_a_basename():
     by_name = collections.defaultdict(list)
     for path in _test_files():
-        by_name[path.name].append(path.relative_to(TESTS))
+        by_name[path.name].append(path.relative_to(TESTS.parent))
     clashes = {name: sorted(str(p) for p in paths)
                for name, paths in by_name.items() if len(paths) > 1}
     assert not clashes, (

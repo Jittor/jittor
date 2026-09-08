@@ -172,11 +172,11 @@ SDK and launcher logs for diagnosis only; do not grep CPU compilation or
 fallback messages to decide whether validation passed. CPU reference/checkpoint
 work outside the device computation is not itself a backend fallback.
 
-`tests/backends/npu/conftest.py` installs this guard automatically for each
+`tests/backends/acl/conftest.py` installs this guard automatically for each
 test when Jittor is already loaded at fixture entry. It preserves the original
 setup/call exception instead of replacing it with a counter error. Tests must
 still synchronize or fetch before returning: the fixture does not flush pending
-work. Standalone scripts and tests outside `tests/backends/npu/` do not inherit
+work. Standalone scripts and tests outside `tests/backends/acl/` do not inherit
 this fixture and must enter `forbid_backend_fallbacks()` explicitly. If Jittor
 is first imported after fixture entry, the test also needs an explicit scope.
 
@@ -212,7 +212,7 @@ export ASCEND_RT_VISIBLE_DEVICES=<allocated-device>
 
 set -o pipefail
 backend_fallback=error sync_run=1 python -m pytest -q -s \
-  tests/backends/npu/test_acl.py::TestACL::test_float32_matmul_runs_on_acl \
+  tests/backends/acl/test_acl.py::TestACL::test_float32_matmul_runs_on_acl \
   2>&1 | tee "$TMPDIR/acl-sync-run.log"
 ```
 
@@ -238,7 +238,7 @@ disabled to verify the normal asynchronous path still launches on ACL:
 ```bash
 set -o pipefail
 backend_fallback=error sync_run=0 python -m pytest -q -s \
-  tests/backends/npu/test_acl.py::TestACL::test_float32_matmul_runs_on_acl \
+  tests/backends/acl/test_acl.py::TestACL::test_float32_matmul_runs_on_acl \
   2>&1 | tee "$TMPDIR/acl-async-run.log"
 ```
 
@@ -345,9 +345,9 @@ To run the same core tests directly:
 export JITTOR_TEST_DEVICES=npu
 export backend_fallback=error
 "$JITTOR_CI_PYTHON" -m pytest -v --timeout=600 \
-  tests/backends/npu/test_acl.py \
-  tests/backends/npu/test_aclop.py \
-  tests/backends/npu/test_acl_indexing.py \
+  tests/backends/acl/test_acl.py \
+  tests/backends/acl/test_aclop.py \
+  tests/backends/acl/test_acl_indexing.py \
   tests/ops/test_ops.py
 ```
 
@@ -366,7 +366,7 @@ python -m pip install "transformers==4.56.2" "jinja2==3.1.6"
 export QWEN3_MODEL=/path/to/Qwen3-8B
 export JITTOR_TORCH_SHIM=1
 
-backend_fallback=error python tests/backends/npu/manual/run_qwen3_transformers.py \
+backend_fallback=error python tests/backends/acl/manual/run_qwen3_transformers.py \
   --model "$QWEN3_MODEL" \
   --dtype bfloat16 \
   --max-new-tokens 8 \
@@ -705,8 +705,8 @@ export ASCEND_RT_VISIBLE_DEVICES=<allocated-device>
 
 set -o pipefail
 backend_fallback=error sync_run=1 python -m pytest -q -s \
-  tests/backends/npu/test_acl.py \
-  tests/backends/test_acl_dtype_preservation.py \
+  tests/backends/acl/test_acl.py \
+  tests/backends/acl/test_acl_dtype_preservation.py \
   2>&1 | tee "$TMPDIR/acl-launcher-close.log"
 ```
 
@@ -746,7 +746,7 @@ SiLU and attention nodes with NPU selection, for example:
 
 ```bash
 PYTHONPATH=python JITTOR_TORCH_SHIM=1 JITTOR_TEST_DEVICES=npu backend_fallback=error sync_run=1 \
-python -m pytest -q -s tests/backends/npu/test_acl_torch_compat.py \
+python -m pytest -q -s tests/backends/acl/test_acl_torch_compat.py \
   -k 'rms_norm or rotary or silu or sdpa'
 ```
 
@@ -804,13 +804,13 @@ The host-only attribute channel is defined by
 compiled before any CANN probe: the header owns the versioned record, typed
 scalar/vector values, schema defaults, and deterministic cache key, but it does
 not call ACL or construct an `aclTensor`. The corresponding source contract is
-`tests/structure/test_acl_data_channel_contract.py` and can be run on a CPU
+`tests/structure/backends/acl/test_acl_data_channel_contract.py` and can be run on a CPU
 host:
 
 ```bash
 python -m pytest -q \
-  tests/structure/test_acl_data_channel_contract.py \
-  tests/structure/test_acl_data_schema_normalizer.py
+  tests/structure/backends/acl/test_acl_data_channel_contract.py \
+  tests/structure/backends/acl/test_acl_data_schema_normalizer.py
 ```
 
 For the future generated-attribute consumer, `AclDataOwner::consume` supplies
@@ -842,7 +842,7 @@ npu-smi info
 export ASCEND_RT_VISIBLE_DEVICES=<allocated-device>
 set -o pipefail
 JITTOR_TEST_DEVICES=npu backend_fallback=error sync_run=1 python -m pytest -q -s \
-  tests/backends/npu/test_acl_torch_compat.py -k 'softmax or triu' \
+  tests/backends/acl/test_acl_torch_compat.py -k 'softmax or triu' \
   2>&1 | tee "$TMPDIR/acl-attribute-data.log"
 ```
 

@@ -89,7 +89,7 @@ def _session_environment(session, serial_compile=False):
     # recorded, which made this script measure something `nox -s cpu` does not
     # run, and the parallel op compiler is where a cold whole-tree run's time
     # goes. ``--serial-compile`` restores the old value for bisecting a compile
-    # failure; tests/compiler/test_parallel_compile_attribution.py is why that
+    # failure; tests/codegen/test_parallel_compile_attribution.py is why that
     # is a diagnostic convenience and not a correctness measure.
     environment["use_parallel_op_compiler"] = "0" if serial_compile else "16"
     # Jittor's segfault handler shells out to gdb for a backtrace. That is

@@ -541,4 +541,4 @@ run "$POLLUTER" "$VICTIM"  # 右上／右下
 > 它测的是「抛没抛」，不是「改没改」。要写一个**不同**的值，再断言旧值还在。
 
 本仓库原有的 `test_all_native_flag_instances_reject_late_startup_writes` 正是前者，
-它在 2.19 这一波补上了后者（`tests/core/test_startup_config.py`）。
+它在 2.19 这一波补上了后者（`tests/runtime/test_startup_config.py`）。

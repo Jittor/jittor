@@ -39,7 +39,7 @@ description: 给核心 C++（图、liveness 记账、执行器计划）写属性
 
 - C++ 里写 `JIT_TEST(foo) { ... }`
 - 自动变成 `jt.tests.foo`
-- 自动变成 pytest 节点 `tests/compiler/test_jit_tests.py::TestJitTests::test_foo`
+- 自动变成 pytest 节点 `tests/codegen/test_jit_tests.py::TestJitTests::test_foo`
 - `tests/compiler` 已在原生 CPU 门禁里（0.04 之后门禁可达全树），所以**不用改任何
   门禁配置**
 
@@ -229,9 +229,9 @@ def test_dropping_a_graph_leaks_nothing_at_all(self):
 
 ```bash
 python tools/gate_conclusion_diff.py record --out base.json -- \
-    tests/core tests/compiler --ignore=tests/core/test_my_new_file.py -q
+    tests/core tests/codegen tests/build --ignore=tests/core/test_my_new_file.py -q
 python tools/gate_conclusion_diff.py record --out cand.json -- \
-    tests/core tests/compiler -q
+    tests/core tests/codegen tests/build -q
 python tools/gate_conclusion_diff.py compare base.json cand.json \
     --expect-new 'tests/core/test_my_new_file.py::TestX::test_y' ...
 ```

@@ -129,7 +129,7 @@ class TestSelftestStructure(unittest.TestCase):
             self.repo_root / "README.md",
             self.repo_root / "CONTRIBUTING.md",
             self.repo_root / "tools" / "install" / "legacy" / "install.sh",
-            self.repo_root / "tests" / "compiler" / "test_lock.py",
+            self.repo_root / "tests" / "runtime" / "test_lock.py",
             self.repo_root / "tools" / "release" / "legacy" / "polish_centos.py",
             self.repo_root / "python" / "jittor" / "build" / "utils" / "class" / "setup_env.py",
         ]

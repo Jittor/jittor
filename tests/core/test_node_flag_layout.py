@@ -7,7 +7,7 @@
 
 ``Node::flags`` is one word whose upper bits mean different things on a ``Var``
 and on an ``Op`` (see ``NodeFlags`` in ``node.h`` and
-``tests/structure/test_node_flag_kinds.py`` for the layout rules).  The union is
+``tests/structure/core/test_node_flag_kinds.py`` for the layout rules).  The union is
 deliberate; what was not deliberate is code that read a bit off a node without
 knowing which kind it had.
 

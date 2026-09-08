@@ -216,9 +216,9 @@ xdist 已校验各 node 一致，取并集），并且用 `optionalhook`，否�
 ```bash
 # baseline 与 candidate 用同一次构建、同一条命令，只 --ignore 掉自己的新文件
 python tools/gate_conclusion_diff.py record --out base.json -- \
-    tests/core tests/compiler --ignore=tests/core/test_my_new_file.py -q
+    tests/core tests/codegen tests/build --ignore=tests/core/test_my_new_file.py -q
 python tools/gate_conclusion_diff.py record --out cand.json -- \
-    tests/core tests/compiler -q
+    tests/core tests/codegen tests/build -q
 python tools/gate_conclusion_diff.py compare base.json cand.json \
     --expect-new 'tests/core/test_my_new_file.py::TestX::test_y'
 ```

@@ -110,12 +110,12 @@ class _Pickler(pickle._Pickler):    # C 版没有可覆写的 save
 ```
 
 张量本身用 `__reduce__` 返回 `(_Global("torch._utils","_rebuild_tensor_v2"), args)`。
-完整可运行版本见 `tests/compat/torch/test_torch_compat_load_strided.py`。
+完整可运行版本见 `compat/tests/torch/test_torch_compat_load_strided.py`。
 
 **旧格式（`_use_new_zipfile_serialization=False`）不要手工拼**——它是「三个 pickle 加
 storage 键表加裸字节」，逐字节复刻等于在测自己对代码的理解。改成**直接单测 rebuild 函数**：
 `jittor_rebuild_direct(...)` 返回的 `ArrayWrapper` 加 `materialize_wrappers({...})`，
-参考 `tests/core/test_load_pytorch_strides.py`。
+参考 `tests/bindings/test_load_pytorch_strides.py`。
 
 ## 4. 期望值怎么算（不要手算）
 

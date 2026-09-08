@@ -159,6 +159,8 @@ def discover_modules(roots: list[tuple[Path, str]]) -> dict[str, Path]:
             if "__pycache__" in path.parts:
                 continue
             parts = list(path.relative_to(base).parts)
+            if prefix == "jittor.compat" and parts[0] == "tests":
+                continue  # Monorepo dev tests are excluded from this distribution.
             if parts[-1] == "__init__.py":
                 parts = parts[:-1]
             else:

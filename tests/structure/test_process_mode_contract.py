@@ -30,8 +30,8 @@ if str(TEST_ROOT) not in sys.path:
 from _helpers.child_process import run_python_child  # noqa: E402
 
 #: A native file, and a Torch-mode file that is cheap to collect.
-_NATIVE_TARGET = "tests/core/test_flags.py"
-_TORCH_TARGET = "tests/compat/torch/test_torch_compiler_fidelity.py"
+_NATIVE_TARGET = "tests/runtime/test_flags.py"
+_TORCH_TARGET = "compat/tests/torch/test_torch_compiler_fidelity.py"
 
 
 def _collect(targets, torch_mode=None):
@@ -48,7 +48,7 @@ def _collect(targets, torch_mode=None):
 
 def test_conftest_does_not_read_the_command_line_to_choose_a_mode():
     """The regression this file exists for, caught statically and for free."""
-    source = (TEST_ROOT / "conftest.py").read_text(encoding="utf-8")
+    source = (TEST_ROOT / "_helpers/pytest_policy.py").read_text(encoding="utf-8")
     tree = ast.parse(source, filename="conftest.py")
     offenders = []
     for node in ast.walk(tree):
@@ -64,7 +64,7 @@ def test_naming_a_torch_path_alongside_a_native_one_does_not_change_its_meaning(
     """Adding a directory must not silently reinterpret the others.
 
     Before: this selection set ``JITTOR_TORCH_SHIM=1`` for the whole process, so
-    ``tests/core/test_flags.py`` -- a native file nobody asked to change -- ran
+    ``tests/runtime/test_flags.py`` -- a native file nobody asked to change -- ran
     with the shim installed. After: the session refuses and says which variable
     to set, so the two meanings can never be produced by the same command.
     """
@@ -94,7 +94,7 @@ def test_manual_probes_are_opt_in_by_variable_not_by_selection_shape():
     marker after the skip decision had already been made, so a whole-tree run
     executed it anyway -- 537 seconds, the slowest item in the suite.
     """
-    source = (TEST_ROOT / "conftest.py").read_text(encoding="utf-8")
+    source = (TEST_ROOT / "_helpers/pytest_policy.py").read_text(encoding="utf-8")
     assert "SELECTION_IS_BROAD" not in source
     assert "JITTOR_TEST_MANUAL" in source
     tree = ast.parse(source, filename="conftest.py")

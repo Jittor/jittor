@@ -1,0 +1,880 @@
+from pathlib import Path
+import sys
+
+
+ROOT = Path(__file__).resolve().parents[4]
+
+if str(ROOT / "tests") not in sys.path:
+    sys.path.insert(0, str(ROOT / "tests"))
+
+from _helpers import acl_launch_tails  # noqa: E402
+
+BASE_HEADER = ROOT / "backends/acl/include/aclops/base_op.h"
+BASE_SOURCE = ROOT / "backends/acl/kernels/native/base_op_acl.cc"
+UNARY_SOURCE = ROOT / "backends/acl/kernels/native/unary_op_acl.cc"
+BINARY_SOURCE = ROOT / "backends/acl/kernels/native/binary_op_acl.cc"
+TERNARY_SOURCE = ROOT / "backends/acl/kernels/native/ternary_op_acl.cc"
+REDUCE_SOURCE = ROOT / "backends/acl/kernels/native/reduce_op_acl.cc"
+CUMSUM_SOURCE = ROOT / "backends/acl/kernels/native/cumsum_op_acl.cc"
+MATMUL_SOURCE = ROOT / "backends/acl/kernels/native/matmul_op_acl.cc"
+EXPAND_SOURCE = ROOT / "backends/acl/kernels/native/expand_op_acl.cc"
+FLOOR_SOURCE = ROOT / "backends/acl/kernels/native/floor_op_acl.cc"
+NANTONUM_SOURCE = ROOT / "backends/acl/kernels/native/nantonum_op_acl.cc"
+TRIU_SOURCE = ROOT / "backends/acl/kernels/native/triu_op_acl.cc"
+SIGMOID_SOURCE = ROOT / "backends/acl/kernels/native/sigmoid_op_acl.cc"
+TRANSPOSE_SOURCE = ROOT / "backends/acl/kernels/native/transpose_op_acl.cc"
+SOFTMAX_SOURCE = ROOT / "backends/acl/kernels/native/softmax_op_acl.cc"
+EMBEDDING_SOURCE = ROOT / "backends/acl/kernels/native/embedding_op_acl.cc"
+ROLL_SOURCE = ROOT / "backends/acl/kernels/native/roll_op_acl.cc"
+CLAMP_SOURCE = ROOT / "backends/acl/kernels/native/clamp_op_acl.cc"
+STACK_SOURCE = ROOT / "backends/acl/kernels/native/stack_op_acl.cc"
+FLIP_SOURCE = ROOT / "backends/acl/kernels/native/flip_op_acl.cc"
+CONCAT_SOURCE = ROOT / "backends/acl/kernels/native/concat_op_acl.cc"
+WHERE_SOURCE = ROOT / "backends/acl/kernels/native/where_op_acl.cc"
+RANGE_SOURCE = ROOT / "backends/acl/kernels/native/index_op_acl.cc"
+DROPOUT_SOURCE = ROOT / "backends/acl/kernels/native/dropout_op_acl.cc"
+RELU_SOURCE = ROOT / "backends/acl/kernels/native/relu_op_acl.cc"
+ARG_REDUCE_SOURCE = ROOT / "backends/acl/kernels/native/arg_reduce_op_acl.cc"
+SILU_SOURCE = ROOT / "backends/acl/kernels/native/silu_op_acl.cc"
+BMM_SOURCE = ROOT / "backends/acl/kernels/native/bmm_op_acl.cc"
+TRUTH_REDUCE_SOURCE = ROOT / "backends/acl/kernels/native/truth_reduce_op_acl.cc"
+CONV_SOURCE = ROOT / "backends/acl/kernels/native/conv_op_acl.cc"
+NORMS_SOURCE = ROOT / "backends/acl/kernels/native/norms_op_acl.cc"
+ROPE_SOURCE = ROOT / "backends/acl/kernels/native/rope_op_acl.cc"
+POOL_SOURCE = ROOT / "backends/acl/kernels/native/pool_op_acl.cc"
+RANDOM_SOURCE = ROOT / "backends/acl/kernels/native/random_op_acl.cc"
+UPSAMPLE_SOURCE = ROOT / "backends/acl/kernels/native/upsample_op_acl.cc"
+GATHER_SOURCE = ROOT / "backends/acl/kernels/native/gather_scatter_op_acl.cc"
+
+
+def test_acl_launcher_tail_has_one_auditable_contract():
+    header = BASE_HEADER.read_text()
+    source = BASE_SOURCE.read_text()
+    assert "using AclExecuteLauncher" in header
+    assert "void launch(aclnnStatus workspace_ret" in header
+    for token in (
+            "checkRet(workspace_ret)", "mallocWorkSpace(workspaceSize)",
+            "launcher(", "execute launcher failed", "syncRun()"):
+        assert token in source
+
+
+def test_acl_op_idx_map_is_removed_without_touching_reduce_dispatch():
+    utils = (ROOT / "backends/acl/kernels/native/utils.cc").read_text()
+    header = (ROOT / "backends/acl/include/aclops/utils.h").read_text()
+    dispatch = (ROOT / "backends/acl/src/acl_op_exec.cc").read_text()
+    assert "op_idx_map" not in utils
+    assert "op_idx_map" not in header
+    assert "op.op_idx = 9" in dispatch
+    assert "op.op_idx = 13" in dispatch
+
+
+def test_unary_family_uses_launcher_without_changing_sync_policy():
+    source = UNARY_SOURCE.read_text()
+    assert "launch(ret, it->second.executeFunc, false);" in source
+    assert "CHECK_RET(ret == ACL_SUCCESS" not in source
+
+
+def test_binary_family_uses_shared_launcher_without_tail_copy():
+    source = BINARY_SOURCE.read_text()
+    assert "launch(ret, it->second.executeFunc, true);" in source
+    assert "checkRet(ret);" not in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_ternary_family_uses_launcher_and_keeps_async_policy():
+    source = TERNARY_SOURCE.read_text()
+    assert "launch(ret, aclnnSWhere, false);" in source
+    assert "checkRet(ret);" not in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_reduce_single_step_families_use_launcher_and_prod_joins_them():
+    source = REDUCE_SOURCE.read_text()
+    for name in ("aclnnReduceSum", "aclnnMean", "aclnnAmax", "aclnnAmin"):
+        assert f"launch(ret, {name}, true);" in source
+    fixed = source[source.index("case 9:"):source.index("case 13:")]
+    assert "mallocWorkSpace(workspaceSize)" not in fixed
+    # The single-step cases used to sync twice: once inside launch() and once
+    # more through a syncRun() shared with the product case at the end of the
+    # switch. The product case owns its own policy now, so that one is gone.
+    assert source.count("syncRun();") == 1
+    prod = source[source.index("case 13:"):source.index("default:")]
+    # All three product paths -- whole-tensor, one axis, staged multi-axis.
+    assert "launch(ret, aclnnProd, true);" in prod
+    assert "launch(ret, aclnnProdDim, true);" in prod
+    assert "launch(ret, aclnnProdDim, false);" in prod
+    assert "mallocWorkSpace(workspaceSize)" not in prod
+    # The staged path's sync is a correctness barrier before the intermediate
+    # buffers are freed, not the diagnostic policy, so it is unconditional and
+    # stays at the call site.
+    assert "aclrtSynchronizeStream(aclstream)" in prod
+    assert prod.index("aclrtSynchronizeStream(aclstream)") < prod.index("aclrtFree(buffer)")
+
+
+def test_prod_execute_result_is_no_longer_dropped_on_the_floor():
+    """The whole-tensor and single-axis product paths ignored their result.
+
+    ``ret = aclnnProd(workspaceAddr, ...)`` was assigned and never read, so a
+    failed product left the freshly allocated output buffer untouched and Jittor
+    returned it as the reduction. Nothing was logged. Routing both paths through
+    ``launch()`` is what makes the failure loud.
+    """
+    source = REDUCE_SOURCE.read_text()
+    prod = source[source.index("case 13:"):source.index("default:")]
+    for name in ("aclnnProd", "aclnnProdDim"):
+        assert f"{name}(workspaceAddr" not in prod
+
+
+def test_arg_reduce_workspace_failure_is_fatal_instead_of_silent():
+    """A failed MaxDim/MinDim query used to print and return.
+
+    Both outputs -- values and indices -- stayed uninitialised and the reduction
+    result was whatever the allocator handed over. ``launch()`` fails loudly.
+    """
+    source = ARG_REDUCE_SOURCE.read_text()
+    body = source[source.index("void ArgReduceOpRunner::executeOp"):]
+    assert "GetWorkspaceSize failed" not in body
+    assert "CHECK_RET(ret == ACL_SUCCESS" not in body
+    assert "launch(ret, launcher, true);" in body
+
+
+def test_truth_reduce_workspace_failure_goes_through_the_shared_tail():
+    source = TRUTH_REDUCE_SOURCE.read_text()
+    assert "GetWorkspaceSize failed" not in source
+    assert "launch(ret, launcher, true);" in source
+
+
+def test_no_execute_op_owner_keeps_a_hand_rolled_launch_tail():
+    """The whole point of 8.06's first family, as an invariant.
+
+    Not "N sites were converted": that shape of contract went stale the moment
+    the shared tail landed and then sat red for about 40 commits. This asks
+    instead whether any operator still allocates its own workspace, issues its
+    own execute call, or handles its own workspace-query failure.
+    """
+    owners, tails = acl_launch_tails.survey(ROOT)
+    assert not tails, tails
+    # An empty scan passes every assertion above it, which is how a gate ends up
+    # green while measuring nothing. Require the canonical backend root and
+    # the operator survey to be populated.
+    roots = acl_launch_tails.populated_roots(ROOT)
+    for root, count in roots.items():
+        assert count > 0, f"{root} is empty; the scan below it proves nothing"
+    assert len(owners) >= 60, owners
+
+
+def test_the_two_owners_that_keep_their_own_sync_are_the_documented_ones():
+    """``syncRun()`` at a call site is allowed but has to be accounted for.
+
+    The AdamW loop synchronises once after its last step instead of once per
+    tensor, and the staged product path after freeing its intermediates. Any
+    third owner is a tail growing back.
+    """
+    assert acl_launch_tails.caller_side_syncs(ROOT) == {
+        "adamw_op_acl.cc:AdamWListOpRunner": 1,
+        "reduce_op_acl.cc:ReduceOpRunner": 1,
+    }
+
+
+def test_cumsum_family_uses_launcher_and_keeps_sync_policy():
+    source = CUMSUM_SOURCE.read_text()
+    assert "launch(ret, aclnnCumsum, true);" in source
+    assert "checkRet(ret);" not in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_matmul_family_uses_launcher_and_keeps_sync_policy():
+    source = MATMUL_SOURCE.read_text()
+    assert "cube_math_type" in source
+    assert "launch(ret, aclnnMatmul, true);" in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_expand_family_uses_launcher_and_keeps_async_policy():
+    source = EXPAND_SOURCE.read_text()
+    assert "launch(ret, aclnnExpand, false);" in source
+    assert "checkRet(ret);" not in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_floor_family_uses_launcher_and_keeps_sync_policy():
+    source = FLOOR_SOURCE.read_text()
+    assert "launch(ret, aclnnFloor, true);" in source
+    assert "checkRet(ret);" not in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_nantonum_family_uses_launcher_and_keeps_sync_policy():
+    source = NANTONUM_SOURCE.read_text()
+    assert "attr->nan" in source
+    assert "attr->posinf" in source
+    assert "attr->neginf" in source
+    assert "launch(ret, aclnnNanToNum, true);" in source
+    assert "checkRet(ret);" not in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_triu_family_uses_launcher_and_keeps_sync_policy():
+    source = TRIU_SOURCE.read_text()
+    assert "attr->diagonal" in source
+    assert "launch(ret, aclnnTriu, true);" in source
+    assert "checkRet(ret);" not in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_sigmoid_forward_uses_launcher_and_backward_remains_present():
+    source = SIGMOID_SOURCE.read_text()
+    forward = source[source.index("void SigmoidOpRunner::executeOp"):source.index("SigmoidBackwardOpRunner::SigmoidBackwardOpRunner")]
+    assert "launch(ret, aclnnSigmoid, true);" in forward
+    assert "checkRet(ret);" not in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void SigmoidBackwardOpRunner::executeOp" in source
+
+
+def test_transpose_family_uses_launcher_and_keeps_dim_cleanup():
+    source = TRANSPOSE_SOURCE.read_text()
+    assert "attr->axes" in source
+    assert "launch(ret, aclnnPermute, true);" in source
+    assert "aclDestroyIntArray(dim);" in source
+    assert "checkRet(ret);" not in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_softmax_forward_uses_launcher_and_backward_remains_present():
+    source = SOFTMAX_SOURCE.read_text()
+    forward = source[source.index("void SoftmaxOpRunner::executeOp"):source.index("SoftmaxBackwardOpRunner::SoftmaxBackwardOpRunner")]
+    assert "attr->dim" in forward
+    assert "launch(ret, aclnnSoftmax, true);" in forward
+    assert "checkRet(ret);" not in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void SoftmaxBackwardOpRunner::executeOp" in source
+
+
+def test_softmax_backward_uses_launcher_and_keeps_dim_query():
+    source = SOFTMAX_SOURCE.read_text()
+    backward = source[source.index("void SoftmaxBackwardOpRunner::executeOp"):]
+    assert "attr->dim" in backward
+    assert "launch(ret, aclnnSoftmaxBackward, true);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
+def test_embedding_forward_uses_launcher_and_backward_remains_present():
+    source = EMBEDDING_SOURCE.read_text()
+    forward = source[source.index("void EmbeddingOpRunner::executeOp"):source.index("EmbeddingBackwardOpRunner::EmbeddingBackwardOpRunner")]
+    assert "launch(ret, aclnnEmbedding, true);" in forward
+    assert "checkRet(ret);" not in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void EmbeddingBackwardOpRunner::executeOp" in source
+
+
+def test_embedding_backward_uses_launcher_and_keeps_attribute_query():
+    source = EMBEDDING_SOURCE.read_text()
+    backward = source[source.index("void EmbeddingBackwardOpRunner::executeOp"):]
+    assert "numEmbeddings" in backward
+    assert "paddingIdx" in backward
+    assert "scaleGradByFreq" in backward
+    assert "launch(ret, aclnnEmbeddingDenseBackward, true);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
+def test_roll_family_uses_launcher_and_keeps_array_cleanup():
+    source = ROLL_SOURCE.read_text()
+    assert "shifts_array" in source
+    assert "dims_array" in source
+    assert "launch(ret, aclnnRoll, true);" in source
+    assert "aclDestroyIntArray(dims_array);" in source
+    assert "aclDestroyIntArray(shifts_array);" in source
+    assert "checkRet(ret);" not in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_gather_forward_uses_launcher_and_scatter_remains_present():
+    source = GATHER_SOURCE.read_text()
+    gather = source[source.index("void GatherOpRunner::executeOp"):source.index("ScatterOpRunner::ScatterOpRunner")]
+    assert "attr->dim" in gather
+    assert "launch(ret, aclnnGather, true);" in gather
+    assert "checkRet(ret);" not in gather
+    assert "mallocWorkSpace(workspaceSize)" not in gather
+    assert "syncRun();" not in gather
+    assert "void ScatterOpRunner::executeOp" in source
+
+
+def test_clamp_tensor_uses_launcher_and_keeps_three_input_query():
+    source = CLAMP_SOURCE.read_text()
+    assert source.count("inputTensors[") >= 3
+    assert "aclnnClampTensorGetWorkspaceSize" in source
+    assert "launch(ret, aclnnClampTensor, true);" in source
+    assert "checkRet(ret);" not in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_stack_uses_launcher_and_keeps_tensor_list_setup():
+    source = STACK_SOURCE.read_text()
+    assert "aclCreateTensorList" in source
+    assert "attr->dim" in source
+    assert "launch(ret, aclnnStack, true);" in source
+    assert "checkRet(ret);" not in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_flip_uses_launcher_and_keeps_axes_setup():
+    source = FLIP_SOURCE.read_text()
+    assert "ReduceAttr" in source
+    assert "aclCreateIntArray" in source
+    assert "launch(ret, aclnnFlip, true);" in source
+    assert "checkRet(ret);" not in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_concat_forward_uses_launcher_and_split_remains_present():
+    source = CONCAT_SOURCE.read_text()
+    concat = source[source.index("void ConcatOpRunner::executeOp"):source.index("SplitWithSizeOpRunner::SplitWithSizeOpRunner")]
+    assert "aclCreateTensorList" in concat
+    assert "attr->dim" in concat
+    assert "launch(ret, aclnnCat, true);" in concat
+    assert "checkRet(ret);" not in concat
+    assert "mallocWorkSpace(workspaceSize)" not in concat
+    assert "syncRun();" not in concat
+    assert "void SplitWithSizeOpRunner::executeOp" in source
+
+
+def test_split_with_size_uses_launcher_and_keeps_tensor_list_setup():
+    source = CONCAT_SOURCE.read_text()
+    split = source[source.index("void SplitWithSizeOpRunner::executeOp"):]
+    assert "splitSize" in split
+    assert "aclCreateTensorList" in split
+    assert "attr->dim" in split
+    assert "launch(ret, aclnnSplitWithSize, true);" in split
+    assert "checkRet(ret);" not in split
+    assert "mallocWorkSpace(workspaceSize)" not in split
+    assert "syncRun();" not in split
+
+
+def test_nonzero_uses_launcher_and_swhere_remains_present():
+    source = WHERE_SOURCE.read_text()
+    nonzero = source[source.index("void NonzeroOpRunner::executeOp"):]
+    assert "launch(ret, aclnnNonzero, true);" in nonzero
+    assert "checkRet(ret);" not in nonzero
+    assert "mallocWorkSpace(workspaceSize)" not in nonzero
+    assert "syncRun();" not in nonzero
+    assert "aclnnSWhere" in source
+
+
+def test_range_uses_launcher_and_keeps_scalar_lifecycle():
+    source = RANGE_SOURCE.read_text()
+    range_source = source[source.index("void RangeOpRunner::executeOp"):source.index("void IndexOpRunner::") if "void IndexOpRunner::" in source else len(source)]
+    assert "aclCreateScalar" in range_source
+    assert "launch(ret, aclnnRange, true);" in range_source
+    assert "aclDestroyScalar(start);" in range_source
+    assert "aclDestroyScalar(end);" in range_source
+    assert "aclDestroyScalar(step);" in range_source
+    assert "checkRet(ret);" not in range_source
+    assert "mallocWorkSpace(workspaceSize)" not in range_source
+    assert "syncRun();" not in range_source
+
+
+def test_dropout_forward_uses_launcher_and_backward_remains_present():
+    source = DROPOUT_SOURCE.read_text()
+    forward = source[source.index("void DropoutOpRunner::executeOp"):source.index("DropoutBackwardOpRunner::DropoutBackwardOpRunner")]
+    assert "attr->p" in forward
+    assert "attr->train" in forward
+    assert "attr->seed" in forward
+    assert "attr->offset" in forward
+    assert "launch(ret, aclnnDropout, true);" in forward
+    assert "checkRet(ret);" not in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void DropoutBackwardOpRunner::executeOp" in source
+
+
+def test_dropout_backward_uses_launcher_and_keeps_scale_query():
+    source = DROPOUT_SOURCE.read_text()
+    backward = source[source.index("void DropoutBackwardOpRunner::executeOp"):]
+    assert "attr->scale" in backward
+    assert "launch(ret, aclnnDropoutBackward, true);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
+def test_leaky_relu_forward_uses_launcher_and_backward_remains_present():
+    source = RELU_SOURCE.read_text()
+    forward = source[source.index("void LeakyReLUOpRunner::executeOp"):source.index("LeakyReLUBackwardOpRunner::LeakyReLUBackwardOpRunner")]
+    assert "negativeSlope" in forward
+    assert "launch(ret, aclnnLeakyRelu, true);" in forward
+    assert "checkRet(ret);" not in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void LeakyReLUBackwardOpRunner::executeOp" in source
+
+
+def test_leaky_relu_backward_uses_launcher_and_keeps_scalar_cleanup():
+    source = RELU_SOURCE.read_text()
+    backward = source[source.index("void LeakyReLUBackwardOpRunner::executeOp"):]
+    assert "negativeSlope" in backward
+    assert "selfIsResult" in backward
+    assert "launch(ret, aclnnLeakyReluBackward, true);" in backward
+    assert "aclDestroyScalar(negativeSlope);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
+def test_arg_reduce_max_min_use_shared_launcher():
+    source = ARG_REDUCE_SOURCE.read_text()
+    assert "is_max" in source
+    assert "keepdims" in source
+    assert "aclnnMaxDimGetWorkspaceSize" in source
+    assert "aclnnMinDimGetWorkspaceSize" in source
+    assert "AclExecuteLauncher launcher = is_max ? aclnnMaxDim : aclnnMinDim;" in source
+    assert "launch(ret, launcher, true);" in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_silu_forward_uses_launcher_and_other_owners_remain_present():
+    source = SILU_SOURCE.read_text()
+    forward = source[source.index("void SiLUOpRunner::executeOp"):source.index("SiLUBackwardOpRunner::SiLUBackwardOpRunner")]
+    assert "launch(ret, aclnnSilu, true);" in forward
+    assert "checkRet(ret);" not in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void SiLUBackwardOpRunner::executeOp" in source
+    assert "void SwishOpRunner::executeOp" in source
+    assert "void SwiGluOpRunner::executeOp" in source
+
+
+def test_silu_backward_uses_launcher_and_forward_remains_present():
+    source = SILU_SOURCE.read_text()
+    backward = source[source.index("void SiLUBackwardOpRunner::executeOp"):source.index("SwishOpRunner::SwishOpRunner")]
+    assert "launch(ret, aclnnSiluBackward, true);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+    assert "launch(ret, aclnnSilu, true);" in source
+
+
+def test_swish_forward_uses_launcher_and_other_owners_remain_present():
+    source = SILU_SOURCE.read_text()
+    forward = source[source.index("void SwishOpRunner::executeOp"):source.index("SwishBackwardOpRunner::SwishBackwardOpRunner")]
+    assert "launch(ret, aclnnSwish, true);" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void SwishBackwardOpRunner::executeOp" in source
+
+
+def test_swish_backward_uses_launcher_and_forward_remains_present():
+    source = SILU_SOURCE.read_text()
+    backward = source[source.index("void SwishBackwardOpRunner::executeOp"):source.index("SwiGluOpRunner::SwiGluOpRunner")]
+    assert "launch(ret, aclnnSwishBackward, true);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+    assert "launch(ret, aclnnSwish, true);" in source
+
+
+def test_swiglu_uses_launcher_and_keeps_silu_families():
+    source = SILU_SOURCE.read_text()
+    swiglu = source[source.index("void SwiGluOpRunner::executeOp"):]
+    assert "launch(ret, aclnnSwiGlu, true);" in swiglu
+    assert "mallocWorkSpace(workspaceSize)" not in swiglu
+    assert "syncRun();" not in swiglu
+    assert "launch(ret, aclnnSilu, true);" in source
+
+
+def test_batch_matmul_uses_launcher_and_keeps_cube_math_type():
+    source = BMM_SOURCE.read_text()
+    assert "cube_math_type" in source
+    assert "launch(ret, aclnnBatchMatMul, true);" in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_truth_reduce_all_any_use_shared_launcher_and_keep_raii_axes():
+    source = TRUTH_REDUCE_SOURCE.read_text()
+    assert "reduce_all" in source
+    assert "aclnnAllGetWorkspaceSize" in source
+    assert "aclnnAnyGetWorkspaceSize" in source
+    assert "AclExecuteLauncher launcher = reduce_all ? aclnnAll : aclnnAny;" in source
+    assert "launch(ret, launcher, true);" in source
+    assert "unique_ptr<aclIntArray" in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_conv_forward_uses_launcher_and_backward_remains_present():
+    source = CONV_SOURCE.read_text()
+    forward = source[source.index("void Conv2dOpRunner::executeOp"):source.index("void Conv2dBackwardOpRunner::executeOp")]
+    assert "attr->group" in forward
+    assert "launch(ret, aclnnConvolution, true);" in forward
+    assert "aclDestroyIntArray(strides);" in forward
+    assert "aclDestroyIntArray(dilations);" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void Conv2dBackwardOpRunner::executeOp" in source
+
+
+def test_conv_backward_uses_launcher_and_keeps_three_outputs():
+    source = CONV_SOURCE.read_text()
+    backward = source[source.index("void Conv2dBackwardOpRunner::executeOp"):]
+    assert "outputTensors[2]" in backward
+    assert "launch(ret, aclnnConvolutionBackward, true);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
+def test_rms_norm_forward_uses_launcher_and_grad_remains_present():
+    source = NORMS_SOURCE.read_text()
+    forward = source[source.index("void RmsNormOpRunner::executeOp"):source.index("RmsNormGradOpRunner::RmsNormGradOpRunner")]
+    assert "attr->eps" in forward
+    assert "outputTensors[1]" in forward
+    assert "launch(ret, aclnnRmsNorm, true);" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void RmsNormGradOpRunner::executeOp" in source
+
+
+def test_rms_norm_grad_uses_launcher_and_forward_remains_present():
+    source = NORMS_SOURCE.read_text()
+    grad = source[source.index("void RmsNormGradOpRunner::executeOp"):]
+    assert "aclnnRmsNormGradGetWorkspaceSize" in grad
+    assert "launch(ret, aclnnRmsNormGrad, true);" in grad
+    assert "mallocWorkSpace(workspaceSize)" not in grad
+    assert "syncRun();" not in grad
+    assert "launch(ret, aclnnRmsNorm, true);" in source
+
+
+def test_layer_norm_forward_uses_launcher_and_backward_remains_present():
+    source = NORMS_SOURCE.read_text()
+    forward = source[source.index("void LayerNormOpRunner::executeOp"):source.index("LayerNormBackwardOpRunner::LayerNormBackwardOpRunner")]
+    assert "normalizedShape" in forward
+    assert "attr->eps" in forward
+    assert "outputTensors[2]" in forward
+    assert "launch(ret, aclnnLayerNorm, true);" in forward
+    assert "aclDestroyIntArray(normalizedShape);" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void LayerNormBackwardOpRunner::executeOp" in source
+
+
+def test_layer_norm_backward_uses_launcher_and_keeps_descriptor_cleanup():
+    source = NORMS_SOURCE.read_text()
+    backward = source[source.index("void LayerNormBackwardOpRunner::executeOp"):source.index("GroupNormOpRunner::GroupNormOpRunner")]
+    assert "normalizedShape" in backward
+    assert "outMask" in backward
+    assert "outputTensors[2]" in backward
+    assert "launch(ret, aclnnLayerNormBackward, true);" in backward
+    assert "aclDestroyIntArray(normalizedShape);" in backward
+    assert "aclDestroyBoolArray(outMask);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
+def test_group_norm_forward_uses_launcher_and_backward_remains_present():
+    source = NORMS_SOURCE.read_text()
+    forward = source[source.index("void GroupNormOpRunner::executeOp"):source.index("GroupNormBackwardOpRunner::GroupNormBackwardOpRunner")]
+    assert "attr->groups" in forward
+    assert "outputTensors[2]" in forward
+    assert "launch(ret, aclnnGroupNorm, true);" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void GroupNormBackwardOpRunner::executeOp" in source
+
+
+def test_group_norm_backward_uses_launcher_and_keeps_output_mask():
+    source = NORMS_SOURCE.read_text()
+    backward = source[source.index("void GroupNormBackwardOpRunner::executeOp"):source.index("RmsNormOpRunner::RmsNormOpRunner")]
+    assert "outputMask" in backward
+    assert "attr->groups" in backward
+    assert "outputTensors[2]" in backward
+    assert "launch(ret, aclnnGroupNormBackward, true);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
+def test_masked_select_uses_launcher_and_keeps_two_inputs():
+    source = (ROOT / "backends/acl/kernels/native/getitem_op_acl.cc").read_text()
+    masked = source[source.index("void MaskedSelectOpRunner::executeOp"):source.index("IndexOpRunner::IndexOpRunner")]
+    assert masked.count("inputTensors[") >= 2
+    assert "launch(ret, aclnnMaskedSelect, true);" in masked
+    assert "mallocWorkSpace(workspaceSize)" not in masked
+    assert "syncRun();" not in masked
+
+
+def test_index_uses_launcher_and_slice_remains_present():
+    source = (ROOT / "backends/acl/kernels/native/getitem_op_acl.cc").read_text()
+    index = source[source.index("void IndexOpRunner::executeOp"):source.index("SliceV2OpRunner::SliceV2OpRunner")]
+    assert "launch(ret, aclnnIndex, true);" in index
+    assert "mallocWorkSpace(workspaceSize)" not in index
+    assert "syncRun();" not in index
+    assert "void SliceV2OpRunner::executeOp" in source
+
+
+def test_slice_v2_uses_launcher_and_keeps_four_descriptors():
+    source = (ROOT / "backends/acl/kernels/native/getitem_op_acl.cc").read_text()
+    slice_source = source[source.index("void SliceV2OpRunner::executeOp"):source.index("IndexPutImplAccumulateOpRunner::IndexPutImplAccumulateOpRunner")]
+    for name in ("begins", "ends", "steps", "axes"):
+        assert name in slice_source
+    assert "launch(ret, aclnnSliceV2, true);" in slice_source
+    assert "mallocWorkSpace(workspaceSize)" not in slice_source
+    assert "syncRun();" not in slice_source
+
+
+def test_strided_slice_assign_uses_launcher_and_keeps_gradient_memset():
+    source = (ROOT / "backends/acl/kernels/native/getitem_op_acl.cc").read_text()
+    owner = source[source.index("void StridedSliceAssignV2OpRunner::executeOp"):]
+    assert "jt_name == \"stridedsliceassignv2_grad\"" in owner
+    assert "aclrtMemsetAsync" in owner
+    assert "launch(ret, aclnnStridedSliceAssignV2, true);" in owner
+    assert "mallocWorkSpace(workspaceSize)" not in owner
+    assert "syncRun();" not in owner
+
+
+def test_inplace_masked_scatter_uses_launcher_and_keeps_copy_dependency():
+    source = (ROOT / "backends/acl/kernels/native/setitem_op_acl.cc").read_text()
+    owner = source[source.index("void InplaceMaskedScatterOpRunner::executeOp"):source.index("IndexPutImplOpRunner::IndexPutImplOpRunner")]
+    assert "aclrtMemcpyAsync" in owner
+    assert "launch(ret, aclnnInplaceMaskedScatter, true);" in owner
+    assert "mallocWorkSpace(workspaceSize)" not in owner
+    assert "syncRun();" not in owner
+
+
+def test_index_put_uses_launcher_and_accumulate_owner_remains_present():
+    source = (ROOT / "backends/acl/kernels/native/setitem_op_acl.cc").read_text()
+    owner = source[source.index("void IndexPutImplOpRunner::executeOp"):]
+    assert "indexTensorListInput" in owner
+    assert "launch(ret, aclnnIndexPutImpl, true);" in owner
+    assert "mallocWorkSpace(workspaceSize)" not in owner
+    assert "syncRun();" not in owner
+
+
+def test_index_put_accumulate_uses_launcher_and_keeps_zero_dependency():
+    source = (ROOT / "backends/acl/kernels/native/getitem_op_acl.cc").read_text()
+    owner = source[source.index("void IndexPutImplAccumulateOpRunner::executeOp"):source.index("StridedSliceAssignV2OpRunner::StridedSliceAssignV2OpRunner")]
+    assert "aclrtMemsetAsync" in owner
+    assert "indexTensorListInput" in owner
+    assert "launch(ret, aclnnIndexPutImpl, true);" in owner
+    assert "mallocWorkSpace(workspaceSize)" not in owner
+    assert "syncRun();" not in owner
+
+
+def test_flash_attention_forward_uses_launcher_and_keeps_raii_descriptors():
+    source = (ROOT / "backends/acl/kernels/native/flashattention_op_acl.cc").read_text()
+    forward = source[source.index("void FlashAttentionOpRunner::executeOp"):source.index("FlashAttentionBackwardOpRunner::FlashAttentionBackwardOpRunner")]
+    for name in ("prefix", "qstart", "kvstart"):
+        assert name in forward
+    assert "launch(ret, aclnnFlashAttentionScoreV2, true);" in forward
+    assert "unique_ptr<aclIntArray" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+
+
+def test_flash_attention_backward_uses_launcher_and_keeps_gradient_outputs():
+    source = (ROOT / "backends/acl/kernels/native/flashattention_op_acl.cc").read_text()
+    backward = source[source.index("void FlashAttentionBackwardOpRunner::executeOp"):source.index("IncreFlashAttentionOpRunner::IncreFlashAttentionOpRunner")]
+    assert "prefix" in backward
+    assert "outputTensors[2]" in backward
+    assert "launch(ret, aclnnFlashAttentionScoreGradV2, true);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
+def test_incremental_flash_attention_uses_launcher_and_keeps_cache_cleanup():
+    source = (ROOT / "backends/acl/kernels/native/flashattention_op_acl.cc").read_text()
+    forward = source[source.index("void IncreFlashAttentionOpRunner::executeOp"):source.index("KVCacheMemcpyOpRunner::KVCacheMemcpyOpRunner")]
+    assert "actualSeqLengths" in forward
+    assert "blockTable" in forward
+    assert "launch(ret, aclnnIncreFlashAttentionV4, true);" in forward
+    assert "aclDestroyTensor(keyView);" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+
+
+def test_adamw_list_uses_async_launcher_and_keeps_loop_sync_point():
+    source = (ROOT / "backends/acl/kernels/native/adamw_op_acl.cc").read_text()
+    assert "aclnnApplyAdamWV2GetWorkspaceSize" in source
+    assert "launch(ret, aclnnApplyAdamWV2, false);" in source
+    assert source.count("syncRun();") == 1
+    assert "aclrtMemcpyAsync" in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+
+
+def test_rope_forward_uses_launcher_and_backward_remains_present():
+    source = ROPE_SOURCE.read_text()
+    forward = source[source.index("void RotaryPositionEmbeddingOpRunner::executeOp"):source.index("RotaryPositionEmbeddingGradOpRunner::RotaryPositionEmbeddingGradOpRunner")]
+    assert "inputTensors[0]" in forward
+    assert "launch(ret, aclnnRotaryPositionEmbedding, true);" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void RotaryPositionEmbeddingGradOpRunner::executeOp" in source
+
+
+def test_rope_gradient_uses_launcher_and_keeps_io_query():
+    source = ROPE_SOURCE.read_text()
+    gradient = source[source.index("void RotaryPositionEmbeddingGradOpRunner::executeOp"):]
+    assert "inputTensors[3]" in gradient
+    assert "outputTensors[2]" in gradient
+    assert "launch(ret, aclnnRotaryPositionEmbeddingGrad, true);" in gradient
+    assert "mallocWorkSpace(workspaceSize)" not in gradient
+    assert "syncRun();" not in gradient
+
+
+def test_maxpool_forward_uses_launcher_and_keeps_descriptors():
+    source = POOL_SOURCE.read_text()
+    forward = source[source.index("void MaxpoolOpRunner::executeOp"):source.index("void AvgpoolOpRunner::executeOp")]
+    assert "kernel_size" in forward
+    assert "strides" in forward
+    assert "pads" in forward
+    assert "dilations" in forward
+    assert "poolCeil" in forward
+    assert "launch(ret, aclnnMaxPool2dWithIndices, true);" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void AvgpoolOpRunner::executeOp" in source
+
+
+def test_avgpool_forward_uses_launcher_and_maxpool_remains_present():
+    source = POOL_SOURCE.read_text()
+    forward = source[source.index("void AvgpoolOpRunner::executeOp"):source.index("MaxpoolBackwardOpRunner::MaxpoolBackwardOpRunner")]
+    assert "kernel_size" in forward
+    assert "poolCeil" in forward
+    assert "countIncludePad" in forward
+    assert "launch(ret, aclnnAvgPool2d, true);" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void MaxpoolOpRunner::executeOp" in source
+
+
+def test_avgpool_backward_uses_launcher_and_keeps_descriptor_cleanup():
+    source = POOL_SOURCE.read_text()
+    backward = source[source.index("void AvgpoolBackwardOpRunner::executeOp"):]
+    assert "countIncludePad" in backward
+    assert "divisorOverride" in backward
+    assert "launch(ret, aclnnAvgPool2dBackward, true);" in backward
+    assert "aclDestroyIntArray(strides);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
+def test_maxpool_backward_uses_launcher_and_keeps_descriptors():
+    source = POOL_SOURCE.read_text()
+    backward = source[source.index("void MaxpoolBackwardOpRunner::executeOp"):source.index("AvgpoolBackwardOpRunner::AvgpoolBackwardOpRunner")]
+    assert "poolCeil" in backward
+    assert "outputTensors[0]" in backward
+    assert "launch(ret, aclnnMaxPool2dWithIndicesBackward, true);" in backward
+    assert "aclDestroyIntArray(kernel_size);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
+def test_random_uniform_normal_share_launcher_and_keep_seed_offset():
+    source = RANDOM_SOURCE.read_text()
+    assert "RandomUniform" in source
+    assert "RandomNormal" in source
+    assert "attr->seed" in source
+    assert "attr->offset" in source
+    assert "launcher = aclnnInplaceUniform;" in source
+    assert "launcher = aclnnInplaceNormal;" in source
+    assert "launch(ret, launcher, true);" in source
+    assert "Not supported random type" in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_upsample_forward_uses_launcher_and_keeps_output_size_raii():
+    source = UPSAMPLE_SOURCE.read_text()
+    forward = source[source.index("void UpsampleNearest2dOpRunner::executeOp"):source.index("UpsampleNearest2dBackwardOpRunner::UpsampleNearest2dBackwardOpRunner")]
+    assert "outputSize" in forward
+    assert "unique_ptr" in forward
+    assert "launch(ret, aclnnUpsampleNearest2d, true);" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void UpsampleNearest2dBackwardOpRunner::executeOp" in source
+
+
+def test_upsample_backward_uses_launcher_and_keeps_descriptor_raii():
+    source = UPSAMPLE_SOURCE.read_text()
+    backward = source[source.index("void UpsampleNearest2dBackwardOpRunner::executeOp"):]
+    assert "outputSize" in backward
+    assert "inputSize" in backward
+    assert "unique_ptr" in backward
+    assert "launch(ret, aclnnUpsampleNearest2dBackward, true);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
+def test_swhere_owner_uses_launcher_and_nonzero_remains_present():
+    source = WHERE_SOURCE.read_text()
+    where = source[source.index("void WhereOpRunner::executeOp"):source.index("NonzeroOpRunner::NonzeroOpRunner")]
+    assert where.count("inputTensors[") >= 3
+    assert "aclnnSWhereGetWorkspaceSize" in where
+    assert "launch(ret, aclnnSWhere, true);" in where
+    assert "checkRet(ret);" not in where
+    assert "mallocWorkSpace(workspaceSize)" not in where
+    assert "syncRun();" not in where
+    assert "void NonzeroOpRunner::executeOp" in source
+
+
+def test_sigmoid_backward_uses_launcher_and_forward_remains_present():
+    source = SIGMOID_SOURCE.read_text()
+    backward = source[source.index("void SigmoidBackwardOpRunner::executeOp"):]
+    assert "launch(ret, aclnnSigmoidBackward, true);" in backward
+    assert "checkRet(ret);" not in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+    assert "launch(ret, aclnnSigmoid, true);" in source
+
+
+def test_batch_norm_forward_uses_launcher_and_keeps_training_attributes():
+    source = NORMS_SOURCE.read_text()
+    forward = source[source.index("void BatchNormOpRunner::executeOp"):source.index("BatchNormBackwardOpRunner::BatchNormBackwardOpRunner")]
+    assert "attr->is_train" in forward
+    assert "attr->momentum" in forward
+    assert "attr->eps" in forward
+    assert "outputTensors[2]" in forward
+    assert "launch(ret, aclnnBatchNorm, true);" in forward
+    assert "checkRet(ret);" not in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void BatchNormBackwardOpRunner::executeOp" in source
+
+
+def test_batch_norm_backward_uses_launcher_and_frees_the_mask_after_launch():
+    source = NORMS_SOURCE.read_text()
+    backward = source[source.index("void BatchNormBackwardOpRunner::executeOp"):source.index("LayerNormOpRunner::LayerNormOpRunner")]
+    assert "outMask" in backward
+    assert "attr->is_train" in backward
+    assert "outputTensors[2]" in backward
+    assert "launch(ret, aclnnBatchNormBackward, true);" in backward
+    # The mask outlives the launch: the shared tail synchronises before it is
+    # destroyed, which is the order the hand-rolled tail had.
+    assert backward.index("launch(ret, aclnnBatchNormBackward, true);") < backward.index(
+        "aclDestroyBoolArray(outMask);")
+    assert "checkRet(ret);" not in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
+def test_scatter_uses_launcher_and_keeps_axis_reduction_query():
+    source = GATHER_SOURCE.read_text()
+    scatter = source[source.index("void ScatterOpRunner::executeOp"):]
+    assert "attr->axis" in scatter
+    assert "attr->reduction" in scatter
+    assert "launch(ret, aclnnScatter, true);" in scatter
+    assert "checkRet(ret);" not in scatter
+    assert "mallocWorkSpace(workspaceSize)" not in scatter
+    assert "syncRun();" not in scatter

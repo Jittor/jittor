@@ -111,7 +111,7 @@ def _tree(root, suffixes, excluded=()):
 
 
 def measure_sizes():
-    src = REPO_ROOT / "python/jittor/src"
+    src = REPO_ROOT / "src"
     core = _tree(src, CXX_SUFFIXES, CORE_EXCLUDED)
     layers = {
         "core_cxx": core,
@@ -123,8 +123,8 @@ def measure_sizes():
         "extern_cxx": _tree(REPO_ROOT / "python/jittor/extern", CXX_SUFFIXES),
         "tests_core": _tree(REPO_ROOT / "tests/core", (".py",)),
         "tests_structure": _tree(REPO_ROOT / "tests/structure", (".py",)),
-        "tests_compat": _tree(REPO_ROOT / "tests/compat", (".py",)),
-        "tests_all": _tree(REPO_ROOT / "tests", (".py",)),
+        "tests_compat": _tree(REPO_ROOT / "compat/tests", (".py",)),
+        "tests_all": _tree(REPO_ROOT / "tests", (".py",)) + _tree(REPO_ROOT / "compat/tests", (".py",)),
     }
     return {
         name: {"files": len(paths), "lines": sum(_lines(path) for path in paths)}
@@ -182,10 +182,10 @@ def _strip_cxx_comments(text):
 
 
 def measure_headers():
-    src = REPO_ROOT / "python/jittor/src"
+    src = REPO_ROOT / "src"
     headers = _tree(src, (".h",), CORE_EXCLUDED)
     test_text = []
-    for path in _tree(REPO_ROOT / "tests", (".py",)):
+    for path in _tree(REPO_ROOT / "tests", (".py",)) + _tree(REPO_ROOT / "compat/tests", (".py",)):
         test_text.append(path.read_text("utf8", "replace"))
     for path in _tree(src / "tests", (".cc", ".h")):
         test_text.append(path.read_text("utf8", "replace"))

@@ -124,7 +124,7 @@ diff <(grep "^FAILED" base-core.log | sort) <(grep "^FAILED" after-core.log | so
     90|
 ## 5. 搬代码会静默掏空按文件名点名的门禁
 
-结构门禁里有一类断言是**按文件名列清单**的。`tests/structure/test_shared_backend_consumers.py`
+结构门禁里有一类断言是**按文件名列清单**的。`tests/structure/runtime/test_shared_backend_consumers.py`
 拿一张 `CONSUMERS` 表逐个 `g++ -fsyntax-only -DHAS_ACCELERATOR`，证明这些文件不依赖任何
 厂商 SDK 头。表里有 `executor.cc`。
 

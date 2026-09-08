@@ -251,7 +251,7 @@ reduce/norm 1.20、other 0.84。
 （`output_scale_factor` 默认就是 `1.0`）在整张特征图上跑双精度除法。
 把 `use_wide` 临时改成 `False` 实测：逐元素类 **3.29 ms → 2.73 ms**（−16.8%），
 整步 22.03 → 21.29 ms。这条改动由兼容层分区决定（有 bit-exact 用例钉着它，
-`tests/compat/torch/test_torch_compat_promotion.py`），不要顺手改。
+`compat/tests/torch/test_torch_compat_promotion.py`），不要顺手改。
 
 **判据：看到某个融合 kernel 的带宽只有同类的一半，先去生成的 `.cc` 里搜 `float64`。**
 路径就在 profiler 报告的 `FileName` 列里。

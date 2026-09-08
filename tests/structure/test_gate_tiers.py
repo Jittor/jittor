@@ -176,7 +176,7 @@ class TestFastTierIsStillWorthRunning(unittest.TestCase):
         self.assertIsInstance(distribution.value, ast.Constant)
         self.assertEqual(distribution.value.value, "loadgroup")
 
-        alias = (REPO_ROOT / "tests/compat/torch/test_torch_shim_aliases.py")
+        alias = (REPO_ROOT / "compat/tests/torch/test_torch_shim_aliases.py")
         alias_source = alias.read_text(encoding="utf-8")
         self.assertGreaterEqual(alias_source.count("xdist_group"), 4)
 
@@ -201,8 +201,8 @@ class TestFastTierIsStillWorthRunning(unittest.TestCase):
         state across its tests" is not visible to a static scan; the list is
         the record of what has been measured to need it.
         """
-        for relative in ("tests/compat/torch/test_torch_shim_aliases.py",
-                         "tests/compat/torch/test_torch_compat_fsdp2.py"):
+        for relative in ("compat/tests/torch/test_torch_shim_aliases.py",
+                         "compat/tests/torch/test_torch_compat_fsdp2.py"):
             source = (REPO_ROOT / relative).read_text(encoding="utf-8")
             self.assertIn(
                 "xdist_group", source,

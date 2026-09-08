@@ -3,9 +3,12 @@
 import ast
 import unittest
 from pathlib import Path
+import pytest
 
 import jittor
 from jittor_adapters.vllm import bootstrap as vllm_compat
+
+pytestmark = pytest.mark.structure
 
 _PACKAGE = Path(vllm_compat.__file__).resolve().parent
 

@@ -78,7 +78,7 @@ the user how to get their old (wrong) run back.
 
 ## 3. The negative test is the deliverable
 
-One test per API, in `tests/compat/torch/test_torch_compat_unimplemented.py`.
+One test per API, in `compat/tests/torch/test_torch_compat_unimplemented.py`.
 Two shapes only:
 
 - **Refused**: `assertRefuses(fn, "torch.X", "<damage phrase>")` — asserts
@@ -137,5 +137,5 @@ in the same commit, saying so in the message.
 [ ] stub-fallback test added for refusals
 [ ] existing tests that asserted the old silent behaviour updated, and called
     out in the commit message
-[ ] full tests/compat/torch/ run compared against a pre-change baseline
+[ ] full compat/tests/torch/ run compared against a pre-change baseline
 ```

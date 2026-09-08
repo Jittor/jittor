@@ -6,7 +6,7 @@
 用户最新要求：后续改动不 push。已推送的最新批次是 `c618d841d`；此后的本地
 整合继续推进，未经新的用户指令不恢复推送。vLLM放本仓
 `adapters/jittor_adapters/vllm`，复用现有adapters发行物；外部提取目录先保留，
-不是交付前置。7.18已在本地收口，当前256条已合并、18条代码/性能未完成，
+不是交付前置。7.18、10.23已在本地收口，当前257条已合并、17条代码/性能未完成，
 远端仍是255条已合并；以后报进度须注明本地与远端区别。
 
 ## 当前开发底座
@@ -25,9 +25,9 @@
   MANIFEST 由 `tools/build/generate_manifest.py` 生成，见
   [打包记录](../results/2026-09-08-packaging-ownership.md)。
 
-本批补齐 NN/distribution/Parameter 类型工厂的模块级实现，原生 TensorPlacement
-接通 CPU/CUDA 图、执行器及工厂/to/load；收口 7.03、11.04，当前剩 19 条
-代码/性能记录，另有 9 条硬件验收。真实 CPU/双卡 CUDA 最终 9 项通过；完整
+此前原生批次补齐NN/distribution/Parameter类型工厂的模块级实现，TensorPlacement
+接通CPU/CUDA图、执行器及工厂/to/load，并收口7.03、11.04。
+真实CPU/双卡CUDA最终9项通过；完整
 structure 仍有失败，不能把本批收口解释为全仓全绿。运行证据见
 [整合记录](../results/2026-09-08-frontend-placement-integration.md)与
 [原生验收](../results/2026-09-08-tensor-backend-placement.md)。
@@ -42,9 +42,12 @@ pytest/子进程合同仍需后续处理；不能把本批收口解释为全仓�
 Var 的 FollowRuntime 语义继续保留，不应为删除legacy Torch模式而改变它。
 当前 CPU checkpoint 回归已去掉 xfail；CPU 0-D 与 CUDA 运算通过局部可导copy
 完成，不能恢复 force_cpu 显示标记或逐操作强同步绕过。
-测试布局整批已在隔离树重排并共享pytest策略，vLLM已整合到本地adapters工作区。
-前者须将rename/edit三方合到c618，保留同期断言与新增测试，不能用旧文件覆盖新base。
-legacy移除另在隔离树推进；先核对agent交付和实际diff，不按隔离树完成就关闭看板。
+测试布局已三方整合：native tests、compat/tests及adapters/tests共用
+tests/_helpers/pytest_policy.py，旧路径不再作为可执行选择器。386映射文件保留
+同期断言与新增测试，8318个原实际节点逐条对应；固定seed映射只用于原case输入，
+不修改pytest nodeid。布局与包证据见[记录](../results/2026-09-08-test-layout-integration.md)。
+legacy移除及只读introspection基座已在隔离树交付，接下来按新测试路径整合，
+不能把旧树测试整文件覆盖已合入的新路径/政策。
 FSDP 的通信、mesh、
 原生 optimizer 复用和生命周期架构已实现；峰值显存性能仍未达，优化后移。
 缺硬件的 ACL/HCCL/NPU、ROCm/Corex 和多机验证继续按上机文档交接。

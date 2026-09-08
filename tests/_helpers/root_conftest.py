@@ -1,34 +1,14 @@
-"""Read ``tests/conftest.py`` as a file, because its module name is ambiguous.
+"""Read the canonical pytest policy without depending on conftest module names.
 
-Three structure tests used to say ``import conftest`` and assert on the module
-object. That works when the selection starts at ``tests/structure`` and fails
-with ``AttributeError: module 'conftest' has no attribute 'source_python_dir'``
-in the whole Torch-mode session -- the same test, a different answer, decided by
-which other directory was named alongside it. Measured both ways: 275 passed in
-``tests/structure`` alone, three failures in the full session.
-
-The cause is not a rename. pytest imports conftest modules under their bare
-basename, and this tree has two of them -- ``tests/conftest.py`` and
-``tests/compat/torch/conftest.py``. When the run reaches the second, it takes
-over the name, and (measured) the first is then **not in ``sys.modules`` at
-all**: pytest keeps its own reference as a plugin, so the module still works, it
-is simply unreachable by name. A lookup by ``__file__`` does not save it either.
-
-So the tests stop asking for the object. What they actually mean to assert is a
-property of the *file*: that the root conftest takes ``source_python_dir`` from
-``_helpers.child_process`` rather than re-implementing it, so the parent's
-``sys.path`` and the child's ``PYTHONPATH`` cannot drift apart. That is a
-statement about the source text, it is true in every selection, and it is what
-this module provides.
-
-The behaviour itself is tested against ``_helpers.child_process``, which is
-where the implementation lives.
+The three conftest adapters register one plugin. Source-contract tests inspect
+that implementation directly, regardless of which test root loaded it first.
+The public helper spellings remain stable for existing structural tests.
 """
 
 from pathlib import Path
 
 
-ROOT_CONFTEST = Path(__file__).resolve().parents[1] / "conftest.py"
+ROOT_CONFTEST = Path(__file__).resolve().parent / "pytest_policy.py"
 
 
 def root_conftest_source():
@@ -36,5 +16,5 @@ def root_conftest_source():
 
 
 def root_conftest_imports_from_the_helper(name):
-    """Whether ``tests/conftest.py`` takes ``name`` from ``_helpers.child_process``."""
+    """Whether the shared pytest policy takes ``name`` from ``_helpers.child_process``."""
     return ("from _helpers.child_process import %s" % name) in root_conftest_source()

@@ -4,6 +4,7 @@
 include MANIFEST.in
 include README.md
 include pyproject.toml
+include tests/conftest.py
 include tests/test_adapters.py
 include tests/vllm/conftest.py
 include tests/vllm/test_arming_ownership.py

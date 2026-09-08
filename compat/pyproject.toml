@@ -25,4 +25,10 @@ package-dir = { "jittor.compat" = ".", "torch" = "shim/resources/torch" }
 
 [tool.jittor.sdist]
 include = []
-exclude = ["build/**", "dist/**"]
+exclude = ["build/**", "dist/**", "tests/**"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["*.egg", ".*", "_darcs", "CVS", "dist", "node_modules", "venv", "{arch}"]
+addopts = "--strict-markers --strict-config -p no:cacheprovider"
+xfail_strict = true

@@ -9,16 +9,16 @@ from _helpers.child_process import run_mpi_python
 
 
 _MIGRATED_TEST_PATHS = {
-    "test_mpi": "tests/distributed/test_mpi.py",
-    "test_mpi_batchnorm": "tests/distributed/test_mpi_batchnorm.py",
-    "test_mpi_dtypes": "tests/distributed/test_mpi_dtypes.py",
-    "test_mpi_half_reduce": "tests/distributed/test_mpi_half_reduce.py",
-    "test_mpi_graph_isomorphism": "tests/distributed/test_mpi_graph_isomorphism.py",
-    "test_mpi_op": "tests/distributed/test_mpi_op.py",
-    "test_mpi_var_ops": "tests/distributed/test_mpi_var_ops.py",
-    "test_nccl_bucket_overlap": "tests/distributed/test_nccl_bucket_overlap.py",
-    "test_nccl_comm_stream": "tests/distributed/test_nccl_comm_stream.py",
-    "test_nccl_ops": "tests/distributed/test_nccl_ops.py",
+    "test_mpi": "tests/backends/comm/mpi/test_mpi.py",
+    "test_mpi_batchnorm": "tests/backends/comm/mpi/test_mpi_batchnorm.py",
+    "test_mpi_dtypes": "tests/backends/comm/mpi/test_mpi_dtypes.py",
+    "test_mpi_half_reduce": "tests/backends/comm/mpi/test_mpi_half_reduce.py",
+    "test_mpi_graph_isomorphism": "tests/backends/comm/mpi/test_mpi_graph_isomorphism.py",
+    "test_mpi_op": "tests/backends/comm/mpi/test_mpi_op.py",
+    "test_mpi_var_ops": "tests/backends/comm/mpi/test_mpi_var_ops.py",
+    "test_nccl_bucket_overlap": "tests/backends/comm/nccl/test_nccl_bucket_overlap.py",
+    "test_nccl_comm_stream": "tests/backends/comm/nccl/test_nccl_comm_stream.py",
+    "test_nccl_ops": "tests/backends/comm/nccl/test_nccl_ops.py",
     "test_resnet": "tests/models/test_resnet.py",
     "test_single_process_scope": "tests/distributed/test_single_process_scope.py",
 }

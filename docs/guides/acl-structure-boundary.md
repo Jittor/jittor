@@ -81,7 +81,7 @@ schema defaults, rejects unknown or wrongly typed fields, and emits an
 address-independent `canonical_cache_key`. It has no CANN dependency and does
 not change the existing generated `OpAttr` path; the module is therefore safe
 to exercise on a CPU-only host. The negative contract is covered by
-`tests/structure/test_acl_data_schema_normalizer.py`.
+`tests/structure/backends/acl/test_acl_data_schema_normalizer.py`.
 
 The C++ interface is:
 
@@ -111,7 +111,7 @@ interface: an eventual `OpAttr` adapter can consume typed values without
 parsing generated source text or touching the decoder's map. It deliberately
 creates no ACL/CANN object, and the view cannot outlive the callback.
 
-`tests/structure/test_acl_data_channel_contract.py` compiles and executes a
+`tests/structure/backends/acl/test_acl_data_channel_contract.py` compiles and executes a
 consumer probe on a CPU-only host. That probe checks defaults, vector order,
 cache-key identity, and the wrong-type failure path. Passing this contract is
 not evidence that an ACL operator has been migrated or that an Ascend device
@@ -139,7 +139,7 @@ from sorted typed values before the owner constructs its `OpAttr`. Vectors keep
 their semantic order while the map and field encoding are deterministic. It
 must not read pointer addresses, process-global state, or Python object identity.
 The host-only compile and runtime contract is covered by
-`tests/structure/test_acl_data_channel_contract.py`.
+`tests/structure/backends/acl/test_acl_data_channel_contract.py`.
 
 ## Descriptor identity and cache shell
 
@@ -205,7 +205,7 @@ an Ascend 910B3 after sourcing CANN:
 source "$ASCEND_HOME/set_env.sh"
 npu-smi info
 JITTOR_TEST_DEVICES=npu backend_fallback=error sync_run=1 \
-  python -m pytest -q -s tests/backends/npu/test_acl.py
+  python -m pytest -q -s tests/backends/acl/test_acl.py
 ```
 
 The run is accepted only when the intended ACL operator executes, independent
@@ -245,7 +245,7 @@ node (replace the example with the owner-specific node after the slice lands):
 source "$ASCEND_HOME/set_env.sh"
 npu-smi info
 JITTOR_TEST_DEVICES=npu backend_fallback=error sync_run=1 \
-  python -m pytest -q -s tests/backends/npu/test_acl_torch_compat.py -k 'softmax or triu'
+  python -m pytest -q -s tests/backends/acl/test_acl_torch_compat.py -k 'softmax or triu'
 ```
 
 Record the card model, CANN version, selected node, device residency, and zero

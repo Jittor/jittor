@@ -8,7 +8,7 @@ kind of optimization: the failure mode is not a crash but a *silent* one, where
 the stamp says "current", the build step is skipped, and the process keeps
 running the previous ``.so`` against edited sources.
 
-``tests/compiler/test_import_bootstrap_laziness.py`` covers the comparison
+``tests/build/test_import_bootstrap_laziness.py`` covers the comparison
 field by field, in-process, which is the check that notices a field quietly
 dropping out of the record. This script covers the other axis: it perturbs the
 real tree and the real cache and asserts that a real child process really

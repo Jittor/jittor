@@ -53,7 +53,7 @@ python -c "import jittor as jt; print('has_mpi', jt.compile_extern.has_mpi)"
 ```bash
 cd <worktree>
 JITTOR_HOME=... TMPDIR=... PATH=<env>/bin:$PATH nvcc_path="" JITTOR_TEST_DEVICES=cpu \
-  python -m pytest tests/distributed/test_mpi_dtypes.py -q
+  python -m pytest tests/backends/comm/mpi/test_mpi_dtypes.py -q
 ```
 
 要看**每个 rank 各自**的结果（外层 pytest 会把内层输出吞掉），直接跑内层：
@@ -299,7 +299,7 @@ atexit。没跑完时 `~std::thread` 落在 joinable 的线程上：
 `terminate called without an active exception` + SIGABRT，接着触发第 1 条。
 这是 jittor 自己的退出期缺陷，和被测的东西无关。
 
-于是这类测试要两层包装（`tests/distributed/test_nccl_rendezvous_timeout.py`
+于是这类测试要两层包装（`tests/backends/comm/nccl/test_nccl_rendezvous_timeout.py`
 是现成的样板）：
 
 - **最里层**（真正 import jittor 的那个）：`try: import jittor / except: 打印
@@ -313,7 +313,7 @@ atexit。没跑完时 `~std::thread` 落在 joinable 的线程上：
 
 ## 两卡验证「一个 rank 死了，其余怎么办」
 
-这条要真两张卡，`tests/distributed/test_nccl_watchdog.py` 是现成的样板。步骤与判据：
+这条要真两张卡，`tests/backends/comm/nccl/test_nccl_watchdog.py` 是现成的样板。步骤与判据：
 
 1. **先各自预热**。每个 rank 用 `JT_NCCL_WORLD_SIZE=1` 单独跑一遍（`cache_name=nccl<r>`
    一 rank 一个缓存，和 `jittor.distributed.launch` 一致）。不预热的话，冷编译会和
@@ -476,7 +476,7 @@ skip 的数量有没有突然变大。
 - **改法（测试侧）**：按语义分组跑，不要混：
   ```bash
   JITTOR_TORCH_SHIM=0 pytest tests/core tests/nn tests/optim tests/distributed
-  JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch
+  JITTOR_TORCH_SHIM=1 pytest tests/structure compat/tests/structure compat/tests/torch
   ```
   归责之前先确认失败不是这么来的。
 

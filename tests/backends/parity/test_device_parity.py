@@ -264,7 +264,7 @@ class TestDeviceParity(JittorTestCase):
         # serialising the compiler never addressed that: it only made the first report
         # arrive with a smaller fused op in it. ``_check`` below drops those frames, so
         # the failure stays where it happened whether or not the compiler is parallel.
-        # ``tests/compiler/test_parallel_compile_attribution.py`` is the proof, on CPU.
+        # ``tests/codegen/test_parallel_compile_attribution.py`` is the proof, on CPU.
         #
         # Probe only when this accelerator class actually runs. Collection must not
         # compile or synchronize CUDA kernels.

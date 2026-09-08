@@ -114,7 +114,7 @@ framework defects.
 - Severity: Critical
 - Status: Core fix verified on CPU/CUDA/NPU; ROCm verification pending
 - Owner: binary operator maintainers
-- Evidence: [`test_floor_divide.py`](../../tests/core/test_floor_divide.py),
+- Evidence: [`test_floor_divide.py`](../../tests/ops/test_floor_divide.py),
   [`sample_floor_divide`](../../tests/opinfo/definitions/pointwise_binary.py), and
   [2026-08-21 verification](../../docs/results/2026-08-21-floor-divide.md)
 - Previous symptom: C++ integer division made negative quotients truncate toward
@@ -133,7 +133,7 @@ framework defects.
 - Severity: Critical
 - Status: CPU/CUDA verified; NPU float32 verified; full NPU dtype/ROCm pending
 - Owner: compiler and comparison-operator maintainers
-- Evidence: [`test_nan_self_comparisons_across_dtypes`](../../tests/compiler/test_kernel_traps.py),
+- Evidence: [`test_nan_self_comparisons_across_dtypes`](../../tests/debug/test_kernel_traps.py),
   [`test_float_comparisons_with_nan`](../../tests/ops/test_fusion_correctness.py),
   [2026-08-21 verification](../../docs/results/2026-08-21-ieee-nan-comparisons.md), and
   [Ascend 910B validation](../../docs/results/2026-08-28-ascend-910b-validation.md)
@@ -156,7 +156,7 @@ framework defects.
 - Severity: High
 - Status: Accepted current default with explicit escape hatch
 - Owner: dtype and compatibility maintainers
-- Evidence: [`test_jt_array_float64_narrowing`](../../tests/compiler/test_kernel_traps.py)
+- Evidence: [`test_jt_array_float64_narrowing`](../../tests/debug/test_kernel_traps.py)
 - Symptom: `jt.array` can narrow NumPy float64 and int64 inputs to 32-bit defaults,
   invalidating high-precision references or numerical gradient checks
 - Workaround: always pass `dtype="float64"` or `dtype="int64"` when width is part
@@ -172,7 +172,7 @@ framework defects.
 - Owner: FFT and Torch-compat maintainers
 - Evidence: [CUDA rFFT sequence review](../../docs/results/2026-08-21-rfft-sequence-review.md)
   and
-  [`test_rfft_after_complex_forward_backward_sequence`](../../tests/compat/torch/test_torch_compat_fft_einsum.py)
+  [`test_rfft_after_complex_forward_backward_sequence`](../../compat/tests/torch/test_torch_compat_fft_einsum.py)
 - What it claimed: complex forward/gradient work earlier in one CUDA process could
   remove the `rfft` imaginary half-spectrum and break `irfft(rfft(x))`
 - Current finding: four fresh-process repetitions of the old aggregate sequence,
@@ -254,4 +254,4 @@ framework defects.
   appending after it. Verified by planting a CPU-only core and confirming the
   CUDA build is still the one imported.
 - Effect: `tests/structure` went from 3 failed / 209 passed to 212 passed.
-- Guard: [cache path precedence](../../tests/compiler/test_cache_path_precedence.py)
+- Guard: [cache path precedence](../../tests/build/test_cache_path_precedence.py)
