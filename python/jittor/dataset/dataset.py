@@ -680,7 +680,8 @@ Example::
             total_len = len(index_list)
             # check is not batch sampler
             if len(index_list):
-                assert not isinstance(index_list[0], (list,tuple)), "Batch sampler not support yet."
+                if isinstance(index_list[0], (list, tuple)):
+                    raise NotImplementedError("Batch sampler is not supported yet")
         elif self.shuffle == False:
             index_list = get_order_list(self.total_len)
         else:
