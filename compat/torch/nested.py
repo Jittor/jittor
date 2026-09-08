@@ -2,6 +2,7 @@
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import numpy as np
+from typing import Any, cast
 import jittor as jt
 from ..diagnostics import EXPECTED, swallowed
 from .tensor_state import get_tensor_state
@@ -150,7 +151,7 @@ class _NestedTensor:
             return t[tail] if tail else t
 
         if isinstance(item, jt.Var):
-            arr = np.asarray(item.detach().cpu().numpy())
+            arr = np.asarray(cast(Any, item).detach().cpu().numpy())
             if arr.ndim == 0:
                 return _tensor_item(self._tensors[int(arr)])
             if arr.dtype == np.bool_:
@@ -182,10 +183,10 @@ class _NestedTensor:
         return _NestedTensor.from_tensors([t.detach() for t in self._tensors], self._ragged_idx)
 
     def cpu(self):
-        return _NestedTensor.from_tensors([t.cpu() for t in self._tensors], self._ragged_idx)
+        return _NestedTensor.from_tensors([cast(Any, t).cpu() for t in self._tensors], self._ragged_idx)
 
     def to(self, *args, **kwargs):
-        return _NestedTensor.from_tensors([t.to(*args, **kwargs) for t in self._tensors], self._ragged_idx)
+        return _NestedTensor.from_tensors([cast(Any, t).to(*args, **kwargs) for t in self._tensors], self._ragged_idx)
 
     def unsqueeze(self, dim):
         sample_dim = self._tensors[0].ndim
@@ -194,12 +195,12 @@ class _NestedTensor:
             d += sample_dim + 1
         if d == 0:
             d = 1
-        return _NestedTensor.from_tensors([t.unsqueeze(d - 1 if d > 0 else d) for t in self._tensors], self._ragged_idx)
+        return _NestedTensor.from_tensors([cast(Any, t).unsqueeze(d - 1 if d > 0 else d) for t in self._tensors], self._ragged_idx)
 
     def equal(self, other):
         if not isinstance(other, _NestedTensor) or len(self) != len(other):
             return False
-        return all(bool((a == b).all().item()) if tuple(a.shape) == tuple(b.shape) else False
+        return all(bool(cast(Any, (a == b)).all().item()) if tuple(a.shape) == tuple(b.shape) else False
                    for a, b in zip(self._tensors, other._tensors))
 
     def numel(self):
@@ -209,7 +210,7 @@ class _NestedTensor:
         return self.to_padded_tensor(0).numpy()
 
     def tolist(self):
-        return [t.tolist() for t in self._tensors]
+        return [cast(Any, t).tolist() for t in self._tensors]
 
     def __reduce__(self):
         return (_rebuild_nested_tensor, ([(t.numpy(), _jittor_dtype_name(t.dtype)) for t in self._tensors], self._ragged_idx))
@@ -243,7 +244,7 @@ def _rebuild_var_from_numpy(np_arr, dtype_str=None):
         # the original dtype. Values are preserved (bf16->fp32 is lossless and
         # the original was already bf16-representable).
         try:
-            v = v.astype(_jittor_dtype_name(dtype_str))
+            v = cast(Any, v).astype(_jittor_dtype_name(dtype_str))
         except EXPECTED as exc:
             swallowed("torch/nested.py _rebuild_var_from_numpy: v = v.astype(dtype_str)", exc,
                       "the tensor keeps the dtype numpy inferred, not the one that "
