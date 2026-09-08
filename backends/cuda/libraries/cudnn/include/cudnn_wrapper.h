@@ -17,6 +17,7 @@
 #include "core/common.h"
 #include "type/nano_string.h"
 #include "runtime/float32_precision.h"
+#include "cudnn_conv_algo_key.h"
 
 namespace jittor {
 
@@ -43,11 +44,31 @@ void set_benchmark(int enabled);
 // @pyjt(get_benchmark)
 int get_benchmark();
 
+// Shared by 2-D/3-D kernels, but owned separately for each device.
+ConvAlgoCache<cudnnConvolutionFwdAlgo_t>& cudnn_fwd_algo_cache();
+ConvAlgoCache<cudnnConvolutionBwdDataAlgo_t>& cudnn_bwdx_algo_cache();
+ConvAlgoCache<cudnnConvolutionBwdFilterAlgo_t>& cudnn_bwdw_algo_cache();
+// @pyjt(cudnn_algorithm_cache_size)
+int cudnn_algorithm_cache_size(int device=-1);
+// @pyjt(cudnn_clear_algorithm_cache)
+void cudnn_clear_algorithm_cache(int device=-1);
+// @pyjt(cudnn_plan_cache_size)
+int cudnn_plan_cache_size(int device=-1);
+// @pyjt(cudnn_plan_destroy_count)
+uint64 cudnn_plan_destroy_count(int device=-1);
+// @pyjt(cudnn_clear_plan_cache)
+void cudnn_clear_plan_cache(int device=-1);
+
 
 template <typename T_ELEM> __inline__  cudnnDataType_t getDataType();
 template <> __inline__ cudnnDataType_t getDataType<half1>() { return CUDNN_DATA_HALF;   }
 template <> __inline__ cudnnDataType_t getDataType<float>() { return CUDNN_DATA_FLOAT;  }
 template <> __inline__ cudnnDataType_t getDataType<double>() { return CUDNN_DATA_DOUBLE; }
+// cuDNN's host alpha/beta pointers use double for double tensors and float
+// for every reduced/single-precision tensor. The pointer has no runtime tag.
+template<class T> struct CudnnScaling { using type = float; };
+template<> struct CudnnScaling<double> { using type = double; };
+template<class T> using CudnnScalingType = typename CudnnScaling<T>::type;
 #ifndef IS_ROCM
 template <> __inline__ cudnnDataType_t getDataType<__nv_bfloat16>() { return CUDNN_DATA_BFLOAT16;  }
 #endif

@@ -7,115 +7,126 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include <list>
-#include <unordered_map>
+#include <map>
 #include "stream_compat.h"
 #include "cufft_wrapper.h"
 #include "runtime/device.h"
-#include "runtime/cuda_streams.h"
+#include "device_plan_cache.h"
 
 namespace jittor {
 
-// Each cached plan holds a cuFFT workspace. The cache used to be unbounded, so
-// a workload whose FFT shapes keep changing kept paying device memory for
-// plans it would never look up again.
 int cufft_max_cache_size = 32;
+struct DestroyCufftPlan {
+    static bool destroy(cufftHandle plan) {
+        auto status = cufftDestroy(plan);
+        peekCudaErrorsAlways(status);
+        return status == CUFFT_SUCCESS;
+    }
+};
+using CufftDeviceCache = DevicePlanCache<CufftPlanKey, cufftHandle,
+    CufftPlanKeyHash, CufftPlanKeyEq, DestroyCufftPlan>;
+static std::map<int, std::unique_ptr<CufftDeviceCache>> cufft_devices;
 
-static std::unordered_map<CufftPlanKey, cufftHandle, CufftPlanKeyHash, CufftPlanKeyEq>
-    cufft_plan_cache_;
-// Creation order, oldest first; the eviction victim comes off the front.
-static std::list<CufftPlanKey> cufft_plan_order_;
-static vector<uint64> cufft_stream_binds;
-
-static void evict_oldest_plan() {
-    if (cufft_plan_order_.empty()) return;
-    auto oldest = cufft_plan_order_.front();
-    cufft_plan_order_.pop_front();
-    auto iter = cufft_plan_cache_.find(oldest);
-    if (iter == cufft_plan_cache_.end()) return;
-    auto plan = iter->second;
-    cufft_plan_cache_.erase(iter);
-    checkCudaErrors(cufftDestroy(plan));
+static CufftDeviceCache& cufft_cache(int device) {
+    auto found = cufft_devices.find(device);
+    if (found != cufft_devices.end()) return *found->second;
+    auto cache = std::unique_ptr<CufftDeviceCache>(
+        new CufftDeviceCache(device, cuda_compute_stream(device)));
+    auto* result = cache.get();
+    cufft_devices.emplace(device, std::move(cache));
+    return *result;
 }
 
-int cufft_plan_cache_size() { return (int)cufft_plan_cache_.size(); }
+int cufft_plan_cache_size(int device) {
+    ExecutorEntryScope entry;
+    int total = 0;
+    for (const auto& bank : cufft_devices)
+        if (device < 0 || bank.first == device) total += bank.second->plans.size();
+    return total;
+}
 
 void cufft_set_plan_cache_size(int size) {
-    // A plan is handed out by reference and executed after this call returns,
-    // so the cache cannot be emptied entirely.
+    ExecutorEntryScope entry;
     cufft_max_cache_size = size < 1 ? 1 : size;
-    while ((int)cufft_plan_cache_.size() > cufft_max_cache_size)
-        evict_oldest_plan();
+    for (auto& bank : cufft_devices) bank.second->trim(cufft_max_cache_size);
 }
 
 cufftHandle cufft_get_plan(const CufftPlanKey& key) {
-    auto iter = cufft_plan_cache_.find(key);
-    if (iter != cufft_plan_cache_.end()) {
-        CUFFT_CALL(cufftSetStream(
-            iter->second, cuda_compute_stream((int)key.device)));
-        if ((int)cufft_stream_binds.size() <= key.device)
-            cufft_stream_binds.resize(key.device + 1);
-        cufft_stream_binds[key.device]++;
-        return iter->second;
+    ExecutorEntryScope entry;
+    int device = -1;
+    checkCudaErrors(cudaGetDevice(&device));
+    USER_CHECK(device == key.device) << "cuFFT plan key must name the current device";
+    auto& cache = cufft_cache(device);
+    auto found = cache.plans.find(key);
+    if (found != cache.plans.end()) {
+        CUFFT_CALL(cufftSetStream(found->second->value, cache.stream));
+        cache.binds++;
+        return found->second->value;
     }
 
+    while ((int)cache.plans.size() >= cufft_max_cache_size) cache.evict();
     int n[2] = {(int)key.n0, (int)key.n1};
-    cufftHandle plan;
-    // cufftPlanMany creates the plan itself. The cufftCreate that used to sit
-    // in front of it produced a second handle that this line immediately
-    // overwrote and nothing ever destroyed: one leaked plan per new shape.
-    CUFFT_CALL(cufftPlanMany(&plan, 2, n,
-                             nullptr, 1, n[0] * n[1],   // *inembed, istride, idist
-                             nullptr, 1, n[0] * n[1],   // *onembed, ostride, odist
-                             (cufftType)key.type, (int)key.batch));
-    CUFFT_CALL(cufftSetStream(
-        plan, cuda_compute_stream((int)key.device)));
-    if ((int)cufft_stream_binds.size() <= key.device)
-        cufft_stream_binds.resize(key.device + 1);
-    cufft_stream_binds[key.device]++;
-
-    while ((int)cufft_plan_cache_.size() >= cufft_max_cache_size)
-        evict_oldest_plan();
-    cufft_plan_cache_[key] = plan;
-    cufft_plan_order_.push_back(key);
-    return plan;
+    std::unique_ptr<CufftDeviceCache::Plan> plan(new CufftDeviceCache::Plan(&cache));
+    // MakePlanMany initializes this existing handle (unlike PlanMany, which
+    // creates another one). The owner is armed before workspace setup so a
+    // failed build or stream bind also releases the handle.
+    CUFFT_CALL(cufftCreate(&plan->value));
+    plan->ready = true;
+    size_t workspace = 0;
+    CUFFT_CALL(cufftMakePlanMany(plan->value, 2, n,
+        nullptr, 1, n[0] * n[1], nullptr, 1, n[0] * n[1],
+        (cufftType)key.type, (int)key.batch, &workspace));
+    CUFFT_CALL(cufftSetStream(plan->value, cache.stream));
+    cache.binds++;
+    return cache.publish(key, std::move(plan));
 }
 
 uint64 cufft_stream_bind_count(int device) {
-    return device >= 0 && device < (int)cufft_stream_binds.size()
-        ? cufft_stream_binds[device] : 0;
+    ExecutorEntryScope entry;
+    auto found = cufft_devices.find(device);
+    return found == cufft_devices.end() ? 0 : found->second->binds;
 }
 
-void cufft_clear_plan_cache() {
-    for (auto& entry : cufft_plan_cache_)
-        // Reporting-only: this also runs from a static destructor, and
-        // throwing there terminates the process during CUDA teardown.
-        // Unlatched, so a whole cache of failing plans is not reduced to one
-        // line that some earlier peek may already have consumed.
-        peekCudaErrorsAlways(cufftDestroy(entry.second));
-    cufft_plan_cache_.clear();
-    cufft_plan_order_.clear();
-    cufft_stream_binds.clear();
+uint64 cufft_plan_build_count(int device) {
+    ExecutorEntryScope entry;
+    uint64 total = 0;
+    for (const auto& bank : cufft_devices)
+        if (device < 0 || bank.first == device) total += bank.second->builds;
+    return total;
 }
 
-// See cublas_shutdown. Naturally idempotent: the second call has an empty
-// cache to walk.
+uint64 cufft_plan_destroy_count(int device) {
+    ExecutorEntryScope entry;
+    uint64 total = 0;
+    for (const auto& bank : cufft_devices)
+        if (device < 0 || bank.first == device) total += bank.second->destroys;
+    return total;
+}
+
+uint64 cufft_plan_destroy_failures(int device) {
+    ExecutorEntryScope entry;
+    uint64 total = 0;
+    for (const auto& bank : cufft_devices)
+        if (device < 0 || bank.first == device) total += bank.second->destroy_failures;
+    return total;
+}
+
+void cufft_clear_plan_cache(int device) {
+    ExecutorEntryScope entry;
+    for (auto& bank : cufft_devices)
+        if (device < 0 || bank.first == device) bank.second->clear();
+}
+
 void cufft_shutdown() {
-    cufft_clear_plan_cache();
+    // No Runtime access or executor entry during static destruction. Each bank
+    // remembers its device/stream and restores the caller's raw CUDA device.
+    for (auto& bank : cufft_devices) bank.second->clear();
+    cufft_devices.clear();
     LOGv << "cufftDestroy finished";
 }
 
 struct cufft_initer {
-
-inline cufft_initer() {
-    if (!get_device_count()) return;
-    LOGv << "cufftCreate finished";
-}
-
-inline ~cufft_initer() {
-    cufft_shutdown();
-}
-
+    ~cufft_initer() { cufft_shutdown(); }
 } init;
 
 } // jittor

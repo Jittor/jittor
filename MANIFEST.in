@@ -148,6 +148,8 @@ include backends/cpu/libraries/mkl/mkl_matmul_op.cc
 include backends/cpu/libraries/mkl/mkl_matmul_op.h
 include backends/cpu/libraries/mkl/mkl_test_op.cc
 include backends/cpu/libraries/mkl/mkl_test_op.h
+include backends/cuda/include/cache_device_scope.h
+include backends/cuda/include/device_plan_cache.h
 include backends/cuda/include/fp16_dev.h
 include backends/cuda/include/fp16_emu.h
 include backends/cuda/include/helper_cuda.h
@@ -283,6 +285,7 @@ include docs/architecture/2.0-version-policy-memo.md
 include docs/architecture/README.md
 include docs/architecture/acl-data-channel.md
 include docs/architecture/backend-build-configuration.md
+include docs/architecture/backend-plan-cache-lifetime.md
 include docs/architecture/codebase-audit/01-core-runtime.md
 include docs/architecture/codebase-audit/02-python-api.md
 include docs/architecture/codebase-audit/03-compat-shim.md
@@ -475,6 +478,7 @@ include docs/results/2026-09-08-api-owner-closure.md
 include docs/results/2026-09-08-api-runtime-integration.md
 include docs/results/2026-09-08-architecture-integration.md
 include docs/results/2026-09-08-autograd-library-owners.md
+include docs/results/2026-09-08-backend-plan-cache-lifetime.md
 include docs/results/2026-09-08-checkpoint-device-mapping.md
 include docs/results/2026-09-08-compat-layout-and-view-ownership.md
 include docs/results/2026-09-08-core-misc-api-owner.md

@@ -134,8 +134,11 @@ def test_each_cudnn_algo_cache_names_its_pass_and_rank(relative):
     _, jit_half = _halves(KERNELS / relative)
     stripped = _strip_comments(jit_half)
 
-    # The table is keyed by the POD struct, not by a string.
-    assert "ConvAlgoCache<" in stripped, relative
+    # The device-owned table remains POD-keyed behind the shared library ABI.
+    accessor = "cudnn_" + table
+    assert "auto& %s = %s();" % (table, accessor) in stripped, relative
+    header = (KERNELS.parent / "libraries/cudnn/include/cudnn_wrapper.h").read_text()
+    assert re.search(r"ConvAlgoCache<[^>]+>&\s+" + accessor + r"\(\)", header), relative
     assert "unordered_map<string" not in stripped, relative
     assert table in stripped, relative
 

@@ -14,9 +14,9 @@
 // about 12us. Each convolution op tries this path first and keeps its legacy
 // code as the fallback for anything the backend declines.
 //
-// Header-only on purpose: the cuDNN kernels compile this plan interface,
-// and a static inside an inline function is a single instance
-// across those translation units.
+// Kernels share the implementation here. Persistent cache storage is owned by
+// cudnn_wrapper.cc, so separately loaded JIT translation units share one bank
+// per device and teardown has one explicit owner.
 #include <cudnn.h>
 #include <cstring>
 #include <cstdint>
@@ -25,6 +25,9 @@
 #include "cudnn_wrapper.h"
 #include "core/executor.h"
 #include "mem/mem_info.h"
+#include "cache_device_scope.h"
+#include "stream_compat.h"
+#include "runtime/device.h"
 
 namespace jittor {
 
@@ -55,18 +58,42 @@ struct ConvPlanRequestEq {
 };
 
 struct ConvPlanEntry {
+    int device = -1;
+    cudaStream_t stream = nullptr;
+    uint64* destroy_counter = nullptr;
     cudnnBackendDescriptor_t plan = nullptr;
     int64 workspace = 0;
     // Descriptors the plan was built from, kept alive with it.
     std::vector<cudnnBackendDescriptor_t> owned;
     bool valid = false;
+    ConvPlanEntry() = default;
+    ConvPlanEntry(const ConvPlanEntry&) = delete;
+    ConvPlanEntry& operator=(const ConvPlanEntry&) = delete;
+    ConvPlanEntry(ConvPlanEntry&& other) noexcept
+        : device(other.device), stream(other.stream), destroy_counter(other.destroy_counter), plan(other.plan),
+          workspace(other.workspace), owned(std::move(other.owned)), valid(other.valid) {
+        other.plan = nullptr;
+        other.owned.clear();
+    }
+    ~ConvPlanEntry() {
+        if (!plan && owned.empty()) return;
+        CacheDeviceScope scope(device, true);
+        if (!scope.active) return;
+        wait_for_cached_plan(stream);
+        if (plan) {
+            auto status = cudnnBackendDestroyDescriptor(plan);
+            peekCudaErrorsAlways(status);
+            if (status == CUDNN_STATUS_SUCCESS && destroy_counter) ++*destroy_counter;
+        }
+        for (auto iter = owned.rbegin(); iter != owned.rend(); ++iter)
+            if (*iter) peekCudaErrorsAlways(cudnnBackendDestroyDescriptor(*iter));
+    }
 };
 
-inline std::unordered_map<ConvPlanRequest, ConvPlanEntry, ConvPlanRequestHash, ConvPlanRequestEq>&
-conv_plan_cache() {
-    static std::unordered_map<ConvPlanRequest, ConvPlanEntry, ConvPlanRequestHash, ConvPlanRequestEq> cache;
-    return cache;
-}
+using ConvPlanCache = std::unordered_map<ConvPlanRequest, ConvPlanEntry,
+    ConvPlanRequestHash, ConvPlanRequestEq>;
+ConvPlanCache& conv_plan_cache();
+void initialize_conv_plan_owner(ConvPlanEntry& entry);
 
 // Strides of a KCRS filter stored as oihw (NCHW) or ohwi (NHWC).
 inline void conv_plan_filter_strides(int64* s, const int* d, bool nhwc) {
@@ -256,7 +283,9 @@ inline void build(const ConvPlanRequest& r, ConvPlanEntry& e, void* x, void* w, 
         if ((int)i != best) cudnnBackendDestroyDescriptor(candidates[i].plan);
     e.plan = candidates[best].plan;
     e.workspace = candidates[best].ws;
-    e.owned = {X.release(), W.release(), Y.release(), conv.release(), op.release(), graph.release()};
+    e.owned.reserve(6);
+    e.owned.push_back(X.release()); e.owned.push_back(W.release()); e.owned.push_back(Y.release());
+    e.owned.push_back(conv.release()); e.owned.push_back(op.release()); e.owned.push_back(graph.release());
     e.valid = true;
 }
 
@@ -315,7 +344,13 @@ inline bool cudnn_conv_backend_run(const ConvPlanRequest& r, void* x, void* w, v
     if (it == cache.end()) {
         if (cache.size() >= 4096) return false;
         it = cache.emplace(r, ConvPlanEntry()).first;
-        conv_plan_detail::build(r, it->second, x, w, y);
+        initialize_conv_plan_owner(it->second);
+        try {
+            conv_plan_detail::build(r, it->second, x, w, y);
+        } catch (...) {
+            cache.erase(it);
+            throw;
+        }
     }
     auto& e = it->second;
     if (!e.valid) return false;

@@ -90,7 +90,6 @@ VarPtr CudnnConv3dBackwardWOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 
 #pragma clang diagnostic ignored "-Wtautological-compare"
 
-EXTERN_LIB ConvAlgoCache<cudnnConvolutionBwdFilterAlgo_t> bwdw_algo_cache;
 EXTERN_LIB int cudnn_benchmark;
 
 template <typename T_ELEM> __inline__  cudnnDataType_t getDataType();
@@ -101,6 +100,7 @@ void CudnnConv3dBackwardWOp::jit_run() {
     auto w = dw;
     auto y = dy;        
     cudnnHandle_t handle_ = cudnn_bind_stream();
+    auto& bwdw_algo_cache = cudnn_bwdw_algo_cache();
 
     // Owned, so a throw anywhere below releases them. There is no backend
     // fast path for 3-D yet (6.B14 left these on the legacy API), so unlike
@@ -307,7 +307,7 @@ void CudnnConv3dBackwardWOp::jit_run() {
         handle_, cudnnIdesc, cudnnOdesc, cudnnConvDesc, 
         cudnnFdesc, algo, &workSpaceSize));
     CudnnWorkspace workSpace(workSpaceSize);
-    float alpha=1, beta=0;
+    CudnnScalingType<Ty> alpha=1, beta=0;
     checkCudaErrors(cudnnConvolutionBackwardFilter(
         handle_,
         (void*)(&alpha),

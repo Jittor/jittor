@@ -53,14 +53,15 @@ EXTERN_LIB int cufft_max_cache_size;
 
     Every plan owns a workspace, so an unbounded cache spends device memory on
     plans a workload of ever-changing shapes never reuses. Past
-    ``cufft_max_cache_size`` the least recently created plan is destroyed.
+    ``cufft_max_cache_size`` per device the least recently created plan is destroyed.
  */
 cufftHandle cufft_get_plan(const CufftPlanKey& key);
 // @pyjt(cufft_stream_bind_count)
 uint64 cufft_stream_bind_count(int device);
 
 /** Destroy every cached plan. Reporting-only on failure: also runs at teardown. */
-void cufft_clear_plan_cache();
+// @pyjt(cufft_clear_plan_cache)
+void cufft_clear_plan_cache(int device=-1);
 
 // Destroys every cached plan, reporting failures instead of raising. Idempotent.
 void cufft_shutdown();
@@ -69,6 +70,14 @@ void cufft_shutdown();
 void cufft_set_plan_cache_size(int size);
 
 // @pyjt(cufft_plan_cache_size)
-int cufft_plan_cache_size();
+int cufft_plan_cache_size(int device=-1);
+
+// Counters are device-owned and retained across explicit clear operations.
+// @pyjt(cufft_plan_build_count)
+uint64 cufft_plan_build_count(int device=-1);
+// @pyjt(cufft_plan_destroy_count)
+uint64 cufft_plan_destroy_count(int device=-1);
+// @pyjt(cufft_plan_destroy_failures)
+uint64 cufft_plan_destroy_failures(int device=-1);
 
 } // jittor

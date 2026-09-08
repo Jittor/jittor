@@ -96,19 +96,18 @@ VarPtr CudnnConvBackwardWOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
 }
 
-ConvAlgoCache<cudnnConvolutionBwdFilterAlgo_t> bwdw_algo_cache;
 
 #else // JIT
 #ifdef JIT_cuda
 
 #pragma clang diagnostic ignored "-Wtautological-compare"
 
-EXTERN_LIB ConvAlgoCache<cudnnConvolutionBwdFilterAlgo_t> bwdw_algo_cache;
 
 void CudnnConvBackwardWOp::jit_run() {
     auto w = dw;
     auto y = dy;        
     cudnnHandle_t handle_ = cudnn_bind_stream();
+    auto& bwdw_algo_cache = cudnn_bwdw_algo_cache();
 
     // Integer arithmetic on Var shapes down to the backend fast path; the
     // legacy descriptors are built below, only if the fallback needs them.
@@ -316,7 +315,7 @@ void CudnnConvBackwardWOp::jit_run() {
         handle_, cudnnIdesc, cudnnOdesc, cudnnConvDesc, 
         cudnnFdesc, algo, &workSpaceSize));
     CudnnWorkspace workSpace(workSpaceSize);
-    float alpha=1, beta=0;
+    CudnnScalingType<Ty> alpha=1, beta=0;
     checkCudaErrors(cudnnConvolutionBackwardFilter(
         handle_,
         (void*)(&alpha),

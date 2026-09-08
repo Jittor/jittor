@@ -98,18 +98,17 @@ VarPtr CudnnConvOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
 }
 
-ConvAlgoCache<cudnnConvolutionFwdAlgo_t> fwd_algo_cache;
 
 #else // JIT
 #ifdef JIT_cuda
 
 #pragma clang diagnostic ignored "-Wtautological-compare"
 
-EXTERN_LIB ConvAlgoCache<cudnnConvolutionFwdAlgo_t> fwd_algo_cache;
 EXTERN_LIB int cudnn_benchmark;
 
 void CudnnConvOp::jit_run() {
     cudnnHandle_t handle_ = cudnn_bind_stream();
+    auto& fwd_algo_cache = cudnn_fwd_algo_cache();
 
     // Everything down to the backend fast path below is integer arithmetic on
     // Var shapes. The four legacy descriptors used to be created up here and
@@ -327,7 +326,7 @@ void CudnnConvOp::jit_run() {
         handle_, cudnnIdesc, cudnnFdesc, cudnnConvDesc, 
         cudnnOdesc, algo, &workSpaceSize) );
     CudnnWorkspace workSpace(workSpaceSize);
-    float alpha=1, beta=0;
+    CudnnScalingType<Ty> alpha=1, beta=0;
     checkCudaErrors(cudnnConvolutionForward(
         handle_,
         (void*)(&alpha),

@@ -57,20 +57,26 @@ EXTERN_LIB int cutt_max_cache_size;
     A cuTT plan owns device memory. The cache used to keep one per distinct
     (rank, shape, permutation, element size) forever, so a workload that keeps
     meeting new transpose shapes never stopped growing. Past
-    ``cutt_max_cache_size`` the least recently created plan is destroyed.
+    ``cutt_max_cache_size`` per device the least recently created plan is destroyed.
  */
 cuttHandle cutt_get_plan(const CuttPlanKey& key);
 
 /** Destroy every cached plan. Reporting-only on failure. */
-void cutt_clear_plan_cache();
+// @pyjt(cutt_clear_plan_cache)
+void cutt_clear_plan_cache(int device=-1);
 
 // @pyjt(cutt_set_plan_cache_size)
 void cutt_set_plan_cache_size(int size);
 
 // @pyjt(cutt_plan_cache_size)
-int cutt_plan_cache_size();
+int cutt_plan_cache_size(int device=-1);
 
 // @pyjt(cutt_plan_build_count)
-uint64 cutt_plan_build_count();
+uint64 cutt_plan_build_count(int device=-1);
+
+// @pyjt(cutt_plan_destroy_count)
+uint64 cutt_plan_destroy_count(int device=-1);
+// @pyjt(cutt_plan_destroy_failures)
+uint64 cutt_plan_destroy_failures(int device=-1);
 
 } // jittor
