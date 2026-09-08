@@ -362,13 +362,12 @@ def test_complete_forward_backward_payloads_are_disjoint(pipeline):
     x, weight, bias = Tensor((2, 6, 4)), Tensor((6,)), Tensor((6,))
     norms.GroupNormACL(3, 0.125)(x, weight, bias)
     first = calls[-1]
-    assert "GroupNormBackward_op" in " ".join(first["data"])
-    assert "GroupNorm_op" in " ".join(first["data"])
+    assert "acl_attr.op" in " ".join(first["data"])
+    assert "apply_acl_code_attributes(op, data, \"acl_attr.\", \"GroupNormBackward\")" in first["cuda_grad_src"][0]
     assert first["data"]["multi_grad"] == 1
-    assert "apply_acl_code_attributes(op, data, \"acl_attr.\", \"BatchNormBackward\")" in first["cuda_grad_src"][0]
     assert len(first["cuda_grad_src"]) == 1
     norms.LayerNormACL((6, 4), eps=0.125)(x, weight, bias)
-    assert "LayerNormBackward_op" in " ".join(calls[-1]["data"])
+    assert "apply_acl_code_attributes(op, data, \"acl_attr.\", \"LayerNormBackward\")" in calls[-1]["cuda_grad_src"][0]
     load("matmul_op").MatmulACL()(Tensor((2, 3)), Tensor((3, 4)))
     assert len(calls[-1]["cuda_grad_src"]) == 2
     assert "matmul_grad_x1" in " ".join(calls[-1]["data"])
