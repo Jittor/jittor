@@ -46,3 +46,30 @@ existing CPU cache. Runtime initialization reached the optional
 `flash_attn` fallback, but forward/backward produced neither completion nor a
 Python exception within 90 seconds and was stopped. This is an inconclusive
 build/runtime prerequisite result, not a parity pass.
+
+## Reproducible target-machine preflight
+
+Record the target matrix before installing optional ecosystems:
+
+```bash
+python --version
+python -c 'import torch; print(torch.__version__, torch.version.cuda)'
+nvidia-smi
+python -c 'import importlib.util; print({n: bool(importlib.util.find_spec(n)) for n in ("vllm", "trellis")})'
+```
+
+Use an isolated environment for vLLM. The probed wheel requires Python 3.9--3.13
+with `torch==2.8.0`, `torchvision==0.23.0`, and `torchaudio==2.8.0`; install
+those matching CUDA wheels first, then `python -m pip install vllm==0.11.0`.
+Do not replace the current PyTorch 2.12.1 oracle environment. TRELLIS has no
+PyPI package; use the upstream repository's pinned requirements in its own
+environment. Verify imports before enabling the adapter:
+
+```bash
+python -c 'import torch, vllm; print(torch.__version__, vllm.__version__)'
+python -c 'import trellis; print(trellis.__file__)'
+python -m pip install ./adapters
+```
+
+The in-tree entry point is `jittor_vllm = jittor_adapters.vllm:register` and
+importing the adapter package alone is inert.
