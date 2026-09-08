@@ -537,6 +537,5 @@ class GetItemACL(jt.Function):
             return result, None
         elif self.type_ == "mask":
             return self.mask.float()
-            pass
         else:
-            assert False, f"grad not implemented for {self.type_}"
+            raise NotImplementedError(f"ACL getitem backward does not support {self.type_!r} gradients")
