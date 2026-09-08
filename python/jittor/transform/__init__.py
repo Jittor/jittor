@@ -1191,21 +1191,21 @@ class RandomAffine(object):
                 raise ValueError("If degrees is a single number, it must be positive.")
             self.degrees = (-degrees, degrees)
         else:
-            assert isinstance(degrees, (tuple, list)) and len(degrees) == 2, \
-                "degrees should be a list or tuple and it must be of length 2."
+            if not isinstance(degrees, (tuple, list)) or len(degrees) != 2:
+                raise ValueError("degrees should be a list or tuple and it must be of length 2.")
             self.degrees = degrees
 
         if translate is not None:
-            assert isinstance(translate, (tuple, list)) and len(translate) == 2, \
-                "translate should be a list or tuple and it must be of length 2."
+            if not isinstance(translate, (tuple, list)) or len(translate) != 2:
+                raise ValueError("translate should be a list or tuple and it must be of length 2.")
             for t in translate:
                 if not (0.0 <= t <= 1.0):
                     raise ValueError("translation values should be between 0 and 1")
         self.translate = translate
 
         if scale is not None:
-            assert isinstance(scale, (tuple, list)) and len(scale) == 2, \
-                "scale should be a list or tuple and it must be of length 2."
+            if not isinstance(scale, (tuple, list)) or len(scale) != 2:
+                raise ValueError("scale should be a list or tuple and it must be of length 2.")
             for s in scale:
                 if s <= 0:
                     raise ValueError("scale values should be positive")
