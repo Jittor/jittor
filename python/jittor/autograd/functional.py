@@ -211,11 +211,14 @@ def _autograd_grad(
 ):
     # Version of grad that accepts `None` in outputs and do not compute gradients for them.
     # This has the extra constraint that inputs has to be a tuple
-    assert isinstance(outputs, tuple)
+    if not isinstance(outputs, tuple):
+        raise TypeError("autograd.grad: outputs must be a tuple")
     if grad_outputs is None:
         grad_outputs = (None,) * len(outputs)
-    assert isinstance(grad_outputs, tuple)
-    assert len(outputs) == len(grad_outputs)
+    if not isinstance(grad_outputs, tuple):
+        raise TypeError("autograd.grad: grad_outputs must be a tuple")
+    if len(outputs) != len(grad_outputs):
+        raise ValueError("autograd.grad: outputs and grad_outputs must have equal length")
 
     new_outputs = ()
     new_grad_outputs = ()
