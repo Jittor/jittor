@@ -570,7 +570,8 @@ def _flatten_cpu(input, start_dim=0, end_dim=-1):
     in_shape = input.shape
     start_dim = len(in_shape) + start_dim if start_dim < 0 else start_dim
     end_dim = len(in_shape) + end_dim if end_dim < 0 else end_dim
-    assert end_dim >= start_dim, "end_dim should be larger than or equal to start_dim for flatten function"
+    if end_dim < start_dim:
+        raise ValueError("flatten: end_dim must be greater than or equal to start_dim")
     if len(in_shape) <= end_dim:
         raise IndexError(f"Dimension out of range (expected to be in range of [{-len(in_shape)}, {len(in_shape) - 1}], but got {end_dim})")
     out_shape = []
