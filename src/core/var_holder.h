@@ -29,7 +29,7 @@ VarPtr device_copy(Var* x, int device);
  * storage underneath genuinely is shared whenever the slice is contiguous (see
  * getitem_contiguous_inplace).
  *
- * This used to be inferred instead of recorded. ``cascade_setitem_root`` walked
+ * This used to be inferred instead of recorded. The old ancestry query walked
  * the producing op graph backwards looking for getitem ops, which could only
  * ever answer for the cases it could recognise: at most ten levels, and every
  * level a single integer. ``y[1:4].assign(...)`` fell outside that and was
@@ -538,16 +538,6 @@ struct VarHolder {
         }
         return this;
     }
-
-    /* check a[x][y] = c
-    */
-    // Backend adapters must preserve native chained-index writeback.
-    // @pyjt(_needs_cascade_setitem)
-    bool needs_cascade_setitem();
-
-    // @pyjt(check_cascade_setitem)
-    // @attrs(return_self)
-    VarHolder* check_cascade_setitem(VarHolder* out);
 
     /**
      * Record that this holder is the view ``base[slices]`` produced by basic

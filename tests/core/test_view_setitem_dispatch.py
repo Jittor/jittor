@@ -1,36 +1,47 @@
-"""Backend routing must not feed custom results to native view writeback."""
+"""Explicit view writeback accepts backend results without producer inspection."""
 
 import jittor as jt
 import numpy as np
 import pytest
 
 
-def test_cascade_query_matches_integer_ancestry_without_gradient_dependency():
+def test_tensor_indexing_records_views_but_operator_entry_does_not():
     x = jt.array(np.arange(12, dtype="float32").reshape(3, 4)).stop_grad()
-    assert not x._needs_cascade_setitem()
+    assert not x._is_view()
+    assert x[1]._is_view()
+    assert x[1:3]._is_view()
     row = jt.core.ops.getitem(x, 1)
-    assert row._needs_cascade_setitem()
-    assert not jt.core.ops.getitem(x, slice(None))._needs_cascade_setitem()
-    assert not jt.core.ops.getitem(x, (1, slice(None)))._needs_cascade_setitem()
-    assert not (row + 1)._needs_cascade_setitem()
+    assert not row._is_view()
+    assert not (row + 1)._is_view()
 
 
-def test_native_cascade_still_updates_held_parent():
+def test_recorded_view_accepts_a_non_setitem_result():
     x = jt.array(np.arange(12, dtype="float32").reshape(3, 4)).stop_grad()
-    row = jt.core.ops.getitem(x, 1)
-    updated = jt.core.ops.setitem(row, 2, jt.array(90.0))
-    row.check_cascade_setitem(updated)
+    row = x[1]
+    row.assign(row + 90)
     expected = np.arange(12, dtype="float32").reshape(3, 4)
-    expected[1, 2] = 90
+    expected[1] += 90
     np.testing.assert_array_equal(x.numpy(), expected)
 
 
-def test_cascade_rejects_a_non_setitem_result_before_native_downcast():
-    x = jt.ones((3, 4))
-    row = jt.core.ops.getitem(x, 1)
-    with pytest.raises(RuntimeError, match="requires a native setitem result"):
-        row.check_cascade_setitem(row + 1)
-    np.testing.assert_array_equal(x.numpy(), np.ones((3, 4)))
+def test_backend_updated_value_writes_through_recorded_slice(monkeypatch):
+    from jittor.ops import indexing
+    x = jt.zeros((5, 4))
+    view = x[1:4]
+    seen = []
+
+    def dispatch(name, value, *args):
+        if name == "tensor.setitem":
+            seen.append(value._is_view())
+            return jt.ones(value.shape) * 7
+        return None
+
+    monkeypatch.setattr(indexing, "try_dispatch", dispatch)
+    view[1] = 99
+    assert seen == [True]
+    expected = np.zeros((5, 4), dtype="float32")
+    expected[1:4] = 7
+    np.testing.assert_array_equal(x.numpy(), expected)
 
 
 @pytest.mark.parametrize("use_cuda", [0, 1])
