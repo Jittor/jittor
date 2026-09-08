@@ -113,7 +113,7 @@ namespace jittor
                 LOGf << "Not supported dtype: " << in_[0]->dtype();
             }
 
-            CHECK_RET(alpha != nullptr, return);
+            if (!alpha) LOGf << name << ": failed to create binary scalar alpha";
         }
         AclWorkspaceArguments args;
         args.x = inputTensors[0];
