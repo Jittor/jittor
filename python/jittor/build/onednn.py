@@ -69,7 +69,8 @@ def check_usable(library, include=None):
             fields = [re.search(r"#\s*define\s+DNNL_VERSION_%s\s+(\d+)" % field, content)
                       for field in ("MAJOR", "MINOR", "PATCH")]
             if all(fields):
-                header_version = tuple(int(field.group(1)) for field in fields)
+                matches = [field for field in fields if field is not None]
+                header_version = tuple(int(field.group(1)) for field in matches)
                 break
         if header_version != actual:
             raise RuntimeError("oneDNN header/library version mismatch: %s reports %s; %s reports %s" %
@@ -88,7 +89,8 @@ def _install_lock(path):
             while True:
                 os.lseek(descriptor, 0, os.SEEK_SET)
                 try:
-                    msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                    locking = getattr(msvcrt, "locking")
+                    locking(descriptor, getattr(msvcrt, "LK_NBLCK"), 1)
                     break
                 except OSError:
                     if time.monotonic() >= deadline:
