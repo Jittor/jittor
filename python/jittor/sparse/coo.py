@@ -14,7 +14,12 @@
 import jittor as jt
 class SparseVar:
     def __init__(self,indices,values,shape):
-        assert isinstance(indices,jt.Var) and isinstance(values,jt.Var) and isinstance(shape,jt.NanoVector)
+        if not (
+            isinstance(indices, jt.Var)
+            and isinstance(values, jt.Var)
+            and isinstance(shape, jt.NanoVector)
+        ):
+            raise TypeError("SparseVar requires Var indices/values and a NanoVector shape")
         self.indices = indices
         self.values = values
         self.shape = shape
