@@ -169,7 +169,8 @@ def histc(input, bins, min=0., max=0.):
     import jittor as jt
     if min == 0 and max == 0:
         min, max = input.min(), input.max()
-    assert min < max
+    if min >= max:
+        raise ValueError("uniform: min must be less than max")
     if bins <= 0:
         raise RuntimeError(f"bins must be > 0, but got {bins}")
     bin_length = (max - min) / bins
