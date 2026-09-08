@@ -1,3 +1,5 @@
+from ._code import code_with_attributes
+from ._attributes import attribute_program, code_program, runner_for_alias
 import os
 from jittor_utils import env_or_try_find
 import jittor_utils
@@ -12,48 +14,16 @@ from typing import Union
 from collections.abc import Sequence, Iterable
 
 
-def matmul_forward(name: str,
-                   inputs: list,
-                   output_dtypes: list = None,
-                   output_shapes: list = None,
-                   attr_code: str = "",
-                   attr_header: str = "",
-                   outputs: list = None,
-                   extra_data: dict = {},
-                   cuda_grad_src: list = None):
-    attr_header = "\nnamespace jittor{" + attr_header + "}\n"
+from ._code import acl_code as matmul_forward
 
-    cuda_header = '''
-    #include "aclops/aclops.h"
-    '''
-    if outputs is None:
-        assert output_dtypes is not None
-        assert output_shapes is not None
-        assert len(output_dtypes) == len(output_shapes)
-    input_code = ''
-    for i in range(len(inputs)):
-        input_code += f"op.add(in{i}, true);\n"
 
-    code_kwargs = dict(
-        cuda_header=attr_header + cuda_header,
-        cuda_grad_src=cuda_grad_src or [],
-        cuda_src=f"""
-    // aclop
-    MatMulOpRunner op;
-    {input_code}
-    op.add(out0, false);
-    {attr_code}
-    op.cube_math_type = {1 if getattr(jt, "acl_allow_hf32", False) else 0};
-    op.run();""",
-        data=extra_data,
+def _matmul_attributes(mode):
+    return attribute_program(
+        "MatMul", {"mode": mode, "cube_math_type": 1 if getattr(jt, "acl_allow_hf32", False) else 0}
     )
-    if outputs is not None:
-        return jt.code(outputs=outputs, inputs=inputs, backend="acl", **code_kwargs)
-    return jt.code(output_shapes, output_dtypes, inputs, backend="acl", **code_kwargs)
 
 
 class MatmulACL:
-
     def __init__(self, trans_x2=False):
         self.trans_x2 = trans_x2
 
@@ -92,34 +62,43 @@ in0->shape = in0_shape;
 dout->shape = dout_shape;
 """
         result = matmul_forward(
-            "MatMul", [x1, x2],
+            "MatMul",
+            [x1, x2],
             output_dtypes=[x1.dtype],
             output_shapes=[
-                x1.shape[:-1] +
-                x2.shape[-2:-1] if self.trans_x2 else x1.shape[:-1] +
-                x2.shape[-1:]
+                x1.shape[:-1] + x2.shape[-2:-1] if self.trans_x2 else x1.shape[:-1] + x2.shape[-1:]
             ],
-            attr_code="op.jt_name=\"matmul_trans_1\";"
-            if self.trans_x2 else "op.jt_name=\"matmul\";",
-            cuda_grad_src=[f"""
-// aclop
-MatMulOpRunner op;
-op.add(dout, true);
-op.add(in1, true);
-op.add(out0, false);
-op.jt_name = "{grad_x1_mode}";
-op.cube_math_type = {cube_math_type};
-op.run();
-""", f"""
-// aclop
-{reshape_code}
-MatMulOpRunner op;
-op.add({grad_x2_lhs}, true);
-op.add({grad_x2_rhs}, true);
-op.add(out0, false);
-op.jt_name = "matmul_trans_0";
-op.cube_math_type = {cube_math_type};
-op.run();
-{restore_code}
-"""])[0]
+            attr_code=_matmul_attributes(1) if self.trans_x2 else _matmul_attributes(0),
+            cuda_grad_src=[
+                code_program(
+                    [
+                        "\n// aclop\nMatMulOpRunner op;\nop.add(dout, true);\nop.add(in1, true);\nop.add(out0, false);\n",
+                        attribute_program(
+                            "MatMul",
+                            {"mode": 0 if self.trans_x2 else 1, "cube_math_type": cube_math_type},
+                            slot="matmul_grad_x1",
+                        ),
+                        "\nop.run();\n",
+                    ]
+                ),
+                code_program(
+                    [
+                        "\n// aclop\n",
+                        reshape_code,
+                        "\nMatMulOpRunner op;\nop.add(",
+                        grad_x2_lhs,
+                        ", true);\nop.add(",
+                        grad_x2_rhs,
+                        ", true);\nop.add(out0, false);\n",
+                        attribute_program(
+                            "MatMul",
+                            {"mode": 2, "cube_math_type": cube_math_type},
+                            slot="matmul_grad_x2",
+                        ),
+                        "\nop.run();\n",
+                        restore_code,
+                    ]
+                ),
+            ],
+        )[0]
         return result

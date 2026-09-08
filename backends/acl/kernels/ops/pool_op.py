@@ -1,3 +1,5 @@
+from ._code import code_with_attributes
+from ._attributes import attribute_program, code_program, runner_for_alias
 import os
 from jittor_utils import env_or_try_find
 import jittor_utils
@@ -12,80 +14,39 @@ from typing import Union
 from collections.abc import Sequence, Iterable
 
 
-def pool_cmd(name: str,
-             inputs: list,
-             output_dtypes: list = None,
-             output_shapes: list = None,
-             attr_code: str = "",
-             attr_header: str = "",
-             outputs: list = None):
-    attr_header = "\nnamespace jittor{" + attr_header + "}\n"
-
-    cuda_header = '''
-    #include "aclops/aclops.h"
-    '''
-    outputs_ = []
-    if outputs is not None:
-        outputs_ = outputs
-    else:
-        assert output_dtypes is not None
-        assert output_shapes is not None
-        assert len(output_dtypes) == len(output_shapes)
-        for i in range(len(output_shapes)):
-            outputs_.append(jt.empty(output_shapes[i], output_dtypes[i]))
-    input_code = ''
-    for i in range(len(inputs)):
-        input_code += f"op.add(in{i}, true);\n"
-
-    output_code = ''
-    for i in range(len(outputs_)):
-        output_code += f"op.add(out{i}, false);\n"
-    return jt.code(backend="acl", outputs=outputs_,
-                   inputs=inputs,
-                   cuda_header=attr_header + cuda_header,
-                   cuda_src=f"""
-   
-    // aclop
-    {name}OpRunner op;
-    {input_code}
-    {output_code}
-    {attr_code}
-    op.run();""")
+from ._code import acl_code as pool_cmd
 
 
 class PoolACL(jt.Function):
-
-    def __init__(self,
-                 kernel_size,
-                 stride=None,
-                 padding=0,
-                 dilation=None,
-                 return_indices=None,
-                 ceil_mode=False,
-                 count_include_pad=True,
-                 op='maximum'):
-        self.kernel_size = kernel_size if isinstance(
-            kernel_size, tuple) else (kernel_size, kernel_size)
+    def __init__(
+        self,
+        kernel_size,
+        stride=None,
+        padding=0,
+        dilation=None,
+        return_indices=None,
+        ceil_mode=False,
+        count_include_pad=True,
+        op="maximum",
+    ):
+        self.kernel_size = (
+            kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
+        )
         stride = stride if stride else kernel_size
         self.stride = stride if isinstance(stride, tuple) else (stride, stride)
-        self.padding = padding if isinstance(padding, tuple) else (padding,
-                                                                   padding)
+        self.padding = padding if isinstance(padding, tuple) else (padding, padding)
         dilation = dilation if dilation else 1
         assert dilation == 1
-        self.dilation = dilation if isinstance(dilation, tuple) else (dilation,
-                                                                      dilation)
+        self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
         for item in self.kernel_size:
             if item <= 0:
-                raise RuntimeError(
-                    f"kernel_size must be greater than zero, but got {item}")
+                raise RuntimeError(f"kernel_size must be greater than zero, but got {item}")
         for item in self.stride:
             if item <= 0:
-                raise RuntimeError(
-                    f"stride must be greater than zero, but got {item}")
+                raise RuntimeError(f"stride must be greater than zero, but got {item}")
         for item in self.padding:
             if item < 0:
-                raise RuntimeError(
-                    f"padding must be non-negative, but got {item}")
+                raise RuntimeError(f"padding must be non-negative, but got {item}")
         self.op = op
         self.return_indices = return_indices
         self.ceil_mode = ceil_mode
@@ -95,37 +56,46 @@ class PoolACL(jt.Function):
         from jittor.nn.functional.pooling import _pool_output_size
 
         self.input = input
-        attr_code = f"""
-        op.jt_name  = "{"avgpool" if self.op == 'mean' else "maxpool"}";
-        PoolAttr *attr = new PoolAttr();
-        attr->kernel_size = {{ {self.kernel_size[0]}, {self.kernel_size[1]} }};
-        attr->poolStrides = {{ {self.stride[0]}, {self.stride[1]} }};
-        attr->poolPads = {{ {self.padding[0]}, {self.padding[1]} }};
-        attr->poolDilations = {{ {self.dilation[0]}, {self.dilation[1]} }};
-        attr->poolCeil = {"true" if self.ceil_mode else "false"};
-        attr->countIncludePad = {"true" if self.count_include_pad else "false"};
-        op.op_attr.reset(attr);
-        """
+        attr_code = code_program(
+            [
+                '\n        op.jt_name  = "',
+                "avgpool" if self.op == "mean" else "maxpool",
+                '";\n        ',
+                attribute_program(
+                    runner_for_alias("avgpool" if self.op == "mean" else "maxpool"),
+                    {
+                        "kernel_size": [self.kernel_size[0], self.kernel_size[1]],
+                        "poolStrides": [self.stride[0], self.stride[1]],
+                        "poolPads": [self.padding[0], self.padding[1]],
+                        "poolDilations": [self.dilation[0], self.dilation[1]],
+                        "poolCeil": bool(self.ceil_mode),
+                        "countIncludePad": bool(self.count_include_pad),
+                    },
+                    variable="op",
+                ),
+                "\n        ",
+            ]
+        )
         output_height, output_width = (
             _pool_output_size(size, kernel, stride, padding, self.ceil_mode)
             for size, kernel, stride, padding in zip(
-                input.shape[-2:], self.kernel_size, self.stride, self.padding)
+                input.shape[-2:], self.kernel_size, self.stride, self.padding
+            )
         )
 
-        output_shape = (input.shape[0], input.shape[1], output_height,
-                        output_width)
+        output_shape = (input.shape[0], input.shape[1], output_height, output_width)
 
         inputs = [input]
 
-        if self.op == 'maximum':
+        if self.op == "maximum":
             result = pool_cmd(
                 "Maxpool",
                 inputs,
-                output_dtypes=[input.dtype, 'int32'],
+                output_dtypes=[input.dtype, "int32"],
                 output_shapes=[output_shape, output_shape],
                 attr_code=attr_code,
             )
-        elif self.op == 'mean':
+        elif self.op == "mean":
             result = pool_cmd(
                 "Avgpool",
                 inputs,
@@ -134,9 +104,9 @@ class PoolACL(jt.Function):
                 attr_code=attr_code,
             )
         else:
-            raise ValueError('no this type pool')
+            raise ValueError("no this type pool")
 
-        if self.op == 'maximum':
+        if self.op == "maximum":
             self.index = result[1]
 
         if self.return_indices:
@@ -146,31 +116,44 @@ class PoolACL(jt.Function):
 
     def grad(self, grad_output):
         input = self.input
-        attr_code = f"""
-        op.jt_name = "{"avgpoolbackward" if self.op == 'mean' else "maxpoolbackward"}";
-        PoolAttr *attr = new PoolAttr();
-        attr->kernel_size = {{ {self.kernel_size[0]}, {self.kernel_size[1]} }};
-        attr->poolStrides = {{ {self.stride[0]}, {self.stride[1]} }};
-        attr->poolPads = {{ {self.padding[0]}, {self.padding[1]} }};
-        attr->poolDilations = {{ {self.dilation[0]}, {self.dilation[1]} }};
-        attr->poolCeil = {"true" if self.ceil_mode else "false"};
-        attr->countIncludePad = {"true" if self.count_include_pad else "false"};
-        op.op_attr.reset(attr);
-        """
+        attr_code = code_program(
+            [
+                '\n        op.jt_name = "',
+                "avgpoolbackward" if self.op == "mean" else "maxpoolbackward",
+                '";\n        ',
+                attribute_program(
+                    runner_for_alias("avgpoolbackward" if self.op == "mean" else "maxpoolbackward"),
+                    {
+                        "kernel_size": [self.kernel_size[0], self.kernel_size[1]],
+                        "poolStrides": [self.stride[0], self.stride[1]],
+                        "poolPads": [self.padding[0], self.padding[1]],
+                        "poolDilations": [self.dilation[0], self.dilation[1]],
+                        "poolCeil": bool(self.ceil_mode),
+                        "countIncludePad": bool(self.count_include_pad),
+                    },
+                    variable="op",
+                ),
+                "\n        ",
+            ]
+        )
         output_shapes = [input.shape]
         output_dtypes = [input.dtype]
-        if self.op == 'maximum':
-            result = pool_cmd("MaxpoolBackward",
-                              inputs=[grad_output, input, self.index],
-                              output_dtypes=output_dtypes,
-                              output_shapes=output_shapes,
-                              attr_code=attr_code)[0]
-        elif self.op == 'mean':
-            result = pool_cmd("AvgpoolBackward",
-                              inputs=[grad_output, input],
-                              output_dtypes=output_dtypes,
-                              output_shapes=output_shapes,
-                              attr_code=attr_code)[0]
+        if self.op == "maximum":
+            result = pool_cmd(
+                "MaxpoolBackward",
+                inputs=[grad_output, input, self.index],
+                output_dtypes=output_dtypes,
+                output_shapes=output_shapes,
+                attr_code=attr_code,
+            )[0]
+        elif self.op == "mean":
+            result = pool_cmd(
+                "AvgpoolBackward",
+                inputs=[grad_output, input],
+                output_dtypes=output_dtypes,
+                output_shapes=output_shapes,
+                attr_code=attr_code,
+            )[0]
         else:
-            raise ValueError('no this type pool')
+            raise ValueError("no this type pool")
         return result

@@ -1,3 +1,5 @@
+from ._code import code_with_attributes
+from ._attributes import attribute_program, code_program, runner_for_alias
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import os
 from jittor_utils import env_or_try_find
@@ -13,87 +15,10 @@ from typing import Union
 from collections.abc import Sequence, Iterable
 
 
-def setitem_cmd(name: str,
-                inputs: list,
-                output_dtypes: list = None,
-                output_shapes: list = None,
-                attr_code: str = "",
-                attr_header: str = "",
-                outputs: list = None):
-    attr_header = "\nnamespace jittor{" + attr_header + "}\n"
-
-    cuda_header = '''
-    #include "aclops/aclops.h"
-    '''
-    outputs_ = []
-    if outputs is not None:
-        outputs_ = outputs
-    else:
-        assert output_dtypes is not None
-        assert output_shapes is not None
-        assert len(output_dtypes) == len(output_shapes)
-        for i in range(len(output_shapes)):
-            outputs_.append(jt.empty(output_shapes[i], output_dtypes[i]))
-    input_code = ''
-    for i in range(len(inputs)):
-        input_code += f"op.add(in{i}, true);\n"
-
-    output_code = ''
-    for i in range(len(outputs_)):
-        output_code += f"op.add(out{i}, false);\n"
-    return jt.code(backend="acl", outputs=outputs_,
-                   inputs=inputs,
-                   cuda_header=attr_header + cuda_header,
-                   cuda_src=f"""
-   
-    // aclop
-    {name}OpRunner op;
-    {input_code}
-    {output_code}
-    {attr_code}
-    op.run();""")
+from ._code import acl_code as setitem_cmd
 
 
-def setitem_forward(name: str,
-                    inputs: list,
-                    output_dtypes: list = None,
-                    output_shapes: list = None,
-                    attr_code: str = "",
-                    attr_header: str = "",
-                    outputs: list = None,
-                    extra_data: dict = {}):
-    attr_header = "\nnamespace jittor{" + attr_header + "}\n"
-
-    cuda_header = '''
-    #include "aclops/aclops.h"
-    '''
-    outputs_ = []
-    if outputs is not None:
-        outputs_ = outputs
-    else:
-        assert output_dtypes is not None
-        assert output_shapes is not None
-        assert len(output_dtypes) == len(output_shapes)
-        for i in range(len(output_shapes)):
-            outputs_.append(jt.empty(output_shapes[i], output_dtypes[i]))
-    input_code = ''
-    for i in range(len(inputs)):
-        input_code += f"op.add(in{i}, true);\n"
-
-    output_code = ''
-    for i in range(len(outputs_)):
-        output_code += f"op.add(out{i}, false);\n"
-    return jt.code(backend="acl", outputs=outputs_,
-                   inputs=inputs,
-                   cuda_header=attr_header + cuda_header,
-                   cuda_src=f"""
-    // aclop
-    {name}OpRunner op;
-    {input_code}
-    op.add(out0, false);
-    {attr_code}
-    op.run();""",
-                   data=extra_data)
+from ._code import acl_code as setitem_forward
 
 
 def caculate_shape(tensors):
@@ -113,11 +38,11 @@ def caculate_shape(tensors):
 def can_broadcast_and_shape(shape1, shape2):
     """
     检查两个张量是否可以广播，并返回广播后的形状。
-    
+
     参数:
     - shape1: 第一个张量的形状（tuple 或 list）
     - shape2: 第二个张量的形状（tuple 或 list）
-    
+
     返回:
     - can_broadcast: 布尔值，表示是否可以广播
     - broadcast_shape: 如果可以广播，返回广播后的形状；否则返回 None
@@ -129,9 +54,9 @@ def can_broadcast_and_shape(shape1, shape2):
     # 使两个形状的长度一致，通过在前面补1
     len1, len2 = len(shape1), len(shape2)
     if len1 < len2:
-        shape1 = (1, ) * (len2 - len1) + shape1
+        shape1 = (1,) * (len2 - len1) + shape1
     elif len2 < len1:
-        shape2 = (1, ) * (len1 - len2) + shape2
+        shape2 = (1,) * (len1 - len2) + shape2
 
     broadcast_shape = []
 
@@ -151,9 +76,8 @@ def can_broadcast_and_shape(shape1, shape2):
 
 
 class SetItemACL(jt.Function):
-
     def __init__(self):
-        self.type_ = 'notype'
+        self.type_ = "notype"
         self.value_var = True
 
     def stride(self, x, dim):
@@ -174,7 +98,7 @@ class SetItemACL(jt.Function):
                     # as the mask selects. Avoid reducing the bool mask here:
                     # bool reductions are not reliable on ACL, and a wrong zero
                     # count would silently turn a real assignment into a no-op.
-                    value = jt.full((x.numel(), ), value, dtype=x.dtype)
+                    value = jt.full((x.numel(),), value, dtype=x.dtype)
                 assert slices.shape == x.shape, "setitem shape not match"
                 assert len(value.shape) == 1, "value shape must be 1D"
                 if self.value_var:
@@ -182,7 +106,7 @@ class SetItemACL(jt.Function):
                     assert value.shape[0] == slices_len, (
                         "value shape length must be equal to slices sum"
                     )
-                self.type_ = 'mask'
+                self.type_ = "mask"
                 self.value_shape = value.shape
                 # base x is an explicit input so its data is materialized before
                 # the in-place masked-scatter (the runner copies base->out first).
@@ -191,27 +115,25 @@ class SetItemACL(jt.Function):
                 attr_code = f"""
                 op.jt_name = "inplacemaskedscatter";
                 """
-                result = setitem_cmd("InplaceMaskedScatter",
-                                     inputs=inputs,
-                                     outputs=outputs,
-                                     attr_code=attr_code)[0]
+                result = setitem_cmd(
+                    "InplaceMaskedScatter", inputs=inputs, outputs=outputs, attr_code=attr_code
+                )[0]
                 return result
 
         # assert isinstance(value,jt.Var), "value must be jt.Var"
         # self.value_shape = value.shape
         if not isinstance(slices, tuple):
-            slices = (slices, )
+            slices = (slices,)
         slices = list(slices)
         for i, s in enumerate(slices):
             if isinstance(s, int) and s < 0:
                 slices[i] = x.shape[i] + s
         slices = tuple(slices)
         slices_list = list(slices)
-        #check slices contains slice type
+        # check slices contains slice type
         contains_slice = False
         for s in slices:
-            if not isinstance(s, jt.Var) and (isinstance(s, slice)
-                                              or s == Ellipsis):
+            if not isinstance(s, jt.Var) and (isinstance(s, slice) or s == Ellipsis):
                 contains_slice = True
                 break
         if not contains_slice:
@@ -221,7 +143,8 @@ class SetItemACL(jt.Function):
             boardcast_shape = caculate_shape(slices_list[0])
             for ii in range(1, len(slices)):
                 dd, boardcast_shape = can_broadcast_and_shape(
-                    boardcast_shape, caculate_shape(slices_list[ii]))
+                    boardcast_shape, caculate_shape(slices_list[ii])
+                )
                 assert dd is True, "can not broadcast"
             value_shape = boardcast_shape
             value_shape += x.shape[slices_len:]
@@ -232,20 +155,22 @@ class SetItemACL(jt.Function):
             self.value_shape = value_shape
             for ii in slices:
                 indices.append(jt.Var(ii).int32())
-            if isinstance(slices[0],
-                          jt.Var) or isinstance(slices[0], int) or isinstance(
-                              slices[0], list) or isinstance(slices[0], tuple):
+            if (
+                isinstance(slices[0], jt.Var)
+                or isinstance(slices[0], int)
+                or isinstance(slices[0], list)
+                or isinstance(slices[0], tuple)
+            ):
                 self.indices = indices
-                self.type_ = 'index'
+                self.type_ = "index"
                 attr_code = f"""
                 op.jt_name = "indexputimpl";
                 """
                 inputs = [value] + indices
                 outputs = [x.clone()]
-                result = setitem_cmd("IndexPutImpl",
-                                     inputs=inputs,
-                                     outputs=outputs,
-                                     attr_code=attr_code)[0]
+                result = setitem_cmd(
+                    "IndexPutImpl", inputs=inputs, outputs=outputs, attr_code=attr_code
+                )[0]
                 # result.sync()
                 return result
             assert "not support"
@@ -254,25 +179,27 @@ class SetItemACL(jt.Function):
         slices = list(slices)
         for s in slices:
             if not isinstance(s, jt.Var) and s == Ellipsis:
-                slices = slices[:slices.index(s)] + [
-                    slice(None, None, None)
-                ] * (x_dim - len(slices) + 1) + slices[slices.index(s) + 1:]
+                slices = (
+                    slices[: slices.index(s)]
+                    + [slice(None, None, None)] * (x_dim - len(slices) + 1)
+                    + slices[slices.index(s) + 1 :]
+                )
                 break
         slices = tuple(slices)
         self.input_slice = slices
         if len(slices) < x_dim:
-            slices += (slice(None, None, None), ) * (x_dim - len(slices))
+            slices += (slice(None, None, None),) * (x_dim - len(slices))
         sizes = []
-        #适配华为奇怪的要求，最后一个维度的step必须是1
+        # 适配华为奇怪的要求，最后一个维度的step必须是1
         expand_dim = False
         if isinstance(slices[-1], slice):
             if slices[-1].step is not None and slices[-1].step != 1:
-                slices = slices + (slice(None, None, None), )
+                slices = slices + (slice(None, None, None),)
                 expand_dim = True
 
         elif isinstance(slices[-1], int):
-            #注意最后一个维度是数字
-            slices = slices + (slice(None, None, None), )
+            # 注意最后一个维度是数字
+            slices = slices + (slice(None, None, None),)
             expand_dim = True
             # value = value.unsqueeze(-1)
         else:
@@ -293,9 +220,8 @@ class SetItemACL(jt.Function):
             for dim in squeeze_dims:
                 value = value.unsqueeze(dim)
 
-        extra_data = {}
+        begins, ends, steps, dims = [], [], [], []
         if len(slices):
-            extra_data["a"] = len(slices)
             for dim, s in enumerate(slices):
                 if isinstance(s, int):
                     s = slice(s, s + 1, 1)
@@ -304,52 +230,31 @@ class SetItemACL(jt.Function):
                 start, stop, step = s.indices(x_shape[dim])
                 size = (stop - start - 1) // step + 1
                 sizes.append(size)
-                extra_data[str(dim * 3)] = start
-                extra_data[str(dim * 3 + 1)] = stop
-                extra_data[str(dim * 3 + 2)] = step
+                begins.append(start)
+                ends.append(stop)
+                steps.append(step)
+                dims.append(dim)
         else:
-            extra_data["a"] = -1
             sizes = [1]
             steps = [1]
         if isinstance(value, int) or isinstance(value, float):
             value = jt.full(sizes, value)
-        self.type_ = 'slicev2'
-        attr_code = """
-        op.jt_name = "stridedsliceassignv2";
-        StrideAttr *attr = new StrideAttr();
-        int slice_dim = data["a"];
-        
-        if(slice_dim == -1) {
-            attr->begins = {};
-            attr->ends = {};
-            attr->steps = {1};
-            attr->axes = {};
-        } else {
-            vector<long int> begins;
-            vector<long int> ends;
-            vector<long int> steps;
-            vector<long int> dims;
-            for(int dim = 0; dim < slice_dim; dim++) {
-                dims.push_back(dim);
-                begins.push_back(data[std::to_string(dim*3)]);
-                ends.push_back(data[std::to_string(dim*3+1)]);
-                steps.push_back(data[std::to_string(dim*3+2)]);
-            }
-            attr->begins = begins;
-            attr->ends = ends;
-            attr->steps = steps;
-            attr->axes = dims;
-        }
-        op.op_attr.reset(attr);
-        """
+        self.type_ = "slicev2"
+        attr_code = attribute_program(
+            "StridedSliceAssignV2",
+            {
+                "begins": begins,
+                "ends": ends,
+                "steps": steps,
+                "axes": dims,
+            },
+        )
         self.value_shape = value.shape
         inputs = [value]
         outputs = [x.clone()]
-        result = setitem_forward("StridedSliceAssignV2",
-                                 inputs=inputs,
-                                 outputs=outputs,
-                                 attr_code=attr_code,
-                                 extra_data=extra_data)[0]
+        result = setitem_forward(
+            "StridedSliceAssignV2", inputs=inputs, outputs=outputs, attr_code=attr_code
+        )[0]
         if expand_dim:
             result = result.squeeze(-1)
         # result.sync()

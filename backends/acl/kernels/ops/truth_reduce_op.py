@@ -1,3 +1,5 @@
+from ._code import code_with_attributes
+from ._attributes import AttributeCode, attribute_data
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import jittor as jt
 
@@ -20,7 +22,8 @@ def _normalize_dims(input, dim):
             axis += input.ndim
         if not 0 <= axis < input.ndim:
             raise ValueError(
-                f"dimension {axis} out of range for tensor with {input.ndim} dimensions")
+                f"dimension {axis} out of range for tensor with {input.ndim} dimensions"
+            )
         if axis in normalized:
             raise ValueError(f"dimension {axis} appears more than once")
         normalized.append(axis)
@@ -28,28 +31,33 @@ def _normalize_dims(input, dim):
 
 
 def _truth_reduce_cmd(input, dims, reduce_all):
-    output_shape = [
-        size for axis, size in enumerate(input.shape) if axis not in dims
-    ] or [1]
+    output_shape = [size for axis, size in enumerate(input.shape) if axis not in dims] or [1]
     output = jt.empty(output_shape, dtype="bool")
-    axes = ", ".join(map(str, dims))
-    return jt.code(
+    return code_with_attributes(
         backend="acl",
         outputs=[output],
         inputs=[input],
         cuda_header='#include "aclops/aclops.h"',
-        cuda_src=f"""
+        cuda_src=AttributeCode(
+            """
         // aclop
-        TruthReduceOpRunner op({str(reduce_all).lower()});
+        auto attributes = jittor::acl_data::decode_code_data(
+            data, "TruthReduce", acl_code_attribute_schema("TruthReduce"));
+        TruthReduceOpRunner op(attributes.fields.at("reduce_all").bool_value);
         op.add(in0, true);
         op.add(out0, false);
-        ReduceAttr *attr = new ReduceAttr();
-        attr->axes = {{{axes}}};
-        attr->keepdims = false;
-        op.op_attr.reset(attr);
-        op.jt_name = "{'all' if reduce_all else 'any'}";
+        assign_acl_code_attributes(op, attributes);
         op.run();
         """,
+            attribute_data(
+                "TruthReduce",
+                {
+                    "axes": list(dims),
+                    "keepdims": False,
+                    "reduce_all": bool(reduce_all),
+                },
+            ),
+        ),
     )[0]
 
 

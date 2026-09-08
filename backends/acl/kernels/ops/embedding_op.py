@@ -1,3 +1,5 @@
+from ._code import code_with_attributes
+from ._attributes import attribute_program, code_program, runner_for_alias
 import os
 from jittor_utils import env_or_try_find
 import jittor_utils
@@ -11,48 +13,10 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
-def embedding_cmd(name: str,
-            inputs: list,
-            output_dtypes: list = None,
-            output_shapes: list = None,
-            attr_code: str = "",
-            attr_header: str = "",
-            outputs: list = None):
-    attr_header = "\nnamespace jittor{" + attr_header + "}\n"
+from ._code import acl_code as embedding_cmd
 
-    cuda_header = '''
-    #include "aclops/aclops.h"
-    '''
-    outputs_ = []
-    if outputs is not None:
-        outputs_ = outputs
-    else:
-        assert output_dtypes is not None
-        assert output_shapes is not None
-        assert len(output_dtypes) == len(output_shapes)
-        for i in range(len(output_shapes)):
-            outputs_.append(jt.empty(output_shapes[i], output_dtypes[i]))
-    input_code = ''
-    for i in range(len(inputs)):
-        input_code += f"op.add(in{i}, true);\n"
 
-    output_code = ''
-    for i in range(len(outputs_)):
-        output_code += f"op.add(out{i}, false);\n"
-    return jt.code(backend="acl", outputs=outputs_,
-                   inputs=inputs,
-                   cuda_header=attr_header + cuda_header,
-                   cuda_src=f"""
-   
-    // aclop
-    {name}OpRunner op;
-    {input_code}
-    {output_code}
-    {attr_code}
-    op.run();""")
-    
 class EmbeddingACL(jt.Function):
-
     def __init__(self, padding_idx=None, scale_grad_by_freq=False):
         super(EmbeddingACL, self).__init__()
         self.padding_idx = -1 if padding_idx is None else int(padding_idx)
@@ -71,25 +35,28 @@ class EmbeddingACL(jt.Function):
         attr_code = f"""
         op.jt_name = "embedding";
         """
-        result = embedding_cmd("Embedding",
-                            inputs=inputs,
-                            outputs=outputs,
-                            attr_code=attr_code)[0]
+        result = embedding_cmd("Embedding", inputs=inputs, outputs=outputs, attr_code=attr_code)[0]
         return result
 
     def grad(self, grad_output):
         inputs = [grad_output, self.indices]
         outputs = [jt.empty(self.weight_shape, grad_output.dtype)]
-        attr_code = f"""
-        op.jt_name = "embeddingbackward";
-        EmbeddingAttr *attr = new EmbeddingAttr();
-        attr->numEmbeddings = {self.weight_shape[0]};
-        attr->paddingIdx = {self.padding_idx};
-        attr->scaleGradByFreq = {str(self.scale_grad_by_freq).lower()};
-        op.op_attr.reset(attr);
-        """
-        grad_weight = embedding_cmd("EmbeddingBackward",
-                                inputs=inputs,
-                                outputs=outputs,
-                                attr_code=attr_code)[0]
+        attr_code = code_program(
+            [
+                '\n        op.jt_name = "embeddingbackward";\n        ',
+                attribute_program(
+                    "EmbeddingBackward",
+                    {
+                        "numEmbeddings": self.weight_shape[0],
+                        "paddingIdx": self.padding_idx,
+                        "scaleGradByFreq": bool(self.scale_grad_by_freq),
+                    },
+                    variable="op",
+                ),
+                "\n        ",
+            ]
+        )
+        grad_weight = embedding_cmd(
+            "EmbeddingBackward", inputs=inputs, outputs=outputs, attr_code=attr_code
+        )[0]
         return None, grad_weight

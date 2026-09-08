@@ -132,168 +132,57 @@ def cudnn_split_libraries(cudnn_major):
     return CUDNN_SPLIT_LIBRARIES.get(
         cudnn_major, CUDNN_SPLIT_LIBRARIES[max(CUDNN_SPLIT_LIBRARIES)])
 
-#: oneDNN's shared library, newest spelling first, as (subdirectory, filename,
-#: linker name) triples.
-#:
-#: The 2021 v2.2 archive that ``manifest.MKL`` pins ships *both*
-#: ``libdnnl.so`` and a ``libmkldnn.so`` compatibility alias. oneDNN v3 dropped
-#: the alias and ships ``libdnnl.so`` only -- so code that looks for
-#: ``libmkldnn.so`` to decide whether the archive unpacked reports a correct v3
-#: install as "downloaded but not installed", and a ``-lmkldnn`` link line
-#: fails against it. Both spellings are accepted here so that the library
-#: version stops being pinned by the *file name*; ``mkl_include_path`` /
-#: ``mkl_lib_path`` already let a caller point at their own build.
-MKL_LIBRARY_NAMES = (
-    ("lib", "libdnnl.so", "dnnl"),
-    ("lib", "libmkldnn.so", "mkldnn"),
-    ("bin", "dnnl.dll", "dnnl"),
-    ("lib", "libdnnl.dylib", "dnnl"),
-    ("lib", "libmkldnn.dylib", "mkldnn"),
-)
-
-
-def mkl_library_layout(dirname):
-    """``(library path, linker name)`` for the oneDNN under ``dirname``.
-
-    ``None`` when no recognised library is there, which is the "not unpacked
-    yet" answer as well as the "this is not a oneDNN tree" answer.
-    """
-    for subdirectory, filename, linker_name in MKL_LIBRARY_NAMES:
-        candidate = os.path.join(dirname, subdirectory, filename)
-        if os.path.isfile(candidate):
-            return candidate, linker_name
-    return None
+# Keep the legacy inspection spelling as a same-object alias to the provider.
+from .onednn import LIBRARY_NAMES as MKL_LIBRARY_NAMES, library_layout as mkl_library_layout
+from . import onednn as _onednn_provider
 
 
 def install_mkl(root_folder):
-    # origin url is
-    # https://github.com/oneapi-src/oneDNN/releases/download/v2.2/
-    asset = manifest.mkl_asset()
-    filename = asset.filename
-    url = asset.url
-    md5 = manifest.digest_of(asset)[1]
-    fullname = os.path.join(root_folder, filename)
-    dirname = os.path.join(root_folder, filename.rsplit(".",1)[0])
-
-    if mkl_library_layout(dirname) is None:
-        LOG.i("Downloading mkl...")
-        download_url_to_local(url, filename, root_folder, md5)
-        if fullname.endswith(".zip"):
-            import zipfile
-            with zipfile.ZipFile(fullname, "r") as f:
-                f.extractall(root_folder)
-        else:
-            import tarfile
-            with tarfile.open(fullname, "r") as tar:
-                safe_tar_extractall(tar, root_folder)
-        if os.name == 'nt':
-            # dnnl.dll and its dependencies live here.
-            bin_path = os.path.join(dirname, "bin")
-            sys.path.append(bin_path)
-            os.environ["PATH"] = os.environ.get("PATH", "") + ";" + bin_path
-        check_mkl_usable(dirname)
+    return _onednn_provider.install_source(
+        root_folder, manifest.mkl_asset(), manifest.ONEDNN_VERSION, cc_path,
+        download_url_to_local, safe_tar_extractall, allow_build=build_is_allowed())
 
 
 def check_mkl_usable(dirname):
-    """Load the library we just unpacked and look for the symbol we use.
-
-    This used to compile one of the upstream examples with the user's compiler
-    and then *run* the resulting binary, on the import path, with `assert 0 ==
-    os.system(...)` as the only diagnostic -- so a broken download reached the
-    user as a bare AssertionError, and every import of a fresh cache built and
-    executed a third-party program. Loading the library and resolving
-    ``dnnl_sgemm`` (the entry point jittor's own MKL operators call) answers
-    the same question: is this archive usable from this process.
-    """
     layout = mkl_library_layout(dirname)
     if layout is None:
-        candidates = [os.path.join(dirname, subdirectory, filename)
-                      for subdirectory, filename, _ in MKL_LIBRARY_NAMES]
-        raise RuntimeError(
-            f"the MKL/oneDNN archive unpacked into {dirname} but none of "
-            f"{candidates} exists; delete that directory and its archive to "
-            f"download it again.")
-    lib_path = layout[0]
-    try:
-        lib = ctypes.CDLL(lib_path, dlopen_flags)
-    except OSError as error:
-        raise RuntimeError(
-            f"could not load {lib_path}: {error}. Delete {dirname} and its "
-            f"archive to download it again.") from error
-    if not hasattr(lib, "dnnl_sgemm"):
-        raise RuntimeError(
-            f"{lib_path} loaded but has no dnnl_sgemm, which jittor's MKL "
-            f"operators call. This is not the expected oneDNN build; delete "
-            f"{dirname} and its archive to download it again.")
-    LOG.v(f"mkl usable: {lib_path}")
+        raise RuntimeError("oneDNN shared library not found under " + str(dirname))
+    return _onednn_provider.check_usable(layout[0], os.path.join(dirname, "include"))
+
 
 def _mkl_library_enabled():
     return bool(use_mkl) and build_flag("use_mkl", True, os.environ)
 
 
 def setup_mkl():
-    if not _mkl_library_enabled(): return
-
-    # pytorch mkl is conflict with jittor mkl
-    # yield error "free: invalide size" or
-    # "mmap error"
-    # import pytorch(>1.8) first can fix this problem
-    # try:
-    #     # jt.dirty_fix_pytorch_runtime_error()
-    #     import torch
-    #     from torch import nn
-    # except:
-    #     torch = None
-
-    mkl_include_path = build_env("mkl_include_path", environ=os.environ)
-    mkl_lib_path = build_env("mkl_lib_path", environ=os.environ)
-
-    if mkl_lib_path is None or mkl_include_path is None:
-        LOG.v("setup mkl...")
-        # mkl_path = os.path.join(cache_path, "mkl")
-        # mkl_path decouple with cc_path
-        mkl_path = os.path.join(jit_utils.home(), ".cache", "jittor", "mkl")
-
-        make_cache_dir(mkl_path)
-        install_mkl(mkl_path)
-        mkl_home = ""
-        for name in os.listdir(mkl_path):
-            if name.startswith("dnnl") and os.path.isdir(os.path.join(mkl_path, name)):
-                mkl_home = os.path.join(mkl_path, name)
-                break
-        assert mkl_home!=""
-    mkl_include_path = os.path.join(mkl_home, "include")
-    mkl_lib_path = os.path.join(mkl_home, "lib")
-
-    # The linker name comes from whichever library is actually there rather
-    # than from a hard-coded `-lmkldnn`: v2 ships libdnnl.so plus a
-    # libmkldnn.so alias, v3 ships libdnnl.so alone. Hard-coding the alias is
-    # what made the library version un-upgradable without touching this line.
-    layout = mkl_library_layout(mkl_home)
-    assert layout is not None, (
-        f"no oneDNN shared library under {mkl_home}; looked for "
-        + ", ".join(name for _, name, _ in MKL_LIBRARY_NAMES))
-    mkl_lib_name, mkl_linker_name = layout
-    extra_flags = f" -I\"{mkl_include_path}\" -L\"{mkl_lib_path}\" -l{mkl_linker_name} "
-    if os.name == 'nt':
-        mkl_bin_path = os.path.join(mkl_home, 'bin')
-        extra_flags = f" -I\"{mkl_include_path}\"  -L\"{mkl_lib_path}\" -L\"{mkl_bin_path}\" -l{mkl_linker_name} "
-
-    assert os.path.isdir(mkl_include_path)
-    assert os.path.isdir(mkl_lib_path)
-    assert os.path.isfile(mkl_lib_name)
-    LOG.v(f"mkl_include_path: {mkl_include_path}")
-    LOG.v(f"mkl_lib_path: {mkl_lib_path}")
-    LOG.v(f"mkl_lib_name: {mkl_lib_name}")
-    # We do not link manualy, link in custom ops
-    # ctypes.CDLL(mkl_lib_name, dlopen_flags)
-
+    if not _mkl_library_enabled():
+        return
+    include = build_env("mkl_include_path", environ=os.environ)
+    library = build_env("mkl_lib_path", environ=os.environ)
+    if bool(include) != bool(library):
+        raise RuntimeError("set both JT_BUILD_MKL_INCLUDE_PATH and JT_BUILD_MKL_LIB_PATH")
+    if include:
+        include = os.path.abspath(include)
+        library_file, linker = _onednn_provider.explicit_library(library)
+    else:
+        root = os.path.join(jit_utils.home(), ".cache", "jittor", "mkl")
+        prefix = install_mkl(root)
+        include = os.path.join(prefix, "include")
+        library_file, linker = mkl_library_layout(prefix)
+    _onednn_provider.check_usable(library_file, include)
+    library_dir = os.path.dirname(library_file)
+    if os.name == "nt":
+        # The import library accompanies the install's include/lib pair.
+        lib_dir = library if library and os.path.isdir(library) else os.path.join(os.path.dirname(include), "lib")
+        extra_flags = f' -I"{include}" -L"{lib_dir}" -l{linker} '
+    else:
+        extra_flags = f' -I"{include}" -L"{library_dir}" -Wl,-rpath,"{library_dir}" -l{linker} '
     mkl_op_dir = os.path.join(backend_root(jittor_path, "cpu"), "libraries", "mkl")
-    mkl_op_files = [os.path.join(mkl_op_dir, name) for name in os.listdir(mkl_op_dir)]
+    mkl_op_files = [os.path.join(mkl_op_dir, name) for name in sorted(os.listdir(mkl_op_dir))
+                    if name.endswith((".cc", ".h"))]
     mkl = compile_custom_ops(mkl_op_files, extra_flags=extra_flags,
                              backend="cpu", return_module=True)
     register_library("mkl", mkl)
-    LOG.vv("Get mkl_ops: "+str(dir(mkl.ops)))
 
 
 def install_cub(root_folder):

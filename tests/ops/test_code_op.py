@@ -12,6 +12,39 @@ import numpy as np
 from jittor import Function
 
 class TestCodeOp(unittest.TestCase):
+    def test_multi_output_grad_preserves_data_without_gradient_controls(self):
+        a = jt.array(np.array([1.0, 2.0], dtype="float32"))
+        b = jt.array(np.array([3.0, 4.0], dtype="float32"))
+        result = jt.code(
+            a.shape,
+            a.dtype,
+            [a, b],
+            cpu_src="""
+                for (int i=0; i<in0_shape0; ++i)
+                    @out(i) = data.at("scale") * @in0(i) * @in1(i);
+            """,
+            cpu_grad_src=[
+                """
+                if (data.count("multi_grad") || data.count("multi_grad_output") ||
+                    data.count("multi_grad_input_count"))
+                    throw std::runtime_error("gradient control leaked into backward");
+                for (int i=0; i<in0_shape0; ++i) {
+                    @out0(i) = data.at("scale") * @dout(i) * @in1(i);
+                    @out1(i) = data.at("scale") * @dout(i) * @in0(i);
+                }
+            """
+            ],
+            data={
+                "scale": 3.5,
+                "multi_grad": 1,
+                "multi_grad_output": 0,
+                "multi_grad_input_count": 2,
+            },
+        )
+        ga, gb = jt.grad(result.sum(), [a, b])
+        np.testing.assert_allclose(ga.numpy(), 3.5 * b.numpy())
+        np.testing.assert_allclose(gb.numpy(), 3.5 * a.numpy())
+
     def test_multi_output_grad(self):
         a = jt.array(np.array([1.0, 2.0, 3.0], dtype="float32"))
         b = jt.array(np.array([4.0, 5.0, 6.0], dtype="float32"))

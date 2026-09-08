@@ -1,3 +1,5 @@
+from ._code import code_with_attributes
+from ._attributes import attribute_program, code_program, runner_for_alias
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import os
 from jittor_utils import env_or_try_find
@@ -22,20 +24,21 @@ from ._code import acl_code as flashattention_cmd
 
 
 class FlashAttentionACL:
-
-    def __init__(self,
-                 headnum,
-                 layout="BNSD",
-                 prefix=None,
-                 qstart=None,
-                 kvstart=None,
-                 scale=1.0,
-                 prob=1.0,
-                 pretokens=2147483647,
-                 nexttokens=2147483647,
-                 innerprecise=0,
-                 sparsemode=0,
-                 psetype=1):
+    def __init__(
+        self,
+        headnum,
+        layout="BNSD",
+        prefix=None,
+        qstart=None,
+        kvstart=None,
+        scale=1.0,
+        prob=1.0,
+        pretokens=2147483647,
+        nexttokens=2147483647,
+        innerprecise=0,
+        sparsemode=0,
+        psetype=1,
+    ):
         self.headnum = headnum
         self.layout = layout
         self.scale = scale
@@ -59,20 +62,20 @@ class FlashAttentionACL:
         paddingMask=None,
         attenMask=None,
     ):
-        if self.layout == 'BSH':
+        if self.layout == "BSH":
             B, SQ, H = q.shape
             SKV = k.shape[1]
             N = self.headnum
             D = H // N
-        elif self.layout == 'SBH':
+        elif self.layout == "SBH":
             SQ, B, H = q.shape
             SKV = k.shape[0]
             N = self.headnum
             D = H // N
-        elif self.layout == 'BSND':
+        elif self.layout == "BSND":
             B, SQ, N, D = q.shape
             SKV = k.shape[1]
-        elif self.layout == 'BNSD':
+        elif self.layout == "BNSD":
             B, N, SQ, D = q.shape
             SKV = k.shape[2]
         else:
@@ -94,35 +97,28 @@ class FlashAttentionACL:
         paddingMask = paddingMask if paddingMask is not None else dummy
         attenMask = attenMask if attenMask is not None else dummy
 
-        attr_code = f"""
-        op.jt_name = "flashattention";
-        FlashAttentionAttr *attr = new FlashAttentionAttr();
-        attr->scale = {self.scale};
-        attr->keepProb = {self.prob};
-        attr->preToken = {self.pretokens};
-        attr->nextToken = {self.nexttokens};
-        attr->headNum = {self.headnum};
-        attr->inputLayout = "{self.layout}";
-        attr->innerPrecise = {self.innerprecise};
-        attr->sparseMode = {self.sparsemode};
-        attr->psetype = {self.psetype};
-        attr->prefix = {{ {", ".join(map(str, prefix))} }};
-        attr->qStartIdx = {{ {", ".join(map(str, qstart))} }};
-        attr->kvStartIdx = {{ {", ".join(map(str, kvstart))} }};
-        attr->hasRealshift = {"true" if has_realshift else "false"};
-        attr->hasDropmask = {"true" if has_dropmask else "false"};
-        attr->hasPaddingmask = {"true" if has_paddingmask else "false"};
-        attr->hasAttentmask = {"true" if has_attenmask else "false"};
-        op.op_attr.reset(attr);
-        """
-        grad_attr_code = attr_code.replace(
-            'op.jt_name = "flashattention";',
-            'op.jt_name = "flashattentionbackward";',
-        )
+        attributes = {
+            "scale": self.scale,
+            "keepProb": self.prob,
+            "preToken": self.pretokens,
+            "nextToken": self.nexttokens,
+            "headNum": self.headnum,
+            "inputLayout": self.layout,
+            "innerPrecise": self.innerprecise,
+            "sparseMode": self.sparsemode,
+            "psetype": self.psetype,
+            "prefix": list(prefix),
+            "qStartIdx": list(qstart),
+            "kvStartIdx": list(kvstart),
+            "hasRealshift": bool(has_realshift),
+            "hasDropmask": bool(has_dropmask),
+            "hasPaddingmask": bool(has_paddingmask),
+            "hasAttentmask": bool(has_attenmask),
+        }
+        attr_code = attribute_program("FlashAttention", attributes)
+        grad_attr_code = attribute_program("FlashAttentionBackward", attributes)
 
-        inputs = [
-            q, k, v, realshift, dropMask, paddingMask, attenMask
-        ]
+        inputs = [q, k, v, realshift, dropMask, paddingMask, attenMask]
 
         result = flashattention_cmd(
             "FlashAttention",
@@ -132,33 +128,19 @@ class FlashAttentionACL:
             attr_code=attr_code,
             multi_grad_output=2,
             multi_grad_input_count=3,
-            multi_grad_src=f"""
-            // aclop
-            FlashAttentionBackwardOpRunner op;
-            op.add(in0, true);
-            op.add(in1, true);
-            op.add(in2, true);
-            op.add(dout, true);
-            op.add(in3, true);
-            op.add(in4, true);
-            op.add(in5, true);
-            op.add(in6, true);
-            op.add(pout0, true);
-            op.add(pout1, true);
-            op.add(pout2, true);
-            op.add(out0, false);
-            op.add(out1, false);
-            op.add(out2, false);
-            {grad_attr_code}
-            op.run();
-            """)
+            multi_grad_src=code_program(
+                [
+                    "\n            // aclop\n            FlashAttentionBackwardOpRunner op;\n            op.add(in0, true);\n            op.add(in1, true);\n            op.add(in2, true);\n            op.add(dout, true);\n            op.add(in3, true);\n            op.add(in4, true);\n            op.add(in5, true);\n            op.add(in6, true);\n            op.add(pout0, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
+                    grad_attr_code,
+                    "\n            op.run();\n            ",
+                ]
+            ),
+        )
         return result[2]
 
 
 class IncreFlashAttentionACL(jt.Function):
-
-    def __init__(self, headnum, key_value_headnum, scale,
-                 layout="BNSD", innerprecise=0):
+    def __init__(self, headnum, key_value_headnum, scale, layout="BNSD", innerprecise=0):
         self.headnum = headnum
         self.key_value_headnum = key_value_headnum
         self.scale = scale
@@ -166,27 +148,44 @@ class IncreFlashAttentionACL(jt.Function):
         self.innerprecise = innerprecise
 
     def execute(self, q, k, v):
-        attr_code = f"""
-        op.jt_name = "increflashattention";
-        IncreFlashAttentionAttr *attr = new IncreFlashAttentionAttr();
-        attr->scale = {self.scale};
-        attr->headNum = {self.headnum};
-        attr->keyValueHeadNum = {self.key_value_headnum};
-        attr->inputLayout = "{self.layout}";
-        attr->innerPrecise = {self.innerprecise};
-        op.op_attr.reset(attr);
-        """
+        attr_code = code_program(
+            [
+                '\n        op.jt_name = "increflashattention";\n        ',
+                attribute_program(
+                    "IncreFlashAttention",
+                    {
+                        "scale": self.scale,
+                        "headNum": self.headnum,
+                        "keyValueHeadNum": self.key_value_headnum,
+                        "inputLayout": self.layout,
+                        "innerPrecise": self.innerprecise,
+                    },
+                    variable="op",
+                ),
+                "\n        ",
+            ]
+        )
         result = flashattention_cmd(
-            "IncreFlashAttention", [q, k, v],
-            output_dtypes=[q.dtype], output_shapes=[q.shape],
-            attr_code=attr_code)
+            "IncreFlashAttention",
+            [q, k, v],
+            output_dtypes=[q.dtype],
+            output_shapes=[q.shape],
+            attr_code=attr_code,
+        )
         return result[0]
 
 
 class PagedIncreFlashAttentionACL(jt.Function):
-
-    def __init__(self, headnum, key_value_headnum, block_size, scale,
-                 actual_seq_lengths, layout="BNSD", innerprecise=0):
+    def __init__(
+        self,
+        headnum,
+        key_value_headnum,
+        block_size,
+        scale,
+        actual_seq_lengths,
+        layout="BNSD",
+        innerprecise=0,
+    ):
         self.headnum = int(headnum)
         self.key_value_headnum = int(key_value_headnum)
         self.block_size = int(block_size)
@@ -196,45 +195,50 @@ class PagedIncreFlashAttentionACL(jt.Function):
         self.innerprecise = int(innerprecise)
 
     def execute(self, q, kv_cache, block_table):
-        lengths = ", ".join(map(str, self.actual_seq_lengths))
-        attr_code = f"""
-        op.jt_name = "paged_increflashattention";
-        IncreFlashAttentionAttr *attr = new IncreFlashAttentionAttr();
-        attr->scale = {self.scale};
-        attr->headNum = {self.headnum};
-        attr->keyValueHeadNum = {self.key_value_headnum};
-        attr->inputLayout = "{self.layout}";
-        attr->innerPrecise = {self.innerprecise};
-        attr->blockSize = {self.block_size};
-        attr->hasBlockTable = true;
-        attr->actualSeqLengths = {{ {lengths} }};
-        op.op_attr.reset(attr);
-        """
+        attr_code = attribute_program(
+            "IncreFlashAttention",
+            {
+                "scale": self.scale,
+                "headNum": self.headnum,
+                "keyValueHeadNum": self.key_value_headnum,
+                "inputLayout": self.layout,
+                "innerPrecise": self.innerprecise,
+                "blockSize": self.block_size,
+                "hasBlockTable": True,
+                "actualSeqLengths": self.actual_seq_lengths,
+            },
+        )
         result = flashattention_cmd(
-            "IncreFlashAttention", [q, kv_cache, block_table],
-            output_dtypes=[q.dtype], output_shapes=[q.shape],
-            attr_code=attr_code)
+            "IncreFlashAttention",
+            [q, kv_cache, block_table],
+            output_dtypes=[q.dtype],
+            output_shapes=[q.shape],
+            attr_code=attr_code,
+        )
         return result[0]
 
 
 class KVCacheMemcpyACL(jt.Function):
-
     def __init__(self, block_size, slots):
         self.block_size = int(block_size)
         self.slots = [int(slot) for slot in slots]
 
     def execute(self, key, value, kv_cache):
         slots = ", ".join(map(str, self.slots))
-        attr_code = f"""
-        op.jt_name = "kv_cache_memcpy";
-        KVCacheMemcpyAttr *attr = new KVCacheMemcpyAttr();
-        attr->blockSize = {self.block_size};
-        attr->slots = {{ {slots} }};
-        op.op_attr.reset(attr);
-        """
+        attr_code = code_program(
+            [
+                '\n        op.jt_name = "kv_cache_memcpy";\n        ',
+                attribute_program(
+                    "KVCacheMemcpy",
+                    {"blockSize": self.block_size, "slots": list(self.slots)},
+                    variable="op",
+                ),
+                "\n        ",
+            ]
+        )
         result = flashattention_cmd(
-            "KVCacheMemcpy", [key, value], outputs=[kv_cache],
-            attr_code=attr_code)
+            "KVCacheMemcpy", [key, value], outputs=[kv_cache], attr_code=attr_code
+        )
         return result[0]
 
 
@@ -257,8 +261,8 @@ def _compressed_causal_mask():
 
 
 def scaled_dot_product_attention_acl(
-        query, key, value, attn_mask=None, dropout_p=0.0,
-        is_causal=False, scale=None, enable_gqa=False):
+    query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False
+):
     """Return fused ACL SDPA for a verified inference/training subset."""
     if not (compiler.has_acl and jt.flags.use_cuda and jt.flags.use_acl):
         return None
@@ -279,7 +283,9 @@ def scaled_dot_product_attention_acl(
         return None
     if q_shape[-1] != k_shape[-1] or q_shape[-1] != v_shape[-1]:
         return None
-    if _jittor_dtype_name(query.dtype) != _jittor_dtype_name(key.dtype) or _jittor_dtype_name(query.dtype) != _jittor_dtype_name(value.dtype):
+    if _jittor_dtype_name(query.dtype) != _jittor_dtype_name(key.dtype) or _jittor_dtype_name(
+        query.dtype
+    ) != _jittor_dtype_name(value.dtype):
         return None
     if _jittor_dtype_name(query.dtype) not in ("float32", "bfloat16"):
         return None
@@ -292,8 +298,7 @@ def scaled_dot_product_attention_acl(
     if query_heads != key_heads:
         if not enable_gqa or query_heads % key_heads != 0:
             return None
-    if training and (
-            _jittor_dtype_name(query.dtype) != "float32" or query_heads != key_heads):
+    if training and (_jittor_dtype_name(query.dtype) != "float32" or query_heads != key_heads):
         return None
     head_dim = int(q_shape[-1])
     if head_dim <= 0 or head_dim > 256 or head_dim % 8 != 0:
@@ -321,10 +326,8 @@ def scaled_dot_product_attention_acl(
             real_shift = attn_mask
         else:
             return None
-        target_shape = (
-            int(q_shape[0]), query_heads, query_length, source_length)
-        if any(actual not in (1, expected)
-               for actual, expected in zip(mask_shape, target_shape)):
+        target_shape = (int(q_shape[0]), query_heads, query_length, source_length)
+        if any(actual not in (1, expected) for actual, expected in zip(mask_shape, target_shape)):
             return None
         if mask_shape != target_shape:
             real_shift = real_shift.broadcast(target_shape)
@@ -337,19 +340,21 @@ def scaled_dot_product_attention_acl(
         if query_length > 1:
             causal_mask = _compressed_causal_mask()
             sparse_mode = 2
-    scale_factor = (1.0 / math.sqrt(head_dim) if scale is None
-                    else float(scale))
-    if (_jittor_dtype_name(query.dtype) == "bfloat16" and query_length == 1
-            and attn_mask is None and not is_causal):
-        scaled_dot_product_attention_acl.backend_name = \
-            "acl_incre_flash_attention_v4"
-        return IncreFlashAttentionACL(
-            query_heads, key_heads, scale_factor)(query, key, value)
+    scale_factor = 1.0 / math.sqrt(head_dim) if scale is None else float(scale)
+    if (
+        _jittor_dtype_name(query.dtype) == "bfloat16"
+        and query_length == 1
+        and attn_mask is None
+        and not is_causal
+    ):
+        scaled_dot_product_attention_acl.backend_name = "acl_incre_flash_attention_v4"
+        return IncreFlashAttentionACL(query_heads, key_heads, scale_factor)(query, key, value)
 
-    scaled_dot_product_attention_acl.backend_name = \
-        "acl_flash_attention_score_v2"
+    scaled_dot_product_attention_acl.backend_name = "acl_flash_attention_score_v2"
     return FlashAttentionACL(
-        query_heads, "BNSD", scale=scale_factor,
+        query_heads,
+        "BNSD",
+        scale=scale_factor,
         sparsemode=sparse_mode,
         psetype=0 if real_shift is not None else 1,
     )(query, key, value, real_shift, None, None, causal_mask)

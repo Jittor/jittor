@@ -7,12 +7,11 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include <dnnl.hpp>
+#include "onednn_runtime.h"
 
 #include "core/var.h"
 #include "mkl_matmul_op.h"
 
-using namespace dnnl;
 using namespace std;
 
 namespace jittor {
@@ -22,16 +21,16 @@ namespace jittor {
 MklMatmulOp::MklMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
     // TODO: support int8 * int8
-    ASSERT(a->dtype().is_float() && b->dtype().is_float())
+    USER_CHECK(a->dtype().is_float() && b->dtype().is_float())
         << "mkl matmul requires floating-point inputs, but got a:" << a->dtype() << "b:" << b->dtype();
     // TODO: support diffrent input type
-    ASSERT(a->dtype().dsize() == 4 && b->dtype().dsize() == 4) << "support float32 only now.";
+    USER_CHECK(a->dtype().dsize() == 4 && b->dtype().dsize() == 4) << "support float32 only now.";
     c = create_output(nullptr, a->dtype());
 }
 
 void MklMatmulOp::infer_shape() {
-    ASSERTop(a->shape.size(),==,2);
-    ASSERTop(b->shape.size(),==,2);
+    USER_CHECKop(a->shape.size(),==,2);
+    USER_CHECKop(b->shape.size(),==,2);
     int n = a->shape[0], m = a->shape[1];
     int m_ = b->shape[0], k = b->shape[1];
     if (trans_a) {
@@ -40,7 +39,7 @@ void MklMatmulOp::infer_shape() {
     if (trans_b) {
         swap(m_, k);
     }
-    ASSERTop(m,==,m_);
+    USER_CHECKop(m,==,m_);
     c->set_shape({n, k});
 }
 
@@ -66,11 +65,8 @@ void MklMatmulOp::jit_run() {
     if ('@Trans_b'=='T') {
         k = bs[0];
     }
-    // a: [n,m], b: [m,k], c: [n,k]
-    ASSERTop(0,==,dnnl_sgemm('@Trans_a', '@Trans_b', n, k, m,
-        1.f, a->ptr<T>(), '@Trans_a'=='N'? m : n,
-        b->ptr<T>(), '@Trans_b' == 'N' ? k : m,
-        0.f, c->ptr<T>(), k));
+    onednn_matmul_execute(1, n, m, k, '@Trans_a'=='T', '@Trans_b'=='T',
+                           a->mem_ptr, b->mem_ptr, c->mem_ptr);
 }
 #endif
 #endif // JIT

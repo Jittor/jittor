@@ -1,3 +1,5 @@
+from ._code import code_with_attributes
+from ._attributes import attribute_program, code_program, runner_for_alias
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import os
 from jittor_utils import env_or_try_find
@@ -17,21 +19,25 @@ from ._code import check_acl_float_dtype
 
 
 class BatchNormACL:
-
     def __init__(self, eps=1e-5, momentum=0.1, is_train=False):
         self.eps = float(eps)
         self.momentum = float(momentum)
         self.is_train = bool(is_train)
 
     def _attr_code(self, name):
-        return f"""
-        op.jt_name = "{name}";
-        BatchNormAttr *attr = new BatchNormAttr();
-        attr->is_train = {"true" if self.is_train else "false"};
-        attr->momentum = {self.momentum};
-        attr->eps = {self.eps};
-        op.op_attr.reset(attr);
-        """
+        return code_program(
+            [
+                '\n        op.jt_name = "',
+                name,
+                '";\n        ',
+                attribute_program(
+                    runner_for_alias(name),
+                    {"is_train": bool(self.is_train), "momentum": self.momentum, "eps": self.eps},
+                    variable="op",
+                ),
+                "\n        ",
+            ]
+        )
 
     def __call__(self, x, weight, bias, running_mean, running_var):
         channels = int(x.shape[1])
@@ -42,96 +48,73 @@ class BatchNormACL:
             output_shapes=[x.shape, (channels,), (channels,)],
             attr_code=self._attr_code("batchnorm"),
             multi_grad_input_count=3,
-            multi_grad_src=f"""
-            // aclop
-            BatchNormBackwardOpRunner op;
-            op.add(dout, true);
-            op.add(in0, true);
-            op.add(in1, true);
-            op.add(in3, true);
-            op.add(in4, true);
-            op.add(pout1, true);
-            op.add(pout2, true);
-            op.add(out0, false);
-            op.add(out1, false);
-            op.add(out2, false);
-            {self._attr_code("batchnormbackward")}
-            op.run();
-            """,
+            multi_grad_src=code_program(
+                [
+                    "\n            // aclop\n            BatchNormBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(in1, true);\n            op.add(in3, true);\n            op.add(in4, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
+                    self._attr_code("batchnormbackward"),
+                    "\n            op.run();\n            ",
+                ]
+            ),
         )
         return result[0]
-    
+
 
 class LayerNormACL:
-
-    def __init__(self,
-                    normalized_shape,
-                    eps: float = 1e-5,
-                    elementwise_affine: bool = True):
+    def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True):
         if isinstance(normalized_shape, int):
-            normalized_shape = (normalized_shape, )
+            normalized_shape = (normalized_shape,)
         self.normalized_shape = tuple(normalized_shape)
         self.eps = eps
         self.elementwise_affine = elementwise_affine
 
     def _attr_code(self, name):
-        return f"""
-        op.jt_name = "{name}";
-        LayerNormAttr *attr = new LayerNormAttr();
-        attr->eps = {self.eps};
-        attr->normalizedShape = {{{', '.join(map(str, self.normalized_shape))}}};
-        attr->size = {len(self.normalized_shape)};
-        op.op_attr.reset(attr);
-        """
+        return attribute_program(
+            runner_for_alias(name),
+            {
+                "eps": self.eps,
+                "normalizedShape": list(self.normalized_shape),
+            },
+        )
 
     def __call__(self, x, weight, bias):
         input_value = check_acl_float_dtype(x, "layernorm")
         # aclnnLayerNorm outputs: out (x.shape), mean & rstd (reduced over the
         # normalized dims -> same leading shape with the normalized dims = 1).
         nd = len(self.normalized_shape)
-        reduced_shape = list(x.shape[:len(x.shape) - nd]) + [1] * nd
+        reduced_shape = list(x.shape[: len(x.shape) - nd]) + [1] * nd
         result = norms_cmd(
             "LayerNorm",
             inputs=[input_value, weight, bias],
             output_dtypes=[input_value.dtype] * 3,
             output_shapes=[input_value.shape, reduced_shape, reduced_shape],
             attr_code=self._attr_code("layernorm"),
-            multi_grad_src=f"""
-            // aclop
-            LayerNormBackwardOpRunner op;
-            op.add(dout, true);
-            op.add(in0, true);
-            op.add(pout1, true);
-            op.add(pout2, true);
-            op.add(in1, true);
-            op.add(in2, true);
-            op.add(out0, false);
-            op.add(out1, false);
-            op.add(out2, false);
-            {self._attr_code("layernormbackward")}
-            op.run();
-            """,
+            multi_grad_src=code_program(
+                [
+                    "\n            // aclop\n            LayerNormBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(in1, true);\n            op.add(in2, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
+                    self._attr_code("layernormbackward"),
+                    "\n            op.run();\n            ",
+                ]
+            ),
         )
         return result[0]
 
 
 class GroupNormACL:
-
     def __init__(self, num_groups, eps):
         self.num_groups = int(num_groups)
         self.eps = float(eps)
 
-    def _attr_code(self):
-        return f'''
-        op.jt_name = "groupnorm";
-        GroupNormAttr *attr = new GroupNormAttr();
-        attr->batch = {self.batch};
-        attr->channels = {self.channels};
-        attr->spatialSize = {self.spatial_size};
-        attr->groups = {self.num_groups};
-        attr->eps = {self.eps};
-        op.op_attr.reset(attr);
-        '''
+    def _attr_code(self, name="GroupNorm"):
+        return attribute_program(
+            name,
+            {
+                "batch": self.batch,
+                "channels": self.channels,
+                "spatialSize": self.spatial_size,
+                "groups": self.num_groups,
+                "eps": self.eps,
+            },
+        )
 
     def __call__(self, x, weight, bias):
         self.batch = int(x.shape[0])
@@ -149,26 +132,18 @@ class GroupNormACL:
                 (self.batch, self.num_groups),
             ],
             attr_code=self._attr_code(),
-            multi_grad_src=f'''
-            // aclop
-            GroupNormBackwardOpRunner op;
-            op.add(dout, true);
-            op.add(in0, true);
-            op.add(pout1, true);
-            op.add(pout2, true);
-            op.add(in1, true);
-            op.add(out0, false);
-            op.add(out1, false);
-            op.add(out2, false);
-            {self._attr_code()}
-            op.run();
-            ''',
+            multi_grad_src=code_program(
+                [
+                    "\n            // aclop\n            GroupNormBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(in1, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
+                    self._attr_code("GroupNormBackward"),
+                    "\n            op.run();\n            ",
+                ]
+            ),
         )
         return result[0]
 
 
 class RmsNormACL(jt.Function):
-
     def execute(self, x, weight, eps):
         self.input = x
         self.weight = weight
@@ -177,15 +152,14 @@ class RmsNormACL(jt.Function):
             jt.empty(x.shape, x.dtype),
             jt.empty(reduced_shape, "float32"),
         ]
-        attr_code = f"""
-        op.jt_name = "rmsnorm";
-        RmsNormAttr *attr = new RmsNormAttr();
-        attr->eps = {eps};
-        op.op_attr.reset(attr);
-        """
-        result = norms_cmd(
-            "RmsNorm", inputs=[x, weight], outputs=outputs,
-            attr_code=attr_code)
+        attr_code = code_program(
+            [
+                '\n        op.jt_name = "rmsnorm";\n        ',
+                attribute_program("RmsNorm", {"eps": eps}, variable="op"),
+                "\n        ",
+            ]
+        )
+        result = norms_cmd("RmsNorm", inputs=[x, weight], outputs=outputs, attr_code=attr_code)
         self.rstd = result[1]
         return result[0]
 
@@ -207,7 +181,6 @@ class RmsNormACL(jt.Function):
 
 
 class GroupedAddRmsNormACL:
-
     def __call__(self, x, residual, weight, eps):
         reduced_shape = list(x.shape[:-1]) + [1]
         outputs = [
@@ -215,41 +188,26 @@ class GroupedAddRmsNormACL:
             jt.empty(x.shape, x.dtype),
             jt.empty(reduced_shape, "float32"),
         ]
-        result = jt.code(
+        result = code_with_attributes(
             backend="acl",
             outputs=outputs,
             inputs=[x, residual, weight],
-            cuda_header='''
+            cuda_header="""
 namespace jittor {}
 #include "aclops/aclops.h"
-''',
-            cuda_src=f'''
-// aclop
-BinaryOpRunner add_op;
-add_op.name = "Add";
-add_op.add(in0, true);
-add_op.add(in1, true);
-add_op.add(out1, false);
-add_op.jt_name = "grouped_add_rms_norm";
-add_op.run();
-
-RmsNormOpRunner norm_op;
-norm_op.add(out1, true);
-norm_op.add(in2, true);
-norm_op.add(out0, false);
-norm_op.add(out2, false);
-norm_op.jt_name = "grouped_add_rms_norm";
-auto *norm_attr = new RmsNormAttr();
-norm_attr->eps = {eps};
-norm_op.op_attr.reset(norm_attr);
-norm_op.run();
-''',
+""",
+            cuda_src=code_program(
+                [
+                    '\n// aclop\nBinaryOpRunner add_op;\nadd_op.name = "Add";\nadd_op.add(in0, true);\nadd_op.add(in1, true);\nadd_op.add(out1, false);\nadd_op.jt_name = "grouped_add_rms_norm";\nadd_op.run();\n\nRmsNormOpRunner norm_op;\nnorm_op.add(out1, true);\nnorm_op.add(in2, true);\nnorm_op.add(out0, false);\nnorm_op.add(out2, false);\nnorm_op.jt_name = "grouped_add_rms_norm";\n',
+                    attribute_program("RmsNorm", {"eps": eps}, variable="norm_op"),
+                    "\nnorm_op.run();\n",
+                ]
+            ),
         )
         return result[0], result[1]
 
 
 class GroupedBFloat16RmsNormACL:
-
     def __call__(self, x, unit_weight, weight, eps):
         reduced_shape = list(x.shape[:-1]) + [1]
         outputs = [
@@ -257,44 +215,27 @@ class GroupedBFloat16RmsNormACL:
             jt.empty(x.shape, x.dtype),
             jt.empty(reduced_shape, "float32"),
         ]
-        result = jt.code(
+        result = code_with_attributes(
             backend="acl",
             outputs=outputs,
             inputs=[x, unit_weight, weight],
-            cuda_header='''
+            cuda_header="""
 namespace jittor {}
 #include "aclops/aclops.h"
-''',
-            cuda_src=f'''
-// aclop
-RmsNormOpRunner norm_op;
-norm_op.add(in0, true);
-norm_op.add(in1, true);
-norm_op.add(out1, false);
-norm_op.add(out2, false);
-norm_op.jt_name = "grouped_bfloat16_rms_norm";
-auto *norm_attr = new RmsNormAttr();
-norm_attr->eps = {eps};
-norm_op.op_attr.reset(norm_attr);
-norm_op.run();
-
-BinaryOpRunner multiply_op;
-multiply_op.name = "Mul";
-multiply_op.add(in2, true);
-multiply_op.add(out1, true);
-multiply_op.add(out0, false);
-multiply_op.jt_name = "grouped_bfloat16_rms_norm";
-multiply_op.run();
-''',
+""",
+            cuda_src=code_program(
+                [
+                    '\n// aclop\nRmsNormOpRunner norm_op;\nnorm_op.add(in0, true);\nnorm_op.add(in1, true);\nnorm_op.add(out1, false);\nnorm_op.add(out2, false);\nnorm_op.jt_name = "grouped_bfloat16_rms_norm";\n',
+                    attribute_program("RmsNorm", {"eps": eps}, variable="norm_op"),
+                    '\nnorm_op.run();\n\nBinaryOpRunner multiply_op;\nmultiply_op.name = "Mul";\nmultiply_op.add(in2, true);\nmultiply_op.add(out1, true);\nmultiply_op.add(out0, false);\nmultiply_op.jt_name = "grouped_bfloat16_rms_norm";\nmultiply_op.run();\n',
+                ]
+            ),
         )
         return result[0]
 
 
 class GroupedDualBFloat16RmsNormACL:
-
-    def __call__(
-            self, first, second, first_unit, second_unit,
-            first_weight, second_weight, eps):
+    def __call__(self, first, second, first_unit, second_unit, first_weight, second_weight, eps):
         first_rstd_shape = list(first.shape[:-1]) + [1]
         second_rstd_shape = list(second.shape[:-1]) + [1]
         outputs = [
@@ -305,56 +246,29 @@ class GroupedDualBFloat16RmsNormACL:
             jt.empty(first_rstd_shape, "float32"),
             jt.empty(second_rstd_shape, "float32"),
         ]
-        result = jt.code(
+        result = code_with_attributes(
             backend="acl",
             outputs=outputs,
             inputs=[
-                first, second, first_unit, second_unit,
-                first_weight, second_weight,
+                first,
+                second,
+                first_unit,
+                second_unit,
+                first_weight,
+                second_weight,
             ],
-            cuda_header='''
+            cuda_header="""
 namespace jittor {}
 #include "aclops/aclops.h"
-''',
-            cuda_src=f'''
-// aclop
-RmsNormOpRunner first_norm;
-first_norm.add(in0, true);
-first_norm.add(in2, true);
-first_norm.add(out2, false);
-first_norm.add(out4, false);
-first_norm.jt_name = "grouped_dual_bfloat16_rms_norm";
-auto *first_attr = new RmsNormAttr();
-first_attr->eps = {eps};
-first_norm.op_attr.reset(first_attr);
-first_norm.run();
-
-BinaryOpRunner first_multiply;
-first_multiply.name = "Mul";
-first_multiply.add(in4, true);
-first_multiply.add(out2, true);
-first_multiply.add(out0, false);
-first_multiply.jt_name = "grouped_dual_bfloat16_rms_norm";
-first_multiply.run();
-
-RmsNormOpRunner second_norm;
-second_norm.add(in1, true);
-second_norm.add(in3, true);
-second_norm.add(out3, false);
-second_norm.add(out5, false);
-second_norm.jt_name = "grouped_dual_bfloat16_rms_norm";
-auto *second_attr = new RmsNormAttr();
-second_attr->eps = {eps};
-second_norm.op_attr.reset(second_attr);
-second_norm.run();
-
-BinaryOpRunner second_multiply;
-second_multiply.name = "Mul";
-second_multiply.add(in5, true);
-second_multiply.add(out3, true);
-second_multiply.add(out1, false);
-second_multiply.jt_name = "grouped_dual_bfloat16_rms_norm";
-second_multiply.run();
-''',
+""",
+            cuda_src=code_program(
+                [
+                    '\n// aclop\nRmsNormOpRunner first_norm;\nfirst_norm.add(in0, true);\nfirst_norm.add(in2, true);\nfirst_norm.add(out2, false);\nfirst_norm.add(out4, false);\nfirst_norm.jt_name = "grouped_dual_bfloat16_rms_norm";\n',
+                    attribute_program("RmsNorm", {"eps": eps}, variable="first_norm"),
+                    '\nfirst_norm.run();\n\nBinaryOpRunner first_multiply;\nfirst_multiply.name = "Mul";\nfirst_multiply.add(in4, true);\nfirst_multiply.add(out2, true);\nfirst_multiply.add(out0, false);\nfirst_multiply.jt_name = "grouped_dual_bfloat16_rms_norm";\nfirst_multiply.run();\n\nRmsNormOpRunner second_norm;\nsecond_norm.add(in1, true);\nsecond_norm.add(in3, true);\nsecond_norm.add(out3, false);\nsecond_norm.add(out5, false);\nsecond_norm.jt_name = "grouped_dual_bfloat16_rms_norm";\n',
+                    attribute_program("RmsNorm", {"eps": eps}, variable="second_norm"),
+                    '\nsecond_norm.run();\n\nBinaryOpRunner second_multiply;\nsecond_multiply.name = "Mul";\nsecond_multiply.add(in5, true);\nsecond_multiply.add(out3, true);\nsecond_multiply.add(out1, false);\nsecond_multiply.jt_name = "grouped_dual_bfloat16_rms_norm";\nsecond_multiply.run();\n',
+                ]
+            ),
         )
         return result[0], result[1]

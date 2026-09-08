@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 from collections import OrderedDict, defaultdict
+from numbers import Integral, Real
 
 
 SCHEMA_VERSION = 1
@@ -27,11 +28,11 @@ class AclDataInternalError(RuntimeError):
 
 
 def _is_int(value):
-    return isinstance(value, int) and not isinstance(value, bool)
+    return isinstance(value, Integral) and not isinstance(value, bool)
 
 
 def _is_finite(value):
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
+    if not isinstance(value, Real) or isinstance(value, bool):
         return False
     try:
         return math.isfinite(value)
@@ -43,7 +44,7 @@ def _validate_value(type_tag, value, field_name):
     if not isinstance(type_tag, str) or type_tag not in _TYPES:
         raise AclDataInternalError("unknown ACL data type for {}: {}".format(field_name, type_tag))
     if type_tag == "int64":
-        valid = _is_int(value) and -(1 << 63) <= value < (1 << 63)
+        valid = _is_int(value) and -(1 << 63) <= int(value) < (1 << 63)
     elif type_tag == "float64":
         valid = _is_finite(value)
     elif type_tag == "bool":
@@ -55,10 +56,18 @@ def _validate_value(type_tag, value, field_name):
             scalar_type = type_tag[:-2]
             valid = all(_validate_value(scalar_type, item, field_name) is None for item in value)
     if not valid:
-        raise AclDataUserError(
-            "ACL data field {!r} does not match {}".format(field_name, type_tag)
-        )
+        raise AclDataUserError("ACL data field {!r} does not match {}".format(field_name, type_tag))
     return None
+
+
+def _plain_value(type_tag, value):
+    if type_tag in _VECTOR_TYPES:
+        return [_plain_value(type_tag[:-2], item) for item in value]
+    if type_tag == "int64":
+        return int(value)
+    if type_tag == "float64":
+        return float(value)
+    return bool(value)
 
 
 def _schema_entry(entry, field_name):
@@ -75,7 +84,9 @@ def _schema_entry(entry, field_name):
             raise AclDataInternalError("invalid ACL schema default for " + field_name) from error
     required = bool(entry.get("required", not has_default))
     if required and has_default:
-        raise AclDataInternalError("ACL schema field cannot be both required and defaulted: " + field_name)
+        raise AclDataInternalError(
+            "ACL schema field cannot be both required and defaulted: " + field_name
+        )
     return type_tag, required, has_default
 
 
@@ -100,6 +111,7 @@ def canonical_cache_key(record):
         type_tag = entry["type"]
         value = entry.get("value", entry.get("default"))
         _validate_value(type_tag, value, name)
+        value = _plain_value(type_tag, value)
         if isinstance(value, (list, tuple)):
             value = tuple(value)
         normalized.append((name, type_tag, value))
@@ -162,6 +174,7 @@ def validate_acl_data(record, *, expected_op=None, schema=None):
         if value is None:
             raise AclDataUserError("ACL data field {!r} has no value".format(name))
         _validate_value(type_tag, value, name)
+        value = _plain_value(type_tag, value)
         normalized_fields[name] = {
             "type": type_tag,
             "value": list(value) if isinstance(value, tuple) else value,
@@ -176,8 +189,10 @@ def validate_acl_data(record, *, expected_op=None, schema=None):
     return normalized
 
 
-_WIRE_TYPES = {name: index for index, name in enumerate(
-    ("int64", "float64", "bool", "int64[]", "float64[]", "bool[]"))}
+_WIRE_TYPES = {
+    name: index
+    for index, name in enumerate(("int64", "float64", "bool", "int64[]", "float64[]", "bool[]"))
+}
 
 
 def _wire_name(value):
@@ -190,7 +205,7 @@ def _wire_name(value):
 def _encode_scalar(output, key, type_tag, value):
     if type_tag == "int64":
         bits = value & ((1 << 64) - 1)
-        output[key + "lo"] = float(bits & 0xffffffff)
+        output[key + "lo"] = float(bits & 0xFFFFFFFF)
         output[key + "hi"] = float(bits >> 32)
     else:
         output[key + "value"] = float(value)
@@ -206,7 +221,7 @@ def encode_code_data(record, *, expected_op=None, schema=None, prefix="acl_attr.
         raise AclDataInternalError("ACL code-data prefix must be a non-empty string")
     normalized = validate_acl_data(record, expected_op=expected_op, schema=schema)
     fields = normalized["fields"]
-    if len(fields) > 0xffffffff:
+    if len(fields) > 0xFFFFFFFF:
         raise AclDataUserError("too many ACL code-data fields")
     output = {
         prefix + "version": float(SCHEMA_VERSION),
@@ -218,7 +233,7 @@ def encode_code_data(record, *, expected_op=None, schema=None, prefix="acl_attr.
         type_tag, value = entry["type"], entry["value"]
         output[key + "name." + _wire_name(name)] = float(_WIRE_TYPES[type_tag])
         if type_tag in _VECTOR_TYPES:
-            if len(value) > 0xffffffff:
+            if len(value) > 0xFFFFFFFF:
                 raise AclDataUserError("ACL code-data vector is too long")
             output[key + "length"] = float(len(value))
             for item_index, item in enumerate(value):
@@ -294,14 +309,22 @@ def _validate_descriptor_key(key):
     version, attribute_key, shape, dtype, layout, device = key
     if version != SCHEMA_VERSION or not isinstance(attribute_key, tuple):
         raise AclDataInternalError("ACL descriptor cache requires a canonical descriptor key")
-    if (len(attribute_key) != 3 or attribute_key[0] != SCHEMA_VERSION or
-            not isinstance(attribute_key[1], str) or not attribute_key[1] or
-            not isinstance(attribute_key[2], tuple)):
+    if (
+        len(attribute_key) != 3
+        or attribute_key[0] != SCHEMA_VERSION
+        or not isinstance(attribute_key[1], str)
+        or not attribute_key[1]
+        or not isinstance(attribute_key[2], tuple)
+    ):
         raise AclDataInternalError("ACL descriptor cache requires a canonical descriptor key")
     for field in attribute_key[2]:
-        if (not isinstance(field, tuple) or len(field) != 3 or
-                not isinstance(field[0], str) or not field[0] or
-                field[1] not in _TYPES):
+        if (
+            not isinstance(field, tuple)
+            or len(field) != 3
+            or not isinstance(field[0], str)
+            or not field[0]
+            or field[1] not in _TYPES
+        ):
             raise AclDataInternalError("ACL descriptor cache requires a canonical descriptor key")
         try:
             _validate_value(field[1], field[2], field[0])
@@ -429,7 +452,8 @@ class DescriptorCache:
         if not isinstance(device, str) or not device:
             raise AclDataInternalError("ACL descriptor device must be a non-empty string")
         return sum(
-            1 for key in self._entries
+            1
+            for key in self._entries
             if isinstance(key, tuple) and len(key) == 6 and key[-1] == device
         )
 

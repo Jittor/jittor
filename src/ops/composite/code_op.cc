@@ -183,11 +183,15 @@ void CodeOp::grads(Var** douts, VarPtr* dins) {
         dtypes.push_back(input->dtype());
     }
     auto alias = new_alias.str();
+    DataMap gradient_data(data);
+    gradient_data.erase("multi_grad");
+    gradient_data.erase("multi_grad_output");
+    gradient_data.erase("multi_grad_input_count");
     auto outputs = make_code_multi(
         move(shapes), move(dtypes), move(inputs),
         move(cpu_src), {}, alias+cpu_header,
         move(cuda_src), {}, alias+cuda_header,
-        {}, string(backend)
+        move(gradient_data), string(backend)
     );
     CHECKop(outputs.size(),==,input_count);
     for (int i=0; i<outputs.size(); i++)

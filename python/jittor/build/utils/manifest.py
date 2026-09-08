@@ -35,28 +35,15 @@ def _asset(key, filename, sha256, md5, url=None, plat="any"):
                  sha256, md5, plat)
 
 
-#: MKL / oneDNN, one archive per platform.
+#: one portable upstream v3 source archive; built for the requested host.
+ONEDNN_VERSION = "3.9.1"
 MKL = {
-    "linux-x86_64": _asset(
-        "mkl", "dnnl_lnx_2.2.0_cpu_gomp.tgz",
-        "06d45ebf9cde5d3dd815c9ec3ad74cd10f0f49294c04cda87fe80bd99ad67dee",
-        "35bbbdf550a9d8ad54db798e372000f6", plat="linux-x86_64"),
-    "linux-aarch64": _asset(
-        "mkl", "dnnl_lnx_2.2.0_cpu_gomp_aarch64.tgz",
-        "991835c5d89ea64905c0234bdd962f242d7c3ddfff2659ee1335d7bd0ae7e1f6",
-        "72cf9b0b8fd6c3c786d35a9daaee22b8", plat="linux-aarch64"),
-    "windows": _asset(
-        "mkl", "dnnl_win_2.2.0_cpu_vcomp.zip",
-        "ab271a1d3d59506ac9dd50b51f86736b78bf52429a98ecffca46aedd42379bce",
-        "fa12c693b2ec07700d174e1e99d60a7e", plat="windows"),
-    "darwin-arm64": _asset(
-        "mkl", "dnnl_mac_2.2.0_cpu_omp_arm64.tgz",
-        "d47f2588e7e40121dd1644c63e85a3a402fdd4a8d34f35fee2e981c3c3451c15",
-        "d8fdf56d3cf618685d22d18f08119f88", plat="darwin-arm64"),
-    "darwin-x86_64": _asset(
-        "mkl", "dnnl_mac_2.2.0_cpu_omp_x86_64.tgz",
-        "8e4d79ae064ccd48eb3484a70aff5c420e730953b58f94b106bf033c89c5654c",
-        "6e2f065d6a589c82081536b684768fe6", plat="darwin-x86_64"),
+    host: _asset(
+        "mkl", "oneDNN-v" + ONEDNN_VERSION + ".tar.gz",
+        "fa44702f5979ed5ab927f7ccc1d2947adb4e6d0e58c433149465c5fc71e3bd45", "",
+        url="https://codeload.github.com/uxlfoundation/oneDNN/tar.gz/refs/tags/v" + ONEDNN_VERSION,
+        plat=host)
+    for host in ("linux-x86_64", "linux-aarch64", "windows", "darwin-arm64", "darwin-x86_64")
 }
 
 CUB = _asset(

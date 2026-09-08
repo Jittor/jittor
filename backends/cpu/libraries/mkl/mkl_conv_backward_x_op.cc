@@ -13,18 +13,15 @@
 #include "core/var.h"
 #include "mkl_conv_backward_x_op.h"
 
-#include <dnnl.hpp>
+#include "onednn_runtime.h"
 
-using namespace dnnl;
 using namespace std;
 
 namespace jittor {
 static inline int findc(const string& format, const char& c) {
-    if (c==format[0]) return 0;
-    if (c==format[1]) return 1;
-    if (c==format[2]) return 2;
-    ASSERT(c==format[3]) << "Not a valid format" << format << c;
-    return 3;
+    auto position = format.find(c);
+    USER_CHECK(format.size() == 4 && position != string::npos) << "Not a valid format" << format;
+    return int(position);
 }
 
 #ifndef JIT
@@ -49,15 +46,24 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
 MklConvBackwardXOp::MklConvBackwardXOp(Var* w, Var* dy, int height, int width, int strideh, int stridew, int paddingh, int paddingw, int dilationh, int dilationw, int groups, string xformat, string wformat, string yformat) 
         : w(w), dy(dy), xh(height), xw(width), strideh(strideh), stridew(stridew), paddingh(paddingh), paddingw(paddingw), dilationh(dilationh), dilationw(dilationw), groups(groups),
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
+    check_onednn_conv_args(w, dy, strideh, stridew, paddingh, paddingw,
+                          dilationh, dilationw, groups, this->xformat, this->wformat, this->yformat);
+    USER_CHECK(height > 0 && width > 0) << "oneDNN backward input requires positive height/width";
     dx = create_output(nullptr, dtype_infer(dy->ns, w->ns));
 }
 
 void MklConvBackwardXOp::infer_shape() {
-    ASSERTop(w->shape.size(),==,4);
-    ASSERTop(dy->shape.size(),==,4);
+    USER_CHECKop(w->shape.size(),==,4);
+    USER_CHECKop(dy->shape.size(),==,4);
     int xn, xc, wh, ww, wci, wco, yn, yc, yh, yw;
     get_shape(w, "oihw", wformat, wco, wci, wh, ww);
     get_shape(dy, "abcd", yformat, yn, yc, yh, yw);
+    USER_CHECK(wco == yc && wco % groups == 0 && wh > 0 && ww > 0)
+        << "oneDNN backward input invalid channels or kernel shape";
+    USER_CHECK(xh+paddingh*2 >= (wh-1)*dilationh+1 && xw+paddingw*2 >= (ww-1)*dilationw+1
+        && yh == (xh+paddingh*2-(wh-1)*dilationh-1)/strideh+1
+        && yw == (xw+paddingw*2-(ww-1)*dilationw-1)/stridew+1)
+        << "oneDNN backward input gradient shape does not match convolution";
     xn = yn, xc = wci * groups;
     set_shape(dx, "abcd", xformat, xn, xc, xh, xw);
 }
@@ -91,127 +97,9 @@ void MklConvBackwardXOp::jit_prepare(JK& jk) {
 #else // JIT
 #ifdef JIT_cpu
 void MklConvBackwardXOp::jit_run() {
-    int batch = dx->shape[findc("@XFORMAT",'a')];
-    int ch_in = dx->shape[findc("@XFORMAT",'b')];
-    int height = dx->shape[findc("@XFORMAT",'c')];
-    int width = dx->shape[findc("@XFORMAT",'d')];
-    int ch_out = w->shape[findc("@WFORMAT",'o')];
-    int kernel_sizeh = w->shape[findc("@WFORMAT",'h')];
-    int kernel_sizew = w->shape[findc("@WFORMAT",'w')];
-    
-    auto* __restrict__ conv_weights = w->ptr<Twd>();
-    auto* __restrict__ net_diff_dst = dy->ptr<Tyd>();
-    auto* __restrict__ conv_user_diff_src_buffer = dx->ptr<Txd>();
-    
-    using tag = memory::format_tag;
-    using dt = memory::data_type;
-
-    auto eng = engine(engine::kind::cpu, 0);
-    stream s(eng);
-
-    std::vector<primitive> net_bwd;
-    std::vector<std::unordered_map<int, memory>> net_bwd_args;
-    
-    memory::dims conv_src_tz = {batch, ch_in, height, width};
-    memory::dims conv_weights_tz = groups>1
-        ? memory::dims{groups, ch_out/groups, ch_in/groups, kernel_sizeh, kernel_sizew} 
-        : memory::dims{ch_out, ch_in, kernel_sizeh, kernel_sizew};
-    memory::dims conv_dst_tz = {batch, ch_out, (height+paddingh*2-kernel_sizeh*dilationh+dilationh-1)/strideh+1, (width+paddingw*2-kernel_sizew*dilationw+dilationw-1)/stridew+1};
-    memory::dims conv_strides = {strideh, stridew};
-    memory::dims conv_padding = {paddingh, paddingw};
-    memory::dims conv_dilation = {dilationh-1, dilationw-1};
-
-    if (groups>1) ASSERT(tag::@WFORMAT == tag::oihw);
-
-    auto conv_user_weights_memory
-            = memory({{conv_weights_tz}, dt::@Tw, groups>1 ? tag::goihw : tag::@WFORMAT}, eng, conv_weights);
-
-    auto conv_src_md = memory::desc({conv_src_tz}, dt::@Tx, tag::any);
-    auto conv_weights_md = memory::desc({conv_weights_tz}, dt::@Tw, tag::any);
-    auto conv_dst_md = memory::desc({conv_dst_tz}, dt::@Ty, tag::any);
-
-    // `convolution_auto` to match what the forward operator actually uses
-    // (`mkl_conv_op.cc`). This pd exists only as the backward pd's hint, so it
-    // has to describe the same primitive the forward pass ran: with
-    // `convolution_direct` here and `convolution_auto` there, oneDNN could
-    // choose a different implementation -- and therefore different src and
-    // weights layouts -- for the hint than for the forward, so the layouts the
-    // backward assumed were not the ones it was handed. `prop_kind::forward`
-    // is already forward_training, which the forward operator now matches.
-    auto conv_desc = convolution_forward::desc(prop_kind::forward_training,
-            algorithm::convolution_auto, conv_src_md, conv_weights_md,
-            conv_dst_md, conv_strides, conv_dilation, conv_padding,
-            conv_padding);
-    auto conv_pd = convolution_forward::primitive_desc(conv_desc, eng);
-
-    auto conv_weights_memory = conv_user_weights_memory;
-    if (conv_pd.weights_desc() != conv_user_weights_memory.get_desc()) {
-        conv_weights_memory = memory(conv_pd.weights_desc(), eng);
-        net_bwd.push_back(
-                reorder(conv_user_weights_memory, conv_weights_memory));
-        net_bwd_args.push_back({{DNNL_ARG_FROM, conv_user_weights_memory},
-                {DNNL_ARG_TO, conv_weights_memory}});
-    }
-    
-    auto conv_user_diff_dst_memory
-            = memory({{conv_dst_tz}, dt::@Ty, tag::@YFORMAT}, eng, net_diff_dst);
-
-    auto conv_user_diff_src_memory
-            = memory({{conv_src_tz}, dt::@Tx, tag::@XFORMAT}, eng, conv_user_diff_src_buffer);
-            
-    auto conv_bwd_weights_md
-            = memory::desc({conv_weights_tz}, dt::@Tw, tag::any);
-    auto conv_diff_src_md = memory::desc({conv_src_tz}, dt::@Tx, tag::any);
-    auto conv_diff_dst_md = memory::desc({conv_dst_tz}, dt::@Ty, tag::any); 
-
-    auto conv_bwd_data_desc
-            = convolution_backward_data::desc(algorithm::convolution_direct,
-                    conv_diff_src_md, conv_bwd_weights_md, conv_diff_dst_md, conv_strides, conv_dilation, conv_padding, conv_padding);
-    auto conv_bwd_data_pd = convolution_backward_data::primitive_desc(
-            conv_bwd_data_desc, eng, conv_pd);
-
-    auto conv_diff_dst_memory = conv_user_diff_dst_memory;
-    if (conv_bwd_data_pd.diff_dst_desc()
-            != conv_user_diff_dst_memory.get_desc()) {
-        conv_diff_dst_memory = memory(conv_bwd_data_pd.diff_dst_desc(), eng);
-        net_bwd.push_back(reorder(conv_user_diff_dst_memory, conv_diff_dst_memory));
-        net_bwd_args.push_back({{DNNL_ARG_FROM, conv_user_diff_dst_memory},
-                {DNNL_ARG_TO, conv_diff_dst_memory}});
-    }
-
-    auto conv_bwd_weights_memory = conv_weights_memory;
-    if (conv_bwd_data_pd.weights_desc() != conv_weights_memory.get_desc()) {
-        conv_bwd_weights_memory = memory(conv_bwd_data_pd.weights_desc(), eng);
-        net_bwd.push_back(reorder(conv_weights_memory, conv_bwd_weights_memory));
-        net_bwd_args.push_back({{DNNL_ARG_FROM, conv_weights_memory},
-                {DNNL_ARG_TO, conv_bwd_weights_memory}});
-    }
-
-    net_bwd.push_back(convolution_backward_data(conv_bwd_data_pd));
-    net_bwd_args.push_back({{DNNL_ARG_WEIGHTS, conv_bwd_weights_memory},
-        {DNNL_ARG_DIFF_DST, conv_diff_dst_memory}});
-            
-    auto conv_diff_src_memory = conv_user_diff_src_memory;
-    if (conv_bwd_data_pd.diff_src_desc()
-            != conv_user_diff_src_memory.get_desc()) {
-        conv_diff_src_memory
-                = memory(conv_bwd_data_pd.diff_src_desc(), eng);
-        net_bwd_args.back().insert(
-                {DNNL_ARG_DIFF_SRC, conv_diff_src_memory});
-                
-        net_bwd.push_back(reorder(
-                conv_diff_src_memory, conv_user_diff_src_memory));
-        net_bwd_args.push_back({{DNNL_ARG_FROM, conv_diff_src_memory},
-                {DNNL_ARG_TO, conv_user_diff_src_memory}});
-    } else {
-        net_bwd_args.back().insert(
-                {DNNL_ARG_DIFF_SRC, conv_diff_src_memory});
-    }
-
-    ASSERTop(net_bwd.size(),==,net_bwd_args.size());
-
-    for (size_t i = 0; i < net_bwd.size(); ++i)
-        net_bwd.at(i).execute(s, net_bwd_args.at(i));
+    auto spec = onednn_conv_spec(1, dx, w, dy, strideh, stridew,
+        paddingh, paddingw, dilationh, dilationw, groups, xformat, wformat, yformat);
+    onednn_conv_execute(spec, dx->mem_ptr, w->mem_ptr, dy->mem_ptr);
 }
 #endif
 #endif // JIT

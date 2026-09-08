@@ -1,3 +1,5 @@
+from ._code import code_with_attributes
+from ._attributes import attribute_program, code_program, runner_for_alias
 import os
 from jittor_utils import env_or_try_find
 import jittor_utils
@@ -16,7 +18,6 @@ from ._code import acl_code as transpose_cmd
 
 
 class TransPoseACL:
-
     def __call__(self, x, *dim):
         return self.execute(x, *dim)
 
@@ -38,27 +39,29 @@ class TransPoseACL:
         for index, axis in enumerate(dim):
             inverse_dim[axis] = index
 
-        attr_code = f"""
-        op.jt_name = "transpose";
-        ReduceAttr *attr = new ReduceAttr();
-        attr->axes = {{ {", ".join(map(str, dim))} }};
-        op.op_attr.reset(attr);
-        """
+        attr_code = code_program(
+            [
+                '\n        op.jt_name = "transpose";\n        ',
+                attribute_program("Transpose", {"axes": list(dim)}, variable="op"),
+                "\n        ",
+            ]
+        )
         # calculate output shape
         output_shape = [x.shape[i] for i in dim]
-        output = transpose_cmd("Transpose", [x],
-                               output_dtypes=[x.dtype],
-                               output_shapes=[output_shape],
-                               attr_code=attr_code,
-                               cuda_grad_src=[f"""
-// aclop
-TransposeOpRunner op;
-op.add(dout, true);
-op.add(out0, false);
-op.jt_name = "transpose";
-ReduceAttr *attr = new ReduceAttr();
-attr->axes = {{ {", ".join(map(str, inverse_dim))} }};
-op.op_attr.reset(attr);
-op.run();
-"""])[0]
+        output = transpose_cmd(
+            "Transpose",
+            [x],
+            output_dtypes=[x.dtype],
+            output_shapes=[output_shape],
+            attr_code=attr_code,
+            cuda_grad_src=[
+                code_program(
+                    [
+                        '\n// aclop\nTransposeOpRunner op;\nop.add(dout, true);\nop.add(out0, false);\nop.jt_name = "transpose";\n',
+                        attribute_program("Transpose", {"axes": list(inverse_dim)}, variable="op", slot="transpose_backward"),
+                        "\nop.run();\n",
+                    ]
+                )
+            ],
+        )[0]
         return output

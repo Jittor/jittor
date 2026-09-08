@@ -25,14 +25,9 @@ bool supports_conv_backward(Var* a, Var* b, int, int, int, int, int, int, int, i
     return supports_conv_layout(a, b, groups, xformat, wformat, yformat);
 }
 
-// oneDNN itself covers f64/f16/bf16 for both matmul and convolution, but
-// Jittor's operators here do not: `mkl_matmul_op.cc` calls `dnnl_sgemm`, whose
-// signature is float-only, and the convolution operators are only exercised
-// and only asserted for f32. So the declaration says f32 -- what this code
-// does -- rather than what the library could do. Widening it is a code change
-// (a `dnnl::matmul` primitive in place of `dnnl_sgemm`), not a declaration
-// change; until then a CPU f64/f16/bf16 matmul runs as the generic reindex
-// kernel, and now says so when asked.
+// The v3 primitive/cache owner deliberately supports verified float32 only.
+// Other dtypes remain on the native generic path; widening this declaration
+// requires extending the actual descriptors and numerical coverage together.
 const vector<string> f32_only = {"float32"};
 
 RegisterOpCapability<VarPtr, Var*, Var*, bool, bool> matmul(

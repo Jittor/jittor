@@ -1,3 +1,5 @@
+from ._code import code_with_attributes
+from ._attributes import attribute_program, code_program, runner_for_alias
 import os
 from jittor_utils import env_or_try_find
 import jittor_utils
@@ -15,7 +17,6 @@ from ._code import acl_code as concat_cmd
 
 
 class ConcatACL:
-
     def __call__(self, input_tensors, dim=0):
         assert isinstance(input_tensors, (list, tuple))
         assert isinstance(dim, int)
@@ -35,41 +36,47 @@ class ConcatACL:
         for i in range(len(input_tensors)):
             if input_tensors[i].dtype != input_tensors[0].dtype:
                 raise ValueError("All input tensors must have the same dtype")
-            if input_tensors[i].shape[:dim] != input_tensors[
-                    0].shape[:dim] or input_tensors[i].shape[
-                        dim + 1:] != input_tensors[0].shape[dim + 1:]:
+            if (
+                input_tensors[i].shape[:dim] != input_tensors[0].shape[:dim]
+                or input_tensors[i].shape[dim + 1 :] != input_tensors[0].shape[dim + 1 :]
+            ):
                 raise ValueError("All input tensors must have the same shape")
-        attr_code = f"""
-        op.jt_name = "concat";
-        ConcatAttr *attr = new ConcatAttr();
-        attr->tensorNum = {len(input_tensors)};
-        attr->dim = {dim};
-        op.op_attr.reset(attr);
-        """
+        attr_code = code_program(
+            [
+                '\n        op.jt_name = "concat";\n        ',
+                attribute_program(
+                    "Concat", {"tensorNum": len(input_tensors), "dim": dim}, variable="op"
+                ),
+                "\n        ",
+            ]
+        )
         split_sizes = [tensor.shape[dim] for tensor in input_tensors]
-        grad_attr_code = f"""
-        op.jt_name = "splitwithsize";
-        auto *attr = new SplitWithSizeAttr();
-        attr->splitSize = {{ {", ".join(map(str, split_sizes))} }};
-        attr->dim = {dim};
-        op.op_attr.reset(attr);
-        """
-        grad_outputs = "\n".join(
-            f"op.add(out{i}, false);" for i in range(len(input_tensors)))
+        grad_attr_code = code_program(
+            [
+                '\n        op.jt_name = "splitwithsize";\n        ',
+                attribute_program(
+                    "SplitWithSize", {"splitSize": list(split_sizes), "dim": dim}, variable="op"
+                ),
+                "\n        ",
+            ]
+        )
+        grad_outputs = "\n".join(f"op.add(out{i}, false);" for i in range(len(input_tensors)))
         result = concat_cmd(
             "Concat",
             input_tensors,
             output_dtypes=[input_tensors[0].dtype],
             output_shapes=[self.calculate_output_shape(input_tensors, dim)],
             attr_code=attr_code,
-            multi_grad_src=f"""
-            // aclop
-            SplitWithSizeOpRunner op;
-            op.add(dout, true);
-            {grad_outputs}
-            {grad_attr_code}
-            op.run();
-            """)[0]
+            multi_grad_src=code_program(
+                [
+                    "\n            // aclop\n            SplitWithSizeOpRunner op;\n            op.add(dout, true);\n            ",
+                    grad_outputs,
+                    "\n            ",
+                    grad_attr_code,
+                    "\n            op.run();\n            ",
+                ]
+            ),
+        )[0]
         return result
 
     def calculate_output_shape(self, input_tensors, axis):
@@ -80,7 +87,6 @@ class ConcatACL:
 
 
 class SplitWithSizeACL:
-
     def __call__(self, x, split_sizes, dim=0):
         return self.execute(x, split_sizes, dim)
 
@@ -90,17 +96,21 @@ class SplitWithSizeACL:
             shape = list(x.shape)
             shape[dim] = size
             output_shapes.append(shape)
-        attr_code = f"""
-        op.jt_name = "splitwithsize";
-        auto *attr = new SplitWithSizeAttr();
-        attr->splitSize = {{ {", ".join(map(str, split_sizes))} }};
-        attr->dim = {dim};
-        op.op_attr.reset(attr);
-        """
-        return tuple(concat_cmd(
-            "SplitWithSize",
-            [x],
-            output_dtypes=[x.dtype] * len(split_sizes),
-            output_shapes=output_shapes,
-            attr_code=attr_code,
-        ))
+        attr_code = code_program(
+            [
+                '\n        op.jt_name = "splitwithsize";\n        ',
+                attribute_program(
+                    "SplitWithSize", {"splitSize": list(split_sizes), "dim": dim}, variable="op"
+                ),
+                "\n        ",
+            ]
+        )
+        return tuple(
+            concat_cmd(
+                "SplitWithSize",
+                [x],
+                output_dtypes=[x.dtype] * len(split_sizes),
+                output_shapes=output_shapes,
+                attr_code=attr_code,
+            )
+        )

@@ -1,3 +1,5 @@
+from ._code import code_with_attributes
+from ._attributes import attribute_program, code_program, runner_for_alias
 import os
 from jittor_utils import env_or_try_find
 import jittor_utils
@@ -12,49 +14,10 @@ from typing import Union
 from collections.abc import Sequence, Iterable
 
 
-def stack_cmd(name: str,
-              inputs: list,
-              output_dtypes: list = None,
-              output_shapes: list = None,
-              attr_code: str = "",
-              attr_header: str = "",
-              outputs: list = None):
-    attr_header = "\nnamespace jittor{" + attr_header + "}\n"
-
-    cuda_header = '''
-    #include "aclops/aclops.h"
-    '''
-    outputs_ = []
-    if outputs is not None:
-        outputs_ = outputs
-    else:
-        assert output_dtypes is not None
-        assert output_shapes is not None
-        assert len(output_dtypes) == len(output_shapes)
-        for i in range(len(output_shapes)):
-            outputs_.append(jt.empty(output_shapes[i], output_dtypes[i]))
-    input_code = ''
-    for i in range(len(inputs)):
-        input_code += f"op.add(in{i}, true);\n"
-
-    output_code = ''
-    for i in range(len(outputs_)):
-        output_code += f"op.add(out{i}, false);\n"
-    return jt.code(backend="acl", outputs=outputs_,
-                   inputs=inputs,
-                   cuda_header=attr_header + cuda_header,
-                   cuda_src=f"""
-   
-    // aclop
-    {name}OpRunner op;
-    {input_code}
-    {output_code}
-    {attr_code}
-    op.run();""")
+from ._code import acl_code as stack_cmd
 
 
 class StackACL(jt.Function):
-
     def __init__(self):
         super(StackACL, self).__init__()
 
@@ -70,21 +33,24 @@ class StackACL(jt.Function):
                 raise ValueError("All input tensors must have the same shape")
         self.input = input_tensors
         input_shape = list(input_tensors[0].shape)
-        output_shape = input_shape[:dim] + [len(input_tensors)
-                                            ] + input_shape[dim:]
-        attr_code = f"""
-        op.jt_name = "stack";
-        ConcatAttr *attr = new ConcatAttr();
-        attr->tensorNum = {len(input_tensors)};
-        attr->dim = {dim};
-        op.op_attr.reset(attr);
-        """
+        output_shape = input_shape[:dim] + [len(input_tensors)] + input_shape[dim:]
+        attr_code = code_program(
+            [
+                '\n        op.jt_name = "stack";\n        ',
+                attribute_program(
+                    "Stack", {"tensorNum": len(input_tensors), "dim": dim}, variable="op"
+                ),
+                "\n        ",
+            ]
+        )
         self.attr_code = attr_code
-        result = stack_cmd("Stack",
-                           input_tensors,
-                           output_dtypes=[input_tensors[0].dtype],
-                           output_shapes=[output_shape],
-                           attr_code=self.attr_code)[0]
+        result = stack_cmd(
+            "Stack",
+            input_tensors,
+            output_dtypes=[input_tensors[0].dtype],
+            output_shapes=[output_shape],
+            attr_code=self.attr_code,
+        )[0]
         return result
 
     def grad(self, grad_output):
@@ -100,16 +66,21 @@ class StackACL(jt.Function):
             dtypeVec.append(tensor.dtype)
             shapeVec.append(tensor.shape)
 
-        attr_code = f"""
-        op.jt_name = "splitwithsize";
-        auto *attr = new SplitWithSizeAttr();
-        attr->splitSize = {{ {", ".join(map(str, offset))} }};
-        attr->dim = {axis};
-        op.op_attr.reset(attr);
-        """
+        attr_code = code_program(
+            [
+                '\n        op.jt_name = "splitwithsize";\n        ',
+                attribute_program(
+                    "SplitWithSize", {"splitSize": list(offset), "dim": axis}, variable="op"
+                ),
+                "\n        ",
+            ]
+        )
 
-        result = stack_cmd("SplitWithSize", [grad_output],
-                           output_dtypes=dtypeVec,
-                           output_shapes=shapeVec,
-                           attr_code=attr_code)
+        result = stack_cmd(
+            "SplitWithSize",
+            [grad_output],
+            output_dtypes=dtypeVec,
+            output_shapes=shapeVec,
+            attr_code=attr_code,
+        )
         return result

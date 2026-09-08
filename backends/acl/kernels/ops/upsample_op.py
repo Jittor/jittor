@@ -1,25 +1,18 @@
+from ._code import code_with_attributes
+from ._attributes import attribute_program, code_program, runner_for_alias
 import jittor as jt
 
 
-def _upsample_cmd(name, inputs, output_dtype, output_shape, attr_code,
-                  cuda_grad_src=None):
-    return jt.code(
-        [output_shape],
-        [output_dtype],
+def _upsample_cmd(name, inputs, output_dtype, output_shape, attr_code, cuda_grad_src=None):
+    from ._code import acl_code
+
+    return acl_code(
+        name,
         inputs,
-        backend="acl",
-        cuda_header='''
-#include "aclops/aclops.h"
-''',
+        output_shapes=[output_shape],
+        output_dtypes=[output_dtype],
+        attr_code=attr_code,
         cuda_grad_src=cuda_grad_src or [],
-        cuda_src=f'''
-// aclop
-{name}OpRunner op;
-        op.add(in0, true);
-        op.add(out0, false);
-        {attr_code}
-        op.run();
-        ''',
     )[0]
 
 
@@ -41,23 +34,22 @@ class UpsampleNearest2dACL:
             input.dtype,
             output_shape,
             attr_code,
-            cuda_grad_src=[f'''
-// aclop
-UpsampleNearest2dBackwardOpRunner op;
-op.add(dout, true);
-op.add(out0, false);
-{attr_code}
-op.run();
-'''],
+            cuda_grad_src=[
+                code_program(
+                    [
+                        "\n// aclop\nUpsampleNearest2dBackwardOpRunner op;\nop.add(dout, true);\nop.add(out0, false);\n",
+                        self._attr_code("UpsampleNearest2dBackward"),
+                        "\nop.run();\n",
+                    ]
+                )
+            ],
         )
 
-    def _attr_code(self):
-        output_size = ", ".join(map(str, self.output_size))
-        input_size = ", ".join(map(str, self.input_shape))
-        return f'''
-        op.jt_name = "upsample_nearest2d";
-        UpsampleNearest2dAttr *attr = new UpsampleNearest2dAttr();
-        attr->outputSize = {{ {output_size} }};
-        attr->inputSize = {{ {input_size} }};
-        op.op_attr.reset(attr);
-        '''
+    def _attr_code(self, name="UpsampleNearest2d"):
+        return attribute_program(
+            name,
+            {
+                "outputSize": list(self.output_size),
+                "inputSize": list(self.input_shape),
+            },
+        )

@@ -4,15 +4,12 @@ from ._code import acl_code
 
 
 def _roll_attr(shifts, dims):
-    return f"""
-    op.jt_name = "roll";
-    op.shifts = {{{', '.join(map(str, shifts))}}};
-    op.dims = {{{', '.join(map(str, dims))}}};
-    """
+    from ._attributes import attribute_program
+
+    return attribute_program("Roll", {"shifts": list(shifts), "dims": list(dims)})
 
 
 class RollACL(jt.Function):
-
     def execute(self, value, shifts, dims):
         self.shifts = tuple(int(shift) for shift in shifts)
         self.dims = tuple(int(dim) for dim in dims)

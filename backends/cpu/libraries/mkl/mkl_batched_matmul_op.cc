@@ -6,12 +6,11 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include <dnnl.hpp>
+#include "onednn_runtime.h"
 
 #include "core/var.h"
 #include "mkl_batched_matmul_op.h"
 
-using namespace dnnl;
 using namespace std;
 
 namespace jittor {
@@ -22,10 +21,10 @@ static auto make_mkl_batched_matmul = op_constructor<VarPtr, Var*, Var*, bool, b
 
 MklBatchedMatmulOp::MklBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
-    ASSERT(a->dtype().is_float() && b->dtype().is_float())
+    USER_CHECK(a->dtype().is_float() && b->dtype().is_float())
         << "mkl batched matmul requires floating-point inputs, but got a:"
         << a->dtype() << "b:" << b->dtype();
-    ASSERT(a->dtype().dsize() == 4 && b->dtype().dsize() == 4)
+    USER_CHECK(a->dtype().dsize() == 4 && b->dtype().dsize() == 4)
         << "mkl batched matmul supports float32 only, but got a:"
         << a->dtype() << "b:" << b->dtype();
     c = create_output(nullptr, a->dtype());
@@ -56,21 +55,21 @@ VarPtr MklBatchedMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 void MklBatchedMatmulOp::infer_shape() {
     auto adim = a->shape.size();
     auto bdim = b->shape.size();
-    ASSERTop(adim,>=,3);
-    ASSERTop(bdim,>=,3);
-    ASSERTop(adim,==,bdim);
+    USER_CHECKop(adim,>=,3);
+    USER_CHECKop(bdim,>=,3);
+    USER_CHECKop(adim,==,bdim);
 
     auto n = a->shape[adim-2], m = a->shape[adim-1];
     auto m_ = b->shape[bdim-2], k = b->shape[bdim-1];
 
     NanoVector c_shape;
     for (uint i=0; i<adim-2; i++) {
-        ASSERTop(a->shape[i],==,b->shape[i]);
+        USER_CHECKop(a->shape[i],==,b->shape[i]);
         c_shape.push_back(a->shape[i]);
     }
     if (trans_a) swap(n, m);
     if (trans_b) swap(m_, k);
-    ASSERTop(m,==,m_);
+    USER_CHECKop(m,==,m_);
     c_shape.push_back(n);
     c_shape.push_back(k);
 
@@ -90,12 +89,12 @@ void MklBatchedMatmulOp::jit_run() {
     const auto& as = a->shape;
     const auto& bs = b->shape;
     auto adim = as.size();
-    memory::dim batch_size = 1;
+    int64 batch_size = 1;
     for (uint i=0; i+2<adim; i++)
         batch_size *= as[i];
-    memory::dim n = as[adim-2];
-    memory::dim m = as[adim-1];
-    memory::dim k = bs[adim-1];
+    int64 n = as[adim-2];
+    int64 m = as[adim-1];
+    int64 k = bs[adim-1];
     if ('@Trans_a'=='T') {
         n = as[adim-1];
         m = as[adim-2];
@@ -104,23 +103,8 @@ void MklBatchedMatmulOp::jit_run() {
         k = bs[adim-2];
     }
 
-    // One gemm per matrix, parallel across the batch. Attention matrices are
-    // only a few hundred rows, so a single batched primitive leaves oneDNN
-    // splitting one small problem over every core; giving each core a whole
-    // matrix scales far better. Nested threading is off by default, so each
-    // dnnl_sgemm here runs sequentially.
-    auto lda = ('@Trans_a'=='N') ? m : n;
-    auto ldb = ('@Trans_b'=='N') ? k : m;
-    auto* ap = a->ptr<T>();
-    auto* bp = b->ptr<T>();
-    auto* cp = c->ptr<T>();
-    #pragma omp parallel for schedule(static)
-    for (int64 i=0; i<batch_size; i++) {
-        dnnl_sgemm('@Trans_a', '@Trans_b', n, k, m,
-            1.f, ap + i*n*m, lda,
-            bp + i*m*k, ldb,
-            0.f, cp + i*n*k, k);
-    }
+    onednn_matmul_execute(batch_size, n, m, k, '@Trans_a'=='T', '@Trans_b'=='T',
+                           a->mem_ptr, b->mem_ptr, c->mem_ptr);
 }
 #endif
 #endif // JIT
