@@ -32,7 +32,8 @@ def eye(shape, dtype="float32"):
     '''
     if isinstance(shape, int):
         shape = (shape,shape)
-    assert len(shape)==2, f"len of shape should be 2, but got {shape}"
+    if len(shape) != 2:
+        raise ValueError("eye: shape must have two dimensions, got {}".format(shape))
     import jittor as jt
     index = jt.index(shape)
     return (index[0]==index[1]).unary(dtype)
