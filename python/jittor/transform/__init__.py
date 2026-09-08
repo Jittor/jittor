@@ -1217,9 +1217,10 @@ class RandomAffine(object):
                     raise ValueError("If shear is a single number, it must be positive.")
                 self.shear = (-shear, shear)
             else:
-                assert isinstance(shear, (tuple, list)) and \
-                    (len(shear) == 2 or len(shear) == 4), \
-                    "shear should be a list or tuple and it must be of length 2 or 4."
+                if not isinstance(shear, (tuple, list)) or len(shear) not in (2, 4):
+                    raise ValueError(
+                        "shear should be a list or tuple and it must be of length 2 or 4."
+                    )
                 # X-Axis shear with [min, max]
                 if len(shear) == 2:
                     self.shear = [shear[0], shear[1], 0., 0.]
