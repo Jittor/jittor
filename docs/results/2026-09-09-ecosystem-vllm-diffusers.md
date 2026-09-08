@@ -86,3 +86,8 @@ GroupNorm divisibility assertion. With both values valid
 (`attention_head_dim=4`, `norm_num_groups=1`), runtime initialization produced
 no result within the 30-second bounded probe. These are compatibility/runtime
 blockers; no runtime code was changed.
+
+The model-independent adapter contract check also ran successfully:
+`python adapters/tests/test_adapters.py -q` executed 4 tests in 0.004 seconds.
+It covers version guards, import protection, and the NPU probe without importing
+the Jittor core or requiring optional model packages.
