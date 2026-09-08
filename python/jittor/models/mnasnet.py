@@ -18,8 +18,10 @@ class _InvertedResidual(nn.Module):
 
     def __init__(self, in_ch, out_ch, kernel_size, stride, expansion_factor, bn_momentum=0.1):
         super(_InvertedResidual, self).__init__()
-        assert (stride in [1, 2])
-        assert (kernel_size in [3, 5])
+        if stride not in (1, 2):
+            raise ValueError("MNASNet stride must be 1 or 2")
+        if kernel_size not in (3, 5):
+            raise ValueError("MNASNet kernel_size must be 3 or 5")
         mid_ch = (in_ch * expansion_factor)
         self.apply_residual = ((in_ch == out_ch) and (stride == 1))
         self.layers = nn.Sequential(nn.Conv(in_ch, mid_ch, 1, bias=False), nn.BatchNorm(mid_ch, momentum=bn_momentum), nn.Relu(), nn.Conv(mid_ch, mid_ch, kernel_size, padding=(kernel_size // 2), stride=stride, groups=mid_ch, bias=False), nn.BatchNorm(mid_ch, momentum=bn_momentum), nn.Relu(), nn.Conv(mid_ch, out_ch, 1, bias=False), nn.BatchNorm(out_ch, momentum=bn_momentum))
@@ -31,7 +33,8 @@ class _InvertedResidual(nn.Module):
             return self.layers(input)
 
 def _stack(in_ch, out_ch, kernel_size, stride, exp_factor, repeats, bn_momentum):
-    assert (repeats >= 1)
+    if repeats < 1:
+        raise ValueError("MNASNet repeats must be at least 1")
     first = _InvertedResidual(in_ch, out_ch, kernel_size, stride, exp_factor, bn_momentum=bn_momentum)
     remaining = []
     for _ in range(1, repeats):
@@ -39,7 +42,8 @@ def _stack(in_ch, out_ch, kernel_size, stride, exp_factor, repeats, bn_momentum)
     return nn.Sequential(first, *remaining)
 
 def _round_to_multiple_of(val, divisor, round_up_bias=0.9):
-    assert (0.0 < round_up_bias < 1.0)
+    if not (0.0 < round_up_bias < 1.0):
+        raise ValueError("MNASNet round_up_bias must be between 0 and 1")
     new_val = max(divisor, ((int((val + (divisor / 2))) // divisor) * divisor))
     return (new_val if (new_val >= (round_up_bias * val)) else (new_val + divisor))
 
@@ -60,7 +64,8 @@ class MNASNet(nn.Module):
 
     def __init__(self, alpha, num_classes=1000, dropout=0.2):
         super(MNASNet, self).__init__()
-        assert (alpha > 0.0)
+        if alpha <= 0.0:
+            raise ValueError("MNASNet alpha must be positive")
         self.alpha = alpha
         self.num_classes = num_classes
         depths = _get_depths(alpha)
