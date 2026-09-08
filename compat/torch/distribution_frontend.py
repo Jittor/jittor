@@ -2,6 +2,7 @@
 
 import inspect
 from types import ModuleType
+from typing import Any, cast
 
 from .distribution_adapters import DistributionAdapterState
 from .api_delegates import bind_delegates
@@ -13,9 +14,10 @@ def make_distribution_frontend(native, target):
     module = ModuleType("torch.distributions")
     module.__package__ = "torch.distributions"
     module.__path__ = []
-    module._native_distribution_module = native
+    facade = cast(Any, module)
+    facade._native_distribution_module = native
     state = DistributionAdapterState(native, target)
-    module._distribution_adapter_state = state
+    facade._distribution_adapter_state = state
     bind_delegates(get_install_context(target), "distribution_functions", {
         name: getattr(native, name) for name in DISTRIBUTION_FUNCTIONS
         if name in native.__all__
@@ -34,5 +36,5 @@ def make_distribution_frontend(native, target):
         elif inspect.isfunction(value):
             value = DISTRIBUTION_FUNCTIONS[name]
         setattr(module, name, value)
-    module.__all__ = list(native.__all__)
+    facade.__all__ = list(native.__all__)
     return module

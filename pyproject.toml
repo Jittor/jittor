@@ -121,6 +121,7 @@ files = [
     "compat/torch/namespace.py",
     "compat/torch/holder_registry.py",
     "compat/torch/tensor_object_state.py",
+    "compat/torch/distribution_frontend.py",
     "tools/lint/check_import_layering.py",
     "tools/release/pack_offline.py",
     "tests/structure/test_cleanup_structure.py",
