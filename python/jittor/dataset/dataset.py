@@ -945,10 +945,12 @@ class VarDataset(Dataset):
         super().__init__()
         self.args = args
         self._disable_workers = True
-        assert len(args), "At lease one args"
+        if not args:
+            raise ValueError("DatasetTuple requires at least one argument")
         l = len(args[0])
         for a in args:
-            assert l == len(a), "Len should be the same"
+            if l != len(a):
+                raise ValueError("DatasetTuple arguments must have the same length")
         self.set_attrs(total_len=l)
 
     def __getitem__(self, idx):
