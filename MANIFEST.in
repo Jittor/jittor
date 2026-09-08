@@ -520,6 +520,9 @@ include docs/results/2026-09-08-test-layout-integration.md
 include docs/results/2026-09-08-torch-installation-target.md
 include docs/results/2026-09-08-torch-namespace-local-ownership.md
 include docs/results/2026-09-08-vllm-independent-distribution.md
+include docs/results/2026-09-09-2-19-user-error-boundaries.md
+include docs/results/2026-09-09-ecosystem-transformers.md
+include docs/results/2026-09-09-ecosystem-vllm-diffusers.md
 include docs/results/2026-09-09-onednn-v3-runtime.md
 include docs/results/README.md
 include docs/results/baselines/torch-shim-resources-stage7.txt
