@@ -23,7 +23,10 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
     import jittor as jt
     from jittor._runtime.flag_policy import READONLY_FLAGS, RUNTIME_FLAGS
 
-    assert tuple(jt.runtime.__slots__) == ("_context", "_scope_factory")
+    assert set(jt.runtime.__slots__) == {
+        "_context", "_scope_factory", "_services", "_service_lock", "_creating_services",
+    }
+    assert not (set(jt.runtime.__slots__) & (RUNTIME_FLAGS | READONLY_FLAGS))
     assert jt.runtime.context.__class__.__name__ == "RuntimeContext"
     assert jt.runtime.context._flags is jt.flags
     snapshot = jt.runtime.context.snapshot()
@@ -83,6 +86,15 @@ def test_runtime_use_cuda_is_a_live_writable_view():
 
 def test_runtime_cuda_allow_tf32_is_a_live_writable_view_on_cpu():
     import jittor as jt
+
+    if not hasattr(jt.flags, "cuda_allow_tf32"):
+        # A CPU-only core has no CUDA library flag to expose. The Runtime
+        # must reject this capability, not manufacture a second stored value.
+        with pytest.raises(AttributeError, match="cuda_allow_tf32"):
+            _ = jt.runtime.cuda_allow_tf32
+        with pytest.raises(AttributeError, match="cuda_allow_tf32"):
+            jt.runtime.cuda_allow_tf32 = 1
+        return
 
     original = jt.flags.cuda_allow_tf32
     try:
@@ -276,10 +288,10 @@ def test_runtime_auto_convert_64_to_32_is_a_live_view_and_controls_cpu_array_dty
         with jt.flag_scope(auto_convert_64_to_32=0):
             assert jt.runtime.auto_convert_64_to_32 == 0
             assert jt.runtime.context.snapshot()["auto_convert_64_to_32"] == 0
-            assert jt.array(np.array([1.5], dtype=np.float64)).dtype == "float64"
+            assert jt.array(np.array([1.5], dtype=np.float64)).dtype == jt.float64
         with jt.flag_scope(auto_convert_64_to_32=1):
             assert jt.runtime.auto_convert_64_to_32 == 1
-            assert jt.array(np.array([1.5], dtype=np.float64)).dtype == "float32"
+            assert jt.array(np.array([1.5], dtype=np.float64)).dtype == jt.float32
         assert jt.runtime.auto_convert_64_to_32 == original
         jt.runtime.auto_convert_64_to_32 = 0
         assert jt.runtime.auto_convert_64_to_32 == jt.flags.auto_convert_64_to_32 == 0

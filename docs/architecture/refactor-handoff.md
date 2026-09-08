@@ -1,5 +1,57 @@
 # 交接：`2.0-refactor` 的当前状态
 
+2026-09-08 更新。只按本节、[看板任务行](refactor-board.md)与当前代码继续；
+下方折叠的历史正文保留证据，其中旧任务数、旧路径和“工作树全部干净”不代表现在。
+
+## 当前开发底座
+
+- 在 `$JITTOR_LAB_ROOT/refactor/coord` 的 `wk/coord` 工作，整合后推送远端
+  `2.0-refactor`。本批以 `7e83d6da4` 为起点，最新提交以远端分支为准。
+- 物理源码固定为顶层 `src/`、`backends/`；`python/jittor/{src,extern}` 已不存在。
+  Var/Op 统一图和七个元算子保留。真实 strides/storage、dtype/C++ 边界、
+  动态形状提交与 GIL 前置见[上一批记录](../results/2026-09-08-architecture-integration.md)。
+- 本批收齐 Runtime 服务、tensor/nn/data、CUDA、utilities/compiler、core misc、
+  scheduler/optimizer 的 API 归属与安装事务。接口见
+  [API 与 Runtime](torch-api-ownership.md)、[家族 owner](torch-api-owners.md)、
+  [优化器](torch-optimizer-owners.md)和[事务](runtime-hook-transactions.md)。
+- 仓库维护脚本统一进入 `tools/`。core、compat、可选 `adapters/` distribution
+  各以自己的 pyproject 声明打包配置，
+  MANIFEST 由 `tools/build/generate_manifest.py` 生成，见
+  [打包记录](../results/2026-09-08-packaging-ownership.md)。
+
+本批运行证据与仍红的全仓门禁见[整合记录](../results/2026-09-08-api-runtime-integration.md)。
+相关修复节点已通过，但非共享分配器的 scalar broadcast/view、旧断言计数及部分
+pytest/子进程合同仍需后续处理；不能把本批收口解释为全仓门禁全绿。
+
+## 继续顺序
+
+先收齐独立前端、剩余 API 和第三方 adapter 边界，再处理剩余功能与性能。
+7.03、7.12 仍是聚合任务，不能因部分家族迁出就全部关闭。FSDP 的通信、mesh、
+原生 optimizer 复用和生命周期架构已实现；峰值显存性能仍未达，优化后移。
+缺硬件的 ACL/HCCL/NPU、ROCm/Corex 和多机验证继续按上机文档交接。
+
+最多 root 加三个 subagent。完整依赖批次实现、集中验证和提交，不恢复历史
+“小切片、一提交、一轮验收”的节奏。冲突工作放隔离树，Git 整合和推送由 root 负责。
+接手先看当前 agent 状态、`git status` 和实际 diff；已整合的隔离树可能仍保留交付快照。
+不要照历史记录重新 rebase、reset、删工作树或清缓存，不动用户未提交文件。
+
+## 运行与交付
+
+源码测试的 Python 路径按 `compat/shim/resources`、`python` 顺序设置，保证
+`import torch` 使用当前源码入口。继承 system-site-packages 的旧环境可能带有历史
+shim，它会把独立 namespace 再覆盖为 Jittor 别名；这是入口问题。干净安装使用本树
+生成的 core、compat wheel。CPU/CUDA 分别使用固定且互不共享的 `JITTOR_HOME`。
+
+CPU 明确选 CPU provider；CUDA 保留真实 nvcc 配置并断言张量实际驻留设备。
+不要设置空 nvcc 路径后用 `has_cuda=0` 推断机器没有 CUDA。重用热缓存，按本批新增
+边界和实际失败定向验证。加入源码或文档后重新生成 MANIFEST，再检查布局和必要门禁。
+状态统计只数看板任务行，包含 `5.02b`/`5.02c`，并注明父项与派生项有重叠。
+
+<details>
+<summary>历史交接正文（旧状态，仅用于追溯）</summary>
+
+## 历史正文
+
 2026-09-04。上一轮中断留下的 WIP 分支和工作树残留已经全部收尾。本文写给接手的人，只回答三个问题：
 **分支停在哪、交接是否干净、下一步从哪开始**。任务本身在 [整改计划](refactor-plan.md)，进度在
 [看板](refactor-board.md)，目录终点在 [目标布局](target-layout.md)，本文不重复它们。
@@ -3350,7 +3402,7 @@ workspace 查询失败 / 自己 `mallocWorkSpace` / 自己发 `(workspaceAddr, w
 前反向、GroupNorm 前反向、ArgReduce、TruthReduce、reduce prod 的三条路径）。此前被记为「有意保留」
 的 reduce prod 其实不需要自己的尾巴——分步只要求异步，`launch(ret, f, false)` 就能表达。
 
-**等价性是这一波最重要的产出，方法值得抄。** `agent/scripts/acl_launch_program.py` 把每个 owner 归约成
+**等价性是这一波最重要的产出，方法值得抄。** `tools/build/acl_launch_program.py` 把每个 owner 归约成
 (workspace 查询, execute 入口, 同步策略, 失败处理) 的有序 token 流，两个树当参数直接 diff。结论：
 迁移前后 **69/71 个 owner 的 execute 入口序列与同步策略逐字相同**，另 2 个（Random、reduce）是同一组
 入口的重新分组；唯一系统性差异是失败处理全部收敛到 `LOGf`（`execfail return`×70、`unchecked`×3、
@@ -3712,3 +3764,5 @@ commit 只把 `JITTOR_TORCH_SHIM` 改成 `1`，变成 **33 failed / 232 passed**
 是错的——变量是 shim 而不是那个提交，**下一位不要沿用这个误判**。
 底下是一条真实的 shim 缺口（torch 模式下 `dtype` 到了 C++ 边界不再是 `string`），但它属后端
 绑定而非 7.03，没有自行改；**要派的话记得计划与看板两侧各加一行**。
+
+</details>

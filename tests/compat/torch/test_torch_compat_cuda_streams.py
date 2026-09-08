@@ -10,6 +10,21 @@ from jittor.compat._aliases import torch_namespace_owned
 
 
 class TestCudaStreams(unittest.TestCase):
+    def test_cuda_api_objects_are_pickleable_and_describe_limits(self):
+        import pickle
+        from jittor.compat.torch.fidelity import Fidelity, fidelity_of
+        for name in ("Stream", "Event", "device", "device_of", "FloatTensor",
+                     "current_stream", "set_stream", "default_stream", "memory_stats",
+                     "memory_allocated", "empty_cache", "get_rng_state"):
+            implementation = getattr(torch.cuda, name)
+            with self.subTest(name=name):
+                self.assertNotIn("<locals>", implementation.__qualname__)
+                self.assertIs(pickle.loads(pickle.dumps(implementation)), implementation)
+                self.assertIs(fidelity_of("torch.cuda." + name).implementation, implementation)
+        self.assertIs(fidelity_of("torch.cuda.Stream").level, Fidelity.APPROXIMATE)
+        self.assertIn("sampled", fidelity_of("torch.cuda.max_memory_allocated").detail)
+        self.assertIs(fidelity_of("torch.cuda.get_rng_state").level, Fidelity.UNIMPLEMENTED)
+
     def test_batch_invariant_precision_controls_are_mutable(self):
         matmul = torch.backends.cuda.matmul
         old_fp16 = matmul.allow_fp16_reduced_precision_reduction

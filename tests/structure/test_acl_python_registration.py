@@ -35,6 +35,10 @@ class _Tensor:
     def assign(self, other):
         raise AssertionError("provider must not own setitem writeback")
 
+    def _set_transpose_view_of(self, owner, axes):
+        self.transpose_owner = owner
+        self.transpose_axes = tuple(axes)
+
 
 @pytest.fixture
 def providers(monkeypatch):
@@ -322,8 +326,12 @@ def test_acl_transpose_preserves_argument_forms_with_real_shape_builder(
             namespace,
         )
         call = namespace["transpose"]
-    result = call(_Tensor(shape), *dims)
+    value = _Tensor(shape)
+    result = call(value, *dims)
     assert result.shape == expected
+    if entry == "public":
+        assert result.transpose_owner is value
+        assert result.transpose_axes == tuple(axes)
     assert len(launches) == 1
     name, output_shapes, forward_source, backward_source = launches[0]
     assert name == "Transpose"

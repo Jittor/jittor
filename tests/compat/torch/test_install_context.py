@@ -23,9 +23,16 @@ from _helpers.child_process import run_python_child
 from _helpers.install_lock import install_lock_is_free
 
 
+def _runtime_module(name):
+    from jittor._runtime.state import RuntimeState, RuntimeContext
+    module = types.ModuleType(name)
+    module.runtime = RuntimeState(RuntimeContext(types.SimpleNamespace()))
+    return module
+
+
 class TestInstallContext(unittest.TestCase):
     def context(self):
-        root = types.ModuleType("_stage7_context_root")
+        root = _runtime_module("_stage7_context_root")
         modules = {root.__name__: root}
         return InstallContext(root, ModuleRegistry(root, modules))
 
@@ -139,7 +146,7 @@ class TestInstallContext(unittest.TestCase):
                          ["optional.backend"])
 
     def test_completed_install_conflict_does_not_leak_global_lock(self):
-        root = types.ModuleType("_stage7_completed_lock_conflict")
+        root = _runtime_module("_stage7_completed_lock_conflict")
         context = InstallContext.for_module(root)
         context.mark_complete()
         with mock.patch(
@@ -147,6 +154,19 @@ class TestInstallContext(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "changed after install"):
                 compat.install(root)
+        self.assertTrue(install_lock_is_free())
+
+    def test_interrupted_install_releases_its_lock_and_restores_the_root(self):
+        root = _runtime_module("interrupted_install")
+        def interrupted(context):
+            context.target_namespace.partial_api = object()
+            raise KeyboardInterrupt()
+        with mock.patch.object(compat, "_REQUIRED_STEPS", (("interrupted", interrupted),)), \
+                mock.patch.object(compat, "_OPTIONAL_STEPS", ()):
+            with self.assertRaises(KeyboardInterrupt):
+                compat.install(root)
+        self.assertFalse(hasattr(root, "partial_api"))
+        self.assertFalse(root._torch_compat_install_context.complete)
         self.assertTrue(install_lock_is_free())
 
     def test_conflicting_rollback_leaves_a_known_state_and_frees_the_lock(self):
@@ -160,7 +180,7 @@ class TestInstallContext(unittest.TestCase):
         the dead transaction stayed reachable through ``context.state``, where
         the runtime flag helpers still look for it.
         """
-        root = types.ModuleType("_stage7_rollback_conflict_root")
+        root = _runtime_module("_stage7_rollback_conflict_root")
         seen = {}
 
         def steal(context):
@@ -188,33 +208,6 @@ class TestInstallContext(unittest.TestCase):
             "the conflicting rollback never released the process install lock",
         )
 
-    def test_transformers_npu_probe_rejects_real_pytorch_extension(self):
-        def original(check_device=False):
-            del check_device
-            return True
-
-        import_utils = types.ModuleType("transformers.utils.import_utils")
-        import_utils.is_torch_npu_available = original
-        utils = types.ModuleType("transformers.utils")
-        utils.is_torch_npu_available = original
-        modules = {
-            "transformers.utils.import_utils": import_utils,
-            "transformers.utils": utils,
-        }
-
-        self.assertTrue(
-            utilities._patch_transformers_npu_probe(import_utils, modules)
-        )
-        guarded = import_utils.is_torch_npu_available
-        self.assertFalse(guarded())
-        self.assertFalse(guarded(check_device=True))
-        self.assertIs(utils.is_torch_npu_available, guarded)
-        self.assertIs(guarded._jittor_original_probe, original)
-        self.assertTrue(callable(guarded.cache_clear))
-        self.assertTrue(
-            utilities._patch_transformers_npu_probe(import_utils, modules)
-        )
-        self.assertIs(import_utils.is_torch_npu_available, guarded)
 
     def test_registry_ensure_publish_and_alias_preserve_identity(self):
         context = self.context()
@@ -256,7 +249,7 @@ class TestInstallContext(unittest.TestCase):
         self.assertIs(context.registry.get("torch.example"), first)
 
     def test_registry_preserves_real_torch_and_children(self):
-        root = types.ModuleType("jittor")
+        root = _runtime_module("jittor")
         real_torch = types.ModuleType("torch")
         real_child = types.ModuleType("torch.nn")
         modules = {"torch": real_torch, "torch.nn": real_child}
@@ -267,7 +260,7 @@ class TestInstallContext(unittest.TestCase):
         self.assertIs(modules["torch.nn"], real_child)
 
     def test_registry_replaces_deployed_torch_placeholder(self):
-        root = types.ModuleType("jittor")
+        root = _runtime_module("jittor")
         placeholder = types.ModuleType("torch")
         placeholder._jittor_torch_shim_placeholder = True
         placeholder.__file__ = "/tmp/site-packages/torch/__init__.py"
@@ -277,7 +270,7 @@ class TestInstallContext(unittest.TestCase):
         self.assertIs(modules["torch"], root)
 
     def test_registry_rejects_marker_with_namespace_package_file(self):
-        root = types.ModuleType("jittor")
+        root = _runtime_module("jittor")
         foreign = types.ModuleType("torch")
         foreign._jittor_torch_shim_placeholder = True
         foreign.__file__ = None
@@ -323,7 +316,7 @@ class TestInstallContext(unittest.TestCase):
             install_cpp_extension,
         )
 
-        root = types.ModuleType("_stage7_cpp_context_root")
+        root = _runtime_module("_stage7_cpp_context_root")
         with mock.patch.dict(sys.modules, {}, clear=False):
             for name in tuple(sys.modules):
                 if name == "torch" or name.startswith("torch."):
@@ -351,7 +344,7 @@ class TestInstallContext(unittest.TestCase):
                 for name in tuple(sys.modules):
                     if name == "torch" or name.startswith("torch."):
                         sys.modules.pop(name, None)
-                root = types.ModuleType("_stage7_completed_%s" % tamper)
+                root = _runtime_module("_stage7_completed_%s" % tamper)
                 context = InstallContext.for_module(root)
                 child = types.ModuleType("torch.nn")
                 context.registry.publish("torch", root)
@@ -398,13 +391,6 @@ class TestInstallContext(unittest.TestCase):
                 ),
                 False,
             ),
-            (
-                "lr-scheduler",
-                lambda ctx: lr_scheduler._install_lr_scheduler(
-                    ctx.jittor_module, ctx.registry
-                ),
-                False,
-            ),
         )
         for step, installer, needs_state in installers:
             with self.subTest(step=step):
@@ -419,10 +405,18 @@ class TestInstallContext(unittest.TestCase):
                 self.assertNotIn(step, context.markers)
                 self.assertEqual(context.reports[-1].status, "failed")
 
+        # Schedulers consume the optimizer owner already installed on the
+        # target; they no longer import a second native optimizer namespace.
+        context = self.context()
+        with self.assertRaisesRegex(InstallStepError, "no Optimizer owner"):
+            context.run_required("lr-scheduler", lambda ctx:
+                                 lr_scheduler._install_lr_scheduler(ctx.jittor_module, ctx.registry))
+        self.assertNotIn("lr-scheduler", context.markers)
+
     def test_plain_composition_does_not_activate_external_integrations(self):
         from jittor.compat import runtime
 
-        root = types.ModuleType("_stage7_plain_composition")
+        root = _runtime_module("_stage7_plain_composition")
         root.compiler = types.SimpleNamespace(LOG=mock.Mock())
         root.flags = object()
 
@@ -445,7 +439,7 @@ class TestInstallContext(unittest.TestCase):
     def test_plain_composition_preserves_orphan_torch_children(self):
         from jittor.compat import runtime
 
-        root = types.ModuleType("_stage7_orphan_composition")
+        root = _runtime_module("_stage7_orphan_composition")
         root.compiler = types.SimpleNamespace(LOG=mock.Mock())
         root.flags = object()
         child = types.ModuleType("torch.nn")
@@ -555,7 +549,7 @@ assert compat._NAMESPACE_TRANSACTION not in jt._torch_compat_install_context.sta
                 mock.patch.object(compat, "_OPTIONAL_STEPS", ()):
             for strict in (False, True):
                 with self.subTest(strict=strict):
-                    root = types.ModuleType(
+                    root = _runtime_module(
                         "_stage7_failed_install_root_%s" % int(strict)
                     )
                     with self.assertRaisesRegex(InstallStepError, "nn.required"):

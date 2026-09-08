@@ -12,7 +12,8 @@ import threading as _threading_data
 
 import jittor as jt
 
-from ..context import registry_for
+from ..context import registry_for, get_install_context
+from ..fidelity import Fidelity, register_fidelity
 from ... import stub_policy as _stub_policy_data
 from ...diagnostics import EXPECTED, swallowed
 
@@ -37,15 +38,11 @@ def _install_torchdata_stateful_dataloader(g, registry=None):
     sampler_mod = _types.ModuleType("torchdata.stateful_dataloader.sampler")
     data_mod = getattr(getattr(g, "utils", None), "data", None)
     base_loader = getattr(data_mod, "DataLoader", object)
-
-    class StatefulDataLoader(base_loader):
-        def state_dict(self):
-            return {}
-
-        def load_state_dict(self, state_dict):
-            return None
-
-    stateful.StatefulDataLoader = StatefulDataLoader
+    if base_loader is _DataLoader:
+        stateful.StatefulDataLoader = StatefulDataLoader
+    else:
+        stateful.StatefulDataLoader = _stateful_loader_type(
+            base_loader, get_install_context(g))
     if data_mod is not None:
         for name in ("RandomSampler", "SequentialSampler", "BatchSampler", "Sampler"):
             if hasattr(data_mod, name):
@@ -55,350 +52,440 @@ def _install_torchdata_stateful_dataloader(g, registry=None):
     setattr(torchdata, "stateful_dataloader", stateful)
 
 
+class _TorchDataset:
+    def __getitem__(self, i):
+        raise NotImplementedError
+    def __add__(self, other):
+        return _ConcatDataset([self, other])
+
+
+class _IterableDataset(_TorchDataset):
+    def __iter__(self):
+        raise NotImplementedError
+
+
+class _TensorDataset(_TorchDataset):
+    def __init__(self, *tensors):
+        self.tensors = tensors
+    def __getitem__(self, i):
+        return tuple(t[i] for t in self.tensors)
+    def __len__(self):
+        return len(self.tensors[0]) if self.tensors else 0
+
+
+class _ConcatDataset(_TorchDataset):
+    def __init__(self, datasets):
+        self.datasets = list(datasets)
+        self.cumulative_sizes = []
+        total = 0
+        for dataset in self.datasets:
+            total += len(dataset)
+            self.cumulative_sizes.append(total)
+    def __len__(self):
+        return self.cumulative_sizes[-1] if self.cumulative_sizes else 0
+    def __getitem__(self, idx):
+        import bisect as _bisect
+        dataset_idx = _bisect.bisect_right(self.cumulative_sizes, idx)
+        prev = self.cumulative_sizes[dataset_idx - 1] if dataset_idx else 0
+        return self.datasets[dataset_idx][idx - prev]
+
+
+class _Subset(_TorchDataset):
+    def __init__(self, dataset, indices):
+        self.dataset = dataset
+        self.indices = list(indices)
+    def __len__(self):
+        return len(self.indices)
+    def __getitem__(self, idx):
+        return self.dataset[self.indices[idx]]
+
+
+class _Sampler:
+    def __init__(self, data_source=None):
+        self.data_source = data_source
+    def __iter__(self):
+        raise NotImplementedError
+
+
+class _SequentialSampler(_Sampler):
+    def __iter__(self):
+        return iter(range(len(self.data_source)))
+    def __len__(self):
+        return len(self.data_source)
+
+
+class _RandomSampler(_Sampler):
+    def __init__(self, data_source, replacement=False, num_samples=None, generator=None):
+        self.data_source = data_source
+        self.replacement = replacement
+        self._num_samples = num_samples
+        self.generator = generator
+    @property
+    def num_samples(self):
+        return len(self.data_source) if self._num_samples is None else self._num_samples
+    def __iter__(self):
+        import random as _random
+        n = len(self.data_source)
+        if self.replacement:
+            return iter(_random.randrange(n) for _ in range(self.num_samples))
+        indices = list(range(n))
+        _random.shuffle(indices)
+        return iter(indices[:self.num_samples])
+    def __len__(self):
+        return self.num_samples
+
+
+class _SubsetRandomSampler(_Sampler):
+    def __init__(self, indices, generator=None):
+        self.indices = list(indices)
+        self.generator = generator
+    def __iter__(self):
+        import random as _random
+        indices = list(self.indices)
+        _random.shuffle(indices)
+        return iter(indices)
+    def __len__(self):
+        return len(self.indices)
+
+
+class _BatchSampler(_Sampler):
+    def __init__(self, sampler, batch_size, drop_last):
+        self.sampler = sampler
+        self.batch_size = int(batch_size)
+        self.drop_last = bool(drop_last)
+    def __iter__(self):
+        batch = []
+        for idx in self.sampler:
+            batch.append(idx)
+            if len(batch) == self.batch_size:
+                yield batch
+                batch = []
+        if batch and not self.drop_last:
+            yield batch
+    def __len__(self):
+        n = len(self.sampler)
+        return n // self.batch_size if self.drop_last else (n + self.batch_size - 1) // self.batch_size
+
+
+class _DistributedSampler(_Sampler):
+    def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True,
+                 seed=0, drop_last=False):
+        import math as _math
+        self.dataset = dataset
+        self.num_replicas = 1 if num_replicas is None else int(num_replicas)
+        self.rank = 0 if rank is None else int(rank)
+        self.shuffle = bool(shuffle)
+        self.seed = int(seed)
+        self.drop_last = bool(drop_last)
+        self.epoch = 0
+        if self.drop_last and len(self.dataset) % self.num_replicas != 0:
+            self.num_samples = _math.ceil((len(self.dataset) - self.num_replicas) / self.num_replicas)
+        else:
+            self.num_samples = _math.ceil(len(self.dataset) / self.num_replicas)
+        self.total_size = self.num_samples * self.num_replicas
+    def __iter__(self):
+        import random as _random
+        indices = list(range(len(self.dataset)))
+        if self.shuffle:
+            rng = _random.Random(self.seed + self.epoch)
+            rng.shuffle(indices)
+        if not self.drop_last:
+            padding = self.total_size - len(indices)
+            if padding > 0:
+                indices += (indices * ((padding + len(indices) - 1) // len(indices)))[:padding]
+        else:
+            indices = indices[:self.total_size]
+        return iter(indices[self.rank:self.total_size:self.num_replicas])
+    def __len__(self):
+        return self.num_samples
+    def set_epoch(self, epoch):
+        self.epoch = int(epoch)
+
+
+def _default_collate(batch):
+    from ..tensor_state import compatibility_owner
+    g = compatibility_owner(jt)
+    import numpy as _np
+    elem = batch[0]
+    if isinstance(elem, jt.Var):
+        from ..frontend import tensor_frontend
+        with tensor_frontend(g.Var):
+            result = jt.stack(list(batch), dim=0)
+            if not any(value.requires_grad for value in batch):
+                result.requires_grad_(False)
+            return result
+    if isinstance(elem, (_np.ndarray, _np.generic)):
+        values = _np.stack(batch)
+        return g.as_tensor(values, dtype=_jittor_dtype_name(values.dtype)).requires_grad_(False)
+    if isinstance(elem, bool):
+        return g.as_tensor(batch, dtype=g.bool).requires_grad_(False)
+    if isinstance(elem, type(0)):
+        return g.as_tensor(batch, dtype=g.int64).requires_grad_(False)
+    if isinstance(elem, type(0.0)):
+        return g.as_tensor(batch, dtype=g.float64).requires_grad_(False)
+    if isinstance(elem, (tuple, list)):
+        return [_default_collate(list(items)) for items in zip(*batch)]
+    if isinstance(elem, dict):
+        return {key: _default_collate([d[key] for d in batch]) for key in elem}
+    return batch
+
+
+class _BaseDataLoaderIter:
+    def __iter__(self):
+        return self
+
+
+class _SingleProcessDataLoaderIter(_BaseDataLoaderIter):
+    def __init__(self, loader):
+        self._loader = loader
+        self._batch_iter = iter(loader.batch_sampler)
+
+    def __next__(self):
+        batch_indices = next(self._batch_iter)
+        return self._loader.collate_fn([self._loader.dataset[i] for i in batch_indices])
+
+
+class _WorkerInfo:
+    def __init__(self, id, num_workers, seed, dataset):
+        self.id = id
+        self.num_workers = num_workers
+        self.seed = seed
+        self.dataset = dataset
+
+
+_worker_state = _threading_data.local()
+
+
+def _get_worker_info():
+    return getattr(_worker_state, "info", None)
+
+
+class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
+    """Real background fetching for DataLoader(num_workers>0).
+
+    This class used to be ``pass``: DataLoader recorded num_workers,
+    prefetch_factor, worker_init_fn and persistent_workers and then
+    built a single-process iterator regardless, so every input pipeline
+    silently ran serially in the training thread -- which reads as "the
+    framework is slow" rather than "the flag did nothing".
+
+    Batches are now prepared by ``num_workers`` background workers with
+    a bounded look-ahead of ``prefetch_factor`` batches each, delivered
+    strictly in order.  The workers are threads, not processes (see the
+    one-time warning): datasets here hold jittor Vars, which do not
+    survive a fork, and the win being bought -- overlapping file IO and
+    decode with compute -- is available to threads.
+    """
+
+    def __init__(self, loader):
+        self._loader = loader
+        self._batch_iter = iter(loader.batch_sampler)
+        self._num_workers = max(1, int(loader.num_workers or 0))
+        prefetch = loader.prefetch_factor
+        self._prefetch = max(1, int(prefetch if prefetch else 2))
+        self._timeout = float(loader.timeout or 0) or None
+        self._pending = _collections_data.deque()
+        base_seed = 0
+        try:
+            base_seed = int(jt.get_seed())
+        except EXPECTED as exc:
+            swallowed("torch/installers/data.py __init__: base_seed = int(jt.get_seed())", exc)
+            base_seed = 0
+        self._pool = _futures_data.ThreadPoolExecutor(
+            max_workers=self._num_workers,
+            thread_name_prefix="jt-dataloader",
+            initializer=_init_worker,
+            initargs=(loader, base_seed))
+        _stub_policy_data.degraded(
+            "torch.utils.data.DataLoader(num_workers>0)",
+            "batches are prefetched by %d worker THREADS rather than "
+            "worker processes" % self._num_workers,
+            "Datasets holding jittor Vars cannot be forked; "
+            "pass num_workers=0 for strictly serial fetching.")
+        self._fill()
+
+    def _fetch(self, batch_indices):
+        loader = self._loader
+        return loader.collate_fn([loader.dataset[i] for i in batch_indices])
+
+    def _fill(self):
+        want = self._num_workers * self._prefetch
+        while len(self._pending) < want:
+            try:
+                batch_indices = next(self._batch_iter)
+            except StopIteration:
+                return
+            self._pending.append(self._pool.submit(self._fetch, batch_indices))
+
+    def __next__(self):
+        if not self._pending:
+            self._shutdown()
+            raise StopIteration
+        future = self._pending.popleft()
+        try:
+            batch = future.result(timeout=self._timeout)
+        except _futures_data.TimeoutError:
+            self._shutdown()
+            raise RuntimeError(
+                "DataLoader timed out after %s seconds waiting for a "
+                "worker batch" % self._timeout)
+        self._fill()
+        return batch
+
+    def _shutdown(self):
+        pool = getattr(self, "_pool", None)
+        if pool is not None and not self._loader.persistent_workers:
+            self._pool = None
+            pool.shutdown(wait=False)
+
+    def __del__(self):
+        try:
+            pool = getattr(self, "_pool", None)
+            if pool is not None:
+                pool.shutdown(wait=False)
+        except EXPECTED as exc:
+            swallowed("torch/installers/data.py __del__: pool = getattr(self, '_pool', None)", exc)
+
+
+_worker_ids = _itertools_data.count()
+
+
+def _init_worker(loader, base_seed):
+    worker_id = next(_worker_ids) % max(1, int(loader.num_workers or 1))
+    _worker_state.info = _WorkerInfo(
+        worker_id, int(loader.num_workers or 0),
+        base_seed + worker_id, loader.dataset)
+    if loader.worker_init_fn is not None:
+        loader.worker_init_fn(worker_id)
+
+
+class _DataLoader:
+    def __init__(self, dataset, batch_size=1, shuffle=False, sampler=None,
+                 batch_sampler=None, num_workers=0, collate_fn=None,
+                 pin_memory=False, drop_last=False, timeout=0,
+                 worker_init_fn=None, generator=None, prefetch_factor=None,
+                 persistent_workers=False, **kwargs):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.drop_last = drop_last
+        self.num_workers = num_workers
+        self.pin_memory = pin_memory
+        self.timeout = timeout
+        self.prefetch_factor = prefetch_factor
+        self.persistent_workers = persistent_workers
+        self.multiprocessing_context = kwargs.get("multiprocessing_context", None)
+        self.shuffle = shuffle
+        self.collate_fn = collate_fn if collate_fn is not None else _default_collate
+        self.worker_init_fn = worker_init_fn
+        self.generator = generator
+        if batch_sampler is not None:
+            self.batch_sampler = batch_sampler
+            self.sampler = None
+        else:
+            self.sampler = sampler if sampler is not None else (
+                _RandomSampler(dataset, generator=generator) if shuffle else _SequentialSampler(dataset)
+            )
+            self.batch_sampler = _BatchSampler(self.sampler, batch_size, drop_last)
+        self._iterator = None
+    def __iter__(self):
+        if int(self.num_workers or 0) > 0:
+            self._iterator = _MultiProcessingDataLoaderIter(self)
+        else:
+            self._iterator = _SingleProcessDataLoaderIter(self)
+        return self._iterator
+    def __len__(self):
+        return len(self.batch_sampler)
+
+
+def _generate_state(base_seed, worker_id):
+    import random as _random_worker
+    rng = _random_worker.Random(int(base_seed) + int(worker_id))
+    return [rng.randrange(0, 2**32) for _ in range(4)]
+
+
+def _checkpoint(fn, *args, use_reentrant=None, **kwargs):
+    """Run fn directly: correct values, but no activation recompute.
+
+    jittor has no gradient-checkpointing primitive, so the activation
+    memory this API exists to save is NOT saved and `use_reentrant`
+    has no meaning here. The result is numerically identical, which is
+    why this stays a pass-through rather than an error -- but the
+    memory guarantee the caller asked for is absent.
+    """
+    _stub_policy_data.degraded(
+        "torch.utils.checkpoint.checkpoint",
+        "the wrapped function is run directly, so activations are kept "
+        "and no memory is saved",
+        "use_reentrant has no effect on jittor.")
+    return fn(*args, **kwargs)
+
+
+def _default_convert(value):
+    return value
+
+
+class _StatefulLoaderState:
+    def state_dict(self):
+        return {}
+
+    def load_state_dict(self, state_dict):
+        return None
+
+
+class StatefulDataLoader(_StatefulLoaderState, _DataLoader):
+    pass
+
+
+def _stateful_loader_type(base_loader, context):
+    """Retain an explicitly supplied loader base without copying its behavior."""
+    adapters = context.state.setdefault("stateful_loader_types", {})
+    if base_loader not in adapters:
+        adapters[base_loader] = type("StatefulDataLoader", (_StatefulLoaderState, base_loader),
+                                     {"__module__": "torchdata.stateful_dataloader"})
+    return adapters[base_loader]
+
+
+_DATA_APIS = {
+    "Dataset": _TorchDataset, "IterableDataset": _IterableDataset,
+    "TensorDataset": _TensorDataset, "ConcatDataset": _ConcatDataset,
+    "Subset": _Subset, "Sampler": _Sampler,
+    "SequentialSampler": _SequentialSampler, "RandomSampler": _RandomSampler,
+    "SubsetRandomSampler": _SubsetRandomSampler, "BatchSampler": _BatchSampler,
+    "DistributedSampler": _DistributedSampler, "DataLoader": _DataLoader,
+    "default_collate": _default_collate, "default_convert": _default_convert,
+    "get_worker_info": _get_worker_info,
+}
+for _name, _implementation in _DATA_APIS.items():
+    register_fidelity(
+        "torch.utils.data." + _name, _implementation, Fidelity.APPROXIMATE,
+        "Jittor datasets and ordered batching; workers use threads rather than "
+        "processes, default_convert preserves its input, and pinned-memory "
+        "and complete Torch worker semantics are not provided",
+    )
+register_fidelity(
+    "torch.utils.checkpoint.checkpoint", _checkpoint, Fidelity.APPROXIMATE,
+    "evaluates the function directly; no activation recomputation or memory saving",
+)
+register_fidelity(
+    "torchdata.stateful_dataloader.StatefulDataLoader", StatefulDataLoader,
+    Fidelity.APPROXIMATE, "ordered data loading; checkpoint state is empty and is not restored",
+)
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
-    Var = ctx.state["Var"]
-    _DTYPE_OBJS = ctx.state["dtypes"]
     import types as _types2
     if "torch.utils.data" not in _modules:
         _data = _types2.ModuleType("torch.utils.data")
-        class _TorchDataset:
-            def __getitem__(self, i):
-                raise NotImplementedError
-            def __add__(self, other):
-                return _ConcatDataset([self, other])
-        class _IterableDataset(_TorchDataset):
-            def __iter__(self):
-                raise NotImplementedError
-        class _TensorDataset(_TorchDataset):
-            def __init__(self, *tensors):
-                self.tensors = tensors
-            def __getitem__(self, i):
-                return tuple(t[i] for t in self.tensors)
-            def __len__(self):
-                return len(self.tensors[0]) if self.tensors else 0
-        class _ConcatDataset(_TorchDataset):
-            def __init__(self, datasets):
-                self.datasets = list(datasets)
-                self.cumulative_sizes = []
-                total = 0
-                for dataset in self.datasets:
-                    total += len(dataset)
-                    self.cumulative_sizes.append(total)
-            def __len__(self):
-                return self.cumulative_sizes[-1] if self.cumulative_sizes else 0
-            def __getitem__(self, idx):
-                import bisect as _bisect
-                dataset_idx = _bisect.bisect_right(self.cumulative_sizes, idx)
-                prev = self.cumulative_sizes[dataset_idx - 1] if dataset_idx else 0
-                return self.datasets[dataset_idx][idx - prev]
-        class _Subset(_TorchDataset):
-            def __init__(self, dataset, indices):
-                self.dataset = dataset
-                self.indices = list(indices)
-            def __len__(self):
-                return len(self.indices)
-            def __getitem__(self, idx):
-                return self.dataset[self.indices[idx]]
-        class _Sampler:
-            def __init__(self, data_source=None):
-                self.data_source = data_source
-            def __iter__(self):
-                raise NotImplementedError
-        class _SequentialSampler(_Sampler):
-            def __iter__(self):
-                return iter(range(len(self.data_source)))
-            def __len__(self):
-                return len(self.data_source)
-        class _RandomSampler(_Sampler):
-            def __init__(self, data_source, replacement=False, num_samples=None, generator=None):
-                self.data_source = data_source
-                self.replacement = replacement
-                self._num_samples = num_samples
-                self.generator = generator
-            @property
-            def num_samples(self):
-                return len(self.data_source) if self._num_samples is None else self._num_samples
-            def __iter__(self):
-                import random as _random
-                n = len(self.data_source)
-                if self.replacement:
-                    return iter(_random.randrange(n) for _ in range(self.num_samples))
-                indices = list(range(n))
-                _random.shuffle(indices)
-                return iter(indices[:self.num_samples])
-            def __len__(self):
-                return self.num_samples
-        class _SubsetRandomSampler(_Sampler):
-            def __init__(self, indices, generator=None):
-                self.indices = list(indices)
-                self.generator = generator
-            def __iter__(self):
-                import random as _random
-                indices = list(self.indices)
-                _random.shuffle(indices)
-                return iter(indices)
-            def __len__(self):
-                return len(self.indices)
-        class _BatchSampler(_Sampler):
-            def __init__(self, sampler, batch_size, drop_last):
-                self.sampler = sampler
-                self.batch_size = int(batch_size)
-                self.drop_last = bool(drop_last)
-            def __iter__(self):
-                batch = []
-                for idx in self.sampler:
-                    batch.append(idx)
-                    if len(batch) == self.batch_size:
-                        yield batch
-                        batch = []
-                if batch and not self.drop_last:
-                    yield batch
-            def __len__(self):
-                n = len(self.sampler)
-                return n // self.batch_size if self.drop_last else (n + self.batch_size - 1) // self.batch_size
-        class _DistributedSampler(_Sampler):
-            def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True,
-                         seed=0, drop_last=False):
-                import math as _math
-                self.dataset = dataset
-                self.num_replicas = 1 if num_replicas is None else int(num_replicas)
-                self.rank = 0 if rank is None else int(rank)
-                self.shuffle = bool(shuffle)
-                self.seed = int(seed)
-                self.drop_last = bool(drop_last)
-                self.epoch = 0
-                if self.drop_last and len(self.dataset) % self.num_replicas != 0:
-                    self.num_samples = _math.ceil((len(self.dataset) - self.num_replicas) / self.num_replicas)
-                else:
-                    self.num_samples = _math.ceil(len(self.dataset) / self.num_replicas)
-                self.total_size = self.num_samples * self.num_replicas
-            def __iter__(self):
-                import random as _random
-                indices = list(range(len(self.dataset)))
-                if self.shuffle:
-                    rng = _random.Random(self.seed + self.epoch)
-                    rng.shuffle(indices)
-                if not self.drop_last:
-                    padding = self.total_size - len(indices)
-                    if padding > 0:
-                        indices += (indices * ((padding + len(indices) - 1) // len(indices)))[:padding]
-                else:
-                    indices = indices[:self.total_size]
-                return iter(indices[self.rank:self.total_size:self.num_replicas])
-            def __len__(self):
-                return self.num_samples
-            def set_epoch(self, epoch):
-                self.epoch = int(epoch)
-        def _default_collate(batch):
-            import numpy as _np
-            elem = batch[0]
-            if isinstance(elem, jt.Var):
-                from ..frontend import tensor_frontend
-                with tensor_frontend(g.Var):
-                    result = jt.stack(list(batch), dim=0)
-                    if not any(value.requires_grad for value in batch):
-                        result.requires_grad_(False)
-                    return result
-            if isinstance(elem, (_np.ndarray, _np.generic)):
-                values = _np.stack(batch)
-                return g.as_tensor(values, dtype=_jittor_dtype_name(values.dtype)).requires_grad_(False)
-            if isinstance(elem, bool):
-                return g.as_tensor(batch, dtype=g.bool).requires_grad_(False)
-            if isinstance(elem, type(0)):
-                return g.as_tensor(batch, dtype=g.int64).requires_grad_(False)
-            if isinstance(elem, type(0.0)):
-                return g.as_tensor(batch, dtype=g.float64).requires_grad_(False)
-            if isinstance(elem, (tuple, list)):
-                return [_default_collate(list(items)) for items in zip(*batch)]
-            if isinstance(elem, dict):
-                return {key: _default_collate([d[key] for d in batch]) for key in elem}
-            return batch
-        class _BaseDataLoaderIter:
-            def __iter__(self):
-                return self
 
-        class _SingleProcessDataLoaderIter(_BaseDataLoaderIter):
-            def __init__(self, loader):
-                self._loader = loader
-                self._batch_iter = iter(loader.batch_sampler)
-
-            def __next__(self):
-                batch_indices = next(self._batch_iter)
-                return self._loader.collate_fn([self._loader.dataset[i] for i in batch_indices])
-
-        class _WorkerInfo:
-            def __init__(self, id, num_workers, seed, dataset):
-                self.id = id
-                self.num_workers = num_workers
-                self.seed = seed
-                self.dataset = dataset
-
-        _worker_state = _threading_data.local()
-
-        def _get_worker_info():
-            return getattr(_worker_state, "info", None)
-
-        class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
-            """Real background fetching for DataLoader(num_workers>0).
-
-            This class used to be ``pass``: DataLoader recorded num_workers,
-            prefetch_factor, worker_init_fn and persistent_workers and then
-            built a single-process iterator regardless, so every input pipeline
-            silently ran serially in the training thread -- which reads as "the
-            framework is slow" rather than "the flag did nothing".
-
-            Batches are now prepared by ``num_workers`` background workers with
-            a bounded look-ahead of ``prefetch_factor`` batches each, delivered
-            strictly in order.  The workers are threads, not processes (see the
-            one-time warning): datasets here hold jittor Vars, which do not
-            survive a fork, and the win being bought -- overlapping file IO and
-            decode with compute -- is available to threads.
-            """
-
-            def __init__(self, loader):
-                self._loader = loader
-                self._batch_iter = iter(loader.batch_sampler)
-                self._num_workers = max(1, int(loader.num_workers or 0))
-                prefetch = loader.prefetch_factor
-                self._prefetch = max(1, int(prefetch if prefetch else 2))
-                self._timeout = float(loader.timeout or 0) or None
-                self._pending = _collections_data.deque()
-                base_seed = 0
-                try:
-                    base_seed = int(jt.get_seed())
-                except EXPECTED as exc:
-                    swallowed("torch/installers/data.py __init__: base_seed = int(jt.get_seed())", exc)
-                    base_seed = 0
-                self._pool = _futures_data.ThreadPoolExecutor(
-                    max_workers=self._num_workers,
-                    thread_name_prefix="jt-dataloader",
-                    initializer=_init_worker,
-                    initargs=(loader, base_seed))
-                _stub_policy_data.degraded(
-                    "torch.utils.data.DataLoader(num_workers>0)",
-                    "batches are prefetched by %d worker THREADS rather than "
-                    "worker processes" % self._num_workers,
-                    "Datasets holding jittor Vars cannot be forked; "
-                    "pass num_workers=0 for strictly serial fetching.")
-                self._fill()
-
-            def _fetch(self, batch_indices):
-                loader = self._loader
-                return loader.collate_fn([loader.dataset[i] for i in batch_indices])
-
-            def _fill(self):
-                want = self._num_workers * self._prefetch
-                while len(self._pending) < want:
-                    try:
-                        batch_indices = next(self._batch_iter)
-                    except StopIteration:
-                        return
-                    self._pending.append(self._pool.submit(self._fetch, batch_indices))
-
-            def __next__(self):
-                if not self._pending:
-                    self._shutdown()
-                    raise StopIteration
-                future = self._pending.popleft()
-                try:
-                    batch = future.result(timeout=self._timeout)
-                except _futures_data.TimeoutError:
-                    self._shutdown()
-                    raise RuntimeError(
-                        "DataLoader timed out after %s seconds waiting for a "
-                        "worker batch" % self._timeout)
-                self._fill()
-                return batch
-
-            def _shutdown(self):
-                pool = getattr(self, "_pool", None)
-                if pool is not None and not self._loader.persistent_workers:
-                    self._pool = None
-                    pool.shutdown(wait=False)
-
-            def __del__(self):
-                try:
-                    pool = getattr(self, "_pool", None)
-                    if pool is not None:
-                        pool.shutdown(wait=False)
-                except EXPECTED as exc:
-                    swallowed("torch/installers/data.py __del__: pool = getattr(self, '_pool', None)", exc)
-
-        _worker_ids = _itertools_data.count()
-
-        def _init_worker(loader, base_seed):
-            worker_id = next(_worker_ids) % max(1, int(loader.num_workers or 1))
-            _worker_state.info = _WorkerInfo(
-                worker_id, int(loader.num_workers or 0),
-                base_seed + worker_id, loader.dataset)
-            if loader.worker_init_fn is not None:
-                loader.worker_init_fn(worker_id)
-
-        class _DataLoader:
-            def __init__(self, dataset, batch_size=1, shuffle=False, sampler=None,
-                         batch_sampler=None, num_workers=0, collate_fn=None,
-                         pin_memory=False, drop_last=False, timeout=0,
-                         worker_init_fn=None, generator=None, prefetch_factor=None,
-                         persistent_workers=False, **kwargs):
-                self.dataset = dataset
-                self.batch_size = batch_size
-                self.drop_last = drop_last
-                self.num_workers = num_workers
-                self.pin_memory = pin_memory
-                self.timeout = timeout
-                self.prefetch_factor = prefetch_factor
-                self.persistent_workers = persistent_workers
-                self.multiprocessing_context = kwargs.get("multiprocessing_context", None)
-                self.shuffle = shuffle
-                self.collate_fn = collate_fn if collate_fn is not None else _default_collate
-                self.worker_init_fn = worker_init_fn
-                self.generator = generator
-                if batch_sampler is not None:
-                    self.batch_sampler = batch_sampler
-                    self.sampler = None
-                else:
-                    self.sampler = sampler if sampler is not None else (
-                        _RandomSampler(dataset, generator=generator) if shuffle else _SequentialSampler(dataset)
-                    )
-                    self.batch_sampler = _BatchSampler(self.sampler, batch_size, drop_last)
-                self._iterator = None
-            def __iter__(self):
-                if int(self.num_workers or 0) > 0:
-                    self._iterator = _MultiProcessingDataLoaderIter(self)
-                else:
-                    self._iterator = _SingleProcessDataLoaderIter(self)
-                return self._iterator
-            def __len__(self):
-                return len(self.batch_sampler)
-        for _name, _value in {
-            "Dataset": _TorchDataset,
-            "IterableDataset": _IterableDataset,
-            "TensorDataset": _TensorDataset,
-            "ConcatDataset": _ConcatDataset,
-            "Subset": _Subset,
-            "Sampler": _Sampler,
-            "SequentialSampler": _SequentialSampler,
-            "RandomSampler": _RandomSampler,
-            "SubsetRandomSampler": _SubsetRandomSampler,
-            "BatchSampler": _BatchSampler,
-            "DistributedSampler": _DistributedSampler,
-            "DataLoader": _DataLoader,
-            "default_collate": _default_collate,
-            "default_convert": lambda x: x,
-            "get_worker_info": _get_worker_info,
-        }.items():
+        for _name, _value in _DATA_APIS.items():
             setattr(_data, _name, _value)
         _modules["torch.utils.data"] = _data
         g.utils.data = _data
         _du = _types2.ModuleType("torch.utils.data._utils")
         _duc = _types2.ModuleType("torch.utils.data._utils.collate")
         _duw = _types2.ModuleType("torch.utils.data._utils.worker")
-        def _generate_state(base_seed, worker_id):
-            import random as _random_worker
-            rng = _random_worker.Random(int(base_seed) + int(worker_id))
-            return [rng.randrange(0, 2**32) for _ in range(4)]
         _duc.default_collate = _default_collate
         _du.collate = _duc
         _duw._generate_state = _generate_state
@@ -434,21 +521,6 @@ def install(ctx):
         g.utils.data = _modules["torch.utils.data"]
     if "torch.utils.checkpoint" not in _modules:
         _ckpt = _types2.ModuleType("torch.utils.checkpoint")
-        def _checkpoint(fn, *args, use_reentrant=None, **kwargs):
-            """Run fn directly: correct values, but no activation recompute.
-
-            jittor has no gradient-checkpointing primitive, so the activation
-            memory this API exists to save is NOT saved and `use_reentrant`
-            has no meaning here. The result is numerically identical, which is
-            why this stays a pass-through rather than an error -- but the
-            memory guarantee the caller asked for is absent.
-            """
-            _stub_policy_data.degraded(
-                "torch.utils.checkpoint.checkpoint",
-                "the wrapped function is run directly, so activations are kept "
-                "and no memory is saved",
-                "use_reentrant has no effect on jittor.")
-            return fn(*args, **kwargs)
         _ckpt.checkpoint = _checkpoint
         _modules["torch.utils.checkpoint"] = _ckpt
         g.utils.checkpoint = _ckpt

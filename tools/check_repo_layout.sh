@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 status=0
 
 fail() {
@@ -58,7 +58,7 @@ if [[ -d "$REPO_ROOT/.claude/worktrees" ]] &&
   fail 'Git worktrees must live under JITTOR_LAB_ROOT/worktrees.'
 fi
 
-python3 "$REPO_ROOT/agent/scripts/check_docs_governance.py" || status=1
+python3 "$REPO_ROOT/tools/docs/check_governance.py" || status=1
 
 if (( status != 0 )); then
   fail 'Move experiments and runtime state outside the repository.'

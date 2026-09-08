@@ -49,6 +49,7 @@ class TestDocsStructure(unittest.TestCase):
             "agent/design",
             "agent/results",
             "agent/baselines",
+            "agent/scripts",
             "agent/README.md",
             "asv.conf.json",
             "AWESOME-JITTOR-LIST.md",

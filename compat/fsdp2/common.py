@@ -12,8 +12,9 @@ from ..diagnostics import EXPECTED, swallowed
 # Rank/world queries and the two collectives moved down to jittor/compat/
 # collectives.py: compat/torch/installers/distributed.py needs
 # `_all_gather_shards` for plain `all_gather`, and borrowing it from here made
-# the distributed installer depend on FSDP2. Re-exported so that every
-# `common._all_gather_shards(...)` inside fsdp2 keeps working unchanged.
+# the distributed installer depend on FSDP2. The original WORLD callables are
+# re-exported under `_world_*`; the optional-group wrappers below additionally
+# route FSDP mesh communicators without changing the shared collective owner.
 from ..collectives import (          # noqa: F401
     _all_gather_shards as _world_all_gather_shards,
     _in_true_distributed,

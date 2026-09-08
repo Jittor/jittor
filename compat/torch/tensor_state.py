@@ -1,23 +1,33 @@
-"""Private state shared by the Torch tensor compatibility installers.
+"""Runtime-owned tensor bookkeeping and explicit weak frontend bindings.
 
-The compatibility package historically attached its leaf and ``retain_grad``
-registries directly to the public :mod:`jittor` module.  Keeping those maps in
-one state object makes their ownership explicit. A native backend resolves its
-explicit active compatibility owner through a private weak module binding.
-Independent installation publishes state only on its target namespace;
-historical native attributes are supported only by legacy initialization.
+Both independent and legacy activation keep state off public modules. Old
+private registries can be adopted once, but are never published as aliases.
 """
 
 from __future__ import annotations
 
 from types import ModuleType
 from weakref import WeakKeyDictionary, ref
+from functools import wraps
 
-from ..transaction import TransactionConflict, _MISSING
+from ..transaction import InstallTransaction, TransactionConflict, _MISSING
 from .holder_registry import HolderRegistry
 
 
 _OWNERS = WeakKeyDictionary()
+_STATE_SERVICE = "jittor.torch.tensor_states"
+_LEGACY_NAMES = ("_torch_tensor_state", "_torch_leaf_params", "_torch_retained",
+                 "_active_optimizers", "_current_optimizer")
+
+
+def _state_locked(function):
+    @wraps(function)
+    def locked(*args, **kwargs):
+        # Creation and owner publication share installation's lock. Locking
+        # only the Runtime's service factory does not protect its owner entries.
+        with InstallTransaction._lock:
+            return function(*args, **kwargs)
+    return locked
 
 
 def _bound_owner(module):
@@ -33,9 +43,8 @@ def _bound_owner(module):
 class TorchTensorState(HolderRegistry):
     """Per-installed-module bookkeeping for Torch-facing tensor autograd.
 
-    The object subclasses ``dict`` so the historical ``jt._torch_leaf_params``
-    mapping remains source-compatible while the retained registry is grouped
-    beside it. Independent holders are weak entries; the dictionaries locate
+    The object subclasses ``dict`` for the internal leaf mapping. Independent
+    holders are weak entries; the dictionaries locate
     Python objects and never define their leaf identity or extend their life.
     """
 
@@ -63,7 +72,26 @@ def compatibility_owner(module):
     return owner
 
 
+def _state_table(module, create=False):
+    runtime = getattr(module, "runtime", None)
+    if runtime is None:
+        if create:
+            raise RuntimeError("Torch tensor state requires the native Runtime service interface")
+        return None
+    return runtime.service_state(_STATE_SERVICE,
+                                 factory=WeakKeyDictionary if create else None)
+
+
+def _published_state(module):
+    table = _state_table(module)
+    state = table.get(module) if table is not None else None
+    return state if isinstance(state, TorchTensorState) else None
+
+
 def _existing_state(module):
+    state = _published_state(module)
+    if state is not None:
+        return state
     local = vars(module)
     state = local.get("_torch_tensor_state")
     if not isinstance(state, TorchTensorState):
@@ -86,27 +114,43 @@ def _adopt_legacy_state(module):
     return state
 
 
+def _remove_legacy_aliases(module, transaction=None):
+    for name in _LEGACY_NAMES:
+        old = vars(module).get(name, _MISSING)
+        if old is not _MISSING:
+            if transaction is not None:
+                transaction.record(module, name, old, _MISSING)
+            delattr(module, name)
+
+
 def _publish_state(module, state, transaction=None):
-    aliases = {
-        "_torch_tensor_state": state,
-        "_torch_leaf_params": state,
-        "_torch_retained": state.retained,
-        "_active_optimizers": state.active_optimizers,
-    }
-    for name, value in aliases.items():
-        if vars(module).get(name, _MISSING) is value:
-            continue
-        if transaction is None:
-            setattr(module, name, value)
+    table = _state_table(module, create=True)
+    old = table.get(module, _MISSING)
+    if old is not state:
+        if transaction is not None:
+            transaction.record(table, module, old, state,
+                               undo=_state_publication_undo(table, module, old, state))
+        table[module] = state
+    _remove_legacy_aliases(module, transaction)
+
+
+def _state_publication_undo(table, module, old, expected):
+    def undo():
+        if table.get(module, _MISSING) is not expected:
+            raise TransactionConflict("tensor-state owner changed externally")
+        if old is _MISSING:
+            del table[module]
         else:
-            transaction.mutate_attr(module, name, value)
+            table[module] = old
+    return undo
 
 
+@_state_locked
 def get_tensor_state(jittor_module):
-    """Return one active-owner state, retaining unbound legacy initialization."""
+    """Return active-owner state through the Runtime, adopting old state once."""
     owner = compatibility_owner(jittor_module)
     bound = isinstance(owner, ModuleType) and owner in _OWNERS
-    state = vars(owner).get("_torch_tensor_state") if bound else _existing_state(owner)
+    state = _published_state(owner) if bound else _existing_state(owner)
     if not isinstance(state, TorchTensorState):
         if bound:
             raise RuntimeError("bound Torch owner has no local tensor state")
@@ -115,7 +159,7 @@ def get_tensor_state(jittor_module):
         optimizers = vars(owner).get("_active_optimizers")
         if isinstance(optimizers, list) and not state.active_optimizers:
             state.active_optimizers = optimizers
-    _publish_state(owner, state)
+        _publish_state(owner, state)
     return state
 
 
@@ -132,6 +176,7 @@ def latest_optimizer(module):
     return None
 
 
+@_state_locked
 def bind_tensor_state(native_backend, target, transaction, state=None):
     """Provision one owner before installers run; every binding is reversible."""
     if transaction.state != "open":
@@ -146,7 +191,7 @@ def bind_tensor_state(native_backend, target, transaction, state=None):
     for owner in (native_backend, target):
         if owner in _OWNERS:
             bound_owner = compatibility_owner(owner)
-            if not isinstance(vars(bound_owner).get("_torch_tensor_state"), TorchTensorState):
+            if _published_state(bound_owner) is None:
                 raise RuntimeError("bound Torch owner has no local tensor state")
     if state is not None and not isinstance(state, TorchTensorState):
         raise TypeError("tensor state must be a TorchTensorState")
@@ -174,6 +219,8 @@ def bind_tensor_state(native_backend, target, transaction, state=None):
         # Preserve an existing empty optimizer list's identity as well.
         state = _adopt_legacy_state(sources[0] if sources else native_backend)
     _publish_state(target, state, transaction)
+    if native_backend is not target:
+        _remove_legacy_aliases(native_backend, transaction)
     for owner in (target,) if target is native_backend else (target, native_backend):
         previous = _OWNERS.get(owner, _MISSING)
         if previous is _MISSING or previous() is not target:

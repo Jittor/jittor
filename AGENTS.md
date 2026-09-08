@@ -38,7 +38,7 @@
 提交前运行：
 
 ```bash
-bash agent/scripts/check_repo_layout.sh
+bash tools/check_repo_layout.sh
 python -m pytest -q tests/structure
 ```
 

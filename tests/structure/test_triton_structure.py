@@ -24,7 +24,7 @@ class TestTritonStructure(unittest.TestCase):
     def test_canonical_package_owns_the_physical_implementation(self):
         canonical = importlib.import_module("jittor.compat.triton")
         package_path = Path(canonical.__file__).resolve().parent
-        repo_root = package_path.parents[3]
+        repo_root = Path(__file__).resolve().parents[2]
         self.assertEqual(package_path.name, "triton")
         self.assertEqual(package_path.parent.name, "compat")
         self.assertEqual(
@@ -55,9 +55,8 @@ class TestTritonStructure(unittest.TestCase):
                 )
 
     def test_console_script_targets_canonical_deploy_module(self):
-        canonical = importlib.import_module("jittor.compat.triton")
-        repo_root = Path(canonical.__file__).resolve().parents[4]
-        pyproject = (repo_root / "pyproject.toml").read_text(encoding="utf-8")
+        repo_root = Path(__file__).resolve().parents[2]
+        pyproject = (repo_root / "compat" / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn(
             'jittor-triton-shim = "jittor.compat.triton.deploy:main"',
             pyproject,
@@ -191,7 +190,7 @@ class TestTritonStructure(unittest.TestCase):
     def test_deployed_redirect_cold_import_converges_to_canonical_modules(self):
         canonical = importlib.import_module("jittor.compat.triton")
         deploy = importlib.import_module("jittor.compat.triton.deploy")
-        python_root = Path(canonical.__file__).resolve().parents[3]
+        python_root = Path(__file__).resolve().parents[2] / "python"
         with tempfile.TemporaryDirectory() as target:
             deploy.deploy(target=target)
             env = os.environ.copy()
@@ -231,13 +230,12 @@ class TestTritonStructure(unittest.TestCase):
                 )
 
     def test_package_discovery_contains_only_the_canonical_package(self):
-        canonical = importlib.import_module("jittor.compat.triton")
-        repo_root = Path(canonical.__file__).resolve().parents[4]
+        repo_root = Path(__file__).resolve().parents[2]
         if not (repo_root / "pyproject.toml").is_file():
             self.skipTest("package discovery requires a source checkout")
         from setuptools import find_packages
 
-        packages = find_packages(where=str(repo_root / "python"))
+        packages = ["jittor.compat." + name for name in find_packages(where=str(repo_root / "compat"))]
         self.assertIn("jittor.compat.triton", packages)
         self.assertNotIn("jittor.triton_shim", packages)
 

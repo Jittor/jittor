@@ -27,7 +27,7 @@ Usage (the environment matters; see the worktree's handoff notes):
 
     JITTOR_HOME=... TMPDIR=... nvcc_path=... \
     PYTHONPATH=<worktree>/python \
-    python agent/scripts/check_build_stamp_invalidation.py
+    python tools/build/check_build_stamp_invalidation.py
 
 Exits 0 when every perturbation triggered a rebuild, 1 otherwise.
 """

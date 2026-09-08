@@ -15,21 +15,38 @@ class TestInstallerSplitRegressions(unittest.TestCase):
         from jittor.compat.torch.context import (
             TransformGetItemToIndex,
             getitem_transform_active,
+            getitem_transform_depth,
         )
 
         owner = SimpleNamespace(_transform_getitem_to_index_depth=4)
-        self.assertTrue(getitem_transform_active(owner))
-        with TransformGetItemToIndex(owner):
-            self.assertEqual(owner._transform_getitem_to_index_depth, 5)
-            with TransformGetItemToIndex(owner):
-                self.assertEqual(owner._transform_getitem_to_index_depth, 6)
-            self.assertEqual(owner._transform_getitem_to_index_depth, 5)
+        self.assertFalse(getitem_transform_active(owner))
+        other = SimpleNamespace()
+        scope = TransformGetItemToIndex(owner)
+        with scope:
+            self.assertEqual(getitem_transform_depth(owner), 1)
+            self.assertFalse(getitem_transform_active(other))
+            with scope:
+                self.assertEqual(getitem_transform_depth(owner), 2)
+            self.assertEqual(getitem_transform_depth(owner), 1)
         self.assertEqual(owner._transform_getitem_to_index_depth, 4)
+        self.assertEqual(getitem_transform_depth(owner), 0)
+
+    def test_transform_getitem_context_does_not_leak_to_another_context(self):
+        from contextvars import Context
+        from jittor.compat.torch.context import TransformGetItemToIndex, getitem_transform_active
+        owner = SimpleNamespace()
+        scope = TransformGetItemToIndex(owner)
+        with scope:
+            self.assertTrue(getitem_transform_active(owner))
+            self.assertFalse(Context().run(getitem_transform_active, owner))
+            self.assertEqual(vars(owner), {})
+        self.assertFalse(getitem_transform_active(owner))
 
         with self.assertRaisesRegex(RuntimeError, "expected"):
             with TransformGetItemToIndex(owner):
                 raise RuntimeError("expected")
-        self.assertEqual(owner._transform_getitem_to_index_depth, 4)
+        self.assertFalse(getitem_transform_active(owner))
+        self.assertEqual(vars(owner), {})
 
     def test_integer_getitem_remains_a_basic_index(self):
         value = jt.array([10, 20, 30])[1]
@@ -91,13 +108,17 @@ class TestInstallerSplitRegressions(unittest.TestCase):
             TransformGetItemToIndex,
         )
 
-        self.assertEqual(
-            getattr(jt, "_transform_getitem_to_index_depth", 0), 0)
+        from jittor.compat.torch.context import getitem_transform_depth
+        from jittor.compat.torch.tensor_state import compatibility_owner
+        owner = compatibility_owner(jt)
+        before = vars(jt).copy()
+        self.assertEqual(getitem_transform_depth(owner), 0)
         with self.assertRaisesRegex(RuntimeError, "expected"):
             with TransformGetItemToIndex():
-                self.assertEqual(jt._transform_getitem_to_index_depth, 1)
+                self.assertEqual(getitem_transform_depth(owner), 1)
                 raise RuntimeError("expected")
-        self.assertEqual(jt._transform_getitem_to_index_depth, 0)
+        self.assertEqual(getitem_transform_depth(owner), 0)
+        self.assertEqual(vars(jt).keys(), before.keys())
 
 
 if __name__ == "__main__":

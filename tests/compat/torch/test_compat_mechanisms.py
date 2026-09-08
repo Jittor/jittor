@@ -308,7 +308,7 @@ class TestExternalBackend(unittest.TestCase):
             def fail_source(path):
                 partial = ModuleType(module_name)
                 partial.__file__ = os.fspath(path / "partial.py")
-                sys.modules[module_name] = partial
+                external_backend.publish_source_module(module_name, partial)
                 raise RuntimeError("source load failed")
 
             sys.path.insert(0, os.fspath(installed_root))

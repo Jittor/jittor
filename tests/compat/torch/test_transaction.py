@@ -14,7 +14,6 @@ from jittor.compat.transaction import (
     set_flag,
 )
 from jittor.compat.torch.installers.core import _set_install_flag
-from jittor.compat.torch.installers.utilities import _mutate_import
 
 from _helpers.install_lock import install_lock_is_free
 
@@ -39,6 +38,9 @@ def test_failed_target_install_replays_rolled_back_steps_with_same_state(monkeyp
     from jittor.compat.torch.tensor_state import get_tensor_state
 
     backend = types.ModuleType("test-native-backend")
+    from jittor._runtime.state import RuntimeState, RuntimeContext
+    backend.runtime = RuntimeState(RuntimeContext(types.SimpleNamespace()))
+    initial_state = get_tensor_state(backend)
     target = TorchNamespace(backend)
     marker = object()
     calls = []
@@ -58,7 +60,9 @@ def test_failed_target_install_replays_rolled_back_steps_with_same_state(monkeyp
     with pytest.raises(installer.InstallStepError, match="injected target install failure"):
         installer.install(target)
     ctx = vars(target)["_torch_compat_install_context"]
-    state = ctx.state["_tensor_state"]
+    state = get_tensor_state(backend)
+    assert state is initial_state
+    assert "_tensor_state" not in ctx.state
     assert not state
     assert "local_api" not in vars(target)
     assert "_torch_compat_owner" not in vars(backend)
@@ -191,14 +195,14 @@ def test_utilities_import_hook_rolls_back_and_detects_external_replacement():
 
     try:
         jittor._torch_compat_install_context = context
-        _mutate_import(replacement, builtins)
+        set_attr(builtins, "__import__", replacement, context=context)
         assert builtins.__import__ is replacement
         tx.rollback()
         assert builtins.__import__ is original_import
 
         tx = InstallTransaction("utilities.install.conflict")
         context.state["_install_transaction"] = tx
-        _mutate_import(replacement, builtins)
+        set_attr(builtins, "__import__", replacement, context=context)
         builtins.__import__ = original_import
         with pytest.raises(TransactionConflict, match="owner lost"):
             tx.rollback()
@@ -254,7 +258,7 @@ def test_installer_writes_ignore_a_ledger_that_has_already_closed(closed):
     """A closed ledger must not turn a later write into a RuntimeError.
 
     These helpers do not run only at install time: ``_set_use_cuda`` is reached
-    from ``torch.zeros(device="cuda")`` and ``_mutate_import`` from the optional
+    from ``torch.zeros(device="cuda")`` and ``set_attr`` from the optional
     integration steps. Five of the six inlined lookups they replaced took
     whatever transaction sat in ``context.state`` without checking its state, and
     ``record()`` refuses one that is no longer open -- so a ledger left behind by
@@ -278,7 +282,7 @@ def test_installer_writes_ignore_a_ledger_that_has_already_closed(closed):
 
     try:
         jittor._torch_compat_install_context = _context(tx)
-        _mutate_import(replacement, builtins)
+        set_attr(builtins, "__import__", replacement, context=_context(tx))
         assert builtins.__import__ is replacement
     finally:
         builtins.__import__ = original_import

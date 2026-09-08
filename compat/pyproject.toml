@@ -16,3 +16,13 @@ jittor-torch-shim = "jittor.compat.shim.deploy:main"
 [tool.setuptools]
 include-package-data = true
 package-dir = { "jittor.compat" = ".", "torch" = "shim/resources/torch" }
+
+[tool.setuptools.package-data]
+"jittor.compat" = ["shim/cpp_extension/include/**/*", "shim/cpp_extension/src/**/*", "shim/resources/**/*"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["**/__pycache__/**", "**/.pytest_cache/**", "**/*.py[cod]"]
+
+[tool.jittor.sdist]
+include = []
+exclude = ["build/**", "dist/**"]

@@ -13,6 +13,13 @@ from unittest import mock
 from _helpers.child_process import run_python_child
 
 
+def _runtime_root(name):
+    from jittor._runtime.state import RuntimeContext, RuntimeState
+    root = types.ModuleType(name)
+    root.runtime = RuntimeState(RuntimeContext(types.SimpleNamespace()))
+    return root
+
+
 _CACHE_ROOT = pathlib.Path(
     os.environ.get("XDG_CACHE_HOME", pathlib.Path.home() / ".cache")
 ).expanduser()
@@ -230,7 +237,7 @@ class TestTorchBootstrap(unittest.TestCase):
 
         for strict in (False, True):
             with self.subTest(strict=strict):
-                root = types.ModuleType("_stage7_control_%s" % int(strict))
+                root = _runtime_root("_stage7_control_%s" % int(strict))
                 logger = mock.Mock()
                 root.compiler = types.SimpleNamespace(LOG=logger)
                 original_torch = sys.modules.get("torch")
@@ -250,9 +257,9 @@ class TestTorchBootstrap(unittest.TestCase):
                         integrations.assert_not_called()
                     else:
                         self.assertIsNone(control.enable_runtime(root, strict=False))
-                        self.assertFalse(root._torch_shim_runtime_state["installed"])
+                        self.assertFalse(root.runtime.service_state("jittor.torch.activation")["installed"])
                         self.assertIsNone(
-                            root._torch_shim_runtime_state["external_patches"]
+                            root.runtime.service_state("jittor.torch.activation")["external_patches"]
                         )
                         logger.w.assert_called_once()
                         integrations.assert_not_called()
@@ -262,7 +269,7 @@ class TestTorchBootstrap(unittest.TestCase):
         from jittor.compat.shim import control
         from jittor.compat.torch.context import InstallStepError
 
-        root = types.ModuleType("_stage7_required_control")
+        root = _runtime_root("_stage7_required_control")
         root.compiler = types.SimpleNamespace(LOG=mock.Mock())
         failure = InstallStepError(
             "distributed.required", RuntimeError("missing graph")
@@ -277,12 +284,12 @@ class TestTorchBootstrap(unittest.TestCase):
             ):
                 control.enable_runtime(root, strict=False)
         integrations.assert_not_called()
-        self.assertFalse(root._torch_shim_runtime_state["installed"])
+        self.assertFalse(root.runtime.service_state("jittor.torch.activation")["installed"])
 
     def test_repeated_control_enable_reapplies_integrations(self):
         from jittor.compat.shim import control
 
-        root = types.ModuleType("_stage7_repeated_control")
+        root = _runtime_root("_stage7_repeated_control")
         root.compiler = types.SimpleNamespace(LOG=mock.Mock())
         reports = ({"pass": 1}, {"pass": 2})
 
@@ -318,7 +325,7 @@ class TestTorchBootstrap(unittest.TestCase):
         runtime_enable.assert_called_once()
         self.assertEqual(integrations.call_count, 1)
         self.assertEqual(
-            root._torch_shim_runtime_state["external_patches"], reports[0]
+            root.runtime.service_state("jittor.torch.activation")["external_patches"], reports[0]
         )
         self.assertEqual(runtime_result["integrations"], reports[0])
 
@@ -335,15 +342,15 @@ class TestTorchBootstrap(unittest.TestCase):
             with self.subTest(graph=graph), mock.patch.dict(
                 sys.modules, {}, clear=False
             ):
-                root = types.ModuleType(
+                root = _runtime_root(
                     "_stage7_changed_control_%s" % graph.replace("-", "_")
                 )
                 root.compiler = types.SimpleNamespace(LOG=mock.Mock())
-                root._torch_shim_runtime_state = {
+                root.runtime.service_state("jittor.torch.activation", factory=dict).update({
                     "installed": True,
                     "result": {"runtime_root": "/runtime"},
                     "external_patches": {"pass": 1},
-                }
+                })
                 for name in tuple(sys.modules):
                     if name == "torch" or name.startswith("torch."):
                         sys.modules.pop(name, None)
@@ -403,7 +410,7 @@ class TestTorchBootstrap(unittest.TestCase):
                     sys.modules["torch"] = real
                     sys.modules["torch.nn"] = child
                     expected = {"torch": real, "torch.nn": child}
-                root = types.ModuleType(
+                root = _runtime_root(
                     "_stage7_retry_control_%s" % int(real_loaded)
                 )
                 root.compiler = types.SimpleNamespace(LOG=mock.Mock())
@@ -417,8 +424,8 @@ class TestTorchBootstrap(unittest.TestCase):
                         control.enable_runtime(root, strict=False)
                     )
                 integrations.assert_not_called()
-                self.assertFalse(root._torch_shim_runtime_state["installed"])
-                self.assertIsNone(root._torch_shim_runtime_state["result"])
+                self.assertFalse(root.runtime.service_state("jittor.torch.activation")["installed"])
+                self.assertIsNone(root.runtime.service_state("jittor.torch.activation")["result"])
                 actual = {
                     name: sys.modules[name]
                     for name in ("torch", "torch.nn")
@@ -465,7 +472,7 @@ class TestTorchBootstrap(unittest.TestCase):
     def test_control_delegates_to_explicit_activation(self):
         from jittor.compat.shim import control
 
-        root = types.ModuleType("_stage7_flags_control")
+        root = _runtime_root("_stage7_flags_control")
         with mock.patch(
             "jittor.compat.shim.runtime._activate_once", return_value={"active": True}
         ) as activate:
@@ -488,7 +495,7 @@ class TestTorchBootstrap(unittest.TestCase):
     def test_activation_runs_once_and_status_is_queryable(self):
         from jittor.compat.shim import runtime
 
-        root = types.ModuleType("_stage7_single_activation")
+        root = _runtime_root("_stage7_single_activation")
         expected = {"runtime_root": "/runtime", "integrations": {"ok": True}}
         with mock.patch.object(
             runtime, "_activate_once", return_value=expected
@@ -503,11 +510,69 @@ class TestTorchBootstrap(unittest.TestCase):
         self.assertTrue(status.active)
         self.assertEqual(status.phase, "active")
         self.assertIs(status.result, expected)
+        self.assertNotIn("_torch_shim_runtime_state", vars(root))
+
+    def test_activation_rollback_conflict_releases_lock_and_marks_failure(self):
+        from jittor.compat.shim import runtime
+        from jittor.compat.transaction import TransactionConflict
+        from _helpers.install_lock import install_lock_is_free
+        root = _runtime_root("_activation_conflict")
+        target = types.SimpleNamespace(value="before")
+
+        def fail(**kwargs):
+            kwargs["_transaction"].mutate_attr(target, "value", "owned")
+            target.value = "external"
+            raise RuntimeError("activation failed")
+
+        with mock.patch.object(runtime, "_activate_once", side_effect=fail):
+            with self.assertRaises(TransactionConflict):
+                runtime.activate(_root_module=root)
+        self.assertEqual(target.value, "external")
+        self.assertEqual(runtime.activation_status(root).phase, "failed")
+        self.assertTrue(install_lock_is_free())
+
+    def test_concurrent_activation_waits_and_reuses_the_result(self):
+        import threading
+        from jittor.compat.shim import runtime
+        root = _runtime_root("_concurrent_activation")
+        entered, release = threading.Event(), threading.Event()
+        results, failures = [], []
+        expected = {"active": True}
+
+        def once(**kwargs):
+            entered.set()
+            assert release.wait(3)
+            return expected
+
+        def run():
+            try:
+                results.append(runtime.activate(_root_module=root))
+            except BaseException as error:
+                failures.append(error)
+
+        with mock.patch.object(runtime, "_activate_once", side_effect=once) as invoke, \
+                mock.patch.object(runtime, "torch_namespace_owned", return_value=True):
+            first = threading.Thread(target=run)
+            second = threading.Thread(target=run)
+            first.start()
+            try:
+                self.assertTrue(entered.wait(3))
+                second.start()
+            finally:
+                release.set()
+                first.join(5)
+                if second.ident is not None:
+                    second.join(5)
+            self.assertFalse(first.is_alive() or second.is_alive())
+            invoke.assert_called_once()
+        self.assertEqual(failures, [])
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(result is expected for result in results))
 
     def test_activation_rejects_switching_from_native_to_independent_namespace(self):
         from jittor.compat.shim import runtime
 
-        root = types.ModuleType("_stage7_namespace_mode_native")
+        root = _runtime_root("_stage7_namespace_mode_native")
         expected = {"torch": root}
         with mock.patch.object(runtime, "_activate_once", return_value=expected), \
                 mock.patch.object(runtime, "torch_namespace_owned", return_value=True):
@@ -518,7 +583,7 @@ class TestTorchBootstrap(unittest.TestCase):
     def test_activation_rejects_switching_from_independent_to_native_namespace(self):
         from jittor.compat.shim import runtime
 
-        root = types.ModuleType("_stage7_namespace_mode_independent")
+        root = _runtime_root("_stage7_namespace_mode_independent")
         expected = {"torch": object()}
         with mock.patch.object(runtime, "_activate_once", return_value=expected), \
                 mock.patch.object(runtime, "torch_namespace_owned", return_value=True):
@@ -561,7 +626,7 @@ class TestTorchBootstrap(unittest.TestCase):
         from jittor.compat.shim import runtime
         from jittor.compat.torch.namespace import TorchNamespace
 
-        root = types.ModuleType("_stage7_independent_namespace")
+        root = _runtime_root("_stage7_independent_namespace")
         root.autograd = types.SimpleNamespace(
             EXPLICIT_REQUIRES_GRAD=object(), set_policy=mock.Mock()
         )
@@ -597,7 +662,7 @@ class TestTorchBootstrap(unittest.TestCase):
         from jittor.compat.shim import runtime
         from jittor.compat.transaction import ActivationTransaction
 
-        root = types.SimpleNamespace()
+        root = _runtime_root("_activation_failure")
         paths = []
         modules = {}
 
@@ -622,7 +687,7 @@ class TestTorchBootstrap(unittest.TestCase):
     def test_compat_composition_keeps_native_flags_object(self):
         from jittor.compat import runtime
 
-        root = types.ModuleType("_stage7_native_flags")
+        root = _runtime_root("_stage7_native_flags")
         core_flags = types.SimpleNamespace(use_cuda=0)
         root.flags = core_flags
         with mock.patch("jittor.compat._aliases.install_aliases", return_value={}), \

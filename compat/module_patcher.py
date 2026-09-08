@@ -18,7 +18,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Tuple
 
 from ._entry_points import entry_points as _entry_points
 from .diagnostics import EXPECTED, swallowed
-from .transaction import TransactionConflict
+from .transaction import InstallTransaction, TransactionConflict, runtime_hook, current_runtime_hook, release_runtime_hooks
 
 
 MODULE_PATCH_ENTRY_POINT = "jittor.module_patches"
@@ -115,7 +115,11 @@ def patch_method(owner: object, name: str, replacement: object, expected: object
     namespace = getattr(owner, "__dict__", {})
     had_local = name in namespace
     local_value = namespace.get(name, _MISSING)
-    setattr(owner, name, replacement)
+    hook = current_runtime_hook()
+    if hook is None:
+        setattr(owner, name, replacement)
+    else:
+        hook.mutate_attr(owner, name, replacement)
     return MethodPatch(owner, name, replacement, had_local, local_value)
 
 
@@ -193,6 +197,7 @@ def _load_entry_point_patches() -> List[PatchResult]:
 
 
 def _apply_module_patches(module: ModuleType, transaction=None) -> List[PatchResult]:
+    global _LAST_REPORT
     with _LOCK:
         callbacks = tuple(_REGISTRY.get(module.__name__, ()))
     results = []
@@ -200,20 +205,23 @@ def _apply_module_patches(module: ModuleType, transaction=None) -> List[PatchRes
         callback_name = _callback_name(callback)
         before = dict(module.__dict__) if transaction is not None else None
         try:
-            changed = callback(module)
+            with runtime_hook(("module_patch", module.__name__, callback),
+                              parent_transaction=transaction):
+                changed = callback(module)
+        except TransactionConflict:
+            raise
         except EXPECTED as exc:
+            if getattr(callback, "_jittor_required_patch", False):
+                failure = PatchResult("module", module.__name__, callback_name, "failed", repr(exc))
+                _LAST_REPORT = PatchReport(tuple(results + [failure]), _FINDER in sys.meta_path)
+                raise
             swallowed("module_patcher.py _apply_module_patches: changed = callback(module)", exc)
             results.append(PatchResult("module", module.__name__, callback_name, "failed", repr(exc)))
             continue
         status = "patched" if changed is not False else "unchanged"
         results.append(PatchResult("module", module.__name__, callback_name, status))
         if transaction is not None:
-            after = module.__dict__
-            for name in set(before) | set(after):
-                old = before.get(name, _MISSING)
-                new = after.get(name, _MISSING)
-                if old is not new:
-                    transaction.record(module, name, old, new)
+            transaction.record_object_diffs(module, before)
     return results
 
 
@@ -249,15 +257,21 @@ class _ModulePatchFinder(importlib.abc.MetaPathFinder):
         return spec
 
 
-def install_module_patches(load_entry_points: bool = True, transaction=None) -> PatchReport:
+def install_module_patches(load_entry_points: bool = True, transaction=None,
+                           expected_entry_points=()) -> PatchReport:
     """Load adapter registrations, patch loaded modules, and install one finder."""
 
     global _FINDER, _LAST_REPORT
-    with _LOCK:
+    with InstallTransaction._lock, _LOCK:
         old_registry = {path: list(callbacks) for path, callbacks in _REGISTRY.items()}
         old_loaded = set(_ENTRY_POINTS_LOADED)
         old_finder = _FINDER
         results = _load_entry_point_patches() if load_entry_points else []
+        present = {result.name for result in results if result.kind == "entry_point"}
+        for name in expected_entry_points:
+            if name not in present:
+                results.append(PatchResult("entry_point", name, "discovery", "unavailable",
+                                           "Requested optional adapter entry point is not installed"))
         for path in tuple(_REGISTRY):
             module = sys.modules.get(path)
             if isinstance(module, ModuleType):
@@ -297,15 +311,31 @@ def last_module_patch_report() -> Optional[PatchReport]:
     return _LAST_REPORT
 
 
+def release_module_patch_hooks(prefix=""):
+    """Release owned callback writes; retain registrations for a later install."""
+    conflicts = []
+    for path, callbacks in registered_module_patches().items():
+        if not path.startswith(prefix):
+            continue
+        for callback in callbacks:
+            try:
+                release_runtime_hooks(("module_patch", path, callback))
+            except TransactionConflict as error:
+                conflicts.append(str(error))
+    if conflicts:
+        raise TransactionConflict("; ".join(conflicts))
+
+
 def uninstall_module_patches() -> bool:
-    """Remove this module's finder; registrations and patched values remain."""
+    """Remove this finder and undo callback writes recorded by the hook API."""
 
     global _FINDER
-    with _LOCK:
+    with InstallTransaction._lock, _LOCK:
         if _FINDER is None or _FINDER not in sys.meta_path:
             return False
         sys.meta_path.remove(_FINDER)
         _FINDER = None
+        release_module_patch_hooks()
         return True
 
 
@@ -320,6 +350,7 @@ __all__ = [
     "patch_method",
     "register_module_patch",
     "registered_module_patches",
+    "release_module_patch_hooks",
     "restore_method",
     "uninstall_module_patches",
 ]

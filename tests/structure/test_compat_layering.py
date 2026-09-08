@@ -165,16 +165,24 @@ class TestCollectivesMovedBelowBothSides(unittest.TestCase):
         self.assertIn("_collectives._all_gather_shards", source)
 
     def test_fsdp2_common_still_re_exports_them(self):
-        # The move must be invisible to the ~10 `common._all_gather_shards(...)`
-        # call sites inside fsdp2.
+        # WORLD keeps the canonical implementation identity. FSDP's optional
+        # group wrappers also support mesh communicators, so they are distinct.
         from jittor.compat import collectives
         from jittor.compat.fsdp2 import common
+        from unittest.mock import patch
 
-        for name in ("_all_gather_shards", "_reduce_scatter_padded", "_rank",
-                     "_world_size", "_nccl_ops", "_slice_flat",
+        for name in ("_rank", "_world_size", "_nccl_ops", "_slice_flat",
                      "_in_true_distributed"):
             with self.subTest(name=name):
                 self.assertIs(getattr(common, name), getattr(collectives, name))
+        for name in ("_all_gather_shards", "_reduce_scatter_padded"):
+            alias = "_world" + name
+            with self.subTest(name=name):
+                self.assertIs(getattr(common, alias), getattr(collectives, name))
+                value, result = object(), object()
+                with patch.object(common, alias, return_value=result) as delegate:
+                    self.assertIs(getattr(common, name)(value), result)
+                    delegate.assert_called_once_with(value)
 
     def test_collectives_does_not_depend_on_fsdp2(self):
         offenders = [module for _node, module in _imports(_COMPAT / "collectives.py")

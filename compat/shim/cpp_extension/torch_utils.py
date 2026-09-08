@@ -14,6 +14,7 @@ import sys
 import types
 import hashlib
 from ...diagnostics import EXPECTED, swallowed
+from ...transaction import runtime_hook, TransactionConflict
 
 
 def _jt_cpp_build_cfg():
@@ -214,10 +215,13 @@ def load(name, sources, extra_include_paths=None, extra_cflags=None,
     if (not force) and loaded is not None and \
        os.path.abspath(getattr(loaded, "__file__", "") or "") == os.path.abspath(out_path):
         return loaded
-    spec = importlib.util.spec_from_file_location(import_name, out_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    sys.modules[import_name] = mod
+    if loaded is not None and os.path.abspath(getattr(loaded, "__file__", "") or "") != os.path.abspath(out_path):
+        raise TransactionConflict("extension module name is owned by another source: " + import_name)
+    with runtime_hook(("cpp_extension", import_name)) as transaction:
+        spec = importlib.util.spec_from_file_location(import_name, out_path)
+        mod = importlib.util.module_from_spec(spec)
+        transaction.replace_module(sys.modules, import_name, mod, expected=loaded)
+        spec.loader.exec_module(mod)
     return mod
 
 

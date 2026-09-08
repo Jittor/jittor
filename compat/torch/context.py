@@ -7,6 +7,7 @@ import importlib.machinery
 import sys
 import types
 from collections.abc import MutableMapping
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 
 from .._aliases import _is_deployed_torch_placeholder
@@ -19,37 +20,39 @@ def _native_backend_for(target):
     return target.owner if isinstance(target, TorchNamespace) else target
 
 
+_getitem_transform_owners = ContextVar("jittor_getitem_transform_owners", default=())
+
+
 class TransformGetItemToIndex:
-    """Scope the vmap getitem lowering hint for one Jittor owner.
-
-    The compatibility surface historically exposed the depth as a private
-    attribute on ``jittor``.  Keeping the owner explicit here prevents the
-    compiler installer and numerical runtime from growing separate state
-    machines, while the attribute remains observable for old callers.
-    """
-
-    DEPTH_ATTR = "_transform_getitem_to_index_depth"
+    """Context-local lowering scope; no mutable counters on frontend modules."""
 
     def __init__(self, owner):
         self.owner = owner
-        self._previous_depth = 0
+        self._tokens = ContextVar("jittor_getitem_transform_tokens", default=())
 
     def __enter__(self):
-        self._previous_depth = int(getattr(self.owner, self.DEPTH_ATTR, 0))
-        setattr(self.owner, self.DEPTH_ATTR, self._previous_depth + 1)
+        owners = _getitem_transform_owners.get()
+        token = _getitem_transform_owners.set(owners + (self.owner,))
+        self._tokens.set(self._tokens.get() + (token,))
         return self
 
     def __exit__(self, *exc):
-        # Always restore the exact entry value, including when the body raises
-        # or when contexts are nested.
-        setattr(self.owner, self.DEPTH_ATTR, self._previous_depth)
+        tokens = self._tokens.get()
+        if not tokens:
+            raise RuntimeError("getitem lowering scope exited without entering")
+        _getitem_transform_owners.reset(tokens[-1])
+        self._tokens.set(tokens[:-1])
         return False
 
 
-def getitem_transform_active(owner):
-    """Return whether getitem-to-index lowering is active for ``owner``."""
+def getitem_transform_depth(owner):
+    """Read this context's nesting depth for one owner by identity."""
+    return sum(current is owner for current in _getitem_transform_owners.get())
 
-    return bool(getattr(owner, TransformGetItemToIndex.DEPTH_ATTR, 0))
+
+def getitem_transform_active(owner):
+    """Return whether getitem-to-index lowering is active in this context."""
+    return bool(getitem_transform_depth(owner))
 
 
 class InstallStepError(RuntimeError):
@@ -302,6 +305,22 @@ class InstallContext:
 
     def mark_complete(self):
         setattr(self.target_namespace, self.COMPLETE_ATTR, True)
+
+
+def get_install_context(module, *, required=True):
+    """Read the active owner's context without creating state or installing APIs."""
+    from .tensor_state import compatibility_owner
+    target = compatibility_owner(module)
+    context = vars(target).get(InstallContext.CONTEXT_ATTR)
+    if context is None and not required:
+        return None
+    if not isinstance(context, InstallContext):
+        raise RuntimeError("Torch API requires an activated installation context")
+    if context.target_namespace is not target or context.registry.target_namespace is not target:
+        raise RuntimeError("Torch installation context belongs to a different target")
+    if context.registry.native_backend is not context.native_backend:
+        raise RuntimeError("Torch installation context has a different native backend")
+    return context
 
 
 def registry_for(jittor_module, registry=None):

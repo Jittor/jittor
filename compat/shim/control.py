@@ -37,7 +37,8 @@ def enable_runtime(root_module, preflight_result=None, strict=None):
     """Compatibility wrapper around the single public activation function."""
 
     strict = _strict_bootstrap(strict)
-    state = getattr(root_module, "_torch_shim_runtime_state", None)
+    from .runtime import _runtime_state
+    state = _runtime_state(root_module, create=False)
     if state and state.get("installed") and not torch_namespace_owned(root_module):
         raise RuntimeError(
             "cannot re-activate the Jittor Torch shim over a changed Torch "

@@ -12,17 +12,15 @@ description: 在没有目标硬件的机器上证明「去样板前后生成的�
 办法是把每个调用点归约成**设备会观察到的东西**的有序 token 流，然后拿改前的树和改后的树
 逐点对 diff。token 流相同 ⇒ 等价；不同 ⇒ 差异被强制显示成具体调用点的具体 token，逐条解释。
 
-参考实现：`agent/scripts/acl_launch_program.py`（ACL 的 `executeOp`）。用法是两个树当参数：
+参考实现：`tools/build/acl_launch_program.py`（ACL 的 `executeOp`）。用法是两个树当参数：
 
 ```bash
 git worktree add --detach $TMPDIR/before <去样板之前的提交>
-python agent/scripts/acl_launch_program.py $TMPDIR/before .   # 退出码非 0 即有差异
+python tools/build/acl_launch_program.py $TMPDIR/before .   # 退出码非 0 即有差异
 ```
 
-放 `agent/scripts/` 而不是 `agent/tools/`：`.gitignore` 里 `/agent/*` 是整目录忽略，
-只有 `design`/`manuals`/`results`/`scripts`/`baselines`/`skills` 被白名单放回来，
-`scripts` 下也只放 `*.sh` 与 `*.py`。写进 `agent/tools/` 的脚本**永远进不了提交**，
-`git status` 也不会提醒你——本波差点就这样把工具丢了。
+实现归仓库的 `tools/build/`，本 skill 保留使用方法。`agent/` 只维护操作手册与
+skills，不放另一份公共仓库检查脚本。
 
 ## 怎么选 token
 

@@ -67,7 +67,7 @@ AWESOME 列表、asv 配置在根目录。
 ├── tests/                    # 目录镜像源码：tests/core ↔ src/core，tests/backends/<name> ↔ backends/<name>
 ├── docs/                     # 唯一的文档树；agent/design 并入 docs/architecture
 ├── examples/  benchmarks/
-└── agent/                    # 只留 manuals/ skills/ scripts/：给 agent 的操作手册，不放设计与结果
+└── agent/                    # 只留 manuals/ skills/；仓库脚本统一在 tools/，不放设计与结果
 ```
 
 ## 3. 每处搬动的理由

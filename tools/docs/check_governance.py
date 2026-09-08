@@ -154,10 +154,10 @@ def check_contract(documents):
 
     if (REPO_ROOT / "agent" / "manuals" / "design").exists():
         errors.append("retired documentation path still exists: agent/manuals/design")
-    allowed_agent_entries = {"manuals", "skills", "scripts"}
+    allowed_agent_entries = {"manuals", "skills"}
     for entry in (REPO_ROOT / "agent").iterdir():
         if entry.name not in allowed_agent_entries:
-            errors.append("agent only owns manuals/skills/scripts; found: " + entry.name)
+            errors.append("agent only owns manuals/skills; repository commands belong in tools: " + entry.name)
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     for token in (

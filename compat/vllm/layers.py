@@ -14,9 +14,9 @@ should not.
 Each patch keeps vLLM's guard conditions and defers to the original method when
 they do not hold, so a configuration these primitives do not cover still runs.
 """
-from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
+from ..transaction import set_attr
 
 _PATCHED = "_jittor_fused_forward"
 
@@ -42,9 +42,9 @@ def patch_rms_norm(module):
                 x, residual, weight, self.variance_epsilon)
         return original(self, x, residual)
 
-    layer.forward_native = forward
-    layer.forward_cuda = forward
-    setattr(layer, _PATCHED, True)
+    set_attr(layer, "forward_native", forward)
+    set_attr(layer, "forward_cuda", forward)
+    set_attr(layer, _PATCHED, True)
     return True
 
 
@@ -70,9 +70,9 @@ def patch_rotary_embedding(module):
                 is_neox=self.is_neox_style)
         return original(self, positions, query, key)
 
-    layer.forward_native = forward
-    layer.forward_cuda = forward
-    setattr(layer, _PATCHED, True)
+    set_attr(layer, "forward_native", forward)
+    set_attr(layer, "forward_cuda", forward)
+    set_attr(layer, _PATCHED, True)
     return True
 
 
@@ -88,9 +88,9 @@ def patch_activations(module):
     changed = False
     gated = getattr(module, "SiluAndMul", None)
     if gated is not None and not getattr(gated, _PATCHED, False):
-        gated.forward_native = staticmethod(jt.nn.silu_and_mul)
-        gated.forward_cuda = staticmethod(jt.nn.silu_and_mul)
-        setattr(gated, _PATCHED, True)
+        set_attr(gated, "forward_native", staticmethod(jt.nn.silu_and_mul))
+        set_attr(gated, "forward_cuda", staticmethod(jt.nn.silu_and_mul))
+        set_attr(gated, _PATCHED, True)
         changed = True
     for activation in vars(module).values():
         # Only the activations this module defines. Classes it merely imports
@@ -102,8 +102,8 @@ def patch_activations(module):
                 and hasattr(activation, "forward_native")
                 and hasattr(activation, "forward_cuda")
                 and not getattr(activation, _PATCHED, False)):
-            activation.forward_cuda = activation.forward_native
-            setattr(activation, _PATCHED, True)
+            set_attr(activation, "forward_cuda", activation.forward_native)
+            set_attr(activation, _PATCHED, True)
             changed = True
     return changed
 
@@ -126,7 +126,7 @@ def patch_qwen3_attention(module):
             and jt.flags.use_cuda
             and getattr(jt.flags, "no_grad", 0)
             and all(isinstance(value, jt.Var) for value in values)
-            and all(_jittor_dtype_name(value.dtype) == "bfloat16" for value in values)
+            and all(str(value.dtype) in ("bfloat16", "torch.bfloat16") for value in values)
             and hasattr(self, "head_dim")
             and hasattr(self, "q_size")
             and hasattr(self, "kv_size")
@@ -172,8 +172,8 @@ def patch_qwen3_attention(module):
         output, _ = self.o_proj(self.attn(q, k, v))
         return output
 
-    layer.forward = forward
-    setattr(layer, _PATCHED, True)
+    set_attr(layer, "forward", forward)
+    set_attr(layer, _PATCHED, True)
     return True
 
 

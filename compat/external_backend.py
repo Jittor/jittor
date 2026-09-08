@@ -5,6 +5,7 @@ from __future__ import annotations
 import glob
 import hashlib
 import importlib
+import importlib.abc
 import importlib.util
 import inspect
 import json
@@ -18,7 +19,73 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ._entry_points import entry_points as _entry_points
 from .diagnostics import EXPECTED, swallowed
-from .transaction import TransactionConflict
+from .transaction import InstallTransaction, TransactionConflict, runtime_hook
+
+class _SourcePath(str):
+    """Identity token for one resolver-owned sys.path insertion."""
+
+_SOURCE_IMPORT_LOCAL = threading.local()
+
+
+def publish_source_module(name, module):
+    """Explicit publication API for custom source loaders inside load()."""
+    state = getattr(_SOURCE_IMPORT_LOCAL, "state", None)
+    if state is None:
+        raise RuntimeError("source publication requires the transactional load() entry")
+    if name not in state["owned"]:
+        if name in sys.modules:
+            state["before"][name] = sys.modules[name]
+        else:
+            state["before"].pop(name, None)
+    sys.modules[name] = module
+    state["owned"][name] = module
+
+
+class _SourceTrackingLoader(importlib.abc.Loader):
+    def __init__(self, loader, state):
+        self.loader, self.state = loader, state
+    def __getattr__(self, name):
+        return getattr(self.loader, name)
+    def create_module(self, spec):
+        create = getattr(self.loader, "create_module", None)
+        return create(spec) if create is not None else None
+    def exec_module(self, module):
+        self.state["owned"][module.__name__] = module
+        try:
+            self.loader.exec_module(module)
+        finally:
+            # Imported modules must not retain the resolver's whole entry
+            # snapshot through their loader after this temporary hook ends.
+            if vars(module).get("__loader__") is self:
+                module.__loader__ = self.loader
+            spec = vars(module).get("__spec__")
+            if spec is not None and spec.loader is self:
+                spec.loader = self.loader
+
+
+class _SourceTrackingFinder(importlib.abc.MetaPathFinder):
+    def __init__(self, state):
+        self.state = state
+    def find_spec(self, fullname, path=None, target=None):
+        if getattr(_SOURCE_IMPORT_LOCAL, "state", None) is not self.state:
+            return None
+        for finder in tuple(sys.meta_path):
+            if finder is self or isinstance(finder, _SourceTrackingFinder):
+                continue
+            find = getattr(finder, "find_spec", None)
+            if find is None:
+                continue
+            spec = find(fullname, path, target)
+            if spec is None:
+                continue
+            if spec.loader is not None and isinstance(spec.origin, str):
+                try:
+                    pathlib.Path(spec.origin).resolve().relative_to(self.state["root"])
+                except (OSError, ValueError):
+                    return spec
+                spec.loader = _SourceTrackingLoader(spec.loader, self.state)
+            return spec
+        return None
 
 
 EXTERNAL_BACKEND_ENTRY_POINT = "jittor.external_backends"
@@ -360,8 +427,8 @@ class ExternalBackend:
         return None
 
     def _inside_root(self, module: ModuleType, root: pathlib.Path) -> bool:
-        raw = getattr(module, "__file__", None)
-        if not raw:
+        raw = vars(module).get("__file__")
+        if not isinstance(raw, (str, os.PathLike)):
             return False
         try:
             pathlib.Path(raw).resolve().relative_to(root.resolve())
@@ -370,6 +437,9 @@ class ExternalBackend:
             return False
 
     def import_local(self, root: pathlib.Path) -> Optional[ModuleType]:
+        state = getattr(_SOURCE_IMPORT_LOCAL, "state", None)
+        if state is None:
+            raise RuntimeError("local source imports require the transactional load() entry")
         for name in self.module_names():
             if not (
                 (root.name == name and (root / "__init__.py").is_file())
@@ -382,6 +452,7 @@ class ExternalBackend:
                 for key in list(sys.modules):
                     if key == name or key.startswith(name + "."):
                         displaced[key] = sys.modules.pop(key)
+                        state["before"][key] = displaced[key]
                 importlib.invalidate_caches()
             try:
                 imported = importlib.import_module(name)
@@ -396,8 +467,14 @@ class ExternalBackend:
                 self._log("import local %s from %s failed: %s" % (name, root, exc))
                 for key in list(sys.modules):
                     if key == name or key.startswith(name + "."):
-                        sys.modules.pop(key, None)
-                sys.modules.update(displaced)
+                        current = sys.modules[key]
+                        if state["owned"].get(key) is current:
+                            sys.modules.pop(key)
+                        elif key not in displaced or current is not displaced[key]:
+                            raise TransactionConflict("local import slot replaced externally: %s" % key)
+                for key, previous in displaced.items():
+                    if key not in sys.modules:
+                        sys.modules[key] = previous
         return None
 
     def manifest_paths(self, root: pathlib.Path) -> List[pathlib.Path]:
@@ -500,7 +577,10 @@ class ExternalBackend:
             if spec is None or spec.loader is None:
                 raise RuntimeError("cannot load %s" % path)
             module = importlib.util.module_from_spec(spec)
-            sys.modules[name] = module
+            state = getattr(_SOURCE_IMPORT_LOCAL, "state", None)
+            if state is None:
+                raise RuntimeError("source builds require the transactional load() entry")
+            publish_source_module(name, module)
             spec.loader.exec_module(module)
             return self.select_backend(module)
         except EXPECTED as exc:
@@ -532,26 +612,59 @@ class ExternalBackend:
 
     @staticmethod
     def _add_source_to_sys_path(root: pathlib.Path) -> None:
+        state = getattr(_SOURCE_IMPORT_LOCAL, "state", None)
+        if state is None:
+            raise RuntimeError("source paths require the transactional load() entry")
         for path in (root, root.parent):
             text = os.fspath(path)
             if text in sys.path:
-                sys.path.remove(text)
-            sys.path.insert(0, text)
+                continue
+            token = _SourcePath(text)
+            sys.path.insert(0, token)
+            state["paths"].append(token)
 
     @staticmethod
-    def _capture_source_import_state():
-        return tuple(sys.path), dict(sys.modules)
+    def _capture_source_import_state(root):
+        return {"root": pathlib.Path(root).resolve(), "before": dict(sys.modules),
+                "paths": [], "owned": {}}
 
     @staticmethod
     def _restore_source_import_state(state) -> None:
-        source_path, source_modules = state
-        sys.path[:] = source_path
-        for name in set(sys.modules).difference(source_modules):
-            sys.modules.pop(name, None)
-        for name, module in source_modules.items():
-            if name not in sys.modules or sys.modules[name] is not module:
-                sys.modules[name] = module
+        conflicts = []
+        for token in state["paths"]:
+            indices = [i for i, value in enumerate(sys.path) if value is token]
+            if len(indices) == 1:
+                sys.path.pop(indices[0])
+            else:
+                conflicts.append("source path insertion changed externally: %s" % token)
+        before = state["before"]
+        for name, module in list(sys.modules.items()):
+            if not isinstance(module, ModuleType):
+                continue
+            raw = vars(module).get("__file__")
+            if not isinstance(raw, (str, os.PathLike)):
+                continue
+            try:
+                pathlib.Path(raw).resolve().relative_to(state["root"])
+            except (OSError, ValueError):
+                continue
+            if before.get(name) is not module and name not in state["owned"]:
+                conflicts.append("untracked source publication (preserved): %s" % name)
+        for name, expected in state["owned"].items():
+            if name in before and sys.modules.get(name) is before[name]:
+                continue
+            if name not in sys.modules and name not in before:
+                continue  # importlib already removed a failed import.
+            if sys.modules.get(name) is not expected:
+                conflicts.append("source module replaced externally: %s" % name)
+                continue
+            if name in before:
+                sys.modules[name] = before[name]
+            else:
+                sys.modules.pop(name, None)
         importlib.invalidate_caches()
+        if conflicts:
+            raise TransactionConflict("; ".join(conflicts))
 
     def load_source_root(self, raw_root: str) -> Optional[ModuleType]:
         root = pathlib.Path(raw_root).expanduser().resolve()
@@ -597,21 +710,33 @@ class ExternalBackend:
 
         # Source discovery changes process-global import state. Serialize these
         # transactions across resolvers and commit only a usable candidate.
-        with _SOURCE_IMPORT_LOCK:
-            state = self._capture_source_import_state()
+        with InstallTransaction._lock, _SOURCE_IMPORT_LOCK:
+            state = self._capture_source_import_state(source)
+            previous_state = getattr(_SOURCE_IMPORT_LOCAL, "state", None)
+            _SOURCE_IMPORT_LOCAL.state = state
+            finder = _SourceTrackingFinder(state)
+            sys.meta_path.insert(0, finder)
             try:
-                backend = self.load_source_root(source)
-                miss = self._candidate_capability_miss(backend, capability_key)
-            except EXPECTED as exc:
-                swallowed("external_backend.py _load_candidate: backend = self.load_source_root(source)", exc)
+                with runtime_hook(("source_backend", id(self), str(source))) as hook:
+                    backend = self.load_source_root(source)
+                    miss = self._candidate_capability_miss(backend, capability_key)
+                    if backend is None or miss is not None:
+                        hook.rollback()
+            except BaseException:
                 self._restore_source_import_state(state)
                 raise
+            finally:
+                _SOURCE_IMPORT_LOCAL.state = previous_state
+                positions = [i for i, value in enumerate(sys.meta_path) if value is finder]
+                if len(positions) != 1:
+                    raise TransactionConflict("source import finder changed externally")
+                sys.meta_path.pop(positions[0])
             if backend is None or miss is not None:
                 self._restore_source_import_state(state)
             return backend, miss
 
     def load(self, capability_key: object = None, force: bool = False) -> Optional[ModuleType]:
-        with self._lock:
+        with InstallTransaction._lock, self._lock:
             if self._prepare_capability is not None and capability_key is not None:
                 self._prepare_capability(capability_key)
             key = self.configuration_key(capability_key)
@@ -629,6 +754,8 @@ class ExternalBackend:
             for kind, source in candidates:
                 try:
                     backend, miss = self._load_candidate(source, capability_key)
+                except TransactionConflict:
+                    raise
                 except EXPECTED as exc:
                     swallowed("external_backend.py load: backend, miss = self._load_candidate(source, capability...", exc)
                     attempts.append(BackendAttempt(str(source or kind), "failed", repr(exc)))
@@ -787,6 +914,7 @@ __all__ = [
     "ExternalBackendSpec",
     "external_backend_for_source_root",
     "load_external_backend_entry_points",
+    "publish_source_module",
     "register_external_backend",
     "register_external_backend_hint",
     "registered_external_backends",

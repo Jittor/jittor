@@ -1,3 +1,4 @@
+from ...fidelity import Fidelity, register_api_bindings
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import jittor as jt
 from jittor import nn
@@ -60,6 +61,169 @@ def _poisson_nll(input, target, log_input=True, full=False, size_average=None,
         loss = loss + jt.ternary(target > 1, stir, jt.zeros_like(target))
     return loss.mean() if reduction == "mean" else (loss.sum() if reduction == "sum" else loss)
 
+from ...context import get_install_context
+from types import MappingProxyType
+from .loss_modules import LOSS_CLASSES, PixelShuffle, PixelUnshuffle
+from .extra_api import _adapt_extra
+
+def _softmax(input, dim=-1, _stacklevel=3, dtype=None):
+    _context = get_install_context(jt)
+    _jt_softmax = _context.state["nn_functional_native"]['_jt_softmax']
+    if dtype is not None:
+        input = input.cast(_dtype_to_str(dtype))
+    return _jt_softmax(input, dim=dim)
+
+
+def _interpolate(input=None, size=None, scale_factor=None,
+                 mode="nearest", align_corners=None,
+                 recompute_scale_factor=None, antialias=False,
+                 **_kw):
+    _context = get_install_context(jt)
+    _jt_interpolate = _context.state["nn_functional_native"]['_jt_interpolate']
+    if input is None:
+        input = _kw.pop("X")
+    ac = False if align_corners is None else align_corners
+    return _jt_interpolate(input, size=size,
+                           scale_factor=scale_factor, mode=mode,
+                           align_corners=ac)
+
+
+def _cross_entropy(input, target, weight=None, size_average=None,
+                   ignore_index=-100, reduce=None, reduction="mean",
+                   label_smoothing=0.0):
+    # torch: a floating-point target with the SAME shape as input is a
+    # class-probability ("soft label") target (mixup / distillation / soft
+    # label-smoothing). jittor's cross_entropy_loss only understands integer
+    # class-index targets, so handle the soft case here.
+    _context = get_install_context(jt)
+    nn = _context.target_namespace.nn
+    _jt_ce = _context.state["nn_functional_native"]['_jt_ce']
+    if (isinstance(target, jt.Var) and target.ndim == input.ndim
+            and "int" not in _jittor_dtype_name(target.dtype)):
+        Cc = int(input.shape[1]) if input.ndim >= 2 else int(input.shape[-1])
+        cdim = 1 if input.ndim >= 2 else -1
+        logp = nn.log_softmax(input, dim=cdim)
+        tgt = target
+        if label_smoothing:
+            tgt = (1.0 - label_smoothing) * tgt + label_smoothing / Cc
+        if weight is not None:
+            wsh = [1] * input.ndim; wsh[cdim] = Cc
+            wloss = -(tgt * logp * weight.reshape(wsh)).sum(dim=cdim)
+        else:
+            wloss = -(tgt * logp).sum(dim=cdim)
+        if reduction == "sum":
+            return wloss.sum()
+        if reduction == "none":
+            return wloss
+        return wloss.mean()        # torch divides the soft-target loss by N
+    if not label_smoothing:
+        ii = -100 if ignore_index is None else ignore_index
+        return _jt_ce(input, target, weight=weight, ignore_index=ii,
+                      reduction=reduction)
+    C = int(input.shape[1]) if input.ndim >= 2 else int(input.shape[-1])
+    if input.ndim > 2:                  # (N,C,d...) -> (M,C)
+        perm = [0] + list(range(2, input.ndim)) + [1]
+        x = input.transpose(perm).reshape((-1, C))
+    else:
+        x = input
+    t = target.reshape((-1,))
+    logp = nn.log_softmax(x, dim=-1)
+    ig = None if ignore_index is None else ignore_index
+    t_safe = t if ig is None else jt.ternary(t == ig, jt.zeros_like(t), t)
+    nll = -logp.gather(1, t_safe.reshape((-1, 1))).reshape((-1,))
+    if weight is not None:
+        wt = weight[t_safe]
+        nll = nll * wt
+        smooth = -(logp * weight.reshape((1, -1))).sum(dim=-1)
+    else:
+        wt = None
+        smooth = -logp.sum(dim=-1)
+    loss = (1.0 - label_smoothing) * nll + (label_smoothing / C) * smooth
+    if ig is not None:
+        keep = (t != ig).float32()
+        loss = loss * keep
+        norm = (wt * keep).sum() if wt is not None else keep.sum()
+    else:
+        norm = wt.sum() if wt is not None else jt.array(float(t.shape[0]))
+    if reduction == "sum":
+        return loss.sum()
+    if reduction == "none":
+        return loss.reshape(target.shape) if input.ndim > 2 else loss
+    return loss.sum() / norm
+
+
+def _ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
+              reduction="mean", zero_infinity=False):
+    _context = get_install_context(jt)
+    import numpy as _np_ctc
+    _CNEG = _context.state["nn_functional_native"]['_CNEG']
+    def _ints(v):
+        return [int(x) for x in (v.numpy().reshape(-1) if isinstance(v, jt.Var) else _np_ctc.asarray(v).reshape(-1))]
+    in_lens, tgt_lens = _ints(input_lengths), _ints(target_lengths)
+    tnp = targets.numpy() if isinstance(targets, jt.Var) else _np_ctc.asarray(targets)
+    flat = (tnp.ndim == 1)
+    def _shift(v, k):
+        return jt.concat([jt.full((k,), _CNEG), v[:int(v.shape[0]) - k]]) if k > 0 else v
+    def _lse(mats):
+        m = mats[0]
+        for x in mats[1:]:
+            m = jt.maximum(m, x)
+        return m + jt.safe_log(sum(jt.exp(x - m) for x in mats))
+    N = log_probs.shape[1]
+    losses, offset = [], 0
+    for n in range(N):
+        Tn, Sn = in_lens[n], tgt_lens[n]
+        if flat:
+            seq = [int(x) for x in tnp[offset:offset + Sn]]; offset += Sn
+        else:
+            seq = [int(x) for x in tnp[n, :Sn]]
+        ext = [blank]
+        for lab in seq:
+            ext += [lab, blank]
+        L = len(ext)
+        ext_idx = jt.array(_np_ctc.array(ext, dtype="int64"))
+        skip = _np_ctc.zeros(L, dtype="float32")
+        for s in range(2, L):
+            if ext[s] != blank and ext[s] != ext[s - 2]:
+                skip[s] = 1.0
+        skip_v = jt.array(skip)
+        start = _np_ctc.full(L, _CNEG, dtype="float32"); start[0] = 0.0
+        if L > 1:
+            start[1] = 0.0
+        lp_n = log_probs[:Tn, n, :]
+        alpha = lp_n[0][ext_idx] + jt.array(start)
+        for t in range(1, Tn):
+            a2 = _shift(alpha, 2) * skip_v + (1 - skip_v) * _CNEG
+            alpha = lp_n[t][ext_idx] + _lse([alpha, _shift(alpha, 1), a2])
+        losses.append(-(_lse([alpha[L - 1], alpha[L - 2]]) if L > 1 else alpha[L - 1]))
+    out = jt.stack(losses).reshape((N,))   # (N,1)->(N,): jittor has no 0-d scalar
+    if zero_infinity:
+        out = jt.ternary(jt.isfinite(out), out, jt.zeros_like(out))
+    if reduction == "none":
+        return out
+    if reduction == "sum":
+        return out.sum()
+    tl = jt.array(_np_ctc.array([max(s, 1) for s in tgt_lens], dtype="float32"))
+    return (out / tl).mean()
+
+
+def _api_F_logsigmoid(input):
+    return jt.minimum(input, 0.0) - jt.log(1.0 + jt.exp(-jt.abs(input)))
+
+
+def _api_F_softmin(input, dim=-1, _stacklevel=3, dtype=None):
+    nn = get_install_context(jt).target_namespace.nn
+    return nn.softmax(-input, dim=dim)
+
+
+def _api_F_tanhshrink(input):
+    return input - jt.tanh(input)
+
+
+def _api_F_celu(input, alpha=1.0, inplace=False):
+    return jt.maximum(input, 0.0) + jt.minimum(0.0, alpha * (jt.exp(input / alpha) - 1))
+
+
 def _install_functional(ctx):
     nn = ctx.target_namespace.nn
     _modules = ctx.registry.module_map
@@ -82,10 +246,6 @@ def _install_functional(ctx):
         # When dtype is given, input is cast to it before softmax (used by
         # transformers' eager attention: F.softmax(scores, dim=-1, dtype=fp32)).
         _jt_softmax = nn.softmax
-        def _softmax(input, dim=-1, _stacklevel=3, dtype=None):
-            if dtype is not None:
-                input = input.cast(_dtype_to_str(dtype))
-            return _jt_softmax(input, dim=dim)
         F.softmax = _softmax
     if hasattr(nn, "linear"): F.linear = nn.linear
     if hasattr(nn, "interpolate"):
@@ -96,16 +256,6 @@ def _install_functional(ctx):
         # torch's default and accepts torch's arg name / extra kwargs. Only
         # this shim copy is affected, not jittor's native nn.interpolate.
         _jt_interpolate = nn.interpolate
-        def _interpolate(input=None, size=None, scale_factor=None,
-                         mode="nearest", align_corners=None,
-                         recompute_scale_factor=None, antialias=False,
-                         **_kw):
-            if input is None:
-                input = _kw.pop("X")
-            ac = False if align_corners is None else align_corners
-            return _jt_interpolate(input, size=size,
-                                   scale_factor=scale_factor, mode=mode,
-                                   align_corners=ac)
         F.interpolate = _interpolate
     if hasattr(nn, "cross_entropy_loss"):
         _jt_ce = nn.cross_entropy_loss
@@ -115,65 +265,6 @@ def _install_functional(ctx):
         # correct incl. weight/ignore_index); implement smoothing to match torch:
         #   loss_i = (1-ls)*nll_i + (ls/C)*smooth_i,  nll_i = -w[t]*logp[i,t],
         #   smooth_i = -sum_c(w_c*logp[i,c]);  mean divides by sum(w[t]) (or count).
-        def _cross_entropy(input, target, weight=None, size_average=None,
-                           ignore_index=-100, reduce=None, reduction="mean",
-                           label_smoothing=0.0):
-            # torch: a floating-point target with the SAME shape as input is a
-            # class-probability ("soft label") target (mixup / distillation / soft
-            # label-smoothing). jittor's cross_entropy_loss only understands integer
-            # class-index targets, so handle the soft case here.
-            if (isinstance(target, jt.Var) and target.ndim == input.ndim
-                    and "int" not in _jittor_dtype_name(target.dtype)):
-                Cc = int(input.shape[1]) if input.ndim >= 2 else int(input.shape[-1])
-                cdim = 1 if input.ndim >= 2 else -1
-                logp = nn.log_softmax(input, dim=cdim)
-                tgt = target
-                if label_smoothing:
-                    tgt = (1.0 - label_smoothing) * tgt + label_smoothing / Cc
-                if weight is not None:
-                    wsh = [1] * input.ndim; wsh[cdim] = Cc
-                    wloss = -(tgt * logp * weight.reshape(wsh)).sum(dim=cdim)
-                else:
-                    wloss = -(tgt * logp).sum(dim=cdim)
-                if reduction == "sum":
-                    return wloss.sum()
-                if reduction == "none":
-                    return wloss
-                return wloss.mean()        # torch divides the soft-target loss by N
-            if not label_smoothing:
-                ii = -100 if ignore_index is None else ignore_index
-                return _jt_ce(input, target, weight=weight, ignore_index=ii,
-                              reduction=reduction)
-            C = int(input.shape[1]) if input.ndim >= 2 else int(input.shape[-1])
-            if input.ndim > 2:                  # (N,C,d...) -> (M,C)
-                perm = [0] + list(range(2, input.ndim)) + [1]
-                x = input.transpose(perm).reshape((-1, C))
-            else:
-                x = input
-            t = target.reshape((-1,))
-            logp = nn.log_softmax(x, dim=-1)
-            ig = None if ignore_index is None else ignore_index
-            t_safe = t if ig is None else jt.ternary(t == ig, jt.zeros_like(t), t)
-            nll = -logp.gather(1, t_safe.reshape((-1, 1))).reshape((-1,))
-            if weight is not None:
-                wt = weight[t_safe]
-                nll = nll * wt
-                smooth = -(logp * weight.reshape((1, -1))).sum(dim=-1)
-            else:
-                wt = None
-                smooth = -logp.sum(dim=-1)
-            loss = (1.0 - label_smoothing) * nll + (label_smoothing / C) * smooth
-            if ig is not None:
-                keep = (t != ig).float32()
-                loss = loss * keep
-                norm = (wt * keep).sum() if wt is not None else keep.sum()
-            else:
-                norm = wt.sum() if wt is not None else jt.array(float(t.shape[0]))
-            if reduction == "sum":
-                return loss.sum()
-            if reduction == "none":
-                return loss.reshape(target.shape) if input.ndim > 2 else loss
-            return loss.sum() / norm
         F.cross_entropy = _cross_entropy
     # These losses are native functional implementations.  Torch mode only
     # publishes the canonical objects; keeping a second fallback body here
@@ -198,26 +289,11 @@ def _install_functional(ctx):
     # nn.*Loss class versions (criterion = nn.HuberLoss()): thin wrappers over the
     # functional. KLDivLoss/BCELoss/BCEWithLogitsLoss/CrossEntropyLoss/MSELoss/L1Loss
     # already exist on jittor.nn (verified correct); add the rest.
-    _Mod = nn.Module
-    def _add_loss_class(cname, fn, defaults, arg_order):
-        if hasattr(nn, cname):
-            return
-        class _L(_Mod):
-            def __init__(self, *a, **k):
-                super().__init__()
-                self._kw = dict(defaults); self._kw.update(k)
-                for nm, val in zip(arg_order, a):
-                    self._kw[nm] = val
-            def execute(self, *inputs):
-                return fn(*inputs, **self._kw)
-        _L.__name__ = cname
-        setattr(nn, cname, _L)
-    _add_loss_class("HuberLoss", F.huber_loss, dict(reduction="mean", delta=1.0), ("reduction", "delta"))
-    _add_loss_class("SmoothL1Loss", F.smooth_l1_loss, dict(reduction="mean"), ("reduction",))
-    _add_loss_class("MarginRankingLoss", F.margin_ranking_loss, dict(margin=0.0, reduction="mean"), ("margin", "reduction"))
-    _add_loss_class("CosineEmbeddingLoss", F.cosine_embedding_loss, dict(margin=0.0, reduction="mean"), ("margin", "reduction"))
-    _add_loss_class("GaussianNLLLoss", F.gaussian_nll_loss, dict(full=False, eps=1e-6, reduction="mean"), ("full", "eps", "reduction"))
-    _add_loss_class("NLLLoss", F.nll_loss, dict(reduction="mean"), ("weight", "size_average", "ignore_index"))
+    _loss_functions = {}
+    for template in LOSS_CLASSES:
+        _loss_functions[template.functional_name] = getattr(F, template.functional_name)
+        if not hasattr(nn, template.__name__):
+            setattr(nn, template.__name__, _adapt_extra(template, ctx.registry))
     # pixel_shuffle / pixel_unshuffle (super-resolution, some VAE decoders): jittor's
     # functional lacks them. (N, C*r^2, H, W) <-> (N, C, H*r, W*r). Verified vs torch.
     if not hasattr(F, "pixel_shuffle"):
@@ -226,18 +302,13 @@ def _install_functional(ctx):
     if not hasattr(F, "pixel_unshuffle"):
         F.pixel_unshuffle = _pixel_unshuffle
         g.pixel_unshuffle = _pixel_unshuffle
-    for _pscn, _psfn in (("PixelShuffle", "pixel_shuffle"), ("PixelUnshuffle", "pixel_unshuffle")):
-        if not hasattr(nn, _pscn):
-            def _mk(fn):
-                class _PS(nn.Module):
-                    def __init__(self, factor): super().__init__(); self._f = factor
-                    def execute(self, x): return getattr(F, fn)(x, self._f)
-                return _PS
-            _cls = _mk(_psfn); _cls.__name__ = _pscn; setattr(nn, _pscn, _cls)
+    for template in (PixelShuffle, PixelUnshuffle):
+        if not hasattr(nn, template.__name__):
+            setattr(nn, template.__name__, _adapt_extra(template, ctx.registry))
     # F.logsigmoid (DPO/preference losses), F.gumbel_softmax (discrete/MoE sampling).
     if not hasattr(F, "logsigmoid"):
         # stable: log(sigmoid(x)) = min(x,0) - log(1+exp(-|x|))
-        F.logsigmoid = lambda input: jt.minimum(input, 0.0) - jt.log(1.0 + jt.exp(-jt.abs(input)))
+        F.logsigmoid = _api_F_logsigmoid
     if not hasattr(F, "gumbel_softmax"):
         F.gumbel_softmax = _gumbel_softmax
     if not hasattr(F, "rms_norm"):
@@ -246,12 +317,11 @@ def _install_functional(ctx):
         F.rms_norm = _rms_norm
     # Activations / losses jittor's functional lacked (verified vs real torch 2.12).
     if not hasattr(F, "softmin"):
-        F.softmin = lambda input, dim=-1, _stacklevel=3, dtype=None: nn.softmax(-input, dim=dim)
+        F.softmin = _api_F_softmin
     if not hasattr(F, "tanhshrink"):
-        F.tanhshrink = lambda input: input - jt.tanh(input)
+        F.tanhshrink = _api_F_tanhshrink
     if not hasattr(F, "celu"):
-        F.celu = lambda input, alpha=1.0, inplace=False: \
-            jt.maximum(input, 0.0) + jt.minimum(0.0, alpha * (jt.exp(input / alpha) - 1))
+        F.celu = _api_F_celu
     if not hasattr(F, "selu"):
         F.selu = _selu
     if not hasattr(F, "threshold"):
@@ -266,56 +336,6 @@ def _install_functional(ctx):
         # Differentiable (grad flows to log_probs). Verified bit-equal to real torch.
         import numpy as _np_ctc
         _CNEG = -1e30
-        def _ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
-                      reduction="mean", zero_infinity=False):
-            def _ints(v):
-                return [int(x) for x in (v.numpy().reshape(-1) if isinstance(v, jt.Var) else _np_ctc.asarray(v).reshape(-1))]
-            in_lens, tgt_lens = _ints(input_lengths), _ints(target_lengths)
-            tnp = targets.numpy() if isinstance(targets, jt.Var) else _np_ctc.asarray(targets)
-            flat = (tnp.ndim == 1)
-            def _shift(v, k):
-                return jt.concat([jt.full((k,), _CNEG), v[:int(v.shape[0]) - k]]) if k > 0 else v
-            def _lse(mats):
-                m = mats[0]
-                for x in mats[1:]:
-                    m = jt.maximum(m, x)
-                return m + jt.safe_log(sum(jt.exp(x - m) for x in mats))
-            N = log_probs.shape[1]
-            losses, offset = [], 0
-            for n in range(N):
-                Tn, Sn = in_lens[n], tgt_lens[n]
-                if flat:
-                    seq = [int(x) for x in tnp[offset:offset + Sn]]; offset += Sn
-                else:
-                    seq = [int(x) for x in tnp[n, :Sn]]
-                ext = [blank]
-                for lab in seq:
-                    ext += [lab, blank]
-                L = len(ext)
-                ext_idx = jt.array(_np_ctc.array(ext, dtype="int64"))
-                skip = _np_ctc.zeros(L, dtype="float32")
-                for s in range(2, L):
-                    if ext[s] != blank and ext[s] != ext[s - 2]:
-                        skip[s] = 1.0
-                skip_v = jt.array(skip)
-                start = _np_ctc.full(L, _CNEG, dtype="float32"); start[0] = 0.0
-                if L > 1:
-                    start[1] = 0.0
-                lp_n = log_probs[:Tn, n, :]
-                alpha = lp_n[0][ext_idx] + jt.array(start)
-                for t in range(1, Tn):
-                    a2 = _shift(alpha, 2) * skip_v + (1 - skip_v) * _CNEG
-                    alpha = lp_n[t][ext_idx] + _lse([alpha, _shift(alpha, 1), a2])
-                losses.append(-(_lse([alpha[L - 1], alpha[L - 2]]) if L > 1 else alpha[L - 1]))
-            out = jt.stack(losses).reshape((N,))   # (N,1)->(N,): jittor has no 0-d scalar
-            if zero_infinity:
-                out = jt.ternary(jt.isfinite(out), out, jt.zeros_like(out))
-            if reduction == "none":
-                return out
-            if reduction == "sum":
-                return out.sum()
-            tl = jt.array(_np_ctc.array([max(s, 1) for s in tgt_lens], dtype="float32"))
-            return (out / tl).mean()
         F.ctc_loss = _ctc_loss
     if hasattr(nn, "layer_norm"): F.layer_norm = nn.layer_norm
     if hasattr(nn, "embedding"): F.embedding = nn.embedding
@@ -325,3 +345,23 @@ def _install_functional(ctx):
         nn.functional.cosine_similarity = nn.cosine_similarity
     if not hasattr(nn.functional, "pairwise_distance") and hasattr(nn, "pairwise_distance"):
         nn.functional.pairwise_distance = nn.pairwise_distance
+
+    ctx.state["nn_functional_native"] = MappingProxyType({
+        "loss_functions": MappingProxyType(_loss_functions),
+        "_jt_softmax": locals().get("_jt_softmax"),
+        "_jt_interpolate": locals().get("_jt_interpolate"),
+        "_jt_ce": locals().get("_jt_ce"),
+        "_CNEG": locals().get("_CNEG"),
+    })
+
+    register_api_bindings(F, 'torch.nn.functional',
+        ('celu', 'cross_entropy', 'ctc_loss', 'embedding', 'gelu', 'gumbel_softmax', 'interpolate', 'layer_norm', 'linear', 'logsigmoid', 'pixel_shuffle', 'pixel_unshuffle', 'poisson_nll_loss', 'relu', 'rms_norm', 'selu', 'softmax', 'softmin', 'tanhshrink', 'threshold', 'triplet_margin_loss') + tuple(()),
+        Fidelity.APPROXIMATE, 'Native neural-network mathematics with Torch argument adaptation; dtype, backend, and optional parameter restrictions apply')
+    register_api_bindings(F, "torch.nn.functional",
+        ("binary_cross_entropy", "cosine_embedding_loss", "gaussian_nll_loss",
+         "huber_loss", "kl_div", "margin_ranking_loss"), Fidelity.APPROXIMATE,
+        "Reuses the canonical native loss implementation and supported argument subset")
+    register_api_bindings(nn, "torch.nn",
+        tuple(template.__name__ for template in LOSS_CLASSES) + ("PixelShuffle", "PixelUnshuffle"),
+        Fidelity.APPROXIMATE, "Module-owned layer implementations reuse native functionals; "
+        "installation adapters preserve Tensor and parameter ownership")

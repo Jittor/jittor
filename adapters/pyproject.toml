@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jittor-torch-adapters"
+version = "1.3.11.0"
+description = "Versioned optional third-party adapters for the Jittor Torch frontend"
+readme = "README.md"
+requires-python = ">=3.7"
+dependencies = ["jittor-torch==1.3.11.0"]
+
+[project.entry-points."jittor.module_patches"]
+jittor_transformers = "jittor_adapters.transformers:register"
+jittor_torchmetrics = "jittor_adapters.torchmetrics:register"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["jittor_adapters*"]
+
+[tool.jittor.sdist]
+include = ["README.md"]
+exclude = ["build/**", "dist/**"]

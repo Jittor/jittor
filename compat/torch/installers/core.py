@@ -6,6 +6,8 @@ changing the compatibility semantics.
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
+import types as _types_misc
+import numpy as _np
 
 from ..functional import (
     _torch_norm_impl,
@@ -13,6 +15,8 @@ from ..functional import (
 )
 from ..grad import (
     _GradScaler,
+    autocast_is_enabled as _autocast_is_enabled,
+    autocast_dtype as _autocast_dtype,
 )
 from ..nested import (
     _torch_make_parameter, _torch_prune_leaf_registry,
@@ -24,7 +28,7 @@ from ..types import (
 )
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
-from ...transaction import set_flag
+from ...transaction import set_flag, set_attr
 
 
 _LN2 = 0.6931471805599453
@@ -92,8 +96,6 @@ def install(ctx):
     g.torch = g
     ctx.registry.publish("torch.torch", g)
     ctx.registry.publish("torch.types", make_torch_types_module())
-    g._torch_make_parameter = _torch_make_parameter
-    g._torch_prune_leaf_registry = _torch_prune_leaf_registry
 
     # Escape hatch for the APIs this layer refuses to fake.  See
     # jittor/compat/stub_policy.py; JITTOR_TORCH_ALLOW_STUB=1 does the same.
@@ -152,23 +154,19 @@ def install(ctx):
         native = getattr(g, "__jittor_version__", None) or _NATIVE_VERSION[0]
         api = getattr(g, "__torch_version__", None)
         if enable and api is not None:
-            g.__version__ = api
+            set_attr(g, "__version__", api, context=ctx)
         else:
-            g.__version__ = native
+            set_attr(g, "__version__", native, context=ctx)
         return g.__version__
 
     _NATIVE_VERSION = (getattr(g, "__version__", None),)
     g.compat_report_torch_api_version = _compat_report_torch_api_version
-    if not hasattr(g, "_vj_native_load"):
-        g._vj_native_load = getattr(g, "load", None)
-    if not hasattr(g, "_vj_native_save"):
-        g._vj_native_save = getattr(g, "save", None)
-    if not hasattr(g, "_vj_native_where"):
-        g._vj_native_where = getattr(g, "where", None)
-    if not hasattr(g, "_vj_native_nonzero"):
-        g._vj_native_nonzero = getattr(g, "nonzero", None)
-    if not hasattr(g, "_vj_native_seed"):
-        g._vj_native_seed = getattr(g, "seed", None)
+    if "core_native_api" not in ctx.state:
+        from types import MappingProxyType
+        ctx.state["core_native_api"] = MappingProxyType({
+            name: getattr(g, name, None)
+            for name in ("load", "save", "where", "nonzero", "seed")
+        })
 
     # Pillow 11 rejects int8 RGB arrays. Some legacy torch projects, including
     # graphdeco gaussian-splatting, use np.byte as a uint8 alias before
@@ -237,471 +235,772 @@ def install(ctx):
         g.clone = tensor_type.clone
 
 
-def install_misc(ctx):
-    _modules = ctx.registry.module_map
+# Public misc objects have one module owner. Mutable policy and seed
+# state belong to the active installation, never a captured installer closure.
+_types_random = _types_misc
+_seed_sentinel = object()
+
+
+def _misc_context():
+    from ..context import get_install_context
+
+    return get_install_context(jt)
+
+
+_FINFO_SPECIAL = {
+    "bfloat16": (
+        -3.3895313892515355e38,
+        3.3895313892515355e38,
+        0.0078125,
+        1.1754943508222875e-38,
+        16,
+    ),
+    "float8_e4m3fn": (-448.0, 448.0, 0.125, 0.015625, 8),
+    "float8_e4m3fnuz": (-240.0, 240.0, 0.125, 0.0078125, 8),
+    "float8_e5m2": (-57344.0, 57344.0, 0.25, 6.103515625e-05, 8),
+    "float8_e5m2fnuz": (-57344.0, 57344.0, 0.25, 6.103515625e-05, 8),
+    "float8_e8m0fnu": (-3.4e38, 3.4e38, 1.0, 1e-38, 8),
+    "float4_e2m1fn_x2": (-6.0, 6.0, 0.5, 0.5, 4),
+}
+
+_PROMO_ORDER = [
+    "bool",
+    "uint8",
+    "int8",
+    "int16",
+    "int32",
+    "int64",
+    "float16",
+    "bfloat16",
+    "float32",
+    "float64",
+]
+
+_PROMO_ROWS = {
+    "bool": [
+        "bool",
+        "uint8",
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "float16",
+        "bfloat16",
+        "float32",
+        "float64",
+    ],
+    "uint8": [
+        "uint8",
+        "uint8",
+        "int16",
+        "int16",
+        "int32",
+        "int64",
+        "float16",
+        "bfloat16",
+        "float32",
+        "float64",
+    ],
+    "int8": [
+        "int8",
+        "int16",
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "float16",
+        "bfloat16",
+        "float32",
+        "float64",
+    ],
+    "int16": [
+        "int16",
+        "int16",
+        "int16",
+        "int16",
+        "int32",
+        "int64",
+        "float16",
+        "bfloat16",
+        "float32",
+        "float64",
+    ],
+    "int32": [
+        "int32",
+        "int32",
+        "int32",
+        "int32",
+        "int32",
+        "int64",
+        "float16",
+        "bfloat16",
+        "float32",
+        "float64",
+    ],
+    "int64": [
+        "int64",
+        "int64",
+        "int64",
+        "int64",
+        "int64",
+        "int64",
+        "float16",
+        "bfloat16",
+        "float32",
+        "float64",
+    ],
+    "float16": [
+        "float16",
+        "float16",
+        "float16",
+        "float16",
+        "float16",
+        "float16",
+        "float16",
+        "float32",
+        "float32",
+        "float64",
+    ],
+    "bfloat16": [
+        "bfloat16",
+        "bfloat16",
+        "bfloat16",
+        "bfloat16",
+        "bfloat16",
+        "bfloat16",
+        "float32",
+        "bfloat16",
+        "float32",
+        "float64",
+    ],
+    "float32": [
+        "float32",
+        "float32",
+        "float32",
+        "float32",
+        "float32",
+        "float32",
+        "float32",
+        "float32",
+        "float32",
+        "float64",
+    ],
+    "float64": [
+        "float64",
+        "float64",
+        "float64",
+        "float64",
+        "float64",
+        "float64",
+        "float64",
+        "float64",
+        "float64",
+        "float64",
+    ],
+}
+
+_PROMO_IDX = {n: i for i, n in enumerate(_PROMO_ORDER)}
+
+
+class UntypedStorage:
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+    def _typed_storage(self):
+        return TypedStorage(wrap_storage=self)
+
+
+class TypedStorage:
+    def __init__(
+        self, *args, wrap_storage=None, dtype=None, device=None, _internal=False, **kwargs
+    ):
+        ctx = _misc_context()
+        g = ctx.jittor_module
+        self._untyped_storage = wrap_storage
+        self.dtype = dtype if dtype is not None else getattr(g, "float32", "float32")
+        self.device = device
+        self.args = args
+        self.kwargs = kwargs
+
+    def untyped(self):
+        return self._untyped_storage
+
+
+class _RandomModule(_types_random.ModuleType):
+    def __call__(self, *args, **kwargs):
+        ctx = _misc_context()
+        _native_random_fn = ctx.state["core_misc_native_random"]
+        if callable(_native_random_fn):
+            return _native_random_fn(*args, **kwargs)
+        raise TypeError("torch.random is not callable")
+
+
+def _manual_seed(s):
+    ctx = _misc_context()
+    g = ctx.jittor_module
+    s = int(s)
+    ctx.state["core_misc"]["seed"] = s
+    if hasattr(jt, "set_global_seed"):
+        jt.set_global_seed(s)
+    return g
+
+
+def _torch_seed():
+    import secrets
+
+    value = secrets.randbits(31)
+    _manual_seed(value)
+    return value
+
+
+def _seed(value=_seed_sentinel):
+    ctx = _misc_context()
+    g = ctx.jittor_module
+    if value is _seed_sentinel:
+        return _torch_seed()
+    value = int(value)
+    ctx.state["core_misc"]["seed"] = value
+    native_seed = ctx.state["core_native_api"]["seed"]
+    if callable(native_seed):
+        return native_seed(value)
+    return jt.set_seed(value)
+
+
+def _get_rng_state():
+    return jt.array([initial_seed()], dtype="int64")
+
+
+def _set_rng_state(state):
+    ctx = _misc_context()
+    Var = ctx.state["Var"]
+    try:
+        if isinstance(state, Var):
+            state = int(state.reshape(-1)[0].item())
+        elif hasattr(state, "__len__"):
+            state = int(list(state)[0])
+        else:
+            state = int(state)
+    except EXPECTED as exc:
+        swallowed("torch/installers/core.py _set_rng_state: if isinstance(state, Var):", exc)
+        state = initial_seed()
+    _manual_seed(state)
+
+
+class PyTorchFileReader:
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError(
+            "torch.PyTorchFileReader is not implemented by the jittor torch shim; use torch.load instead"
+        )
+
+
+def norm(input, p="fro", dim=None, keepdim=False, dtype=None, out=None, **kw):
+    return _torch_norm_impl(input, p=p, dim=dim, keepdim=keepdim, dtype=dtype)
+
+
+def _is_autocast_enabled(device_type=None, *a, **k):
+    return _autocast_is_enabled(device_type)
+
+
+def _get_autocast_dtype(device_type=None, *a, **k):
+    ctx = _misc_context()
+    g = ctx.jittor_module
+    name = _autocast_dtype(device_type)
+    if name is None:
+        return getattr(g, "float32", "float32")
+    return getattr(g, name, name)
+
+
+def where(condition, input=None, other=None, *, out=None):
+    if input is None and other is None:
+        native = _misc_context().state["core_native_api"]
+        native_where = native["where"]
+        native_nonzero = native["nonzero"]
+        if native_where is not None:
+            idx = native_where(condition)
+        elif native_nonzero is not None:
+            idx = native_nonzero(condition)
+        else:
+            idx = condition.nonzero()
+        if isinstance(idx, (tuple, list)):
+            return tuple(idx)
+        if getattr(idx, "ndim", 0) == 2:
+            return tuple((idx[:, d] for d in range(idx.shape[1])))
+        return (idx.reshape(-1),)
+    if input is None or other is None:
+        raise TypeError("torch.where expected either 1 or 3 arguments")
+    return _torch_where_select(condition, input, other)
+
+
+def bincount(input, weights=None, minlength=0):
+    x = input.reshape(-1).int64()
+    ml = max(int(minlength), 0)
+    if x.numel() == 0:
+        wdtype = weights.dtype if weights is not None else jt.int64
+        return jt.zeros((ml,), dtype=wdtype)
+    n = max(int(x.max().item()) + 1, ml)
+    if weights is not None:
+        out = jt.zeros((n,), dtype=weights.dtype)
+        src = weights.reshape(-1).cast(_jittor_dtype_name(weights.dtype))
+    else:
+        out = jt.zeros((n,), dtype=jt.int64)
+        src = jt.ones((x.shape[0],), dtype=jt.int64)
+    return out.scatter_add(0, x, src)
+
+
+def segment_reduce(data, reduce="sum", *, lengths=None, **kw):
+    assert lengths is not None, "torch_compat segment_reduce requires lengths="
+    lengths_list = [int(l) for l in lengths]
+    tail = list(data.shape[1:])
+    segs = []
+    start = 0
+    for l in lengths_list:
+        chunk = data[start : start + l]
+        start += l
+        if reduce == "sum":
+            r = chunk.sum(dim=0)
+        elif reduce == "mean":
+            r = chunk.mean(dim=0)
+        elif reduce == "prod":
+            r = chunk.prod(dim=0)
+        elif reduce in ("max", "amax"):
+            r = chunk.amax(dim=0)
+        elif reduce in ("min", "amin"):
+            r = chunk.amin(dim=0)
+        else:
+            raise ValueError(f"Unsupported segment_reduce op: {reduce}")
+        segs.append(r.reshape([1] + tail))
+    return jt.concat(segs, dim=0)
+
+
+class finfo:
+    def __init__(self, dt):
+        ds = _dtype_to_str(dt) or "float32"
+        if ds in _FINFO_SPECIAL:
+            mn, mx, eps, tiny, bits = _FINFO_SPECIAL[ds]
+            self.min, self.max, self.eps, self.tiny, self.smallest_normal = (
+                mn,
+                mx,
+                eps,
+                tiny,
+                tiny,
+            )
+            self.bits, self.dtype = (bits, ds)
+            self.resolution = eps
+            return
+        info = _np.finfo(_np.dtype(ds))
+        self.min = float(info.min)
+        self.max = float(info.max)
+        self.eps = float(info.eps)
+        self.tiny = float(info.tiny)
+        self.smallest_normal = float(info.tiny)
+        self.resolution = float(info.resolution)
+        self.bits = info.bits
+        self.dtype = ds
+
+
+class iinfo:
+    def __init__(self, dt):
+        ds = _dtype_to_str(dt) or "int64"
+        info = _np.iinfo(_np.dtype(ds))
+        self.min = int(info.min)
+        self.max = int(info.max)
+        self.bits = info.bits
+
+
+def _promote_pair(a, b):
+    if a == b:
+        return a
+    ia, ib = (_PROMO_IDX.get(a), _PROMO_IDX.get(b))
+    if ia is not None and ib is not None:
+        return _PROMO_ROWS[a][ib]
+    if a.startswith("complex") or b.startswith("complex"):
+        wide = "complex128" if "128" in a or "128" in b or "float64" in (a, b) else "complex64"
+        return wide
+    return a if ib is None else b
+
+
+def promote_types(t1, t2):
+    ctx = _misc_context()
+    _DTYPE_OBJS = ctx.state["dtypes"]
+    return _DTYPE_OBJS.get(
+        _promote_pair(_dtype_to_str(t1), _dtype_to_str(t2)),
+        _promote_pair(_dtype_to_str(t1), _dtype_to_str(t2)),
+    )
+
+
+def _category(name):
+    if name == "bool":
+        return 0
+    if name.startswith(("int", "uint")):
+        return 1
+    if name.startswith("complex"):
+        return 3
+    return 2
+
+
+def result_type(a, b):
+    ctx = _misc_context()
+    _DTYPE_OBJS = ctx.state["dtypes"]
+    (na, sa), (nb, sb) = (_result_type_info(a), _result_type_info(b))
+    if sa and (not sb):
+        res = _promote_pair(na, nb) if _category(na) > _category(nb) else nb
+    elif sb and (not sa):
+        res = _promote_pair(na, nb) if _category(nb) > _category(na) else na
+    else:
+        res = _promote_pair(na, nb)
+    return _DTYPE_OBJS.get(res, res)
+
+
+def can_cast(from_dtype, to_dtype):
+    f, t = (_dtype_to_str(from_dtype), _dtype_to_str(to_dtype))
+    return _promote_pair(f, t) == t
+
+
+def set_default_dtype(d):
+    ctx = _misc_context()
+    _state = ctx.state["core_misc"]
+    if not isinstance(d, dtype) or _dtype_to_str(d) not in (
+        "float16",
+        "bfloat16",
+        "float32",
+        "float64",
+    ):
+        raise TypeError("only floating-point types are supported as the default type")
+    _state["dtype"] = d
+
+
+def get_default_device():
+    ctx = _misc_context()
+    g = ctx.jittor_module
+    if not jt.flags.use_cuda:
+        return g.device("cpu")
+    try:
+        index = int(jt.current_device())
+    except EXPECTED as exc:
+        swallowed(
+            "torch/installers/core.py get_default_device: index = int(jt.current_device())",
+            exc,
+            "reporting cuda:0, which is wrong on any other device",
+        )
+        index = 0
+    return g.device("cuda", index if index >= 0 else 0)
+
+
+def set_default_device(device=None):
+    """torch.set_default_device -- now actually moves the default.
+
+    Was `lambda *a, **k: None` while get_default_device() reported the real
+    residency, so set/get openly contradicted each other: a script that set
+    the default to "cuda" allocated on the CPU and was told it had not.
+    Jittor's default residency is the global use_cuda flag, so this sets it.
+    """
+    ctx = _misc_context()
+    if device is None:
+        _set_install_flag(ctx, "use_cuda", 0)
+        return None
+    if isinstance(device, str):
+        name, _, raw_index = device.partition(":")
+        index = int(raw_index) if raw_index.isdigit() else None
+    else:
+        name = getattr(device, "type", None) or str(device)
+        index = getattr(device, "index", None)
+        if not isinstance(index, int) or isinstance(index, bool):
+            index = None
+        if index is None and ":" in str(name):
+            name, _, raw_index = str(name).partition(":")
+            index = int(raw_index) if raw_index.isdigit() else None
+    name = str(name).split(":")[0]
+    if name == "cpu":
+        _set_install_flag(ctx, "use_cuda", 0)
+        return None
+    if name in ("cuda", "gpu", "npu"):
+        if not jt.has_cuda:
+            raise RuntimeError(
+                "torch.set_default_device(%r): this build has no CUDA/NPU device available."
+                % (device,)
+            )
+        _set_install_flag(ctx, "use_cuda", 1)
+        if index is not None:
+            try:
+                jt.set_device(int(index))
+            except (AttributeError, RuntimeError, TypeError, ValueError) as error:
+                raise RuntimeError("torch.set_default_device(%r): %s" % (device, error))
+        return None
+    from ...stub_policy import unimplemented
+
+    return unimplemented(
+        "torch.set_default_device(%r)" % (name,),
+        "silently keep the previous default device",
+        "Only 'cpu' and 'cuda' defaults are supported.",
+    )
+
+
+def _result_type_info(x):
+    ctx = _misc_context()
     g = ctx.jittor_module
     Var = ctx.state["Var"]
     _DTYPE_OBJS = ctx.state["dtypes"]
-    import types as _types_misc
-    _types2 = _types_misc
-
-    if "torch.storage" not in _modules:
-        _storage_mod = _types_misc.ModuleType("torch.storage")
-
-        class UntypedStorage:
-            def __init__(self, *args, **kwargs):
-                self.args = args
-                self.kwargs = kwargs
-
-            def _typed_storage(self):
-                return TypedStorage(wrap_storage=self)
-
-        class TypedStorage:
-            def __init__(self, *args, wrap_storage=None, dtype=None, device=None,
-                         _internal=False, **kwargs):
-                self._untyped_storage = wrap_storage
-                self.dtype = dtype if dtype is not None else getattr(g, "float32", "float32")
-                self.device = device
-                self.args = args
-                self.kwargs = kwargs
-
-            def untyped(self):
-                return self._untyped_storage
-
-        _storage_mod.UntypedStorage = UntypedStorage
-        _storage_mod.TypedStorage = TypedStorage
-        _modules["torch.storage"] = _storage_mod
-    else:
-        _storage_mod = _modules["torch.storage"]
-
-    g.storage = _storage_mod
-    g.UntypedStorage = getattr(_storage_mod, "UntypedStorage")
-    g.TypedStorage = getattr(_storage_mod, "TypedStorage")
-    for _name in (
-        "DoubleStorage", "FloatStorage", "HalfStorage", "BFloat16Storage",
-        "LongStorage", "IntStorage", "ShortStorage", "CharStorage",
-        "ByteStorage", "BoolStorage",
+    if isinstance(x, Var):
+        return (_dtype_to_str(x.dtype), False)
+    if isinstance(x, dtype) or (
+        isinstance(x, str) and _dtype_to_str(x) in _jittor_dtype_name(_DTYPE_OBJS)
     ):
-        if not hasattr(g, _name):
-            setattr(g, _name, type(_name, (g.TypedStorage,), {"__module__": "torch"}))
-        if not hasattr(_storage_mod, _name):
-            setattr(_storage_mod, _name, getattr(g, _name))
-
-    import types as _types_random
-    _native_random_fn = getattr(g, "random", None)
-    class _RandomModule(_types_random.ModuleType):
-        def __call__(self, *args, **kwargs):
-            if callable(_native_random_fn):
-                return _native_random_fn(*args, **kwargs)
-            raise TypeError("torch.random is not callable")
-    _random_mod = _RandomModule("torch.random")
-    _random_mod._seed = int(getattr(g, "_torch_initial_seed", 0))
-    _seed_sentinel = object()
-
-    def _manual_seed(s):
-        s = int(s)
-        _random_mod._seed = s
-        g._torch_initial_seed = s
-        if hasattr(jt, "set_global_seed"):
-            jt.set_global_seed(s)
-        return g
-
-    def _torch_seed():
-        import secrets
-
-        value = secrets.randbits(31)
-        _manual_seed(value)
-        return value
-
-    def _seed(value=_seed_sentinel):
-        if value is _seed_sentinel:
-            return _torch_seed()
-
-        value = int(value)
-        _random_mod._seed = value
-        g._torch_initial_seed = value
-        native_seed = getattr(g, "_vj_native_seed", None)
-        if callable(native_seed):
-            return native_seed(value)
-        return jt.set_seed(value)
-
-    def _get_rng_state():
-        return jt.array([int(getattr(_random_mod, "_seed", 0))], dtype="int64")
-    def _set_rng_state(state):
-        try:
-            if isinstance(state, Var):
-                state = int(state.reshape(-1)[0].item())
-            elif hasattr(state, "__len__"):
-                state = int(list(state)[0])
-            else:
-                state = int(state)
-        except EXPECTED as exc:
-            swallowed("torch/installers/core.py _set_rng_state: if isinstance(state, Var):", exc)
-            state = int(getattr(_random_mod, "_seed", 0))
-        _manual_seed(state)
-    g.manual_seed = _manual_seed
-    g.initial_seed = lambda: int(getattr(_random_mod, "_seed", 0))
-    g.seed = _seed
-    g.get_rng_state = _get_rng_state
-    g.set_rng_state = _set_rng_state
-    _random_mod.manual_seed = _manual_seed
-    _random_mod.initial_seed = g.initial_seed
-    _random_mod.seed = _torch_seed
-    _random_mod.get_rng_state = _get_rng_state
-    _random_mod.set_rng_state = _set_rng_state
-    g.random = _random_mod
-    _modules["torch.random"] = _random_mod
-    g.is_tensor = lambda x: isinstance(x, Var)
-    if not hasattr(g, "numel"):
-        g.numel = lambda x: x.numel()
-    if not hasattr(g, "PyTorchFileReader"):
-        class PyTorchFileReader:
-            def __init__(self, *args, **kwargs):
-                raise NotImplementedError(
-                    "torch.PyTorchFileReader is not implemented by the jittor torch shim; use torch.load instead")
-        g.PyTorchFileReader = PyTorchFileReader
-
-    # torch.norm(input, p='fro', dim=None, keepdim=False, dtype=None, out=None):
-    # default reduces over ALL dims to a 0-dim scalar. jittor's jt.norm defaults
-    # to dim=-1 (per-row), so torch.norm(x)/x.norm() silently returned a vector.
-    # Override the torch-facing top-level norm (NOT jt.norm's internal default,
-    # which jittor relies on) to match torch.
-    def norm(input, p="fro", dim=None, keepdim=False, dtype=None, out=None, **kw):
-        return _torch_norm_impl(input, p=p, dim=dim, keepdim=keepdim, dtype=dtype)
-    g.norm = norm
-
-    # autocast / grad-mode query helpers.  These used to be constants
-    # (is_autocast_enabled -> False always) even while torch.autocast claimed
-    # to be active, so nothing in a program could detect that mixed precision
-    # had silently not happened.  They now report the live autocast region.
-    from ..grad import autocast_is_enabled as _autocast_is_enabled
-    from ..grad import autocast_dtype as _autocast_dtype
-
-    def _is_autocast_enabled(device_type=None, *a, **k):
-        return _autocast_is_enabled(device_type)
-
-    def _get_autocast_dtype(device_type=None, *a, **k):
-        name = _autocast_dtype(device_type)
-        if name is None:
-            return getattr(g, "float32", "float32")
-        return getattr(g, name, name)
-
-    g.is_autocast_enabled = _is_autocast_enabled
-    g.set_autocast_enabled = lambda *a, **k: None
-    g.is_grad_enabled = lambda: not bool(getattr(jt.flags, "no_grad", 0))
-    g.set_grad_enabled = lambda mode: (g.enable_grad() if mode else g.no_grad())
-    g.get_autocast_dtype = _get_autocast_dtype
-    g.get_autocast_gpu_dtype = lambda *a, **k: (
-        _get_autocast_dtype("cuda") if _autocast_is_enabled("cuda")
-        else getattr(g, "float16", "float16"))
-    g.is_autocast_available = lambda *a, **k: True
-    g.are_deterministic_algorithms_enabled = lambda: False
-    g.use_deterministic_algorithms = lambda *a, **k: None
-    g.is_floating_point = lambda x: ("float" in _jittor_dtype_name(x.dtype))
-
-    def where(condition, input=None, other=None, *, out=None):
-        if input is None and other is None:
-            native_where = getattr(jt, "_vj_native_where", None)
-            native_nonzero = getattr(jt, "_vj_native_nonzero", None)
-            if native_where is not None:
-                idx = native_where(condition)
-            elif native_nonzero is not None:
-                idx = native_nonzero(condition)
-            else:
-                idx = condition.nonzero()
-            if isinstance(idx, (tuple, list)):
-                return tuple(idx)
-            if getattr(idx, "ndim", 0) == 2:
-                return tuple(idx[:, d] for d in range(idx.shape[1]))
-            return (idx.reshape(-1),)
-        if input is None or other is None:
-            raise TypeError("torch.where expected either 1 or 3 arguments")
-        return _torch_where_select(condition, input, other)
-    g.where = where
-
-    # torch-compat: torch.bincount(input, weights=None, minlength=0). Counts the
-    # occurrences of each non-negative integer in a 1-D `input`; with `weights`,
-    # sums the weights per bin instead. Output length = max(input.max()+1, minlength)
-    # (0 for an empty input, honoring minlength). Implemented with jittor's native
-    # out-of-place scatter_add (reduce='add' accumulates duplicate indices).
-    if not hasattr(g, "bincount"):
-        def bincount(input, weights=None, minlength=0):
-            x = input.reshape(-1).int64()
-            ml = max(int(minlength), 0)
-            if x.numel() == 0:
-                wdtype = weights.dtype if weights is not None else jt.int64
-                return jt.zeros((ml,), dtype=wdtype)
-            n = max(int(x.max().item()) + 1, ml)
-            if weights is not None:
-                out = jt.zeros((n,), dtype=weights.dtype)
-                src = weights.reshape(-1).cast(_jittor_dtype_name(weights.dtype))
-            else:
-                out = jt.zeros((n,), dtype=jt.int64)
-                src = jt.ones((x.shape[0],), dtype=jt.int64)
-            # scatter_add is out-of-place and accumulates at duplicate indices.
-            return out.scatter_add(0, x, src)
-        g.bincount = bincount
-        Var.bincount = lambda self, weights=None, minlength=0: bincount(self, weights, minlength)
-
-    # torch-compat: torch.segment_reduce(data, reduce, *, lengths) -- reduce over
-    # contiguous variable-length segments along dim 0 (lengths-based form). torch
-    # supports reduce in {sum, mean, prod, max/amax, min/amin}; the per-segment
-    # result is stacked back into a (num_segments, *data.shape[1:]) tensor.
-    if not hasattr(g, "segment_reduce"):
-        def segment_reduce(data, reduce="sum", *, lengths=None, **kw):
-            assert lengths is not None, "torch_compat segment_reduce requires lengths="
-            lengths_list = [int(l) for l in lengths]
-            tail = list(data.shape[1:])     # per-element shape; segments reduce dim 0
-            segs = []
-            start = 0
-            for l in lengths_list:
-                chunk = data[start:start + l]
-                start += l
-                if reduce == "sum":
-                    r = chunk.sum(dim=0)
-                elif reduce == "mean":
-                    r = chunk.mean(dim=0)
-                elif reduce == "prod":
-                    r = chunk.prod(dim=0)
-                elif reduce in ("max", "amax"):
-                    r = chunk.amax(dim=0)    # values-only (Var.max here is the (values,idx) shim)
-                elif reduce in ("min", "amin"):
-                    r = chunk.amin(dim=0)
-                else:
-                    raise ValueError(f"Unsupported segment_reduce op: {reduce}")
-                # jittor's reduce over dim 0 leaves a leading size-1 axis; normalise
-                # each segment to (1, *tail) so concat gives torch's output shape:
-                # 1-D data -> (num_segments,), N-D data -> (num_segments, *data[1:]).
-                segs.append(r.reshape([1] + tail))
-            return jt.concat(segs, dim=0)
-        g.segment_reduce = segment_reduce
-
-    # torch unary math jittor lacks at top level (it has log2 but not exp2/log10/
-    # trunc/sign/frac). These are module-level stable objects with registered
-    # fidelity; the function and the method are the same object on purpose --
-    # they used to be two copies that disagreed on integer dtypes.
-    g.exp2 = exp2
-    g.log10 = log10
-    g.sign = sign
-    g.trunc = trunc
-    Var.exp2 = exp2
-    Var.log10 = log10
-    Var.sign = sign
-    Var.trunc = trunc
-    Var.frac = frac
+        return (_dtype_to_str(x), False)
+    if isinstance(x, bool):
+        return ("bool", True)
+    if isinstance(x, int):
+        return ("int64", True)
+    if isinstance(x, float):
+        return (_dtype_to_str(g.get_default_dtype()) or "float32", True)
+    if isinstance(x, complex):
+        return ("complex64", True)
+    return (_dtype_to_str(x) or "float32", False)
 
 
-    # ---- finfo / iinfo ----
-    import numpy as _np
-    # hardcoded specs for dtypes numpy can't represent: (min, max, eps, tiny, bits)
-    _FINFO_SPECIAL = {
-        "bfloat16": (-3.3895313892515355e38, 3.3895313892515355e38, 0.0078125, 1.1754943508222875e-38, 16),
-        "float8_e4m3fn": (-448.0, 448.0, 0.125, 0.015625, 8),
-        "float8_e4m3fnuz": (-240.0, 240.0, 0.125, 0.0078125, 8),
-        "float8_e5m2": (-57344.0, 57344.0, 0.25, 6.103515625e-05, 8),
-        "float8_e5m2fnuz": (-57344.0, 57344.0, 0.25, 6.103515625e-05, 8),
-        "float8_e8m0fnu": (-3.4e38, 3.4e38, 1.0, 1e-38, 8),
-        "float4_e2m1fn_x2": (-6.0, 6.0, 0.5, 0.5, 4),
-    }
-    class finfo:
-        def __init__(self, dt):
-            ds = _dtype_to_str(dt) or "float32"
-            if ds in _FINFO_SPECIAL:
-                mn, mx, eps, tiny, bits = _FINFO_SPECIAL[ds]
-                self.min, self.max, self.eps, self.tiny, self.smallest_normal = mn, mx, eps, tiny, tiny
-                self.bits, self.dtype = bits, ds
-                self.resolution = eps
-                return
-            info = _np.finfo(_np.dtype(ds))
-            self.min = float(info.min); self.max = float(info.max)
-            self.eps = float(info.eps); self.tiny = float(info.tiny)
-            self.smallest_normal = float(info.tiny)
-            self.resolution = float(info.resolution)
-            self.bits = info.bits; self.dtype = ds
-    class iinfo:
-        def __init__(self, dt):
-            ds = _dtype_to_str(dt) or "int64"
-            info = _np.iinfo(_np.dtype(ds))
-            self.min = int(info.min); self.max = int(info.max); self.bits = info.bits
-    g.finfo = finfo
-    g.iinfo = iinfo
+def initial_seed():
+    return int(_misc_context().state["core_misc"].get("seed", 0))
 
-    # ---- type promotion (torch.result_type / promote_types / can_cast) ----
-    # Encodes torch's documented `_promoteTypesLookup` lattice (c10/core/
-    # ScalarType.cpp). Rules, verified against torch's docs:
-    #   * category order  bool < (signed/unsigned int) < float < complex;
-    #   * same-category ints: the wider wins, BUT mixing signed+unsigned of the
-    #     same OR smaller width promotes to a SIGNED type wide enough to hold both
-    #     (uint8+int8 -> int16, uint8+int16 -> int16, uint8+int32 -> int32,
-    #     uint8+int64 -> int64);  uint8+uint8 stays uint8;
-    #   * a float of ANY width absorbs an int of ANY width WITHOUT widening
-    #     (float16+int64 -> float16);  int+bfloat16 -> bfloat16 (torch parity,
-    #     incl. its known low-mantissa caveat);
-    #   * floats: the wider wins, except float16+bfloat16 -> float32 (neither can
-    #     represent the other; matches torch/JAX).
-    # This is the SAME table torch's binary ops consult, so wrapping the Var
-    # arithmetic operators (below, in _install_tensor_methods) to cast both
-    # operands to result_type before the native op reproduces torch exactly.
-    _PROMO_ORDER = ["bool", "uint8", "int8", "int16", "int32", "int64",
-                    "float16", "bfloat16", "float32", "float64"]
-    # The lower-triangular promotion matrix (symmetric); rows/cols in _PROMO_ORDER.
-    # b1 u1 i1 i2 i4 i8 f2 bf f4 f8
-    _PROMO_ROWS = {
-        "bool":     ["bool", "uint8", "int8", "int16", "int32", "int64", "float16", "bfloat16", "float32", "float64"],
-        "uint8":    ["uint8", "uint8", "int16", "int16", "int32", "int64", "float16", "bfloat16", "float32", "float64"],
-        "int8":     ["int8", "int16", "int8", "int16", "int32", "int64", "float16", "bfloat16", "float32", "float64"],
-        "int16":    ["int16", "int16", "int16", "int16", "int32", "int64", "float16", "bfloat16", "float32", "float64"],
-        "int32":    ["int32", "int32", "int32", "int32", "int32", "int64", "float16", "bfloat16", "float32", "float64"],
-        "int64":    ["int64", "int64", "int64", "int64", "int64", "int64", "float16", "bfloat16", "float32", "float64"],
-        "float16":  ["float16", "float16", "float16", "float16", "float16", "float16", "float16", "float32", "float32", "float64"],
-        "bfloat16": ["bfloat16", "bfloat16", "bfloat16", "bfloat16", "bfloat16", "bfloat16", "float32", "bfloat16", "float32", "float64"],
-        "float32":  ["float32", "float32", "float32", "float32", "float32", "float32", "float32", "float32", "float32", "float64"],
-        "float64":  ["float64", "float64", "float64", "float64", "float64", "float64", "float64", "float64", "float64", "float64"],
-    }
-    _PROMO_IDX = {n: i for i, n in enumerate(_PROMO_ORDER)}
 
-    def _promote_pair(a, b):
-        # a, b are bare dtype-name strings. Unknown/complex types fall back to the
-        # wider of the two by category index when possible, else to a.
-        if a == b:
-            return a
-        ia, ib = _PROMO_IDX.get(a), _PROMO_IDX.get(b)
-        if ia is not None and ib is not None:
-            return _PROMO_ROWS[a][ib]
-        # complex (jittor has no native complex compute, but keep the lattice sane)
-        if a.startswith("complex") or b.startswith("complex"):
-            wide = "complex128" if ("128" in a or "128" in b or "float64" in (a, b)) else "complex64"
-            return wide
-        return a if ib is None else b
+def is_tensor(value):
+    return isinstance(value, _misc_context().state["Var"])
 
-    def promote_types(t1, t2):
-        return _DTYPE_OBJS.get(_promote_pair(_dtype_to_str(t1), _dtype_to_str(t2)),
-                               _promote_pair(_dtype_to_str(t1), _dtype_to_str(t2)))
-    g.promote_types = promote_types
 
-    def _category(name):
-        # 0 bool, 1 int, 2 float, 3 complex -- torch's scalar-promotion categories.
-        if name == "bool":
-            return 0
-        if name.startswith(("int", "uint")):
-            return 1
-        if name.startswith("complex"):
-            return 3
-        return 2
+def numel(value):
+    return value.numel()
 
-    def result_type(a, b):
-        # torch.result_type(a, b): a/b may each be a Tensor, a dtype, or a Python
-        # number. Two tensors (or dtypes) -> promote_types. A Python scalar follows
-        # torch's "wrapped number" rule: it only bumps the result if it is a HIGHER
-        # category than the tensor; a same-or-lower-category scalar keeps the
-        # tensor's dtype (an int scalar does NOT widen, a float scalar lifts an int
-        # tensor to the default float).
-        def info(x):
-            if isinstance(x, Var):
-                return (_dtype_to_str(x.dtype), False)
-            if isinstance(x, dtype) or (isinstance(x, str) and _dtype_to_str(x) in _jittor_dtype_name(_DTYPE_OBJS)):
-                return (_dtype_to_str(x), False)
-            if isinstance(x, bool):
-                return ("bool", True)
-            if isinstance(x, int):
-                return ("int64", True)
-            if isinstance(x, float):
-                return (_dtype_to_str(g.get_default_dtype()) or "float32", True)
-            if isinstance(x, complex):
-                return ("complex64", True)
-            return (_dtype_to_str(x) or "float32", False)
-        (na, sa), (nb, sb) = info(a), info(b)
-        if sa and not sb:
-            # scalar a vs tensor b: bump only if a is a strictly higher category
-            res = _promote_pair(na, nb) if _category(na) > _category(nb) else nb
-        elif sb and not sa:
-            res = _promote_pair(na, nb) if _category(nb) > _category(na) else na
-        else:
-            res = _promote_pair(na, nb)
-        return _DTYPE_OBJS.get(res, res)
-    g.result_type = result_type
 
-    def can_cast(from_dtype, to_dtype):
-        # torch.can_cast(from, to): True iff `from` can promote into `to` without
-        # leaving its (or a lower) category -- i.e. promote(from, to) == to.
-        f, t = _dtype_to_str(from_dtype), _dtype_to_str(to_dtype)
-        return _promote_pair(f, t) == t
-    g.can_cast = can_cast
+def set_autocast_enabled(*args, **kwargs):
+    return None
 
-    # Expose the promoter for the operator wrappers installed on Var.
-    g._torch_promote_pair = _promote_pair
 
-    # ---- default dtype/device ----
-    _state = {"dtype": getattr(g, "float32", "float32")}
-    g.get_default_dtype = lambda: _state["dtype"]
-    def set_default_dtype(d):
-        if not isinstance(d, dtype) or _dtype_to_str(d) not in (
-                "float16", "bfloat16", "float32", "float64"):
-            raise TypeError("only floating-point types are supported as the default type")
-        _state["dtype"] = d
-    g.set_default_dtype = set_default_dtype
-    def get_default_device():
-        if not jt.flags.use_cuda:
-            return g.device("cpu")
-        try:
-            index = int(jt.current_device())
-        except EXPECTED as exc:
-            swallowed("torch/installers/core.py get_default_device: "
-                      "index = int(jt.current_device())", exc,
-                      "reporting cuda:0, which is wrong on any other device")
-            index = 0
-        return g.device("cuda", index if index >= 0 else 0)
-    g.get_default_device = get_default_device
+def is_grad_enabled():
+    return not bool(getattr(jt.flags, "no_grad", 0))
 
-    def set_default_device(device=None):
-        """torch.set_default_device -- now actually moves the default.
 
-        Was `lambda *a, **k: None` while get_default_device() reported the real
-        residency, so set/get openly contradicted each other: a script that set
-        the default to "cuda" allocated on the CPU and was told it had not.
-        Jittor's default residency is the global use_cuda flag, so this sets it.
-        """
-        if device is None:
-            _set_install_flag(ctx, "use_cuda", 0)
-            return None
-        # Strings first: `str.index` is a method, so getattr(dev, "index")
-        # on "cuda:1" hands back a bound method rather than None, and the
-        # ":" branch below is then never taken.
-        if isinstance(device, str):
-            name, _, raw_index = device.partition(":")
-            index = int(raw_index) if raw_index.isdigit() else None
-        else:
-            name = getattr(device, "type", None) or str(device)
-            index = getattr(device, "index", None)
-            if not isinstance(index, int) or isinstance(index, bool):
-                index = None
-            if index is None and ":" in str(name):
-                name, _, raw_index = str(name).partition(":")
-                index = int(raw_index) if raw_index.isdigit() else None
-        name = str(name).split(":")[0]
-        if name == "cpu":
-            _set_install_flag(ctx, "use_cuda", 0)
-            return None
-        if name in ("cuda", "gpu", "npu"):
-            if not jt.has_cuda:
-                raise RuntimeError(
-                    "torch.set_default_device(%r): this build has no CUDA/NPU "
-                    "device available." % (device,))
-            _set_install_flag(ctx, "use_cuda", 1)
-            # An index is honoured now: it becomes the current device, which
-            # is where new tensors are placed. This used to refuse anything
-            # but 0, because there was nothing to switch.
-            if index is not None:
-                try:
-                    jt.set_device(int(index))
-                except (AttributeError, RuntimeError, TypeError, ValueError) as error:
-                    raise RuntimeError(
-                        "torch.set_default_device(%r): %s" % (device, error))
-            return None
-        from ...stub_policy import unimplemented
-        return unimplemented(
-            "torch.set_default_device(%r)" % (name,),
-            "silently keep the previous default device",
-            "Only 'cpu' and 'cuda' defaults are supported.")
+def set_grad_enabled(mode):
+    owner = _misc_context().jittor_module
+    return owner.enable_grad() if mode else owner.no_grad()
 
-    g.set_default_device = set_default_device
+
+def get_autocast_gpu_dtype(*args, **kwargs):
+    owner = _misc_context().jittor_module
+    return (
+        _get_autocast_dtype("cuda")
+        if _autocast_is_enabled("cuda")
+        else getattr(owner, "float16", "float16")
+    )
+
+
+def is_autocast_available(*args, **kwargs):
+    return True
+
+
+def are_deterministic_algorithms_enabled():
+    return False
+
+
+def use_deterministic_algorithms(*args, **kwargs):
+    return None
+
+
+def is_floating_point(value):
+    return "float" in _jittor_dtype_name(value.dtype)
+
+
+def get_default_dtype():
+    return _misc_context().state["core_misc"]["dtype"]
+
+
+manual_seed = _manual_seed
+seed = _seed
+get_rng_state = _get_rng_state
+set_rng_state = _set_rng_state
+is_autocast_enabled = _is_autocast_enabled
+get_autocast_dtype = _get_autocast_dtype
+
+
+class DoubleStorage(TypedStorage):
+    pass
+
+
+class FloatStorage(TypedStorage):
+    pass
+
+
+class HalfStorage(TypedStorage):
+    pass
+
+
+class BFloat16Storage(TypedStorage):
+    pass
+
+
+class LongStorage(TypedStorage):
+    pass
+
+
+class IntStorage(TypedStorage):
+    pass
+
+
+class ShortStorage(TypedStorage):
+    pass
+
+
+class CharStorage(TypedStorage):
+    pass
+
+
+class ByteStorage(TypedStorage):
+    pass
+
+
+class BoolStorage(TypedStorage):
+    pass
+
+
+_STORAGE_TYPES = (
+    UntypedStorage,
+    TypedStorage,
+    DoubleStorage,
+    FloatStorage,
+    HalfStorage,
+    BFloat16Storage,
+    LongStorage,
+    IntStorage,
+    ShortStorage,
+    CharStorage,
+    ByteStorage,
+    BoolStorage,
+)
+_MISC_BINDINGS = {
+    "manual_seed": manual_seed,
+    "initial_seed": initial_seed,
+    "seed": seed,
+    "get_rng_state": get_rng_state,
+    "set_rng_state": set_rng_state,
+    "is_tensor": is_tensor,
+    "numel": numel,
+    "PyTorchFileReader": PyTorchFileReader,
+    "norm": norm,
+    "where": where,
+    "bincount": bincount,
+    "segment_reduce": segment_reduce,
+    "is_autocast_enabled": is_autocast_enabled,
+    "set_autocast_enabled": set_autocast_enabled,
+    "is_grad_enabled": is_grad_enabled,
+    "set_grad_enabled": set_grad_enabled,
+    "get_autocast_dtype": get_autocast_dtype,
+    "get_autocast_gpu_dtype": get_autocast_gpu_dtype,
+    "is_autocast_available": is_autocast_available,
+    "are_deterministic_algorithms_enabled": are_deterministic_algorithms_enabled,
+    "use_deterministic_algorithms": use_deterministic_algorithms,
+    "is_floating_point": is_floating_point,
+    "finfo": finfo,
+    "iinfo": iinfo,
+    "promote_types": promote_types,
+    "result_type": result_type,
+    "can_cast": can_cast,
+    "get_default_dtype": get_default_dtype,
+    "set_default_dtype": set_default_dtype,
+    "get_default_device": get_default_device,
+    "set_default_device": set_default_device,
+}
+_MISC_DETAILS = {
+    "PyTorchFileReader": "raises NotImplementedError; use torch.load instead",
+    "set_autocast_enabled": "no-op setter; use the supported autocast scope",
+    "use_deterministic_algorithms": "no-op setter; deterministic algorithm policy is not implemented",
+    "get_rng_state": "seed-only state, not a full generator snapshot or exact stream restoration",
+    "set_rng_state": "restores the recorded seed, not an exact generator stream snapshot",
+    "norm": "existing Torch norm adapter; out and extra keyword semantics are not implemented",
+    "where": "existing one- or three-argument selection; out is not implemented",
+    "bincount": "native scatter-add implementation; existing flatten/minlength behavior retained",
+    "segment_reduce": "lengths-based dim-0 reduction only; additional keyword semantics are not implemented",
+    "finfo": "NumPy limits plus declared metadata-only low-precision specs; this does not enable their computation",
+    "iinfo": "NumPy integer-limit metadata for supported dtype names",
+    "is_autocast_available": "legacy True capability answer; does not verify a requested device",
+    "are_deterministic_algorithms_enabled": "legacy False answer; deterministic algorithms are not configurable",
+}
+for _name, _implementation in _MISC_BINDINGS.items():
+    _level = (
+        Fidelity.UNIMPLEMENTED
+        if _name in ("PyTorchFileReader", "set_autocast_enabled", "use_deterministic_algorithms")
+        else Fidelity.APPROXIMATE
+    )
+    register_fidelity(
+        "torch." + _name,
+        _implementation,
+        _level,
+        _MISC_DETAILS.get(
+            _name, "existing Jittor compatibility behavior; not a claim of complete Torch parity"
+        ),
+    )
+for _storage in _STORAGE_TYPES:
+    register_fidelity(
+        "torch." + _storage.__name__,
+        _storage,
+        Fidelity.APPROXIMATE,
+        "metadata carrier only; no byte-storage allocation or tensor-storage semantics",
+    )
+    register_fidelity(
+        "torch.storage." + _storage.__name__,
+        _storage,
+        Fidelity.APPROXIMATE,
+        "metadata carrier only; no byte-storage allocation or tensor-storage semantics",
+    )
+for _name, _implementation in (
+    ("manual_seed", manual_seed),
+    ("initial_seed", initial_seed),
+    ("seed", _torch_seed),
+    ("get_rng_state", get_rng_state),
+    ("set_rng_state", set_rng_state),
+):
+    register_fidelity(
+        "torch.random." + _name,
+        _implementation,
+        Fidelity.APPROXIMATE,
+        _MISC_DETAILS.get(
+            _name, "existing Jittor compatibility behavior; not a claim of complete Torch parity"
+        ),
+    )
+register_fidelity(
+    "torch.Tensor.bincount", bincount, Fidelity.APPROXIMATE, _MISC_DETAILS["bincount"]
+)
+del _name, _implementation, _level, _storage
+
+
+def install_misc(ctx):
+    """Bind stable misc objects and initialize their per-installation state."""
+    modules = ctx.registry.module_map
+    owner = ctx.jittor_module
+    var_type = ctx.state["Var"]
+    ctx.state.setdefault("core_misc", {"dtype": getattr(owner, "float32", "float32")})
+    ctx.state.setdefault("core_misc_native_random", getattr(owner, "random", None))
+    storage = modules.get("torch.storage")
+    if storage is None:
+        storage = modules["torch.storage"] = _types_misc.ModuleType("torch.storage")
+    for storage_type in _STORAGE_TYPES:
+        setattr(storage, storage_type.__name__, storage_type)
+        setattr(owner, storage_type.__name__, storage_type)
+    owner.storage = storage
+    random = modules.get("torch.random")
+    if not isinstance(random, _RandomModule):
+        random = modules["torch.random"] = _RandomModule("torch.random")
+    for name in ("manual_seed", "initial_seed", "get_rng_state", "set_rng_state"):
+        setattr(random, name, _MISC_BINDINGS[name])
+    random.seed = _torch_seed
+    owner.random = random
+    for name, implementation in _MISC_BINDINGS.items():
+        setattr(owner, name, implementation)
+    var_type.bincount = bincount
+    owner.Tensor.bincount = bincount
+    for name, implementation in (
+        ("exp2", exp2),
+        ("log10", log10),
+        ("sign", sign),
+        ("trunc", trunc),
+    ):
+        setattr(owner, name, implementation)
+        setattr(var_type, name, implementation)
+    var_type.frac = frac

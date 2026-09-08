@@ -335,7 +335,6 @@ class TestCleanupStructure(unittest.TestCase):
             ),
         ]
         roots = (
-            "agent/scripts",
             "agent/skills",
             "docs",
             "examples",
@@ -390,7 +389,7 @@ class TestCleanupStructure(unittest.TestCase):
         self.assertEqual(unexpected, [])
 
     def test_documentation_governance_checker(self):
-        checker = self.repo_root / "agent" / "scripts" / "check_docs_governance.py"
+        checker = self.repo_root / "tools" / "docs" / "check_governance.py"
         result = run_python_child(
             [checker], cwd=self.repo_root, merge_stderr=True)
         self.assertEqual(result.returncode, 0, result.stdout)

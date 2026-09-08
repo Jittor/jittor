@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import pathlib
 import sys
+from functools import wraps
 from typing import Any, List, NamedTuple, Optional, Sequence, Union
 
 from .build import (
@@ -35,23 +36,26 @@ class ActivationStatus(NamedTuple):
     error: Optional[str]
 
 
-def _runtime_state(root_module):
-    state = getattr(root_module, "_torch_shim_runtime_state", None)
-    if state is None:
-        state = {
-            "phase": "inactive",
-            "installed": False,
-            "result": None,
-            "external_patches": None,
-            "error": None,
-            "runtime_configured": False,
-            # The published torch root is part of activation identity.  Do
-            # not silently reuse an independent namespace for a later native
-            # activation (or the reverse).
-            "independent_namespace": False,
-        }
-        root_module._torch_shim_runtime_state = state
-    return state
+def _new_runtime_state():
+    return {
+        "phase": "inactive",
+        "installed": False,
+        "result": None,
+        "external_patches": None,
+        "error": None,
+        "runtime_configured": False,
+        "independent_namespace": False,
+    }
+
+
+def _runtime_state(root_module, create=True):
+    runtime = getattr(root_module, "runtime", None)
+    if runtime is None:
+        if not create:
+            return None
+        raise RuntimeError("Torch activation requires the native Runtime service interface")
+    return runtime.service_state(
+        "jittor.torch.activation", factory=_new_runtime_state if create else None)
 
 
 def _installation_target(owner, independent):
@@ -95,7 +99,7 @@ def activation_status(root_module=None):
     """Return an immutable snapshot of process-wide Torch shim activation."""
 
     root = root_module or sys.modules.get("jittor")
-    state = getattr(root, "_torch_shim_runtime_state", None) if root else None
+    state = _runtime_state(root, create=False) if root else None
     if state is None:
         return ActivationStatus("inactive", False, None, None)
     phase = state.get("phase") or (
@@ -186,15 +190,18 @@ def _activate_once(
         transaction.acquire()
         try:
             published = _installation_target(jt, independent_namespace)
-            torch_compat.install(published, strict=strict_bootstrap)
+            torch_compat.install(published, strict=strict_bootstrap,
+                                 parent_transaction=transaction)
             if independent_namespace:
                 publish_independent_namespace(
                     published, published._torch_compat_install_context.registry,
                     transaction=transaction,
                 )
             _publish_torch_module(transaction, published, jt)
+            if _transaction is not None:
+                _transaction.adopt(transaction)
             transaction.commit()
-        except EXPECTED:
+        except BaseException:
             transaction.rollback()
             raise
         finally:
@@ -262,7 +269,8 @@ def _activate_once(
             _transaction.mutate_flag(jt.flags, "no_grad", 1)
     from jittor.compat import torch as torch_compat
     published = _installation_target(jt, independent_namespace)
-    torch_compat.install(published, strict=strict_bootstrap)
+    torch_compat.install(published, strict=strict_bootstrap,
+                         parent_transaction=_transaction)
     if independent_namespace:
         publish_independent_namespace(
             published, published._torch_compat_install_context.registry,
@@ -349,6 +357,17 @@ def _activate_once(
     }
 
 
+def _serialized_activation(function):
+    @wraps(function)
+    def serialized(*args, **kwargs):
+        # State inspection and transitions share the same lock as installation.
+        # A second thread waits; recursion in this thread reaches the phase guard.
+        with ActivationTransaction._lock:
+            return function(*args, **kwargs)
+    return serialized
+
+
+@_serialized_activation
 def activate(
     project_root: Optional[Union[str, os.PathLike]] = None,
     runtime_root: Optional[Union[str, os.PathLike]] = None,
@@ -421,17 +440,24 @@ def activate(
             _transaction=transaction,
             independent_namespace=independent_namespace,
         )
-    except EXPECTED as exc:
-        transaction.rollback()
-        transaction.release()
-        state.update(
-            phase="active" if already_installed else "failed",
-            installed=already_installed,
-            error=str(exc),
-        )
-        raise
-    transaction.commit()
-    transaction.release()
+    except BaseException as exc:
+        try:
+            transaction.rollback()
+        except BaseException as rollback_error:
+            state.update(phase="failed", installed=False, error=str(rollback_error))
+            raise
+        else:
+            state.update(
+                phase="active" if already_installed else "failed",
+                installed=already_installed, error=str(exc))
+            raise
+        finally:
+            transaction.release()
+    else:
+        try:
+            transaction.commit()
+        finally:
+            transaction.release()
     state.update(
         phase="active",
         installed=True,

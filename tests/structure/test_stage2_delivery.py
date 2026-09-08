@@ -62,13 +62,13 @@ class TestStage2Delivery(unittest.TestCase):
 
     def test_retired_gitlab_ci_does_not_return(self):
         self.assertFalse((self.repo_root / ".gitlab-ci.yml").exists())
-        layout_gate = (self.repo_root / "agent" / "scripts" / "check_repo_layout.sh").read_text(
+        layout_gate = (self.repo_root / "tools" / "check_repo_layout.sh").read_text(
             encoding="utf-8",
         )
         self.assertNotIn(".gitlab-ci.yml", layout_gate)
 
     def test_layout_gate_is_a_small_rule_checker_not_a_history_blacklist(self):
-        layout_gate = (self.repo_root / "agent" / "scripts" / "check_repo_layout.sh").read_text(
+        layout_gate = (self.repo_root / "tools" / "check_repo_layout.sh").read_text(
             encoding="utf-8",
         )
         self.assertLess(len(layout_gate.splitlines()), 100)
@@ -79,7 +79,7 @@ class TestStage2Delivery(unittest.TestCase):
             "required_paths",
             "notebook product must stay outside",
             "module/package path collision",
-            "check_docs_governance.py",
+                "check_governance.py",
         ):
             with self.subTest(contract=contract):
                 self.assertIn(contract, layout_gate)

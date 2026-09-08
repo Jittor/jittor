@@ -48,7 +48,7 @@ repos:
         pass_filenames: false
       - id: repository-layout
         name: repository layout
-        entry: agent/scripts/check_repo_layout.sh
+        entry: tools/check_repo_layout.sh
         language: system
         pass_filenames: false
         always_run: true

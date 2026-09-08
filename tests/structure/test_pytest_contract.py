@@ -285,7 +285,7 @@ def test_the_tier_marker_is_attached_from_the_recorded_list():
     assert "slow" in _automatic_markers(listed, "cpu", "cpu")
     assert "slow" not in _automatic_markers(unlisted, "cpu", "cpu")
 
-    external = REPO_ROOT / "agent" / "scripts" / "test_check_wheel_contents.py"
+    external = REPO_ROOT / "tools" / "release" / "test_check_wheel_contents.py"
     assert _automatic_markers(external) == set()
 
 

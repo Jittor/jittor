@@ -57,18 +57,18 @@ Jittor 使用文件锁串行化 JIT 编译。多个进程共享缓存并首次�
   wheel/模型/编译缓存与原始日志。
 - `$JITTOR_LAB_ROOT/worktrees/`：并行 agent 的 Git worktree。
 - 不在主仓库顶层新建 `jittor_fsdp2`、`*_work`、`*_probe` 等实验目录。
-- 提交前运行 `agent/scripts/check_repo_layout.sh`，直接检查工作区顶层是否越界。
+- 提交前运行 `tools/check_repo_layout.sh`，直接检查工作区顶层是否越界。
 
 ## 目录结构
 
 ```
 agent/
 ├── manuals/                  # 协作、环境、问题总账和上下文索引
-├── scripts/                  # 仓库维护检查
 └── skills/                   # SKILL.md 与可复用工具
 ```
 
 长期设计资料不放在 `agent/manuals/` 的主题子目录，按语义写入根目录 `docs/`。
+仓库维护检查统一放在 `tools/`，不在 `agent/` 保留第二份脚本。
 设计与唯一看板位于 `docs/architecture/`，验证报告和历史基线位于 `docs/results/`。
 任务领取、状态和验收证据只更新 `docs/architecture/refactor-board.md`；
 接手步骤与分工分别维护于同目录的 `refactor-handoff.md` 和 `refactor-dispatch.md`。

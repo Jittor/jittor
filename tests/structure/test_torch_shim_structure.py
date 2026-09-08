@@ -9,6 +9,16 @@ import unittest
 
 
 class TestTorchShimStructure(unittest.TestCase):
+    @staticmethod
+    def _current_source_path(path):
+        # Historical approvals retain original names/hashes. Only the lookup
+        # maps the completed distribution move to its current physical owner.
+        prefix = "python/jittor/compat/"
+        path = "compat/" + path[len(prefix):] if path.startswith(prefix) else path
+        if path == "compat/shim/resources/torch_init.py":
+            return "compat/shim/resources/torch/__init__.py"
+        return path
+
     @classmethod
     def setUpClass(cls):
         cls.repo_root = Path(__file__).resolve().parents[2]
@@ -39,7 +49,7 @@ class TestTorchShimStructure(unittest.TestCase):
                 continue
             match = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
             self.assertIsNotNone(match, line)
-            entries.append(match.group(2))
+            entries.append(self._current_source_path(match.group(2)))
 
         self.assertEqual(len(entries), len(set(entries)), "duplicate entries")
         missing = [path for path in entries
@@ -48,7 +58,7 @@ class TestTorchShimStructure(unittest.TestCase):
 
     def test_manifest_covers_deep_and_generated_resources(self):
         paths = {
-            line.split("  ", 1)[1]
+            self._current_source_path(line.split("  ", 1)[1])
             for line in self.manifest.read_text(encoding="utf-8").splitlines()
             if line and not line.startswith("#")
         }
@@ -69,6 +79,20 @@ class TestTorchShimStructure(unittest.TestCase):
         required.update(path.relative_to(self.repo_root).as_posix()
                         for path in flash_sources)
         self.assertTrue(required.issubset(paths))
+        # Runtime data now has one declarative source and a generated sdist
+        # manifest. Ordinary .py modules are handled by package discovery.
+        from importlib.util import module_from_spec, spec_from_file_location
+        spec = spec_from_file_location(
+            "shim_resource_declarations", self.repo_root / "tools/build/generate_manifest.py")
+        generator = module_from_spec(spec)
+        spec.loader.exec_module(generator)
+        project = self.repo_root / "compat"
+        declared = generator.runtime_resources(project)
+        for path in required:
+            if path.startswith(("compat/shim/resources/", "compat/shim/cpp_extension/include/")):
+                self.assertIn(path[len("compat/"):], declared)
+        self.assertEqual((project / "MANIFEST.in").read_text(encoding="utf-8"),
+                         generator.manifest_text(project))
 
     def test_deployed_torch_template_is_an_identity_only_entrypoint(self):
         """Activate the shim and publish its returned independent namespace.

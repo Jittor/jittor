@@ -18,8 +18,6 @@ import ast
 import unittest
 from pathlib import Path
 
-import jittor
-
 
 _COMPAT = Path(__file__).resolve().parents[2] / "compat"
 _POLICY = "EXPECTED"
@@ -42,6 +40,7 @@ def _sources():
 def _handlers():
     for path in _sources():
         tree = ast.parse(path.read_text(encoding="utf-8"))
+        _link_parents(tree)
         for node in ast.walk(tree):
             if isinstance(node, ast.ExceptHandler):
                 yield path, node
@@ -54,9 +53,92 @@ def _is_broad(handler):
     return isinstance(node, ast.Name) and node.id in ("Exception", "BaseException")
 
 
+def _link_parents(tree):
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            child._policy_parent = parent
+
+
+def _outcomes(statements):
+    """Normal control-flow exits; nested definitions do not execute their bodies."""
+    outcomes = {"next"}
+    for statement in statements:
+        if "next" not in outcomes:
+            break
+        exits = {"next"}
+        if isinstance(statement, ast.Raise):
+            exits = {"raise"}
+        elif isinstance(statement, (ast.Return, ast.Break, ast.Continue)):
+            exits = {"escape"}
+        elif isinstance(statement, ast.If):
+            exits = _outcomes(statement.body) | _outcomes(statement.orelse)
+        elif isinstance(statement, (ast.With, ast.AsyncWith, ast.For, ast.AsyncFor, ast.While)):
+            # Loops may execute zero times and context managers may suppress
+            # raises. A return from their bodies can still bypass a later raise.
+            exits = {"next"} | _outcomes(statement.body) | _outcomes(getattr(statement, "orelse", ()))
+        elif isinstance(statement, ast.Try):
+            exits = _outcomes(statement.body)
+            if "next" in exits:
+                exits = (exits - {"next"}) | _outcomes(statement.orelse)
+            if statement.handlers:
+                exits.discard("raise")
+                for nested in statement.handlers:
+                    exits |= _outcomes(nested.body)
+            final = _outcomes(statement.finalbody)
+            exits = (exits if "next" in final else set()) | (final - {"next"})
+        outcomes = (outcomes - {"next"}) | exits
+    return outcomes
+
+
+def _deferred_rethrow(handler):
+    # Recognize the bounded cleanup idiom: collect the caught object, finish a
+    # for-loop's independent cleanup, then immediately raise that stored error.
+    if not handler.name or len(handler.body) != 1:
+        return False
+    statement = handler.body[0]
+    call = statement.value if isinstance(statement, ast.Expr) else None
+    if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "append" and isinstance(call.func.value, ast.Name)
+            and len(call.args) == 1 and isinstance(call.args[0], ast.Name)
+            and call.args[0].id == handler.name):
+        return False
+    name = call.func.value.id
+    loop = getattr(handler, "_policy_parent", None)
+    while loop is not None and not isinstance(loop, (ast.For, ast.FunctionDef, ast.AsyncFunctionDef)):
+        loop = getattr(loop, "_policy_parent", None)
+    if not isinstance(loop, ast.For):
+        return False
+    container = getattr(loop, "_policy_parent", None)
+    siblings = getattr(container, "body", ())
+    if loop not in siblings:
+        return False
+    position = siblings.index(loop)
+    if position + 1 >= len(siblings):
+        return False
+    guard = siblings[position + 1]
+    if not (isinstance(guard, ast.If) and isinstance(guard.test, ast.Name)
+            and guard.test.id == name and _outcomes(guard.body) == {"raise"}):
+        return False
+    initializers = [node for node in siblings[:position] if isinstance(node, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)]
+    if not initializers or not isinstance(initializers[-1].value, ast.List) or initializers[-1].value.elts:
+        return False
+    for node in ast.walk(loop):
+        if isinstance(node, ast.Return):
+            return False
+        if isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, (ast.Store, ast.Del)):
+            return False
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and isinstance(node.func.value, ast.Name) and node.func.value.id == name and node is not call:
+            return False
+    raised = [node.exc for node in ast.walk(guard) if isinstance(node, ast.Raise)]
+    return bool(raised) and all(isinstance(value, ast.Subscript)
+        and isinstance(value.value, ast.Name) and value.value.id == name
+        and isinstance(value.slice, ast.Constant) and value.slice.value == 0 for value in raised)
+
+
 def _only_reraises(handler):
-    """A handler that translates an error into a clearer one is not swallowing."""
-    return any(isinstance(stmt, ast.Raise) for stmt in handler.body)
+    return _outcomes(handler.body) == {"raise"} or _deferred_rethrow(handler)
 
 
 def _records(handler):
@@ -71,6 +153,29 @@ def _where(path, node):
 
 
 class TestCompatExceptionPolicy(unittest.TestCase):
+    def test_rethrow_analysis_accepts_cleanup_but_rejects_swallow_paths(self):
+        good = [
+            "try:\n work()\nexcept Exception:\n try:\n  cleanup()\n finally:\n  raise\n",
+            "try:\n work()\nexcept Exception:\n try:\n  cleanup()\n except BaseException:\n  raise\n else:\n  raise\n finally:\n  release()\n",
+            "def run():\n errors=[]\n for item in items:\n  try:\n   cleanup(item)\n  except Exception as error:\n   errors.append(error)\n if errors:\n  raise errors[0]\n",
+        ]
+        bad = [
+            "try:\n work()\nexcept Exception:\n if condition:\n  raise\n",
+            "try:\n work()\nexcept Exception:\n def unused():\n  raise\n",
+            "try:\n work()\nexcept Exception:\n try:\n  raise\n except Exception:\n  pass\n",
+            "try:\n work()\nexcept Exception:\n return_value = None\n",
+            good[2].replace(" if errors:", " errors.clear()\n if errors:"),
+            good[2].replace("raise errors[0]", "return errors[0]"),
+            "def run():\n try:\n  work()\n except Exception:\n  with lock:\n   return\n  raise\n",
+            "def run():\n try:\n  work()\n except Exception:\n  for item in items:\n   return\n  raise\n",
+        ]
+        for sources, expected in ((good, True), (bad, False)):
+            for source in sources:
+                tree = ast.parse(source)
+                _link_parents(tree)
+                handler = next(node for node in ast.walk(tree) if isinstance(node, ast.ExceptHandler))
+                with self.subTest(source=source):
+                    self.assertEqual(_only_reraises(handler), expected)
     def test_no_handler_body_is_only_pass(self):
         offenders = [_where(path, handler) for path, handler in _handlers()
                      if len(handler.body) == 1

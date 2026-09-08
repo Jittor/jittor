@@ -104,7 +104,7 @@ _OWNERSHIP = {
         "fill_fsdp_optimizer_grads_from_grad_map",
     },
     optimizer: {
-        "clear_fsdp_optimizer_grads", "_optimizer_param_steps",
+        "clear_fsdp_optimizer_grads",
         "_assign_preserve_trainability", "refresh_optimizer_fsdp_params",
         "_refresh_all_optimizer_fsdp_params", "_sgd_hparams",
         "_sgd_update_for_param", "_adam_hparams", "_adam_update_for_param",
@@ -314,16 +314,29 @@ assert second is jittor.torch_fsdp2_compat
             )
 
     def test_implementation_ownership_and_real_origins(self):
+        reexports = {
+            optimizer: {
+                "_optimizer_param_steps": (
+                    "jittor.compat.torch.optimizer_api", "_torch_param_steps"),
+            },
+        }
         names = set()
         for module, expected in _OWNERSHIP.items():
             with self.subTest(module=module.__name__):
-                self.assertEqual(set(module._EXPORTS), expected)
-                self.assertTrue(names.isdisjoint(expected))
-                names.update(expected)
-                for name in expected:
+                aliases = reexports.get(module, {})
+                exports = expected | set(aliases)
+                self.assertEqual(set(module._EXPORTS), exports)
+                self.assertTrue(names.isdisjoint(exports))
+                names.update(exports)
+                for name in exports:
                     value = getattr(module, name)
                     self.assertIs(getattr(fsdp, name), value)
-                    if callable(value):
+                    if name in aliases:
+                        owner_module, owner_name = aliases[name]
+                        canonical = getattr(importlib.import_module(owner_module), owner_name)
+                        self.assertIs(value, canonical)
+                        self.assertEqual(value.__module__, owner_module)
+                    elif callable(value):
                         self.assertEqual(value.__module__, module.__name__)
         self.assertIs(fsdp._install_fsdp2_distributed, fsdp.install)
 

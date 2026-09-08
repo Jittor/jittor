@@ -1,3 +1,4 @@
+from ...fidelity import Fidelity, register_api_bindings
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import collections as _collections
 import functools as _functools
@@ -1096,3 +1097,7 @@ def _install_module_methods(nn, registry=None):
         M.type = _module_type
     if not isinstance(M.__dict__.get("_non_persistent_buffers_set"), property):
         M._non_persistent_buffers_set = property(_nonpersist_set)
+
+    register_api_bindings(M, 'torch.nn.Module',
+        ('__setattr__', 'buffers', 'cpu', 'cuda', 'double', 'eval', 'execute', 'float', 'forward', 'get_buffer', 'get_execution_pipelining', 'get_parameter', 'get_submodule', 'half', 'load_state_dict', 'named_buffers', 'named_modules', 'named_parameters', 'npu', 'parameters', 'register_parameter', 'set_execution_pipelining', 'to', 'to_empty', 'train', 'type', 'zero_grad') + tuple(()),
+        Fidelity.APPROXIMATE, 'Module state and parameter management over native holders; Torch lazy iterator, meta, and layout semantics are approximate')

@@ -12,7 +12,7 @@ import sys
 
 from .._aliases import _torch_namespace as _torch_namespace_snapshot
 from .context import InstallContext, InstallReport, InstallStepError, ModuleRegistry
-from ..transaction import InstallTransaction, active_transaction
+from ..transaction import InstallTransaction, active_transaction, _MISSING
 from .functional import (
     _diff,
     _isin,
@@ -182,11 +182,26 @@ def _same_namespace(left, right):
     )
 
 
-def _restore_namespace(snapshot):
-    for name in tuple(sys.modules):
-        if name == "torch" or name.startswith("torch."):
+def _restore_namespace(snapshot, expected):
+    from ..transaction import TransactionConflict
+    missing = object()
+    conflicts = []
+    for name in snapshot.keys() | expected.keys():
+        old, new = snapshot.get(name, missing), expected.get(name, missing)
+        if old is new:
+            continue
+        current = sys.modules.get(name, missing)
+        if current is old:
+            continue  # An explicit child entry already restored this slot.
+        if current is not new:
+            conflicts.append(name)
+            continue
+        if old is missing:
             sys.modules.pop(name, None)
-    sys.modules.update(snapshot)
+        else:
+            sys.modules[name] = old
+    if conflicts:
+        raise TransactionConflict("Torch namespace owner lost: " + ", ".join(conflicts))
 
 
 def _abandon(transaction, context):
@@ -202,7 +217,7 @@ def _abandon(transaction, context):
     transaction.release()
 
 
-def install(torch, strict=True):
+def install(torch, strict=True, parent_transaction=None):
     """Install once on the explicit Torch target and return that target."""
 
     from .tensor_state import (
@@ -218,6 +233,8 @@ def install(torch, strict=True):
         )
 
     transaction = InstallTransaction("torch.install")
+    if parent_transaction is not None and parent_transaction.state != "open":
+        raise RuntimeError("parent install transaction must be open")
     context = InstallContext.for_module(torch, strict=strict)
     if context.complete:
         from .._aliases import torch_namespace_owned
@@ -254,7 +271,8 @@ def install(torch, strict=True):
         if var_type is not None and hasattr(var_type, "__dict__")
         else None
     )
-    transaction.record_undo(lambda: _restore_namespace(before))
+    namespace_after = [before]
+    transaction.record_undo(lambda: _restore_namespace(before, namespace_after[0]))
 
     tensor_state_before = None
     tensor_state = None
@@ -266,7 +284,9 @@ def install(torch, strict=True):
                 context.native_backend, context.target_namespace, transaction,
                 state=context.state.get("_tensor_state"),
             )
+            previous_tensor_state = context.state.get("_tensor_state", _MISSING)
             context.state["_tensor_state"] = tensor_state
+            transaction.record(context.state, "_tensor_state", previous_tensor_state, tensor_state)
         finally:
             # Binding owns its own attribute ledger. Do not record the same
             # changes again when collecting subsequent installer mutations.
@@ -277,7 +297,7 @@ def install(torch, strict=True):
         for step, installer in _OPTIONAL_STEPS:
             context.run_optional(step, installer)
         context.mark_complete()
-    except EXPECTED as exc:
+    except BaseException as exc:
         swallowed("torch/__init__.py install: for step, installer in _REQUIRED_STEPS:", exc)
         if tensor_state_before is not None:
             record_tensor_state_changes(transaction, tensor_state, tensor_state_before)
@@ -288,7 +308,7 @@ def install(torch, strict=True):
         transaction.record_object_diffs(torch, root_attrs_before)
         if var_attrs_before is not None:
             transaction.record_object_diffs(var_type, var_attrs_before)
-        _restore_namespace(before)
+        namespace_after[0] = _torch_namespace_snapshot()
         context.state[_NAMESPACE_TRANSACTION] = {
             "before": before,
         }
@@ -300,6 +320,16 @@ def install(torch, strict=True):
         raise
     context.state.pop(_NAMESPACE_TRANSACTION, None)
     try:
+        namespace_after[0] = _torch_namespace_snapshot()
+        if parent_transaction is not None:
+            if tensor_state_before is not None:
+                record_tensor_state_changes(transaction, tensor_state, tensor_state_before)
+            transaction.record_mapping_diffs(context.markers, markers_before)
+            transaction.record_mapping_diffs(context.registry._published, published_before)
+            transaction.record_object_diffs(torch, root_attrs_before)
+            if var_attrs_before is not None:
+                transaction.record_object_diffs(var_type, var_attrs_before)
+            parent_transaction.adopt(transaction)
         transaction.commit()
     finally:
         _abandon(transaction, context)

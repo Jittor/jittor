@@ -45,6 +45,10 @@ MODULE = "module"
 DEFERRED = "deferred"
 TYPING = "typing"
 
+# Explicit resource namespaces are not Python coverage roots. Unknown empty
+# roots still fail; these owners must have declared data and no Python code.
+DATA_ONLY_PACKAGES = {"jittor.src": "native core source resources declared by package-data"}
+
 # ---------------------------------------------------------------------------
 # Baselines. Every number here is measured, not aspirational: run this file
 # with --report to reprint them. They are ceilings and allowlists, so the
@@ -359,6 +363,11 @@ def owning_subpackage(module: str) -> str:
 def check_coverage(report: dict) -> list[str]:
     """The graph is big enough that a "no violations" result means something."""
     problems = []
+    for name, details in report.get("data_only_roots", {}).items():
+        if not details["resource_files"]:
+            problems.append("data-only package %r resolved to no declared resources" % name)
+        if details["python_files"]:
+            problems.append("data-only package %r unexpectedly contains Python modules" % name)
     for name, count in sorted(report["modules_per_root"].items()):
         if count == 0:
             problems.append(
@@ -432,6 +441,18 @@ CONTRACTS = (
 
 def build_report(root: Path = REPO_ROOT) -> dict:
     roots = scan_roots(root)
+    declarations = _load_pyproject(root)["tool"]["setuptools"].get("package-data", {})
+    data_only = {}
+    for base, prefix in roots:
+        if prefix in DATA_ONLY_PACKAGES:
+            resources = {path for pattern in declarations.get(prefix, [])
+                         for path in base.glob(pattern) if path.is_file()}
+            data_only[prefix] = {
+                "reason": DATA_ONLY_PACKAGES[prefix],
+                "resource_files": len(resources),
+                "python_files": len(list(base.rglob("*.py"))),
+            }
+    roots = [(base, prefix) for base, prefix in roots if prefix not in DATA_ONLY_PACKAGES]
     modules = discover_modules(roots)
     edges = build_edges(modules, _import_aliases(root))
     at_import = graph_for(edges, {MODULE})
@@ -463,6 +484,7 @@ def build_report(root: Path = REPO_ROOT) -> dict:
                 break
 
     return {
+        "data_only_roots": data_only,
         "modules_checked": len(modules),
         "modules_per_root": {
             prefix: sum(1 for m in modules if m == prefix or m.startswith(prefix + "."))

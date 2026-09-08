@@ -140,12 +140,12 @@ _RESOLVER_FILES = {
 #: ``jittor_utils`` is importable. It holds the names in constants, which means
 #: the regex below cannot see them -- so the allowance is bounded here instead,
 #: and a third name appearing in that module fails the gate.
-_SHIM_PREFLIGHT = "jittor/compat/shim/preflight.py"
+_SHIM_PREFLIGHT = REPO / "compat/shim/preflight.py"
 _SHIM_ALLOWED_DEPRECATED = {"tikcc_path", "nvcc_flags"}
 
 
 def test_the_shim_preflight_exception_does_not_grow():
-    tree = ast.parse((SOURCE / _SHIM_PREFLIGHT).read_text())
+    tree = ast.parse(_SHIM_PREFLIGHT.read_text())
     declared = set()
     for node in ast.walk(tree):
         if (isinstance(node, ast.Assign) and len(node.targets) == 1

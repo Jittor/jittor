@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from types import MappingProxyType, ModuleType
+from threading import RLock
 
 from .flag_policy import FLAG_ALIASES, READONLY_FLAGS, RUNTIME_FLAGS, STARTUP_FLAGS
 
@@ -93,11 +94,14 @@ class RuntimeContext:
 class RuntimeState:
     """Live runtime switches backed by native setters, plus read-only counters."""
 
-    __slots__ = ("_context", "_scope_factory")
+    __slots__ = ("_context", "_scope_factory", "_services", "_service_lock", "_creating_services")
 
     def __init__(self, context, scope_factory=None):
         object.__setattr__(self, "_context", context)
         object.__setattr__(self, "_scope_factory", scope_factory)
+        object.__setattr__(self, "_services", {})
+        object.__setattr__(self, "_service_lock", RLock())
+        object.__setattr__(self, "_creating_services", set())
 
     def __getattr__(self, name):
         return getattr(self._context, name)
@@ -132,6 +136,30 @@ class RuntimeState:
         if self._scope_factory is None:
             raise RuntimeError("runtime scope is unavailable before composition")
         return self._scope_factory(**changes)
+
+    def service_state(self, namespace, *, factory=None):
+        """Own an extension's state without publishing attributes on jittor.
+
+        Reads do not create state. A successful factory runs once per runtime;
+        failures leave no entry and recursive creation is rejected. The service
+        owns the returned object and its own field/transaction semantics.
+        """
+        if not isinstance(namespace, str) or not namespace:
+            raise ValueError("runtime service namespace must be a nonempty string")
+        with self._service_lock:
+            if namespace in self._services:
+                return self._services[namespace]
+            if factory is None:
+                return None
+            if namespace in self._creating_services:
+                raise RuntimeError("recursive runtime service creation: " + namespace)
+            self._creating_services.add(namespace)
+            try:
+                state = factory()
+                self._services[namespace] = state
+                return state
+            finally:
+                self._creating_services.remove(namespace)
 
 
 __all__ = ["StartupConfig", "RuntimeContext", "RuntimeState"]

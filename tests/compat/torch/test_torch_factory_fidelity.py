@@ -31,7 +31,7 @@ class TestTorchFactoryFidelity(unittest.TestCase):
         report = fidelity.fidelity_report(prefix="torch.")
         factory_records = tuple(
             record for record in report
-            if record.api.split(".")[-1] in FACTORY_NAMES
+            if record.api in {"torch." + name for name in FACTORY_NAMES}
         )
         self.assertEqual(
             tuple(record.api for record in factory_records),

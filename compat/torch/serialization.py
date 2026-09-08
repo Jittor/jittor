@@ -4,7 +4,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import numpy as np
 import jittor as jt
 
-from .context import registry_for
+from .context import get_install_context, registry_for
 from .types import _make_cpu_resident, _make_cuda_resident, _move_to_cuda_index
 from ..diagnostics import EXPECTED, swallowed
 
@@ -592,7 +592,7 @@ def install(ctx):
         path = None
         if not hasattr(f, "read"):
             path = _os_pickle.fspath(f)
-            native_load = getattr(g, "_vj_native_load", None)
+            native_load = get_install_context(g).state["core_native_api"]["load"]
             if native_load is not None and path.startswith(("jittorhub://", "http://", "https://")):
                 return _apply_map_location(native_load(path), map_location)
         _zip = False
@@ -619,7 +619,7 @@ def install(ctx):
             raise
         except EXPECTED as exc:
             swallowed("torch/serialization.py load: if hasattr(f, 'read'):", exc)
-            native_load = getattr(g, "_vj_native_load", None)
+            native_load = get_install_context(g).state["core_native_api"]["load"]
             if native_load is not None and path is not None and path.lower().endswith(".pkl"):
                 return _apply_map_location(native_load(path), map_location)
             raise

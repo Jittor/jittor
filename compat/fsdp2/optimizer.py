@@ -8,6 +8,7 @@ from . import common, grad_sync, shard
 from .. import optimizer_kinds
 from ..diagnostics import EXPECTED, swallowed
 from ..torch.tensor_state import get_tensor_state
+from ..torch.optimizer_api import _torch_param_steps as _optimizer_param_steps
 
 
 _EXPORTS = (
@@ -35,18 +36,6 @@ def clear_fsdp_optimizer_grads(opt):
         for i, param in enumerate(pg.get("params", [])):
             if i < len(grads) and shard.is_fsdp_managed_param(param):
                 grads[i] = None
-
-
-def _optimizer_param_steps(pg):
-    params = list(pg.get("params", []))
-    steps = pg.get("_torch_steps")
-    if not isinstance(steps, list):
-        steps = pg["_torch_steps"] = [0] * len(params)
-    while len(steps) < len(params):
-        steps.append(0)
-    if len(steps) > len(params):
-        del steps[len(params):]
-    return steps
 
 
 def _assign_preserve_trainability(target, value, was_trainable=None):

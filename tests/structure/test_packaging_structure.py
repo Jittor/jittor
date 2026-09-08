@@ -64,42 +64,62 @@ class TestPackagingStructure(unittest.TestCase):
         )
 
     def test_manifest_covers_runtime_trees_without_cache_payloads(self):
-        manifest = (self.repo_root / "MANIFEST.in").read_text(encoding="utf-8")
-        directives = {
-            line.strip()
-            for line in manifest.splitlines()
-            if line.strip() and not line.lstrip().startswith("#")
-        }
-        runtime_resources = {
-            "include python/jittor/__init__.pyi",
-            "recursive-include backends *",
-            "recursive-include python/jittor/contrib/math_util/src *",
-            "recursive-include src *.cc *.h",
-            "recursive-include python/jittor/tools *.py",
-            "recursive-include python/jittor/build/utils/class *",
-        }
-        self.assertTrue(runtime_resources.issubset(directives))
-        compat_manifest = (self.repo_root / "compat/MANIFEST.in").read_text(encoding="utf-8")
-        compat_directives = {
-            line.strip() for line in compat_manifest.splitlines()
-            if line.strip() and not line.lstrip().startswith("#")
-        }
-        compat_resources = {
-            "recursive-include shim/cpp_extension/include *",
-            "recursive-include shim/cpp_extension/src *",
-            "recursive-include shim/resources *",
-        }
-        self.assertTrue(compat_resources.issubset(compat_directives))
-        self.assertFalse(any("compat/shim" in line for line in directives))
-        self.assertNotIn("recursive-include python/jittor/extern *", directives)
-        self.assertNotIn("recursive-include python/jittor *", directives)
-        self.assertNotIn("recursive-include python/jittor_utils *", directives)
-        self.assertIn("recursive-include examples *", directives)
-        self.assertIn("recursive-include tools *", directives)
-        self.assertIn("recursive-include docs *", directives)
-        self.assertIn("global-exclude *.py[cod]", directives)
-        self.assertIn("global-exclude *.ipynb", directives)
-        self.assertIn("global-exclude __pycache__", directives)
+        from importlib.util import module_from_spec, spec_from_file_location
+        path = self.repo_root / "tools/build/generate_manifest.py"
+        spec = spec_from_file_location("manifest_contract", path)
+        generator = module_from_spec(spec)
+        spec.loader.exec_module(generator)
+        for project in (self.repo_root, self.repo_root / "compat"):
+            self.assertEqual((project / "MANIFEST.in").read_text(),
+                             generator.manifest_text(project))
+        resources = generator.runtime_resources(self.repo_root)
+        self.assertEqual(resources["src/core/common.h"], "jittor/src/core/common.h")
+        self.assertEqual(resources["backends/cuda/include/helper_cuda.h"],
+                         "jittor/backends/cuda/include/helper_cuda.h")
+        self.assertIn("python/jittor/contrib/math_util/src/igamma.h", resources)
+        self.assertFalse(any(path.startswith("compat/") for path in resources))
+        compat_resources = generator.runtime_resources(self.repo_root / "compat")
+        self.assertEqual(compat_resources["shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh"],
+                         "jittor/compat/shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh")
+        self.assertTrue(set(resources.values()).isdisjoint(compat_resources.values()))
+        for source in (self.repo_root / "backends").rglob("*"):
+            if source.is_file() and source.suffix in {".h", ".cc", ".cpp", ".cu", ".cuh"}:
+                self.assertIn(source.relative_to(self.repo_root).as_posix(), resources)
+
+    def test_generated_manifest_handles_spaces_and_dirty_source_caches(self):
+        from importlib.util import module_from_spec, spec_from_file_location
+        from tempfile import TemporaryDirectory
+        from setuptools._distutils.filelist import FileList
+
+        spec = spec_from_file_location("manifest_fixture", self.repo_root / "tools/build/generate_manifest.py")
+        generator = module_from_spec(spec)
+        spec.loader.exec_module(generator)
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "pyproject.toml").write_text(
+                '[tool.setuptools]\npackage-dir={demo="pkg"}\n'
+                '[tool.setuptools.package-data]\ndemo=["assets/**/*"]\n'
+                '[tool.jittor.sdist]\ninclude=["examples/**"]\nexclude=[]\n')
+            files = ["setup.py", "MANIFEST.in", "pkg/assets/value.dat",
+                     "pkg/assets/__pycache__/leak.dat", "examples/tutorial 1.md",
+                     "examples/.pytest_cache/v/cache/data"]
+            for relative in files:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("fixture")
+            resources = generator.runtime_resources(root)
+            self.assertEqual(resources, {"pkg/assets/value.dat": "demo/assets/value.dat"})
+            manifest = generator.manifest_text(root)
+            selected = FileList()
+            selected.allfiles = files + ["pyproject.toml"]
+            for line in manifest.splitlines():
+                if line.startswith("include "):
+                    selected.process_template_line(line)
+            self.assertIn("examples/tutorial 1.md", selected.files)
+            self.assertFalse(any("cache" in name for name in selected.files))
+            (root / "pkg/assets/new.dat").write_text("new resource")
+            self.assertIn("pkg/assets/new.dat", generator.runtime_resources(root))
+            self.assertNotEqual(manifest, generator.manifest_text(root))
 
     def test_root_development_trees_do_not_become_runtime_packages(self):
         for relative in ("examples", "tools"):
@@ -108,7 +128,7 @@ class TestPackagingStructure(unittest.TestCase):
             self.assertFalse((root / "__init__.py").exists(), relative)
 
     def test_built_sdist_has_an_executable_contents_gate(self):
-        checker = self.repo_root / "agent" / "scripts" / "check_sdist_contents.py"
+        checker = self.repo_root / "tools" / "release" / "check_sdist_contents.py"
         self.assertTrue(checker.is_file())
 
     def test_required_deep_runtime_resources_exist(self):
@@ -127,7 +147,7 @@ class TestPackagingStructure(unittest.TestCase):
                 self.assertTrue((self.repo_root / relative).is_file())
 
     def test_wheel_audit_distinguishes_runtime_helpers_from_build_artifacts(self):
-        path = self.repo_root / "agent/scripts/check_wheel_contents.py"
+        path = self.repo_root / "tools/release/check_wheel_contents.py"
         spec = importlib.util.spec_from_file_location("wheel_layout_contract", path)
         checker = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(checker)

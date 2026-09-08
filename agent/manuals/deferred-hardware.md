@@ -24,7 +24,7 @@ HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md
    不变量式合同还要**自证扫到了东西**：ACL 正处在 `python/jittor/extern/acl` 与 `backends/acl`
    两处都有内容的半途搬迁状态，按「总数 > N」断言会在只扫到一侧时仍然发绿，所以要求**每个根各自非空**。
 2b. **去样板前后的静态等价性。** 把每个 owner 归约成 (workspace 查询, execute 入口, 同步策略)
-   的有序 token 流，逐 owner 对比改前改后。`agent/scripts/acl_launch_program.py` 做这件事，两个树
+   的有序 token 流，逐 owner 对比改前改后。`tools/build/acl_launch_program.py` 做这件事，两个树
    当参数、退出码非 0 即有差异。它把「样板删对了」和「顺手改了行为」分开：前者 token 流不动，
    后者会以具体 owner 的具体 token 出现，必须逐条解释。**这比字符串合同强**，因为它比较的是
    设备会观察到的东西，而不是源码长什么样。
@@ -75,7 +75,7 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
    launcher 站点，`aclnnProd` 与 `aclnnProdDim` 的真实 execute ABI 只有这里能确认。
 
 2. **算得对，且与迁移前逐算子一致。** 本波声称的等价性是**源码级**的：
-   `python agent/scripts/acl_launch_program.py <迁移前树> <当前树>` 证明 69/71 个 owner 的
+   `python tools/build/acl_launch_program.py <迁移前树> <当前树>` 证明 69/71 个 owner 的
    (workspace 查询, execute 入口, 同步策略) token 流逐字相同。设备侧要把它变成数值对拍：
 
    ```bash

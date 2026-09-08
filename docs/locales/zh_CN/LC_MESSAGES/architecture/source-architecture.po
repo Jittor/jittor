@@ -328,7 +328,7 @@ msgid ""
 msgstr ""
 
 #: cbddb7af7e664aa49f16dc55f985220c
-msgid "`bash agent/scripts/check_repo_layout.sh` passes;"
+msgid "`bash tools/check_repo_layout.sh` passes;"
 msgstr ""
 
 #: ef336585bd5b418fa0277935c3124142

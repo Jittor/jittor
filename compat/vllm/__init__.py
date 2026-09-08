@@ -31,7 +31,7 @@ import sys
 import types
 
 from jittor.compat.module_patcher import register_module_patch
-from jittor.compat.transaction import TransactionConflict
+from jittor.compat.transaction import TransactionConflict, owned_runtime_hook, active_transaction, set_attr
 
 from . import backend, custom_ops, flash_attn, layers
 
@@ -50,6 +50,7 @@ _EXTENSION_MODULES = (
 _installed = False
 
 
+@owned_runtime_hook("vllm.activation")
 def install():
     """Answer vLLM's compiled-extension surface. Idempotent; safe to re-call."""
 
@@ -75,10 +76,10 @@ def install():
 
     for name in _EXTENSION_MODULES:
         if name not in sys.modules:
-            sys.modules[name] = types.ModuleType(name)
+            active_transaction().replace_module(sys.modules, name, types.ModuleType(name))
     custom_ops.register(torch)
     flash_attn.install()
-    _installed = True
+    set_attr(sys.modules[__name__], "_installed", True)
     return True
 
 

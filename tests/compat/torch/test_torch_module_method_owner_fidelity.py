@@ -211,19 +211,16 @@ def unbridged_grad():
     actually wrong.
     """
     previous_no_grad = bool(jt.flags.no_grad)
-    previous_current = getattr(jt, "_current_optimizer", None)
-    previous_active = list(getattr(jt, "_active_optimizers", []) or [])
+    from jittor.compat.torch.tensor_state import get_tensor_state
+    state = get_tensor_state(jt)
+    previous_active = list(state.active_optimizers)
     jt.flags.no_grad = 0
-    jt._current_optimizer = None
-    if hasattr(jt, "_active_optimizers"):
-        jt._active_optimizers[:] = []
+    state.active_optimizers[:] = []
     try:
         yield
     finally:
         jt.flags.no_grad = 1 if previous_no_grad else 0
-        jt._current_optimizer = previous_current
-        if hasattr(jt, "_active_optimizers"):
-            jt._active_optimizers[:] = previous_active
+        state.active_optimizers[:] = previous_active
 
 
 @pytest.fixture

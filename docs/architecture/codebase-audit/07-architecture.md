@@ -107,7 +107,7 @@ phase 6 那 1.94 ms 的 per-op 发射常数与 phase 7 那 9.78 ms 背后「CPU 
 | 结构门禁把现状固化成契约 | `tests/structure/test_nn_structure.py:48-52` 逐个 import_module 具体文件名，`:170-274` 断言其导出名 | 门禁保护的是现在长什么样而非应该长什么样，重构被自己的测试锁死 | 结构测试断言规则而非清单 | 主要 |
 | `python/jittor/utils/` 是杂物间 | 11 文件 1477 行无共同职责：asm_tuner/dumpdef/dlink_compiler（编译器资源）、gen_pyi/local_doc_builder（仓库工具应在 tools/）、pytorch_converter.py 718 行（源码翻译器应在 compat）、converter_server.py（其启动脚本却在 tools/services/legacy/）、nvtx、jtune、tracer | 根目录 exact-entry 门禁把 utils 整体放行，杂物在门禁内侧继续堆积 | 拆散 | 主要 |
 | `src/misc/` 是 C++ 侧杂物间，最核心的状态住在里面 | 25 文件 12233 行占 src 的 26%：vendored miniz 9214 行、类型系统 nano_string/nano_vector 655 行、NaN 检查、`misc/cuda_flags.cc:19-24` 定义 use_cuda/device_id/sync_run。同时另有 `src/type/` 879 行也是类型系统 | 类型系统一分为二；最重要的全局状态在名为 misc 的目录里 | miniz 移出；nano_* 并入 src/type/；cuda_flags 并入 Runtime 对象 | 主要 |
-| agent/ 树不在任何布局文档里却承载布局门禁 | 163 文件 2.3 MB；repository-layout.md 的 Target Layout 不含 agent/，但引用 `agent/scripts/check_repo_layout.sh` 作为验收条件；docs/ 里 9 处反向链接到 agent/results/ | 两套并行的架构文档，读者不知哪套权威 | design 并入 docs/architecture/，脚本并入 tools/ | 次要 |
+| agent/ 树不在任何布局文档里却承载布局门禁 | 163 文件 2.3 MB；repository-layout.md 的 Target Layout 不含 agent/，但引用 `tools/check_repo_layout.sh` 作为验收条件；docs/ 里 9 处反向链接到 agent/results/ | 两套并行的架构文档，读者不知哪套权威 | design 并入 docs/architecture/，脚本并入 tools/ | 次要 |
 | 死目录与死文件 | `tests/system/` 下只有 legacy/*.sh 零个 .py；`src/utils/flags.cc` 27 行全在注释里但仍被 flag 扫描器读到 | 门禁与扫描器把死代码当活代码 | 删除 | 次要 |
 | 结构靠测试而非构造保证 | tests/structure 22 文件 8071 行占测试树 11%；test_nn_structure.py 单文件 1912 行 | 架构约束的成本落在测试维护上且会固化现状 | 少数可执行规则替代逐项清单 | 主要 |
 

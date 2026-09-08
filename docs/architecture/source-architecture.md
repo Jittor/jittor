@@ -11,6 +11,9 @@ This document defines how Python source is decomposed inside Jittor. Repository,
 packaging, and runtime-resource ownership is defined by the broader
 [repository layout decision](repository-layout.md).
 
+The [Torch API ownership contract](torch-api-ownership.md) defines stable API
+objects, installation-owned state and the Runtime service boundary.
+
 ## Principles
 
 1. **One physical owner.** A public domain is a normal package; it does not have
@@ -273,6 +276,9 @@ under `python/jittor` are now below 1,500 lines. The former large compatibility
 NN, numerical, tensor and FlashAttention modules are normal packages with
 separate implementation owners. This source decomposition does not establish
 completion of the independent Torch architecture migration.
+The [Torch API owner contract](torch-api-owners.md) identifies module-level
+implementations, installation-owned native-delegate snapshots and the generated
+fidelity coverage table.
 Runtime-only framework imports are deferred to calls to keep the import-cycle
 surface from growing. The six legacy complex linalg functions are lazily
 re-exported as their original objects, preserving concrete ComplexNumber type
@@ -740,6 +746,6 @@ A source-layout change is acceptable when:
 - no legacy implementation tree or root-level compatibility file remains;
 - the wheel contains every required runtime resource and excludes repository-only
   tests/tools;
-- `bash agent/scripts/check_repo_layout.sh` passes;
+- `bash tools/check_repo_layout.sh` passes;
 - focused tests, structure tests, and every affected backend gate pass;
 - any deliberate incompatibility is documented in release notes.

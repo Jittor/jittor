@@ -8,12 +8,12 @@ common cache, build, and experiment artifacts are present.
 
 Examples:
 
-    python agent/scripts/check_wheel_contents.py compare dist/jittor.whl
-    python agent/scripts/check_wheel_contents.py compare new.whl --old-wheel old.whl
-    python agent/scripts/check_wheel_contents.py compare new.whl \
+    python tools/release/check_wheel_contents.py compare dist/jittor.whl
+    python tools/release/check_wheel_contents.py compare new.whl --old-wheel old.whl
+    python tools/release/check_wheel_contents.py compare new.whl \
         --old-wheel old.whl --addition-allowlist approved-additions.txt \
         --content-change-allowlist approved-content-changes.txt
-    python agent/scripts/check_wheel_contents.py manifest old.whl --output baseline.txt
+    python tools/release/check_wheel_contents.py manifest old.whl --output baseline.txt
 """
 
 from __future__ import print_function

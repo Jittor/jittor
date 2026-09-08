@@ -189,7 +189,7 @@ depfile 换成私有路径，保证每次都是真冷编译、没有任何缓存
 | 每个 session 都从空缓存起步且必须联网 | `noxfile.py:346-363` `_session_env` 把 HOME/JITTOR_HOME/XDG_CACHE_HOME/TMPDIR 全指向新建的临时目录并先 rmtree | 每次门禁重编整个核心并重新从清华镜像下载 mkl（CPU）与 cutt/cutlass（CUDA）。这是 40 分钟与 2 小时的主要构成，同时把一台中国高校主机变成 CI 的硬依赖 | 缓存目录改成按构建配置指纹命名的共享目录；第三方包本地镜像预置 | 主要 |
 | 每个测试目标一个 pytest 进程，串行执行 | `noxfile.py:410-422` 对 defaults 逐项 session.run；CPU 18 项加 oracle 9 项共 27 次进程启动，每次都要 import jittor；`stop_on_first_error = True`（`:294`） | 进程启动开销乘以目标数；无 xdist；第一个失败即停，一轮只能拿到一个失败信息 | 同模式目标合并成一次调用加 xdist；分 smoke/full 两层 | 主要 |
 | 门禁是手工维护的测试白名单 | `noxfile.py:152-289` 逐条列出路径。统计：tests/ 下 289 个 test_*.py，只有 86 个能被任一 session 默认目标触及，**203 个从不在门禁里跑** | 新增测试默认是死的；专门守护冷启动双映射这个已修 bug 的 `tests/compiler/test_cold_start_runtime.py` 就不在门禁内 | 默认跑整个 tests/，用 marker 做减法而不是白名单做加法 | 主要 |
-| 仓库检查脚本是只增不减的历史文件名黑名单 | `agent/scripts/check_repo_layout.sh` 40+ 条 forbidden legacy path（`:90-124`）、根目录白名单（`:72-88`）、8 组全树 grep（`:225-249`），并用字符串拼接避免匹配到脚本自身 | 每次重构只增不减；新增任何根目录文件都会失败；迁移文档提到历史路径会误报；全树 grep 使这个"快速"门禁并不快 | 用 git 历史记录已删除路径，只保留少数真会复发的检查 | 主要 |
+| 仓库检查脚本是只增不减的历史文件名黑名单 | `tools/check_repo_layout.sh` 40+ 条 forbidden legacy path（`:90-124`）、根目录白名单（`:72-88`）、8 组全树 grep（`:225-249`），并用字符串拼接避免匹配到脚本自身 | 每次重构只增不减；新增任何根目录文件都会失败；迁移文档提到历史路径会误报；全树 grep 使这个"快速"门禁并不快 | 用 git 历史记录已删除路径，只保留少数真会复发的检查 | 主要 |
 | pytest 配置强制注入主源码树 | `pyproject.toml` `pythonpath = ["python"]` | 副本或 worktree 里跑 pytest 会导入主树 | conftest 按环境变量决定 | 次要 |
 | 门禁一律关掉并行编译器 | `noxfile.py:687/1128/1548`、`tools/run_test_suite.py:59` | 门禁验证的不是用户默认跑到的代码路径（默认值 16） | 修好同步原语后默认打开，另设串行 session 做对照 | 主要 |
 

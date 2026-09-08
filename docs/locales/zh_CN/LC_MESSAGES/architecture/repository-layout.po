@@ -719,7 +719,7 @@ msgid ""
 msgstr ""
 
 #: f215a6aecf6140e7ad97ec43fc14e054
-msgid "`agent/scripts/check_repo_layout.sh` and repository structure checks;"
+msgid "`tools/check_repo_layout.sh` and repository structure checks;"
 msgstr ""
 
 #: 7fa41619d021475eb15bd22447a4fdad

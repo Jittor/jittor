@@ -130,7 +130,36 @@ def _enclosing_function_names(tree):
                 return current.name
         return "<module>"
 
+    owner_of.parents = parents
     return owner_of
+
+
+def _is_local_module_memo(node, parents):
+    """A closure over a fresh dict is not the process module table."""
+    scope = parents.get(id(node))
+    while scope is not None:
+        if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
+            if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                arguments = getattr(scope.args, "posonlyargs", []) + scope.args.args + scope.args.kwonlyargs
+                if any(argument.arg == "modules" for argument in arguments):
+                    return False
+            bindings = []
+            pending = list(scope.body)
+            while pending:
+                current = pending.pop()
+                if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                    continue
+                if isinstance(current, (ast.Global, ast.Nonlocal)) and "modules" in current.names:
+                    return False
+                if isinstance(current, (ast.Assign, ast.AnnAssign)):
+                    targets = current.targets if isinstance(current, ast.Assign) else [current.target]
+                    if any(isinstance(target, ast.Name) and target.id == "modules" for target in targets):
+                        bindings.append(current.value)
+                pending.extend(ast.iter_child_nodes(current))
+            if bindings:
+                return all(isinstance(value, ast.Dict) and not value.keys for value in bindings)
+        scope = parents.get(id(scope))
+    return False
 
 
 def discover_write_entry_points():
@@ -156,9 +185,34 @@ def discover_write_entry_points():
                 kind = _kind_of_call(node)
             if kind is None:
                 continue
+            if kind == "sys.modules":
+                targets = node.targets if isinstance(node, ast.Assign) else [getattr(node, "target", None)]
+                bases = [_dotted(target.value) for target in targets
+                         if isinstance(target, ast.Subscript) and _kind_of_assignment(target) == kind]
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                    bases = [_dotted(node.func.value)]
+                if bases and all(base == "modules" for base in bases) \
+                        and _is_local_module_memo(node, owner_of.parents):
+                    continue
             key = (relative, owner_of(node), kind)
             found.setdefault(key, []).append(node.lineno)
     return {key: sorted(lines) for key, lines in found.items()}
+
+
+def test_local_memo_detection_does_not_exempt_module_table_aliases():
+    cases = (
+        ("def build():\n modules = {}\n def copy():\n  modules[id(source)] = result\n", True),
+        ("def build():\n modules = sys.modules\n def copy():\n  modules[name] = result\n", False),
+        ("def publish(modules):\n modules[name] = result\n", False),
+        ("def publish():\n modules = {}\n modules = sys.modules\n modules[name] = result\n", False),
+    )
+    for source, expected in cases:
+        tree = ast.parse(source)
+        owners = _enclosing_function_names(tree)
+        write = next(node for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                     and isinstance(node.targets[0], ast.Subscript))
+        assert _kind_of_assignment(write.targets[0]) == "sys.modules"
+        assert _is_local_module_memo(write, owners.parents) is expected
 
 
 C = "compat/"
@@ -187,11 +241,13 @@ CLASSIFIED = {
     # Activation transaction: mutate_path / publish_module / mutate_flag.
     (C + "shim/runtime.py", "_activate_once", "flags"): "ledger",
     (C + "shim/runtime.py", "_activate_once", "sys.modules"): "ledger",
+    (C + "shim/runtime.py", "_activate_once", "env"): "ledger",
+    (C + "torch/installers/core.py", "install_misc", "sys.modules"): "ledger",
     (C + "shim/runtime.py", "_publish_torch_module", "sys.modules"): "ledger",
 
     # ---- runtime requests, not installation steps --------------------------
     # torch.backends.cuda.matmul.allow_tf32 = True and friends.
-    (C + "torch/installers/cuda.py", "_tf32_set", "flags"): "runtime",
+    (C + "torch/installers/cuda/api.py", "_tf32_set", "flags"): "runtime",
     # Module.to(device="cuda") turns CUDA on because the caller asked, after the
     # install has finished.
     (C + "torch/installers/nn/module_methods.py", "_module_to", "flags"): "runtime",
@@ -199,8 +255,10 @@ CLASSIFIED = {
     (C + "torch/grad.py", "__enter__", "flags"): "runtime",
     (C + "torch/grad.py", "__exit__", "flags"): "runtime",
     # node_order is set and restored inside one optimizer step.
-    (C + "torch/optimizers.py", "_adam_step_torch", "flags"): "runtime",
-    (C + "torch/optimizers.py", "_step_torch_closure", "flags"): "runtime",
+    (C + "torch/optimizer_api.py", "_adam_step", "flags"): "runtime",
+    (C + "torch/optimizer_api.py", "_step_with_closure", "flags"): "runtime",
+    (C + "torch/optimizer_api.py", "_torch_post_step", "flags"): "runtime",
+    (C + "torch/serialization.py", "_apply_map_location", "flags"): "runtime",
     (C + "fsdp2/optimizer.py", "optimizer_step", "flags"): "runtime",
     # Scoped environment overrides around one borrow/copy region.
     (C + "shim/extensions/readonly.py", "_borrow_scope", "env"): "runtime",
@@ -226,8 +284,6 @@ CLASSIFIED = {
     (C + "shim/preflight.py", "append_sys_path", "sys.path"): "pre-ledger",
     # compose() publishes aliases before Torch mode is chosen, so this runs on
     # plain `import jittor` too and is not part of any Torch install.
-    (C + "_aliases.py", "_publish_alias", "sys.modules"): "pre-ledger",
-    (C + "_aliases.py", "install_aliases", "sys.meta_path"): "pre-ledger",
     # The canonical Triton domain is part of plain Jittor startup, same reason.
     (C + "triton/__init__.py", "install", "sys.modules"): "pre-ledger",
     (C + "triton/__init__.py", "_ensure_libcuda_linkable", "env"): "pre-ledger",
@@ -243,40 +299,21 @@ CLASSIFIED = {
     (C + "shim/resources/stubs/torchdata/__init__.py",
      "__getattr__", "sys.modules"): "deployed-payload",
 
-    # ---- still owed to 7.05 ------------------------------------------------
-    # External backend source import restores sys.path and sys.modules from a
-    # whole-table snapshot (`_capture_source_import_state`), so a concurrent
-    # writer's entries are discarded rather than reported. Needs either
-    # owner-aware entries or a child process; see PENDING below.
-    (C + "external_backend.py", "_add_source_to_sys_path", "sys.path"): "pending",
-    (C + "external_backend.py", "_restore_source_import_state", "sys.path"): "pending",
+    # Resolver-owned path tokens and current-thread loader publications only.
+    # Untracked publications remain intact and cause a hard conflict.
+    (C + "external_backend.py", "_add_source_to_sys_path", "sys.path"): "ledger",
+    (C + "external_backend.py", "_restore_source_import_state", "sys.path"): "ledger",
     (C + "external_backend.py",
-     "_restore_source_import_state", "sys.modules"): "pending",
-    (C + "external_backend.py", "import_local", "sys.modules"): "pending",
-    (C + "external_backend.py", "load_build_script", "sys.modules"): "pending",
-    # vllm.install() fires from the arming finder on the first `import vllm`,
-    # after the install transaction has closed. Reverting it needs a ledger with
-    # the lifetime of the armed hook, not of the install.
-    (C + "vllm/__init__.py", "install", "sys.modules"): "pending",
-    (C + "vllm/flash_attn.py", "install", "sys.modules"): "pending",
-    # Extension builds publish the built module; the build outlives the install.
-    (C + "shim/cpp_extension/torch_utils.py", "load", "sys.modules"): "pending",
+     "_restore_source_import_state", "sys.modules"): "ledger",
+    (C + "external_backend.py", "import_local", "sys.modules"): "ledger",
+    (C + "external_backend.py", "publish_source_module", "sys.modules"): "ledger",
+    (C + "external_backend.py", "_load_candidate", "sys.meta_path"): "ledger",
+    (C + "transaction.py", "replace_module", "sys.modules"): "ledger",
+    (C + "transaction.py", "undo", "sys.modules"): "ledger",
 }
 
 #: What 7.05 still owes, as the reason it is not done rather than a bare list.
-PENDING = {
-    C + "external_backend.py":
-        "source-root import restores sys.path/sys.modules from a whole-table "
-        "snapshot, which discards a concurrent writer's entries instead of "
-        "reporting them; needs owner-aware entries or child-process isolation",
-    C + "vllm/__init__.py":
-        "install() runs from the arming finder on first `import vllm`, after the "
-        "install transaction has closed",
-    C + "vllm/flash_attn.py":
-        "publishes vllm.vllm_flash_attn from the same post-install moment",
-    C + "shim/cpp_extension/torch_utils.py":
-        "extension build publishes the built module and outlives the install",
-}
+PENDING = {}
 
 CATEGORIES = ("ledger", "runtime", "pre-ledger", "deployed-payload", "pending")
 

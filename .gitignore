@@ -23,6 +23,7 @@ build/
 # This is a source-owned tool category, not a generated build directory.
 !/tools/build/
 !/tools/build/**
+/tools/build/**/__pycache__/
 docs/_build/
 docs/.doctrees/
 docs/**/*.pot
@@ -51,10 +52,6 @@ extern/mkl/mkldnn_lnx*/*
 !/agent/manuals/
 !/agent/manuals/**/
 !/agent/manuals/**/*.md
-!/agent/scripts/
-/agent/scripts/**
-!/agent/scripts/*.sh
-!/agent/scripts/*.py
 !/agent/skills/
 !/agent/skills/**
 /agent/skills/**/.cache/

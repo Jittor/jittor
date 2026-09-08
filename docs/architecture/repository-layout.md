@@ -101,11 +101,37 @@ the unchanged historical packaging manifests. Active indexes and incoming links
 must resolve; archived claims and their original test evidence are not rewritten
 as current successes. Documentation checks preserve that active/archive boundary.
 
-`agent/` contains only `manuals/`, `skills/` and `scripts/`. The workflow entry is
+`agent/` contains only `manuals/` and `skills/`; repository checks live in `tools/`.
+The workflow entry is
 [`agent/manuals/agent-index.md`](../../agent/manuals/agent-index.md). Community
 project lists live in `docs/community/`; the ASV source configuration lives in
 `benchmarks/asv.conf.json`. Nox derives absolute input and external output paths
 from that configuration without moving benchmark runtime state into the tree.
+
+## Tool and package-resource ownership (2026-09-08)
+
+Repository commands live under `tools/`: build checks in `tools/build/`,
+documentation governance in `tools/docs/`, and distribution checks in
+`tools/release/`. The layout entry is `tools/check_repo_layout.sh`.
+`python/jittor/tools/` retains user-facing NVTX, jtune, tracing and the
+`jt.benchmark` implementation; it is not a second maintainer-tools directory.
+
+Each distribution declares runtime resources in its own
+`pyproject.toml` `[tool.setuptools.package-data]`. Core maps the data-only
+`jittor.src` namespace to the checkout's `src/`; setuptools copies these files
+without a second suffix inventory in setup.py. Backend package-dir mappings
+and the same resource table preserve their installed `jittor/backends/` paths.
+The independent compat project owns its shim resources and Torch entrypoint.
+
+`tools/build/generate_manifest.py` derives both MANIFEST.in files from those
+tables plus `[tool.jittor.sdist]` source-only selections. Generated exact paths
+avoid MANIFEST's non-recursive `**` behavior; spaced source filenames use anchored
+single-character patterns because MANIFEST has no whitespace quoting syntax.
+Cache and generated-output directories are removed before enumeration.
+Run the generator after adding source-only files or changing declarations;
+`--check` is enforced by the packaging session and structure gate. Both sdists
+build independently with setuptools and do not import the runtime or depend on
+the sibling distribution to read a resource list.
 
 ## Target Layout
 
@@ -133,7 +159,7 @@ stood after the 2.0 domain-package migration rather than where it should go.
 │   ├── distributed/  contrib/  tools/
 ├── compat/                   # separate distribution (jittor-torch): torch shim fsdp2 vllm triton
 ├── tools/  tests/  docs/  examples/  benchmarks/
-└── agent/                    # manuals/ skills/ scripts/ only
+└── agent/                    # manuals/ skills/ only
 ```
 
 Three rules the old tree did not state:
@@ -370,7 +396,7 @@ complete:
 - no regression in the affected CPU matrix;
 - at least one real accelerator regression, with NPU evidence required before a
   capability is described as NPU-supported;
-- `agent/scripts/check_repo_layout.sh` and repository structure checks;
+- `tools/check_repo_layout.sh` and repository structure checks;
 - documentation of commands, results, known skips, and unverified backends;
 - a focused commit that does not stage unrelated user changes.
 

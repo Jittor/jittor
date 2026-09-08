@@ -108,14 +108,62 @@ def register(torch_module):
     library = getattr(torch_module, "library", None)
     if library is None or not hasattr(library, "Library"):
         return ()
+    from ..transaction import current_runtime_hook, TransactionConflict
+    hook = current_runtime_hook()
+    table = getattr(getattr(torch_module, "ops", None), "__dict__", {}).get("_namespaces")
+    namespace_before_creation = table.get("_C") if isinstance(table, dict) else None
     fragment = library.Library("_C", "FRAGMENT")
+    owned_ops = None
+    if hook is not None:
+        destroy = getattr(fragment, "_destroy", None)
+        if callable(destroy):
+            hook.record_undo(destroy)
+        else:
+            namespaces = vars(torch_module.ops).get("_namespaces")
+            if not isinstance(namespaces, dict):
+                raise RuntimeError("vLLM registration requires an owned operator registry or Library._destroy")
+            previous_namespace = namespace_before_creation
+            namespace = getattr(torch_module.ops, "_C")
+            owned_ops = vars(namespace).get("_ops")
+            if not isinstance(owned_ops, dict):
+                raise RuntimeError("vLLM operator namespace has no reversible registry")
+            if previous_namespace is None:
+                def undo_namespace():
+                    if namespaces.get("_C") is not namespace or owned_ops:
+                        raise TransactionConflict("vLLM operator namespace changed externally")
+                    del namespaces["_C"]
+                hook.record_undo(undo_namespace)
+            names = [name for name, _ in _OPERATORS] + list(_CAPABILITY_PROBES)
+            if any(name in owned_ops for name in names):
+                raise TransactionConflict("vLLM cannot replace an existing _C operator")
+
+    def record_operator(name):
+        if owned_ops is None or name not in owned_ops:
+            return
+        value = owned_ops[name]
+        attributes = dict(vars(value))
+        mappings = {key: dict(item) for key, item in attributes.items() if isinstance(item, dict)}
+        def undo():
+            current = vars(value)
+            if owned_ops.get(name) is not value or current.keys() != attributes.keys() \
+                    or any(current[key] is not item for key, item in attributes.items()) \
+                    or any(current[key] != item for key, item in mappings.items()):
+                raise TransactionConflict("vLLM operator changed externally: " + name)
+            del owned_ops[name]
+        hook.record_undo(undo)
+
+    def register_one(name, schema, implementation):
+        try:
+            fragment.define(schema)
+            fragment.impl(name, implementation)
+        finally:
+            record_operator(name)
     registered = []
     for name, schema in _OPERATORS:
-        fragment.define(schema)
-        fragment.impl(name, _IMPLEMENTATIONS[name])
+        register_one(name, schema, _IMPLEMENTATIONS[name])
         registered.append(name)
     for probe in _CAPABILITY_PROBES:
-        fragment.define("%s(int cuda_device_capability) -> bool" % probe)
-        fragment.impl(probe, lambda *args, **kwargs: False)
+        register_one(probe, "%s(int cuda_device_capability) -> bool" % probe,
+                     lambda *args, **kwargs: False)
         registered.append(probe)
     return tuple(registered)

@@ -1,6 +1,6 @@
 # Jittor Agent 文档索引
 
-`agent/` 只保存操作手册、可复用 skill 和维护脚本。
+`agent/` 只保存操作手册与可复用 skill，仓库维护命令统一在 `tools/`。
 设计、看板及验证结论的唯一权威分别位于 `docs/architecture/` 与 `docs/results/`。
 
 ## 开始工作
@@ -27,7 +27,6 @@ agent/
 │   ├── environment.md
 │   ├── known-issues.md
 │   ├── project-context.md
-├── scripts/                  # 仓库维护检查
 └── skills/                   # SKILL.md 与可复用工具
 
 docs/

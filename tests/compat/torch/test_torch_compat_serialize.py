@@ -221,8 +221,8 @@ class TestStateDict(Base):
             }
             dst.load_state_dict(src)
             params = dict(dst.named_parameters())
-            self.assertEqual(str(params["weight"].dtype), "bfloat16", f"weight dtype {dev}")
-            self.assertEqual(str(params["bias"].dtype), "bfloat16", f"bias dtype {dev}")
+            self.assertEqual(params["weight"].dtype, torch.bfloat16, f"weight dtype {dev}")
+            self.assertEqual(params["bias"].dtype, torch.bfloat16, f"bias dtype {dev}")
 
         both_devices(body)
 

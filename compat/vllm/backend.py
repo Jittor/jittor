@@ -1,4 +1,5 @@
 from ..diagnostics import EXPECTED, swallowed
+from ..transaction import set_attr
 """What this backend's substituted attention implementation actually does.
 
 vLLM's FlashAttention backend declares the shape of the cache vLLM then
@@ -45,13 +46,13 @@ def declare_cache_layout(module):
     except EXPECTED as exc:
         swallowed("vllm/backend.py declare_cache_layout: probe = tuple(backend.get_kv_cache_shape(*_PROBE))", exc)
         return False
-    setattr(backend, _DECLARED, True)
+    set_attr(backend, _DECLARED, True)
     if probe[:2] != (2, _PROBE[0]):
         # Block-major already, or a spelling this does not recognise. Either
         # way there is nothing here to correct.
         return False
-    backend.get_kv_cache_shape = staticmethod(_block_major_shape)
-    backend.get_kv_cache_stride_order = staticmethod(_contiguous_stride_order)
+    set_attr(backend, "get_kv_cache_shape", staticmethod(_block_major_shape))
+    set_attr(backend, "get_kv_cache_stride_order", staticmethod(_contiguous_stride_order))
     return True
 
 
@@ -82,10 +83,10 @@ def declare_head_sizes(module):
     if not hasattr(backend, "validate_head_size"):
         # Newer vLLM validates elsewhere; nothing here to widen.
         return False
-    setattr(backend, _HEAD_SIZES, True)
-    backend.validate_head_size = staticmethod(_validate_head_size)
+    set_attr(backend, _HEAD_SIZES, True)
+    set_attr(backend, "validate_head_size", staticmethod(_validate_head_size))
     if hasattr(backend, "get_supported_head_sizes"):
-        backend.get_supported_head_sizes = staticmethod(_supported_head_sizes)
+        set_attr(backend, "get_supported_head_sizes", staticmethod(_supported_head_sizes))
     return True
 
 

@@ -21,6 +21,7 @@ import jittor as jt
 
 from ..permissive import PermissiveModule, install_permissive_package
 from ..diagnostics import EXPECTED, swallowed
+from ..transaction import owned_runtime_hook, active_transaction, set_attr, runtime_owns_module
 
 # torch is the shim itself, and this module is imported while the shim is still
 # installing, so it cannot be reached at module scope -- only from a call, by
@@ -183,25 +184,29 @@ def _no_scheduler_metadata(*args, **kwargs):
     return None
 
 
+@owned_runtime_hook("vllm.flash_attention")
 def install():
     """Publish ``vllm.vllm_flash_attn`` and return the module names it owns."""
 
+    if all(runtime_owns_module("vllm.flash_attention", sys.modules, name)
+           for name in (_BUNDLE, _INTERFACE)):
+        return (_BUNDLE, _INTERFACE)
     published = []
     bundle = PermissiveModule(_BUNDLE)
     bundle.flash_attn_varlen_func = flash_attn_varlen_func
     bundle.flash_attn_with_kvcache = flash_attn_with_kvcache
     bundle.get_scheduler_metadata = _no_scheduler_metadata
     bundle.__version__ = "2.6.1"
-    sys.modules[_BUNDLE] = bundle
+    active_transaction().replace_module(sys.modules, _BUNDLE, bundle)
     published.append(_BUNDLE)
     # V1 reaches the same three entry points by this longer path as well.
     interface = PermissiveModule(_INTERFACE)
     interface.flash_attn_varlen_func = flash_attn_varlen_func
     interface.flash_attn_with_kvcache = flash_attn_with_kvcache
     interface.get_scheduler_metadata = _no_scheduler_metadata
-    sys.modules[_INTERFACE] = interface
+    active_transaction().replace_module(sys.modules, _INTERFACE, interface)
     published.append(_INTERFACE)
-    install_permissive_package(_BUNDLE, sys.meta_path)
+    install_permissive_package(_BUNDLE, sys.meta_path, transaction=active_transaction())
     return tuple(published)
 
 
@@ -262,9 +267,9 @@ def patch_attention_impl(module):
         """
         return
 
-    impl.forward = forward
-    impl.do_kv_cache_update = do_kv_cache_update
-    impl._jittor_paged_attention = True
+    set_attr(impl, "forward", forward)
+    set_attr(impl, "do_kv_cache_update", do_kv_cache_update)
+    set_attr(impl, "_jittor_paged_attention", True)
     return True
 
 

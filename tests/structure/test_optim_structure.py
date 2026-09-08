@@ -106,7 +106,18 @@ class TestOptimStructure(unittest.TestCase):
         }
         for name, signature in signatures.items():
             with self.subTest(name=name):
-                self.assertEqual(str(inspect.signature(_CLASSES[name])), signature)
+                actual = inspect.signature(_CLASSES[name])
+                # Variadic collector names are internal spelling: *a/**k and
+                # *args/**kwargs accept exactly the same calls. Keep checking
+                # every named argument, default, order and parameter kind.
+                parameters = [
+                    parameter.replace(name="a")
+                    if parameter.kind is inspect.Parameter.VAR_POSITIONAL else
+                    parameter.replace(name="k")
+                    if parameter.kind is inspect.Parameter.VAR_KEYWORD else parameter
+                    for parameter in actual.parameters.values()
+                ]
+                self.assertEqual(str(actual.replace(parameters=parameters)), signature)
 
     def test_package_parses_as_python37(self):
         for path in self.package.rglob("*.py"):

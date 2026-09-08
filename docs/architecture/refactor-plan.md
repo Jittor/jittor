@@ -446,7 +446,7 @@
 | 9.13 | README 加「首次运行会发生什么」（联网、1–2 GB 缓存、可能十几分钟、可能自动下载 CUDA、git 影响缓存路径）与离线安装说明 | 9.01 | [构建](codebase-audit/04-build-tooling.md)§安装 | 文档 |
 | 9.14 | 一次性的构建前置条件检查：编译器、Python 头文件、OpenMP、磁盘空间、网络可达、CUDA 组件版本，一次报告全部缺失并区分可自动修复项（替代 1500 行模块顶层按序拦人） | 9.01 | [构建](codebase-audit/04-build-tooling.md)§17 个失败点 | 17 个失败点中「可操作」由 4 → ≥ 14 |
 | 9.15 | noxfile：缓存目录按构建配置指纹命名并跨 session 共享，第三方包本地镜像预置（`noxfile.py:346-363`） | 0.07、9.05 | [构建](codebase-audit/04-build-tooling.md)§门禁 | 门禁不再每次重编核心与重新下载 |
-| 9.16 | `agent/scripts/check_repo_layout.sh` 收缩为少数真会复发的检查，已删除路径交给 git 历史（40+ 条黑名单、8 组全树 grep） | — | [构建](codebase-audit/04-build-tooling.md)§门禁 | 脚本 < 100 行且 < 5 s |
+| 9.16 | `tools/check_repo_layout.sh` 收缩为少数真会复发的检查，已删除路径交给 git 历史（40+ 条黑名单、8 组全树 grep） | — | [构建](codebase-audit/04-build-tooling.md)§门禁 | 脚本 < 100 行且 < 5 s |
 | 9.17 | 死代码：Windows MinGW 分支未定义的 `link`（`compiler.py:83`）、`cuda_wheel` 的 Darwin 分支、`env_or_try_find` 重复定义（`compiler.py:949`）、`src/utils/flags.cc`（27 行全注释但被 flag 扫描器读到，导致 12 个 flag 双定义）、`tests/system/legacy` | — | [构建](codebase-audit/04-build-tooling.md)§跨平台与死代码；[架构](codebase-audit/07-architecture.md)§重复 | flag 扫描改预处理后扫描或宏注册 |
 | 9.18 | `disable_lock=1` 启用时明确告警并纳入缓存指纹（`lock.py:18`、`src/lock.cc:31`） | 0.08 | [构建](codebase-audit/04-build-tooling.md)§锁与并发 | 告警可见 |
 | 9.19 | 布局收尾：`tools/` 只留仓库工具（`gen_pyi`、`local_doc_builder`、`dumpdef`、release、benchmarks 脚本），`agent/scripts` 并入；`python/jittor/tools/` 只留给用户的 nvtx/jtune/tracer；`MANIFEST.in` 改为从 `pyproject` 的 package-data 生成 | 9.01、4.15、5.26、0.19 | [布局](target-layout.md)§3、§5 | `tools/` 与 `python/jittor/tools/` 职责不重叠 |

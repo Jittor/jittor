@@ -268,6 +268,7 @@ def prepare_nn_namespace(context):
     context.state["nn_frontend"] = namespace
     context.state["nn_frontend_tensor"] = tensor_type
     context.state["nn_layer_adapters"] = adapters
+    context.state["nn_class_adapter"] = adapt_class
     target.Module = Module
     target.nn = namespace
     return namespace

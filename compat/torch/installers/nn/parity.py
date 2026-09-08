@@ -1,22 +1,31 @@
+import abc
+from ...fidelity import Fidelity, register_fidelity
+
+def _functional_call(target, parameters, args=(), kwargs=None):
+    return target(*args, **(kwargs or {}))
+
+register_fidelity("torch.nn.utils.stateless.functional_call", _functional_call,
+    Fidelity.UNIMPLEMENTED, "Calls the target with its existing parameters; supplied replacements are ignored")
+
+def abc_base(name, *concrete):
+    base = abc.ABCMeta(name, (object,), {})
+    for item in concrete:
+        if isinstance(item, type):
+            base.register(item)
+    return base
+
+
 
 def install_parity(ctx):
     import abc
     import importlib
     g = ctx.jittor_module
     registry = ctx.registry
-    def module(name):
-        return registry.ensure(name)
     nn = g.nn
     modules = registry.get("torch.nn.modules")
 
-    def abc_base(name, *concrete):
-        base = abc.ABCMeta(name, (object,), {})
-        for item in concrete:
-            if isinstance(item, type):
-                base.register(item)
-        return base
 
-    conv = module("torch.nn.modules.conv")
+    conv = registry.ensure("torch.nn.modules.conv")
     conv._ConvNd = getattr(
         conv,
         "_ConvNd",
@@ -96,7 +105,7 @@ def install_parity(ctx):
     )
     modules.pooling = pooling
 
-    instancenorm = module("torch.nn.modules.instancenorm")
+    instancenorm = registry.ensure("torch.nn.modules.instancenorm")
     instancenorm._InstanceNorm = getattr(
         instancenorm,
         "_InstanceNorm",
@@ -110,12 +119,10 @@ def install_parity(ctx):
     )
     modules.instancenorm = instancenorm
 
-    stateless = module("torch.nn.utils.stateless")
+    stateless = registry.ensure("torch.nn.utils.stateless")
     stateless.functional_call = getattr(
         getattr(g, "func", None),
         "functional_call",
-        lambda target, parameters, args=(), kwargs=None: target(
-            *args, **(kwargs or {})
-        ),
+        _functional_call,
     )
     nn.utils.stateless = stateless

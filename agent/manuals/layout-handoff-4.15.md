@@ -292,13 +292,13 @@ sdist官方检查通过；360 core + 35 comm + 全部1027生产文件源码/产�
 4.15 的物理目录目标已达，但 ACL canonical backend 命名和完整 CUDA structure
 验收仍需确认。不要把本记录当作所有剩余任务完成。
 
-`agent/scripts/check_core_includes.py`，**0.4 秒**，解析核心里每条 quoted include 并对着
+`tools/build/check_core_includes.py`，**0.4 秒**，解析核心里每条 quoted include 并对着
 `-I` 根求解。它不是编译器（模型不了每个后端自带的 `-I`），所以在能编过的树上仍报约 280
 处盲点——**所以只能用差分模式**：
 
 ```bash
-python3 agent/scripts/check_core_includes.py --baseline /tmp/inc_baseline.txt .   # 已知良好时记
-python3 agent/scripts/check_core_includes.py --check    /tmp/inc_baseline.txt .   # 搬完只看新增
+python3 tools/build/check_core_includes.py --baseline /tmp/inc_baseline.txt .   # 已知良好时记
+python3 tools/build/check_core_includes.py --check    /tmp/inc_baseline.txt .   # 搬完只看新增
 ```
 
 对比一下成本：`src` 那一刀我付了**四次全量重建**（178 个 TU、每次 5–9 分钟）才把四处
@@ -429,7 +429,7 @@ pool_size = min(16, max(int(mem_gib // 3), 1))
 
 第一步：`git fetch origin 2.0-refactor && git rebase origin/2.0-refactor`。
 `coord` 停在 2026-09-06 12:33，**落后 125 个提交**；本文档、
-`agent/scripts/check_core_includes.py` 与五刀搬动都在那之后，rebase 之后才会有。
+`tools/build/check_core_includes.py` 与五刀搬动都在那之后，rebase 之后才会有。
 
 **不要因为「`pyops` 的缓存是热的」而留在 `pyops`。** 那个理由很弱：搬动全部已推到
 `2.0-refactor`，任何工作树 rebase 就能拿到；`coord` 只是要付一次全量重建来预热，

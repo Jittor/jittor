@@ -21,7 +21,7 @@ import jittor as torch
 import jittor as jt
 
 from jittor.compat.torch.installers import cuda as _cuda_installer
-from jittor.compat.torch.installers.cuda import (
+from jittor.compat.torch.installers.cuda.api import (
     _FP32_PRECISIONS,
     _TF32_FLAGS,
     _tf32_get,

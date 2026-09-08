@@ -245,6 +245,25 @@ def test_device_id_falls_back_to_cpu_without_native_device_field():
     assert context.device_id == state.device_id == 3
 
 
+def test_runtime_owns_service_state_and_retries_failed_creation():
+    module = _load_state()
+    state = module.RuntimeState(module.RuntimeContext(_fake_flags(module)))
+    assert state.service_state("frontend") is None
+    calls = []
+
+    def create():
+        calls.append(1)
+        return {"ready": True}
+
+    result = state.service_state("frontend", factory=create)
+    assert state.service_state("frontend", factory=create) is result
+    assert calls == [1]
+    with pytest.raises(RuntimeError, match="recursive runtime service"):
+        state.service_state("recursive", factory=lambda: state.service_state("recursive", factory=dict))
+    assert state.service_state("recursive") is None
+    assert state.service_state("recursive", factory=dict) == {}
+
+
 def test_native_public_runtime_classes_reexport_the_state_owner():
     import jittor as jt
     from jittor._runtime import core_api, state

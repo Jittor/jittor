@@ -137,8 +137,8 @@ NN_MIGRATION_FILES = (
 RATCHET_FILES = (
     *NN_MIGRATION_FILES,
     "noxfile.py",
-    "agent/scripts/check_sdist_contents.py",
-    "agent/scripts/check_wheel_contents.py",
+    "tools/release/check_sdist_contents.py",
+    "tools/release/check_wheel_contents.py",
     "docs/_myst_autodoc.py",
     "docs/conf.py",
     "python/jittor/selftest.py",
@@ -164,8 +164,8 @@ RATCHET_FILES = (
 FORMAT_FILES = (
     *NN_MIGRATION_FILES,
     "noxfile.py",
-    "agent/scripts/check_sdist_contents.py",
-    "agent/scripts/test_check_sdist_contents.py",
+    "tools/release/check_sdist_contents.py",
+    "tools/release/test_check_sdist_contents.py",
     "docs/_myst_autodoc.py",
     "docs/conf.py",
     "python/jittor/selftest.py",
@@ -188,8 +188,8 @@ FORMAT_FILES = (
     "tests/structure/test_stage2_delivery.py",
 )
 STRUCTURE_TESTS = (
-    "agent/scripts/test_check_sdist_contents.py",
-    "agent/scripts/test_check_wheel_contents.py",
+    "tools/release/test_check_sdist_contents.py",
+    "tools/release/test_check_wheel_contents.py",
     "tests/structure",
 )
 # No CPU_TESTS list any more. The CPU gate runs the whole tree in two
@@ -1084,7 +1084,7 @@ def structure(session):
         "pillow==11.0.0",
         "tqdm==4.67.1",
     )
-    session.run("bash", "agent/scripts/check_repo_layout.sh", external=True, env=env)
+    session.run("bash", "tools/check_repo_layout.sh", external=True, env=env)
     _install_compat_source(session, env)
     test_paths = tuple(session.posargs) or STRUCTURE_TESTS
     session.run(
@@ -1107,7 +1107,7 @@ def _build_compat_distribution(session, source, dist, env):
     if len(wheels) != 1:
         session.error("expected exactly one compatibility wheel, found %d" % len(wheels))
     session.run(
-        "python", str(REPO_ROOT / "agent/scripts/check_wheel_contents.py"),
+        "python", str(REPO_ROOT / "tools/release/check_wheel_contents.py"),
         "audit", str(wheels[0]), "--profile", "compat", env=env,
     )
     return wheels[0]
@@ -1129,6 +1129,7 @@ def packaging(session):
         "tqdm==4.67.1",
     )
 
+    session.run("python", "tools/build/generate_manifest.py", "--check", env=env)
     source = root / "source"
     dist = root / "dist"
     for path in (source, dist):
@@ -1155,7 +1156,7 @@ def packaging(session):
         session.error("expected exactly one sdist, found %d" % len(sdists))
     session.run(
         "python",
-        "agent/scripts/check_sdist_contents.py",
+        "tools/release/check_sdist_contents.py",
         str(sdists[0]),
         env=env,
     )
@@ -1179,7 +1180,7 @@ def packaging(session):
     for wheel in (wheels[0], sdist_wheels[0]):
         session.run(
             "python",
-            "agent/scripts/check_wheel_contents.py",
+            "tools/release/check_wheel_contents.py",
             "compare",
             str(wheel),
             *wheel_args,

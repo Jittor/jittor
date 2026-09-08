@@ -85,6 +85,19 @@ def test_the_backends_overlay_is_inside_the_scan():
         assert per_root.get(backend, 0) > 0, (backend, per_root)
 
 
+def test_native_source_namespace_is_explicitly_classified_as_data():
+    module, report = _report()
+    assert "jittor.src" not in report["modules_per_root"]
+    source = report["data_only_roots"]["jittor.src"]
+    assert source["resource_files"] > 0 and source["python_files"] == 0
+    assert source["reason"]
+    source["python_files"] = 1
+    assert any("unexpectedly contains Python" in error for error in module.check_coverage(report))
+    source["python_files"] = 0
+    source["resource_files"] = 0
+    assert any("no declared resources" in error for error in module.check_coverage(report))
+
+
 def test_the_graph_is_large_enough_for_a_clean_result_to_mean_something():
     module, report = _report()
     assert report["modules_checked"] >= module.MIN_MODULES, report["modules_checked"]

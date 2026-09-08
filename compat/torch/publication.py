@@ -9,7 +9,7 @@ distribution import the view without pulling in the native shim installer.
 from __future__ import annotations
 
 from .namespace import TorchNamespace
-from ..transaction import _MISSING
+from ..transaction import _MISSING, TransactionConflict
 
 
 def independent_torch_namespace(owner):
@@ -80,17 +80,19 @@ def bind_published_namespace(namespace, published, transaction=None):
                 setattr(parent, attr, modules[name])
             parents[name] = modules[name]
             continue
-        had_attr = hasattr(parent, attr)
-        old = getattr(parent, attr, None)
+        had_attr = attr in vars(parent)
+        old = vars(parent).get(attr, _MISSING)
         if transaction is not None:
-            def undo(parent=parent, attr=attr, had_attr=had_attr, old=old):
+            def undo(parent=parent, attr=attr, had_attr=had_attr, old=old, expected=modules[name]):
+                current = vars(parent).get(attr, _MISSING)
+                if current is _MISSING and not had_attr:
+                    return  # This owned insertion has already been removed.
+                if current is not expected:
+                    raise TransactionConflict("published parent binding changed externally: " + attr)
                 if had_attr:
                     object.__setattr__(parent, attr, old)
                 else:
-                    try:
-                        object.__delattr__(parent, attr)
-                    except AttributeError:
-                        pass
+                    object.__delattr__(parent, attr)
             transaction.record_undo(undo)
         object.__setattr__(parent, attr, modules[name])
         parents[name] = modules[name]

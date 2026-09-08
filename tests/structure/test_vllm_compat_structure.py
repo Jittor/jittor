@@ -69,7 +69,7 @@ def _imported_names(tree):
 
 class TestVllmCompatIsRelocatable(unittest.TestCase):
     def test_architecture_records_the_staged_plugin_boundary(self):
-        repo = _PACKAGE.parents[3]
+        repo = Path(__file__).resolve().parents[2]
         source = (
             repo / "docs" / "architecture" / "source-architecture.md"
         ).read_text(encoding="utf-8")
