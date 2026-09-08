@@ -30,7 +30,10 @@ class InvertedResidual(nn.Module):
             raise ValueError('illegal stride value')
         self.stride = stride
         branch_features = (oup // 2)
-        assert ((self.stride != 1) or (inp == (branch_features << 1)))
+        if self.stride == 1 and inp != (branch_features << 1):
+            raise ValueError(
+                "InvertedResidual: inp must equal 2 * branch_features when stride=1"
+            )
         if (self.stride > 1):
             self.branch1 = nn.Sequential(self.depthwise_conv(inp, inp, kernel_size=3, stride=self.stride, padding=1), nn.BatchNorm(inp), nn.Conv(inp, branch_features, kernel_size=1, stride=1, padding=0, bias=False), nn.BatchNorm(branch_features), nn.Relu())
         else:
