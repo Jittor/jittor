@@ -4,7 +4,8 @@ from .base import Optimizer
 
 class LRScheduler:
     def __init__(self,optimizer, last_epoch=-1):
-        assert isinstance(optimizer,Optimizer)
+        if not isinstance(optimizer, Optimizer):
+            raise TypeError("LRScheduler requires an Optimizer")
         self.optimizer = optimizer
 
         if last_epoch==-1:
@@ -12,7 +13,8 @@ class LRScheduler:
                 gp.setdefault('initial_lr',gp.get('lr',optimizer.lr))
         else:
             for gp in optimizer.param_groups:
-                assert 'initial_lr' in gp
+                if 'initial_lr' not in gp:
+                    raise KeyError("parameter group is missing initial_lr")
 
         self.base_lrs = list(map(lambda group: group['initial_lr'], optimizer.param_groups))
         self.last_epoch = last_epoch
