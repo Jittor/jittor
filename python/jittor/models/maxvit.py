@@ -296,9 +296,11 @@ class PartitionAttentionLayer(nn.Module):
         """x: [B, C, H, W] -> [B, C, H, W]."""
         # Undefined behavior if H or W are not divisible by p.
         gh, gw = self.grid_size[0] // self.p, self.grid_size[1] // self.p
-        assert (self.grid_size[0] % self.p == 0 and self.grid_size[1] % self.p == 0), (
-            "Grid size must be divisible by partition size. Got grid size of {} "
-            "and partition size of {}".format(self.grid_size, self.p))
+        if self.grid_size[0] % self.p != 0 or self.grid_size[1] % self.p != 0:
+            raise ValueError(
+                "Grid size must be divisible by partition size. Got grid size of {} "
+                "and partition size of {}".format(self.grid_size, self.p)
+            )
 
         x = self.partition_op(x, self.p)
         x = self.partition_swap(x)
