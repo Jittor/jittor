@@ -365,6 +365,7 @@ def test_complete_forward_backward_payloads_are_disjoint(pipeline):
     assert "GroupNormBackward_op" in " ".join(first["data"])
     assert "GroupNorm_op" in " ".join(first["data"])
     assert first["data"]["multi_grad"] == 1
+    assert "apply_acl_code_attributes(op, data, \"acl_attr.\", \"BatchNormBackward\")" in first["cuda_grad_src"][0]
     assert len(first["cuda_grad_src"]) == 1
     norms.LayerNormACL((6, 4), eps=0.125)(x, weight, bias)
     assert "LayerNormBackward_op" in " ".join(calls[-1]["data"])

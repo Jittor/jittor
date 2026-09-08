@@ -72,6 +72,7 @@ def acl_code(
     multi_grad_output=0,
     multi_grad_input_count=None,
     attributes=None,
+    multi_grad_attributes=None,
     attribute_sets=None,
 ):
     from ._attributes import AttributeCode, code_program
@@ -108,6 +109,19 @@ def acl_code(
         data.update(attribute_data(name, attributes))
         cuda_header += '\n#include "aclops/acl_code_attributes.h"\n'
         attr_code = 'apply_acl_code_attributes(op, data, "acl_attr.", "' + name + '");'
+    if multi_grad_attributes is not None:
+        if not multi_grad_src:
+            raise ValueError("multi_grad_attributes requires multi_grad_src")
+        from ._attributes import attribute_data
+        backward_name = name + "Backward"
+        data.update(attribute_data(backward_name, multi_grad_attributes))
+        cuda_header += '\n#include "aclops/acl_code_attributes.h"\n'
+        multi_grad_src = code_program([
+            multi_grad_src,
+            '\n            apply_acl_code_attributes(op, data, "acl_attr.", "',
+            backward_name,
+            '");\n            ',
+        ])
     if multi_grad_src:
         assert not cuda_grad_src
         cuda_grad_src = [multi_grad_src]
