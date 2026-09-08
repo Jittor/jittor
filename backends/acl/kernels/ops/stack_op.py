@@ -1,5 +1,5 @@
 from ._code import code_with_attributes
-from ._attributes import attribute_program, code_program, runner_for_alias
+from ._attributes import runner_for_alias
 import os
 from jittor_utils import env_or_try_find
 import jittor_utils
@@ -32,24 +32,15 @@ class StackACL(jt.Function):
             if input_tensors[i].shape != input_tensors[0].shape:
                 raise ValueError("All input tensors must have the same shape")
         self.input = input_tensors
+        self.dim = dim
         input_shape = list(input_tensors[0].shape)
         output_shape = input_shape[:dim] + [len(input_tensors)] + input_shape[dim:]
-        attr_code = code_program(
-            [
-                '\n        op.jt_name = "stack";\n        ',
-                attribute_program(
-                    "Stack", {"tensorNum": len(input_tensors), "dim": dim}, variable="op"
-                ),
-                "\n        ",
-            ]
-        )
-        self.attr_code = attr_code
         result = stack_cmd(
             "Stack",
             input_tensors,
             output_dtypes=[input_tensors[0].dtype],
             output_shapes=[output_shape],
-            attr_code=self.attr_code,
+            attributes={"tensorNum": len(input_tensors), "dim": dim},
         )[0]
         return result
 
@@ -66,21 +57,11 @@ class StackACL(jt.Function):
             dtypeVec.append(tensor.dtype)
             shapeVec.append(tensor.shape)
 
-        attr_code = code_program(
-            [
-                '\n        op.jt_name = "splitwithsize";\n        ',
-                attribute_program(
-                    "SplitWithSize", {"splitSize": list(offset), "dim": axis}, variable="op"
-                ),
-                "\n        ",
-            ]
-        )
-
         result = stack_cmd(
             "SplitWithSize",
             [grad_output],
             output_dtypes=dtypeVec,
             output_shapes=shapeVec,
-            attr_code=attr_code,
+            attributes={"splitSize": list(offset), "dim": axis},
         )
         return result
