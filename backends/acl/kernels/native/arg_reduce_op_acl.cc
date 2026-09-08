@@ -42,7 +42,7 @@ namespace jittor
                 get_dtype(out_[idx]->dtype()),
                 &outputTensors[idx],
                 use_nchw);
-            CHECK_RET(ret == ACL_SUCCESS, return);
+            if (ret != ACL_SUCCESS) LOGf << name << ": output tensor creation failed. ERROR:" << ret;
         }
     }
 
