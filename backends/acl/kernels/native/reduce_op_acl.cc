@@ -115,7 +115,7 @@ namespace jittor
         }
     }
 
-    void ReduceOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void ReduceOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         switch (op_idx)
         {

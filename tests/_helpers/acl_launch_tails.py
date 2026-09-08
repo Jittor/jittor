@@ -30,7 +30,7 @@ ACLOPS = "backends/acl/kernels/native"
 SHARED_TAIL = "base_op_acl.cc"
 
 OWNER = re.compile(r"void\s+(\w+)::executeOp\b")
-QUERY = re.compile(r"\b(?:aclnn\w*GetWorkspaceSize|it->second\.getWorkspaceSizeFunc\w*)\s*\(")
+QUERY = re.compile(r"\b(?:aclnn\w*GetWorkspaceSize|it->second\.(?:getWorkspaceSizeFunc\w*|workspace))\s*\(")
 WORKSPACE_MALLOC = re.compile(r"\bmallocWorkSpace\s*\(")
 DIRECT_EXECUTE = re.compile(r"(\w[\w.>-]*)\s*\(\s*workspaceAddr\s*,\s*workspaceSize\s*,"
                             r"\s*executor\s*,\s*aclstream\s*\)")

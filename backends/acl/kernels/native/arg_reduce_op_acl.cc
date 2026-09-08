@@ -47,7 +47,7 @@ namespace jittor
     }
 
     void ArgReduceOpRunner::executeOp(
-        std::unordered_map<string, AclOpFunctions>::iterator &it)
+        AclOpRegistry::const_iterator &it)
     {
         if (is_max)
         {

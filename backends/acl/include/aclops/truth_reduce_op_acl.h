@@ -14,6 +14,6 @@ namespace jittor
 
         void setupOutputDesc() override;
         void executeOp(
-            std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+            AclOpRegistry::const_iterator &it) override;
     };
 }

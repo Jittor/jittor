@@ -8,7 +8,7 @@ namespace jittor
     {
 
     protected:
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
 
     public:
         SoftmaxOpRunner();
@@ -18,7 +18,7 @@ namespace jittor
     {
 
     protected:
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
 
     public:
         SoftmaxBackwardOpRunner();

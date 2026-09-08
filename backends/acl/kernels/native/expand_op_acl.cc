@@ -35,7 +35,7 @@ namespace jittor
         use_nchw = false;
     }
 
-    void ExpandOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void ExpandOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         aclIntArray *size = nullptr;
         size = aclCreateIntArray(&outputShapes[0][0], outputShapes[0].size());

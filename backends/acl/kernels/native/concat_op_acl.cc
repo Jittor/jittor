@@ -35,7 +35,7 @@ namespace jittor
     {
     }
 
-    void ConcatOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void ConcatOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto input_num = in_.size();
         std::vector<aclTensor *> concatTensorList = {};
@@ -54,7 +54,7 @@ namespace jittor
     {
     }
 
-    void SplitWithSizeOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void SplitWithSizeOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto output_num = out_.size();
         auto attr = dynamic_cast<SplitWithSizeAttr *>(op_attr.get());

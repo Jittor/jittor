@@ -61,7 +61,7 @@ namespace jittor
             }
         }
     }
-    void MatMulOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void MatMulOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
 
         ret = aclnnMatmulGetWorkspaceSize(inputTensors[0], inputTensors[1], outputTensors[0], cube_math_type, &workspaceSize, &executor);

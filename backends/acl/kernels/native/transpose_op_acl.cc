@@ -35,7 +35,7 @@ namespace jittor
     {
     }
 
-    void TransposeOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void TransposeOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<ReduceAttr *>(op_attr.get());
 

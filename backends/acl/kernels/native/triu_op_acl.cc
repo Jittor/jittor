@@ -35,7 +35,7 @@ namespace jittor
     {
     }
 
-    void TriuOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void TriuOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<TriuAttr *>(op_attr.get());
         ret = aclnnTriuGetWorkspaceSize(inputTensors[0], aclDataType(attr->diagonal), outputTensors[0], &workspaceSize, &executor);

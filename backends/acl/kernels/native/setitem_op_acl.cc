@@ -34,7 +34,7 @@ namespace jittor
     {
     }
 
-    void InplaceMaskedScatterOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void InplaceMaskedScatterOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         // inputs: base(0), mask(1), value(2); output: out(0).
         // Copy base -> out on aclstream first (base is a tracked input, so its
@@ -55,7 +55,7 @@ namespace jittor
     {
     }
 
-    void IndexPutImplOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void IndexPutImplOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto input_num = in_.size();
         std::vector<aclTensor *> indexTensorList = {};

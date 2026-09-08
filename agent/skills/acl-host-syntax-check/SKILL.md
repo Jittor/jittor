@@ -57,11 +57,11 @@ python agent/skills/acl-host-syntax-check/syntax_check.py \
 `std::is_same<decltype(&X), AclExecuteAbi>`；比较**裸函数指针类型**才能拒绝 variadic。
 **改了 launcher 相关的东西一定要带 `--check-launchers`。**
 
-**坑 2：`acl_jittor.h` 在桩下必然报错，这是预期的。**
-`AclOpFunctions` 有 40 个 `std::function` 构造重载（正是 8.06 要做类型擦除的那个胖结构）。
-variadic 桩对每个重载都可转换，于是 `aclOpFuncMap` 那张表每一行都报 ambiguous。
-脚本按**文件名**过滤掉 `acl_jittor.h` 的诊断，其它任何文件的诊断都算失败。
-副作用：g++ 报错后继续做语义分析，但错误恢复**可能吞掉后面的个别诊断**。所以本检查是下界。
+**坑 2：不能重新过滤注册头的诊断。**
+旧`AclOpFunctions`构造重载曾在variadic桩下产生歧义，脚本因而过滤整个
+`acl_jittor.h`的诊断。8.06将活跃查询改成显式family adapter后，该例外已删除。
+现在任意头文件的错误及任意非零compiler退出码都必须失败；不能把错误恢复后
+继续解析误当成完整TU通过。查询实参的SDK签名限制仍然存在，见上节。
 
 ## 判据：怎么确认这次检查真的在起作用
 
@@ -91,7 +91,7 @@ sed -i 's/launch(ret, aclnnSWhere, true);/launch(ret, aclnnSWhereGetWorkspaceSiz
 
 `make_cann_stub.py` 扫 `backends/acl/**` 自动生成，不需要手工维护清单：
 
-- 所有 `aclnn*` 标识符（**不只是调用点**——注册表里 `AclOpFunctions(aclnnAbsGetWorkspaceSize, aclnnAbs)`
+- 所有 `aclnn*` 标识符（**不只是调用点**——注册表里 `AclOpFunctions::unary(aclnnAbsGetWorkspaceSize, aclnnAbs)`
   是当值用的，只匹配 `aclnnX(` 会漏掉一半）；`*GetWorkspaceSize` 声明成 variadic，
   其余按真实的四参数 execute ABI 声明；
 - 所有 `ACL_ERROR_*` 名字（`acl_error_code.cc` 用到几百个），值取互不相同的负数；

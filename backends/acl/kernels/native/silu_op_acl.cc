@@ -38,7 +38,7 @@ namespace jittor
     {
     }
 
-    void SiLUOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void SiLUOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         ret = aclnnSiluGetWorkspaceSize(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
 
@@ -51,7 +51,7 @@ namespace jittor
     {
     }
 
-    void SiLUBackwardOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void SiLUBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         ret = aclnnSiluBackwardGetWorkspaceSize(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
 
@@ -64,7 +64,7 @@ namespace jittor
     {
     }
 
-    void SwishOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void SwishOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         ret = aclnnSwishGetWorkspaceSize(
             inputTensors[0], nullptr, outputTensors[0], &workspaceSize, &executor);
@@ -78,7 +78,7 @@ namespace jittor
     {
     }
 
-    void SwishBackwardOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void SwishBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         ret = aclnnSwishBackwardGetWorkspaceSize(
             inputTensors[0], inputTensors[1], nullptr, outputTensors[0],
@@ -94,7 +94,7 @@ namespace jittor
     }
 
     void SwiGluOpRunner::executeOp(
-        std::unordered_map<string, AclOpFunctions>::iterator &it)
+        AclOpRegistry::const_iterator &it)
     {
         ret = aclnnSwiGluGetWorkspaceSize(
             inputTensors[0], dim, outputTensors[0], &workspaceSize, &executor);

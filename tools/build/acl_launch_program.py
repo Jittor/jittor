@@ -40,7 +40,7 @@ ACLOPS = "backends/acl/kernels/native"
 
 OWNER = re.compile(r"void\s+(\w+)::executeOp\b")
 QUERY = re.compile(r"\b(aclnn\w*GetWorkspaceSize)\s*\(")
-REGISTRY_QUERY = re.compile(r"it->second\.(getWorkspaceSizeFunc\w*)\s*\(")
+REGISTRY_QUERY = re.compile(r"it->second\.(getWorkspaceSizeFunc\w*|workspace)\s*\(")
 LAUNCH = re.compile(r"\blaunch\(\s*ret\s*,\s*([^,]+?)\s*,\s*(true|false)\s*\)")
 RAW_EXEC = re.compile(r"(\w+(?:->second\.\w+)?|it->second\.\w+)\s*\(\s*workspaceAddr\s*,"
                       r"\s*workspaceSize\s*,\s*executor\s*,\s*aclstream\s*\)")

@@ -59,7 +59,7 @@ namespace jittor
 
     protected:
         // Virtual method for specific operator execution
-        virtual void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) = 0;
+        virtual void executeOp(AclOpRegistry::const_iterator &it) = 0;
         void cleanupAttr();
     };
 

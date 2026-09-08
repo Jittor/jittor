@@ -171,7 +171,10 @@ struct Check {
 };
 #define INTERNAL_ASSERT(value) Check{bool(value)}
 using aclTensor = int;
-std::map<std::string, int> aclOpFuncMap{{"registered", 1}};
+const std::map<std::string, int>& acl_op_registry() {
+    static const std::map<std::string, int> entries{{"registered", 1}};
+    return entries;
+}
 int drains = 0, destroys = 0, setups = 0, executes = 0, aclstream = 0;
 int aclrtSynchronizeStream(int) { ++drains; return 0; }
 int aclDestroyTensor(aclTensor*) { ++destroys; return 0; }
@@ -186,9 +189,9 @@ struct Runner {
         if (failure == 1) throw failure;
     }
     void setupOutputDesc() { ++setups; outputTensors.push_back(&output); }
-    void executeOp(std::map<std::string, int>::iterator& entry) {
+    void executeOp(std::map<std::string, int>::const_iterator& entry) {
         ++executes;
-        assert((entry == aclOpFuncMap.end()) == (name == "direct"));
+        assert((entry == acl_op_registry().end()) == (name == "direct"));
         if (failure == 2) throw failure;
     }
     void cleanupDesc() {
@@ -225,5 +228,5 @@ def test_preflight_and_execution_share_launcher_keys_before_any_fallback_migrati
     assert "AclExecutionRunner<AdamWListOpRunner, false>" in source
     for variant in ("ReduceSum", "ReduceMean", "ReduceMax", "ReduceMin", "ReduceProd", "Select", "Expand"):
         assert 'return "' + variant + '"' in source
-    registration = (ROOT / "backends/acl/include/acl_jittor.h").read_text()
-    assert '{"ReduceProd", AclOpFunctions(aclnnProdGetWorkspaceSize, aclnnProd)}' in registration
+    registration = (ROOT / "backends/acl/src/acl_jittor.cc").read_text()
+    assert '{"ReduceProd", AclOpFunctions::direct(aclnnProd)}' in registration

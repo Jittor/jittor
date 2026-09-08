@@ -35,7 +35,7 @@ namespace jittor
     {
     }
 
-    void DropoutOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void DropoutOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<DropoutAttr *>(op_attr.get());
         ret = aclnnDropoutGetWorkspaceSize(inputTensors[0], attr->p, attr->train, attr->seed, attr->offset, outputTensors[0], outputTensors[1], &workspaceSize, &executor);
@@ -49,7 +49,7 @@ namespace jittor
     {
     }
 
-    void DropoutBackwardOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void DropoutBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<DropoutAttr *>(op_attr.get());
         ret = aclnnDropoutBackwardGetWorkspaceSize(inputTensors[0], inputTensors[1], attr->scale, outputTensors[0], &workspaceSize, &executor);

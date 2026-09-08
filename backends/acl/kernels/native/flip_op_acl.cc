@@ -35,7 +35,7 @@ namespace jittor
     {
     }
 
-    void FlipOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void FlipOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<ReduceAttr *>(op_attr.get());
         auto dim = aclCreateIntArray(attr->axes.data(), attr->axes.size());

@@ -9,7 +9,7 @@ namespace jittor
     }
 
     void UpsampleNearest2dOpRunner::executeOp(
-        std::unordered_map<string, AclOpFunctions>::iterator &it)
+        AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<UpsampleNearest2dAttr *>(op_attr.get());
         std::unique_ptr<aclIntArray, decltype(&aclDestroyIntArray)> outputSize(
@@ -30,7 +30,7 @@ namespace jittor
     }
 
     void UpsampleNearest2dBackwardOpRunner::executeOp(
-        std::unordered_map<string, AclOpFunctions>::iterator &it)
+        AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<UpsampleNearest2dAttr *>(op_attr.get());
         std::unique_ptr<aclIntArray, decltype(&aclDestroyIntArray)> outputSize(

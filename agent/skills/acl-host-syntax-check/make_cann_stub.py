@@ -131,7 +131,7 @@ ENTRY_HEADER = """#pragma once
 
 
 def collect_entry_points(acl_root):
-    # Not just call sites: the registry in acl_jittor.h names both the query
+    # Not just call sites: the registry in acl_jittor.cc names both the query
     # and the launcher as plain values, e.g. AclOpFunctions(aclnnAbs...,
     # aclnnAbs), so a "followed by (" pattern would miss half of them.
     mention = re.compile(r"\baclnn[A-Za-z0-9_]*\b")

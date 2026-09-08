@@ -35,7 +35,7 @@ namespace jittor
         use_nchw = true;
     }
 
-    void Conv2dOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void Conv2dOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         // for conv
         aclIntArray *strides = nullptr;
@@ -104,7 +104,7 @@ namespace jittor
         }
     }
 
-    void Conv2dBackwardOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void Conv2dBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         // for conv
         aclIntArray *strides = nullptr;

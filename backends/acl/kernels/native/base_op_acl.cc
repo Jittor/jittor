@@ -150,8 +150,8 @@ namespace jittor
     {
         if (is_group_op)
         {
-            auto it = aclOpFuncMap.find(name);
-            if (it == aclOpFuncMap.end())
+            auto it = acl_op_registry().find(name);
+            if (it == acl_op_registry().end())
             {
                 LOGf << "ACL operator has no registered launcher:" << name;
             }
@@ -162,8 +162,8 @@ namespace jittor
         }
         else
         {
-            auto it = aclOpFuncMap.find(name);
-            if (it == aclOpFuncMap.end())
+            auto it = acl_op_registry().find(name);
+            if (it == acl_op_registry().end())
             {
                 LOGf << "ACL operator has no registered launcher:" << name;
             }

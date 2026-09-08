@@ -8,7 +8,7 @@ namespace jittor
     {
 
     protected:
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
 
     public:
         SiLUOpRunner();
@@ -18,7 +18,7 @@ namespace jittor
     {
 
     protected:
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
 
     public:
         SiLUBackwardOpRunner();
@@ -28,7 +28,7 @@ namespace jittor
     {
 
     protected:
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
 
     public:
         SwishOpRunner();
@@ -38,7 +38,7 @@ namespace jittor
     {
 
     protected:
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
 
     public:
         SwishBackwardOpRunner();
@@ -47,7 +47,7 @@ namespace jittor
     class SwiGluOpRunner : public BaseOpRunner
     {
     protected:
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
 
     public:
         int64_t dim = -1;

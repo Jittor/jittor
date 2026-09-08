@@ -35,7 +35,7 @@ namespace jittor
     {
     }
 
-    void NanToNumOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void NanToNumOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<NanToNumAttr *>(op_attr.get());
         ret = aclnnNanToNumGetWorkspaceSize(inputTensors[0], attr->nan, attr->posinf, attr->neginf, outputTensors[0], &workspaceSize, &executor);

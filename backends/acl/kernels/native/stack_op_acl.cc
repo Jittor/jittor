@@ -35,7 +35,7 @@ namespace jittor
     {
     }
 
-    void StackOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void StackOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto input_num = in_.size();
         std::vector<aclTensor *> stackTensorList = {};

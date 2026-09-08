@@ -35,7 +35,7 @@ namespace jittor
     {
     }
 
-    void CumsumOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void CumsumOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<GatherAttr *>(op_attr.get());
         ret = aclnnCumsumGetWorkspaceSize(inputTensors[0], attr->dim, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);

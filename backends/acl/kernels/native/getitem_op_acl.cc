@@ -35,7 +35,7 @@ namespace jittor
     {
     }
 
-    void MaskedSelectOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void MaskedSelectOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         ret = aclnnMaskedSelectGetWorkspaceSize(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
 
@@ -47,7 +47,7 @@ namespace jittor
     {
     }
 
-    void IndexOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void IndexOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto input_num = in_.size();
         auto indexTensorList = aclCreateTensorList(&inputTensors[1], input_num - 1);
@@ -61,7 +61,7 @@ namespace jittor
     {
     }
 
-    void SliceV2OpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void SliceV2OpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<StrideAttr *>(op_attr.get());
         auto begins = aclCreateIntArray(attr->begins.data(), attr->begins.size());
@@ -79,7 +79,7 @@ namespace jittor
     {
     }
 
-    void IndexPutImplAccumulateOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void IndexPutImplAccumulateOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         // inputs: values(0), index0(1), index1(2), ...
         // output: out(0)  -- scatter-accumulate `values` into a zeroed `out` at
@@ -107,7 +107,7 @@ namespace jittor
     {
     }
 
-    void StridedSliceAssignV2OpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void StridedSliceAssignV2OpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<StrideAttr *>(op_attr.get());
         if (jt_name == "stridedsliceassignv2_grad")

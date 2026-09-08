@@ -70,13 +70,13 @@ def test_acl_op_idx_map_is_removed_without_touching_reduce_dispatch():
 
 def test_unary_family_uses_launcher_without_changing_sync_policy():
     source = UNARY_SOURCE.read_text()
-    assert "launch(ret, it->second.executeFunc, false);" in source
+    assert "launch(ret, it->second.launcher(), false);" in source
     assert "CHECK_RET(ret == ACL_SUCCESS" not in source
 
 
 def test_binary_family_uses_shared_launcher_without_tail_copy():
     source = BINARY_SOURCE.read_text()
-    assert "launch(ret, it->second.executeFunc, true);" in source
+    assert "launch(ret, it->second.launcher(), true);" in source
     assert "checkRet(ret);" not in source
     assert "mallocWorkSpace(workspaceSize)" not in source
     assert "syncRun();" not in source

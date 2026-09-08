@@ -7,7 +7,7 @@ namespace jittor
     class RollOpRunner : public BaseOpRunner
     {
     protected:
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
 
     public:
         vector<int64_t> shifts;

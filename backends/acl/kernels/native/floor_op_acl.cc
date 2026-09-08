@@ -35,7 +35,7 @@ namespace jittor
     {
     }
 
-    void FloorOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void FloorOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         ret = aclnnFloorGetWorkspaceSize(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
 

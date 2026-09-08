@@ -35,7 +35,7 @@ namespace jittor
     {
     }
 
-    void SoftmaxOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void SoftmaxOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<SoftmaxAttr *>(op_attr.get());
         ret = aclnnSoftmaxGetWorkspaceSize(inputTensors[0], aclDataType(attr->dim), outputTensors[0], &workspaceSize, &executor);
@@ -49,7 +49,7 @@ namespace jittor
     {
     }
 
-    void SoftmaxBackwardOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void SoftmaxBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<SoftmaxAttr *>(op_attr.get());
         ret = aclnnSoftmaxBackwardGetWorkspaceSize(inputTensors[0], inputTensors[1], attr->dim, outputTensors[0], &workspaceSize, &executor);

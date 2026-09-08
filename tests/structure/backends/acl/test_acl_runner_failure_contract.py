@@ -1,6 +1,7 @@
 """ACL runner failures must be attributed and stop before execution continues."""
 
 from pathlib import Path
+import re
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -50,8 +51,8 @@ def test_acl_workspace_status_and_runner_lookup_fail_loudly():
     assert "CHECK_RET" not in check
 
     run = _block_body(source, "void BaseOpRunner::run()")
-    assert run.count("aclOpFuncMap.find(name)") == 2
-    assert run.count("it == aclOpFuncMap.end()") == 2
+    assert run.count("acl_op_registry().find(name)") == 2
+    assert run.count("it == acl_op_registry().end()") == 2
     assert "ACL operator has no registered launcher" in run
 
 
@@ -89,7 +90,10 @@ def test_acl_fused_queue_checks_the_current_op_without_shadowing():
     assert "auto op = queue.front();" not in loop
     assert loop.index("auto *current_op = queue.front();") < loop.index(
         "current_op->inputs()")
-    assert loop.count("current_op->inputs()") == 2
+    # Allocation checks, contiguous handling and liveness release may each
+    # inspect inputs. What matters is their owner, not a frozen access count.
+    owners = re.findall(r"\b(\w+)->(?:inputs|outputs)\(", loop)
+    assert owners and set(owners) == {"current_op"}
     assert "current_op->outputs()" in loop
     assert "current_op->name()" in loop
     assert "current fused operator input is not allocated" in loop

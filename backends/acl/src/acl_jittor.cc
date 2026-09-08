@@ -1,16 +1,119 @@
 // ***************************************************************
 // Copyright (c) 2023 Jittor. All Rights Reserved.
-// Maintainers: Dun Liang <randonlang@gmail.com>.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-// ACL runtime support is provided by acl_runtime/acl_workspace and the
-// registered aclops translation units. Source-to-source CUDA rewriting was
-// intentionally removed: unsupported generated kernels are rejected by the
-// ACL backend instead of being silently rewritten here.
-#include "core/common.h"
-#include "acl_jittor.h"
+// ACL operator registry has one owner; query adapters erase only the four
+// live grouped query signatures. Direct runners retain their own SDK queries.
+#include "acl_op_registry.h"
 
 namespace jittor {
-// Keep a translation unit for build manifests and SDK-specific ACL globals.
+const AclOpRegistry& acl_op_registry() {
+    static const AclOpRegistry entries = {
+        {"Abs", AclOpFunctions::unary(aclnnAbsGetWorkspaceSize, aclnnAbs)},
+        {"Exp", AclOpFunctions::unary(aclnnExpGetWorkspaceSize, aclnnExp)},
+        {"Log", AclOpFunctions::unary(aclnnLogGetWorkspaceSize, aclnnLog)},
+        {"Sqrt", AclOpFunctions::unary(aclnnSqrtGetWorkspaceSize, aclnnSqrt)},
+        {"Ceil", AclOpFunctions::unary(aclnnCeilGetWorkspaceSize, aclnnCeil)},
+        {"Floor", AclOpFunctions::unary(aclnnFloorGetWorkspaceSize, aclnnFloor)},
+        {"Round", AclOpFunctions::unary(aclnnRoundGetWorkspaceSize, aclnnRound)},
+        {"Sin", AclOpFunctions::unary(aclnnSinGetWorkspaceSize, aclnnSin)},
+        {"Cos", AclOpFunctions::unary(aclnnCosGetWorkspaceSize, aclnnCos)},
+        {"Tan", AclOpFunctions::unary(aclnnTanGetWorkspaceSize, aclnnTan)},
+        {"Asin", AclOpFunctions::unary(aclnnAsinGetWorkspaceSize, aclnnAsin)},
+        {"Acos", AclOpFunctions::unary(aclnnAcosGetWorkspaceSize, aclnnAcos)},
+        {"Atan", AclOpFunctions::unary(aclnnAtanGetWorkspaceSize, aclnnAtan)},
+        {"Sinh", AclOpFunctions::unary(aclnnSinhGetWorkspaceSize, aclnnSinh)},
+        {"Cosh", AclOpFunctions::unary(aclnnCoshGetWorkspaceSize, aclnnCosh)},
+        {"Tanh", AclOpFunctions::unary(aclnnTanhGetWorkspaceSize, aclnnTanh)},
+        {"Asinh", AclOpFunctions::unary(aclnnAsinhGetWorkspaceSize, aclnnAsinh)},
+        {"Acosh", AclOpFunctions::unary(aclnnAcoshGetWorkspaceSize, aclnnAcosh)},
+        {"Atanh", AclOpFunctions::unary(aclnnAtanhGetWorkspaceSize, aclnnAtanh)},
+        {"Sigmoid", AclOpFunctions::unary(aclnnSigmoidGetWorkspaceSize, aclnnSigmoid)},
+        {"Erf", AclOpFunctions::unary(aclnnErfGetWorkspaceSize, aclnnErf)},
+        {"Erfinv", AclOpFunctions::unary(aclnnErfinvGetWorkspaceSize, aclnnErfinv)},
+        {"LogicalNot", AclOpFunctions::unary(aclnnLogicalNotGetWorkspaceSize, aclnnLogicalNot)},
+        {"BitwiseNot", AclOpFunctions::unary(aclnnBitwiseNotGetWorkspaceSize, aclnnBitwiseNot)},
+        {"Neg", AclOpFunctions::unary(aclnnNegGetWorkspaceSize, aclnnNeg)},
+        {"Cast", AclOpFunctions::cast(aclnnCastGetWorkspaceSize, aclnnCast)},
+        {"Maximum", AclOpFunctions::binary(aclnnMaximumGetWorkspaceSize, aclnnMaximum)},
+        {"Minimum", AclOpFunctions::binary(aclnnMinimumGetWorkspaceSize, aclnnMinimum)},
+        {"Add", AclOpFunctions::add(aclnnAddGetWorkspaceSize, aclnnAdd)},
+        {"Sub", AclOpFunctions::add(aclnnSubGetWorkspaceSize, aclnnSub)},
+        {"Mul", AclOpFunctions::binary(aclnnMulGetWorkspaceSize, aclnnMul)},
+        {"RealDiv", AclOpFunctions::binary(aclnnDivGetWorkspaceSize, aclnnDiv)},
+        {"FloorDiv", AclOpFunctions::binary(aclnnFloorDivideGetWorkspaceSize, aclnnFloorDivide)},
+        {"LessEqual", AclOpFunctions::binary(aclnnLeTensorGetWorkspaceSize, aclnnLeTensor)},
+        {"Less", AclOpFunctions::binary(aclnnLtTensorGetWorkspaceSize, aclnnLtTensor)},
+        {"GreaterEqual", AclOpFunctions::binary(aclnnGeTensorGetWorkspaceSize, aclnnGeTensor)},
+        {"Greater", AclOpFunctions::binary(aclnnGtTensorGetWorkspaceSize, aclnnGtTensor)},
+        {"Equal", AclOpFunctions::binary(aclnnEqTensorGetWorkspaceSize, aclnnEqTensor)},
+        {"NotEqual", AclOpFunctions::binary(aclnnNeTensorGetWorkspaceSize, aclnnNeTensor)},
+        {"LogicalAnd", AclOpFunctions::binary(aclnnLogicalAndGetWorkspaceSize, aclnnLogicalAnd)},
+        {"LogicalOr", AclOpFunctions::binary(aclnnLogicalOrGetWorkspaceSize, aclnnLogicalOr)},
+        {"LogicalXor", AclOpFunctions::binary(aclnnLogicalXorGetWorkspaceSize, aclnnLogicalXor)},
+        {"BitwiseAnd", AclOpFunctions::binary(aclnnBitwiseAndTensorGetWorkspaceSize, aclnnBitwiseAndTensor)},
+        {"BitwiseOr", AclOpFunctions::binary(aclnnBitwiseOrTensorGetWorkspaceSize, aclnnBitwiseOrTensor)},
+        {"BitwiseXor", AclOpFunctions::binary(aclnnBitwiseXorTensorGetWorkspaceSize, aclnnBitwiseXorTensor)},
+        {"Pow", AclOpFunctions::binary(aclnnPowTensorTensorGetWorkspaceSize, aclnnPowTensorTensor)},
+        {"Expand", AclOpFunctions::direct(aclnnExpand)},
+        {"MatMul", AclOpFunctions::direct(aclnnMatmul)},
+        {"BatchMatMul", AclOpFunctions::direct(aclnnBatchMatMul)},
+        {"ReduceMax", AclOpFunctions::direct(aclnnAmax)},
+        {"ReduceMin", AclOpFunctions::direct(aclnnAmin)},
+        {"ReduceSum", AclOpFunctions::direct(aclnnReduceSum)},
+        {"Triu", AclOpFunctions::direct(aclnnTriu)},
+        {"Conv2d", AclOpFunctions::direct(aclnnConvolution)},
+        {"Conv2dBackward", AclOpFunctions::direct(aclnnConvolutionBackward)},
+        {"ReduceMean", AclOpFunctions::direct(aclnnMean)},
+        {"ReduceProd", AclOpFunctions::direct(aclnnProd)},
+        {"Select", AclOpFunctions::direct(aclnnSWhere)},
+        {"RandomUniform", AclOpFunctions::direct(aclnnInplaceUniform)},
+        {"RandomNormal", AclOpFunctions::direct(aclnnInplaceNormal)},
+        {"Transpose", AclOpFunctions::direct(aclnnPermute)},
+        {"Maxpool", AclOpFunctions::direct(aclnnMaxPool2dWithIndices)},
+        {"MaxpoolBackward", AclOpFunctions::direct(aclnnMaxPool2dWithIndicesBackward)},
+        {"Avgpool", AclOpFunctions::direct(aclnnAvgPool2d)},
+        {"AvgpoolBackward", AclOpFunctions::direct(aclnnAvgPool2dBackward)},
+        {"Flip", AclOpFunctions::direct(aclnnFlip)},
+        {"Concat", AclOpFunctions::direct(aclnnCat)},
+        {"Gather", AclOpFunctions::direct(aclnnGather)},
+        {"Cumsum", AclOpFunctions::direct(aclnnCumsum)},
+        {"Index", AclOpFunctions::direct(aclnnIndex)},
+        {"Scatter", AclOpFunctions::direct(aclnnScatter)},
+        {"Nonzero", AclOpFunctions::unary(aclnnNonzeroGetWorkspaceSize, aclnnNonzero)},
+        {"Where", AclOpFunctions::direct(aclnnSWhere)},
+        {"Floor", AclOpFunctions::unary(aclnnFloorGetWorkspaceSize, aclnnFloor)},
+        {"StridedSliceAssignV2", AclOpFunctions::direct(aclnnStridedSliceAssignV2)},
+        {"SliceV2", AclOpFunctions::direct(aclnnSliceV2)},
+        {"IndexPutImpl", AclOpFunctions::direct(aclnnIndexPutImpl)},
+        {"IndexPutImplAccumulate", AclOpFunctions::direct(aclnnIndexPutImpl)},
+        {"Range", AclOpFunctions::direct(aclnnRange)},
+        {"ReLU", AclOpFunctions::unary(aclnnReluGetWorkspaceSize, aclnnRelu)},
+        {"LeakyReLU", AclOpFunctions::direct(aclnnLeakyRelu)},
+        {"LeakyReLUBackward", AclOpFunctions::direct(aclnnLeakyReluBackward)},
+        {"Dropout", AclOpFunctions::direct(aclnnDropout)},
+        {"DropoutBackward", AclOpFunctions::direct(aclnnDropoutBackward)},
+        {"SiLU", AclOpFunctions::unary(aclnnSiluGetWorkspaceSize, aclnnSilu)},
+        {"SiLUBackward", AclOpFunctions::direct(aclnnSiluBackward)},
+        {"Sigmoid", AclOpFunctions::unary(aclnnSigmoidGetWorkspaceSize, aclnnSigmoid)},
+        {"SigmoidBackward", AclOpFunctions::direct(aclnnSigmoidBackward)},
+        {"Embedding", AclOpFunctions::direct(aclnnEmbedding)},
+        {"EmbeddingBackward", AclOpFunctions::direct(aclnnEmbeddingDenseBackward)},
+        {"InplaceMaskedScatter", AclOpFunctions::direct(aclnnInplaceMaskedScatter)},
+        {"MaskedSelect", AclOpFunctions::direct(aclnnMaskedSelect)},
+        {"SplitWithSize", AclOpFunctions::direct(aclnnSplitWithSize)},
+        {"Softmax", AclOpFunctions::direct(aclnnSoftmax)},
+        {"SoftmaxBackward", AclOpFunctions::direct(aclnnSoftmaxBackward)},
+        {"FlashAttention", AclOpFunctions::direct(aclnnFlashAttentionScoreV2)},
+        {"FlashAttentionBackward", AclOpFunctions::direct(aclnnFlashAttentionScoreGradV2)},
+        {"BatchNorm", AclOpFunctions::direct(aclnnBatchNorm)},
+        {"BatchNormBackward", AclOpFunctions::direct(aclnnBatchNormBackward)},
+        {"LayerNorm", AclOpFunctions::direct(aclnnLayerNorm)},
+        {"RotaryPosEmb", AclOpFunctions::direct(aclnnApplyRotaryPosEmb)},
+        {"Stack", AclOpFunctions::direct(aclnnStack)},
+        {"NanToNum", AclOpFunctions::direct(aclnnNanToNum)},
+    };
+    return entries;
 }
+} // namespace jittor

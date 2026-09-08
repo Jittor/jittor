@@ -38,7 +38,7 @@ namespace jittor
     }
 
     void RotaryPositionEmbeddingOpRunner::executeOp(
-        std::unordered_map<string, AclOpFunctions>::iterator &it)
+        AclOpRegistry::const_iterator &it)
     {
         ret = aclnnRotaryPositionEmbeddingGetWorkspaceSize(
             inputTensors[0], inputTensors[1], inputTensors[2], 0,
@@ -52,7 +52,7 @@ namespace jittor
     }
 
     void RotaryPositionEmbeddingGradOpRunner::executeOp(
-        std::unordered_map<string, AclOpFunctions>::iterator &it)
+        AclOpRegistry::const_iterator &it)
     {
         ret = aclnnRotaryPositionEmbeddingGradGetWorkspaceSize(
             inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3],

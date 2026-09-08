@@ -35,7 +35,7 @@ namespace jittor
     {
     }
 
-    void SigmoidOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void SigmoidOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         ret = aclnnSigmoidGetWorkspaceSize(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
 
@@ -48,7 +48,7 @@ namespace jittor
     {
     }
 
-    void SigmoidBackwardOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void SigmoidBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         ret = aclnnSigmoidBackwardGetWorkspaceSize(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
 

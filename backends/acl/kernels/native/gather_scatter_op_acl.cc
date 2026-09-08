@@ -35,7 +35,7 @@ namespace jittor
     {
     }
 
-    void GatherOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void GatherOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<GatherAttr *>(op_attr.get());
         ret = aclnnGatherGetWorkspaceSize(inputTensors[0], attr->dim, inputTensors[1], outputTensors[0], &workspaceSize, &executor);
@@ -48,7 +48,7 @@ namespace jittor
     {
     }
 
-    void ScatterOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void ScatterOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<ScatterAttr *>(op_attr.get());
         ret = aclnnScatterGetWorkspaceSize(inputTensors[0], attr->axis, inputTensors[1], inputTensors[2], attr->reduction, outputTensors[0], &workspaceSize, &executor);

@@ -7,7 +7,7 @@ namespace jittor
     class UpsampleNearest2dOpRunner : public BaseOpRunner
     {
     protected:
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
 
     public:
         UpsampleNearest2dOpRunner();
@@ -16,7 +16,7 @@ namespace jittor
     class UpsampleNearest2dBackwardOpRunner : public BaseOpRunner
     {
     protected:
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
 
     public:
         UpsampleNearest2dBackwardOpRunner();

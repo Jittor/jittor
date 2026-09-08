@@ -41,7 +41,7 @@ namespace jittor
         name = _name;
     }
 
-    void RandomOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void RandomOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<RandomAttr *>(op_attr.get());
         AclExecuteLauncher launcher;

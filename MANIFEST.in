@@ -3,6 +3,7 @@
 # Exact paths avoid MANIFEST glob's non-recursive ** and cache leakage.
 include MANIFEST.in
 include backends/acl/include/acl_jittor.h
+include backends/acl/include/acl_op_registry.h
 include backends/acl/include/acl_runtime.h
 include backends/acl/include/acl_workspace.h
 include backends/acl/include/aclnn/aclnn.h
@@ -469,6 +470,7 @@ include docs/results/2026-09-07-build-contrib-layout.md
 include docs/results/2026-09-07-native-core-packages.md
 include docs/results/2026-09-07-ops-pooling-layout.md
 include docs/results/2026-09-07-python-domain-packages.md
+include docs/results/2026-09-08-acl-registry.md
 include docs/results/2026-09-08-api-owner-closure.md
 include docs/results/2026-09-08-api-runtime-integration.md
 include docs/results/2026-09-08-architecture-integration.md

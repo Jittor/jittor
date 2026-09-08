@@ -35,7 +35,7 @@ namespace jittor
     {
     }
 
-    void RangeOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void RangeOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         aclScalar *start = nullptr;
         aclScalar *end = nullptr;

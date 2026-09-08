@@ -70,7 +70,7 @@ namespace jittor
         setupNormTensorDescs(out_, outputShapes, outputTensors, 1);
     }
 
-    void BatchNormOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void BatchNormOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<BatchNormAttr *>(op_attr.get());
         ret = aclnnBatchNormGetWorkspaceSize(inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], inputTensors[4], attr->is_train, attr->momentum, attr->eps, outputTensors[0], outputTensors[1], outputTensors[2], &workspaceSize, &executor);
@@ -94,7 +94,7 @@ namespace jittor
         setupNormTensorDescs(out_, outputShapes, outputTensors, 1);
     }
 
-    void BatchNormBackwardOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void BatchNormBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<BatchNormAttr *>(op_attr.get());
         bool outputMask[3] = {true, true, true};
@@ -111,7 +111,7 @@ namespace jittor
     {
     }
 
-    void LayerNormOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void LayerNormOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<LayerNormAttr *>(op_attr.get());
         aclIntArray *normalizedShape = nullptr;
@@ -128,7 +128,7 @@ namespace jittor
     {
     }
 
-    void LayerNormBackwardOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void LayerNormBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         // inputs : gradOut(0), input(1), mean(2), rstd(3), weight(4), bias(5)
         // outputs: gradInput(0), gradWeight(1), gradBias(2)
@@ -154,7 +154,7 @@ namespace jittor
     {
     }
 
-    void GroupNormOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void GroupNormOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<GroupNormAttr *>(op_attr.get());
         ret = aclnnGroupNormGetWorkspaceSize(
@@ -170,7 +170,7 @@ namespace jittor
     {
     }
 
-    void GroupNormBackwardOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void GroupNormBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<GroupNormAttr *>(op_attr.get());
         bool outputMaskValues[3] = {true, true, true};
@@ -190,7 +190,7 @@ namespace jittor
     {
     }
 
-    void RmsNormOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void RmsNormOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<RmsNormAttr *>(op_attr.get());
         ret = aclnnRmsNormGetWorkspaceSize(
@@ -206,7 +206,7 @@ namespace jittor
     {
     }
 
-    void RmsNormGradOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void RmsNormGradOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         ret = aclnnRmsNormGradGetWorkspaceSize(
             inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3],

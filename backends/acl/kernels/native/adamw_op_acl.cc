@@ -11,7 +11,7 @@ namespace jittor
     }
 
     void AdamWListOpRunner::executeOp(
-        std::unordered_map<string, AclOpFunctions>::iterator &it)
+        AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<AdamWAttr *>(op_attr.get());
         CHECK(attr != nullptr);

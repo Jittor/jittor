@@ -35,7 +35,7 @@ namespace jittor
     {
     }
 
-    void WhereOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void WhereOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         ret = aclnnSWhereGetWorkspaceSize(inputTensors[0], inputTensors[1], inputTensors[2], outputTensors[0], &workspaceSize, &executor);
 
@@ -47,7 +47,7 @@ namespace jittor
     {
     }
 
-    void NonzeroOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void NonzeroOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         ret = aclnnNonzeroGetWorkspaceSize(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
 

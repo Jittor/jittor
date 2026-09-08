@@ -36,7 +36,7 @@ namespace jittor
         use_nchw = true;
     }
 
-    void MaxpoolOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void MaxpoolOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
 
         aclIntArray *strides = nullptr;
@@ -66,7 +66,7 @@ namespace jittor
         use_nchw = true;
     }
 
-    void AvgpoolOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void AvgpoolOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
 
         aclIntArray *strides = nullptr;
@@ -93,7 +93,7 @@ namespace jittor
         use_nchw = true;
     }
 
-    void MaxpoolBackwardOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void MaxpoolBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
 
         aclIntArray *strides = nullptr;
@@ -123,7 +123,7 @@ namespace jittor
         use_nchw = true;
     }
 
-    void AvgpoolBackwardOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void AvgpoolBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         aclIntArray *strides = nullptr;
         aclIntArray *pads = nullptr;

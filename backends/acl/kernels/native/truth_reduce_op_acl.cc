@@ -47,7 +47,7 @@ namespace jittor
     }
 
     void TruthReduceOpRunner::executeOp(
-        std::unordered_map<string, AclOpFunctions>::iterator &it)
+        AclOpRegistry::const_iterator &it)
     {
         std::unique_ptr<aclIntArray, decltype(&aclDestroyIntArray)> dim(
             aclCreateIntArray(attr->axes.data(), attr->axes.size()),

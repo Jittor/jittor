@@ -1,23 +1,30 @@
 # ACL Structure Migration Boundary
 
 The standard ACL workspace/query/execute tail is already centralized in
-`BaseOpRunner::launch`. The remaining 8.06 work is intentionally split into
-three dependent migrations:
+`BaseOpRunner::launch`. Reviewed 2026-09-08: the following three boundaries have
+different implementation status. The board's earlier claim that only type
+erasure remained was too narrow; host schema/cache shells do not establish
+that the production attribute or descriptor paths use them.
 
-- `AclOpFunctions` type erasure: migrate the fields, constructors, registry,
-  and every query consumer as one change; do not replace one field in isolation.
-- Attribute data plumbing: migrate `aclops/_code.py` and its Python callers
+- `AclOpFunctions` type erasure is implemented: one uniform query callback and
+  one checked execute pointer replace the signature-specific slots. Four live
+  query families retain their argument adaptation; other runners keep their
+  already typed direct queries. One immutable registry in `acl_jittor.cc` is
+  shared across translation units. All consumers and preflight signature checks
+  use that registry; no header diagnostic is filtered in host syntax checks.
+- Attribute data plumbing remains: migrate `backends/acl/kernels/ops/_code.py` and its Python callers
   together, preserving generated operator arguments and cache keys.
-- Descriptor caching: establish ownership and invalidation rules before adding
+- Descriptor caching remains: establish ownership and invalidation rules before adding
   shape-keyed caches; do not cache descriptors by shape while addresses remain
   mutable.
 
 `KVCacheMemcpy` is outside this contract. It is a per-token
 `aclrtMemcpyAsync` path without an ACL workspace executor.
 
-The ACL structure migrations require a real Ascend 910B3/CANN run before being
-marked complete. The host-only contract is source/static validation and must
-not be reported as NPU validation; every real run must prove no CPU fallback.
+The user permits code organization to proceed without the missing hardware.
+Host-only evidence can establish that code boundary, but must not be reported
+as NPU validation. Real Ascend 910B3/CANN acceptance remains a separate device
+gate and every such run must prove no CPU fallback.
 
 Candidate attribute owners reviewed for an isolated slice were `triu.diagonal`,
 `softmax.dim`, and `flip.axes`. None is safe to move alone: each currently
@@ -66,7 +73,7 @@ This keeps generated/cache keys stable when a graph is prepared on one host and
 executed or restored on another.
 
 The host-only C++ decoder boundary is now defined in
-`python/jittor/extern/acl/aclops/acl_data_channel.h`. It is one shared decoder
+`backends/acl/include/aclops/acl_data_channel.h`. It is one shared decoder
 boundary. The `BaseOpRunner` helper is the future consumer; the decoder
 validates the
 operator name, schema version, type tag, and required fields before an owner
@@ -76,7 +83,7 @@ wired into an ACL runner until the first owner migrates its schema, generated
 attribute construction, and JIT key atomically.
 
 The Python host-side half of this contract lives in
-`python/jittor/extern/acl/aclops/acl_data.py`. `validate_acl_data()` applies
+`backends/acl/kernels/ops/acl_data.py`. `validate_acl_data()` applies
 schema defaults, rejects unknown or wrongly typed fields, and emits an
 address-independent `canonical_cache_key`. It has no CANN dependency and does
 not change the existing generated `OpAttr` path; the module is therefore safe
@@ -195,8 +202,9 @@ during lease acquisition or teardown.
    key and cache ownership shell above. Define device-side descriptor address
    rebinding and invalidation next, then add the shell to a real ACL runner. A
    shape cache must never reuse a descriptor with a stale address.
-4. Migrate `AclOpFunctions` type erasure only after all query signatures and
-   registry entries have a single launcher representation.
+4. **Implemented:** `AclOpFunctions` uses a uniform erased query plus a checked
+   execute ABI. The immutable registry is defined once; typed runner arguments
+   and the synchronous/asynchronous launch policies are preserved.
 
 The real-device acceptance command is intentionally explicit and must run on
 an Ascend 910B3 after sourcing CANN:

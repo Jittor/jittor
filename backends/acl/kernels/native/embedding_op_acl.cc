@@ -35,7 +35,7 @@ namespace jittor
     {
     }
 
-    void EmbeddingOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void EmbeddingOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         ret = aclnnEmbeddingGetWorkspaceSize(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
 
@@ -48,7 +48,7 @@ namespace jittor
     {
     }
 
-    void EmbeddingBackwardOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void EmbeddingBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<EmbeddingAttr *>(op_attr.get());
         auto numEmbeddings = attr->numEmbeddings;

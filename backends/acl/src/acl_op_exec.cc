@@ -242,11 +242,11 @@ namespace jittor
 
         void run()
         {
-            auto entry = aclOpFuncMap.end();
+            auto entry = acl_op_registry().end();
             if (UsesRegistry)
             {
-                entry = aclOpFuncMap.find(this->name);
-                INTERNAL_ASSERT(entry != aclOpFuncMap.end())
+                entry = acl_op_registry().find(this->name);
+                INTERNAL_ASSERT(entry != acl_op_registry().end())
                     << "ACL launcher disappeared after preflight:" << this->name;
             }
             try
@@ -348,17 +348,16 @@ namespace jittor
             if (op->name() == string("array")) continue;
             const auto name = fused_acl_name(op);
             if (name.empty()) return string("unregistered fused operator variant: ") + op->name() + "/" + S(op->ns);
-            auto found = aclOpFuncMap.find(name);
-            if (found == aclOpFuncMap.end()) return "unregistered ACL launcher: " + name;
-            INTERNAL_ASSERT(found->second.executeFunc) << "Empty registered ACL launcher:" << name;
+            auto found = acl_op_registry().find(name);
+            if (found == acl_op_registry().end()) return "unregistered ACL launcher: " + name;
+            INTERNAL_ASSERT(found->second.launcher()) << "Empty registered ACL launcher:" << name;
             if (op->name() == string("unary") || op->name() == string("contiguous"))
-                INTERNAL_ASSERT(name == "Cast" ? bool(found->second.getWorkspaceSizeFuncCast)
-                                               : bool(found->second.getWorkspaceSizeFuncUnaryNonzero))
+                INTERNAL_ASSERT(found->second.supports(name == "Cast"
+                    ? AclOpFunctions::QueryKind::Cast : AclOpFunctions::QueryKind::Unary))
                     << "Wrong registered unary launcher signature:" << name;
             if (op->name() == string("binary"))
-                INTERNAL_ASSERT(name == "Add" || name == "Sub"
-                    ? bool(found->second.getWorkspaceSizeFuncAdd)
-                    : bool(found->second.getWorkspaceSizeFuncBinary))
+                INTERNAL_ASSERT(found->second.supports(name == "Add" || name == "Sub"
+                    ? AclOpFunctions::QueryKind::Add : AclOpFunctions::QueryKind::Binary))
                     << "Wrong registered binary launcher signature:" << name;
             for (auto *input : op->inputs())
                 if (!acl_has_dtype(input->dtype())) return name + " does not support input dtype " + S(input->dtype());
@@ -728,7 +727,7 @@ namespace jittor
                 USER_CHECK(random->type == ns_uniform || random->type == ns_normal)
                     << "random requires uniform or normal";
                 const string name = random->type == ns_uniform ? "RandomUniform" : "RandomNormal";
-                if (!aclOpFuncMap.count(name)) unsupported = "unregistered ACL launcher: " + name;
+                if (!acl_op_registry().count(name)) unsupported = "unregistered ACL launcher: " + name;
             }
         }
         dispatch_acl_checked(unsupported, [&]

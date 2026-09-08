@@ -35,7 +35,7 @@ namespace jittor
     {
     }
 
-    void LeakyReLUOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void LeakyReLUOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         aclScalar *negativeSlope = nullptr;
 
@@ -53,7 +53,7 @@ namespace jittor
     {
     }
 
-    void LeakyReLUBackwardOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void LeakyReLUBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         aclScalar *negativeSlope = nullptr;
 

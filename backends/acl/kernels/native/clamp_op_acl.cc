@@ -11,7 +11,7 @@ namespace jittor
     }
 
     void ClampTensorOpRunner::executeOp(
-        std::unordered_map<string, AclOpFunctions>::iterator &it)
+        AclOpRegistry::const_iterator &it)
     {
         (void)it;
         ret = aclnnClampTensorGetWorkspaceSize(

@@ -46,7 +46,7 @@ namespace jittor
     static aclScalar *getUnitScalar()
     {
         // aclnn launches asynchronously and may still read the scalar after
-        // executeFunc returns. Cache one immutable scalar per dtype so its
+        // the execute launcher returns. Cache one immutable scalar per dtype so its
         // lifetime covers every queued Add/Sub invocation.
         static UnitScalarHolder<T, DType> holder;
         return holder.scalar;
@@ -58,7 +58,7 @@ namespace jittor
         is_group_op = true;
     }
 
-    void BinaryOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void BinaryOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         aclScalar *alpha = nullptr;
 
@@ -114,15 +114,14 @@ namespace jittor
             }
 
             CHECK_RET(alpha != nullptr, return);
-            ret = it->second.getWorkspaceSizeFuncAdd(inputTensors[0], inputTensors[1], alpha, outputTensors[0], &workspaceSize, &executor);
         }
-        else
-
-        {
-            ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
-        }
-
-        launch(ret, it->second.executeFunc, true);
+        AclWorkspaceArguments args;
+        args.x = inputTensors[0];
+        args.y = inputTensors[1];
+        args.output = outputTensors[0];
+        args.alpha = alpha;
+        ret = it->second.workspace(args, &workspaceSize, &executor);
+        launch(ret, it->second.launcher(), true);
 
         return;
     }

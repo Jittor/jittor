@@ -18,12 +18,10 @@ the stub declares every ``aclnn`` execute entry point with its real
 
 It does not prove the operator is called correctly. The per-operator
 ``aclnnXxxGetWorkspaceSize`` signatures are not knowable without the SDK, so
-they are stubbed variadic. A consequence is that the ``AclOpFunctions``
-constructor overload set in ``acl_jittor.h`` becomes ambiguous against those
-variadic stubs, and that one file always produces diagnostics under the stub.
-Those are filtered by file, and any diagnostic pointing at a requested source
--- or at any other header -- fails the check. Argument-level mistakes in a
-workspace query still need a real Ascend 910B3 build.
+they are stubbed variadic. The registry now explicitly adapts its live query
+families rather than selecting an overloaded constructor. No header diagnostic
+is filtered: a nonzero compiler status always fails. Argument-level mistakes
+in an SDK workspace query still need a real Ascend 910B3 build.
 
 ``--check-launchers`` adds a separate generated translation unit that asserts
 every ``launch(ret, <symbol>, ...)`` site names a function with the exact
@@ -41,10 +39,6 @@ import subprocess
 import sys
 
 import make_cann_stub
-
-# acl_jittor.h holds the aclOpFuncMap table whose overload set cannot be
-# resolved against variadic stubs. Nothing else may report a diagnostic.
-STUB_AMBIGUITY_ONLY = "acl_jittor.h"
 
 DIAGNOSTIC = re.compile(r"^(?P<file>[^\s:][^:]*):(?P<line>\d+):(?P<col>\d+): "
                         r"(?P<kind>error|warning|fatal error):")
@@ -115,12 +109,12 @@ def main():
         unexpected = []
         for line in result.stderr.splitlines():
             match = DIAGNOSTIC.match(line)
-            if match and pathlib.Path(match.group("file")).name != STUB_AMBIGUITY_ONLY:
+            if match:
                 unexpected.append(line)
-        if unexpected:
+        if result.returncode != 0 or unexpected:
             failed = True
             print("FAIL {}".format(source))
-            for line in unexpected:
+            for line in unexpected or result.stderr.splitlines()[:40]:
                 print("  " + line)
         else:
             print("ok   {}".format(source))

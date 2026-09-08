@@ -35,7 +35,7 @@ namespace jittor
     {
     }
 
-    void FlashAttentionOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void FlashAttentionOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<FlashAttentionAttr *>(op_attr.get());
         std::unique_ptr<aclIntArray, decltype(&aclDestroyIntArray)> prefix(
@@ -58,7 +58,7 @@ namespace jittor
     {
     }
 
-    void FlashAttentionBackwardOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void FlashAttentionBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<FlashAttentionAttr *>(op_attr.get());
         std::unique_ptr<aclIntArray, decltype(&aclDestroyIntArray)> prefix(
@@ -81,7 +81,7 @@ namespace jittor
     {
     }
 
-    void IncreFlashAttentionOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void IncreFlashAttentionOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<IncreFlashAttentionAttr *>(op_attr.get());
         aclTensor *keyTensor = nullptr;
@@ -150,7 +150,7 @@ namespace jittor
     {
     }
 
-    void KVCacheMemcpyOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void KVCacheMemcpyOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<KVCacheMemcpyAttr *>(op_attr.get());
         CHECK(in_.size() == 2);

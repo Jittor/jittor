@@ -9,7 +9,7 @@ namespace jittor
 
     protected:
         void setupInputDesc() override;
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
 
     public:
         // aclnn cubeMathType: 0 = KEEP_DTYPE (full fp32, matches torch, default),

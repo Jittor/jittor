@@ -9,7 +9,7 @@ namespace jittor
 
     protected:
         string name; // special to random op
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
 
     public:
         RandomOpRunner();

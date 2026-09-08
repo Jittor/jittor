@@ -10,7 +10,7 @@ namespace jittor
     protected:
         void setupInputDesc() override;
         void setupOutputDesc() override;
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
     public:
         BatchNormOpRunner();
     };
@@ -21,7 +21,7 @@ namespace jittor
     protected:
         void setupInputDesc() override;
         void setupOutputDesc() override;
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
     public:
         BatchNormBackwardOpRunner();
     };
@@ -30,7 +30,7 @@ namespace jittor
     {
 
     protected:
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
     public:
         LayerNormOpRunner();
     };
@@ -39,7 +39,7 @@ namespace jittor
     {
 
     protected:
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
     public:
         LayerNormBackwardOpRunner();
     };
@@ -47,7 +47,7 @@ namespace jittor
     class GroupNormOpRunner : public BaseOpRunner
     {
     protected:
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
     public:
         GroupNormOpRunner();
     };
@@ -55,7 +55,7 @@ namespace jittor
     class GroupNormBackwardOpRunner : public BaseOpRunner
     {
     protected:
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
     public:
         GroupNormBackwardOpRunner();
     };
@@ -64,7 +64,7 @@ namespace jittor
     {
 
     protected:
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
     public:
         RmsNormOpRunner();
     };
@@ -73,7 +73,7 @@ namespace jittor
     {
 
     protected:
-        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
     public:
         RmsNormGradOpRunner();
     };

@@ -37,15 +37,16 @@ namespace jittor
         is_group_op = true;
     }
 
-    void UnaryOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void UnaryOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
-        if (name == "Cast")
-            ret = it->second.getWorkspaceSizeFuncCast(inputTensors[0], get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
-        else
-            ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
+        AclWorkspaceArguments args;
+        args.x = inputTensors[0];
+        args.output = outputTensors[0];
+        if (name == "Cast") args.dtype = get_dtype(out_[0]->dtype());
+        ret = it->second.workspace(args, &workspaceSize, &executor);
 
         // Preserve the historical asynchronous unary path while moving its
         // workspace/execute/error tail behind the common launcher contract.
-        launch(ret, it->second.executeFunc, false);
+        launch(ret, it->second.launcher(), false);
     }
 }

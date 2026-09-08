@@ -35,7 +35,7 @@ namespace jittor
         use_nchw = false;
     }
 
-    void TernaryOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void TernaryOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         ret = aclnnSWhereGetWorkspaceSize(inputTensors[0], inputTensors[1], inputTensors[2], outputTensors[0], &workspaceSize, &executor);
 

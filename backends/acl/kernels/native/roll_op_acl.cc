@@ -14,7 +14,7 @@ namespace jittor
     }
 
     void RollOpRunner::executeOp(
-        std::unordered_map<string, AclOpFunctions>::iterator &it)
+        AclOpRegistry::const_iterator &it)
     {
         auto shifts_array = aclCreateIntArray(shifts.data(), shifts.size());
         auto dims_array = aclCreateIntArray(dims.data(), dims.size());
