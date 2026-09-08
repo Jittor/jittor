@@ -2,13 +2,14 @@
 
 from collections import OrderedDict
 from collections.abc import Mapping
+from typing import Any, cast
 
 
 def _as_parameter(container, value):
     parameter_type = type(container)._parameter_type
     if isinstance(value, parameter_type):
         return value
-    if isinstance(value, type(container)._tensor_base):
+    if isinstance(value, cast(Any, type(container))._tensor_base):
         return parameter_type(value)
     return value
 
@@ -24,7 +25,7 @@ class ParameterListAdapter:
 
     def _var_attrs(self):
         return [(str(index), value) for index, value in enumerate(self._values)
-                if isinstance(value, type(self)._tensor_base)]
+                if isinstance(value, cast(Any, type(self))._tensor_base)]
 
     def __len__(self):
         return len(self._values)
@@ -60,7 +61,7 @@ class ParameterListAdapter:
         return self
 
     def extend(self, values):
-        if isinstance(values, type(self)._tensor_base):
+        if isinstance(values, cast(Any, type(self))._tensor_base):
             raise TypeError("ParameterList.extend expects an iterable of parameters")
         for value in values:
             self.append(value)
@@ -84,7 +85,7 @@ class ParameterDictAdapter:
 
     def _var_attrs(self):
         return [(key, value) for key, value in self._values.items()
-                if isinstance(value, type(self)._tensor_base)]
+                if isinstance(value, cast(Any, type(self))._tensor_base)]
 
     def __len__(self):
         return len(self._values)

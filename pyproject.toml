@@ -122,6 +122,7 @@ files = [
     "compat/torch/distribution_api.py",
     "compat/torch/fidelity.py",
     "compat/torch/nested.py",
+    "compat/torch/parameter_containers.py",
     "compat/torch/_placeholder_context.py",
     "compat/torch/namespace.py",
     "compat/torch/holder_registry.py",
