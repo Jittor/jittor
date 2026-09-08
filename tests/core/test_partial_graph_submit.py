@@ -10,7 +10,7 @@ def test_submit_pending_only_selected_roots_and_returns_identity():
     result = jt.submit_pending(first)
     assert result is first
     # The unrelated graph remains lazy until explicitly submitted.
-    assert not second.is_finished()
+    assert second.location() == "none"
     jt.submit_pending(second, device_sync=True)
     assert np.allclose(first.numpy(), [2., 3.])
     assert np.allclose(second.numpy(), [6., 8.])
