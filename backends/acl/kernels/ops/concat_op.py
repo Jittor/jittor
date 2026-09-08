@@ -18,8 +18,10 @@ from ._code import acl_code as concat_cmd
 
 class ConcatACL:
     def __call__(self, input_tensors, dim=0):
-        assert isinstance(input_tensors, (list, tuple))
-        assert isinstance(dim, int)
+        if not isinstance(input_tensors, (list, tuple)):
+            raise TypeError("Concat expects a list or tuple of tensors")
+        if not isinstance(dim, int):
+            raise TypeError("Concat dimension must be an integer")
         return self.execute(input_tensors, dim)
 
     def execute(self, input_tensors, dim=0):
