@@ -2,6 +2,7 @@
 from contextlib import nullcontext
 from functools import wraps
 from types import MappingProxyType
+from typing import Any, cast
 import jittor as jt
 from jittor import nn
 from ..diagnostics import EXPECTED, swallowed
@@ -109,12 +110,12 @@ class Gumbel:
         return out if out else (1,)
     @_sampling_scope
     def rsample(self, sample_shape=None):
-        u = jt.random(self._sample_shape(sample_shape, self.batch_shape))
+        u = cast(Any, jt.random(self._sample_shape(sample_shape, self.batch_shape)))
         eps = 1e-6
         u = jt.clamp(u, eps, 1.0 - eps)
         loc = self.loc if isinstance(self.loc, jt.Var) else jt.array(self.loc)
         scale = self.scale if isinstance(self.scale, jt.Var) else jt.array(self.scale)
-        return loc - scale * jt.log(-jt.log(u))
+        return cast(Any, loc - cast(Any, scale) * cast(Any, jt.log(-cast(Any, jt.log(u)))))
     @_sampling_scope
     def sample(self, sample_shape=None):
         return self.rsample(sample_shape).stop_grad()
@@ -127,11 +128,11 @@ class RelaxedBernoulli:
             raise ValueError("Either probs or logits must be specified")
         self.temperature = temperature
         if logits is None:
-            probs_v = probs if isinstance(probs, jt.Var) else jt.array(probs)
+            probs_v = cast(Any, probs if isinstance(probs, jt.Var) else jt.array(probs))
             self.probs = probs_v
-            self.logits = jt.log(probs_v) - jt.log(1.0 - probs_v)
+            self.logits = cast(Any, jt.log(probs_v) - cast(Any, jt.log(1.0 - cast(Any, probs_v))))
         else:
-            self.logits = logits if isinstance(logits, jt.Var) else jt.array(logits)
+            self.logits = cast(Any, logits if isinstance(logits, jt.Var) else jt.array(logits))
             self.probs = jt.sigmoid(self.logits)
     @_sampling_scope
     def rsample(self, sample_shape=None):
@@ -142,7 +143,7 @@ class RelaxedBernoulli:
             sample_shape = (sample_shape,)
         else:
             sample_shape = tuple(int(s) for s in sample_shape)
-        u = jt.random(sample_shape + shape)
+        u = cast(Any, jt.random(sample_shape + shape))
         eps = 1e-6
         u = jt.clamp(u, eps, 1.0 - eps)
         temp = self.temperature if isinstance(self.temperature, jt.Var) else jt.array(self.temperature)
@@ -159,7 +160,7 @@ class RelaxedOneHotCategorical:
             raise ValueError("Either probs or logits must be specified")
         self.temperature = temperature
         if logits is None:
-            probs_v = probs if isinstance(probs, jt.Var) else jt.array(probs)
+            probs_v = cast(Any, probs if isinstance(probs, jt.Var) else jt.array(probs))
             self.probs = probs_v / probs_v.sum(-1, keepdims=True)
             self.logits = jt.log(self.probs)
         else:
@@ -174,10 +175,10 @@ class RelaxedOneHotCategorical:
             sample_shape = (sample_shape,)
         else:
             sample_shape = tuple(int(s) for s in sample_shape)
-        u = jt.random(sample_shape + shape)
+        u = cast(Any, jt.random(sample_shape + shape))
         eps = 1e-6
         u = jt.clamp(u, eps, 1.0 - eps)
-        gumbels = -jt.log(-jt.log(u))
+        gumbels = cast(Any, -cast(Any, jt.log(-cast(Any, jt.log(u)))))
         temp = self.temperature if isinstance(self.temperature, jt.Var) else jt.array(self.temperature)
         return nn.softmax((self.logits + gumbels) / temp, dim=-1)
     @_sampling_scope
