@@ -137,7 +137,8 @@ class Bernoulli(Distribution):
     sigmoid (unlike Categorical, where it is softmax -- see the Categorical fix). '''
     def __init__(self, probs=None, logits=None):
         import jittor as jt
-        assert (probs is not None) or (logits is not None)
+        if probs is None and logits is None:
+            raise ValueError("Bernoulli requires probs or logits")
         if logits is not None:
             self.logits = logits
             self.probs = jt.sigmoid(logits)
