@@ -486,7 +486,8 @@ def five_crop(img, size):
     if isinstance(size, numbers.Number):
         size = (int(size), int(size))
     else:
-        assert len(size) == 2, "Please provide only two dimensions (h, w) for size."
+        if len(size) != 2:
+            raise ValueError("Please provide only two dimensions (h, w) for size.")
 
     image_width, image_height = img.size
     crop_height, crop_width = size
@@ -524,7 +525,8 @@ def ten_crop(img, size, vertical_flip=False):
     if isinstance(size, numbers.Number):
         size = (int(size), int(size))
     else:
-        assert len(size) == 2, "Please provide only two dimensions (h, w) for size."
+        if len(size) != 2:
+            raise ValueError("Please provide only two dimensions (h, w) for size.")
 
     first_five = five_crop(img, size)
 
