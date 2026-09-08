@@ -111,7 +111,8 @@ class RandomCropAndResize:
     """
     def __init__(self, size, scale:tuple=(0.08, 1.0), ratio:tuple=(3. / 4., 4. / 3.), interpolation=Image.BILINEAR):
         self.size = _setup_size(size, error_msg="If size is a sequence, it should have 2 values")
-        assert scale[0] <= scale[1] and ratio[0] <= ratio[1]
+        if scale[0] > scale[1] or ratio[0] > ratio[1]:
+            raise ValueError("scale and ratio bounds must be ordered low-to-high")
 
         self.size = size
         self.scale = scale
