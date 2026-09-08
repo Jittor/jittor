@@ -2,6 +2,7 @@
 
 from threading import RLock
 from types import ModuleType
+from typing import Dict
 
 
 class BackendLibraries:
@@ -82,7 +83,7 @@ class BackendLibraries:
             enabled = self._enabled.get(name)
             module = self._modules.get(name)
             loader = self._loaders.get(name)
-        evidence = {
+        evidence: Dict[str, object] = {
             "has_loader": loader is not None,
             "has_enabled_policy": enabled is not None,
             "module_loaded": module is not None,

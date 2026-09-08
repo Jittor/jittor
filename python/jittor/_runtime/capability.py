@@ -49,6 +49,18 @@ import enum
 import glob
 import os
 from types import MappingProxyType
+from typing import TYPE_CHECKING, Dict, Iterable, Mapping, Optional, Tuple
+
+if TYPE_CHECKING:
+    from typing_extensions import Protocol
+
+    class _CapabilityCore(Protocol):
+        def get_device_count(self) -> int: ...
+
+    class _LibraryQueries(Protocol):
+        LIBRARY_NAMES: Iterable[str]
+
+        def probe_library(self, name: str, load: bool = False) -> Tuple[str, str, Mapping[str, object]]: ...
 
 #: Read to decide whether the machine has an NVIDIA driver at all. Chosen
 #: because it is unaffected by ``CUDA_VISIBLE_DEVICES``, by ``nvcc_path`` and
@@ -92,8 +104,14 @@ class Capability:
     """One capability question and the evidence behind its answer."""
 
     __slots__ = ("_name", "_kind", "_state", "_reason", "_evidence")
+    _name: str
+    _kind: str
+    _state: CapabilityState
+    _reason: str
+    _evidence: Mapping[str, object]
 
-    def __init__(self, name, kind, state, reason, evidence=None):
+    def __init__(self, name: str, kind: str, state: CapabilityState, reason: str,
+                 evidence: Optional[Mapping[str, object]] = None):
         if not isinstance(state, CapabilityState):
             raise TypeError("state must be a CapabilityState, got %r" % (state,))
         if not reason:
@@ -286,6 +304,11 @@ class Capabilities:
     """
 
     __slots__ = ("_build_config", "_compiler", "_core", "_extern", "_libraries")
+    _build_config: object
+    _compiler: object
+    _core: "_CapabilityCore"
+    _extern: object
+    _libraries: "_LibraryQueries"
 
     def __init__(self, build_config, compiler, core, extern, libraries):
         object.__setattr__(self, "_build_config", build_config)
@@ -430,7 +453,7 @@ class Capabilities:
                 "unknown backend library %r; known: %s"
                 % (name, ", ".join(self.libraries())))
 
-        evidence = {"load_requested": bool(load)}
+        evidence: Dict[str, object] = {"load_requested": bool(load)}
 
         # A library cannot be usable if the accelerator under it is not.
         accelerator_name = LIBRARY_ACCELERATOR.get(name)

@@ -1,6 +1,7 @@
 """Native dtype names at Python, NumPy and code-generation boundaries."""
+from typing import Tuple
 
-_python_dtype_types = ()
+_python_dtype_types: Tuple[type, ...] = ()
 
 
 def register_dtype_type(dtype_type):

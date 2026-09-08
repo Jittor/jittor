@@ -11,10 +11,10 @@
 """Named tuple results shared by public linear algebra functions."""
 from collections import namedtuple
 
-SVD = namedtuple("svd", ["U", "S", "Vh"])
-INVEX = namedtuple("inv_ex", ["inverse", "info"])
+svd = namedtuple("svd", ["U", "S", "Vh"])
+inv_ex = namedtuple("inv_ex", ["inverse", "info"])
 
 # The canonical result module can expose the original tuple type names without
 # colliding with the public functions of the same names.
-svd = SVD
-inv_ex = INVEX
+SVD = svd
+INVEX = inv_ex

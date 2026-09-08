@@ -9,10 +9,14 @@
 # ***************************************************************
 import math
 import warnings
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from jittor import Var
 
 
 def trunc_normal_(var, mean=0., std=1., a=-2., b=2.):
-    # type: (jt.jittor_core.Var, float, float, float, float) -> jt.jittor_core.Var
+    # type: (Var, float, float, float, float) -> Var
     r"""Fills the input jt.jittor_core.Var with values drawn from a truncated
     normal distribution. The values are effectively drawn from the
     normal distribution :math:`\mathcal{N}(\text{mean}, \text{std}^2)`

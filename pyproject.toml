@@ -122,7 +122,7 @@ files = [
 ]
 mypy_path = "python"
 follow_imports = "skip"
-follow_imports_for_stubs = true
+follow_imports_for_stubs = false
 ignore_missing_imports = true
 check_untyped_defs = true
 no_implicit_optional = true

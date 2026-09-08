@@ -12,8 +12,8 @@ def _snapshot_value(value, immutable=False):
         values = {key: _snapshot_value(item, immutable) for key, item in value.items()}
         return MappingProxyType(values) if immutable else values
     if isinstance(value, (list, tuple)):
-        values = [_snapshot_value(item, immutable) for item in value]
-        return tuple(values) if immutable else values
+        items = [_snapshot_value(item, immutable) for item in value]
+        return tuple(items) if immutable else items
     return value
 
 

@@ -177,6 +177,8 @@ class _AliasLoader(importlib.abc.Loader):
         return module
 
     def exec_module(self, module):
+        if self.metadata is None:
+            raise ImportError("alias loader must create the canonical module before execution")
         module.__name__, module.__package__, module.__loader__, module.__spec__ = self.metadata
         _publish_alias(self.alias, module)
         if self.canonical in _PACKAGE_TARGETS:

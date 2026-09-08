@@ -7,10 +7,23 @@ Snapshots are detached observations, not an atomic process-wide checkpoint.
 from collections import namedtuple
 from collections.abc import Mapping
 import operator
+from typing import TYPE_CHECKING, FrozenSet, Sequence
 
-from .capability import Capability, CapabilityState
+from .capability import Capabilities, Capability, CapabilityState
 from .flag_policy import RUNTIME_FLAGS, STARTUP_FLAGS
-from .state import _snapshot_value
+from .state import RuntimeContext, _snapshot_value
+
+if TYPE_CHECKING:
+    from typing_extensions import Protocol
+
+    class _NativeObservations(Protocol):
+        def known_backends(self) -> Sequence[str]: ...
+        def registered_backends(self) -> Sequence[str]: ...
+        def backend_device_count(self, name: str) -> int: ...
+        def number_of_hold_vars(self) -> int: ...
+        def number_of_lived_vars(self) -> int: ...
+        def number_of_lived_ops(self) -> int: ...
+        def async_launch_history(self, backend: str, device: int, stream: int) -> str: ...
 
 
 class _ReadOnly:
@@ -46,6 +59,8 @@ class DeviceInventory(namedtuple("DeviceInventory", "capability devices")):
 class CapabilityQueries(_ReadOnly):
     """Backend/visible-device registry plus existing library capability evidence."""
     __slots__ = ("_capability", "_core")
+    _capability: Capabilities
+    _core: "_NativeObservations"
 
     def __init__(self, capability, core):
         object.__setattr__(self, "_capability", capability)
@@ -108,6 +123,8 @@ class CapabilityQueries(_ReadOnly):
 class PolicyValues(_ReadOnly, Mapping):
     """Live named policy values; mutable containers are returned frozen."""
     __slots__ = ("_source", "_names")
+    _source: object
+    _names: FrozenSet[str]
 
     def __init__(self, source, names):
         object.__setattr__(self, "_source", source)
@@ -146,6 +163,8 @@ class PolicySnapshot(namedtuple("PolicySnapshot", "startup runtime")):
 
 class EffectivePolicy(_ReadOnly):
     __slots__ = ("startup", "runtime")
+    startup: PolicyValues
+    runtime: PolicyValues
 
     def __init__(self, config, context):
         object.__setattr__(self, "startup", PolicyValues(config, STARTUP_FLAGS))
@@ -171,6 +190,8 @@ class CounterSnapshot(namedtuple("CounterSnapshot", "exec_calls allocator held_v
 
 class Counters(_ReadOnly):
     __slots__ = ("_context", "_core")
+    _context: RuntimeContext
+    _core: "_NativeObservations"
 
     def __init__(self, context, core):
         object.__setattr__(self, "_context", context)
@@ -209,6 +230,7 @@ class Counters(_ReadOnly):
 class Diagnostics(_ReadOnly):
     """Detached diagnostic text; querying never submits work or waits for a device."""
     __slots__ = ("_core",)
+    _core: "_NativeObservations"
 
     def __init__(self, core):
         object.__setattr__(self, "_core", core)
@@ -233,6 +255,10 @@ class Diagnostics(_ReadOnly):
 class Introspection(_ReadOnly):
     """The supported jt.introspection read-only capability/policy/counter API."""
     __slots__ = ("capabilities", "policy", "counters", "diagnostics")
+    capabilities: CapabilityQueries
+    policy: EffectivePolicy
+    counters: Counters
+    diagnostics: Diagnostics
 
     def __init__(self, capability, config, runtime, core):
         object.__setattr__(self, "capabilities", CapabilityQueries(capability, core))

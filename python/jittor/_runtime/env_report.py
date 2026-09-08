@@ -30,6 +30,7 @@ functions of the rows the core hands over.
 """
 
 import warnings
+from typing import Dict, Tuple
 
 from jittor_utils import env_config
 
@@ -58,7 +59,7 @@ def merge_rows(*row_groups):
     to decide its own verbosity, so a naive concatenation reported it twice and
     made the count wrong.
     """
-    merged = {}
+    merged: Dict[str, Tuple[str, str, object, str]] = {}
     for rows in row_groups:
         for name, variable, value, kind in rows:
             merged.setdefault(name, (name, variable, value, kind))

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from functools import wraps
 import sys
 import threading
-from typing import NamedTuple
+from typing import Any, Callable, Dict, FrozenSet, List, NamedTuple, Optional, Tuple
 
 
 class DispatchContext(NamedTuple):
@@ -23,15 +23,15 @@ class DispatchContext(NamedTuple):
 
 @dataclass(frozen=True)
 class KernelRegistration:
-    implementation: object
-    dtypes: object = None
-    supports: object = None
+    implementation: Callable[..., Any]
+    dtypes: Optional[FrozenSet[str]] = None
+    supports: Optional[Callable[..., bool]] = None
     priority: int = 0
-    runtime_modes: object = None
+    runtime_modes: Optional[FrozenSet[int]] = None
 
 
 _lock = threading.RLock()
-_kernels = {}
+_kernels: Dict[Tuple[str, str], Tuple[KernelRegistration, ...]] = {}
 
 
 def _canonical_backend(backend):
@@ -77,7 +77,7 @@ def dispatch_context(*args, **kwargs):
     if native is None or not hasattr(native, "core"):
         raise RuntimeError("Jittor must be initialized before selecting a kernel")
     var_type = native.core.Var
-    tensors = []
+    tensors: List[Any] = []
     # `args` and `kwargs` are freshly built by this call, so neither can be
     # reachable from itself and neither needs an entry in the cycle set.
     _collect_tensors(args, var_type, tensors, None)
