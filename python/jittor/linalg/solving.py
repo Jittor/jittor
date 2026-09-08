@@ -161,8 +161,8 @@ def matrix_power(x, n):
             n = n.__index__()
         else:
             raise TypeError("matrix_power: exponent 'n' must be an integer")
-    assert x.shape[-2] == x.shape[-1], \
-        "matrix_power expects square matrices (last two dims equal)"
+    if x.shape[-2] != x.shape[-1]:
+        raise ValueError("matrix_power expects square matrices (last two dims equal)")
 
     if n == 0:
         # batched identity, broadcast to x's batch shape and dtype
