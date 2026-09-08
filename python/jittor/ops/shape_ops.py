@@ -341,7 +341,8 @@ def view_as(x,y):
 
 
 def diag(x,diagonal=0):
-    assert x.ndim==1 or (x.ndim==2 and x.shape[0]==x.shape[1])
+    if not (x.ndim == 1 or (x.ndim == 2 and x.shape[0] == x.shape[1])):
+        raise ValueError("diag: input must be a vector or square matrix")
     d = diagonal if diagonal>=0 else -diagonal
     d_str = f'+{diagonal}' if diagonal>=0 else f'{diagonal}'
 
@@ -361,10 +362,14 @@ def diagonal(x, offset=0, dim1=0, dim2=1):
             msg = f"Dimension out of range (expected to be in range of [{-rank}, {rank - 1}], but got {d})"
             raise IndexError(msg)
         return d
-    assert x.ndim >= 2, f"diagonal dimensions requires ndim larger than 2, but got {x.ndim}"
+    if x.ndim < 2:
+        raise ValueError(
+            "diagonal dimensions requires ndim larger than 2, but got {}".format(x.ndim)
+        )
     dim1 = __normalize_dim(dim1, x.ndim)
     dim2 = __normalize_dim(dim2, x.ndim)
-    assert dim1 != dim2, f"diagonal dimensions cannot be identical {dim1}, {dim2}"
+    if dim1 == dim2:
+        raise ValueError("diagonal dimensions cannot be identical {}".format(dim1))
 
     if offset >= 0:
         diag_size = max(min(x.shape[dim1], x.shape[dim2] - offset), 0)
