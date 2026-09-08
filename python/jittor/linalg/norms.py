@@ -35,8 +35,8 @@ def matrix_rank(x, tol=None, hermitian=False):
     from .decompositions import eigh
     from .decompositions import svd
     if hermitian:
-        assert x.shape[-2] == x.shape[-1], \
-            "matrix_rank(hermitian=True) expects square matrices"
+        if x.shape[-2] != x.shape[-1]:
+            raise ValueError("matrix_rank(hermitian=True) expects square matrices")
         w, _ = eigh(x)
         s = jt.abs(w)
     else:
@@ -95,7 +95,8 @@ def matrix_norm(x, ord='fro', dim=(-2, -1), keepdim=False):
     nd = len(x.shape)
     d0 = d0 % nd
     d1 = d1 % nd
-    assert d0 != d1, "matrix_norm: dim must reference two distinct axes"
+    if d0 == d1:
+        raise ValueError("matrix_norm: dim must reference two distinct axes")
 
     def _restore(res, reduced_axes):
         # re-insert size-1 axes so keepdim=True lines up with the input rank
