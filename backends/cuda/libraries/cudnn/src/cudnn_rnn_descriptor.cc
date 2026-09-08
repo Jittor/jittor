@@ -68,13 +68,13 @@ struct cudnn_rnn_dropout_initer {
 // that the one query does need are destroyed.
 struct RnnReserveKey {
     int mode, input_size, hidden_size, num_layers, seq_length, batch_size;
-    int bidirectional, has_dropout, dtype;
+    int bidirectional, has_dropout, dtype, math_type;
     bool operator==(const RnnReserveKey& o) const {
         return mode == o.mode && input_size == o.input_size
             && hidden_size == o.hidden_size && num_layers == o.num_layers
             && seq_length == o.seq_length && batch_size == o.batch_size
             && bidirectional == o.bidirectional && has_dropout == o.has_dropout
-            && dtype == o.dtype;
+            && dtype == o.dtype && math_type == o.math_type;
     }
 };
 
@@ -83,7 +83,7 @@ struct RnnReserveKeyHash {
         size_t h = 1469598103934665603ull;
         for (int v : {k.mode, k.input_size, k.hidden_size, k.num_layers,
                       k.seq_length, k.batch_size, k.bidirectional,
-                      k.has_dropout, k.dtype})
+                      k.has_dropout, k.dtype, k.math_type})
             h = (h ^ (size_t)(uint32)v) * 1099511628211ull;
         return h;
     }
@@ -96,7 +96,7 @@ size_t cudnn_rnn_reserve_space_size(string mode, int input_size, int hidden_size
         int seq_length, int batch_size, cudnnDataType_t dtype) {
     RnnReserveKey key{(int)rnn_string_to_rnn_mode(mode), input_size, hidden_size,
         num_layers, seq_length, batch_size, (int)bidirectional,
-        dropout > 0 ? 1 : 0, (int)dtype};
+        dropout > 0 ? 1 : 0, (int)dtype, (int)rnn_math_type(dtype)};
     auto iter = rnn_reserve_cache.find(key);
     if (iter != rnn_reserve_cache.end()) return iter->second;
 

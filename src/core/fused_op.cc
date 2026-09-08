@@ -43,6 +43,7 @@ void FusedOp::update_jit_key() {
 }
 
 void FusedOp::update_ops() {
+    if (!ops.empty()) float32_precision = ops.back()->float32_precision;
     loop_options_merged.clear();
     loop_options_tuned.clear();
     loop_options = loop_options_origin = nullptr;
@@ -114,6 +115,7 @@ FusedOp::FusedOp() {
 }
 
 FusedOp::FusedOp(const FusedOp& other) {
+    float32_precision = other.float32_precision;
     Op::number_of_lived_ops--;
     set_flag(OpFlags::_cpu, other.flag(OpFlags::_cpu));
     set_flag(OpFlags::_cuda, other.flag(OpFlags::_cuda));

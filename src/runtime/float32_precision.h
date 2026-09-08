@@ -35,6 +35,7 @@
 // tier used to silently cost accuracy that nobody asked to spend.
 #include "core/common.h"
 #include "utils/log.h"
+#include "runtime/jit_policy.h"
 
 namespace jittor {
 
@@ -49,8 +50,29 @@ DECLARE_FLAG(int, use_tensorcore);
 DECLARE_FLAG(int, cuda_allow_tf32);
 DECLARE_FLAG(int, cuda_allow_cudnn_tf32);
 
-// `float32_matmul_precision` parsed once, by its setter, so an op reads an int.
-EXTERN_LIB int float32_matmul_precision_tier;
+// A frontend's explicit operation policy, or native FollowRuntime (-1/-1).
+struct Float32PrecisionPolicy {
+    int matmul = -1;
+    int cudnn = -1;
+    bool operator==(const Float32PrecisionPolicy& other) const {
+        return matmul == other.matmul && cudnn == other.cudnn;
+    }
+    bool operator!=(const Float32PrecisionPolicy& other) const { return !(*this == other); }
+};
+
+EXTERN_LIB Float32PrecisionPolicy current_float32_precision_policy();
+EXTERN_LIB void set_float32_precision_policy(Float32PrecisionPolicy policy);
+struct Float32PrecisionScope {
+    Float32PrecisionPolicy previous;
+    explicit Float32PrecisionScope(Float32PrecisionPolicy policy)
+        : previous(current_float32_precision_policy()) { set_float32_precision_policy(policy); }
+    ~Float32PrecisionScope() { set_float32_precision_policy(previous); }
+    Float32PrecisionScope(const Float32PrecisionScope&) = delete;
+    Float32PrecisionScope& operator=(const Float32PrecisionScope&) = delete;
+};
+
+// @pyjt(float32_precision_state)
+vector<string> float32_precision_state();
 
 inline const char* float32_precision_tier_name(int tier) {
     switch (tier) {
@@ -86,7 +108,9 @@ inline int raise_tier(int tier, int floor) { return tier > floor ? tier : floor;
 
 /// Effective tier for a float32 matmul.
 inline int float32_matmul_tier() {
-    int tier = raise_tier(float32_matmul_precision_tier, legacy_tensorcore_tier());
+    auto policy = current_float32_precision_policy();
+    if (policy.matmul >= 0) return policy.matmul;
+    int tier = raise_tier(runtime_jit_policy().float32_matmul_precision_tier, legacy_tensorcore_tier());
     if (cuda_allow_tf32) tier = raise_tier(tier, F32_HIGH);
     return tier;
 }
@@ -100,7 +124,9 @@ inline int float32_matmul_tier() {
 /// reference: the gradients were 2.3e-04 out where jittor's own CPU
 /// recurrence was 1.2e-07.
 inline int float32_cudnn_tier() {
-    int tier = raise_tier(float32_matmul_precision_tier, legacy_tensorcore_tier());
+    auto policy = current_float32_precision_policy();
+    if (policy.cudnn >= 0) return policy.cudnn;
+    int tier = raise_tier(runtime_jit_policy().float32_cudnn_precision_tier, legacy_tensorcore_tier());
     if (cuda_allow_cudnn_tf32) tier = raise_tier(tier, F32_HIGH);
     return tier;
 }

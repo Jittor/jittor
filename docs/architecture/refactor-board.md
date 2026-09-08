@@ -1,6 +1,6 @@
 # 整改看板
 
-2026-09-08 最新：本地收口8.12，已有259条“已合并”，剩15条代码/性能记录，另有9条硬件验收、5条并入其他任务和3条已合并但验收有保留的记录；父项与派生项存在重叠。Torch只安装独立前端，旧native别名路径移除，CPU-only正式入口和已有CUDA构建回归通过，见[最新证据](../results/2026-09-08-single-torch-frontend.md)。源码/包/测试布局已收齐；后端缓存生命周期已收齐；下一步完成内省消费者、精度策略与剩余功能，性能后移。按用户要求不push，远端c618d841d仍为255条已合并；vLLM位于本仓adapters/jittor_adapters/vllm。
+2026-09-08 最新：本地收口8.12、7.19、7.20，已有261条“已合并”，剩13条代码/性能记录，另有9条硬件验收、5条并入其他任务和3条已合并但验收有保留的记录；父项与派生项存在重叠。Torch只安装独立前端，旧native别名路径移除，CPU-only正式入口和已有CUDA构建回归通过，见[最新证据](../results/2026-09-08-single-torch-frontend.md)。源码/包/测试布局已收齐；后端缓存生命周期与精度策略已收齐；下一步完成内省消费者、ACL属性通道与剩余功能，性能后移。按用户要求不push，远端c618d841d仍为255条已合并；vLLM位于本仓adapters/jittor_adapters/vllm。
 
 下方早期波次记录为历史证据，当前关闭状态以任务表为准；Tensor 子类底层前置见 [类型边界记录](../results/2026-09-08-tensor-frontend-types.md)。
 
@@ -727,8 +727,8 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.17 | `runtime.enable()` 只把 shim 的 site 目录加进 sys.path … | 已合并 | 兼容层分区 | d5c769fb |
 | 7.18 | 布局收尾 | 已合并 | coord（本地） | 顶层compat独立distribution与扩展资源打包已完成。按用户2026-09-08修订，vLLM七个生产文件已移入adapters/jittor_adapters/vllm，复用jittor-torch-adapters；独立repo/远端发布不是前置。具名EP保留before/after import与事务，core/compat不带vLLM实现。三包构建与文件交集检查、20个host节点和原adapters4项通过；整合后真实jt.nn公开接口节点1passed。按用户要求仅本地合并，不push；7.12的legacy语义清理仍独立跟踪，不由包布局完成代替。见[提取记录](../results/2026-09-08-vllm-independent-distribution.md)。 |
 | 7.21 | `compat/vllm` 只经公开入口使用 jittor | 已合并 | gatecheck | `71adc134`。新增 `jt.nn.qk_rms_norm_rotary` 与 `jt.nn.has_qk_rms_norm_rotary`，`compat/vllm/layers.py` 不再 import `jittor.nn.backends.hooks`。拆成两个入口是为了让非融合路径不必为「问一句有没有」先付一次 cos/sin cache 的 cast。`tests/nn/test_serving_ops.py` 12 passed（新增 3 条覆盖无后端／后端按序收到全部实参／后端拒绝输入）、vllm 与 nn 结构合计 29 passed。本机无 CANN/NPU，ACL 融合分支未实机执行，行为与改前一致（两处都在 hook 为 None 时短路） |
-| 7.19 | 精度策略接线：Jittor 一档、torch 两档，底层 matmul/conv 分字段 | 待领 | | 依赖 8.03、7.08；需保持 shim 的卷积与 matmul 语义分离 |
-| 7.20 | fp32 RNN 默认精度与 torch `cudnn.allow_tf32` 映射 | 待领 | | 依赖 8.03、7.19；需 CPU 递推与真实 CUDA 对拍 |
+| 7.19 | 精度策略接线：Jittor 一档、torch 两档，底层 matmul/conv 分字段 | 已合并 | coord | 2026-09-08：native Runtime 保留一个同时设置 matmul/cuDNN 的入口，Torch context 持有独立 highest/high/medium matmul 与 cuDNN 策略，互不改写。线程局部 frontend scope 与每个 Op 捕获策略接通建图、融合、编译、执行及梯度；无 Tensor 参数的查询也受 scope 管理，退出/异常恢复。真实 CUDA pending matmul/conv、策略隔离及既有映射共用本批 17 passed、0 skipped；详见[精度记录](../results/2026-09-08-frontend-precision-isolation.md)。 |
+| 7.20 | fp32 RNN 默认精度与 torch `cudnn.allow_tf32` 映射 | 已合并 | coord | 2026-09-08：native 默认 highest，Torch cuDNN 默认 high；RNN descriptor 按所属 frontend 策略选 math type，reserve-space 与权重 offset 缓存包含精度。修复独立 Torch 中 flatten 权重的常量零缓冲切断参数梯度的问题，数学与布局保持不变。5 步 CUDA LSTM 输出、输入梯度和四类参数梯度对 CPU float64 递推：native/torch strict 最大归一误差 2.24003e-7，Torch TF32 5.36036e-4；本批集中 17 passed、0 skipped。详见[精度记录](../results/2026-09-08-frontend-precision-isolation.md)。 |
 | 8.01 | 描述符与 workspace 一律 RAII | 已合并 | cudabk | afb08e88 |
 | 8.02 | 集合通信走通信流加事件依赖，支持 `GroupStart/End` 桶化 | 并入 硬件验收 | dist | NCCL 部分已合并并有两卡证据；HCCL 同步优化按用户授权并入 Ascend 910B3/CANN 硬件验收，保留上机清单 `agent/manuals/hccl-on-device-verification.md`。 |
 | 8.03 | 精度策略收敛 | 已合并 | cudabk | dab0690c |

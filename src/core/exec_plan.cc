@@ -81,6 +81,7 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
             if (has_gopt(n)) {
                 ExecutionBackendScope backend_scope(n->op()->requested_backend());
                 TensorPlacementScope placement_scope(n->op()->graph_placement());
+                Float32PrecisionScope precision_scope(n->op()->float32_precision);
                 n->op()->graph_optimize();
                 n->op()->set_flag(OpFlags::_has_gopt, 0);
             }

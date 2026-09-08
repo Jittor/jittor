@@ -161,6 +161,7 @@ struct RnnDescriptor {
         int num_layers, float dropout, bool bidirectional, cudnnDataType_t dataType)
         : handle(handle), dataType(dataType) {
         checkCudaErrors(cudnnCreateRNNDescriptor(&desc));
+        const auto math_type = rnn_math_type(dataType);
         checkCudaErrors(cudnnSetRNNDescriptor_v8(
             desc,
             CUDNN_RNN_ALGO_STANDARD,
@@ -177,7 +178,7 @@ struct RnnDescriptor {
             dataType,
             // v6 needed a second call (cudnnSetRNNMatrixMathType, gone in
             // cuDNN 9); v8 takes it here.
-            rnn_math_type(dataType),
+            math_type,
             input_size,
             hidden_size,
             // projSize == hiddenSize is "no projection". jittor asserts
@@ -189,6 +190,8 @@ struct RnnDescriptor {
             // padded, so cuDNN need not look for padding.
             CUDNN_RNN_PADDED_IO_DISABLED
         ));
+        LOGvvv << "rnn precision select: precision=" >> float32_precision_tier_name(float32_cudnn_tier())
+            << "mathType=" >> cudnn_math_type_name(static_cast<int>(math_type));
     }
 
     RnnDescriptor(const RnnDescriptor&) = delete;

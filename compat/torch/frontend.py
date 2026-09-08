@@ -6,6 +6,17 @@ from functools import update_wrapper
 from types import MethodType
 
 
+def _frontend_precision_policy(cls):
+    """Read this frontend's two native accumulation tiers without flag writes."""
+    from .context import get_install_context
+    state = get_install_context(cls._frontend_backend).state.get("cuda_runtime")
+    if state is None:
+        # Type creation precedes CUDA facade publication during installation.
+        return (0, 1)
+    tiers = {"highest": 0, "high": 1, "medium": 2}
+    return tiers[state.matmul_precision], tiers[state.cudnn_precision]
+
+
 def _default_tensor_dtype(backend):
     from .tensor_state import compatibility_owner
     from .types import _dtype_to_str
@@ -51,13 +62,17 @@ def tensor_frontend(tensor_type, *, device=None, like=None):
         return
     token = backend.core._set_tensor_frontend_type(tensor_type)
     placement_token = None
+    precision_token = None
     try:
+        precision_token = backend.core._set_float32_precision(*tensor_type._frontend_precision_policy())
         placement = _placement_request(backend, device, like)
         if placement is not None:
             placement_token = backend.core._set_tensor_placement(*placement)
         with backend.autograd.policy_scope(backend.autograd.EXPLICIT_REQUIRES_GRAD):
             yield
     finally:
+        if precision_token is not None:
+            backend.core._reset_float32_precision(precision_token)
         if placement_token is not None:
             backend.core._reset_tensor_placement(placement_token)
         backend.core._reset_tensor_frontend_type(token)
@@ -121,6 +136,7 @@ def make_tensor_type(backend):
         "__slots__": ("__weakref__",),
         "_frontend_backend": backend,
         "_frontend_autograd_policy": 3,
+        "_frontend_precision_policy": classmethod(_frontend_precision_policy),
         "clone": clone,
         **tensor_object_properties(),
     })

@@ -81,6 +81,7 @@ VarPtr make_grad(Op* op, Var* out, Var* dout, Var* x, int x_index) {
     LOGvvvv << "Make grad op:" >> op->name() << "inputs:" >> op->inputs()
         << "out:" >> out << "dout:" >> dout << "x:" >> x << "xid:" >> x_index;
     AmpGradGuard agg(op);
+    Float32PrecisionScope precision_scope(op->float32_precision);
     auto dx = op->grad(out, dout, x, x_index);
     // A null dx is an ordinary path, not an error: floor/round/ceil, mod,
     // floor_divide, the bitwise ops and the default Op::grad all return one.
@@ -293,6 +294,7 @@ vector<VarPtr> grad(
                 trace_grad_op = op;
                 {
                     AmpGradGuard agg(op);
+                    Float32PrecisionScope precision_scope(op->float32_precision);
                     op->grads(douts, dins);
                 }
                 for (int i=0; i<n_i; i++) {

@@ -39,8 +39,12 @@ sets `CUDNN_DATA_FLOAT`) declared a third.
 
 ## What it is
 
-`jt.flags.float32_matmul_precision`, on torch's scale, read by matmul and
-convolution alike:
+The native `float32_matmul_precision` Runtime setting writes both native
+matmul and cuDNN tiers. The independent Torch frontend owns a separate pair:
+`torch.set_float32_matmul_precision()` changes only matmul, while
+`torch.backends.cudnn.allow_tf32` changes only cuDNN (convolution and RNN).
+Torch defaults to `highest` matmul and `high` cuDNN; native defaults to
+`highest` for both. Neither frontend's setters mutate the other's state.
 
 | tier | cuBLAS compute type | cuDNN math type | meaning |
 | --- | --- | --- | --- |
@@ -59,10 +63,27 @@ a reduced-precision compute type was requested — rather than being selected
 separately, which is how the two came to be chosen with opposite senses
 (6.B05).
 
-Where it lives: `src/misc/float32_precision.h` (the tiers and the flag),
-`extern/cuda/cublas/inc/cublas_compute_type.h` (one `cublas_gemm_mode` for
-all three gemm ops), `extern/cuda/cudnn/inc/cudnn_wrapper.h`
+Where it lives: `src/runtime/float32_precision.{h,cc}` (policy and scopes),
+`backends/cuda/libraries/cublas/include/cublas_compute_type.h` (one `cublas_gemm_mode` for
+all three gemm ops), `backends/cuda/libraries/cudnn/include/cudnn_wrapper.h`
 (`cudnn_conv_compute_type` and `cudnn_conv_math_type` for all six conv ops).
+
+## Delayed graphs and frontend boundaries
+
+The native Runtime stores separate matmul and cuDNN tier fields. A Torch
+binding enters a thread-local pair resolved from its install context; native
+calls retain the existing Runtime-following policy. Each Op captures the
+pair at construction. Fusion requires equal pairs; graph rewriting,
+parallel compilation, execution and native backward construction restore
+the captured pair. Thus changing a Torch switch after constructing a lazy
+graph cannot silently change that graph's requested library precision.
+These scopes do not mutate global flags or synchronize pending tensors.
+
+The cuDNN RNN descriptor uses the same cuDNN tier as convolution. Its reserve
+space key includes the selected math type, and Python's flattened-weight
+offset cache includes the cuDNN tier rather than the unrelated matmul tier.
+Float32 native RNN selects FMA by default; Torch's default cuDNN setting
+permits TF32. Half/bfloat16 accumulation rules remain unchanged.
 
 ## The default is unchanged, deliberately
 
@@ -93,11 +114,12 @@ makes the policy the whole answer. `use_tensorcore=3` folds into `medium`:
 same on every tensor-core generation and bfloat16 keeps float32's exponent
 range, so the float16 variant was strictly the worse of the two.
 
-They are kept rather than merged because torch's own API has two independent
-switches — `torch.backends.cudnn.allow_tf32` defaults to True while
-`torch.backends.cuda.matmul.allow_tf32` defaults to False. Collapsing them
-into one Jittor flag would mean any framework that touches the cuDNN switch
-silently drops every matmul to tf32 as well.
+These deprecated overrides apply only to native Runtime-following calls.
+Torch's explicit context pair bypasses them, so native legacy flags cannot
+raise the precision tier of an independent Torch operation. Torch's
+high/medium boolean-toggle roundtrip remains the shim's documented
+approximation; it does not claim to reproduce PyTorch 2.12's rejection of
+mixed old/new precision-control APIs.
 
 ## Reading the choice back
 

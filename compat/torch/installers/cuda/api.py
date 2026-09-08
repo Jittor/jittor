@@ -207,9 +207,9 @@ class _DeviceProps:
 #: ``matmul.allow_tf32 = True`` never touched.
 #:
 #: tests/compat/torch/test_torch_backends_tf32.py drives this table.
-_TF32_FLAGS = {
-    "matmul": "cuda_allow_tf32",
-    "cudnn": "cuda_allow_cudnn_tf32",
+_PRECISION_FIELDS = {
+    "matmul": "matmul_precision",
+    "cudnn": "cudnn_precision",
 }
 
 #: The two ``fp32_precision`` values this layer can actually deliver. torch
@@ -218,40 +218,33 @@ _TF32_FLAGS = {
 _FP32_PRECISIONS = ("ieee", "tf32")
 
 
-#: Where a domain's setting lives on a build that has no such ``jt.flags``
-#: entry -- a CPU-only or pre-CUDA Jittor. Without it, ``cudnn.allow_tf32 =
-#: True`` there was a silent no-op that read back ``False``: the caller asked
-#: for something, got no error, and got the opposite answer. Real torch on a
-#: CPU-only build round-trips the setting too (inert, but honest), and keeping
-#: it here is what lets the six spellings agree on *every* build rather than
-#: only where the flags happen to exist.
-_TF32_FALLBACK = {}
-
-
 def _tf32_get(domain):
     """Whether reduced-precision fp32 math is enabled for ``domain``."""
-    flag = _TF32_FLAGS[domain]
-    if hasattr(jt.flags, flag):
-        enabled = bool(getattr(jt.flags, flag))
-    else:
-        enabled = bool(_TF32_FALLBACK.get(domain, False))
-    if domain == "matmul":
-        # Ascend spells the same idea hf32, and it is not a jt.flags entry.
-        enabled = enabled or bool(getattr(jt, "acl_allow_hf32", False))
-    return enabled
+    return getattr(_cuda_runtime(), _PRECISION_FIELDS[domain]) != "highest"
 
 
 def _tf32_set(domain, value):
     """Point every spelling of ``domain``'s switch at ``value``."""
     enabled = bool(value)
-    flag = _TF32_FLAGS[domain]
-    if hasattr(jt.flags, flag):
-        setattr(jt.flags, flag, int(enabled))
-    else:
-        _TF32_FALLBACK[domain] = enabled
-    if domain == "matmul":
-        jt.acl_allow_hf32 = enabled
+    tier = _cuda_runtime().matmul_refinement if domain == "matmul" else "high"
+    _set_precision_tier(domain, tier if enabled else "highest")
     return enabled
+
+
+def _set_precision_tier(domain, tier):
+    from ....transaction import current_transaction
+    state = _cuda_runtime()
+    field = _PRECISION_FIELDS[domain]
+    transaction = current_transaction()
+    if transaction is None:
+        setattr(state, field, tier)
+    else:
+        transaction.mutate_attr(state, field, tier)
+    if domain == "matmul" and tier != "highest":
+        if transaction is None:
+            state.matmul_refinement = tier
+        else:
+            transaction.mutate_attr(state, "matmul_refinement", tier)
 
 
 def _tf32_to_precision(enabled):
@@ -321,6 +314,8 @@ class CudaRuntimeState:
         self.native_nvtx = [None]
         self.mem_peak = [0]
         self.memgetinfo = [None]
+        self.matmul_precision = "highest"
+        self.cudnn_precision = "high"
         self.matmul_refinement = "high"
         self.empty_cache_mode = str(os.environ.get(
             "JITTOR_TORCH_CUDA_EMPTY_CACHE", "0")).strip().lower()
@@ -905,9 +900,7 @@ def _preferred_blas_library(backend=None):
 
 
 def _get_float32_matmul_precision():
-    if not _tf32_get("matmul"):
-        return "highest"
-    return _cuda_runtime().matmul_refinement
+    return _cuda_runtime().matmul_precision
 
 
 def _set_float32_matmul_precision(precision):
@@ -916,9 +909,7 @@ def _set_float32_matmul_precision(precision):
     precision = precision.lower()
     if precision not in ("highest", "high", "medium"):
         raise ValueError("precision must be one of 'highest', 'high', or 'medium'")
-    if precision != "highest":
-        _cuda_runtime().matmul_refinement = precision
-    _tf32_set("matmul", precision != "highest")
+    _set_precision_tier("matmul", precision)
 
 
 def _api_cuda_is_initialized(*a, **k):
@@ -1190,8 +1181,8 @@ _CUDA_FIDELITY_DETAILS = {
     _api_cuda_memory_stats: "Current and sampled peak live bytes only; other PyTorch counters absent.",
     _mem_get_info: "cudaMemGetInfo when available; native live-byte fallback excludes other processes.",
     _empty_cache: "Environment-selected no-op, GC or synchronized GC; default is a memory hint.",
-    _get_float32_matmul_precision: "Native TF32 flag; high and medium share one execution policy.",
-    _set_float32_matmul_precision: "Native TF32 flag; high and medium share one execution policy.",
+    _get_float32_matmul_precision: "Frontend-owned CUDA matmul policy; native Jittor and cuDNN policies are independent.",
+    _set_float32_matmul_precision: "Frontend-owned highest/high/medium CUDA matmul accumulation; does not change cuDNN or native Jittor.",
 }
 
 _CUDA_PLACEHOLDERS = frozenset((

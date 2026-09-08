@@ -61,6 +61,7 @@ bool lookup_requires_grad_disabled_edge(Node* source, Node* target) {
 }
 
 Op::Op() {
+    float32_precision = current_float32_precision_policy();
     flags.set(NodeFlags::_var, 0);
     set_flag(OpFlags::_cpu, 1);
     // The six amp bits are one field, so they move as one. `set_flag` with a
@@ -304,6 +305,7 @@ void Op::propagate_device() {
 }
 
 void Op::init() {
+    Float32PrecisionScope precision_scope(float32_precision);
     JT_GBP_SCOPE(gbp_op_init);
     // Graph-only diagnostic Ops may deliberately be unregistered. Execution
     // still requires a definition; registered instances pin one coherent
@@ -456,6 +458,7 @@ void Op::prepare_codegen_key(JK& jk) {
 }
 
 void Op::prepare_execution(JK& jk) {
+    Float32PrecisionScope precision_scope(float32_precision);
     JT_GBP_SCOPE(gbp_jit_key);
     jk.clear();
     if (is_storage_view()) return;
@@ -470,6 +473,7 @@ void Op::prepare_execution(JK& jk) {
 }
 
 void Op::execute_prepared(JK& jk) {
+    Float32PrecisionScope precision_scope(float32_precision);
     if (is_storage_view()) return;
     const auto& kernel = implementation().kernel;
     if (!jk.empty()) {

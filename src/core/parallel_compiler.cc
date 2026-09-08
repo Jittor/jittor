@@ -148,6 +148,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
         LOGvvv << "Check op needs compile:" << op;
         ExecutionBackendScope operation_backend_scope(op->requested_backend());
         TensorPlacementScope placement_scope(op->graph_placement());
+        Float32PrecisionScope precision_scope(op->float32_precision);
         op->prepare_execution(jkl);
         if (jkl.empty()) continue;
 
@@ -223,6 +224,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 LOGvv << "Compile Op:" << op;
                 ExecutionBackendScope operation_backend_scope(op->requested_backend());
                 TensorPlacementScope placement_scope(op->graph_placement());
+                Float32PrecisionScope precision_scope(op->float32_precision);
                 op->prepare_execution(jkl);
                 auto op_entry = OpCompiler::do_compile(op);
                 CompileResult result;
@@ -237,6 +239,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 op = &fused_op;
                 ExecutionBackendScope operation_backend_scope(op->requested_backend());
                 TensorPlacementScope placement_scope(op->graph_placement());
+                Float32PrecisionScope precision_scope(op->float32_precision);
                 LOGvv << "Compile FusedOp:" << op;
                 LOGV(11) << "FusedOps:" << fused_op.ops;
                 auto context = std::make_shared<FusedOpContext>();

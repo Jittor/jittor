@@ -175,6 +175,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         const auto execution_backend = op->execution_backend();
         ExecutionBackendScope operation_backend_scope(requested_backend);
         TensorPlacementScope placement_scope(op->graph_placement());
+        Float32PrecisionScope precision_scope(op->float32_precision);
         int execution_device = 0;
         #ifdef HAS_ACCELERATOR
         if (requested_backend != BackendId::Cpu) {

@@ -483,6 +483,7 @@ include docs/results/2026-09-08-checkpoint-device-mapping.md
 include docs/results/2026-09-08-compat-layout-and-view-ownership.md
 include docs/results/2026-09-08-core-misc-api-owner.md
 include docs/results/2026-09-08-frontend-placement-integration.md
+include docs/results/2026-09-08-frontend-precision-isolation.md
 include docs/results/2026-09-08-fsdp-mesh-optimizer-lifetime.md
 include docs/results/2026-09-08-independent-autograd-data.md
 include docs/results/2026-09-08-independent-checkpoint-loading.md
@@ -866,6 +867,7 @@ include src/runtime/dispatch_context.h
 include src/runtime/executor_entry.cc
 include src/runtime/executor_entry.h
 include src/runtime/file_rendezvous.h
+include src/runtime/float32_precision.cc
 include src/runtime/float32_precision.h
 include src/runtime/holder_state.cc
 include src/runtime/holder_state.h

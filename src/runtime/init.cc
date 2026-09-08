@@ -26,7 +26,6 @@ DEFINE_FLAG(vector<int>, cuda_archs, {}, "Cuda arch");
 // scale torch uses, shared by matmul and convolution. See
 // runtime/float32_precision.h for the full mapping and for why the three flags
 // below are now overrides on top of it rather than four separate encodings.
-int float32_matmul_precision_tier = F32_HIGHEST;
 
 DEFINE_FLAG_WITH_SETTER(string, float32_matmul_precision, "highest",
     "Accumulate precision for float32 matmul and convolution: "
@@ -40,7 +39,10 @@ void setter_float32_matmul_precision(const string& old_value, const string& valu
     if (tier < 0)
         LOGf << "float32_matmul_precision must be one of highest, high, medium; got"
             << '"' >> value >> '"';
-    float32_matmul_precision_tier = tier;
+    // Native Jittor deliberately offers one convenience setter for both
+    // domains. Frontends may instead capture independent per-op values.
+    runtime_jit_policy().float32_matmul_precision_tier = tier;
+    runtime_jit_policy().float32_cudnn_precision_tier = tier;
 }
 
 // Deprecated: each raises the tier for the domain it names. Kept because they

@@ -91,7 +91,9 @@ class RNNBase(jt.Module):
         # Offsets are element indices in the parameters' dtype, not bytes or
         # indices into an unconditional float32 buffer.
         dtype = _jittor_dtype_name(self.weight_ih_l0.dtype)
-        if getattr(self, '_cudnn_weight_dtype', None) != dtype:
+        precision = jt.core.float32_precision_state()[1]
+        if (getattr(self, '_cudnn_weight_dtype', None) != dtype or
+                getattr(self, '_cudnn_weight_precision', None) != precision):
             offset_array = library.cudnn_rnn_weight_offset(
                 cudnn_mode,
                 self.input_size,
@@ -105,9 +107,15 @@ class RNNBase(jt.Module):
             self._cudnn_weight_size = offset_array[0]
             self._cudnn_weight_offset = offset_array[1:]
             self._cudnn_weight_dtype = dtype
+            self._cudnn_weight_precision = precision
 
         num_gates = {"RNN": 1, "LSTM": 4, "GRU": 3}[self.mode]
         ft_weight = jt.zeros(self._cudnn_weight_size, dtype=dtype)
+        # Explicit-requires-grad frontends create constant zero buffers. The
+        # following indexed assignments must retain the parameter-copy graph,
+        # rather than preserving a stopped destination through every write.
+        if any(parameter.requires_grad for parameter in self.parameters()):
+            ft_weight.start_grad()
         cnt = 0
         for layer in range(self.num_layers):
             suffix = ''

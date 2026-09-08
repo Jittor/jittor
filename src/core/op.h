@@ -11,6 +11,7 @@
 #include "utils/jit_cache_map.h"
 #include "ops/composite/op_dispatch.h"
 #include "runtime/tensor_placement.h"
+#include "runtime/float32_precision.h"
 
 namespace jittor {
 
@@ -27,6 +28,7 @@ struct ExecutionBackendScope {
     ExecutionBackendScope& operator=(const ExecutionBackendScope&) = delete;
 };
 struct Op : Node {
+    Float32PrecisionPolicy float32_precision;
     // Dense-only kernels receive explicit contiguous graph inputs at the
     // generated construction boundary, before storing their Var members.
     static constexpr bool accepts_storage_strides = false;

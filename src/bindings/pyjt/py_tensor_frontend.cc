@@ -111,6 +111,25 @@ void reset_tensor_placement_context(PyObject* token) {
         throw std::runtime_error("cannot reset tensor placement context");
 }
 
+PyObject* set_float32_precision_context(int matmul, int cudnn) {
+    USER_CHECK(matmul >= 0 && matmul <= 2 && cudnn >= 0 && cudnn <= 2)
+        << "frontend precision tiers must be in [0, 2]";
+    auto previous = current_float32_precision_policy();
+    PyObject* token = Py_BuildValue("(ii)", previous.matmul, previous.cudnn);
+    if (!token) throw std::runtime_error("cannot create precision scope token");
+    set_float32_precision_policy({matmul, cudnn});
+    return token;
+}
+
+void reset_float32_precision_context(PyObject* token) {
+    int matmul, cudnn;
+    if (!PyArg_ParseTuple(token, "ii", &matmul, &cudnn))
+        throw std::runtime_error("invalid precision scope token");
+    USER_CHECK(matmul >= -1 && matmul <= 2 && cudnn >= -1 && cudnn <= 2)
+        << "invalid previous precision tiers";
+    set_float32_precision_policy({matmul, cudnn});
+}
+
 void PyTensorFrontendScope::select(
     PyObject* self, PyObject** args, int64 count, bool scan_sequences) {
     // Factories may have no tensor inputs. Their explicit context still owns
@@ -185,6 +204,29 @@ void PyTensorFrontendScope::apply_policy(PyObject* type, PyObject* candidate) {
     previous_placement_ = current_tensor_placement();
     restore_placement_ = true;
     set_tensor_placement(placement);
+    PyObject* precision_getter = PyObject_GetAttrString(type, "_frontend_precision_policy");
+    if (!precision_getter) {
+        if (PyErr_ExceptionMatches(PyExc_AttributeError)) { PyErr_Clear(); return; }
+        throw std::runtime_error("cannot read frontend precision policy");
+    }
+    PyObject* precision = PyObject_CallObject(precision_getter, nullptr);
+    Py_DECREF(precision_getter);
+    if (!precision) throw std::runtime_error("cannot resolve frontend precision policy");
+    bool valid = PyTuple_Check(precision) && PyTuple_GET_SIZE(precision) == 2
+        && PyLong_Check(PyTuple_GET_ITEM(precision, 0)) && PyLong_Check(PyTuple_GET_ITEM(precision, 1));
+    if (!valid) {
+        Py_DECREF(precision);
+        USER_CHECK(valid) << "frontend precision policy requires two integer tiers";
+    }
+    long matmul = PyLong_AsLong(PyTuple_GET_ITEM(precision, 0));
+    long cudnn = PyLong_AsLong(PyTuple_GET_ITEM(precision, 1));
+    Py_DECREF(precision);
+    if (PyErr_Occurred()) throw std::runtime_error("invalid frontend precision tier");
+    USER_CHECK(matmul >= 0 && matmul <= 2 && cudnn >= 0 && cudnn <= 2)
+        << "frontend precision tiers must be in [0, 2]";
+    previous_precision_ = current_float32_precision_policy();
+    restore_precision_ = true;
+    set_float32_precision_policy({int(matmul), int(cudnn)});
 }
 
 PyTensorFrontendScope::PyTensorFrontendScope()
@@ -220,9 +262,13 @@ PyTensorFrontendScope::PyTensorFrontendScope(
 }
 
 void PyTensorFrontendScope::restore() noexcept {
-    if (!token_ && previous_policy_ < 0 && !restore_placement_) return;
+    if (!token_ && previous_policy_ < 0 && !restore_placement_ && !restore_precision_) return;
     PyObject *error_type = nullptr, *error_value = nullptr, *error_traceback = nullptr;
     PyErr_Fetch(&error_type, &error_value, &error_traceback);
+    if (restore_precision_) {
+        set_float32_precision_policy(previous_precision_);
+        restore_precision_ = false;
+    }
     if (restore_placement_) {
         set_tensor_placement(previous_placement_);
         restore_placement_ = false;

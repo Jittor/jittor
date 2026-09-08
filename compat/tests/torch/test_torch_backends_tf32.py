@@ -1,7 +1,7 @@
 """One semantic, one state: torch.backends' TF32 switches all agree.
 
 torch spells "may fp32 math use reduced-precision tensor cores" three ways per
-domain, and Jittor keeps one flag per domain. Each spelling used to hold its
+domain, and the frontend keeps one context field per domain. Each spelling used to hold its
 own state:
 
 * ``fp32_precision`` was the literal ``"ieee"`` on all four backend objects --
@@ -12,7 +12,7 @@ own state:
 
 Whether tf32 helps is a numerics question. Whether the six spellings of it
 report the same thing is not, and that is what these pin. The table below is
-the same one ``installers/cuda.py`` is built from, written out independently so
+the same one ``installers/cuda/api.py`` is built from, written out independently so
 a change to the mapping has to be made twice, on purpose.
 """
 import unittest
@@ -20,19 +20,19 @@ import unittest
 import torch
 import jittor as jt
 
-from jittor.compat.torch.installers import cuda as _cuda_installer
 from jittor.compat.torch.installers.cuda.api import (
     _FP32_PRECISIONS,
-    _TF32_FLAGS,
+    _PRECISION_FIELDS,
+    _cuda_runtime,
     _tf32_get,
     _tf32_set,
 )
 
 
-#: (domain, jittor flag, [every torch spelling that is a view of it])
+#: (domain, context field, [every torch spelling that is a view of it])
 #: A spelling is (getter, setter) over the live torch namespace.
 _SPELLINGS = (
-    ("matmul", "cuda_allow_tf32", (
+    ("matmul", "matmul_precision", (
         ("torch.backends.cuda.matmul.allow_tf32",
          lambda: torch.backends.cuda.matmul.allow_tf32,
          lambda v: setattr(torch.backends.cuda.matmul, "allow_tf32", v)),
@@ -44,7 +44,7 @@ _SPELLINGS = (
          lambda: torch.get_float32_matmul_precision() != "highest",
          lambda v: torch.set_float32_matmul_precision("high" if v else "highest")),
     )),
-    ("cudnn", "cuda_allow_cudnn_tf32", (
+    ("cudnn", "cudnn_precision", (
         ("torch.backends.cudnn.allow_tf32",
          lambda: torch.backends.cudnn.allow_tf32,
          lambda v: setattr(torch.backends.cudnn, "allow_tf32", v)),
@@ -62,39 +62,28 @@ _SPELLINGS = (
 
 class Base(unittest.TestCase):
     def setUp(self):
-        self._saved = {flag: getattr(jt.flags, flag, None)
-                       for flag in _TF32_FLAGS.values()}
-        self._acl = getattr(jt, "acl_allow_hf32", None)
-        self._fallback = dict(_cuda_installer._TF32_FALLBACK)
+        self._saved = (torch.get_float32_matmul_precision(), torch.backends.cudnn.allow_tf32,
+                       _cuda_runtime().matmul_refinement)
+        self._native = {flag: getattr(jt.introspection.policy.runtime, flag) for flag in
+                        ("float32_matmul_precision", "use_tensorcore", "cuda_allow_tf32", "cuda_allow_cudnn_tf32")}
 
     def tearDown(self):
-        for flag, value in self._saved.items():
-            if value is not None and hasattr(jt.flags, flag):
-                setattr(jt.flags, flag, value)
-        if self._acl is not None:
-            jt.acl_allow_hf32 = self._acl
-        _cuda_installer._TF32_FALLBACK.clear()
-        _cuda_installer._TF32_FALLBACK.update(self._fallback)
+        torch.set_float32_matmul_precision(self._saved[0])
+        torch.backends.cudnn.allow_tf32 = self._saved[1]
+        _cuda_runtime().matmul_refinement = self._saved[2]
 
     @staticmethod
     def _force(domain, enabled):
-        """Set the domain's state through whichever store this build has.
-
-        A CPU-only build has neither `jt.flags.cuda_allow_tf32` nor
-        `cuda_allow_cudnn_tf32`; the settings then live in the installer's
-        fallback dict. The tests must exercise the behaviour on the build they
-        are running on, not skip it -- these six spellings have to agree
-        everywhere, and the CPU build is where they are actually run.
-        """
+        """Use the same context-owned state on CPU and CUDA builds."""
         _tf32_set(domain, enabled)
 
 
 class TestEverySpellingIsAViewOfTheSameFlag(Base):
     def test_the_table_covers_both_domains(self):
         self.assertEqual({domain for domain, _flag, _s in _SPELLINGS},
-                         set(_TF32_FLAGS))
+                         set(_PRECISION_FIELDS))
         for domain, flag, _spellings in _SPELLINGS:
-            self.assertEqual(_TF32_FLAGS[domain], flag)
+            self.assertEqual(_PRECISION_FIELDS[domain], flag)
 
     def test_writing_the_underlying_state_shows_up_in_every_spelling(self):
         for domain, _flag, spellings in _SPELLINGS:
@@ -115,11 +104,7 @@ class TestEverySpellingIsAViewOfTheSameFlag(Base):
                     with self.subTest(writer=writer, enabled=enabled,
                                       reader="the domain's own state"):
                         self.assertEqual(_tf32_get(domain), enabled)
-                    if hasattr(jt.flags, flag):
-                        with self.subTest(writer=writer, enabled=enabled,
-                                          reader="jt.flags." + flag):
-                            self.assertEqual(
-                                bool(getattr(jt.flags, flag)), enabled)
+                    self.assertEqual({name: getattr(jt.introspection.policy.runtime, name) for name in self._native}, self._native)
                     for reader, read, _w in spellings:
                         with self.subTest(writer=writer, reader=reader,
                                           enabled=enabled):
