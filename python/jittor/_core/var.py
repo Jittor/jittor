@@ -1188,6 +1188,7 @@ Example 2::
             args[var_map[i]] = v
         func(*args)
     core.ops.fetch(variables, callback)
+    core.submit_pending_fetches()
 
 Var.fetch = fetch
 

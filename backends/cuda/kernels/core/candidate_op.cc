@@ -1,6 +1,7 @@
 #include "ops/composite/candidate_op.h"
 #include "core/var.h"
 #include "core/executor.h"
+#include "runtime/device.h"
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
 
@@ -61,8 +62,8 @@ void CandidateOp::jit_run() {
     );
 
     int n=0;
-    // checkCudaErrors(cudaDeviceSynchronize());
-    checkCudaErrors(cudaMemcpy(&n, np, 4, cudaMemcpyDeviceToHost));
+    backend_copy(&n, {BackendId::Cpu, 0}, np,
+                 {accelerator_backend_id(), current_device()}, sizeof(n));
     y->set_shape({n});
     runtime_executor().temp_allocator->free(np, 4, n_allocation);
     runtime_executor().temp_allocator->free(maskp, xshape0, mask_allocation);

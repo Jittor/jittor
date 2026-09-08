@@ -623,6 +623,9 @@ VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void BinaryOp::infer_shape() {
+    // Construction inserts explicit broadcasts. Their data-dependent extent
+    // may become concrete later, before this elementwise node is executed.
+    z->set_shape(x->shape);
 }
 
 void BinaryOp::jit_prepare(JK& jk) {

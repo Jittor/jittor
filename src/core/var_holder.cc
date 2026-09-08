@@ -525,7 +525,7 @@ ItemData VarHolder::item() {
     auto dsize = data.dtype.dsize();
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
         // A blocking backend host copy waits for its producer stream.
-        sync();
+        sync(false, false);
         if (save_mem || _HAS_ACCELERATOR)
             migrate_to_cpu(var, runtime_executor().allocator);
     }

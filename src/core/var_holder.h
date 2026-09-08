@@ -16,6 +16,8 @@
 namespace jittor {
 
 struct VarHolder;
+// @pyjt(submit_pending_fetches)
+void submit_pending_fetches();
 VarPtr detach(Var* x);
 VarPtr device_copy(Var* x, int device);
 

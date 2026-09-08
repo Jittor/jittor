@@ -250,6 +250,22 @@ void copy(void* dst, Device target, const void* src, Device source, size_t size,
             backend_default_stream_wait_side(BackendStreamKind::Copy, device, device);
             if (source.index != device)
                 backend_default_stream_wait_side(BackendStreamKind::Copy, device, source.index);
+        } else if (target.backend == BackendId::Cpu && source.backend != BackendId::Cpu) {
+            // Readback waits for its producer stream's event, not the device.
+            // This also serves data-dependent shape counts and scalar item().
+            cudaEvent_t done;
+            checkCudaErrors(cudaEventCreateWithFlags(&done, cudaEventDisableTiming));
+            try {
+                checkCudaErrors(cudaMemcpyAsync(dst, src, size, cudaMemcpyDeviceToHost, 0));
+                checkCudaErrors(cudaEventRecord(done, 0));
+                checkCudaErrors(cudaEventSynchronize(done));
+            } catch (...) {
+                const auto cleanup = cudaEventDestroy(done);
+                if (cleanup != cudaSuccess)
+                    LOGe << "Readback event cleanup failed:" << cudaGetErrorString(cleanup);
+                throw;
+            }
+            checkCudaErrors(cudaEventDestroy(done));
         } else {
             checkCudaErrors(cudaMemcpy(dst, src, size, copy_kind(target, source)));
         }

@@ -64,9 +64,10 @@ void Executor::submit_pending(Var* target, bool force) {
     auto& pipeline = runtime_submission_pipeline();
     if (!target || pipeline.flush_active || target->is_finished()) return;
 
-    if (force) {
+    if (force || target->num < 0) {
         PendingSubmissionScope scope(pipeline);
         run_sync({target}, false, false);
+        CHECK(target->num >= 0) << target << "has an unresolved dynamic shape";
         return;
     }
 
@@ -214,19 +215,55 @@ static void top_weak_sync(vector<Var*>& vars) {
 //               launch, then release the liveness the batch held.
 //   7 finish    assert the requested Vars are backed, wait for every device
 //               the batch launched on if asked, restore the entry device.
+static void resolve_dynamic_inputs(Executor& executor, const vector<Var*>& roots) {
+    // Native C++ callers can compose operators before any Python conversion.
+    // Resolve their internal data-dependent extents at this explicit execution
+    // boundary, in dependency order, before fusion or kernel compilation.
+    vector<std::pair<Op*, bool>> pending;
+    unordered_set<Op*> seen;
+    vector<Op*> ordered;
+    for (auto* var : roots)
+        if (!var->is_finished() && var->input()) pending.emplace_back(var->input(), false);
+    while (!pending.empty()) {
+        auto entry = pending.back();
+        pending.pop_back();
+        auto* op = entry.first;
+        if (entry.second) {
+            ordered.push_back(op);
+            continue;
+        }
+        if (!seen.insert(op).second) continue;
+        pending.emplace_back(op, true);
+        for (auto* input : op->inputs())
+            if (!input->is_finished() && input->input())
+                pending.emplace_back(input->input(), false);
+    }
+    bool changed = false;
+    for (auto* op : ordered) {
+        for (auto* input : op->inputs()) {
+            if (input->num >= 0) continue;
+            executor.run_sync({input}, false, false);
+            CHECK(input->num >= 0) << "Dynamic input shape was not resolved";
+            changed = true;
+        }
+        if (changed) op->infer_shape();
+    }
+}
+
 void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // == phase 1: setup ==
     // One batch at a time. Until the device waits inside started releasing the
     // GIL, the GIL *was* this exclusion for Python threads; now that another
     // Python thread can run during phase 7, the "not reentrant" contract above
-    // has to be a lock. Nested batches (dynamic shape inference, building
-    // backward ops) are on this thread and pass straight through.
+    // has to be a lock. Explicit dynamic-input prerequisite submissions are
+    // on this thread and pass straight through; constructors never submit.
     ExecutorEntryScope entry;
     exec_called ++;
     auto& pipeline = runtime_submission_pipeline();
     pipeline.last_run_ops = Op::number_of_created_ops;
     if (weak_sync && !use_threading)
         top_weak_sync(vars);
+    resolve_dynamic_inputs(*this, vars);
     this->allocator = get_allocator();
     this->temp_allocator = get_allocator(true);
     // Each op allocates from and launches on the device its outputs live on;

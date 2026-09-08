@@ -11,6 +11,7 @@
 #include "cub_where_op.h"
 #ifdef JIT_cuda
 #include "core/executor.h"
+#include "runtime/device.h"
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
 #include <assert.h>
@@ -99,7 +100,8 @@ void CubWhereOp::jit_run(){
     runtime_executor().temp_allocator->free(temp_storage, temp_storage_bytes, temp_storage_allocation);
 
     To num_nonzeros_h;
-    cudaMemcpy(&num_nonzeros_h, num_nonzeros, sizeof(To), cudaMemcpyDeviceToHost);
+    backend_copy(&num_nonzeros_h, {BackendId::Cpu, 0}, num_nonzeros,
+                 {accelerator_backend_id(), current_device()}, sizeof(To));
     @for(i, 0, NDIM, outs[@i]->set_shape({(int64)num_nonzeros_h});)
 
     if (num_nonzeros_h > 0 && NDIM > 1) {

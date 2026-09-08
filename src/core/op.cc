@@ -292,17 +292,13 @@ void Op::init() {
             v->set_flag(VarFlags::_needed_by_backward);
         }
     }
-    Var* need_sync = nullptr;
     for (Var* v : outputs()) {
         if (!manual_set_vnbb)
             v->set_flag(VarFlags::_needed_by_backward);
-        if (v->num < 0)
-            need_sync = v;
     }
-    if (need_sync) {
-        runtime_executor().run_sync(vector<Var*>({need_sync}), false);
-        CHECK(need_sync->num >= 0) << need_sync << "'s shape is error";
-    }
+    // A negative extent is an allocation upper bound until execution resolves
+    // the data-dependent shape. Construction only publishes that graph state;
+    // the Python result/submission boundary materializes it when required.
     if (first_init && _inputs.size()) {
         if (all_inputs_stopped && has_disabled_input) {
             for (Var* v : outputs())

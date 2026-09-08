@@ -19,8 +19,8 @@ namespace jittor {
 // serialization point for a data race.
 //
 // ExecutorEntryScope is the lock. It is recursive *by thread*: a nested batch
-// (dynamic shape inference re-enters `run_sync` from `Op::init`, and building
-// backward ops re-enters it from `grad`) sees a depth > 0 and neither locks nor
+// (the execution-time dynamic-input phase can submit a prerequisite subgraph)
+// sees a depth > 0 and neither locks nor
 // touches the GIL, so nesting costs nothing and cannot self-deadlock.
 //
 // The acquisition order is the part that matters. Taking the lock while

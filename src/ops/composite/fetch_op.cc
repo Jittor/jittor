@@ -77,10 +77,8 @@ FetchOp::FetchOp(vector<Var*>&& inputs, FetchFunc&& func)
     outputs_holder.emplace_back(vp);
     fetcher.emplace_front(move(vp));
     fetcher_iter = fetcher.begin();
-    bool all_finished = true;
     for (auto v : fetch_vars)
         if (!v->is_finished()) {
-            all_finished = false;
             v->set_flag(VarFlags::_stop_fuse);
             v->flags.set(NodeFlags::_fetch);
         }
@@ -90,16 +88,23 @@ FetchOp::FetchOp(vector<Var*>&& inputs, FetchFunc&& func)
     flags.set(NodeFlags::_fetch);
     flags.set(NodeFlags::_stop_grad);
     fetcher_iter->ptr->flags.set(NodeFlags::_fetch);
-    // fetcher_to_free.clear();
-    if (all_finished) {
-        // if all finished, run immediately
-        run();
+}
+
+// Called only after the Python fetch constructor has returned and the graph
+// edges are installed. Callback execution never observes a half-built Op.
+void submit_pending_fetches() {
+    if (!fetcher.empty()) {
+        auto target = fetcher.front();
+        auto* op = target->input();
+        bool ready = op != nullptr;
+        if (op)
+            for (auto* v : op->inputs()) ready &= v->is_finished();
+        if (ready) runtime_executor().run_sync({target.ptr}, false, false);
     }
-    // if too many fetchers are bufferd, force flush
     while (fetcher.size() > 20) {
         LOGvvvv << "too many fetchers(">>fetcher.size() >> 
             ") are bufferd, force flush";
-        runtime_executor().run_sync({fetcher.back().ptr}, false);
+        runtime_executor().run_sync({fetcher.back().ptr}, false, false);
     }
 }
 
