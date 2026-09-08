@@ -616,7 +616,8 @@ class RandomApply:
     """
 
     def __init__(self, transforms, p=0.5):
-        assert isinstance(transforms, (list, tuple))
+        if not isinstance(transforms, (list, tuple)):
+            raise TypeError("RandomApply transforms must be a list or tuple")
         self.transforms = transforms
         self.p = p
 
