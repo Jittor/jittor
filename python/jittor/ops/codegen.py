@@ -1,5 +1,7 @@
 """Codegen tensor operations."""
 
+from typing import List
+
 
 def python_pass_wrapper(mod_func, args, kw):
     import importlib
@@ -49,7 +51,7 @@ def auto_parallel(n, src, block_num=1024, **kw):
     pnargs = pargs[0::2]
     pnargs2 = [ a.split()[-1] for a in pnargs ]
     oargs2 = [ a.split()[-1] for a in oargs ]
-    call_args = []
+    call_args: List[str] = []
     for i in range(n):
         call_args.extend((pnargs2[i], f"i{i}"))
     call_args += oargs2
