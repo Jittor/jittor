@@ -36,7 +36,8 @@ class PoolACL(jt.Function):
         self.stride = stride if isinstance(stride, tuple) else (stride, stride)
         self.padding = padding if isinstance(padding, tuple) else (padding, padding)
         dilation = dilation if dilation else 1
-        assert dilation == 1
+        if dilation != 1:
+            raise ValueError("ACL pooling only supports dilation=1")
         self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
         for item in self.kernel_size:
             if item <= 0:
