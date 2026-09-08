@@ -132,7 +132,8 @@ def acl_code(
             '");\n            ',
         ])
     if multi_grad_src:
-        assert not cuda_grad_src
+        if cuda_grad_src:
+            raise ValueError("ACL code cannot combine multi_grad_src with cuda_grad_src")
         cuda_grad_src = [multi_grad_src]
         data.update({"multi_grad": 1, "multi_grad_output": multi_grad_output})
         if multi_grad_input_count is not None:
