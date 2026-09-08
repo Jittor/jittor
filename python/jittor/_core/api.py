@@ -96,6 +96,7 @@ from .var import (
     where,
     zeros,
     zeros_like,
+    submit_pending,
 )
 
 from .hooks import (
@@ -110,7 +111,6 @@ from .module import (
 
 from .function import (
     Function,
-    submit_pending,
     GradHooker,
 )
 
