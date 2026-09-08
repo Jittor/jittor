@@ -401,7 +401,8 @@ def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
     shape = x.shape
     new_shape = list(x.shape)
 
-    assert dim is None or dims is None, "dim and dims can not be both set"
+    if dim is not None and dims is not None:
+        raise ValueError("dim and dims can not be both set")
     if dim is None and dims is None:
         dims = list(range(len(shape)))
     elif dim is not None:
