@@ -27,7 +27,12 @@ class _MLP(nn.Module):
 class _Attention(nn.Module):
     def __init__(self, dim, num_heads, drop=0.0):
         super().__init__()
-        assert dim % num_heads == 0
+        if num_heads <= 0 or dim % num_heads != 0:
+            raise ValueError(
+                "VisionTransformer attention dim {} must be divisible by positive num_heads {}".format(
+                    dim, num_heads
+                )
+            )
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
         self.scale = self.head_dim ** -0.5
