@@ -178,6 +178,7 @@ void Node::own_pending_liveness() {
 
 void Node::release_pending_liveness() {
     CHECK_EXIST;
+    if (flags.get(NodeFlags::_queued_for_free)) return;
     bool became_dead = liveness.pending.release();
     if (became_dead && !is_finished()) {
         for (auto* in : inputs())
@@ -197,6 +198,7 @@ void Node::release_pending_liveness() {
 
 void Node::release_forward_liveness() {
     CHECK_EXIST;
+    if (flags.get(NodeFlags::_queued_for_free)) return;
     bool became_dead = liveness.forward.release();
     if (became_dead) {
         // Snapshot the outputs: the propagation below can erase edges, and on
@@ -239,6 +241,7 @@ void Node::own_forward_liveness() {
 
 void Node::release_backward_liveness() {
     CHECK_EXIST;
+    if (flags.get(NodeFlags::_queued_for_free)) return;
     if (liveness.backward.count() <= 0) {
         fprintf(stderr,
             "JITTOR_LIVENESS_UNDERFLOW node=%p name=%s f=%d b=%d p=%d path=release_backward_liveness\\n",
