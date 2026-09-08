@@ -118,9 +118,11 @@ def cross(input, other, dim=-1):
         [ 0.18393655 -0.04907863 -0.17928357]]
     '''
     import jittor as jt
-    assert input.shape==other.shape, "input shape and other shape must be same"
+    if input.shape != other.shape:
+        raise ValueError("geometry: input shape and other shape must be same")
     if dim < 0: dim += len(input.shape)
-    assert input.shape[dim] == 3, "input dim shape must be 3"
+    if input.shape[dim] != 3:
+        raise ValueError("geometry: input dimension must have size 3")
     a1 = input[(slice(None,),)*dim+(1,)]*other[(slice(None,),)*dim+(2,)]-input[(slice(None,),)*dim+(2,)]*other[(slice(None,),)*dim+(1,)]
     a2 = input[(slice(None,),)*dim+(2,)]*other[(slice(None,),)*dim+(0,)]-input[(slice(None,),)*dim+(0,)]*other[(slice(None,),)*dim+(2,)]
     a3 = input[(slice(None,),)*dim+(0,)]*other[(slice(None,),)*dim+(1,)]-input[(slice(None,),)*dim+(1,)]*other[(slice(None,),)*dim+(0,)]
