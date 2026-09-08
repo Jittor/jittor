@@ -54,7 +54,8 @@ def _invoke_factory(name, args, kwargs):
     if implementation is None:
         raise RuntimeError("torch.%s is not installed" % name)
     from ..frontend import tensor_frontend
-    with tensor_frontend(context.target_namespace.Var):
+    like = args[0] if args and (name.endswith("_like") or name in _TENSOR_ARGUMENT) else None
+    with tensor_frontend(context.target_namespace.Var, device=kwargs.get("device"), like=like):
         return implementation(*args, **kwargs)
 
 
@@ -228,7 +229,7 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     _want_cpu = _device_is_cpu(_requested_device)
     _want_cuda = _device_is_cuda(_requested_device)
     _cuda_index = None
-    if _want_cuda:
+    if _want_cuda and g is jt:
         _set_use_cuda()
         # device="cuda:N" means "create it on N", not "create it here
         # and copy it there": the copy would be a wasted transfer and,
@@ -285,6 +286,15 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
             # ones_like / tril / triu have no dtype param in jittor; torch
             # accepts one. Pop it and cast the result instead.
             _cast_to = _dtype_to_str(kwargs.pop("dtype"))
+    if g is not jt:
+        out = orig(*args, **kwargs)
+        if _cast_to is not None:
+            out = out.cast(_cast_to)
+        out._jittor_torch_ext_mutable = True
+        out.requires_grad_(_requires_grad)
+        if _requires_grad:
+            _torch_register_leaf(out)
+        return out
     if _want_cpu and jt.flags.use_cuda:
         # Build on the host so the result is genuinely CPU-resident.
         with jt.flag_scope(use_cuda=0):

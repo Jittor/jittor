@@ -149,7 +149,11 @@ def select_kernel(op, *args, **kwargs):
         entries = _kernels.get((op, context.backend), ()) + _kernels.get((op, "*"), ())
     for entry in sorted(entries, key=lambda item: item.priority, reverse=True):
         if entry.runtime_modes is not None:
-            if sys.modules["jittor"].runtime.use_cuda not in entry.runtime_modes:
+            runtime_mode = sys.modules["jittor"].runtime.use_cuda
+            # Explicit CPU/CUDA tensor placement can differ from the Runtime
+            # default; mode eligibility follows the selected graph backend.
+            selected_mode = 0 if context.backend == "cpu" else (runtime_mode or 1)
+            if selected_mode not in entry.runtime_modes:
                 continue
         if entry.dtypes is not None and any(dtype not in entry.dtypes for dtype in context.dtypes):
             continue

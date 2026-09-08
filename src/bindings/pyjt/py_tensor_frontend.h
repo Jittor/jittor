@@ -2,6 +2,7 @@
 
 #include <Python.h>
 #include "core/common.h"
+#include "runtime/tensor_placement.h"
 
 namespace jittor {
 
@@ -14,12 +15,20 @@ PyObject* set_tensor_frontend_type(PyObject* type);
 // @pyjt(_reset_tensor_frontend_type)
 void reset_tensor_frontend_type(PyObject* token);
 
+// Construction-only placement override; independent of Runtime execution flags.
+// @pyjt(_set_tensor_placement)
+PyObject* set_tensor_placement_context(int backend, int device=0);
+// @pyjt(_reset_tensor_placement)
+void reset_tensor_placement_context(PyObject* token);
+
 // Generated binding scopes infer a frontend only when none is already active.
 // A plain native Var never overrides its caller's explicit frontend choice.
 class PyTensorFrontendScope {
     PyObject* token_ = nullptr;
     int previous_policy_ = -1;
-    void apply_policy(PyObject* type);
+    TensorPlacement previous_placement_;
+    bool restore_placement_ = false;
+    void apply_policy(PyObject* type, PyObject* candidate=nullptr);
     void restore() noexcept;
     void select(PyObject* self, PyObject** args, int64 count, bool scan_sequences);
 public:

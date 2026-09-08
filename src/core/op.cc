@@ -105,6 +105,12 @@ BackendId execution_target_backend() {
         : static_cast<BackendId>(execution_target_override);
 }
 
+BackendId construction_target_backend(const Var* input) {
+    if (input && input->placement.explicit_backend) return input->placement.device.backend;
+    auto placement = current_tensor_placement();
+    return placement.explicit_backend ? placement.device.backend : execution_target_backend();
+}
+
 ExecutionBackendScope::ExecutionBackendScope(BackendId backend)
     : previous(execution_target_override) {
     execution_target_override = static_cast<int>(backend);
@@ -112,8 +118,22 @@ ExecutionBackendScope::ExecutionBackendScope(BackendId backend)
 
 ExecutionBackendScope::~ExecutionBackendScope() { execution_target_override = previous; }
 
+TensorPlacement Op::graph_placement() const {
+    for (const auto& edge : _outputs) {
+        Var* output = edge.node->var();
+        if (output->placement.explicit_backend)
+            return output->placement;
+    }
+    return {};
+}
+
+BackendId Op::requested_backend() const {
+    auto placement = graph_placement();
+    return placement.explicit_backend ? placement.device.backend : execution_target_backend();
+}
+
 BackendId Op::execution_backend() const {
-    const auto requested = execution_target_backend();
+    const auto requested = requested_backend();
     return flag(OpFlags::_cuda) && requested != BackendId::Cpu
         ? requested : BackendId::Cpu;
 }
@@ -185,15 +205,16 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
 // moving something the caller computed. device-placement.md §5 has the
 // reasoning and why a third condition would cost more than it buys.
 static inline bool is_pending_scalar(Var* v) {
-    return !v->is_finished() && v->flag(VarFlags::_is_scalar);
+    return !v->is_finished() && v->flag(VarFlags::_is_scalar)
+        && !v->flag(VarFlags::_placement_published);
 }
 
 // Move a pending scalar, and the pending subgraph that produces it, onto
 // `dev`. Refuses (returning false) if that subgraph reaches data that already
 // exists on another device -- then it is not a scalar constant being placed,
 // it is a genuine cross-device use.
-static bool retarget_pending(Var* v, int dev) {
-    if (v->device_id == dev) return true;
+static bool retarget_pending(Var* v, int dev, TensorPlacement placement = {}) {
+    if (v->device_id == dev && (!placement.explicit_backend || v->placement == placement)) return true;
     if (v->is_finished()) return false;
     vector<Var*> seen;
     vector<Node*> queue{v};
@@ -201,8 +222,11 @@ static bool retarget_pending(Var* v, int dev) {
         auto node = queue[i];
         if (node->is_var()) {
             Var* var = node->var();
+            if (var->flag(VarFlags::_placement_published) && placement.explicit_backend
+                    && var->placement != placement) return false;
             if (var->is_finished()) {
-                if (var->device_id != dev) return false;
+                if (var->device_id != dev || (placement.explicit_backend &&
+                        var->placement.explicit_backend && var->placement != placement)) return false;
                 continue;
             }
             seen.push_back(var);
@@ -217,11 +241,39 @@ static bool retarget_pending(Var* v, int dev) {
             if (!dup) queue.push_back(e.node);
         }
     }
-    for (Var* var : seen) var->device_id = dev;
+    for (Var* var : seen) {
+        var->device_id = dev;
+        if (placement.explicit_backend) var->placement = placement;
+    }
     return true;
 }
 
 void Op::propagate_device() {
+    TensorPlacement target;
+    for (Var* v : inputs()) {
+        if (!v->placement.explicit_backend || is_pending_scalar(v)) continue;
+        USER_CHECK(!target.explicit_backend || target == v->placement)
+            << "Expected all tensor inputs on the same backend and device for" << name()
+            << "; use an explicit device copy before mixing CPU and accelerator tensors";
+        target = v->placement;
+    }
+    if (!target.explicit_backend)
+        for (Var* v : inputs())
+            if (v->placement.explicit_backend) { target = v->placement; break; }
+    if (target.explicit_backend) {
+        const int dev = target.device.backend == BackendId::Cpu ? -1 : target.device.index;
+        for (Var* v : inputs()) {
+            if (!v->placement.explicit_backend || v->placement == target) continue;
+            USER_CHECK(is_pending_scalar(v) && retarget_pending(v, dev, target))
+                << "Expected all tensor inputs on the same backend and device for" << name()
+                << "; use an explicit device copy before mixing CPU and accelerator tensors";
+        }
+        for (Var* v : outputs()) {
+            v->placement = target;
+            v->device_id = dev;
+        }
+        return;
+    }
     // Placement only has a question to answer when more than one device is
     // visible; with one, every Var already carries the same index.
     static int device_count = get_device_count();
@@ -384,7 +436,7 @@ void Op::prepare_codegen_key(JK& jk) {
             // TODO: 64bit index in CUDA
             // use_int64_t = false;
         } else {
-            if (runtime_use_cuda()==2) {
+            if (runtime_use_cuda()==2 && requested_backend() != BackendId::Cpu) {
                 if (flag(OpFlags::_cuda))
                     LOGf << "Op" << name() >> "'s vars are not allocated in cuda";
                 else

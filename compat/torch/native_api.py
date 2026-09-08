@@ -52,7 +52,11 @@ class NativeOperation:
         import jittor
         context = get_install_context(jittor)
         implementation = context.state["native_torch_operations"][self._operation_key]
-        with tensor_frontend(context.state["Var"]):
+        device = None
+        if self._operation_key in ("fft.fftfreq", "fft.rfftfreq"):
+            kwargs = dict(kwargs)
+            device = kwargs.pop("device", None)
+        with tensor_frontend(context.state["Var"], device=device):
             if isinstance(implementation, type) and issubclass(implementation, context.native_backend.Function):
                 implementation = implementation()
             return implementation(*args, **kwargs)

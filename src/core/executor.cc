@@ -271,7 +271,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // every device the run touched is waited on rather than just one.
     int entry_device = -1;
     #ifdef HAS_ACCELERATOR
-    if (runtime_use_cuda()) entry_device = current_device();
+    entry_device = current_device();
     #endif
     // == phases 2-5: graph -> execution plan ==
     ExecPlan plan;

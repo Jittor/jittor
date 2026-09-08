@@ -10,6 +10,7 @@
 #include "codegen/jit_key.h"
 #include "utils/jit_cache_map.h"
 #include "ops/composite/op_dispatch.h"
+#include "runtime/tensor_placement.h"
 
 namespace jittor {
 
@@ -17,6 +18,7 @@ enum OpType {other=0, element=1, broadcast=2, reduce=3};
 // Selection belongs to the execution plan / compiler invocation, never to an
 // operator's capability flags. Nested preparation restores its caller's target.
 BackendId execution_target_backend();
+BackendId construction_target_backend(const Var* input=nullptr);
 struct ExecutionBackendScope {
     int previous;
     explicit ExecutionBackendScope(BackendId backend);
@@ -29,6 +31,7 @@ struct Op : Node {
     // generated construction boundary, before storing their Var members.
     static constexpr bool accepts_storage_strides = false;
     static constexpr bool mutates_storage_inputs = false;
+    static constexpr bool accepts_cpu_scalar_operands = false;
     virtual bool is_storage_view() const { return false; }
     static constexpr uint32 backend_mask = OpBackendAny;
     vector<VarPtr> outputs_holder;
@@ -54,6 +57,8 @@ struct Op : Node {
     void bind_definition(bool required = true) const;
     const OpDef& definition() const;
     BackendId execution_backend() const;
+    virtual BackendId requested_backend() const;
+    virtual TensorPlacement graph_placement() const;
     bool executes_on_accelerator() const { return execution_backend() != BackendId::Cpu; }
     const OpImplementation& implementation() const;
     const Codegen& codegen() const;

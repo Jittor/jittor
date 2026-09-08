@@ -297,6 +297,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
             cc_args_with_default.append(arg + "=" + py_arg)
         cc_args = cc_args_with_default
         storage_inputs = []
+        placement_inputs = []
         for argument in cc_make_args:
             if argument.startswith("VarSlices"):
                 argument_name = argument.split()[-1].split("=")[0]
@@ -306,9 +307,13 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
                 # Explicit output buffers must keep their identity. Their
                 # storage contract is validated by the operator itself.
                 if argument_name not in ("outputs", "out"):
+                    placement_inputs.append(f"collect_placement_inputs({argument_name}, _placement_inputs);")
                     storage_inputs.append(
                         f"adapt_storage_input<{op_name}>({argument_name}, _storage_owners);")
-        storage_setup = "vector<VarPtr> _storage_owners;\n" + "\n".join(storage_inputs)
+        placement_setup = (f"if ({op_name}::accepts_cpu_scalar_operands) {{\n"
+                           "vector<Var**> _placement_inputs;\n" + "\n".join(placement_inputs) +
+                           "\nadapt_cpu_scalar_operands(_placement_inputs, _storage_owners);\n}")
+        storage_setup = "vector<VarPtr> _storage_owners;\n" + placement_setup + "\n" + "\n".join(storage_inputs)
         # steps of Op creation:
         # 1. new op
         # 2. new output var (create_output in op constructor)

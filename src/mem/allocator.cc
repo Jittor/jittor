@@ -95,16 +95,29 @@ Allocator* get_allocator(bool temp_allocator) {
 }
 
 Allocator* get_allocator(int device, bool temp_allocator) {
+    Device target{BackendId::Cpu, 0};
+#ifdef HAS_ACCELERATOR
+    if (runtime_use_cuda() && device >= 0)
+        target = {accelerator_backend_id(), device};
+#endif
+    return get_allocator(target, temp_allocator);
+}
+
+Allocator* get_allocator(Device device, bool temp_allocator) {
+#ifndef HAS_ACCELERATOR
+    USER_CHECK(device.backend == BackendId::Cpu)
+        << "Accelerator tensor placement requires a registered accelerator backend";
+#endif
     Allocator* allocator = nullptr;
-    if (runtime_use_cuda() && sfrl_large_block_size_device >= (1ll<<40)) {
+    if (device.backend != BackendId::Cpu && sfrl_large_block_size_device >= (1ll<<40)) {
         // if super large block is used, don't use
         // temp allocator
         temp_allocator = false;
     }
 #ifdef HAS_ACCELERATOR
-    if (runtime_use_cuda() && device >= 0 && !allocator) {
-        LOGvv << "Using cuda allocator of device" << device;
-        allocator = backend_raw_allocator({accelerator_backend_id(), device},
+    if (device.backend != BackendId::Cpu && !allocator) {
+        LOGvv << "Using accelerator allocator of device" << device.index;
+        allocator = backend_raw_allocator(device,
             use_cuda_managed_allocator ? BackendMemoryKind::Managed : BackendMemoryKind::Device);
     } else
 #endif

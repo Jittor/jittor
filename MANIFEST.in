@@ -293,9 +293,11 @@ include docs/architecture/codebase-audit/README.md
 include docs/architecture/complex-dtype.md
 include docs/architecture/cudnn-convolution-plans.md
 include docs/architecture/device-placement.md
+include docs/architecture/distribution-frontend-owners.md
 include docs/architecture/dynamic-shape-submission.md
 include docs/architecture/float32-precision-policy.md
 include docs/architecture/index.md
+include docs/architecture/installer-backend-contracts.md
 include docs/architecture/multi-backend-design.md
 include docs/architecture/pipelined-execution.md
 include docs/architecture/refactor-board.md
@@ -308,6 +310,7 @@ include docs/architecture/source-architecture.md
 include docs/architecture/storage-layout.md
 include docs/architecture/system-design-audit.md
 include docs/architecture/target-layout.md
+include docs/architecture/tensor-backend-placement.md
 include docs/architecture/torch-api-owners.md
 include docs/architecture/torch-api-ownership.md
 include docs/architecture/torch-autograd-library-owners.md
@@ -472,6 +475,7 @@ include docs/results/2026-09-08-autograd-library-owners.md
 include docs/results/2026-09-08-checkpoint-device-mapping.md
 include docs/results/2026-09-08-compat-layout-and-view-ownership.md
 include docs/results/2026-09-08-core-misc-api-owner.md
+include docs/results/2026-09-08-frontend-placement-integration.md
 include docs/results/2026-09-08-fsdp-mesh-optimizer-lifetime.md
 include docs/results/2026-09-08-independent-autograd-data.md
 include docs/results/2026-09-08-independent-checkpoint-loading.md
@@ -486,6 +490,7 @@ include docs/results/2026-09-08-native-compat-bootstrap.md
 include docs/results/2026-09-08-packaging-ownership.md
 include docs/results/2026-09-08-parameter-and-holder-ownership.md
 include docs/results/2026-09-08-private-frontend-owner.md
+include docs/results/2026-09-08-tensor-backend-placement.md
 include docs/results/2026-09-08-tensor-construction-dtypes.md
 include docs/results/2026-09-08-tensor-copy-boundaries.md
 include docs/results/2026-09-08-tensor-frontend-types.md
@@ -576,6 +581,7 @@ include python/jittor/build/utils/class/motd
 include python/jittor/build/utils/class/setup.py
 include python/jittor/build/utils/class/setup_env.py
 include python/jittor/contrib/math_util/src/igamma.h
+include python/jittor_utils/__init__.pyi
 include requirements/docs.in
 include requirements/docs.txt
 include requirements/examples.txt
@@ -875,6 +881,8 @@ include src/runtime/ring_buffer.h
 include src/runtime/runtime.cc
 include src/runtime/runtime.h
 include src/runtime/submission_pipeline.h
+include src/runtime/tensor_placement.cc
+include src/runtime/tensor_placement.h
 include src/runtime/traversal_epoch.cc
 include src/runtime/traversal_epoch.h
 include src/runtime/traversal_state.h

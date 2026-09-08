@@ -11,6 +11,7 @@ namespace jittor {
 
 struct TernaryOp : Op {
     static constexpr bool accepts_storage_strides = true;
+    static constexpr bool accepts_cpu_scalar_operands = true;
     Var* cond, * x, * y, * z;
     TernaryOp(Var* cond, Var* x, Var* y);
     

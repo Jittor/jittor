@@ -118,6 +118,8 @@ void check_op_async_error(Op* op, bool is_fused_op, const std::exception& e, jit
 // bytes to the wrong device while Var::device_id still says otherwise, and
 // the next kernel that reads it faults with an illegal address.
 static inline Allocator* var_allocator(Var* v, Allocator* op_allocator) {
+    if (v->placement.explicit_backend)
+        return get_allocator(v->placement.device, false);
     if (v->device_id >= 0 && v->device_id != op_allocator->device())
         return get_allocator(v->device_id, false);
     return op_allocator;
@@ -169,21 +171,33 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             root = fuse_ops[rr-1];
             load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
         }
+        const auto requested_backend = op->requested_backend();
+        const auto execution_backend = op->execution_backend();
+        ExecutionBackendScope operation_backend_scope(requested_backend);
+        TensorPlacementScope placement_scope(op->graph_placement());
+        int execution_device = 0;
         #ifdef HAS_ACCELERATOR
-        if (runtime_use_cuda()) {
+        if (requested_backend != BackendId::Cpu) {
             int dev = op_target_device(op);
             if (dev >= 0) {
                 if (dev != current_device()) set_current_device(dev);
-                if (allocator->device() != dev) {
-                    allocator = get_allocator(dev, false);
-                    temp_allocator = get_allocator(dev, true);
-                    exe.allocator = allocator;
-                    exe.temp_allocator = temp_allocator;
-                }
+                execution_device = dev;
                 if (dev < 64) touched_devices |= 1ull << dev;
             }
         }
         #endif
+        Device allocation_target{execution_backend, execution_device};
+        #ifdef HAS_ACCELERATOR
+        // A genuine accelerator fallback may execute a CPU kernel against
+        // managed storage. Explicit CPU graphs instead always own host memory.
+        if (execution_backend == BackendId::Cpu && requested_backend != BackendId::Cpu
+                && use_cuda_managed_allocator)
+            allocation_target.backend = requested_backend;
+        #endif
+        allocator = get_allocator(allocation_target, false);
+        temp_allocator = get_allocator(allocation_target, true);
+        exe.allocator = allocator;
+        exe.temp_allocator = temp_allocator;
         if (save_mem) {
             TraversalEpoch swap_epoch("Executor::swap");
             swap_timestamp = swap_epoch.stamp;
@@ -213,9 +227,9 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         // Array staging and explicit transfers are not CPU implementations of
         // a requested accelerator computation. Reject a real fallback before
         // moving its inputs or executing any CPU kernel.
-        if (runtime_use_cuda() && !is_cuda && !op->flag(OpFlags::_manual_device)
+        if (requested_backend != BackendId::Cpu && !is_cuda && !op->flag(OpFlags::_manual_device)
                 && op->type_id() != op_ids::array()) {
-            check_backend_fallback(op->name_ex(), accelerator_backend_id(), BackendId::Cpu,
+            check_backend_fallback(op->name_ex(), requested_backend, BackendId::Cpu,
                 "operator has no accelerator execution path for this invocation");
         }
         #ifdef HAS_ACCELERATOR
@@ -231,7 +245,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 sync_times++;
             }
             for (Var* v : op->inputs()) {
-                if (v->allocator->is_cuda())
+                if (v->allocator->is_cuda() && !op->flag(OpFlags::_manual_device))
                     migrate_to_cpu(v, allocator);
             }
             if (!use_cuda_managed_allocator) {
@@ -272,9 +286,9 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         // _JT_SEH_END2;
         #ifdef HAS_ACCELERATOR
         // migrate to gpu
-        if (PREDICT_BRANCH_NOT_TAKEN((!is_cuda && runtime_use_cuda() && !use_cuda_managed_allocator))) {
+        if (PREDICT_BRANCH_NOT_TAKEN((!is_cuda && requested_backend != BackendId::Cpu && !use_cuda_managed_allocator))) {
             for (Var* v : op->outputs()) {
-                migrate_to_gpu(v, var_allocator(v, allocator));
+                migrate_to_gpu(v, var_allocator(v, get_allocator({requested_backend, execution_device}, false)));
             }
         }
         #endif
@@ -352,7 +366,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     if (device_sync && !runtime_use_cuda())
         backend_ops(BackendId::Cpu).synchronize(0);
     #ifdef HAS_ACCELERATOR
-    if (device_sync && runtime_use_cuda()) {
+    if (device_sync && (runtime_use_cuda() || touched_devices)) {
         exe.last_is_cuda = false;
         sync_times++;
         try {
@@ -373,7 +387,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         // touch Python objects.
         event_queue.flush();
     }
-    if (runtime_use_cuda() && entry_device >= 0 && entry_device != current_device())
+    if (entry_device >= 0 && entry_device != current_device())
         set_current_device(entry_device);
     LOGvv << "cudaDeviceSynchronize times:" << sync_times << "/" <<queue.size() << "device_sync:" << device_sync;
     #endif

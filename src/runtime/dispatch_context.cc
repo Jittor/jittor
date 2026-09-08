@@ -7,7 +7,8 @@ namespace jittor {
 namespace {
 
 bool pending_scalar(Var* value) {
-    return !value->is_finished() && value->flag(VarFlags::_is_scalar);
+    return !value->is_finished() && value->flag(VarFlags::_is_scalar)
+        && !value->flag(VarFlags::_placement_published);
 }
 
 // Read-only counterpart of Op::propagate_device's bounded scalar retargeting.
@@ -40,6 +41,30 @@ bool can_retarget_pending(Var* value, int device) {
 } // namespace
 
 DispatchContext query_dispatch_context(const vector<Var*>& inputs) {
+    TensorPlacement target;
+    for (auto* value : inputs) {
+        USER_CHECK(value) << "dispatch_context requires non-null tensor inputs";
+        if (!value->placement.explicit_backend || pending_scalar(value)) continue;
+        if (value->placement.device.backend == BackendId::Cpu && value->shape.size() == 0) continue;
+        USER_CHECK(!target.explicit_backend || target == value->placement)
+            << "Expected all tensor inputs on the same backend and device in dispatch_context";
+        target = value->placement;
+    }
+    if (!target.explicit_backend)
+        for (auto* value : inputs)
+            if (value->placement.explicit_backend) { target = value->placement; break; }
+    if (!target.explicit_backend) target = current_tensor_placement();
+    if (target.explicit_backend) {
+        int index = target.device.backend == BackendId::Cpu ? -1 : target.device.index;
+        for (auto* value : inputs) {
+            if (!value->placement.explicit_backend || value->placement == target) continue;
+            if (target.device.backend != BackendId::Cpu && value->placement.device.backend == BackendId::Cpu
+                    && value->shape.size() == 0) continue; // constructor inserts a differentiable local copy
+            USER_CHECK(pending_scalar(value) && can_retarget_pending(value, index))
+                << "Expected all tensor inputs on the same backend and device in dispatch_context";
+        }
+        return {backend_ops(target.device.backend).name, index};
+    }
     int device = -1;
     for (auto* value : inputs) {
         USER_CHECK(value) << "dispatch_context requires non-null tensor inputs";

@@ -36,8 +36,9 @@ ArgReduceOp::ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims)
         this->dim = x->shape.size() - 1;
     dim = this->dim;
     #ifdef HAS_ACCELERATOR
-    if (runtime_use_cuda()) {
-        if (has_op_capability(accelerator_backend_id(), OpCapability::SegmentedArgReduce)) {
+    const auto backend = construction_target_backend(x);
+    if (backend != BackendId::Cpu) {
+        if (has_op_capability(backend, OpCapability::SegmentedArgReduce)) {
             int dims = x->shape.size();
             vector<int64> axes;
             axes.reserve(dims);
@@ -56,7 +57,7 @@ ArgReduceOp::ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims)
             auto offsets1 = make_index({m+1}, 0, ns_int32);
             auto offsets = make_binary(one, offsets1, ns_multiply);
             auto segmented_reduce = find_op_capability<std::vector<VarPtr>, Var*, Var*, NanoString, bool>(
-                accelerator_backend_id(), OpCapability::SegmentedArgReduce, tranpose1, offsets, op, keepdims);
+                backend, OpCapability::SegmentedArgReduce, tranpose1, offsets, op, keepdims);
             if (segmented_reduce) {
                 auto var = segmented_reduce(tranpose1, offsets, op, keepdims);
                 if (keepdims) {

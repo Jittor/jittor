@@ -1,5 +1,8 @@
 #include "bindings/pyjt/py_tensor_frontend.h"
 #include "core/grad.h"
+#include "core/var_holder.h"
+#include "bindings/pyjt/py_converter.h"
+#include "runtime/device.h"
 #include <stdexcept>
 
 namespace jittor {
@@ -10,6 +13,27 @@ namespace {
 // One shared symbol owner across the core and all loaded JIT extensions.
 // Access occurs with the GIL held, just like the Python conversion boundary.
 PyObject* frontend_context = nullptr;
+PyObject* placement_context = nullptr;
+
+PyObject* placement_variable() {
+    if (!placement_context) {
+        placement_context = PyContextVar_New("jittor.tensor_placement", nullptr);
+        if (!placement_context)
+            throw std::runtime_error("cannot create tensor placement context");
+    }
+    return placement_context;
+}
+
+TensorPlacement selected_placement() {
+    PyObject* value = nullptr;
+    if (PyContextVar_Get(placement_variable(), nullptr, &value) < 0)
+        throw std::runtime_error("cannot read tensor placement context");
+    if (!value) return {};
+    int backend = int(PyLong_AsLong(PyTuple_GET_ITEM(value, 0)));
+    int index = int(PyLong_AsLong(PyTuple_GET_ITEM(value, 1)));
+    Py_DECREF(value);
+    return TensorPlacement({static_cast<BackendId>(backend), index});
+}
 
 PyObject* context_variable() {
     if (!frontend_context) {
@@ -71,14 +95,33 @@ void reset_tensor_frontend_type(PyObject* token) {
         throw std::runtime_error("cannot reset tensor frontend context token");
 }
 
+PyObject* set_tensor_placement_context(int backend, int device) {
+    USER_CHECK(backend >= 0 && backend <= int(BackendId::Corex) && device >= 0)
+        << "tensor placement requires a registered backend id and a non-negative device index";
+    PyObject* value = Py_BuildValue("(ii)", backend, backend == 0 ? 0 : device);
+    if (!value) throw std::runtime_error("cannot create tensor placement value");
+    PyObject* token = PyContextVar_Set(placement_variable(), value);
+    Py_DECREF(value);
+    if (!token) throw std::runtime_error("cannot set tensor placement context");
+    return token;
+}
+
+void reset_tensor_placement_context(PyObject* token) {
+    if (PyContextVar_Reset(placement_variable(), token) < 0)
+        throw std::runtime_error("cannot reset tensor placement context");
+}
+
 void PyTensorFrontendScope::select(
     PyObject* self, PyObject** args, int64 count, bool scan_sequences) {
     // Factories may have no tensor inputs. Their explicit context still owns
     // both the Python result type and the native autograd policy for this call.
+    PyObject* candidate = is_frontend_instance(self) ? self : nullptr;
+    for (int64 i = 0; !candidate && args && i < count; ++i)
+        candidate = frontend_candidate(args[i], scan_sequences);
     PyObject* existing = selected_type();
     if (existing) {
         try {
-            apply_policy(existing);
+            apply_policy(existing, candidate);
         } catch (...) {
             Py_DECREF(existing);
             throw;
@@ -86,9 +129,6 @@ void PyTensorFrontendScope::select(
         Py_DECREF(existing);
         return;
     }
-    PyObject* candidate = is_frontend_instance(self) ? self : nullptr;
-    for (int64 i = 0; !candidate && args && i < count; ++i)
-        candidate = frontend_candidate(args[i], scan_sequences);
     if (!candidate) return;
     PyObject* actual_type = reinterpret_cast<PyObject*>(Py_TYPE(candidate));
     PyObject* result_type = PyObject_GetAttrString(actual_type, "_frontend_result_type");
@@ -105,7 +145,7 @@ void PyTensorFrontendScope::select(
         // The shared setter validates a marker just as strictly as an explicit
         // frontend selection before changing the context.
         token_ = set_tensor_frontend_type(result_type);
-        apply_policy(result_type);
+        apply_policy(result_type, candidate);
     } catch (...) {
         Py_DECREF(result_type);
         throw;
@@ -113,7 +153,7 @@ void PyTensorFrontendScope::select(
     Py_DECREF(result_type);
 }
 
-void PyTensorFrontendScope::apply_policy(PyObject* type) {
+void PyTensorFrontendScope::apply_policy(PyObject* type, PyObject* candidate) {
     PyObject* value = PyObject_GetAttrString(type, "_frontend_autograd_policy");
     if (!value) {
         if (PyErr_ExceptionMatches(PyExc_AttributeError)) {
@@ -135,6 +175,16 @@ void PyTensorFrontendScope::apply_policy(PyObject* type) {
         << "tensor frontend autograd policy must be in [0, 3]";
     previous_policy_ = get_autograd_policy();
     set_autograd_policy((bits & 1) != 0, (bits & 2) != 0);
+    TensorPlacement placement = selected_placement();
+    if (!placement.explicit_backend && candidate && GET_INITED_FLAG(VarHolder, 1, candidate))
+        placement = GET_RAW_PTR(VarHolder, candidate)->var->placement;
+    if (!placement.explicit_backend) placement = current_tensor_placement();
+    if (!placement.explicit_backend)
+        placement = TensorPlacement({runtime_use_cuda() ? accelerator_backend_id() : BackendId::Cpu,
+                                     runtime_use_cuda() ? current_device() : 0});
+    previous_placement_ = current_tensor_placement();
+    restore_placement_ = true;
+    set_tensor_placement(placement);
 }
 
 PyTensorFrontendScope::PyTensorFrontendScope()
@@ -170,9 +220,13 @@ PyTensorFrontendScope::PyTensorFrontendScope(
 }
 
 void PyTensorFrontendScope::restore() noexcept {
-    if (!token_ && previous_policy_ < 0) return;
+    if (!token_ && previous_policy_ < 0 && !restore_placement_) return;
     PyObject *error_type = nullptr, *error_value = nullptr, *error_traceback = nullptr;
     PyErr_Fetch(&error_type, &error_value, &error_traceback);
+    if (restore_placement_) {
+        set_tensor_placement(previous_placement_);
+        restore_placement_ = false;
+    }
     if (previous_policy_ >= 0) {
         // This setter only writes the two native policy bits; it cannot invoke
         // Python or allocate. Keep destruction safe even during unwinding.

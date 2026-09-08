@@ -393,12 +393,14 @@ def _move_to_cuda_index(v, dev, default_index=None):
 
 
 def _var_is_cpu_resident(v):
-    """True if a Var's data actually lives in host memory.
+    """Explicit tensor backend, or legacy storage residency when unplaced.
 
     Uses Var.location() (var->allocator->is_cuda()), the same residency that
     jtorch's C++ is_cpu()/device() report -- NOT the global use_cuda flag. A
     not-yet-materialized Var reports 'none'; treat that as following the global
     flag (it will land per use_cuda when realized)."""
+    if isinstance(v, jt.Var) and v.placement_backend >= 0:
+        return v.placement_backend == 0
     try:
         if getattr(v, "_jittor_torch_force_cpu", False):
             return True
@@ -420,6 +422,8 @@ def _var_is_cpu_resident(v):
 
 
 def _var_has_cpu_residency_hint(v):
+    if isinstance(v, jt.Var) and v.placement_backend >= 0:
+        return v.placement_backend == 0
     try:
         return bool(getattr(v, "_jittor_torch_force_cpu", False))
     except EXPECTED as exc:
@@ -436,6 +440,16 @@ def _make_cpu_resident(v, inplace=False):
     """
     if not isinstance(v, jt.Var):
         return v
+    if v.placement_backend >= 0:
+        if v.placement_backend == 0:
+            return v
+        moved = v._copy_to_cpu()
+        if inplace:
+            trainable = bool(v.requires_grad)
+            v.assign(moved.detach())
+            v.requires_grad = trainable
+            return v
+        return moved
     if _var_is_cpu_resident(v):
         return v
     if v.numel() == 0:
@@ -473,7 +487,7 @@ def _make_cpu_resident(v, inplace=False):
     return out
 
 
-def _make_cuda_resident(v, force=False, inplace=False):
+def _make_cuda_resident(v, force=False, inplace=False, device=None):
     """Return a CUDA-resident Var.
 
     Prefer native storage migration over a NumPy round-trip. The latter remains
@@ -481,6 +495,21 @@ def _make_cuda_resident(v, force=False, inplace=False):
     """
     if not isinstance(v, jt.Var):
         return v
+    if v.placement_backend >= 0:
+        from .frontend import _placement_request
+        request = device
+        if request is None:
+            request = "cuda:%d" % v.device_id if v.placement_backend else "cuda"
+        backend, index = _placement_request(jt, request)
+        if v.placement_backend == backend and v.device_id == index:
+            return v
+        moved = v.to_device(index)
+        if inplace:
+            trainable = bool(v.requires_grad)
+            v.assign(moved.detach())
+            v.requires_grad = trainable
+            return v
+        return moved
     if not jt.flags.use_cuda:
         return v
     loc = None
@@ -544,6 +573,8 @@ def _make_cuda_resident(v, force=False, inplace=False):
 
 
 def _mark_cpu_like(out, *inputs):
+    if isinstance(out, jt.Var) and out.placement_backend >= 0:
+        return out
     try:
         if not isinstance(out, jt.Var):
             return out

@@ -34,8 +34,9 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype)
         this->dim = x->shape.size() - 1;
     dim = this->dim;
     #ifdef HAS_ACCELERATOR
-    if (runtime_use_cuda()) {
-        if (has_op_capability(accelerator_backend_id(), OpCapability::SegmentedArgsort)) {
+    const auto backend = construction_target_backend(x);
+    if (backend != BackendId::Cpu) {
+        if (has_op_capability(backend, OpCapability::SegmentedArgsort)) {
             int dims = x->shape.size();
             vector<int64> axes;
             axes.reserve(dims);
@@ -55,7 +56,7 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype)
             auto offsets1 = make_index({m+1}, 0, ns_int32);
             auto offsets = make_binary(one, offsets1, ns_multiply);
             auto segmented_sort = find_op_capability<std::vector<VarPtr>, Var*, Var*, Var*, bool, NanoString>(
-                accelerator_backend_id(), OpCapability::SegmentedArgsort, tranpose1, indexes, offsets, descending, dtype);
+                backend, OpCapability::SegmentedArgsort, tranpose1, indexes, offsets, descending, dtype);
             if (segmented_sort) {
                 auto var = segmented_sort(tranpose1, indexes, offsets, descending, dtype);
                 vector<int64> axes2;

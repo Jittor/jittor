@@ -10,7 +10,7 @@ import shlex
 
 from jittor_utils.compiler_flags import remove_flags
 from jittor_utils.backend_resources import backend_root
-from jittor_utils.build_config import BuildSource
+from jittor_utils.build_config import BuildConfig, BuildContext, BuildSource
 
 
 CorexDiscovery = namedtuple(
@@ -30,7 +30,7 @@ def discover(corex_home=None):
     return CorexDiscovery(home, compiler_path, True, "ready")
 
 
-def configure(context, corex_home=None):
+def configure(context: BuildContext, corex_home=None) -> BuildConfig:
     """Declare Corex SDK units and kernel compilation without source rewriting."""
     discovery = discover(corex_home)
     if not discovery.available:
@@ -104,9 +104,9 @@ def convert_nvcc_flags(flags):
                     if flag not in unsupported)
 
 
-def install_extern(context):
+def install_extern(context: BuildContext) -> bool:
     return False
 
 
-def post_process(context):
+def post_process(context: BuildContext) -> BuildConfig:
     return context.config

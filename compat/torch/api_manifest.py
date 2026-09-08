@@ -32,7 +32,7 @@ API_PATHS = {
         "BCELoss", "BCEWithLogitsLoss", "BatchNorm1d", "BatchNorm2d", "BatchNorm3d",
         "Bilinear", "CTCLoss", "ConstantPad1d", "ConstantPad2d", "ConstantPad3d",
         "Conv1d", "Conv2d", "Conv3d", "ConvTranspose1d", "ConvTranspose2d", "ConvTranspose3d",
-        "CrossEntropyLoss", "Dropout", "Dropout2d", "Dropout3d", "ELU", "Embedding",
+        "CrossEntropyLoss", "Dropout", "Dropout2d", "ELU", "Embedding",
         "EmbeddingBag", "Flatten", "Fold", "GELU", "GLU", "GRU", "GRUCell", "GroupNorm",
         "InstanceNorm1d", "InstanceNorm2d", "InstanceNorm3d", "KLDivLoss", "L1Loss",
         "LSTM", "LSTMCell", "LayerNorm", "LazyBatchNorm1d", "LazyBatchNorm2d",
@@ -74,6 +74,8 @@ API_PATHS = {
 UNIMPLEMENTED_PATHS = {
     "torch": ("ScriptModule", "SymBool", "SymFloat", "SymInt"),
     "torch.jit": ("ScriptModule",),
+    "torch.types": ("Storage",),
+    "torch.types.Storage": ("element_size", "_new_shared", "_write_file", "__deepcopy__"),
     "torch.nn.utils.parametrizations": ("orthogonal",),
 }
 
@@ -96,5 +98,10 @@ def register_public_apis(context):
     for namespace, names in UNIMPLEMENTED_PATHS.items():
         owner = resolve(context.target_namespace, namespace)
         if owner is not None:
+            detail = (
+                "Typing-only storage protocol; shared allocation, serialization and element-size operations raise NotImplementedError"
+                if namespace.startswith("torch.types") else
+                "Concrete compatibility placeholder; symbolic values, TorchScript or the requested parametrization are not implemented"
+            )
             register_api_bindings(owner, namespace, names, Fidelity.UNIMPLEMENTED,
-                "Concrete compatibility placeholder; symbolic values, TorchScript or the requested parametrization are not implemented")
+                detail)

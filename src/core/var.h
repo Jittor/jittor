@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include "runtime/tensor_placement.h"
 #include "core/common.h"
 #include "core/node.h"
 #include "utils/cstr.h"
@@ -63,6 +64,7 @@ struct Var : Node {
     // current device. Host residency is a different axis -- a Var migrated to
     // the CPU keeps its device_id and goes back to that device.
     int device_id = -1;
+    TensorPlacement placement;
     // Circular list of the vars that currently point into one allocation.
     // `share_src` above is only the *request*, and alloc() clears it once it
     // is served; from then on a child is indistinguishable from its parent
@@ -183,6 +185,11 @@ std::ostream& operator<<(std::ostream& os, const Var* var);
 std::ostream& operator<<(std::ostream& os, const VarPtr& v);
 
 VarPtr contiguous_storage(Var* value);
+void adapt_cpu_scalar_operands(const vector<Var**>& inputs, vector<VarPtr>& owners);
+inline void collect_placement_inputs(Var*& value, vector<Var**>& inputs) { inputs.push_back(&value); }
+inline void collect_placement_inputs(vector<Var*>& values, vector<Var**>& inputs) {
+    for (auto*& value : values) inputs.push_back(&value);
+}
 template<class Operator>
 void adapt_storage_input(Var*& value, vector<VarPtr>& owners) {
     if (Operator::accepts_storage_strides || !value || value->is_contiguous()) return;

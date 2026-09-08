@@ -7,6 +7,7 @@
 import os
 import shutil
 from jittor_utils.env_config import build_env
+from jittor_utils.build_config import BuildConfig, BuildContext
 # export LD_LIBRARY_PATH=/usr/local/Ascend/ascend-toolkit/latest/tools/aoe/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/plugin/opskernel:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/plugin/nnengine:/usr/local/Ascend/ascend-toolkit/latest/runtime/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/stub:/usr/local/Ascend/ascend-toolkit/latest/tools/tikicpulib/lib/Ascend910A:/usr/local/Ascend/ascend-toolkit/latest/toolkit/tools/simulator/Ascend910A/lib:/opt/AXESMI/lib64:/usr/local/Ascend/driver/lib64/driver/
 # export PYTHONPATH=/home/cjld/new_jittor/jittor/python
 # export JT_BUILD_TIKCC_PATH=g++
@@ -84,7 +85,7 @@ CORE_SOURCES = (
 )
 
 
-def configure(context):
+def configure(context: BuildContext) -> BuildConfig:
     """Return ACL build inputs without mutating the compiler or environment."""
     config = context.config
     requested_compiler = build_env("tikcc_path", "ccec")
@@ -146,14 +147,14 @@ void init_acl_ops();
     )
 
 
-def install(context):
+def install(context: BuildContext) -> BuildConfig:
     return configure(context)
 
 
-def install_extern(context):
+def install_extern(context: BuildContext) -> bool:
     return False
 
 
-def post_process(context):
+def post_process(context: BuildContext) -> None:
     if context.config.has_acl:
         context.config.resources["acl_initializer"].init_acl_ops()

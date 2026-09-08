@@ -40,8 +40,8 @@ def test_array_staging_uses_actual_backend_host_allocator():
 
 def test_reduction_policy_is_target_scoped_without_changing_amp():
     source = (SRC / "ops/reduce_op.cc").read_text()
-    assert source.count("backend_ops(runtime_use_cuda()") == 2
-    assert source.count("? accelerator_backend_id() : BackendId::Cpu).execution") == 2
+    assert source.count("backend_ops(construction_target_backend(x)).execution") == 2
+    assert "backend_ops(runtime_use_cuda()" not in source
     assert source.count("!policy.native_low_precision_reduction") == 2
     assert source.count("reduce_dtype_infer(ns, x->ns, policy.preserve_reduction_dtype)") == 2
     assert "amp_reg |= " not in source and "amp_reg = " not in source

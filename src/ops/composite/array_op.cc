@@ -35,9 +35,9 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
         output->set_flag(VarFlags::_is_scalar);
     #ifdef HAS_ACCELERATOR
     // Fused scalar values are emitted inside generated kernels on both backends.
-    if (runtime_use_cuda() && output->flag(VarFlags::_force_fuse))
+    if (requested_backend() != BackendId::Cpu && output->flag(VarFlags::_force_fuse))
         set_flag(OpFlags::_cuda, 1);
-    if (runtime_use_cuda() && !save_mem && !use_pinned_host_memory()) {
+    if (requested_backend() != BackendId::Cpu && !save_mem && !use_pinned_host_memory()) {
         set_flag(OpFlags::_cpu, 0);
         set_flag(OpFlags::_cuda, 1);
         if (!output->flag(VarFlags::_force_fuse)) {

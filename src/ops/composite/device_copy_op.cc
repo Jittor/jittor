@@ -31,19 +31,27 @@ DeviceCopyOp::DeviceCopyOp(Var* x, int device) : x(x), device(device) {
     USER_CHECK(device >= -1 && (device < 0 || count == 0 || device < count))
         << "Invalid CUDA device index" << device >> ", visible device count is" << count;
     y = create_output(nullptr, x->dtype());
-    y->device_id = device < 0 ? x->device_id : device;
+    y->set_flag(VarFlags::_is_scalar, x->flag(VarFlags::_is_scalar));
+    if (x->placement.explicit_backend || y->placement.explicit_backend) {
+        y->placement = TensorPlacement({device < 0 ? BackendId::Cpu : accelerator_backend_id(),
+                                       device < 0 ? 0 : device});
+        y->device_id = device;
+    } else {
+        y->device_id = device < 0 ? x->device_id : device;
+    }
     if (x->name.ptr)
         y->name = x->name;
 }
 
 VarPtr DeviceCopyOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // The gradient of a move is a move back.
-    return make_device_copy(dout, x->device_id);
+    return make_device_copy(dout, x->placement.explicit_backend &&
+        x->placement.device.backend == BackendId::Cpu ? -1 : x->device_id);
 }
 
 void DeviceCopyOp::infer_shape() {
     y->set_shape(x->shape);
-    y->device_id = device < 0 ? x->device_id : device;
+    y->device_id = y->placement.explicit_backend ? device : (device < 0 ? x->device_id : device);
 }
 
 void DeviceCopyOp::jit_prepare(JK& jk) {
@@ -82,6 +90,30 @@ void DeviceCopyOp::run() {
 
 VarPtr device_copy(Var* x, int device) {
     return make_device_copy(x, device);
+}
+
+void adapt_cpu_scalar_operands(const vector<Var**>& inputs, vector<VarPtr>& owners) {
+    TensorPlacement target;
+    for (auto* slot : inputs) {
+        auto* value = *slot;
+        if (!value || !value->placement.explicit_backend) continue;
+        if (!value->flag(VarFlags::_placement_published) && !value->is_finished()
+                && value->flag(VarFlags::_is_scalar)) continue;
+        if (value->placement.device.backend == BackendId::Cpu && value->shape.size() == 0) continue;
+        USER_CHECK(!target.explicit_backend || target == value->placement)
+            << "Expected all tensor inputs on the same backend and device";
+        target = value->placement;
+    }
+    if (!target.explicit_backend || target.device.backend == BackendId::Cpu) return;
+    for (auto* slot : inputs) {
+        auto* value = *slot;
+        if (!value || !value->placement.explicit_backend || value->shape.size() != 0
+                || value->placement.device.backend != BackendId::Cpu) continue;
+        // Replace the constructor argument before typed members, broadcasting
+        // subgraphs and Node edges are created. The source Var never moves.
+        owners.emplace_back(device_copy(value, target.device.index));
+        *slot = owners.back().ptr;
+    }
 }
 
 } // jittor

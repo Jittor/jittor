@@ -251,8 +251,7 @@ EXTERN_LIB int amp_reg;
 
 ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
     : x(x) {
-    const auto& policy = backend_ops(runtime_use_cuda()
-        ? accelerator_backend_id() : BackendId::Cpu).execution;
+    const auto& policy = backend_ops(construction_target_backend(x)).execution;
     // improve float16 mean precision
     if (!policy.native_low_precision_reduction && !(amp_reg & 32) && (x->dtype() == ns_float16 || x->dtype() == ns_bfloat16) && (op == ns_mean || op == ns_add)) {
         auto x_float32 = make_unary(x, ns_float32);
@@ -291,8 +290,7 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
 
 ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, uint keepdims_mask)
     : x(x) {
-    const auto& policy = backend_ops(runtime_use_cuda()
-        ? accelerator_backend_id() : BackendId::Cpu).execution;
+    const auto& policy = backend_ops(construction_target_backend(x)).execution;
     // improve float16 mean precision
     if (!policy.native_low_precision_reduction && !(amp_reg & 32) && (x->dtype() == ns_float16 || x->dtype() == ns_bfloat16) && (op == ns_mean || op == ns_add)) {
         auto x_float32 = make_unary(x, ns_float32);

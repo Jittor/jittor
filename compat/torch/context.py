@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from .._aliases import _is_deployed_torch_placeholder
 from ..diagnostics import EXPECTED, swallowed
 from .namespace import TorchNamespace
+from .contracts import Installer, validate_installer
 
 
 def _native_backend_for(target):
@@ -263,11 +264,12 @@ class InstallContext:
         self.reports.append(report)
         return report
 
-    def run_required(self, step, installer):
+    def run_required(self, step: str, installer: Installer) -> object:
         if self.markers.get(step) == "complete":
             self._record(step, True, "skipped")
             return None
         try:
+            validate_installer(installer, step)
             result = installer(self)
         except EXPECTED as error:
             swallowed("torch/context.py run_required: result = installer(self)", error)
@@ -277,11 +279,12 @@ class InstallContext:
         self._record(step, True, "complete")
         return result
 
-    def run_optional(self, step, installer):
+    def run_optional(self, step: str, installer: Installer) -> object:
         if self.markers.get(step) == "complete":
             self._record(step, False, "skipped")
             return None
         try:
+            validate_installer(installer, step)
             result = installer(self)
         except EXPECTED as error:
             warned = self.state.setdefault("_optional_warned_steps", set())

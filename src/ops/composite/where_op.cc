@@ -19,9 +19,10 @@ WhereOp::WhereOp(Var* cond, NanoString dtype) : cond(cond) {
     set_flag(OpFlags::_manual_set_vnbb);
     auto ndim = cond->shape.size();
     #ifdef HAS_ACCELERATOR
-    if (runtime_use_cuda()) {
+    const auto backend = construction_target_backend(cond);
+    if (backend != BackendId::Cpu) {
         auto accelerated_where = find_op_capability<std::vector<VarPtr>, Var*, NanoString>(
-            accelerator_backend_id(), OpCapability::Where, cond, dtype);
+            backend, OpCapability::Where, cond, dtype);
         if (accelerated_where) {
             auto var = accelerated_where(cond, dtype);
             for(uint i=0;i<ndim;i++)

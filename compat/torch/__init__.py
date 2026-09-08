@@ -9,9 +9,11 @@ package object through the central compatibility alias registry.
 from __future__ import absolute_import
 
 import sys
+from typing import Tuple
 
 from .._aliases import _torch_namespace as _torch_namespace_snapshot
 from .context import InstallContext, InstallReport, InstallStepError, ModuleRegistry
+from .contracts import InstallStep
 from ..transaction import InstallTransaction, active_transaction, _MISSING
 from .functional import (
     _diff,
@@ -137,7 +139,7 @@ def _install_optional_vllm(context):
     )
 
 
-_REQUIRED_STEPS = (
+_REQUIRED_STEPS: Tuple[InstallStep, ...] = (
     ("core", core.install),
     ("tensor.base", tensor.install),
     ("tensor.methods", tensor.install_methods),
@@ -164,7 +166,7 @@ _REQUIRED_STEPS = (
     ("utilities.module-keys", utilities.install_parity),
 )
 
-_OPTIONAL_STEPS = (
+_OPTIONAL_STEPS: Tuple[InstallStep, ...] = (
     ("optional.torchmetrics", utilities.install_torchmetrics),
     ("optional.transformers", utilities.install_transformers),
     ("optional.tensordict", autograd_installer.install_tensordict),

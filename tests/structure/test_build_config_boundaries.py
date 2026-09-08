@@ -65,7 +65,8 @@ def test_entrypoint_selection_is_explicit_and_order_independent():
             self.name = name
         def load(self):
             calls.append(self.name)
-            return SimpleNamespace(configure=lambda context: context.config)
+            return SimpleNamespace(configure=lambda context: context.config,
+                                   install_extern=lambda context: False)
     entries = [Entry("acl"), Entry("rocm"), Entry("corex")]
     assert discovery.requested_backend({"JT_BACKEND": "npu", "COREX_HOME": "/sdk"}) == "acl"
     discovery.load_backend_provider("acl", entries=entries)
@@ -87,6 +88,46 @@ def test_available_sdk_selection_checks_paths_without_imports():
     assert len(checked) == 3
     assert discovery.requested_backend({"hipcc_path": "/custom/hipcc"}, is_file=exists) == "rocm"
     assert len(checked) == 3
+
+
+@pytest.mark.parametrize("broken", ("missing_extern", "wrong_configure", "wrong_post_process"))
+def test_invalid_provider_is_rejected_before_running_any_hook(broken):
+    discovery = _load("backend_discovery")
+    calls = []
+    def configure(context):
+        calls.append("configure")
+        return context.config
+    provider = SimpleNamespace(configure=configure,
+                               install_extern=lambda context: calls.append("extern"))
+    if broken == "missing_extern":
+        del provider.install_extern
+        expected = "install_extern"
+    elif broken == "wrong_configure":
+        provider.configure = lambda context, second: calls.append("configure")
+        expected = "configure"
+    else:
+        provider.post_process = lambda: calls.append("post_process")
+        expected = "post_process"
+    class Entry:
+        name, group = "test_provider", discovery.ENTRY_POINT_GROUP
+        def load(self):
+            return provider
+    with pytest.raises(TypeError, match=expected):
+        discovery.load_backend_provider("test_provider", entries=[Entry()])
+    assert calls == []
+
+
+def test_optional_provider_post_process_and_bound_hooks_accept_one_context():
+    discovery = _load("backend_discovery")
+    class Provider:
+        def configure(self, context, optional=None):
+            raise AssertionError("validation must not configure")
+        def install_extern(self, context):
+            raise AssertionError("validation must not compile")
+    discovery.validate_backend_provider(Provider(), "without_post_process")
+    provider = Provider()
+    provider.post_process = lambda context: None
+    discovery.validate_backend_provider(provider, "with_post_process")
 
 
 def test_utils_do_not_import_the_runtime():

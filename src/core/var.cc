@@ -113,6 +113,9 @@ Var::Var(NanoVector shape, NanoString dtype)
       loop_options(compile_options) {
     flags.set(NodeFlags::_var, 1);
     device_id = current_device();
+    placement = current_tensor_placement();
+    if (placement.explicit_backend)
+        device_id = placement.device.backend == BackendId::Cpu ? -1 : placement.device.index;
     // complex dtypes are differentiable too (Wirtinger autograd), so they must not be
     // auto-stop_grad like integer/bool vars are. Only non-float AND non-complex stops grad.
     flags.set(NodeFlags::_stop_grad, (!dtype.is_float() && !dtype.is_complex()) || no_grad);

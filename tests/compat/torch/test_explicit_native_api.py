@@ -99,9 +99,9 @@ def test_manifest_describes_final_bindings_without_changing_native_functions(fro
     from jittor.compat.torch.fidelity import fidelity_of, register_fidelity, Fidelity
     for namespace, names in [*API_PATHS.items(), *UNIMPLEMENTED_PATHS.items()]:
         owner = resolve(frontend, namespace)
-        if owner is None:
-            continue
+        assert owner is not None, namespace
         for name in names:
+            assert hasattr(owner, name), namespace + "." + name
             implementation = getattr(owner, name, None)
             if isinstance(implementation, property):
                 implementation = implementation.fget

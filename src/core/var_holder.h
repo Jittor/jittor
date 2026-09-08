@@ -173,6 +173,10 @@ struct VarHolder {
     // @pyjt(swap)
     // @attrs(return_self)
     inline VarHolder* swap(VarHolder* v) {
+        if (var->flag(VarFlags::_placement_published) || v->var->flag(VarFlags::_placement_published)) {
+            var->set_flag(VarFlags::_placement_published);
+            v->var->set_flag(VarFlags::_placement_published);
+        }
         std::swap(var, v->var);
         own_holder(); v->own_holder();
         return this; 
@@ -186,6 +190,12 @@ struct VarHolder {
      */
     // @pyjt(__get__device_id)
     inline int device_id() { return var->device_id; }
+
+    // Explicit graph placement (-1 means native FollowRuntime policy).
+    // @pyjt(__get__placement_backend)
+    inline int placement_backend() {
+        return var->placement.explicit_backend ? int(var->placement.device.backend) : -1;
+    }
 
     /**
      * Return this Var on CUDA device ``device``, copying it there when it

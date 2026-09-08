@@ -6,7 +6,7 @@
 ## 当前开发底座
 
 - 在 `$JITTOR_LAB_ROOT/refactor/coord` 的 `wk/coord` 工作，整合后推送远端
-  `2.0-refactor`。本批以 `c68b0cf7d` 为起点，最新提交以远端分支为准。
+  `2.0-refactor`。本批以 `b2e03162b` 为起点，最新提交以远端分支为准。
 - 物理源码固定为顶层 `src/`、`backends/`；`python/jittor/{src,extern}` 已不存在。
   Var/Op 统一图和七个元算子保留。真实 strides/storage、dtype/C++ 边界、
   动态形状提交与 GIL 前置见[上一批记录](../results/2026-09-08-architecture-integration.md)。
@@ -19,22 +19,25 @@
   MANIFEST 由 `tools/build/generate_manifest.py` 生成，见
   [打包记录](../results/2026-09-08-packaging-ownership.md)。
 
-本批补齐 serialization/autograd/library/distribution 公共函数、factory/vmap/FSDP
-公共 helper owner，独立根 namespace 安装后关闭原生 fallback；收口 11.03，
-当前剩 21 条代码/性能记录，另有 9 条硬件验收。本批运行证据与仍红的全仓门禁见
-[整合记录](../results/2026-09-08-api-owner-closure.md)。
+本批补齐 NN/distribution/Parameter 类型工厂的模块级实现，原生 TensorPlacement
+接通 CPU/CUDA 图、执行器及工厂/to/load；收口 7.03、11.04，当前剩 19 条
+代码/性能记录，另有 9 条硬件验收。真实 CPU/双卡 CUDA 最终 9 项通过；完整
+structure 仍有失败，不能把本批收口解释为全仓全绿。运行证据见
+[整合记录](../results/2026-09-08-frontend-placement-integration.md)与
+[原生验收](../results/2026-09-08-tensor-backend-placement.md)。
 相关修复节点已通过，但非共享分配器的 scalar broadcast/view、旧断言计数及部分
 pytest/子进程合同仍需后续处理；不能把本批收口解释为全仓门禁全绿。
 
 ## 继续顺序
 
 先收齐独立前端、剩余 API 和第三方 adapter 边界，再处理剩余功能与性能。
-7.03 仍需将 distribution/NN/frontend 类型工厂中的真实适配逻辑迁为模块级实现，
-不能用 installer 命名范围的闭包计数证明全项完成。7.12 的优先缺口是
-KI-BACKEND-PLACEMENT-001：CUDA 全局模式下，CPU checkpoint 后续计算会迁回
-GPU；原生 TensorPlacement/图传播/执行器已在隔离树实现并过 TU 语法与 host
-scope 检查，尚需与当前 Python 工厂/to/load 接线并做真实运行验收。
-不能用 force_cpu 显示标记或每步强制同步替代原生约束；严格 xfail 用例保留至修复。
+7.12 的剩余明确入口是 compat/shim/runtime.py 的 independent=False：它仍将
+安装指向 native owner，需删除该legacy原生别名模式并同步调用者；原生 native
+Var 的 FollowRuntime 语义继续保留，不应为删除legacy Torch模式而改变它。
+当前 CPU checkpoint 回归已去掉 xfail；CPU 0-D 与 CUDA 运算通过局部可导copy
+完成，不能恢复 force_cpu 显示标记或逐操作强同步绕过。
+测试布局整批已在隔离树重排并共享 pytest 策略，vLLM 提取已准备独立本地项目；
+两项均待合入，先核对 agent 交付和实际diff，不能仅凭隔离树完成就关闭看板。
 FSDP 的通信、mesh、
 原生 optimizer 复用和生命周期架构已实现；峰值显存性能仍未达，优化后移。
 缺硬件的 ACL/HCCL/NPU、ROCm/Corex 和多机验证继续按上机文档交接。

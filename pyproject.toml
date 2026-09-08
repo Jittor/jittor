@@ -26,6 +26,7 @@ dependencies = [
     "pillow",
     "astunparse",
     "importlib-metadata; python_version < '3.8'",
+    "typing_extensions>=4.1; python_version < '3.8'",
     "pywin32>=1.0; platform_system == 'Windows'",
 ]
 
@@ -60,6 +61,7 @@ include-package-data = true
 # declarations plus the sdist-only selections below; setup.py has no inventory.
 [tool.setuptools.package-data]
 "jittor" = ["__init__.pyi", "contrib/math_util/src/*", "build/utils/class/*"]
+"jittor_utils" = ["__init__.pyi"]
 "jittor.src" = ["**/*.cc", "**/*.h"]
 "jittor.backends.cpu" = ["**/*.cc", "**/*.h", "**/*.cpp", "**/*.cu", "**/*.cuh"]
 "jittor.backends.cuda" = ["**/*.cc", "**/*.h", "**/*.cpp", "**/*.cu", "**/*.cuh"]
@@ -111,6 +113,7 @@ files = [
     "python/jittor_utils",
     "python/jittor/build/utils",
     "compat/shim/deploy.py",
+    "compat/torch/contracts.py",
     "tools/lint/check_import_layering.py",
     "tools/release/pack_offline.py",
     "tests/structure/test_cleanup_structure.py",

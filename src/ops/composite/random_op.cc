@@ -18,9 +18,10 @@ namespace jittor {
 #ifndef JIT
 RandomOp::RandomOp(NanoVector shape, NanoString dtype, NanoString type) {
     #ifdef HAS_ACCELERATOR
-    if (runtime_use_cuda()) {
+    const auto backend = construction_target_backend();
+    if (backend != BackendId::Cpu) {
         auto accelerated_random = find_op_capability<VarPtr, NanoVector, NanoString, NanoString>(
-            accelerator_backend_id(), OpCapability::Random, shape, dtype, type);
+            backend, OpCapability::Random, shape, dtype, type);
         if (accelerated_random) {
             auto var = accelerated_random(shape, dtype, type);
             forward(var);

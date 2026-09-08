@@ -98,6 +98,20 @@ def _install_distribution_surface(ctx):
         "Native distributions retain their backend limits; sampling fallbacks clamp random values and have limited validation")
     register_api_bindings(_dist.constraints, "torch.distributions.constraints", ("Constraint",),
         Fidelity.APPROXIMATE, "Legacy permissive constraint objects do not validate mathematical support")
+    for class_name in (
+        "Distribution", "Normal", "Uniform", "Bernoulli", "Beta", "Categorical",
+        "Dirichlet", "Exponential", "Gamma", "Geometric", "Independent", "LogNormal",
+        "LogisticNormal", "MultivariateNormal", "OneHotCategorical", "Poisson",
+        "Gumbel", "RelaxedBernoulli", "RelaxedOneHotCategorical",
+    ):
+        distribution_type = getattr(_dist, class_name, None)
+        if distribution_type is not None:
+            register_api_bindings(distribution_type, "torch.distributions." + class_name,
+                ("__init__", "sample", "rsample", "log_prob", "prob", "entropy", "cdf",
+                 "icdf", "mean", "variance", "stddev", "loc", "scale", "expand",
+                 "enumerate_support"), Fidelity.APPROXIMATE,
+                "Module-owned adapter applies frontend dtype/sampling policy to native "
+                "distribution mathematics; native validation and backend limitations remain")
     register_api_bindings(_dist, "torch.distributions",
         ("kl_divergence", "broadcast_all", "simple_presum"), Fidelity.APPROXIMATE,
         "Native distribution mathematics under the active Tensor frontend scope; "

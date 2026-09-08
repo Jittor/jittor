@@ -81,6 +81,9 @@ struct VarFlags {
         // Reversible torch-style requires_grad_(False). Unlike _stop_grad this
         // must not release an already-built backward graph.
         _requires_grad_disabled,
+        // This explicit placement has been observed by a Python Tensor holder.
+        // It cannot be retargeted as an unpublished scalar implementation detail.
+        _placement_published,
         _end,
     };
 };

@@ -19,8 +19,6 @@ from jittor.compat.torch import serialization
 from jittor.compat.torch.serialization import portable, safetensors as safe_owner, torch_archive
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="KI-BACKEND-PLACEMENT-001: execution backend still follows global mode after CPU load")
 def test_cuda_checkpoint_mapped_to_cpu_stays_on_cpu_for_subsequent_ops():
     import jittor as jt
     import torch
@@ -35,7 +33,9 @@ def test_cuda_checkpoint_mapped_to_cpu_stays_on_cpu_for_subsequent_ops():
         stream.seek(0)
         restored = torch.load(stream, weights_only=True, map_location="cpu")["value"]
         assert type(restored) is torch.Tensor
-        assert restored.device.type == "cpu" and restored.location() == "cpu"
+        assert restored.device.type == "cpu" and restored.placement_backend == 0
+        restored.sync()
+        assert restored.location() == "cpu" and restored.device_id == -1
         result = restored + 1
         result.sync()
         assert result.location() == "cpu"

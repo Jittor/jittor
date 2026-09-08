@@ -113,7 +113,7 @@ def save(obj, f, *a, **k):
 
 def _preserve_parameter(obj, moved, g):
     if moved is not obj and isinstance(obj, g.nn.Parameter):
-        on_cpu = moved.location() == "cpu"
+        on_cpu = moved.placement_backend == 0 if moved.placement_backend >= 0 else moved.location() == "cpu"
         obj.assign(moved.detach())
         if on_cpu:
             return _make_cpu_resident(obj, inplace=True)
@@ -159,6 +159,12 @@ def _apply_map_location(obj, map_location, _depth=0, source_devices=None):
             return _preserve_parameter(obj, _make_cpu_resident(
                 obj, inplace=isinstance(obj, g.nn.Parameter)), g)
     if name in ("cuda", "npu", "gpu"):
+        if obj.placement_backend >= 0:
+            if name == "gpu":
+                target = "cuda" + str(target)[3:]
+            moved = _make_cuda_resident(obj, force=True,
+                                       inplace=isinstance(obj, g.nn.Parameter), device=target)
+            return _preserve_parameter(obj, moved, g)
         if not jt.flags.use_cuda:
             if not jt.has_cuda and not getattr(jt.flags, "use_acl", False):
                 raise RuntimeError(

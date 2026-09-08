@@ -11,6 +11,7 @@ namespace jittor {
 
 struct BinaryOp : Op {
     static constexpr bool accepts_storage_strides = true;
+    static constexpr bool accepts_cpu_scalar_operands = true;
     Var* x, * y, * z;
     BinaryOp(Var* x, Var* y, NanoString p);
     

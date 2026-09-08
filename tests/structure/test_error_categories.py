@@ -376,9 +376,17 @@ def test_py_converter_conversion_checks_stay_internal_invariants():
 
 def test_device_copy_user_boundary_migration_is_explicit_and_bounded():
     source = (ROOT / "src/ops/composite/device_copy_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    # The original migration owns the device-index check. Scalar placement
+    # normalization is a new constructor-input boundary, not a second migrated
+    # assertion; keep the two scopes explicit rather than inflating the ledger.
+    copy_impl, marker, scalar_adapter = source.partition("\nvoid adapt_cpu_scalar_operands(")
+    assert marker
+    actual = copy_impl.count("USER_CHECK(") + copy_impl.count("USER_CHECKop(")
     assert actual == MIGRATED_DEVICE_COPY_USER_BOUNDARIES[
         "src/ops/composite/device_copy_op.cc"]
+    assert scalar_adapter.count("USER_CHECK(") == 1
+    assert "USER_CHECK(!target.explicit_backend || target == value->placement)" in scalar_adapter
+    assert "Expected all tensor inputs on the same backend and device" in scalar_adapter
 
 
 def test_numpy_type_boundary_migration_is_explicit_and_bounded():

@@ -7,7 +7,7 @@ pretend that MIOpen/RCCL are available.
 import os
 import shutil
 from pathlib import Path
-from jittor_utils.build_config import BuildSource
+from jittor_utils.build_config import BuildConfig, BuildContext, BuildSource
 from jittor_utils.backend_resources import backend_root
 
 
@@ -15,7 +15,7 @@ def _rocm_home():
     return os.path.abspath(os.environ.get("ROCM_HOME") or os.environ.get("ROCM_PATH") or os.environ.get("HIP_PATH") or "/opt/rocm")
 
 
-def configure(context):
+def configure(context: BuildContext) -> BuildConfig:
     config = context.config
     home = _rocm_home()
     hipcc = os.environ.get("hipcc_path") or os.path.join(home, "bin", "hipcc")
@@ -38,11 +38,11 @@ def configure(context):
         environment=dict(config.environment, use_mkl="0"))
 
 
-def install_extern(context):
+def install_extern(context: BuildContext) -> bool:
     from .libraries import install_libraries
     return bool(install_libraries(context))
 
 
-def post_process(context):
+def post_process(context: BuildContext) -> None:
     from .libraries import install_kernels
     install_kernels()

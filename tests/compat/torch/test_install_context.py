@@ -123,6 +123,18 @@ class TestInstallContext(unittest.TestCase):
         self.assertEqual(context.markers["core"], "complete")
         self.assertEqual(context.reports[-1].status, "skipped")
 
+    def test_invalid_installer_uses_required_and_optional_failure_reports(self):
+        context = self.context()
+        def invalid(current, missing):
+            self.fail("invalid callback must not execute")
+        with self.assertRaisesRegex(InstallStepError, "one InstallContext argument"):
+            context.run_required("invalid.required", invalid)
+        self.assertNotIn("invalid.required", context.markers)
+        self.assertEqual(context.reports[-1].status, "failed")
+        context.run_optional("invalid.optional", invalid)
+        self.assertEqual(context.markers["invalid.optional"], "failed")
+        self.assertEqual(context.optional_failures()[-1].step, "invalid.optional")
+
     def test_optional_failure_is_reported_once_and_can_retry(self):
         context = self.context()
         calls = []

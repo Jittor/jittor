@@ -65,6 +65,7 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     // relation == 0: `op` and `other` both read `var` (siblings, so the
     //                question is only whether they may share one kernel).
     auto edge_fusable = [&](Var* var, Op* op, Op* other, int relation) -> bool {
+        if (op->requested_backend() != other->requested_backend()) return false;
         if (var->flag(VarFlags::_stop_fuse)) return false;
         if (relation == 1) {
             // vars before start_var_num are the batch's inputs: they already

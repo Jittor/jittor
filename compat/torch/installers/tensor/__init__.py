@@ -524,7 +524,7 @@ def _array_keep_dtype(data):
 def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
     g = compatibility_owner(jt)
     Var = g.Var
-    with tensor_frontend(Var):
+    with tensor_frontend(Var, device=device, like=data):
         import numpy as _np
         ds = _dtype_to_str(dtype)
         numpy_dtypes = {"bool", "uint8", "int8", "int16", "int32", "int64",
@@ -569,8 +569,9 @@ def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
         if _device_is_cpu(device):
             v = _make_cpu_resident(v)
         elif _device_is_cuda(device):
-            _set_use_cuda()
-            v = _make_cuda_resident(v, force=True)
+            if g is jt:
+                _set_use_cuda()
+            v = _make_cuda_resident(v, force=True, device=device)
             v = _move_to_cuda_index(v, g.device(device))
         if g is not jt:
             v.requires_grad_(bool(requires_grad))
@@ -585,7 +586,7 @@ def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
 def as_tensor(data, dtype=None, device=None):
     g = compatibility_owner(jt)
     Var = g.Var
-    with tensor_frontend(Var):
+    with tensor_frontend(Var, device=device, like=data):
         if isinstance(data, jt.Var):
             r = data if isinstance(data, Var) else g.Tensor(data)
             if dtype is not None and _jittor_dtype_name(r.dtype) != _dtype_to_str(dtype):
@@ -593,8 +594,9 @@ def as_tensor(data, dtype=None, device=None):
             if _device_is_cpu(device):
                 return _make_cpu_resident(r)
             if _device_is_cuda(device):
-                _set_use_cuda()
-                return _move_to_cuda_index(_make_cuda_resident(r, force=True), g.device(device))
+                if g is jt:
+                    _set_use_cuda()
+                return _move_to_cuda_index(_make_cuda_resident(r, force=True, device=device), g.device(device))
             return r
         return tensor(data, dtype=dtype, device=device)
 
@@ -602,15 +604,16 @@ def as_tensor(data, dtype=None, device=None):
 def from_numpy(arr, *, device=None):
     g = compatibility_owner(jt)
     Var = g.Var
-    with tensor_frontend(Var):
+    with tensor_frontend(Var, device=device if device is not None or g is jt else "cpu"):
         v = _array_keep_dtype(arr)
         if g is not jt:
             v.requires_grad_(False)
         if _device_is_cpu(device):
             return _make_cpu_resident(v)
         if _device_is_cuda(device):
-            _set_use_cuda()
-            return _move_to_cuda_index(_make_cuda_resident(v, force=True), g.device(device))
+            if g is jt:
+                _set_use_cuda()
+            return _move_to_cuda_index(_make_cuda_resident(v, force=True, device=device), g.device(device))
         return v
 
 

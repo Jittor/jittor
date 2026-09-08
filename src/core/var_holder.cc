@@ -56,6 +56,8 @@ void add_hold_vars(VarHolder* self) {
 }
 
 void schedule_pending_from_python(VarHolder* holder) {
+    if (holder->var->placement.explicit_backend)
+        holder->var->set_flag(VarFlags::_placement_published);
     runtime_executor().submit_pending(holder->var);
 }
 
@@ -373,6 +375,8 @@ VarHolder::~VarHolder() {
 
 // assign attributes of b to a
 static inline void assign_var(Var* a, Var* b) {
+    if (b->flag(VarFlags::_placement_published))
+        a->set_flag(VarFlags::_placement_published);
     a->name = move(b->name);
     if (b->is_stop_grad())
         a->set_stop_grad();
@@ -485,6 +489,8 @@ VarHolder* VarHolder::update(VarHolder* v) {
 }
 
 VarHolder* VarHolder::_update(VarHolder* v) {
+    if (var->flag(VarFlags::_placement_published))
+        v->var->set_flag(VarFlags::_placement_published);
     release_holder();
     v->var->own_both_liveness();
     var->release_both_liveness();

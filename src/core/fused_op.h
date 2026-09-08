@@ -90,6 +90,11 @@ struct FusedOp final : Op {
     int get_node_id(Node* node);
     int has(Node* node);
     void update_ops();
+    TensorPlacement graph_placement() const override {
+        // Compiler copies borrow the constituent graph but intentionally do
+        // not copy Node edges. Their placement must still match the segment.
+        return ops.empty() ? TensorPlacement{} : ops.back()->graph_placement();
+    }
     FusedOp();
     FusedOp(const FusedOp& other);
     ~FusedOp();

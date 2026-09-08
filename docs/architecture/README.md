@@ -11,6 +11,11 @@
 
 ## 已落地
 
+- [Installer 与 Backend 接口契约](installer-backend-contracts.md) —— 统一安装步骤
+  的上下文、事务和失败约定；SDK provider 在配置/编译前检查必需回调，保留可选
+  post-process。原生 executor、allocator 与 BackendOps 各自承载运行期契约。
+- [Torch API 与 Runtime 归属](torch-api-ownership.md) —— 独立命名空间、模块级
+  实现、原生数学委托与逐 API 保真度记录；完整任务状态仍以看板为准。
 - [惰性图的流水化执行](pipelined-execution.md) —— CUDA 上每步的差距不在
   kernel 而在 GPU 空转：整步图先在 CPU 上建完再发射，建图的 9 ms 里设备
   无事可做。`auto_flush_ops` 按段提前发射后，transformer 类用例全部追平

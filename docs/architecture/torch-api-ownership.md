@@ -18,6 +18,16 @@ changing a nested function's `__qualname__` does not satisfy this boundary.
 Per-call algorithm callbacks may close over inputs, but installation must not
 create a new public implementation on each attempt.
 
+Frontend type factories configure classes and bind module-owned behavior.
+`NNFrontendOwner` owns the layer-class cache; `LayerInitializer` and
+`nn_adoption.py` handle native construction and parameter adoption without
+mutating external/shared modules. Parameter containers use explicit adapter
+mixins. Distribution constructors, methods and properties use the descriptors
+in `distribution_adapters.py`, with separate state for each frontend. Dynamic
+type identity does not justify hiding adaptation algorithms inside a factory.
+See [distribution owners](distribution-frontend-owners.md) and the shared
+[Installer/Backend protocols](installer-backend-contracts.md).
+
 Use `get_install_context(native_backend)` to resolve the explicitly bound
 frontend owner at call time. This is a read operation: it neither activates
 Torch nor creates an installation. It rejects an absent or inconsistent owner.
@@ -55,8 +65,10 @@ Family-specific restrictions take precedence over generic composition metadata.
 the coverage table. The registry is authoritative per API spelling: aliases can
 share an object while declaring different supported behavior. Metadata must not
 mutate shared native Python classes/functions. Neither coverage registration nor
-namespace sealing proves full Torch semantics; native placement is still tracked
-under 7.12 and `KI-BACKEND-PLACEMENT-001`.
+namespace sealing proves full Torch semantics. Native explicit placement now
+preserves CPU/CUDA residency through execution; see the
+[placement contract](tensor-backend-placement.md). Removal of the explicitly
+selected legacy native-as-Torch activation still belongs to 7.12.
 
 Serialization owners separate portable values, restricted pickle loading, Torch
 archives and safetensors. Restricted mode rejects native-only fallback paths that

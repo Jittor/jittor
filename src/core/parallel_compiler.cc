@@ -146,6 +146,8 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
             load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
         }
         LOGvvv << "Check op needs compile:" << op;
+        ExecutionBackendScope operation_backend_scope(op->requested_backend());
+        TensorPlacementScope placement_scope(op->graph_placement());
         op->prepare_execution(jkl);
         if (jkl.empty()) continue;
 
@@ -219,6 +221,8 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 int root = queue[rid];
                 op = ops[root];
                 LOGvv << "Compile Op:" << op;
+                ExecutionBackendScope operation_backend_scope(op->requested_backend());
+                TensorPlacementScope placement_scope(op->graph_placement());
                 op->prepare_execution(jkl);
                 auto op_entry = OpCompiler::do_compile(op);
                 CompileResult result;
@@ -231,6 +235,8 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
             } else {
                 FusedOp& fused_op = *fop_needs_compile[-rid-1];
                 op = &fused_op;
+                ExecutionBackendScope operation_backend_scope(op->requested_backend());
+                TensorPlacementScope placement_scope(op->graph_placement());
                 LOGvv << "Compile FusedOp:" << op;
                 LOGV(11) << "FusedOps:" << fused_op.ops;
                 auto context = std::make_shared<FusedOpContext>();

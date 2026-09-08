@@ -79,6 +79,8 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
         if (!need_opt || gopt_disable) break;
         for (Node* n : bfs_q) {
             if (has_gopt(n)) {
+                ExecutionBackendScope backend_scope(n->op()->requested_backend());
+                TensorPlacementScope placement_scope(n->op()->graph_placement());
                 n->op()->graph_optimize();
                 n->op()->set_flag(OpFlags::_has_gopt, 0);
             }
