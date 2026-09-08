@@ -135,6 +135,15 @@ def test_swiglu_dimension_uses_typed_data_channel(pipeline):
     assert "op.dim =" not in calls[-1].get("cuda_src", "")
 
 
+def test_concat_forward_uses_typed_data_channel(pipeline):
+    load, Tensor, calls = pipeline
+    data = load("_attributes").attribute_data
+    load("concat_op").ConcatACL().execute([Tensor((2, 3)), Tensor((2, 5))], 1)
+    expected = data("Concat", {"tensorNum": 2, "dim": 1})
+    assert all(calls[-1]["data"].get(key) == value for key, value in expected.items())
+    assert "op.jt_name = \"concat\"" not in calls[-1]["cuda_src"]
+
+
 def test_generated_and_runtime_attribute_sources_cannot_be_mixed(pipeline):
     load, Tensor, calls = pipeline
     code = load("_code").acl_code

@@ -41,15 +41,6 @@ class ConcatACL:
                 or input_tensors[i].shape[dim + 1 :] != input_tensors[0].shape[dim + 1 :]
             ):
                 raise ValueError("All input tensors must have the same shape")
-        attr_code = code_program(
-            [
-                '\n        op.jt_name = "concat";\n        ',
-                attribute_program(
-                    "Concat", {"tensorNum": len(input_tensors), "dim": dim}, variable="op"
-                ),
-                "\n        ",
-            ]
-        )
         split_sizes = [tensor.shape[dim] for tensor in input_tensors]
         grad_attr_code = code_program(
             [
@@ -66,7 +57,7 @@ class ConcatACL:
             input_tensors,
             output_dtypes=[input_tensors[0].dtype],
             output_shapes=[self.calculate_output_shape(input_tensors, dim)],
-            attr_code=attr_code,
+            attributes={"tensorNum": len(input_tensors), "dim": dim},
             multi_grad_src=code_program(
                 [
                     "\n            // aclop\n            SplitWithSizeOpRunner op;\n            op.add(dout, true);\n            ",
