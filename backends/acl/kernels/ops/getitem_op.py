@@ -292,7 +292,8 @@ class GetItemACL(jt.Function):
                 return self.execute(x, index_list, return_x)
             # assert False, "not support bool type now"
             # TODO:优化
-            assert x.shape == slices.shape, "shape not match"
+            if x.shape != slices.shape:
+                raise ValueError("getitem mask shape must match input shape")
             output_len = slices.sum().item()
             # output = jt.empty((output_len,),dtype=x.dtype)
             x_len = x.numel()
@@ -340,7 +341,8 @@ class GetItemACL(jt.Function):
                 dd, boardcast_shape = can_broadcast_and_shape(
                     boardcast_shape, caculate_shape(slices_list[ii])
                 )
-                assert dd is True, "can not broadcast"
+                if dd is not True:
+                    raise ValueError("getitem indices cannot be broadcast")
             output_shape = boardcast_shape
             output_shape += x.shape[slices_len:]
             if output_shape == []:
@@ -369,7 +371,8 @@ class GetItemACL(jt.Function):
                     attr_code=attr_code,
                 )[0]
                 return result
-        assert contains_slice, "slice type error"
+        if not contains_slice:
+            raise TypeError("getitem expects at least one slice index")
         x_dim = len(x.shape)
         slices = list(slices)
         for s in slices:
