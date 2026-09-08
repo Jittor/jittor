@@ -1207,9 +1207,11 @@ Example 2::
                 print(f"#{i}, loss:{loss} acc:{acc}"
         )
     '''
-    assert len(args)>=1
+    if len(args) < 1:
+        raise ValueError("fetch requires at least one Var and a callback")
     func = args[-1]
-    assert callable(func)
+    if not callable(func):
+        raise TypeError("fetch callback must be callable")
     args = list(args[:-1])
     if len(args)>0 and isinstance(args[0], Sequence) \
         and len(args[0])>=1 and isinstance(args[0][0], Var):
@@ -1256,7 +1258,8 @@ def to_float(v):
     return ori_float(v.item())
 
 def to_bool(v):
-    assert v.dtype.is_int() or v.dtype.is_bool()
+    if not (v.dtype.is_int() or v.dtype.is_bool()):
+        raise TypeError("bool conversion requires an integer or boolean Var")
     return ori_bool(v.item())
 
 Var.__int__ = to_int
