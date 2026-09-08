@@ -93,8 +93,12 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
     n = x.shape[dim]
     if len(rep_list) == 1 and n != 1:
         rep_list = rep_list * n
-    assert len(rep_list) == n, \
-        f"repeat_interleave: repeats length {len(rep_list)} != dim size {n}"
+    if len(rep_list) != n:
+        raise ValueError(
+            "repeat_interleave: repeats length {} != dim size {}".format(
+                len(rep_list), n
+            )
+        )
     idx = []
     for i, c in enumerate(rep_list):
         idx.extend([i] * c)
@@ -144,7 +148,8 @@ def stack(x, dim=0):
         [[4 5 6]]]
     '''
     import jittor as jt
-    assert isinstance(x, Sequence)
+    if not isinstance(x, Sequence):
+        raise TypeError("stack: expected a sequence of tensors")
     if isinstance(x, tuple):
         x = list(x)
     for i,x_ in enumerate(x):
