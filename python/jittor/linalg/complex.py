@@ -270,8 +270,10 @@ def complex_pinv(x:ComplexNumber):
     :return: x's pinv (...,N,M).
     """
     import jittor as jt
-    assert isinstance(x, ComplexNumber), "complex_pinv is implemented for nn.ComplexNumber"
-    assert _jittor_dtype_name(x.real.dtype) == "float32" and _jittor_dtype_name(x.imag.dtype) == "float32", "real and imag in ComplexNumber should be jt.float32"
+    if not isinstance(x, ComplexNumber):
+        raise TypeError("complex_pinv is implemented for nn.ComplexNumber")
+    if not (_jittor_dtype_name(x.real.dtype) == "float32" and _jittor_dtype_name(x.imag.dtype) == "float32"):
+        raise TypeError("real and imag in ComplexNumber should be jt.float32")
     def forward_code(np, data):
         a = _stack_to_complex(data["inputs"][0])
         m_a = data["outputs"][0]
