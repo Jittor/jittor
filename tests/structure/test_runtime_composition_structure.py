@@ -484,13 +484,14 @@ print("RESULT=" + json.dumps({
 
     def test_alias_ownership_is_central(self):
         aliases = (self.compat / "_aliases.py").read_text(encoding="utf-8")
+        native_aliases = (self.jittor / "_runtime/import_aliases.py").read_text(encoding="utf-8")
+        for name in ("jittor.attention", "jittor.depthwise_conv"):
+            self.assertIn(name, native_aliases)
         for name in (
-            "jittor.attention",
             "jittor.torch_compat",
             "jittor.torch_fsdp2_compat",
             "jittor.torch_shim",
             "jittor.triton_shim",
-            "jittor.depthwise_conv",
         ):
             self.assertIn(name, aliases)
         for path in (
@@ -508,6 +509,7 @@ print("RESULT=" + json.dumps({
         paths = [
             self.jittor / "_runtime" / "__init__.py",
             self.jittor / "_runtime" / "core_api.py",
+            self.jittor / "_runtime" / "import_aliases.py",
             self.compat / "_aliases.py",
             self.compat / "integrations.py",
             self.compat / "runtime.py",

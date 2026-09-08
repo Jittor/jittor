@@ -605,13 +605,13 @@ may still use its native owner; deletion masks that fallback locally. Transactio
 rollback restores the exact local binding and deletion state. InstallContext
 separates the installation target from its native backend and never inherits
 install markers through namespace fallback. Publication keeps the root self-alias
-consistent in the registry and import mapping. This is an ownership boundary;
-the default installers still patch native Var/NN classes, so independent Torch
-type semantics remain unfinished.
+consistent in the registry and import mapping. Independent activation owns real
+Tensor/Parameter subclasses and Module/NN adapters, reusing the native Var/Op
+graph and mathematics without installing those APIs on native classes.
 
 The canonical Torch-style implementation is `jittor.compat.torch`. The legacy
-attribute/module spelling `jittor.torch_compat` is an alias created during Jittor
-initialization; it is not a second source file. Likewise, the canonical Triton
+attribute/module spelling `jittor.torch_compat` loads its optional alias provider
+on explicit import; it is not a second source file. Likewise, the canonical Triton
 implementation is `jittor.compat.triton`, with `jittor.triton_shim` retained as
 an object-identity alias.
 
@@ -619,9 +619,10 @@ Compatibility installers for NN, numerical and tensor APIs, and the
 FlashAttention adapter, are normal packages split by implementation family.
 Public callables without installation-state captures can retain module-level
 identity; stateful installation paths keep explicit context and their original
-registration order. The namespace still forwards to native objects and the
-installer still patches native classes. Consequently, task 7.12 remains open:
-package layout alone is not an independent Torch object model or implementation.
+registration order. Task 7.12 remains open: the remaining per-Tensor and runtime
+state must be consolidated, native Torch-role dependencies removed, and compat
+physically extracted into its own distribution. The explicit legacy mode still
+adapts native classes and must not be confused with independent activation.
 
 Basic indexing uses native `VarView` tracking instead of a parallel Python
 `_torch_index_parent`/slice chain. Torch-specific slice forms that do not yet
@@ -639,7 +640,10 @@ name `jittor.torch_shim` is retained only as a same-object legacy alias. The shi
 delegates Torch-style semantics to `jittor.compat.torch`; neither the alias nor
 the deployed package owns a second implementation.
 
-Plain Jittor startup installs only alias resolution and native domains. The
+Plain Jittor startup uses `_runtime.import_aliases` for native aliases and
+`_runtime.compat_bootstrap` for optional activation. It does not import any
+`jittor.compat` module; a missing optional package produces an installation
+error only when compatibility is requested. The
 Torch installer runs after an explicit Torch-mode preflight, through a deployed
 `torch` entry point, or when the historical `jittor.torch_compat` alias is
 imported. This prevents class-level Torch adaptations from changing native

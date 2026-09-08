@@ -8,7 +8,7 @@ from types import ModuleType
 
 
 def test_private_nn_alias_keeps_import_and_pickle_identity_without_facade_export(monkeypatch):
-    source = Path(__file__).resolve().parents[2] / "python/jittor/compat/_aliases.py"
+    source = Path(__file__).resolve().parents[2] / "python/jittor/_runtime/import_aliases.py"
     spec = importlib.util.spec_from_file_location("offline_backend_aliases", source)
     aliases = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(aliases)

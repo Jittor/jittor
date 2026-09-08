@@ -69,10 +69,11 @@ pickle保留，igamma与class资源清单同步。CPU/CUDA/shim和真实自定�
 
 存储/stride与完整API验证仍保留，但不能用笼统“继续API收口”替代上述具体前置。
 
-物理拆包的下一批实施边界（已只读核对，尚未实现）：先把`build/__init__.py`依赖的
-纯native别名表和loader从`compat._aliases`迁到`_runtime/import_aliases.py`；再把
-`jittor/__init__.py`的无条件compat preflight/compose改成显式请求时才加载的桥，
-plain native import不再无条件导入Triton兼容域。随后整树移动
+物理拆包前置已实现：`build/__init__.py`依赖的纯native别名表和loader已迁到
+`_runtime/import_aliases.py`；`jittor/__init__.py`经`_runtime/compat_bootstrap.py`
+仅在显式请求时加载compat preflight/compose，plain native import不再导入兼容域。
+阻止所有compat导入的native前向/反向、按需旧别名与独立入口短验证CPU11/CUDA6项通过。
+见[启动解耦记录](../results/2026-09-08-native-compat-bootstrap.md)。下一批直接整树移动
 `python/jittor/compat`到顶层`compat`，独立项目独占`jittor.compat`包、shim资源和
 torch/triton部署命令，core wheel排除这些文件。两个distribution不得共同拥有
 `jittor/compat/__init__.py`。Torch入口保留一个源文件供打包和deploy复用。

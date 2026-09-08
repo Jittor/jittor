@@ -40,7 +40,7 @@ def test_nn_backend_directory_contains_only_composition_and_hooks():
 
 
 def test_legacy_nn_aliases_declare_the_canonical_backend_owner():
-    tree = ast.parse((ROOT / "python/jittor/compat/_aliases.py").read_text(encoding="utf-8"))
+    tree = ast.parse((ROOT / "python/jittor/_runtime/import_aliases.py").read_text(encoding="utf-8"))
     published = next(ast.literal_eval(node.value) for node in tree.body
                      if isinstance(node, ast.Assign)
                      and any(isinstance(target, ast.Name) and target.id == "ALIASES"

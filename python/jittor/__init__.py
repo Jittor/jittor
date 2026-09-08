@@ -14,7 +14,7 @@ __version__ = '1.3.11.0'
 import os as _os
 import sys as _sys
 
-from .compat.shim.preflight import (
+from ._runtime.compat_bootstrap import (
     is_truthy as _compat_is_truthy,
     prepare_import_environment as _prepare_compat_import,
 )
@@ -295,7 +295,7 @@ if compile_extern.nccl_ops is not None and not hasattr(core.Var, "mpi_all_reduce
 
 
 
-from .compat.runtime import compose as _compose_compat_runtime
+from ._runtime.compat_bootstrap import compose as _compose_compat_runtime
 
 _compat_composition_report = _compose_compat_runtime(
     _sys.modules[__name__],
