@@ -186,7 +186,12 @@ def flip(x, dim=0, dims=None):
     for i in range(len(dim)):
         if dim[i]<0:
             dim[i] += x.ndim
-        assert dim[i]>=0 and dim[i]<x.ndim
+        if dim[i] < 0 or dim[i] >= x.ndim:
+            raise ValueError(
+                "flip: dim {} out of range for tensor with {} dimensions".format(
+                    dim[i], x.ndim
+                )
+            )
     result = try_dispatch("tensor.flip", x, dim)
     if result is not None:
         return result
