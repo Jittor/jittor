@@ -181,7 +181,8 @@ def getitem_acl(x, slices, return_x=None):
         return _getitem_without_none(x, slices)
     if isinstance(slices, int) or isinstance(slices, slice):
         slices = (slices,)
-    assert isinstance(slices, tuple)
+    if not isinstance(slices, tuple):
+        raise TypeError("ACL getitem slices must be a tuple, integer, slice, or tensor")
 
     insert_positions = _get_insert_positions(x, slices)
     slices_without_none = tuple((s for s in slices if s is not None))
