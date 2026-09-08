@@ -18,9 +18,7 @@ from ._code import acl_code as matmul_forward
 
 
 def _matmul_attributes(mode):
-    return attribute_program(
-        "MatMul", {"mode": mode, "cube_math_type": 1 if getattr(jt, "acl_allow_hf32", False) else 0}
-    )
+    return {"mode": mode, "cube_math_type": 1 if getattr(jt, "acl_allow_hf32", False) else 0}
 
 
 class MatmulACL:
@@ -68,7 +66,7 @@ dout->shape = dout_shape;
             output_shapes=[
                 x1.shape[:-1] + x2.shape[-2:-1] if self.trans_x2 else x1.shape[:-1] + x2.shape[-1:]
             ],
-            attr_code=_matmul_attributes(1) if self.trans_x2 else _matmul_attributes(0),
+            attributes=_matmul_attributes(1) if self.trans_x2 else _matmul_attributes(0),
             cuda_grad_src=[
                 code_program(
                     [
