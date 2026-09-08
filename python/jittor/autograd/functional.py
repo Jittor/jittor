@@ -93,7 +93,8 @@ def _tuple_postprocess(res, to_unpack):
     # - invert _as_tuple when res should match the inp given to _as_tuple
     # - optionally remove nesting of two tuples created by multiple calls to _as_tuple
     if isinstance(to_unpack, tuple):
-        assert len(to_unpack) == 2
+        if len(to_unpack) != 2:
+            raise ValueError("autograd: to_unpack tuple must contain two flags")
         if not to_unpack[1]:
             res = tuple(el[0] for el in res)
         if not to_unpack[0]:
