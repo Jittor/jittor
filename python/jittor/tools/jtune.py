@@ -34,7 +34,9 @@ def rewrite_compile_command(command, mode):
 
 def run_cmd(command):
     print("Run cmd:", command)
-    assert os.system(command) == 0, "Run cmd failed: " + command
+    status = os.system(command)
+    if status != 0:
+        raise RuntimeError("Run cmd failed: " + command)
 
 
 def main(argv=None):
