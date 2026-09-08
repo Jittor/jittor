@@ -247,6 +247,16 @@ def _run(python, runtime, case, output, weights=None, device="cpu", repeats=None
         # The oracle is a different interpreter with its own real PyTorch
         # installation. Pinning this checkout onto it is exactly what the
         # comparison must not do, so it is launched unpinned and on purpose.
+        # Test invocations commonly inherit Jittor's source and shim
+        # variables; clear them so the oracle cannot import the deployed
+        # facade and accidentally compare Jittor with itself.
+        environment["PYTHONPATH"] = ""
+        for name in (
+            "JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_CACHE_ROOT",
+            "JITTOR_TORCH_SHIM", "JITTOR_TORCH_KEEP_HOME", "JT_BACKEND",
+            "JT_USE_CUDA", "JT_BUILD_NVCC_PATH", "use_cuda", "nvcc_path",
+        ):
+            environment.pop(name, None)
         completed = subprocess.run(
             command,
             env=environment,
