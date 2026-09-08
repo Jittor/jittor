@@ -41,7 +41,7 @@ def pillow_fromarray(obj, mode=None, *args, **kwargs):
     return original(obj, mode=mode, *args, **kwargs)
 
 
-pillow_fromarray._jittor_torch_compat = True
+setattr(pillow_fromarray, "_jittor_torch_compat", True)
 
 
 def bind_core_install_api(context):
