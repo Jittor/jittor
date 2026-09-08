@@ -214,6 +214,33 @@ def grad(loss, targets, retain_graph=True):
         return core.grad(loss, [targets], retain_graph)[0]
     return core.grad(loss, targets, retain_graph)
 
+
+def submit_pending(*vars, device_sync=False):
+    """Submit exactly the pending subgraphs rooted at ``vars``.
+
+    This is the explicit partial-graph boundary used by Function callbacks and
+    custom execution bridges. It does not flush unrelated holder roots or alter
+    the normal lazy/auto-flush policy. Set ``device_sync`` only when the caller
+    immediately consumes host-visible data.
+    """
+    if not vars:
+        raise ValueError("submit_pending requires at least one Var")
+    for var in vars:
+        if not isinstance(var, Var):
+            raise TypeError("submit_pending expects Var arguments")
+        submit = getattr(var, "submit_pending", None)
+        # Older generated bindings expose only the C++ executor entry point on
+        # the holder; keep the public API compatible with that shape.
+        if submit is None:
+            submit = lambda: core.submit_pending(var)
+        if not callable(submit):
+            raise RuntimeError("partial graph submission is unavailable in this core")
+        submit()
+    if device_sync:
+        for var in vars:
+            var.sync()
+    return vars[0] if len(vars) == 1 else tuple(vars)
+
 def ones(*shape, dtype="float32"):
     ''' Constructs a jittor Var with all elements set to 1.
 

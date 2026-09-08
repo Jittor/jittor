@@ -1,6 +1,4 @@
 """DeviceMesh and DTensor compatibility types and factories."""
-from jittor._core.dtypes import dtype_name as _jittor_dtype_name
-
 import types
 
 import numpy as np

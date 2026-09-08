@@ -110,6 +110,7 @@ from .module import (
 
 from .function import (
     Function,
+    submit_pending,
     GradHooker,
 )
 
@@ -153,6 +154,7 @@ def __getattr__(name):
 __all__ = (
     "ExitHooks",
     "Function",
+    "submit_pending",
     "GradHooker",
     "Module",
     "abs_",
