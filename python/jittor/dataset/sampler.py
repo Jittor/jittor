@@ -94,7 +94,12 @@ class SubsetRandomSampler(Sampler):
         self.dataset = dataset
         self.indices = indice
         dlen = dataset.__real_len__() if hasattr(dataset,"__real_len__") else dataset.__len__()
-        assert indice[0] >= 0 and indice[1] < dlen and indice[0] < indice[1]
+        if len(indice) != 2 or indice[0] < 0 or indice[1] >= dlen or indice[0] >= indice[1]:
+            raise ValueError(
+                "SubsetRandomSampler: indice must be a non-empty range within dataset length {}".format(
+                    dlen
+                )
+            )
 
     def __iter__(self):
         return (int(i) + self.indices[0] for i in np.random.permutation(self.indices[1] - self.indices[0]))
