@@ -12,8 +12,10 @@ that the production attribute or descriptor paths use them.
   already typed direct queries. One immutable registry in `acl_jittor.cc` is
   shared across translation units. All consumers and preflight signature checks
   use that registry; no header diagnostic is filtered in host syntax checks.
-- Attribute data plumbing remains: migrate `backends/acl/kernels/ops/_code.py` and its Python callers
-  together, preserving generated operator arguments and cache keys.
+- Attribute data plumbing is connected for Softmax/SoftmaxBackward, Triu,
+  Flip, Cumsum, Gather and Scatter. Their Python callers use `_code.py` and
+  `acl_code_attributes.h` constructs the original C++ attribute types from
+  decoded CodeOp data. The remaining owners still need migration.
 - Descriptor caching remains: establish ownership and invalidation rules before adding
   shape-keyed caches; do not cache descriptors by shape while addresses remain
   mutable.
@@ -26,11 +28,9 @@ Host-only evidence can establish that code boundary, but must not be reported
 as NPU validation. Real Ascend 910B3/CANN acceptance remains a separate device
 gate and every such run must prove no CPU fallback.
 
-Candidate attribute owners reviewed for an isolated slice were `triu.diagonal`,
-`softmax.dim`, and `flip.axes`. None is safe to move alone: each currently
-serializes an `OpAttr` assignment in generated C++ while the corresponding
-Python call also determines the JIT key. Move them only after the data-channel
-schema and cache-key contract are defined for every owner.
+An owner migrates together with its Python caller, forward/backward attribute
+construction, wire schema and key contract. Changing only a generated
+assignment leaves an incomplete boundary.
 
 ## Atomic attribute migration gate
 
@@ -43,12 +43,15 @@ valid intermediate state and must remain a design-only patch:
 | `schema_version`/`op` | version and registered owner are validated before decode | decoder contract rejects an unknown version or owner |
 | scalar/vector value | type tag, required/default rule, and canonical vector order are preserved | schema contract covers valid and malformed records |
 | generated `OpAttr` | C++ receives decoded values without parsing generated source text | source check finds no attribute string interpolation for the owner |
-| JIT/cache key | key is made from sorted typed values and schema version | key contract excludes pointer/object identity and address values |
+| JIT/cache key | compiled code identifies the owner/schema and tensor signature; attribute identity uses sorted typed values and schema version | two calls with different attributes share source but keep distinct data; canonical attribute keys exclude pointer/object identity |
 | failure path | malformed data raises `UserError`; internal schema mismatch raises `InternalInvariantError` | negative cases are asserted before any ACL call |
 
-The first implementation slice must complete this table for one owner (and its
-Python caller, C++ decoder, generated call, and cache key) in one commit. Do
-not migrate only `softmax.dim`, only `triu.diagonal`, or only `_code.py`.
+The first implementation completes this table for all seven runners above.
+Its JIT source contains a fixed decoder call, not interpolated attribute values.
+CodeOp owns the data map for each invocation; decoded canonical keys remain
+available for future attribute-dependent descriptor caches. Those keys must
+not be confused with the compiled kernel key: changing a runtime dimension
+value does not require compiling the same decoder again.
 Descriptor caching and `AclOpFunctions` type erasure remain separate atomic
 changes; combining them with an attribute slice makes rollback and review
 ambiguous.
@@ -72,22 +75,25 @@ must still serialize the same float value as a host configured with a period.
 This keeps generated/cache keys stable when a graph is prepared on one host and
 executed or restored on another.
 
-The host-only C++ decoder boundary is now defined in
+The shared C++ decoder boundary is defined in
 `backends/acl/include/aclops/acl_data_channel.h`. It is one shared decoder
-boundary. The `BaseOpRunner` helper is the future consumer; the decoder
+boundary. The production adapter `acl_code_attributes.h` is a consumer; the decoder
 validates the
 operator name, schema version, type tag, and required fields before an owner
 constructs an `OpAttr`. The header has no
-ACL/CANN include and can be compiled on a CPU-only host; it is deliberately not
-wired into an ACL runner until the first owner migrates its schema, generated
-attribute construction, and JIT key atomically.
+ACL/CANN include and can be compiled on a CPU-only host. Its CodeOp wire bridge
+is `acl_code_data.h`; attribute classes and runner assignment are kept in
+the separate CANN-aware adapter.
 
 The Python host-side half of this contract lives in
 `backends/acl/kernels/ops/acl_data.py`. `validate_acl_data()` applies
 schema defaults, rejects unknown or wrongly typed fields, and emits an
-address-independent `canonical_cache_key`. It has no CANN dependency and does
-not change the existing generated `OpAttr` path; the module is therefore safe
-to exercise on a CPU-only host. The negative contract is covered by
+address-independent `canonical_cache_key`. `encode_code_data()` sends this
+record through the existing string-to-double DataMap: signed int64 values use
+two exact uint32 lanes, so values beyond 2^53 are not rounded. Scalars and
+vectors have explicit type/length fields; unknown keys within the reserved
+prefix are rejected, while other CodeOp data is untouched. The module has no
+CANN dependency. The negative contract is covered by
 `tests/structure/backends/acl/test_acl_data_schema_normalizer.py`.
 
 The C++ interface is:
@@ -192,12 +198,11 @@ during lease acquisition or teardown.
 
 ## Migration order
 
-1. **Done on the host:** define the data-channel schema and its cache-key
-   representation, with a C++14 static/generated-code contract. This does not
-   claim that an ACL operator consumes the channel yet.
-2. Migrate `softmax.dim` or `triu.diagonal` as the first attribute owner; keep
-   `pool_op.py` out of this step because pooled descriptors have a separate
-   lifetime/cache contract.
+1. **Implemented:** data-channel schema, CodeOp wire encoding and C++ decoder.
+2. **Implemented for seven runners:** Softmax and its backward, Triu, Flip,
+   Cumsum, Gather and Scatter consume runtime attributes. Remaining family
+   owners must migrate their forward/backward paths together. Pool descriptors
+   retain their separate lifetime/cache contract.
 3. **Host-only prerequisite now defined:** validate the descriptor identity
    key and cache ownership shell above. Define device-side descriptor address
    rebinding and invalidation next, then add the shell to a real ACL runner. A

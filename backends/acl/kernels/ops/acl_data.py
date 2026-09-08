@@ -1,11 +1,9 @@
 """Host-side contract for ACL attribute data channels.
 
-This module deliberately has no ACL/CANN dependency.  It is the shared
-normalization point for the future C++ decoder: callers can validate and
-freeze an operator's scalar/vector attributes before generated code or an
-ACL executor consumes them.  The current ACL operators still use their
-existing generated ``OpAttr`` path; this module does not silently switch that
-path over.
+This module has no ACL/CANN dependency. It validates typed attributes and
+encodes them for CodeOp's string-to-double data map. The matching C++ bridge
+in acl_code_data.h delegates semantic checks to the shared ACL data decoder.
+Callers explicitly opt into the channel; unrelated CodeOp keys are untouched.
 """
 
 from __future__ import annotations
@@ -33,14 +31,19 @@ def _is_int(value):
 
 
 def _is_finite(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _validate_value(type_tag, value, field_name):
-    if type_tag not in _TYPES:
+    if not isinstance(type_tag, str) or type_tag not in _TYPES:
         raise AclDataInternalError("unknown ACL data type for {}: {}".format(field_name, type_tag))
     if type_tag == "int64":
-        valid = _is_int(value)
+        valid = _is_int(value) and -(1 << 63) <= value < (1 << 63)
     elif type_tag == "float64":
         valid = _is_finite(value)
     elif type_tag == "bool":
@@ -62,12 +65,18 @@ def _schema_entry(entry, field_name):
     if not isinstance(entry, dict):
         raise AclDataInternalError("ACL schema entry {!r} is not a mapping".format(field_name))
     type_tag = entry.get("type")
-    if type_tag not in _TYPES:
+    if not isinstance(type_tag, str) or type_tag not in _TYPES:
         raise AclDataInternalError("ACL schema entry {!r} has invalid type".format(field_name))
     has_default = "default" in entry
     if has_default:
-        _validate_value(type_tag, entry["default"], field_name)
-    return type_tag, bool(entry.get("required", not has_default)), has_default
+        try:
+            _validate_value(type_tag, entry["default"], field_name)
+        except AclDataUserError as error:
+            raise AclDataInternalError("invalid ACL schema default for " + field_name) from error
+    required = bool(entry.get("required", not has_default))
+    if required and has_default:
+        raise AclDataInternalError("ACL schema field cannot be both required and defaulted: " + field_name)
+    return type_tag, required, has_default
 
 
 def canonical_cache_key(record):
@@ -76,11 +85,13 @@ def canonical_cache_key(record):
         raise AclDataUserError("ACL data record must be a mapping")
     version = record.get("schema_version")
     op = record.get("op")
-    if version != SCHEMA_VERSION or not isinstance(op, str) or not op:
+    if not _is_int(version) or version != SCHEMA_VERSION or not isinstance(op, str) or not op:
         raise AclDataUserError("ACL data record has an invalid schema_version or op")
     fields = record.get("fields", {})
     if not isinstance(fields, dict):
         raise AclDataUserError("ACL data fields must be a mapping")
+    if any(not isinstance(name, str) or not name for name in fields):
+        raise AclDataUserError("ACL data field names must be non-empty strings")
     normalized = []
     for name in sorted(fields):
         entry = fields[name]
@@ -101,11 +112,11 @@ def validate_acl_data(record, *, expected_op=None, schema=None):
     ``schema`` is a mapping of field name to ``{"type": ..., "required":
     ..., "default": ...}``.  The returned record uses an ordered field map
     and carries its canonical cache key, making it safe to pass across a
-    future Python/C++ data-channel boundary.
+    Python/C++ data-channel boundary.
     """
     if not isinstance(record, dict):
         raise AclDataUserError("ACL data record must be a mapping")
-    if record.get("schema_version") != SCHEMA_VERSION:
+    if not _is_int(record.get("schema_version")) or record.get("schema_version") != SCHEMA_VERSION:
         raise AclDataUserError("unsupported ACL data schema version")
     op = record.get("op")
     if not isinstance(op, str) or not op:
@@ -115,6 +126,8 @@ def validate_acl_data(record, *, expected_op=None, schema=None):
     fields = record.get("fields", {})
     if not isinstance(fields, dict):
         raise AclDataUserError("ACL data fields must be a mapping")
+    if any(not isinstance(name, str) or not name for name in fields):
+        raise AclDataUserError("ACL data field names must be non-empty strings")
 
     if schema is not None:
         if not isinstance(schema, dict):
@@ -143,6 +156,8 @@ def validate_acl_data(record, *, expected_op=None, schema=None):
         if not isinstance(entry, dict) or "type" not in entry:
             raise AclDataUserError("ACL data field {!r} is missing its type".format(name))
         type_tag = entry["type"]
+        if schema is not None and type_tag != normalized_schema[name][0]:
+            raise AclDataUserError("ACL data field {!r} type does not match schema".format(name))
         value = entry.get("value", entry.get("default"))
         if value is None:
             raise AclDataUserError("ACL data field {!r} has no value".format(name))
@@ -159,6 +174,58 @@ def validate_acl_data(record, *, expected_op=None, schema=None):
     }
     normalized["cache_key"] = canonical_cache_key(normalized)
     return normalized
+
+
+_WIRE_TYPES = {name: index for index, name in enumerate(
+    ("int64", "float64", "bool", "int64[]", "float64[]", "bool[]"))}
+
+
+def _wire_name(value):
+    try:
+        return value.encode("utf-8").hex()
+    except UnicodeError as error:
+        raise AclDataUserError("ACL code-data names must be valid UTF-8") from error
+
+
+def _encode_scalar(output, key, type_tag, value):
+    if type_tag == "int64":
+        bits = value & ((1 << 64) - 1)
+        output[key + "lo"] = float(bits & 0xffffffff)
+        output[key + "hi"] = float(bits >> 32)
+    else:
+        output[key + "value"] = float(value)
+
+
+def encode_code_data(record, *, expected_op=None, schema=None, prefix="acl_attr."):
+    """Encode typed attributes into CodeOp's string-to-double DataMap.
+
+    Names live in hex UTF-8 keys; signed integers use two exact uint32 lanes.
+    Callers may merge this fresh mapping into their other CodeOp data entries.
+    """
+    if not isinstance(prefix, str) or not prefix:
+        raise AclDataInternalError("ACL code-data prefix must be a non-empty string")
+    normalized = validate_acl_data(record, expected_op=expected_op, schema=schema)
+    fields = normalized["fields"]
+    if len(fields) > 0xffffffff:
+        raise AclDataUserError("too many ACL code-data fields")
+    output = {
+        prefix + "version": float(SCHEMA_VERSION),
+        prefix + "op." + _wire_name(normalized["op"]): 1.0,
+        prefix + "fields": float(len(fields)),
+    }
+    for index, (name, entry) in enumerate(fields.items()):
+        key = prefix + "field." + str(index) + "."
+        type_tag, value = entry["type"], entry["value"]
+        output[key + "name." + _wire_name(name)] = float(_WIRE_TYPES[type_tag])
+        if type_tag in _VECTOR_TYPES:
+            if len(value) > 0xffffffff:
+                raise AclDataUserError("ACL code-data vector is too long")
+            output[key + "length"] = float(len(value))
+            for item_index, item in enumerate(value):
+                _encode_scalar(output, key + "item." + str(item_index) + ".", type_tag[:-2], item)
+        else:
+            _encode_scalar(output, key, type_tag, value)
+    return output
 
 
 def entry_default(entry):

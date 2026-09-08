@@ -7,6 +7,8 @@ include backends/acl/include/acl_op_registry.h
 include backends/acl/include/acl_runtime.h
 include backends/acl/include/acl_workspace.h
 include backends/acl/include/aclnn/aclnn.h
+include backends/acl/include/aclops/acl_code_attributes.h
+include backends/acl/include/aclops/acl_code_data.h
 include backends/acl/include/aclops/acl_data_channel.h
 include backends/acl/include/aclops/aclops.h
 include backends/acl/include/aclops/adamw_op_acl.h
@@ -473,6 +475,7 @@ include docs/results/2026-09-07-build-contrib-layout.md
 include docs/results/2026-09-07-native-core-packages.md
 include docs/results/2026-09-07-ops-pooling-layout.md
 include docs/results/2026-09-07-python-domain-packages.md
+include docs/results/2026-09-08-acl-code-data-wire.md
 include docs/results/2026-09-08-acl-registry.md
 include docs/results/2026-09-08-api-owner-closure.md
 include docs/results/2026-09-08-api-runtime-integration.md

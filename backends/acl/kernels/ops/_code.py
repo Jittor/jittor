@@ -36,7 +36,8 @@ def acl_code(name,
              cuda_grad_src=None,
              multi_grad_src=None,
              multi_grad_output=0,
-             multi_grad_input_count=None):
+             multi_grad_input_count=None,
+             attributes=None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
     cuda_header = '''
     #include "aclops/aclops.h"
@@ -58,6 +59,15 @@ def acl_code(name,
         for index in range(output_count)
     )
     data = dict(extra_data or {})
+    if attributes is not None:
+        from ._attributes import attribute_data
+        if attr_code:
+            raise ValueError("ACL attributes and generated attr_code are mutually exclusive")
+        if any(key.startswith("acl_attr.") for key in data):
+            raise ValueError("extra_data uses the reserved ACL attribute namespace")
+        data.update(attribute_data(name, attributes))
+        cuda_header += '\n#include "aclops/acl_code_attributes.h"\n'
+        attr_code = "apply_acl_code_attributes(op, data);"
     if multi_grad_src:
         assert not cuda_grad_src
         cuda_grad_src = [multi_grad_src]

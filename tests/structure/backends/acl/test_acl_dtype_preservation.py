@@ -56,7 +56,7 @@ class TestAclDtypePreservation(unittest.TestCase):
     # (module, launcher attribute, callable building the op invocation)
     CASES = [
         ("silu", silu_op, "silu_cmd", lambda m, x: m.SiLUACL()(x)),
-        ("softmax", softmax_op, "softmax_cmd", lambda m, x: m.SoftmaxACL().execute(x, -1)),
+        ("softmax", softmax_op, "acl_code", lambda m, x: m.SoftmaxACL().execute(x, -1)),
         ("sigmoid", sigmoid_op, "sigmoid_cmd", lambda m, x: m.SigmoidACL().execute(x)),
         ("relu", relu_op, "acl_code", lambda m, x: m.ReLUACL()(x)),
         ("leaky_relu", relu_op, "acl_code", lambda m, x: m.LeakyReLUACL()(x, 0.01)),
