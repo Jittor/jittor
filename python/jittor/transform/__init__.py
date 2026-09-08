@@ -579,7 +579,12 @@ class RandomCrop:
         if not isinstance(img, Image.Image):
             img = to_pil_image(img)
         width, height = img.size
-        assert self.size[0] <= height and self.size[1] <= width, f"crop size exceeds the input image in RandomCrop, {(self.size, height, width)}"
+        if self.size[0] > height or self.size[1] > width:
+            raise ValueError(
+                "crop size exceeds the input image in RandomCrop, {}".format(
+                    (self.size, height, width)
+                )
+            )
         top = np.random.randint(0,height-self.size[0]+1)
         left = np.random.randint(0,width-self.size[1]+1)
         return crop(img, top, left, self.size[0], self.size[1])
