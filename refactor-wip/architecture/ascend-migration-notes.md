@@ -190,3 +190,224 @@ zero native fallback-attempt delta in the handoff. The owner-specific node must
 enclose device execution and synchronization in `forbid_backend_fallbacks()`.
 A host-only decoder pass does not close
 8.06 and must not be reported as NPU hardware validation.
+
+
+## 各算子族迁移到共享 launcher 的状态（逐条记录）
+
+The ACL binary operator family uses the shared launcher contract for workspace
+allocation, execution errors, and synchronization. This source-only change
+still requires the 910B3 probe below; hosts without CANN and an Ascend device
+must not report hardware validation.
+
+The single-step ACL reduce owners (ReduceSum, Mean, Amax, and Amin) also use
+the shared launcher and retain synchronous execution. Product reductions with
+multiple axes remain on their dedicated intermediate-buffer path.
+
+The unary runner is the first family migrated to the shared launcher tail. It
+keeps its historical asynchronous policy, while workspace allocation and ACL
+launch failures now use the same auditable error path as the base runner. When
+validating this migration, include one unary operation under
+`forbid_backend_fallbacks()` and materialize its result inside the scope.
+An `execute launcher failed` message is failure-attribution evidence, not a
+replacement for the runtime counter check.
+
+The ACL Cumsum family uses the shared launcher and retains synchronous
+execution. This remains source-only until the Ascend 910B3 probe is run.
+
+The ACL MatMul family uses the shared launcher while retaining its synchronous
+execution policy. This source-only migration still requires the Ascend 910B3
+probe and is not hardware validation on this host.
+
+The ACL Expand family uses the shared launcher and intentionally retains its
+historical asynchronous execution policy.
+
+The ACL Floor family uses the shared launcher and retains synchronous
+execution. This source-only migration still requires the Ascend 910B3 probe.
+
+The ACL NanToNum family uses the shared launcher while retaining its nan,
+posinf, and neginf attribute handling and synchronous execution policy.
+
+The ACL Triu family uses the shared launcher while retaining its diagonal
+attribute and synchronous execution policy.
+
+The ACL Sigmoid forward family uses the shared launcher and retains synchronous
+execution. Sigmoid backward is intentionally outside this slice. This remains
+source-only until the Ascend 910B3 probe is run.
+
+The ACL Transpose/Permute family uses the shared launcher while retaining axes
+descriptor cleanup and synchronous execution.
+
+The ACL Softmax forward family uses the shared launcher and retains synchronous
+execution. Softmax backward is intentionally outside this slice. This remains
+source-only until the Ascend 910B3 probe is run.
+
+The ACL Embedding forward family uses the shared launcher and retains
+synchronous execution. Embedding backward is intentionally outside this slice.
+
+The ACL Embedding backward owner uses the shared launcher while retaining
+numEmbeddings, paddingIdx, scaleGradByFreq, and synchronous execution.
+
+The ACL Roll family uses the shared launcher while retaining shifts/dims array
+cleanup and synchronous execution. This remains source-only until the Ascend
+910B3 probe is run.
+
+The ACL Gather family uses the shared launcher and retains its dimension
+parameter and synchronous execution policy. Scatter is outside this slice.
+
+The ACL ClampTensor family uses the shared launcher while retaining its three
+input query and synchronous execution policy. This remains source-only until
+the Ascend 910B3 probe is run.
+
+The ACL Stack family uses the shared launcher while retaining tensor-list setup,
+dimension handling, and synchronous execution. Tensor-list lifetime cleanup is
+outside this migration slice.
+
+The ACL Flip family uses the shared launcher while retaining axes setup and
+synchronous execution. Its pre-existing aclIntArray lifetime issue is outside
+this migration slice.
+
+The ACL Scatter family uses the shared launcher while retaining axis/reduction
+handling and synchronous execution. Gather remains outside this slice.
+
+The ACL Concat family uses the shared launcher while retaining tensor-list and
+dimension handling. SplitWithSize is intentionally outside this slice.
+
+The ACL SplitWithSize family now uses the shared launcher while retaining its
+split-size, tensor-list, and dimension handling. Tensor-list lifetime cleanup
+is outside this migration slice.
+
+The ACL Nonzero owner uses the shared launcher and retains synchronous
+execution. The SWhere owner is outside this slice.
+
+The ACL Range owner uses the shared launcher while retaining scalar creation,
+cleanup, and synchronous execution. Scalar cleanup on exceptional exits is
+outside this migration slice.
+
+The ACL Dropout forward owner uses the shared launcher while retaining its
+probability, training, seed, offset, and dual-output handling. Dropout backward
+is intentionally outside this slice.
+
+The ACL LeakyReLU forward owner uses the shared launcher while retaining its
+negativeSlope scalar and synchronous execution. LeakyReLU backward is outside
+this slice; scalar exceptional cleanup is unchanged.
+
+The ACL LeakyReLU backward owner uses the shared launcher while retaining its
+negativeSlope, selfIsResult, scalar cleanup, and synchronous execution.
+
+The ACL SiLU forward owner uses the shared launcher and retains synchronous
+execution. Backward, Swish, and SwiGlu remain outside this slice.
+
+The ACL SiLU backward owner uses the shared launcher and retains synchronous
+execution. Swish and SwiGlu remain outside this slice.
+
+The ACL Swish forward owner uses the shared launcher and retains synchronous
+execution. Swish backward and SwiGlu remain outside this slice.
+
+The ACL Swish backward owner uses the shared launcher and retains synchronous
+execution. SwiGlu remains outside this slice.
+
+The ACL SwiGlu owner uses the shared launcher and retains synchronous execution.
+
+The ACL BatchMatMul owner uses the shared launcher while retaining
+cube_math_type and synchronous execution. This remains source-only until the
+Ascend 910B3 probe is run.
+
+The ACL TruthReduce owner routes both all and any through the shared launcher
+while retaining reduce_all selection, keepdims, and RAII axes descriptors.
+
+The ACL Conv2d forward owner uses the shared launcher while retaining its
+group, bias, and convolution descriptor handling. Conv2d backward is outside
+this slice.
+
+The ACL Conv2d backward owner uses the shared launcher while retaining its
+three-output gradient query and descriptor cleanup.
+
+The ACL RmsNorm forward owner uses the shared launcher while retaining eps and
+dual-output handling. Its gradient owner is outside this slice.
+
+The ACL RmsNorm gradient owner now uses the shared launcher and retains its
+multi-input, dual-output, and synchronous execution handling.
+
+The ACL LayerNorm forward owner uses the shared launcher while retaining
+normalizedShape, eps, three outputs, and descriptor cleanup. Backward remains
+outside this slice.
+
+The ACL LayerNorm backward owner uses the shared launcher while retaining its
+normalizedShape/outMask descriptors, three-output gradient query, and cleanup.
+
+The ACL GroupNorm forward owner uses the shared launcher while retaining its
+group, epsilon, and three-output query. GroupNorm backward remains outside this
+slice.
+
+The ACL GroupNorm backward owner uses the shared launcher while retaining its
+output-mask descriptor, group attributes, three-output query, and cleanup.
+
+The ACL MaskedSelect owner uses the shared launcher while retaining its
+two-input mask query and synchronous execution.
+
+The ACL Index owner uses the shared launcher while retaining its index query
+and synchronous execution. SliceV2 remains outside this slice.
+
+The ACL SliceV2 owner uses the shared launcher while retaining begins, ends,
+steps, and axes descriptor handling with synchronous execution.
+
+The ACL StridedSliceAssignV2 owner uses the shared launcher while retaining its
+gradient memset branch and slice descriptor handling.
+
+The ACL InplaceMaskedScatter owner uses the shared launcher while retaining its
+tracked base-to-output device copy dependency and synchronous execution.
+
+The ACL IndexPutImpl owner uses the shared launcher while retaining its
+index-tensor-list handling and synchronous execution. Accumulate remains
+outside this slice.
+
+The ACL IndexPutImpl accumulate owner uses the shared launcher while retaining
+its tracked output memset and index tensor-list dependency.
+
+The ACL FlashAttention forward owner uses the shared launcher while retaining
+prefix/qstart/kvstart RAII descriptors and synchronous execution. Backward,
+incremental, and KV-cache owners remain outside this slice.
+
+The ACL FlashAttention backward owner uses the shared launcher while retaining
+its RAII descriptors, three gradient outputs, and synchronous execution.
+
+The ACL incremental FlashAttention owner uses the shared launcher while
+retaining block-table, actual-sequence, cache-view cleanup, and synchronization.
+KVCacheMemcpy remains outside this slice.
+
+The ACL AdamWList owner uses the shared launcher for each tensor update while
+retaining its fused device-copy checks and single synchronization point after
+the update loop.
+
+The ACL Dropout backward owner uses the shared launcher while retaining its
+scale query and synchronous execution policy.
+
+The ACL Softmax backward owner now uses the shared launcher while retaining its
+dimension query and synchronous execution policy.
+
+The ACL RotaryPositionEmbedding forward owner uses the shared launcher and
+retains its three input tensors and synchronous execution. Its gradient owner
+is outside this slice.
+
+The ACL RotaryPositionEmbedding gradient owner uses the shared launcher while
+retaining its four-input, three-output query and synchronous execution.
+
+The ACL Maxpool forward owner uses the shared launcher while retaining its
+kernel, stride, padding, dilation, and ceil-mode descriptors. Avgpool and
+backward owners remain outside this slice.
+
+The ACL Avgpool forward owner uses the shared launcher while retaining its
+pool descriptors, ceil mode, divisor, and padding semantics. Maxpool and
+backward owners remain outside this slice.
+
+The ACL Avgpool backward owner uses the shared launcher while retaining its
+countIncludePad/divisorOverride semantics and descriptor cleanup.
+
+The ACL Maxpool backward owner uses the shared launcher while retaining its
+pool descriptors, ceil mode, output handling, and cleanup.
+
+The ACL UpsampleNearest2d forward owner uses the shared launcher while retaining
+output-size RAII and synchronous execution. Backward is outside this slice.
+
+The ACL UpsampleNearest2d backward owner uses the shared launcher while
+retaining output/input-size RAII descriptors and synchronous execution.

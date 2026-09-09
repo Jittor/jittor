@@ -1,45 +1,43 @@
-# Ascend 910B setup and validation
+# 昇腾 910B：配置与验证
 
-This guide configures a Jittor 2.0 source checkout for Ascend 910B-series
-devices and verifies that an operation really executes through ACL. Installing
-the Ascend driver, firmware, and CANN itself is outside Jittor's scope; start
-from a host where the vendor runtime and compiler are already installed.
+本指南把 Jittor 2.0 的源码 checkout 配置到昇腾 910B 系列设备上，并验证运算**确实
+经由 ACL 执行**。昇腾驱动、固件和 CANN 本身的安装不在 Jittor 范围内——请从一台已装好
+厂商运行时与编译器的主机开始。
 
-## Validated baseline
+## 已验证的基线
 
-The maintained gate was validated on this combination:
+维护中的门禁在以下组合上验证通过：
 
-| Component | Validated version |
+| 组件 | 验证版本 |
 | --- | --- |
-| Device | Ascend 910B3 |
-| Architecture | Linux aarch64 |
-| Driver reported by `npu-smi` | 25.5.1 |
-| CANN toolkit and `ccec` | 9.0.0 |
+| 设备 | 昇腾 910B3 |
+| 架构 | Linux aarch64 |
+| `npu-smi` 报告的驱动 | 25.5.1 |
+| CANN toolkit 与 `ccec` | 9.0.0 |
 | Python | 3.9.25 |
 | NumPy | 1.26.4 |
 | pytest / pytest-timeout | 7.4.4 / 2.3.1 |
 
-These versions are a reproduced baseline, not a claim that every other CANN
-release is incompatible. Jittor declares Python 3.7 through 3.13 support;
-Python 3.9 through 3.11 is the practical range for an Ascend environment whose
-vendor packages may have narrower Python constraints.
+这些版本是**复现过的基线**，不是"其它 CANN 版本都不兼容"的断言。Jittor 声明支持
+Python 3.7 到 3.13；对于厂商包可能有更窄 Python 约束的昇腾环境，3.9 到 3.11 是实际
+可用区间。
 
-## Check the device and toolkit
+## 检查设备与工具链
 
-Confirm that the driver sees a healthy device before importing Jittor:
+导入 Jittor 之前先确认驱动看得到一块健康的设备：
 
 ```bash
 npu-smi info
 ```
 
-Find the CANN environment script and load it in the current shell. Keep its
-location configurable instead of embedding a host-specific installation path:
+找到 CANN 的环境脚本并在当前 shell 里加载。**把位置做成可配置的**，不要把主机专属
+安装路径写死：
 
 ```bash
 export ASCEND_HOME=/path/to/Ascend/cann-9.0.0
 export CANN_SET_ENV="$ASCEND_HOME/set_env.sh"
 
-# Some CANN set_env.sh releases expect these variables to exist under `set -u`.
+# 某些 CANN 的 set_env.sh 在 `set -u` 下要求这两个变量已存在。
 : "${LD_LIBRARY_PATH:=}"
 : "${CMAKE_PREFIX_PATH:=}"
 source "$CANN_SET_ENV"
@@ -47,14 +45,13 @@ source "$CANN_SET_ENV"
 ccec --version
 ```
 
-`npu-smi info` must succeed in the same execution environment as Python. In a
-container, pass the required Ascend devices and driver libraries through using
-the vendor container runtime instructions.
+`npu-smi info` **必须在与 Python 相同的执行环境里**成功。容器中请按厂商容器运行时的
+说明把所需的昇腾设备和驱动库透传进去。
 
-## Install the source checkout
+## 安装源码 checkout
 
-Create a dedicated Python environment and install the checkout in editable
-mode. The NPU validation gate also needs SciPy and the pinned pytest tools:
+建一个专用 Python 环境，以 editable 方式安装。NPU 验证门禁还需要 SciPy 与钉住版本的
+pytest 工具：
 
 ```bash
 python -m pip install -e .
@@ -65,18 +62,16 @@ python -m pip install \
   "pytest-timeout==2.3.1"
 ```
 
-Run from the repository root. For development without an editable install,
-place the checkout's Python package first:
+从仓库根目录运行。不做 editable 安装时，把 checkout 的 Python 包放在最前面：
 
 ```bash
 export PYTHONPATH="$PWD/python${PYTHONPATH:+:$PYTHONPATH}"
 ```
 
-## Isolate JIT state
+## 隔离 JIT 状态
 
-Jittor compiles its core and operators on first use. Put mutable state outside
-the checkout and give every concurrent run a distinct `JITTOR_HOME` or
-`cache_name`:
+Jittor 在首次使用时编译核心与算子。把可变状态放到 checkout 之外，并给每个并发运行
+**不同的 `JITTOR_HOME` 或 `cache_name`**：
 
 ```bash
 export JITTOR_LAB_ROOT="${JITTOR_LAB_ROOT:-$(cd .. && pwd)/jittor-lab}"
@@ -90,27 +85,23 @@ export XDG_CACHE_HOME="$run_root/xdg-cache"
 export cache_name=ascend_910b_manual
 ```
 
-Run the first JIT or extension compile serially. Tests and benchmarks must not
-share a compilation cache. After changing CANN, the driver, the host compiler,
-or ACL source, use a new cache name; do not diagnose the new stack with stale
-binaries.
+**首次 JIT 或扩展编译要串行执行。测试与基准不得共享编译缓存。** 更换 CANN、驱动、
+宿主编译器或 ACL 源码之后要换一个新的 cache name——**不要用陈旧的二进制去诊断新的栈。**
 
-## Select a device
+## 选择设备
 
-Restrict the process to allocated devices before importing Jittor:
+导入 Jittor 之前把进程限制到分配给你的设备上：
 
 ```bash
-export ASCEND_RT_VISIBLE_DEVICES=<allocated-device>
+export ASCEND_RT_VISIBLE_DEVICES=<分配到的设备>
 ```
 
-The visible device is renumbered inside the process. Do not select a device
-that is already occupied by another workload.
+可见设备在进程内会被重新编号。**不要选一块已经被别的负载占用的设备。**
 
-## Run a real ACL probe
+## 跑一次真实的 ACL 探测
 
-An import-only check cannot prove NPU support. The following probe requires ACL,
-enables the accelerator flags, performs float32 matrix multiplication, and
-checks its independent result, device residency, and native fallback counter:
+**只验证 import 成功不能证明 NPU 支持。** 下面这个探测要求 ACL 存在，打开加速器标志，
+做 float32 矩阵乘，并检查独立参考结果、设备驻留和原生回退计数器：
 
 ```python
 import numpy as np
@@ -136,79 +127,49 @@ assert jt.core.backend_fallback_count() == fallback_before
 print("ACL matmul passed")
 ```
 
-Save the probe as `probe_acl.py` outside the checkout and run it only after
-sourcing CANN:
+把探测保存为 checkout 之外的 `probe_acl.py`，并且**只在 source 过 CANN 之后**运行：
 
 ```bash
 backend_fallback=error python probe_acl.py
 ```
 
-Jittor uses `use_cuda` as the common accelerator execution flag even when the
-selected backend is ACL. `has_acl` is therefore the required discriminator
-between Ascend and CUDA.
+即使选中的后端是 ACL，Jittor 也用 `use_cuda` 作为通用的加速器执行标志。因此
+**`has_acl` 才是区分昇腾与 CUDA 的判据。**
 
-### Runtime fallback policy
+### 运行时回退策略
 
-`jt.runtime.backend_fallback` accepts `error`, `warn`, or `allow`. Use
-`backend_fallback=error` in the environment before starting every validation
-process. `warn` and `allow` are explicit debugging policies, not NPU acceptance
-modes. Only a preflight unsupported decision may request fallback; a launcher,
-allocation, compilation, or execution exception must propagate after cleanup,
-never be retried as CPU execution.
+`jt.runtime.backend_fallback` 接受 `error`、`warn`、`allow`。**每个验证进程启动前都在
+环境里设 `backend_fallback=error`。** `warn` 和 `allow` 是显式的调试策略，
+**不是 NPU 的验收模式**。只有预检阶段判定不支持时才可以请求回退；launcher、分配、
+编译或执行的异常必须在清理后向上传播，**绝不能改成 CPU 执行重试**。
 
-`jt.core.backend_fallback_count()` counts fallback attempts, including requests
-rejected by `error`. Compare its value before and after the work in the same
-process. `forbid_backend_fallbacks()` temporarily selects `error` and also
-rejects a nonzero counter delta on normal exit, including when an inner caller
-caught the rejection. An exception from the body propagates unchanged.
-Materialization (`numpy()`/fetch) or `jt.sync_all(True)` must occur inside the
-scope: it does not synchronize automatically. A lazy tensor created inside and
-executed after leaving the scope is not covered.
+`jt.core.backend_fallback_count()` 统计回退**尝试**次数，包括被 `error` 拒绝掉的请求。
+在同一个进程内比较工作前后的值。`forbid_backend_fallbacks()` 临时选中 `error`，并且
+在正常退出时**拒绝计数器有非零增量**——即使内层调用方捕获了那次拒绝也一样。函数体
+抛出的异常原样向上传播。
 
-Focused test nodes must use that scope around the operation and synchronization
-and assert NPU execution/residency plus independent values or gradients. A
-successful collection, skip, or absent log message is not this evidence. Keep
-SDK and launcher logs for diagnosis only; do not grep CPU compilation or
-fallback messages to decide whether validation passed. CPU reference/checkpoint
-work outside the device computation is not itself a backend fallback.
+**实体化（`numpy()`/fetch）或 `jt.sync_all(True)` 必须发生在作用域内**：它不会自动
+同步。在作用域内创建、离开后才执行的惰性张量**不在覆盖范围内**。
 
-`tests/backends/acl/conftest.py` installs this guard automatically for each
-test when Jittor is already loaded at fixture entry. It preserves the original
-setup/call exception instead of replacing it with a counter error. Tests must
-still synchronize or fetch before returning: the fixture does not flush pending
-work. Standalone scripts and tests outside `tests/backends/acl/` do not inherit
-this fixture and must enter `forbid_backend_fallbacks()` explicitly. If Jittor
-is first imported after fixture entry, the test also needs an explicit scope.
+定向测试节点必须把该作用域套在运算和同步外面，并断言 NPU 执行/驻留以及独立的数值或
+梯度。**收集成功、skip 或"日志里没有某条消息"都不是这种证据。** SDK 与 launcher 日志
+只用于诊断——不要靠 grep CPU 编译或回退消息来判断验证是否通过。设备计算之外的
+CPU 参考/checkpoint 工作本身不算后端回退。
 
-## Check per-operator ACL synchronization
+`tests/backends/acl/conftest.py` 会在 fixture 进入时 Jittor 已加载的情况下自动为每个
+测试装上这道守卫。它保留原始的 setup/call 异常，而不是用计数器错误替换掉。测试仍然
+必须在返回前同步或取值——**fixture 不会冲刷待定工作**。`tests/backends/acl/` 之外的
+独立脚本和测试不继承该 fixture，必须显式进入 `forbid_backend_fallbacks()`。如果
+Jittor 是在 fixture 进入之后才首次导入，该测试也需要显式作用域。
 
-The ACL binary operator family uses the shared launcher contract for workspace
-allocation, execution errors, and synchronization. This source-only change
-still requires the 910B3 probe below; hosts without CANN and an Ascend device
-must not report hardware validation.
+## 逐算子同步检查
 
-The ternary SWhere family uses the same contract and intentionally retains its
-historical asynchronous execution policy.
-
-The single-step ACL reduce owners (ReduceSum, Mean, Amax, and Amin) also use
-the shared launcher and retain synchronous execution. Product reductions with
-multiple axes remain on their dedicated intermediate-buffer path.
-
-Run this diagnostic on an Ascend 910B3 only after sourcing the CANN environment,
-confirming the device is healthy, and selecting an allocated device:
-
-The unary runner is the first family migrated to the shared launcher tail. It
-keeps its historical asynchronous policy, while workspace allocation and ACL
-launch failures now use the same auditable error path as the base runner. When
-validating this migration, include one unary operation under
-`forbid_backend_fallbacks()` and materialize its result inside the scope.
-An `execute launcher failed` message is failure-attribution evidence, not a
-replacement for the runtime counter check.
+在昇腾 910B3 上，先 source CANN 环境、确认设备健康、选好分配到的设备，再运行：
 
 ```bash
 source "$CANN_SET_ENV"
 npu-smi info
-export ASCEND_RT_VISIBLE_DEVICES=<allocated-device>
+export ASCEND_RT_VISIBLE_DEVICES=<分配到的设备>
 
 set -o pipefail
 backend_fallback=error sync_run=1 python -m pytest -q -s \
@@ -216,24 +177,19 @@ backend_fallback=error sync_run=1 python -m pytest -q -s \
   2>&1 | tee "$TMPDIR/acl-sync-run.log"
 ```
 
-`sync_run=1` makes every `BaseOpRunner` wait for `aclstream` immediately after
-launch. If synchronization fails, Jittor raises an error containing the
-operator name, numeric return code, and decoded ACL error. Keep the complete
-log and extract the attribution line with:
+`sync_run=1` 让每个 `BaseOpRunner` 在发射后立刻等待 `aclstream`。同步失败时 Jittor 会
+抛出包含算子名、数值返回码和解码后 ACL 错误的异常。保留完整日志，并提取归因行：
 
 ```bash
 rg "aclrtSynchronizeStream failed" "$TMPDIR/acl-sync-run.log"
 ```
 
-The ACL Cumsum family uses the shared launcher and retains synchronous
-execution. This remains source-only until the Ascend 910B3 probe is run.
+**只有当 ACL 执行断言通过、且 `forbid_backend_fallbacks()` 下
+`backend_fallback_count()` 增量为零时，这次运行才有效。** 测试必须在作用域内同步；
+日志仅供诊断。`execute launcher failed` 是失败归因的证据，**不能替代运行时计数器检查**。
 
-The run is valid only when the ACL execution assertion passes and the
-`backend_fallback_count()` delta is zero under `forbid_backend_fallbacks()`.
-The test must synchronize inside the scope; the log is diagnostic only.
-
-After diagnosis, repeat the same focused node with per-operator synchronization
-disabled to verify the normal asynchronous path still launches on ACL:
+诊断完成后，用关闭逐算子同步的方式重跑同一个定向节点，确认常规异步路径仍然发射在
+ACL 上：
 
 ```bash
 set -o pipefail
@@ -242,20 +198,18 @@ backend_fallback=error sync_run=0 python -m pytest -q -s \
   2>&1 | tee "$TMPDIR/acl-async-run.log"
 ```
 
-`JT_SYNC=1` is the separate executor-wide compile-time diagnostic. It is not a
-replacement for the `BaseOpRunner` `sync_run=1` check above and may rebuild the
-JIT cache when toggled.
+`JT_SYNC=1` 是另一个作用于整个执行器的编译期诊断开关。它**不能替代**上面
+`BaseOpRunner` 的 `sync_run=1` 检查，而且切换它可能重建 JIT 缓存。
 
-## Verify ACL tensor and workspace ownership
+## 验证 ACL 张量与 workspace 归属
 
-The ACL runner creates tensor descriptors explicitly and obtains its shared
-aclnn workspace from Jittor's temporary allocator. On Ascend 910B3, source CANN,
-check the device, and record memory before running a process that grows the
-workspace through several normal matrix multiplications:
+ACL runner 显式创建张量描述符，并从 Jittor 的临时分配器取得共享的 aclnn workspace。
+在 910B3 上 source CANN、检查设备、记录显存，然后运行一个通过若干次正常矩阵乘把
+workspace 撑大的进程：
 
 ```bash
 source "$CANN_SET_ENV"
-export ASCEND_RT_VISIBLE_DEVICES=<allocated-device>
+export ASCEND_RT_VISIBLE_DEVICES=<分配到的设备>
 npu-smi info | tee "$TMPDIR/before-workspace.txt"
 
 set -o pipefail
@@ -283,63 +237,54 @@ PY
 npu-smi info | tee "$TMPDIR/after-workspace.txt"
 ```
 
-The normal run is accepted only with correct values, device residency, and a
-zero native fallback-attempt delta. After
-the Python process exit, it must no longer appear in `npu-smi`; compare
-`before-workspace.txt` and `after-workspace.txt` to confirm its workspace was
-released rather than retained by an orphan process.
+**只有数值正确、设备驻留、且原生回退尝试增量为零时**，这次正常运行才被接受。Python
+进程退出后它必须不再出现在 `npu-smi` 里；对比 `before-workspace.txt` 与
+`after-workspace.txt` 确认 workspace 被释放，而不是被某个孤儿进程占着。
 
-Do not manufacture an unbounded allocation on a shared NPU. When an existing
-workload naturally reproduces a workspace failure, preserve its log and extract
-the attribution with:
+**不要在共享 NPU 上人为制造无界分配。** 当已有负载自然复现出 workspace 失败时，保留
+它的日志并提取归因：
 
 ```bash
 rg "ACL workspace allocation failed" "$TMPDIR/workspace-failure.log"
 ```
 
-The error must report `workspace requested bytes`, the `workspace allocator`,
-and the underlying allocation failure. A later small probe in a fresh process
-must still pass without CPU fallback; otherwise the failed allocation did not
-leave the global workspace in a retryable empty state.
+错误必须报告 `workspace requested bytes`、`workspace allocator` 以及底层的分配失败。
+之后在新进程里的小探测必须仍然能通过且无 CPU 回退——否则说明那次失败的分配没有把
+全局 workspace 留在可重试的空状态。
 
-Three runner failures now identify the stage and operator instead of continuing
-with an invalid executor or checking the outer fused graph by mistake:
+三类 runner 失败现在会指明阶段与算子，而不是带着无效的 executor 继续、或误查外层
+融合图：
 
-- `aclnn workspace-size query failed` includes the operator name, return code,
-  decoded ACL status, and CANN's recent error text;
-- `ACL operator has no registered launcher` means the runner name was absent
-  from the ACL function table, for group and non-group runners alike;
-- `current fused operator input is not allocated` names the queue item whose
-  input invariant failed, rather than the enclosing fused operation.
+- `aclnn workspace-size query failed` —— 含算子名、返回码、解码后的 ACL 状态和 CANN
+  最近的错误文本；
+- `ACL operator has no registered launcher` —— runner 名字不在 ACL 函数表里
+  （分组与非分组 runner 同理）；
+- `current fused operator input is not allocated` —— 指出输入不变量失败的那个队列项，
+  而不是外层的融合运算。
 
-On a 910B3, preserve these lines together with the surrounding SDK/launcher
-log and the native fallback-attempt delta. The normal matmul and workspace
-commands above must contain none of these failure diagnostics;
-an injected or naturally reproduced failure must stop that ACL runner before an
-execute call uses an invalid executor.
+在 910B3 上，请把这些行连同周边的 SDK/launcher 日志和原生回退尝试增量一起保留。
+**上面的正常 matmul 与 workspace 命令中不应出现任何这类失败诊断**；注入或自然复现的
+失败必须在 execute 调用用上无效 executor **之前**就让该 ACL runner 停下。
 
-## Run the maintained NPU gate
+## 运行维护中的 NPU 门禁
 
-The NPU nox session creates isolated state, checks `npu-smi`, runs a real ACL
-matmul probe, and then executes the maintained backend and OpInfo tests. Nox
-itself uses Python 3.11, while `JITTOR_CI_PYTHON` points to the pre-provisioned
-Ascend Python environment:
+NPU 的 nox 会话会建立隔离状态、检查 `npu-smi`、跑一次真实 ACL matmul 探测，然后执行
+维护中的后端与 OpInfo 测试。nox 自身用 Python 3.11，而 `JITTOR_CI_PYTHON` 指向预置的
+昇腾 Python 环境：
 
 ```bash
 python -m pip install -r requirements/dev-tools.txt
-
 export CANN_SET_ENV=/path/to/Ascend/cann-9.0.0/set_env.sh
 export JITTOR_CI_PYTHON=/path/to/ascend-python/bin/python
-export ASCEND_RT_VISIBLE_DEVICES=<allocated-device>
+export ASCEND_RT_VISIBLE_DEVICES=<分配到的设备>
 backend_fallback=error python -m nox -s npu
 ```
 
-The session resolves `python_config_path` from `JITTOR_CI_PYTHON` rather than
-from Nox's own interpreter. If a direct launch sets `python_config_path`, it
-must point to the config helper for that same Python version; a mismatched
-helper produces an extension suffix that the hardware Python cannot import.
+该会话从 `JITTOR_CI_PYTHON` 解析 `python_config_path`，而不是从 nox 自己的解释器解析。
+若直接启动时设置了 `python_config_path`，它必须指向**同一个 Python 版本**的 config
+助手——版本不匹配的助手会产生硬件 Python 无法导入的扩展后缀。
 
-To run the same core tests directly:
+直接运行同一批核心测试：
 
 ```bash
 export JITTOR_TEST_DEVICES=npu
@@ -351,15 +296,13 @@ export backend_fallback=error
   tests/ops/test_ops.py
 ```
 
-Do not treat a passing CPU fallback as NPU coverage. For a new or repaired
-operation, add a focused assertion that captures ACL execution or otherwise
-proves the declared device performed the calculation.
+**不要把通过的 CPU 回退当成 NPU 覆盖。** 新增或修复一个运算时，要补一条捕获 ACL 执行、
+或以其它方式证明所声明设备完成了计算的定向断言。
 
-## Run Qwen3-8B with Transformers
+## 用 Transformers 跑 Qwen3-8B
 
-The maintained manual probe runs a local Qwen3 checkpoint through the Jittor
-Torch shim and Transformers 4.56.2. Install the optional model dependencies and
-keep the checkpoint outside the source tree:
+维护中的手动探测让本地 Qwen3 checkpoint 经由 Jittor Torch shim 与 Transformers 4.56.2
+运行。安装可选的模型依赖，并把 checkpoint 放在源码树之外：
 
 ```bash
 python -m pip install "transformers==4.56.2" "jinja2==3.1.6"
@@ -373,296 +316,61 @@ backend_fallback=error python tests/backends/acl/manual/run_qwen3_transformers.p
   --runs 3
 ```
 
-Run this command only after the CANN, device-selection, and isolated-cache setup
-above. The probe loads weights on CPU, explicitly migrates the model to the
-visible NPU, prints `npu-smi` while the model is resident, performs greedy eager
-attention generation with KV cache under `forbid_backend_fallbacks()`, and
-rejects any native fallback attempt during generation. CPU checkpoint
-deserialization is expected and is not used as evidence for the model forward.
+**只在完成上面的 CANN、设备选择和缓存隔离配置之后**运行该命令。探测会在 CPU 上加载
+权重、显式把模型迁移到可见 NPU、在模型驻留时打印 `npu-smi`、在
+`forbid_backend_fallbacks()` 下用 KV cache 做贪心 eager 注意力生成，并拒绝生成期间的
+任何原生回退尝试。**CPU 上的 checkpoint 反序列化是预期行为，不作为模型前向的证据。**
 
-The validated Qwen3-8B checkpoint has 8,190,735,360 parameters. Float32 uses
-32,376 MB of device memory on one 64 GB 910B3. Both float32 and bfloat16 report
-accelerator-resident parameters and `has_acl=use_acl=use_cuda=1`. Historical
-zero-fallback log reports must be revalidated with the native counter and scope
-on the current branch. The maintained bfloat16 eight-token request
-stops after `[19, 13, 151645]` and decodes to `4.` in every repeated run. Use
-`--dtype float32` for the original one-token probe. These are correctness probes,
-not throughput benchmarks.
+已验证的 Qwen3-8B checkpoint 有 8,190,735,360 个参数。float32 在一块 64 GB 910B3 上
+占用 32,376 MB 显存。float32 与 bfloat16 都报告参数驻留在加速器上且
+`has_acl=use_acl=use_cuda=1`。**历史上的零回退日志报告必须在当前分支上用原生计数器和
+作用域重新验证。** 维护中的 bfloat16 八 token 请求在 `[19, 13, 151645]` 处停止，每次
+重复运行都解码为 `4.`。用 `--dtype float32` 可跑最初的单 token 探测。
+**这些是正确性探测，不是吞吐基准。**
 
-## Current limitations
+## 当前限制
 
-The maintained 910B gate deliberately skips these reproduced gaps instead of
-allowing them to abort or stall the process:
+维护中的 910B 门禁**刻意跳过**下列已复现的缺口，而不是让它们中止或卡住进程：
 
-- sub-32-bit integer `sum`, `max`, and `min`, plus boolean `all` and
-  `any`, lack a complete ACL reduction path; promote inputs to a supported
-  width when possible;
-- composed float32 `atan2` can raise a vector-core exception;
-- complex `irfft` can stall;
-- native FlashAttention tests require an optional `jt.nn.FlashAttention`
-  implementation and are skipped when it is absent;
-- Qwen3 bfloat16 is verified for eager, no-grad greedy inference. Fused ACL SDPA
-  is additionally verified for Qwen3-0.6B with FlashAttentionScoreV2 prefill and
-  IncreFlashAttentionV4 decode. Qwen3-0.6B float32 eager forward, causal-LM loss,
-  and backward are also verified with zero fallback; the optimized RoPE result
-  currently requires an external Transformers module patch to route Qwen3 to
-  `jt.nn.rotary_emb`. Optimizer update, BF16 training, Qwen3-8B BF16 SDPA and
-  training, sampling, quantization, and other model families remain separate
-  capability gates. See the
-  [Qwen3 forward/backward report](../../refactor-wip/results/transformers/2026-08-30-qwen3-ascend-training.md);
-- ACL does not provide general float64 operator coverage, so float64 fallback
-  is not accepted as evidence for an NPU operation.
+- 低于 32 位的整数 `sum`、`max`、`min`，以及布尔 `all`、`any` 缺少完整的 ACL 归约
+  路径——可能的话把输入提升到受支持的位宽；
+- 组合出来的 float32 `atan2` 可能触发向量核异常；
+- 复数 `irfft` 可能卡死；
+- 原生 FlashAttention 测试需要可选的 `jt.nn.FlashAttention` 实现，缺失时跳过；
+- Qwen3 bfloat16 已验证的是 eager、无梯度的贪心推理。融合 ACL SDPA 另在 Qwen3-0.6B 上
+  以 FlashAttentionScoreV2 prefill 和 IncreFlashAttentionV4 decode 验证。Qwen3-0.6B
+  float32 的 eager 前向、因果 LM loss 与反向也在零回退下验证通过；当前优化后的 RoPE
+  结果需要一个外部 Transformers 模块补丁把 Qwen3 路由到 `jt.nn.rotary_emb`。优化器
+  更新、BF16 训练、Qwen3-8B 的 BF16 SDPA 与训练、采样、量化以及其它模型家族仍是**独立
+  的能力门禁**；
+- ACL 不提供通用的 float64 算子覆盖，因此 **float64 回退不被接受为 NPU 运算的证据**。
 
-Float16/float32 `arg_reduce` forward and value-output backward are maintained
-ACL capabilities. Forward uses CANN MaxDim/MinDim and backward scatters the
-upstream gradient to the selected first index; current real-device validation
-must reject fallback attempts through the native policy and counter. See the
-[focused verification report](../../refactor-wip/results/2026-08-30-npu-arg-reduce-backward.md).
+float16/float32 的 `arg_reduce` 前向与值输出反向是维护中的 ACL 能力：前向用 CANN
+MaxDim/MinDim，反向把上游梯度散射到选中的第一个下标；当前的真实设备验证必须通过
+原生策略与计数器拒绝回退尝试。
 
-Full, single-axis, and multi-axis `prod` use CANN `aclnnProd`/`aclnnProdDim`.
-Multi-axis reductions are lowered to ordered single-axis device reductions.
-Float32 forward/backward and uint8/int8/int16/int32/int64 forward match
-independent NumPy references on a real NPU. Revalidation requires device
-residency and zero fallback attempts within the guarded computation. See the
-[product verification report](../../refactor-wip/results/2026-08-30-npu-product-reduction.md).
+完整、单轴和多轴的 `prod` 使用 CANN `aclnnProd`/`aclnnProdDim`，多轴归约被降低为有序的
+单轴设备归约。float32 的前向/反向以及 uint8/int8/int16/int32/int64 的前向在真实 NPU 上
+与独立 NumPy 参考吻合。重新验证需要设备驻留，且守卫内的计算回退尝试为零。
 
-See the [active known-issues ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)
-for executable evidence and exit conditions.
+可执行证据与退出条件见
+[活跃问题总账](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)。
 
-## Troubleshooting
+## 排错
 
-If ACL is not detected, verify `CANN_SET_ENV`, `ccec --version`, the Python
-architecture, and the CANN library paths in the same shell. Do not catch and
-ignore CANN registration or compilation errors; an incomplete backend setup
-must fail visibly.
+**ACL 未被检测到**：在同一个 shell 里核对 `CANN_SET_ENV`、`ccec --version`、Python
+架构和 CANN 库路径。**不要捕获并忽略 CANN 的注册或编译错误**——不完整的后端配置必须
+显式失败。
 
-If an asynchronous device error is reported after the Python operation that
-caused it, rerun only the smallest reproducer with:
+**异步设备错误报告在导致它的那行 Python 之后**：只用最小复现重跑，并加上
 
 ```bash
 export JT_SYNC=1
 export trace_py_var=3
 ```
 
-The ACL MatMul family uses the shared launcher while retaining its synchronous
-execution policy. This source-only migration still requires the Ascend 910B3
-probe and is not hardware validation on this host.
-
-The ACL Expand family uses the shared launcher and intentionally retains its
-historical asynchronous execution policy.
-
-The ACL Floor family uses the shared launcher and retains synchronous
-execution. This source-only migration still requires the Ascend 910B3 probe.
-
-The ACL NanToNum family uses the shared launcher while retaining its nan,
-posinf, and neginf attribute handling and synchronous execution policy.
-
-The ACL Triu family uses the shared launcher while retaining its diagonal
-attribute and synchronous execution policy.
-
-The ACL Sigmoid forward family uses the shared launcher and retains synchronous
-execution. Sigmoid backward is intentionally outside this slice. This remains
-source-only until the Ascend 910B3 probe is run.
-
-The ACL Transpose/Permute family uses the shared launcher while retaining axes
-descriptor cleanup and synchronous execution.
-
-The ACL Softmax forward family uses the shared launcher and retains synchronous
-execution. Softmax backward is intentionally outside this slice. This remains
-source-only until the Ascend 910B3 probe is run.
-
-The ACL Embedding forward family uses the shared launcher and retains
-synchronous execution. Embedding backward is intentionally outside this slice.
-
-The ACL Embedding backward owner uses the shared launcher while retaining
-numEmbeddings, paddingIdx, scaleGradByFreq, and synchronous execution.
-
-The ACL Roll family uses the shared launcher while retaining shifts/dims array
-cleanup and synchronous execution. This remains source-only until the Ascend
-910B3 probe is run.
-
-The ACL Gather family uses the shared launcher and retains its dimension
-parameter and synchronous execution policy. Scatter is outside this slice.
-
-The ACL ClampTensor family uses the shared launcher while retaining its three
-input query and synchronous execution policy. This remains source-only until
-the Ascend 910B3 probe is run.
-
-The ACL Stack family uses the shared launcher while retaining tensor-list setup,
-dimension handling, and synchronous execution. Tensor-list lifetime cleanup is
-outside this migration slice.
-
-These flags are diagnostic and slow execution. Remove them after locating the
-failing operation. For general JIT and memory diagnostics, see
-{doc}`debugging`.
-
-The ACL Flip family uses the shared launcher while retaining axes setup and
-synchronous execution. Its pre-existing aclIntArray lifetime issue is outside
-this migration slice.
-
-The ACL Scatter family uses the shared launcher while retaining axis/reduction
-handling and synchronous execution. Gather remains outside this slice.
-
-The ACL Concat family uses the shared launcher while retaining tensor-list and
-dimension handling. SplitWithSize is intentionally outside this slice.
-
-The ACL SplitWithSize family now uses the shared launcher while retaining its
-split-size, tensor-list, and dimension handling. Tensor-list lifetime cleanup
-is outside this migration slice.
-
-The ACL Nonzero owner uses the shared launcher and retains synchronous
-execution. The SWhere owner is outside this slice.
-
-The ACL Range owner uses the shared launcher while retaining scalar creation,
-cleanup, and synchronous execution. Scalar cleanup on exceptional exits is
-outside this migration slice.
-
-The ACL Dropout forward owner uses the shared launcher while retaining its
-probability, training, seed, offset, and dual-output handling. Dropout backward
-is intentionally outside this slice.
-
-The ACL LeakyReLU forward owner uses the shared launcher while retaining its
-negativeSlope scalar and synchronous execution. LeakyReLU backward is outside
-this slice; scalar exceptional cleanup is unchanged.
-
-The ACL LeakyReLU backward owner uses the shared launcher while retaining its
-negativeSlope, selfIsResult, scalar cleanup, and synchronous execution.
-
-The ACL ArgReduce owner routes both max and min execution through the shared
-launcher while retaining is_max, dim, keepdims, and dual-output handling.
-
-The ACLNN declaration header has an explicit include guard. This is a source
-organization contract and does not constitute Ascend hardware validation.
-
-The ACL Random owner routes uniform and normal execution through the shared
-launcher while retaining seed, offset, unsupported-type diagnostics, and
-synchronous execution.
-
-The ACL SiLU forward owner uses the shared launcher and retains synchronous
-execution. Backward, Swish, and SwiGlu remain outside this slice.
-
-The ACL SiLU backward owner uses the shared launcher and retains synchronous
-execution. Swish and SwiGlu remain outside this slice.
-
-The ACL Swish forward owner uses the shared launcher and retains synchronous
-execution. Swish backward and SwiGlu remain outside this slice.
-
-The ACL Swish backward owner uses the shared launcher and retains synchronous
-execution. SwiGlu remains outside this slice.
-
-The ACL SwiGlu owner uses the shared launcher and retains synchronous execution.
-
-The ACL BatchMatMul owner uses the shared launcher while retaining
-cube_math_type and synchronous execution. This remains source-only until the
-Ascend 910B3 probe is run.
-
-The ACL TruthReduce owner routes both all and any through the shared launcher
-while retaining reduce_all selection, keepdims, and RAII axes descriptors.
-
-The ACL Conv2d forward owner uses the shared launcher while retaining its
-group, bias, and convolution descriptor handling. Conv2d backward is outside
-this slice.
-
-The ACL Conv2d backward owner uses the shared launcher while retaining its
-three-output gradient query and descriptor cleanup.
-
-The ACL RmsNorm forward owner uses the shared launcher while retaining eps and
-dual-output handling. Its gradient owner is outside this slice.
-
-The ACL RmsNorm gradient owner now uses the shared launcher and retains its
-multi-input, dual-output, and synchronous execution handling.
-
-The ACL LayerNorm forward owner uses the shared launcher while retaining
-normalizedShape, eps, three outputs, and descriptor cleanup. Backward remains
-outside this slice.
-
-The ACL LayerNorm backward owner uses the shared launcher while retaining its
-normalizedShape/outMask descriptors, three-output gradient query, and cleanup.
-
-The ACL GroupNorm forward owner uses the shared launcher while retaining its
-group, epsilon, and three-output query. GroupNorm backward remains outside this
-slice.
-
-The ACL GroupNorm backward owner uses the shared launcher while retaining its
-output-mask descriptor, group attributes, three-output query, and cleanup.
-
-The ACL MaskedSelect owner uses the shared launcher while retaining its
-two-input mask query and synchronous execution.
-
-The ACL Index owner uses the shared launcher while retaining its index query
-and synchronous execution. SliceV2 remains outside this slice.
-
-The ACL SliceV2 owner uses the shared launcher while retaining begins, ends,
-steps, and axes descriptor handling with synchronous execution.
-
-The ACL StridedSliceAssignV2 owner uses the shared launcher while retaining its
-gradient memset branch and slice descriptor handling.
-
-The ACL InplaceMaskedScatter owner uses the shared launcher while retaining its
-tracked base-to-output device copy dependency and synchronous execution.
-
-The ACL IndexPutImpl owner uses the shared launcher while retaining its
-index-tensor-list handling and synchronous execution. Accumulate remains
-outside this slice.
-
-The ACL IndexPutImpl accumulate owner uses the shared launcher while retaining
-its tracked output memset and index tensor-list dependency.
-
-The ACL FlashAttention forward owner uses the shared launcher while retaining
-prefix/qstart/kvstart RAII descriptors and synchronous execution. Backward,
-incremental, and KV-cache owners remain outside this slice.
-
-The ACL FlashAttention backward owner uses the shared launcher while retaining
-its RAII descriptors, three gradient outputs, and synchronous execution.
-
-The ACL incremental FlashAttention owner uses the shared launcher while
-retaining block-table, actual-sequence, cache-view cleanup, and synchronization.
-KVCacheMemcpy remains outside this slice.
-
-The ACL AdamWList owner uses the shared launcher for each tensor update while
-retaining its fused device-copy checks and single synchronization point after
-the update loop.
-
-The ACL Dropout backward owner uses the shared launcher while retaining its
-scale query and synchronous execution policy.
-
-The ACL Softmax backward owner now uses the shared launcher while retaining its
-dimension query and synchronous execution policy.
-
-The ACL RotaryPositionEmbedding forward owner uses the shared launcher and
-retains its three input tensors and synchronous execution. Its gradient owner
-is outside this slice.
-
-The ACL RotaryPositionEmbedding gradient owner uses the shared launcher while
-retaining its four-input, three-output query and synchronous execution.
-
-The ACL Maxpool forward owner uses the shared launcher while retaining its
-kernel, stride, padding, dilation, and ceil-mode descriptors. Avgpool and
-backward owners remain outside this slice.
-
-The ACL Avgpool forward owner uses the shared launcher while retaining its
-pool descriptors, ceil mode, divisor, and padding semantics. Maxpool and
-backward owners remain outside this slice.
-
-The ACL Avgpool backward owner uses the shared launcher while retaining its
-countIncludePad/divisorOverride semantics and descriptor cleanup.
-
-The ACL Maxpool backward owner uses the shared launcher while retaining its
-pool descriptors, ceil mode, output handling, and cleanup.
-
-The ACL UpsampleNearest2d forward owner uses the shared launcher while retaining
-output-size RAII and synchronous execution. Backward is outside this slice.
-
-The ACL UpsampleNearest2d backward owner uses the shared launcher while
-retaining output/input-size RAII descriptors and synchronous execution.
-
-The ACL launcher migration boundary is now explicit: KVCacheMemcpy is a
-per-token aclrtMemcpyAsync path, not a workspace/query executor owner, and must
-remain outside BaseOpRunner::launch. The remaining 8.06 work is module-level
-registration, attribute data plumbing, descriptor caching, and process_acl
-removal with their stated prerequisites.
-
-The obsolete ACL `op_idx_map` has no runtime consumers. Reduce dispatch keeps
-its explicit operator ids in `acl_op_exec.cc`; the map definition and extern
-were removed without changing dispatch semantics.
-
+这些开关是诊断用途且会拖慢执行，**定位到出错运算后就去掉**。通用的 JIT 与显存诊断见
+[调试指南](debugging.md)。
+
+各 ACL 算子族迁移到共享 launcher 的逐条状态属于整改期记录，见
+[昇腾迁移记录](../../refactor-wip/architecture/ascend-migration-notes.md)。
