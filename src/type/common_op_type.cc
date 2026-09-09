@@ -50,7 +50,7 @@ unordered_map<string,string> common_op_type_cuda_map = {
     {"pow", "(($1)jittor::_signed_pow(($2),($4)))"},
     {"maximum", "::max($1($2), $1($4))"},
     {"minimum", "::min($1($2), $1($4))"},
-    {"mod", "@if(@strcmp($1,float32)==0,(($2)-::floorf(($2)/($4))*($4)),@if(@strcmp(@Tx,float64)==0,(($2)-::floor(($2)/($4))*($4)),(($2)%($4))))"},
+    {"mod", "@if(@strcmp($1,float32)==0,(($2)-::floorf(($2)/($4))*($4)),@if(@strcmp(@Tx,float64)==0,(($2)-::floor(($2)/($4))*($4)),jittor::_floor_mod($1($2), $1($4))))"},
     {"init_maximum", "::numeric_min<$1>()"},
     {"init_minimum", "::numeric_max<$1>()"},
 };
@@ -113,7 +113,7 @@ struct CommonOpType : OpByType {
             {"pow", "std::pow(($2),($4))"},
             {"maximum", "std::max($1($2), $1($4))"},
             {"minimum", "std::min($1($2), $1($4))"},
-            {"mod", "@if(@strcmp($1,float32)==0,(($2)-std::floor(($2)/($4))*($4)),@if(@strcmp(@Tx,float64)==0,(($2)-std::floor(($2)/($4))*($4)),(($2)%($4))))"},
+            {"mod", "@if(@strcmp($1,float32)==0,(($2)-std::floor(($2)/($4))*($4)),@if(@strcmp(@Tx,float64)==0,(($2)-std::floor(($2)/($4))*($4)),jittor::_floor_mod($1($2), $1($4))))"},
             {"init_maximum", "std::numeric_limits<$1>::lowest()"},
             {"init_minimum", "std::numeric_limits<$1>::max()"},
         };
@@ -172,7 +172,8 @@ struct CommonOpType : OpByType {
     void post_pass(OpCompiler* oc) {
         string& src = oc->src;
         string includes;
-        if (src.find("_floor_divide") != string::npos &&
+        if ((src.find("_floor_divide") != string::npos ||
+             src.find("_floor_mod") != string::npos) &&
             src.find("type/floor_divide_compute.h") == string::npos)
             includes += "#include \"type/floor_divide_compute.h\"\n";
         if (src.find("_signed_pow") != string::npos &&
