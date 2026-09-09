@@ -68,12 +68,10 @@ class FlashAttentionACL:
             D = H // N
         elif self.layout == "SBH":
             SQ, B, H = q.shape
-            SKV = k.shape[0]
             N = self.headnum
             D = H // N
         elif self.layout == "BSND":
             B, SQ, N, D = q.shape
-            SKV = k.shape[1]
         elif self.layout == "BNSD":
             B, N, SQ, D = q.shape
         else:
