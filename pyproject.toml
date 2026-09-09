@@ -137,6 +137,7 @@ files = [
     "compat/torch/nested.py",
     "compat/torch/parameter_containers.py",
     "compat/torch/tensor_state.py",
+    "compat/torch/types.py",
     "compat/torch/api_manifest.py",
     "compat/torch/_placeholder_context.py",
     "compat/torch/namespace.py",
