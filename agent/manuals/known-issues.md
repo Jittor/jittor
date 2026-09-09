@@ -352,6 +352,127 @@ framework defects.
   reproducible failing sequence, exact revision, device, cache isolation, and
   copied host results from both the spectrum and round trip
 
+## KI-COMPAT-001: Torch namespaces publish native-only helpers and imported symbols
+
+- Severity: Medium
+- Status: Open, recorded in the Torch API manifest
+- Owner: Torch compatibility frontend maintainers
+- Evidence:
+  [`tests/structure/torch_api_manifest.json`](../../tests/structure/torch_api_manifest.json)
+  records all 291 native `Var` methods on `torch.Tensor`, 37 of which PyTorch's
+  `Tensor` has no equivalent for -- `assign`, `start_grad`, `stop_grad`,
+  `stop_fuse`, `reindex`, `reindex_reduce`, `reindex_var`, `migrate_to_cpu`,
+  `migrate_to_gpu`, `fetch_sync`, `cast`, `float_auto`, `ceil_int`, `floor_int`,
+  `round_int`, `safe_clip`, `debug_msg`, `peek`, `tape` and `candidate` among
+  them -- plus `torch.nn.OrderedDict`, `torch.nn.deepcopy` and
+  `torch.nn.partial`, which are imports leaking into a published namespace.
+  `torch.random` is a third shape: a module subclass with `__call__`, so
+  `torch.random(3)` returns a tensor while `torch.random` is also the published
+  `torch.random` namespace; PyTorch's is a module only.
+- Symptom: [`compat/torch/api_manifest.py`](../../compat/torch/api_manifest.py)
+  states that native-only helpers copied into compatibility namespaces are not
+  counted as PyTorch APIs, but they are public and reachable on the frontend, so
+  downstream code can bind to them and `dir(torch.nn)` advertises them. They also
+  sit in the Torch coverage denominator, where no Torch-facing test will call them.
+- Workaround: do not treat a name's presence on `torch.*` as evidence that the
+  Torch API has it; `compat/torch/api_manifest.py` holds the declared set.
+- Review/expiry condition: keep the native-only names and the imported symbols
+  out of the published namespaces, regenerate
+  `tests/structure/torch_api_manifest.json` in the same commit, and remove this
+  entry when the manifest no longer records them.
+
+## KI-OPS-009: scatter_add segfaults on a CPU-only build
+
+- Severity: Critical
+- Status: Reproduced, unfixed; CPU-only builds only
+- Owner: indexing/scatter and build-configuration maintainers
+- Evidence: at `65a220d53`, two freshly built cores (215 and 216 objects
+  compiled from scratch, so not a stale cache), same four lines, same machine:
+
+  ```
+  # nvcc_path="" -- the CPU-only build tools/run_test_suite.py configures
+  nvcc_path="" PYTHONPATH=<repo>/python python -c "
+  import jittor as jt
+  x = jt.zeros((4,5)); idx = jt.zeros((4,5), dtype='int64'); src = jt.ones((4,5))
+  print(x.scatter_add(0, idx, src).numpy().sum())"
+  # Caught segfault at address 0x... / Segfault, exit   (exit 1)
+
+  # the same command with nvcc on PATH
+  # 20.0                                                (exit 0)
+  ```
+
+  `tests/ops/test_ops.py::TestCommonCPU::test_reference_scatter_add_float32`
+  follows the same split: the process dies on the CPU-only build and the case is
+  `1 passed` on the CUDA build. The Torch spelling
+  (`torch.zeros(4,5).scatter_add(...)`) behaves identically, so it is a core
+  defect and not a frontend one.
+- Symptom: the crash takes the interpreter with it, so on a CPU-only build the
+  OpInfo case ends the pytest process after printing its nodeid -- no result, no
+  traceback, no summary -- and every later test in that session silently never
+  runs. `tests/ops/test_ops.py` belongs to the Torch process mode, so a native
+  `pytest tests/ops` never reaches it, and a CUDA-configured run never sees it.
+- Workaround: on a CPU-only build do not call `scatter_add`; `-k "not
+  scatter_add"` to complete a Torch session. `tests/ops/test_ops.py -k "not
+  interpolate"` is needed for the same reason and is probably the same defect.
+- Review/expiry condition: the four-line reproducer returns the summed tensor on
+  a CPU-only build, the OpInfo case passes there, and a build-configuration
+  difference of this size is either explained or gated.
+
+## KI-TEST-002: a dead session is indistinguishable from a short one
+
+- Severity: High
+- Status: Open
+- Owner: test infrastructure maintainers
+- Evidence: on a CPU-only build (`nvcc_path=""`, the configuration
+  `tools/run_test_suite.py` sets), the maintained Torch selection printed
+  progress to 48% and then ended with exit 1 -- no result line for the case that
+  died, no traceback, no summary, and no mention of the ~2200 tests that never
+  ran. Four cases do this on that build:
+  `tests/ops/test_ops.py::TestCommonCPU::test_reference_scatter_add_float32`
+  (KI-OPS-009),
+  `tests/ops/test_ops.py::TestGradientsCPU::test_gradcheck_interpolate_bilinear`,
+  `compat/tests/torch/test_torch_hf_alias.py::TestTorchHFAlias::test_small_transformers_forward_direct_alias`,
+  and
+  `compat/tests/torch/test_torch_hf_models.py::TestTorchHFModels::test_generate_greedy_kv_cache_and_beam`.
+  On a CUDA build the last two report `1 failed` and the session continues, so
+  the individual crashes are configuration-specific -- the reporting hole is not.
+- Symptom: a session that dies mid-run reads like a session that ran fewer
+  tests. This is the same disease as an entry that only ever skips, one degree
+  worse: a skip at least leaves a line in the summary. Any exclusion taken to
+  work around it -- this is how the first Torch coverage baseline had to be
+  gathered -- then silently narrows what the gate covers.
+- Workaround: compare the executed count against the collected count, or run the
+  selection in parts and check that each part produced a summary line.
+- Review/expiry condition: a session whose process ends before pytest writes a
+  summary is reported as a failure naming the case that was running and the
+  number of tests that never executed.
+
+## KI-TEST-003: the coverage wrapper is visible to the Torch identity contracts
+
+- Severity: Medium
+- Status: Open, measured and excluded rather than hidden
+- Owner: test infrastructure maintainers
+- Evidence: with `JITTOR_API_COVERAGE=1` on the Torch surface, 86 cases in the
+  14 files listed in `tests/_helpers/api_coverage.py::IDENTITY_CONTRACT_FILES`
+  fail that pass with it off -- `assertIs(torch.addmm,
+  installers.numerical.addmm)` and the object-keyed fidelity registry lookups.
+- Symptom: the wrapper records a call by replacing the published object, and the
+  Torch frontend contracts that the published object *is* the one its owner
+  module holds. Two ways of hiding were measured and both made it worse:
+  rebinding the defining module took the count from 86 to 101, and rebinding
+  every alias took it to 97 with the failures moving from `assertIs` to the
+  registry. The native surface states no such contract and is unaffected
+  (`tests/ops/test_where_op.py` is 18 passed with the diagnostic on and off).
+- Workaround: a Torch coverage run excludes those 14 files, and the exclusion is
+  written into `tests/structure/torch_api_coverage_baseline.json` so the looser
+  set is not read as a complete result.
+- Review/expiry condition: record calls without replacing anything -- a
+  `sys.setprofile` hook keyed by code object observes the same calls and mutates
+  nothing -- then delete the exclusion list and re-take the Torch baseline. The
+  characterisation case
+  `tests/structure/test_api_coverage_helper.py::test_the_wrapper_is_visible_to_an_identity_contract`
+  is where that change reports success.
+
 ## KI-COMPLEX-001: native complex capability gaps
 
 - Severity: Research/High by operation

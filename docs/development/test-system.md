@@ -1,7 +1,7 @@
 # 测试体系
 
 - 状态：已接受
-- 上次复查：2026-09-03
+- 上次复查：2026-09-10
 - 基线：`6b8fb594` 加任务 10.03
 - Owner：测试基础设施维护者
 - 复查触发：收集根目录、进程模式归属、marker、OpInfo 契约或后端门禁发生变化时
@@ -101,7 +101,7 @@ NumPy 或数学参考比对。
 上面三层回答的是**「这个算子对不对」**。它们不回答**「我们到底问了哪些算子、
 哪些 dtype」**——而缺陷正是从没被问到的地方冒出来的。
 
-三个已经证实的形态：
+四个已经证实的形态：
 
 **算子面远大于数据库。** 公开可调用面有 1294 个名字，OpInfo 覆盖 179 个算子。
 差集不是"还没来得及"，它是缺陷的住所。
@@ -115,17 +115,52 @@ NumPy 或数学参考比对。
 **按文本统计覆盖率是自欺。** 1294 个名字每一个都在 `tests/` 下某处出现过
 （import、注释、无关标识符），那个口径给出约 96%。
 
-对应的三件工具：
+**测量只盖住了其中一个面。** 上面这 1294 个名字全是原生面。Torch 兼容面是另一张
+对象图——`torch` 是兼容 owner 的命名空间视图，`torch.Tensor` 不是 `jt.Var`，
+`torch.nn` 是组合出来的——原生清单一个名字都覆盖不到它。它自己有 1295 个公开
+可调用名字，与原生面一样大，而在这套体系建成之前完全不在测量范围内。
+
+对应的四件工具（清单和基线按进程模式各一份）：
 
 | 工具 | 回答 |
 | --- | --- |
-| [`tests/structure/public_api_manifest.json`](https://github.com/Jittor/jittor/blob/master/tests/structure/public_api_manifest.json) 与其门禁 | 这 1294 个名字**还在不在** |
+| [`tests/structure/public_api_manifest.json`](https://github.com/Jittor/jittor/blob/master/tests/structure/public_api_manifest.json) 与其门禁 | 原生的 1294 个名字**还在不在** |
+| [`tests/structure/torch_api_manifest.json`](https://github.com/Jittor/jittor/blob/master/tests/structure/torch_api_manifest.json) 与其门禁 | Torch 面的 1295 个名字**还在不在** |
 | [`tests/_helpers/api_coverage.py`](https://github.com/Jittor/jittor/blob/master/tests/_helpers/api_coverage.py)（`JITTOR_API_COVERAGE=1`） | 一次运行**真的调用**了哪些入口 |
+| [`tools/api_coverage_ratchet.py`](https://github.com/Jittor/jittor/blob/master/tools/api_coverage_ratchet.py) 与两份基线 | 没被调用的那个集合**有没有变大** |
 | [`tools/opinfo_dtype_gaps.py`](https://github.com/Jittor/jittor/blob/master/tools/opinfo_dtype_gaps.py) | 哪些 (算子, dtype) **跑得通却没声明** |
 
-覆盖测量默认关闭：包装每个公开入口是诊断，不是常态。它已用开/关对照验证不改变
-被测系统。无法包装的入口单独记账而不是丢弃——分母里少算一个会美化结果。
-dtype 探测按 (算子, dtype) 逐个试编译，属于 nightly 级诊断而非 PR 门禁。
+覆盖测量默认关闭：包装每个公开入口是诊断，不是常态。它用开/关对照验证不改变被测
+系统——原生 `tests/ops/test_where_op.py` 开关两侧同为 18 passed，Torch 会话在排除
+下述 14 个文件后开关两侧的失败 nodeid 集合逐条相同。
+
+**这条对照必须在每一个面上各做一次，在一个面上通过不能外推。** 同一行「包装所有
+callable」在原生面一直无害，因为原生面没有可调用的 module；到 Torch 面上它替换掉
+`torch.random`，前端的命名空间归属检查随即判定图已被改动，收集期直接报错。诊断在
+一张对象图上验证过，就只是在那一张对象图上验证过。
+
+Torch 面还有一条这套包装绕不过去的界限，它被记录而不是被藏起来：前端对「发布出去的
+就是 owner 模块持有的同一个对象」有显式契约，fidelity 注册表又以对象本身为键，因此
+替换对象的包装器对这些用例是可见的——`JITTOR_API_COVERAGE=1` 会让其中 86 条转红。
+试过两种躲避方式，都更差（改绑定义模块 101 条，改绑全部别名 97 条且失败点移到注册表），
+这说明这是「以替换实现的记录器」的性质而不是待修的 bug。名单、测量与出路记在
+`tests/_helpers/api_coverage.py` 的 `IDENTITY_CONTRACT_FILES`：Torch 覆盖运行排除这 14 个
+文件，排除项写进基线文件本身，而真正的解法是一个不替换任何对象的记录器。
+
+一次运行只测量它所属进程模式拥有的那一个面：`JITTOR_TORCH_SHIM` 决定进程模式，
+也就决定读哪一份清单、写哪一份基线；更新一个面的基线不动另一份。包装在**收集
+结束之后**安装而不是在 session 开始时：拿到一个面意味着 import 它，而在 Torch
+模式下这个 import 本身就是若干测试所测量的前端激活——早一步做，`enable()` 到测试
+执行时已成空操作，诊断就改变了它的观测对象。
+
+无法包装的入口单独记账而不是丢弃——分母里少算一个会美化结果。类是入口，但包装它
+会替换类型并破坏 `isinstance`；module 是 owner 而不是入口，而 Torch 面有可调用的
+module（`torch.random` 是带 `__call__` 的 module 子类），包装它会替换已发布的命名
+空间绑定。两者都进 unwrappable，而不是从分母里消失。
+
+棘轮的比较需要一次完整覆盖运行，属于 nightly 级作业而不是 PR 门禁；PR 门禁上跑的
+只是基线自身的形态检查和规则的负向验证。dtype 探测按 (算子, dtype) 逐个试编译，
+同样属于 nightly 级诊断。
 
 ## 跨切面契约
 

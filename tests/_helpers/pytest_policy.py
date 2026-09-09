@@ -251,7 +251,6 @@ def _torch_mode_paths_named_on_the_command_line(config):
 
 
 def pytest_sessionstart(session):
-    _install_api_coverage()
     _require_real_accelerator()
     found = [name for name in _LEGACY_SELECTION if name in os.environ]
     if found:
@@ -307,6 +306,10 @@ def _manual_probes_are_enabled(config):
     # depend on the rest of pytest's Config existing.
     option = getattr(config, "option", None)
     return "manual" in (getattr(option, "markexpr", "") or "")
+
+
+def pytest_collection_finish(session):
+    _install_api_coverage(session)
 
 
 def pytest_collection_modifyitems(config, items):
@@ -968,25 +971,63 @@ def pytest_sessionfinish(session, exitstatus):
         session.exitstatus = 1
 
 
-def _install_api_coverage():
+def _install_api_coverage(session):
     """Wrap the public surface so the session can say what it actually called.
 
     Inert unless ``JITTOR_API_COVERAGE=1``: a normal run must not pay for a
     diagnostic, and a wrapper on every public entry point is not something to
     leave on by default.
+
+    Which surface it measures follows the process mode: a native session
+    wrapping the Torch namespace would count a denominator it never reaches,
+    and the reverse would leave the mode's own surface unmeasured.
+
+    After collection, not at session start. This looks like the wrong hook and
+    will read as one to whoever finds it next, so here is what happens when it
+    moves back. Reaching a surface means importing it, and in Torch mode that
+    import *is* the frontend activation several tests measure. Installing at
+    ``pytest_sessionstart`` therefore activated the shim before collection,
+    and in a Torch session:
+
+    * ``compat/tests/structure/test_torch_compat_structure.py`` failed to
+      collect at all -- ``RuntimeError: cannot re-activate the Jittor Torch
+      shim over a changed Torch module graph`` -- which interrupts the session;
+    * ``test_torch_bootstrap.py::TestTorchBootstrap::
+      test_required_install_failure_propagates_for_both_bootstrap_policies``
+      and ``TestShimSysPathOwnership::
+      test_enable_appends_the_project_and_prepends_only_its_own_dirs`` went
+      from passing to failing, because ``enable()`` had nothing left to do by
+      the time they called it.
+
+    A diagnostic that changes its subject is not measuring it. By the end of
+    collection the session has imported whatever it was going to import anyway,
+    so the wrapper lands on the state the run would have had regardless, and
+    what it records is what the *tests* called rather than what importing them
+    happened to call -- an import-time call carries no assertion, so counting
+    it inflates coverage with something nobody checks.
+
+    The trade is worth stating: a callable a module *captured* at import time
+    is the original object, not the wrapper, so calling it later is not
+    recorded. A table of operators built at collection is the shape to watch
+    for. The OpInfo database is exactly that shape and binds ``jt.*``, which
+    the Torch surface does not measure, so no maintained run is currently
+    affected -- but a future table of ``torch.*`` callables would be.
     """
+    if getattr(session.config.option, "collectonly", False):
+        return
     from _helpers import api_coverage
     if not api_coverage.enabled():
         return
-    api_coverage.install()
+    api_coverage.install("torch" if _torch_mode_is_active() else "native")
 
 
 def _report_api_coverage(terminalreporter):
     """Print exercised/unexercised public entry points, and save the detail.
 
-    The manifest gate proves 1294 names still resolve. This says how many the
-    suite *called* -- the number a textual measure cannot give, because every
-    one of those names appears somewhere under tests/ and would score ~96%.
+    The manifest gates prove the recorded names still resolve -- 1294 native,
+    1295 Torch. This says how many the session *called* -- the number a textual
+    measure cannot give, because every one of those names appears somewhere
+    under tests/ and would score ~96%.
     """
     from _helpers import api_coverage
     if not api_coverage.enabled():
@@ -994,8 +1035,8 @@ def _report_api_coverage(terminalreporter):
     data = api_coverage.report()
     terminalreporter.write_sep("=", "public API coverage")
     terminalreporter.write_line(
-        "called %d of %d wrapped entry points (%d unwrappable)"
-        % (data["called"], data["wrapped"], data["unwrappable"]))
+        "%s surface: called %d of %d wrapped entry points (%d unwrappable)"
+        % (data["surface"], data["called"], data["wrapped"], data["unwrappable"]))
     destination = os.environ.get("JITTOR_API_COVERAGE_REPORT")
     if destination:
         api_coverage.write_report(destination)
