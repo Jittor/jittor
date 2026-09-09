@@ -2,7 +2,7 @@
 
 - Status: Maintained
 - Last reviewed: 2026-09-09
-- Baseline: `715009c02` plus KI-OPS-005
+- Baseline: `28e61e669`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -207,40 +207,6 @@ framework defects.
   of the contract
 - Review/expiry condition: retain both default and explicit-dtype assertions until
   a public dtype-default decision changes them together
-
-## KI-OPS-005: integer `%` truncates while `//` floors, breaking the division identity
-
-- Severity: Critical
-- Status: Reproduced, fix identified, not yet applied
-- Owner: operator and codegen maintainers
-- Evidence: on CPU, `a = [-7,-5,-1,1,5,7]`, `b = [2,3,2,2,3,2]` as int32:
-  `a // b` gives `[-4,-2,-1,0,1,3]` (floored, matching NumPy) while `a % b`
-  gives `[-1,-2,-1,1,2,1]` where NumPy gives `[1,1,1,1,2,1]`. The identity
-  `(a // b) * b + a % b == a` therefore yields `[-9,-8,-3,1,5,7]` instead of
-  `a`. `jt.mod` is the same object as `__mod__`.
-- Symptom: the two halves of integer division use opposite conventions. `%` on
-  negative integers returns C's truncated remainder (it equals `np.fmod`
-  exactly), while `//` floors. The same expression on float32/float64 is
-  correct, so the defect is dtype-dependent: `(-7.0) % 2.0` gives `1.0` and
-  `(-7) % 2` gives `-1`. Silent wrong result wherever negative operands reach
-  modular arithmetic -- wrapped indices, circular buffers, bucketing.
-- Cause: `src/type/common_op_type.cc` maps `mod` to
-  `x - floor(x/y)*y` for float32 and float64 and to the bare `($2)%($4)` for
-  every other type. Integer flooring already has a precedent next door:
-  `_floor_divide` in `src/type/floor_divide_compute.h` exists for exactly this
-  reason and carries the comment explaining it.
-- Fix: add `_floor_mod` beside `_floor_divide`
-  (`remainder + T(remainder != 0 && ((remainder < 0) != (y < 0))) * y`), point
-  the integer branch at it, and extend the `post_pass` include condition in
-  `common_op_type.cc` so the header is pulled in for `_floor_mod` too. Verified
-  by hand on the four sign combinations. Unsigned and bool are unaffected
-  because `remainder < 0` is always false there.
-- Workaround: for negative operands compute `a - (a // b) * b`, which uses the
-  correct floored quotient.
-- Review/expiry condition: the identity `(a // b) * b + a % b == a` holds for
-  every signed integer width and both operand signs on CPU and CUDA, `%`
-  matches NumPy for negatives, and a regression covers the four sign
-  combinations across dtypes.
 
 ## KI-FFT-001: withdrawn -- current CUDA sequence regression is clean
 
