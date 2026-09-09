@@ -169,6 +169,45 @@ An unavailable backend is an environment result. A reproduced kernel, dtype, or
 gradient mismatch on a working backend is a framework result. Reports must not
 conflate the two.
 
+## Editable installs of core and compat
+
+`jittor` (core) and `jittor-torch` (compat) are two distributions that share one
+import package. Compat installs into `jittor.compat` without owning `jittor`, so
+its editable install declares `jittor` as an implicit namespace: the generated
+finder carries `NAMESPACES = {'jittor': []}` and appends a path placeholder to
+`sys.path`.
+
+`PathFinder` runs before any appended `sys.meta_path` finder. If core is
+editable-installed in the default mode -- which registers a `sys.meta_path`
+finder rather than a path entry -- `PathFinder` reaches compat's placeholder
+first, synthesises an empty `jittor` namespace, and returns it. `import jittor`
+then **succeeds and yields a module with no `__version__`, no `flags` and no
+operators**, and the first real use fails somewhere unrelated to the cause.
+
+Use one of these; all three resolve `jittor` to the real package:
+
+```bash
+# source tests -- what the nox sessions do: compat editable, core on the path
+export PYTHONPATH="$PWD/compat/shim/resources:$PWD/python"
+python -m pip install --no-deps --no-build-isolation -e compat
+
+# a long-lived development environment that wants a bare `import jittor`
+python -m pip install --no-deps --no-build-isolation \
+    --config-settings editable_mode=compat -e .
+
+# a clean installation
+python -m pip install dist/jittor-*.whl dist/jittor_torch-*.whl
+```
+
+`editable_mode=compat` writes a plain `.pth` path entry instead of a meta-path
+finder. `__editable__.jittor-*.pth` sorts before `__editable__.jittor_torch-*.pth`
+(`-` precedes `_`), so core's path entry is on `sys.path` before compat appends
+its placeholder and `PathFinder` finds the real package first.
+
+Do not editable-install core in the default mode alongside compat.
+`tests/structure/test_core_package_not_shadowed.py` fails when `jittor` resolves
+to a namespace package and names the finder that shadowed it.
+
 ## Independent Torch oracle
 
 Tests that compare with real Torch must prove that `torch` did not resolve to
