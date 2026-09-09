@@ -153,9 +153,9 @@ def prepare_nn_namespace(context):
     namespace.modules.parameter.ParameterDict = ParameterDict
     # Parameter's public module may not exist in the native tree yet.
     parameter_module = types.ModuleType("torch.nn.parameter")
-    parameter_module.Parameter = Parameter
-    parameter_module.ParameterList = ParameterList
-    parameter_module.ParameterDict = ParameterDict
+    setattr(parameter_module, "Parameter", Parameter)
+    setattr(parameter_module, "ParameterList", ParameterList)
+    setattr(parameter_module, "ParameterDict", ParameterDict)
     source_parameter_module = getattr(backend.nn, "parameter", None)
     if source_parameter_module is not None:
         for name in ("UninitializedTensorMixin", "UninitializedParameter", "UninitializedBuffer"):
