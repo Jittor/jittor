@@ -123,6 +123,7 @@ files = [
     "compat/torch/fidelity.py",
     "compat/torch/context.py",
     "compat/torch/nn_frontend.py",
+    "compat/torch/grad.py",
     "compat/torch/nested.py",
     "compat/torch/parameter_containers.py",
     "compat/torch/tensor_state.py",

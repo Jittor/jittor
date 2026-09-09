@@ -2,6 +2,7 @@
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import numpy as np
+from typing import Any, Dict, List
 import jittor as jt
 from .. import collectives as _collectives
 
@@ -231,7 +232,7 @@ def _get_total_norm_device(grads, norm_type=2.0, error_if_nonfinite=False,
     # ordinary parameters are counted once; combining all through WORLD
     # would duplicate the replica axis and mix independent meshes.
     if shard_reduce is True and any(hasattr(g, "_fsdp_norm_group") for g in grads):
-        groups = {}
+        groups: Dict[Any, List[Any]] = {}
         for grad in grads:
             group = getattr(grad, "_fsdp_norm_group", None)
             groups.setdefault(group, []).append(grad)
@@ -277,10 +278,10 @@ def _get_total_norm_device(grads, norm_type=2.0, error_if_nonfinite=False,
         flat = jt.concat(parts)
         ax = flat.abs()
         if p == float("inf"):
-            local = ax.max() if int(flat.numel()) else jt.array(float("-inf"), dtype=acc_dtype)
+            local = ax.max() if int(flat.numel()) else jt.array(float("-inf")).cast(acc_dtype)
             total = _across(local, "max")
         elif p == float("-inf"):
-            local = ax.min() if int(flat.numel()) else jt.array(float("inf"), dtype=acc_dtype)
+            local = ax.min() if int(flat.numel()) else jt.array(float("inf")).cast(acc_dtype)
             total = _across(local, "min")
         elif p == 1.0:
             total = _across(ax.sum(), "sum")
@@ -315,7 +316,7 @@ def _clip_grads_with_norm_device(grads, max_norm, total_norm):
         return
     scalar_type = np.float64 if _jittor_dtype_name(acc_dtype) == "float64" else np.float32
     raw_coef = scalar_type(limit) / (total_norm + scalar_type(1e-6))
-    coef = jt.minimum(raw_coef, scalar_type(1.0))
+    coef = jt.minimum(raw_coef, jt.array(float(scalar_type(1.0))).cast(acc_dtype))
     # CUDA fmin-style minimum may select the finite operand for NaN. Torch
     # propagates a NaN total norm into every gradient when errors are disabled.
     coef = jt.ternary(jt.isnan(raw_coef), raw_coef, coef)
@@ -352,7 +353,8 @@ class _GradScaler:
         # The legacy torch.cuda.amp.GradScaler took init_scale first. Detect a
         # leading device positional (a str like "cuda" or a device object) and
         # shift it out, so BOTH signatures work.
-        args = list(args)
+        local_args: Any = list(args)
+        args = local_args
         if args and (isinstance(args[0], str) or
                      args[0].__class__.__name__ in ("device", "_Device")):
             args = args[1:]                     # drop the device positional
