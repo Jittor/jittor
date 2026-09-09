@@ -37,8 +37,8 @@ class TestAllocatorContracts(unittest.TestCase):
 
     def test_inplace_ops_use_the_explicit_share_relation(self):
         for relative in (
-                "src/ops/getitem_op.cc",
-                "src/ops/setitem_op.cc"):
+                "src/ops/composite/getitem_op.cc",
+                "src/ops/composite/setitem_op.cc"):
             source = (REPO_ROOT / relative).read_text(encoding="utf-8")
             self.assertIn(
                 "shares_allocation_with", source,
