@@ -139,11 +139,3 @@
 int64_t GetShapeSize(const std::vector<int64_t> &shape);
 
 void PrintOutResult(std::vector<int64_t> &shape, void **deviceAddr);
-
-//int Init(int32_t deviceId);
-
-/*
-template <typename T>
-int CreateAclTensor(const std::vector<T>& hostData, const std::vector<int64_t>& shape, void** deviceAddr,
-                    aclDataType dataType, aclTensor** tensor);
-*/
