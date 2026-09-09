@@ -264,7 +264,7 @@ def compile_custom_ops(
 
     _compiler_state.LOG.vvv(f"Build custum ops lib:{gen_lib}")
     _compiler_state.LOG.vvvv(f"Build sources:{builds}")
-    _compiler_state.compile(_compiler_state.cc_path, extra_flags+_compiler_state.cc_flags+_compiler_state.opt_flags+includes, builds, gen_lib)
+    _compiler_state.compile(_compiler_state.cc_path, extra_flags+_compiler_state.cc_flags+_compiler_state.opt_flags+include_flags, builds, gen_lib)
 
     # After the compile, so the stamp records the product that exists now. The
     # source signature is the pre-build one on purpose: a source edited during
