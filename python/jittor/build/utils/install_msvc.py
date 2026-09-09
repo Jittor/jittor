@@ -1,5 +1,4 @@
 import os
-import sys
 from jittor_utils.misc import download_url_to_local
 from jittor_utils import LOG
 from jittor_utils import manifest

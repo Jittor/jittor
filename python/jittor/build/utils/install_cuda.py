@@ -13,7 +13,6 @@ from jittor_utils.misc import download_url_to_local
 from jittor_utils import cuda_wheel
 from jittor_utils import manifest
 from jittor_utils.env_config import build_env
-import pathlib
 from typing import Any, Dict
 
 
@@ -79,7 +78,8 @@ def get_cuda_driver_win():
         cuda_driver = ctypes.CDLL(r"nvcuda")
         driver_version = ctypes.c_int()
         r = cuda_driver.cuDriverGetVersion(ctypes.byref(driver_version))
-        if r != 0: return None
+        if r != 0:
+            return None
         v = driver_version.value
         return [v//1000, v%1000//10, v%10]
     except:
@@ -105,7 +105,8 @@ def get_cuda_driver():
 
 def _read_cuda_driver():
     ret, out = sp.getstatusoutput("nvidia-smi -q -u")
-    if ret != 0: return None
+    if ret != 0:
+        return None
     try:
         out = out.lower()
         out = out.split('cuda version')[1] \
@@ -230,7 +231,8 @@ def install_cuda():
     md5 = manifest.digest_of(asset)[1]
     jtcuda_path = os.path.join(jit_utils.home(), ".cache", "jittor", "jtcuda")
     nvcc_path = os.path.join(jtcuda_path, cuda_tgz[:-4], "bin", "nvcc")
-    if os.name=='nt': nvcc_path += '.exe'
+    if os.name == 'nt':
+        nvcc_path += '.exe'
     nvcc_lib_path = os.path.join(jtcuda_path, cuda_tgz[:-4], "lib64")
     sys.path.append(nvcc_lib_path)
     new_ld_path = os.environ.get("LD_LIBRARY_PATH", "") + ":" + nvcc_lib_path
