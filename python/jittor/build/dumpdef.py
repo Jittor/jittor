@@ -21,16 +21,24 @@ for obj in sys.argv[1:-2]:
             if "External" not in sym_line:
                 continue
             sym = sym_line.split('|')[1].strip().split()[0]
-            if sym[0] in '@.': continue
-            if sym.startswith("??$get_from_env"): syms[sym] = 1
+            if sym[0] in '@.':
+                continue
+            if sym.startswith("??$get_from_env"):
+                syms[sym] = 1
             # if sym.startswith("??"): continue
-            if sym.startswith("my"): syms[sym] = 1
+            if sym.startswith("my"):
+                syms[sym] = 1
             # for cutt
-            if "custom_cuda" in sym: syms[sym] = 1
-            if "cutt" in sym: syms[sym] = 1
-            if "_cudaGetErrorEnum" in sym: syms[sym] = 1
-            if export_all: syms[sym] = 1
-            if "jittor" not in sym: continue
+            if "custom_cuda" in sym:
+                syms[sym] = 1
+            if "cutt" in sym:
+                syms[sym] = 1
+            if "_cudaGetErrorEnum" in sym:
+                syms[sym] = 1
+            if export_all:
+                syms[sym] = 1
+            if "jittor" not in sym:
+                continue
             syms[sym] = 1
     # print(ret)
 libname = os.path.basename(def_path).rsplit(".", 1)[0]
