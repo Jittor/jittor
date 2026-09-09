@@ -172,6 +172,68 @@ framework defects.
   every advertised accelerator, the strict expected failure above turns red, and
   this entry is removed
 
+## KI-OPS-006: max/min drop NaN where every other reduction propagates it
+
+- Severity: Critical
+- Status: Reproduced on CPU and CUDA, unfixed; a working implementation was
+  measured and rejected on cost
+- Owner: reduction and binary operator maintainers
+- Evidence:
+  [`test_minmax_nan_propagation.py`](../../tests/ops/test_minmax_nan_propagation.py)
+  `::TestMinMaxNanPropagationCpu::test_max_and_min_reductions_propagate_nan` and
+  `::test_elementwise_maximum_and_minimum_propagate_nan`, strict expected
+  failures, with the same pair on the CUDA class
+- Symptom: `jt.max([nan, 1.0, 2.0])` returns 2.0 and `jt.min` returns 1.0 where
+  NumPy and Torch both return nan. `sum`, `mean` and `prod` propagate correctly,
+  so one reduction family answers a NaN input two different ways. The
+  elementwise operators also disagree with themselves across backends:
+  `jt.maximum(1.0, nan)` is 1.0 on CPU and `jt.maximum(nan, 1.0)` is 1.0 on
+  CUDA, because the two lower the same ternary differently.
+- Cause: `std::max(a, b)` is `a < b ? b : a`, and CUDA's `::max` on floats
+  lowers to `fmaxf`. Every comparison against NaN is false, so the operand that
+  is not NaN survives; the reduction starts at its identity (`lowest()` on CPU,
+  `-inf` on CUDA -- see [KI-OPS-008]) and folds `max(acc, x)`, so a NaN can
+  neither enter the accumulator nor stay in it. The two rows are
+  `maximum`/`minimum` in both tables of
+  [`common_op_type.cc`](../../src/type/common_op_type.cc).
+- Why it is not simply fixed -- three costs, all measured on `1e25ff68a`:
+  1. The NaN test cannot be a comparison. JIT kernels compile with `-Ofast`,
+     which implies `-ffinite-math-only`; `x != x` and `std::isnan(x)` fold to
+     false there, and a max written with either collapses back to a single
+     `vmaxss` (confirmed from the emitted assembly). Only a bit test on the
+     exponent and mantissa survives. [`numerical.py`](../../python/jittor/ops/numerical.py)
+     hits the same wall for isnan/isinf and drops that one kernel to `-O2`
+     through `_simple_for`, which a reduction kernel cannot afford.
+  2. A bit test is not a GCC-recognised reduction, so max/min reductions lose
+     auto-vectorisation. Timed at the kernel's own flags
+     (`-Ofast -march=native`), the NaN-propagating reduce runs at 3.9-4.9 GB/s
+     flat, whatever the working set, because it is scalar and latency-bound;
+     `std::max` vectorises and reaches 28-31 GB/s at 64 MB and 40-109 GB/s while
+     cache-resident. That is 7.4x-8.2x slower out of memory and 10x-28x slower in
+     cache -- the spread is the denominator moving with machine load, not the
+     numerator. In-tree, with the addition-reduce control at 1.00x in the same
+     run, float32 `max()` and `min()` over 1M and 8M elements regressed 7.1x to
+     7.5x. The elementwise operators cost only 1.2x to 1.6x.
+  3. The spelling is load-bearing elsewhere.
+     [`parallel_pass.cc`](../../src/codegen/opt/pass/parallel_pass.cc) and
+     [`atomic_tuner_pass.cc`](../../src/codegen/opt/pass/atomic_tuner_pass.cc)
+     match the literal `std::max(T(a),T(b))` / `::max(T(a),T(b))` to route a
+     parallel reduction through `cpu_atomic_max`/`cuda_atomic_max`, so changing
+     the expression makes CUDA reductions fail to compile outright
+     (`Expr not match`). A complete fix therefore also has to make those atomics
+     NaN-correct -- `cuda_atomic_max` is a CAS over a sign-magnitude integer
+     key, where a negative NaN sorts below -inf -- plus the float16 table and
+     `shared_reduce_max`/`shared_reduce_min`.
+- Workaround: test for NaN separately -- `float('nan') if jt.isnan(x).any() else
+  x.max()` -- rather than reading it out of the reduction. `jt.isnan` is correct
+  on both backends; it is the kernel that already compiles at `-O2`.
+- Review/expiry condition: a max/min reduce that propagates NaN without losing
+  the vectorised reduction -- most plausibly a second, OR-folded NaN accumulator
+  in the reduce codegen, which stays a recognised reduction and costs about two
+  vector operations per eight elements -- lands together with NaN-correct
+  atomics. The four strict expected failures above then turn red and this entry
+  is removed.
+
 ## KI-OPS-007: the CUDA unary math table narrows float64 to float32
 
 - Severity: Critical
@@ -200,6 +262,39 @@ framework defects.
   does, keeping the `f` spelling for float32 so consumer GPUs -- where float64
   throughput is a fraction of float32 -- do not pay for the fix; the strict
   expected failure above turns red and this entry is removed.
+
+## KI-OPS-008: the CPU max/min reduction starts from a finite identity
+
+- Severity: Critical
+- Status: Reproduced on CPU, unfixed; CUDA is already correct
+- Owner: reduction operator maintainers
+- Evidence:
+  [`test_minmax_reduction_identity.py`](../../tests/ops/test_minmax_reduction_identity.py)
+  `::TestMinMaxReductionIdentityCpu::test_infinite_reductions_use_the_right_identity`,
+  a strict expected failure; the CUDA class runs the same body and passes
+- Symptom: `jt.max` of a float32 tensor whose every element is -inf returns
+  -3.4028235e38 on CPU and -inf on CUDA; `jt.min` of an all +inf tensor is the
+  mirror image. NumPy and Torch return the infinity. A fully masked attention
+  row is exactly this input -- it is all -inf, and `logits.max(-1)` is exactly
+  this reduction -- so the wrong value is reachable without anyone writing an
+  infinity by hand.
+- Cause: `init_maximum` is `std::numeric_limits<$1>::lowest()` in the CPU table
+  of [`common_op_type.cc`](../../src/type/common_op_type.cc) and
+  `::numeric_min<$1>()` in the CUDA table, and the CUDA one resolves to
+  `-CUDART_INF` for float and double. `max(lowest(), -inf)` keeps the identity
+  instead of the element, so on CPU no reduction can ever report an infinity it
+  was given. Integers are unaffected: `lowest()` *is* their identity and they
+  have no infinity to lose, which is why the fix has to dispatch on the dtype
+  rather than replace the row.
+- Distinct from [KI-OPS-006]: that entry is the NaN behaviour of the `maximum`
+  and `minimum` *operators*, which is expensive to fix. This one is the identity
+  the reduction folds from -- a per-output-element constant, with no effect on
+  the inner loop -- and the two are independent.
+- Workaround: on CPU, treat a result equal to `numpy.finfo(dtype).min` (or
+  `.max` for `min()`) as possibly an infinity, or run the reduction on CUDA.
+- Review/expiry condition: the CPU identity resolves to `-inf`/`+inf` for
+  float32 and float64 while integers keep `lowest()`/`max()`, the strict
+  expected failure above turns red, and this entry is removed.
 
 ## KI-SEMANTICS-003: floating-comparison backend verification incomplete
 
