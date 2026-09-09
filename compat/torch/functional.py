@@ -15,7 +15,6 @@ def _torch_norm_impl(input, p="fro", dim=None, keepdim=False, dtype=None):
     #   * p='fro' or None -> 2-norm (Frobenius == Euclidean over the flattened
     #     reduced elements); p may be an int/float (1, 2, inf) or 'fro'/'nuc'.
     #   * dim may be an int or a tuple of ints.
-    import math as _m
     if dtype is not None:
         input = input.cast(_dtype_to_str(dtype))
     # normalize the order p

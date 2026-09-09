@@ -70,7 +70,7 @@ from .installers import (
     utilities,
 )
 from . import serialization
-from ..diagnostics import EXPECTED, swallowed
+from ..diagnostics import swallowed
 
 
 _COMPAT_PUBLIC_SYMBOLS = (
