@@ -115,8 +115,6 @@ class FlashAttentionACL:
             "hasPaddingmask": bool(has_paddingmask),
             "hasAttentmask": bool(has_attenmask),
         }
-        attr_code = attribute_program("FlashAttention", attributes)
-        grad_attr_code = attribute_program("FlashAttentionBackward", attributes)
 
         inputs = [q, k, v, realshift, dropMask, paddingMask, attenMask]
 
@@ -125,16 +123,16 @@ class FlashAttentionACL:
             inputs,
             output_dtypes=["float", "float", q.dtype],
             output_shapes=[output_shape, output_shape, q.shape],
-            attr_code=attr_code,
+            attributes=attributes,
             multi_grad_output=2,
             multi_grad_input_count=3,
             multi_grad_src=code_program(
                 [
                     "\n            // aclop\n            FlashAttentionBackwardOpRunner op;\n            op.add(in0, true);\n            op.add(in1, true);\n            op.add(in2, true);\n            op.add(dout, true);\n            op.add(in3, true);\n            op.add(in4, true);\n            op.add(in5, true);\n            op.add(in6, true);\n            op.add(pout0, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
-                    grad_attr_code,
                     "\n            op.run();\n            ",
                 ]
             ),
+            multi_grad_attributes=attributes,
         )
         return result[2]
 

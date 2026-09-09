@@ -152,6 +152,14 @@ def test_grouped_add_rms_norm_uses_named_attribute_set(pipeline):
     assert "acl_payload.norm." in calls[-1]["cuda_src"]
 
 
+def test_flashattention_forward_backward_use_shared_typed_attributes():
+    source = (OPS / "flashattention_op.py").read_text(encoding="utf-8")
+    assert "attributes=attributes" in source
+    assert "multi_grad_attributes=attributes" in source
+    assert 'attribute_program("FlashAttention"' not in source
+    assert 'attribute_program("FlashAttentionBackward"' not in source
+
+
 def test_generated_and_runtime_attribute_sources_cannot_be_mixed(pipeline):
     load, Tensor, calls = pipeline
     code = load("_code").acl_code
