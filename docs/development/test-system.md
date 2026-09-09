@@ -96,6 +96,52 @@ NumPy 或数学参考比对。
 > **CPU 只有在被前向层与数值梯度层独立钉死之后，才是有效的一致性参考。** 后端环境
 > 失败要与框架缺陷分开报告。
 
+## 覆盖面：三层之外的那个问题
+
+上面三层回答的是**「这个算子对不对」**。它们不回答**「我们到底问了哪些算子、
+哪些 dtype」**——而缺陷正是从没被问到的地方冒出来的。
+
+三个已经证实的形态：
+
+**算子面远大于数据库。** 公开可调用面有 1294 个名字，OpInfo 覆盖 179 个算子。
+差集不是"还没来得及"，它是缺陷的住所。
+
+**"被覆盖"不是二值的。** `bitwise_not` 对 bool 恒返回 `True`（与输入无关），
+全程有 OpInfo 条目。条目声明 `dtypes=_INT`（`integral_types()` 不含 bool），
+样本生成器又写着 `dt = _int_dtype(dtype)` 把传入 dtype 强制转成整型——于是没有
+任何测试**能**喂给它 bool。算子读起来是被覆盖的。另注意 `OpInfo.dtypes` 缺省为
+`floating_types()`：忘记声明的条目静默只测浮点。
+
+**按文本统计覆盖率是自欺。** 1294 个名字每一个都在 `tests/` 下某处出现过
+（import、注释、无关标识符），那个口径给出约 96%。
+
+对应的三件工具：
+
+| 工具 | 回答 |
+| --- | --- |
+| [`tests/structure/public_api_manifest.json`](https://github.com/Jittor/jittor/blob/master/tests/structure/public_api_manifest.json) 与其门禁 | 这 1294 个名字**还在不在** |
+| [`tests/_helpers/api_coverage.py`](https://github.com/Jittor/jittor/blob/master/tests/_helpers/api_coverage.py)（`JITTOR_API_COVERAGE=1`） | 一次运行**真的调用**了哪些入口 |
+| [`tools/opinfo_dtype_gaps.py`](https://github.com/Jittor/jittor/blob/master/tools/opinfo_dtype_gaps.py) | 哪些 (算子, dtype) **跑得通却没声明** |
+
+覆盖测量默认关闭：包装每个公开入口是诊断，不是常态。它已用开/关对照验证不改变
+被测系统。无法包装的入口单独记账而不是丢弃——分母里少算一个会美化结果。
+dtype 探测按 (算子, dtype) 逐个试编译，属于 nightly 级诊断而非 PR 门禁。
+
+## 跨切面契约
+
+有些语义不属于任何单个算子，因而不属于上面任何一层：驻留与迁移、别名与就地写、
+惰性与实体化时机。它们没有归属就没有测试。
+
+[`tests/core/test_var_residency_contract.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_var_residency_contract.py)
+是这一类的第一个：未计算的 Var 没有驻留；读取 device Var 的数据会把存储真的迁回
+主机；`device_id` 跨 `cpu()` 保留源设备而 `device`/`location()` 跟随数据。它整体
+在 CPU 上运行，CUDA 用例逐条 skip——**去掉加速器只会收窄它而不是清空它**。
+
+这一点是有来历的：Var/Module 的设备方法契约此前只有四条用例，且全部要求两张
+CUDA 卡，于是在单卡与 CPU 机器上整体跳过，报告里和四条通过长得一模一样。现在
+"设备数量不够"由 `insufficient-devices` 单独计数并在汇总里点名，与"没有加速器"
+区分开——前者是硬件在场却仍丢掉的覆盖，不是环境事实。
+
 ## 测试分类与 marker
 
 Marker 在 [`pyproject.toml`](https://github.com/Jittor/jittor/blob/master/pyproject.toml)
