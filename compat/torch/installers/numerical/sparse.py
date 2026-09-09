@@ -34,7 +34,8 @@ def sparse_coo_tensor(indices, values, size=None, dtype=None, device=None,
     )
     from ...types import _dtype_to_str
     selected = _dtype_to_str(dtype)
-    if not isinstance(indices, jt.Var): indices = jt.array(indices)
+    if not isinstance(indices, jt.Var):
+        indices = jt.array(indices)
     if not isinstance(values, jt.Var):
         values = jt.array(values, dtype=selected)
     elif selected is not None:
@@ -49,7 +50,8 @@ def sparse_coo_tensor(indices, values, size=None, dtype=None, device=None,
         full = [int(idx_np[s].max()) + 1 if nnz > 0 else 0 for s in range(rank)] + tail
     sparse_shape, tail_shape = full[:rank], full[rank:]
     prod = 1
-    for d in sparse_shape: prod *= int(d)
+    for d in sparse_shape:
+        prod *= int(d)
     linear = np.zeros(nnz, dtype="int64")
     stride = 1
     for s in range(rank - 1, -1, -1):
