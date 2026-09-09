@@ -47,7 +47,6 @@ def hook_pt_randn(*shape, device=None):
     if isinstance(shape, tuple) and len(shape)==1 and isinstance(shape[0], (torch.Size, tuple, list)):
         shape = tuple(shape[0])
     np.random.seed(0)
-    print(shape)
     res = torch.from_numpy(np.random.randn(*tuple(shape)).astype("float32"))
     if device is not None:
         return res.to(device)
