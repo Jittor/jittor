@@ -172,6 +172,35 @@ framework defects.
   every advertised accelerator, the strict expected failure above turns red, and
   this entry is removed
 
+## KI-OPS-007: the CUDA unary math table narrows float64 to float32
+
+- Severity: Critical
+- Status: Reproduced on CUDA, unfixed for every entry except `round`
+- Owner: unary operator maintainers
+- Evidence:
+  [`test_float64_unary_precision.py`](../../tests/ops/test_float64_unary_precision.py)
+  `::TestFloat64UnaryPrecisionCuda::test_unary_family_keeps_float64_precision`,
+  a strict expected failure; the CPU class of the same file passes, which is
+  what makes this a backend divergence rather than a shared limitation
+- Symptom: nearly every row of `common_op_type_cuda_map` in
+  [`common_op_type.cc`](../../src/type/common_op_type.cc) is the `f` -- that is,
+  single-precision -- spelling of its libm function: `::floorf`, `::ceilf`,
+  `::sqrtf`, `::expf`, `::logf`, `::sinf` and the rest. A float64 operand is
+  converted to float on the way in, so the result carries 24 mantissa bits
+  instead of 53. Above 2**24 the answer is not merely imprecise:
+  `jt.ceil(12345678901234.5)` is 12345678901235.0 on CPU and 12345679020032.0
+  on CUDA, and `jt.log(1.0000000000000002)` is 2.22e-16 on CPU and exactly 0.0
+  on CUDA.
+- Cause: the table was written for float32 and the width was never dispatched.
+  `round` now is -- `@if(@strcmp($1,float32)==0, ::rintf, ::rint)` -- and is the
+  shape the remaining rows need.
+- Workaround: run float64 unary math on CPU, or accept float32 accuracy and say
+  so. A float64 tensor whose values stay inside 2**24 is unaffected.
+- Review/expiry condition: the remaining rows dispatch on width the way `round`
+  does, keeping the `f` spelling for float32 so consumer GPUs -- where float64
+  throughput is a fraction of float32 -- do not pay for the fix; the strict
+  expected failure above turns red and this entry is removed.
+
 ## KI-SEMANTICS-003: floating-comparison backend verification incomplete
 
 - Severity: Critical

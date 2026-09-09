@@ -22,7 +22,14 @@ unordered_map<string,string> common_op_type_cuda_map = {
     {"log", "::logf(($1)($2))"},
     {"exp", "::expf(($1)($2))"},
     {"sqrt", "::sqrtf(($1)($2))"},
-    {"round", "(($1) ::roundf(($2)))"},
+    // numpy and torch round halves to even (round(0.5)==0, round(2.5)==2);
+    // ::roundf rounds halves away from zero. ::rint follows the current
+    // rounding mode, which is to-nearest-even and is never changed here.
+    // The width is dispatched too: the old entry was the *float* spelling,
+    // so a float64 input was narrowed to float before rounding and every
+    // bit past the 24th was lost (round(12345678901234.5) came back as
+    // 12345679020032). Anything wider than float32 goes through ::rint.
+    {"round", "@if(@strcmp($1,float32)==0,(($1) ::rintf(($1)($2))),(($1) ::rint((double)($2))))"},
     {"floor", "(($1) ::floorf(($2)))"},
     {"ceil", "(($1) ::ceilf(($2)))"},
     {"round_int", "(($1) ::roundf(($2)))"},
@@ -88,7 +95,11 @@ struct CommonOpType : OpByType {
             {"log", "std::log(($1)($2))"},
             {"exp", "std::exp(($1)($2))"},
             {"sqrt", "std::sqrt(($1)($2))"},
-            {"round", "(($1)std::round(($2)))"},
+            // half-to-even, matching numpy/torch -- see the CUDA table.
+            // std::nearbyint keeps std::round's integral overload, so an
+            // integer input still widens to double instead of going
+            // ambiguous between the float and double spellings.
+            {"round", "(($1)std::nearbyint(($2)))"},
             {"floor", "(($1)std::floor(($2)))"},
             {"ceil", "(($1)std::ceil(($2)))"},
             {"round_int", "(($1)std::round(($2)))"},

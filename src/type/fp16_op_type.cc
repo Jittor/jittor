@@ -44,7 +44,10 @@ struct FP16OpType : OpByType {
             {"log", "::hlog(($1)($2))"},
             {"exp", "::hexp(($1)($2))"},
             {"sqrt", "::hsqrt(($1)($2))"},
-            {"round", "(($1) ::roundf(($2)))"},
+            // half-to-even, matching numpy/torch and the float32/float64
+            // tables. float16 and bfloat16 both widen losslessly to float,
+            // so the float spelling is the right one here.
+            {"round", "(($1) ::rintf(($2)))"},
             {"floor", "(($1) ::floorf(($2)))"},
             {"ceil", "(($1) ::ceilf(($2)))"},
             {"round_int", "(($1) ::roundf(($2)))"},
@@ -86,7 +89,7 @@ struct FP16OpType : OpByType {
             {"log", "std::log(($1)($2))"},
             {"exp", "std::exp(($1)($2))"},
             {"sqrt", "std::sqrt(($1)($2))"},
-            {"round", "(($1)std::round(($2)))"},
+            {"round", "(($1)std::nearbyint(($2)))"},
             {"floor", "(($1)std::floor(($2)))"},
             {"ceil", "(($1)std::ceil(($2)))"},
             {"round_int", "(($1)std::round(($2)))"},
