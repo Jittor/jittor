@@ -817,7 +817,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
             while (il>0 && src[il-1] != '\n') il--;
             while (ir+1<src.size() && src[ir+1] != '\n') ir++;
             string this_line = src.substr(il, ir-il+1);
-            LOGf << e.what() >> "\nJit compiler error:\n" >> this_line;
+            LOGf << e.what() << "\nJit compiler error:\n" << this_line;
         }
     }
     return new_src;
