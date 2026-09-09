@@ -426,7 +426,8 @@ class _GradScaler:
         if not self._enabled:
             return
         if new_scale is not None:
-            self._scale = float(new_scale); return
+            self._scale = float(new_scale)
+            return
         if self._found_inf:
             self._scale = max(1.0, self._scale * self._backoff_factor)
             self._growth_tracker = 0

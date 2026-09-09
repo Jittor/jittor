@@ -287,7 +287,6 @@ class GetItemACL(jt.Function):
                 index_list = tuple(idx[:, i] for i in range(len(slices.shape)))
                 return self.execute(x, index_list, return_x)
             # assert False, "not support bool type now"
-            # TODO:优化
             if x.shape != slices.shape:
                 raise ValueError("getitem mask shape must match input shape")
             output_len = slices.sum().item()
