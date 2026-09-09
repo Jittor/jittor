@@ -128,6 +128,7 @@ files = [
     "compat/torch/parameter_containers.py",
     "compat/torch/tensor_state.py",
     "compat/torch/api_manifest.py",
+    "compat/torch/grad.py",
     "compat/torch/_placeholder_context.py",
     "compat/torch/namespace.py",
     "compat/torch/holder_registry.py",
