@@ -252,7 +252,7 @@ _DEVICE_CTX_STACK: typing.List[device] = []
 
 
 Number = typing.Union[int, float, bool]
-Device = typing.Union[device, str, int, type(None)]
+Device = typing.Optional[typing.Union[device, str, int]]
 FileLike = typing.Union[str, os.PathLike, typing.IO[bytes]]
 SymInt = int
 SymFloat = float
