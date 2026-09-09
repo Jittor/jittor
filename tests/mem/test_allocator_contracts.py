@@ -137,5 +137,58 @@ class TestAllocatorContractsCuda(TestAllocatorContracts):
         self._scope.__exit__(None, None, None)
 
 
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
+class TestHostCopyDestination(unittest.TestCase):
+    """``x.cpu()`` must not take its destination out of device memory.
+
+    The executor allocates an op's outputs in the op's own allocator. The
+    device-to-host ``device_copy`` behind ``Var.cpu()`` was handled after the
+    fact instead: the destination was allocated on the device like any other
+    output, filled by way of a separate host block, and the device block was
+    then thrown away. Moving a tensor off the card therefore needed twice its
+    size *on the card*, and anything past half of device memory failed with
+    ``cudaMalloc failed`` -- exactly the case where getting it off the device
+    is the point.
+
+    Size is the only assertion that separates the two implementations. A
+    counter-based check does not: the source's own block goes back to the pool
+    first, so a device-allocated destination can be served from it without the
+    pool growing, and the test passes either way.
+    """
+
+    def setUp(self):
+        self._scope = jt.flag_scope(use_cuda=1)
+        self._scope.__enter__()
+
+    def tearDown(self):
+        self._scope.__exit__(None, None, None)
+        jt.clean()
+
+    def test_a_tensor_past_half_the_card_still_moves_to_host(self):
+        total = jt.get_mem_info().total_cuda_ram
+        # 60% of the card: one copy fits, two do not.
+        floats = int(total * 0.6) // 4
+        side = 1024 * 1024
+        rows = max(floats // side, 1)
+        try:
+            source = jt.ones((rows, side))
+            source.sync()
+        except RuntimeError as exc:
+            self.skipTest("cuda device has no room for the source: %s" % exc)
+
+        host = source.cpu()
+        host.sync()
+        self.assertEqual(host.location(), "cpu")
+        self.assertEqual(source.location(), "device")
+        self.assertEqual(float(host.numpy().flat[0]), 1.0)
+        self.assertEqual(float(host.numpy().flat[-1]), 1.0)
+
+    def test_host_copy_keeps_its_gradient(self):
+        x = jt.array(np.arange(6, dtype="float32")).cuda()
+        g = jt.grad((x.cpu() * x.cpu()).sum(), x)
+        np.testing.assert_allclose(
+            g.numpy(), 2 * np.arange(6, dtype="float32"), rtol=1e-6)
+
+
 if __name__ == "__main__":
     unittest.main()

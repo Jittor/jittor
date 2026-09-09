@@ -84,6 +84,12 @@ struct VarFlags {
         // This explicit placement has been observed by a Python Tensor holder.
         // It cannot be retargeted as an unpublished scalar implementation detail.
         _placement_published,
+        // The producing op puts this output in host memory whatever device it
+        // runs on: the host copy behind `x.cpu()`. Allocating it on the device
+        // first would need the tensor's size in device memory for a transfer
+        // whose whole purpose is to take those bytes off the device, so a
+        // tensor larger than half the card could not be moved off it at all.
+        _host_resident,
         _end,
     };
 };

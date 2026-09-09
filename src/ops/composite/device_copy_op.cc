@@ -32,6 +32,14 @@ DeviceCopyOp::DeviceCopyOp(Var* x, int device) : x(x), device(device) {
         << "Invalid CUDA device index" << device >> ", visible device count is" << count;
     y = create_output(nullptr, x->dtype());
     y->set_flag(VarFlags::_is_scalar, x->flag(VarFlags::_is_scalar));
+    // The host copy is placed in host memory directly. The executor used to
+    // allocate every output on the op's device and this one then threw that
+    // block away after the D2H transfer, so `x.cpu()` transiently held twice
+    // the tensor on the device and raised `cudaMalloc failed` for anything
+    // over half the card -- failing precisely when freeing device memory is
+    // the point. `run()` keeps its fallback for the swap path.
+    if (device < 0)
+        y->set_flag(VarFlags::_host_resident);
     if (x->placement.explicit_backend || y->placement.explicit_backend) {
         y->placement = TensorPlacement({device < 0 ? BackendId::Cpu : accelerator_backend_id(),
                                        device < 0 ? 0 : device});

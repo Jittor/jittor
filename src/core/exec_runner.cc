@@ -110,6 +110,15 @@ void check_op_async_error(Op* op, bool is_fused_op, const std::exception& e, jit
 }
 
 
+// Where an op's outputs are allocated. Every op places them on its own device
+// except the host copy behind `x.cpu()`, whose output is marked host-resident:
+// allocating that on the device first cost the tensor's size in device memory
+// for a transfer that exists to release it.
+static inline Allocator* output_allocator(Var* v, Allocator* op_allocator) {
+    if (v->flag(VarFlags::_host_resident)) return cpu_allocator;
+    return op_allocator;
+}
+
 #ifdef HAS_ACCELERATOR
 // The device an op runs on: where its outputs are placed. Op::propagate_device
 // has already made the outputs agree with the inputs, so either end answers;
@@ -222,14 +231,15 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 check_and_swap_out(var, allocator);
             }
             for (auto* var : op->outputs()) {
-                alloc_with_swap(var, allocator, true);
+                alloc_with_swap(var, output_allocator(var, allocator), true);
                 swap_epoch.mark(var);
             }
         } else {
             for (auto* var : op->outputs()) {
                 // the return value used to be discarded: a CPU OOM reached the
                 // generated kernel as a null pointer and crashed there
-                CHECK(var->alloc(allocator)) << "Unable to allocate memory for" << var;
+                CHECK(var->alloc(output_allocator(var, allocator)))
+                    << "Unable to allocate memory for" << var;
             }
         }
         if (PREDICT_BRANCH_NOT_TAKEN(profile_memory_enable))
@@ -277,7 +287,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                     migrate_to_gpu(v, var_allocator(v, allocator));
             }
             for (Var* v : op->outputs()) {
-                if (!v->allocator->is_cuda())
+                if (!v->allocator->is_cuda() && !v->flag(VarFlags::_host_resident))
                     migrate_to_gpu(v, var_allocator(v, allocator));
             }
         }
@@ -304,6 +314,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         // migrate to gpu
         if (PREDICT_BRANCH_NOT_TAKEN((!is_cuda && requested_backend != BackendId::Cpu && !use_cuda_managed_allocator))) {
             for (Var* v : op->outputs()) {
+                if (v->flag(VarFlags::_host_resident)) continue;
                 migrate_to_gpu(v, var_allocator(v, get_allocator({requested_backend, execution_device}, false)));
             }
         }
