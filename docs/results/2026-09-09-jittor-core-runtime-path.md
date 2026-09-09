@@ -35,3 +35,9 @@ shim and requires the `jittor.compat` distribution (`ModuleNotFoundError:
 No module named 'jittor.compat'`). The independent binary PyTorch available on
 the machine is Python 3.12, so it cannot share this Python 3.11 Jittor core.
 Consequently no ecosystem forward/backward claim is made from this probe.
+
+The independent Python 3.12 oracle was also probed directly. A tiny
+`BertModel` cannot import because the installed torchvision fails during
+`torchvision::nms` fake-kernel registration (`RuntimeError: operator
+torchvision::nms does not exist`). This is a torchvision/torch ABI mismatch;
+no model result is recorded from that process either.
