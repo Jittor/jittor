@@ -11,7 +11,10 @@ from _helpers.numerical_grad import ngrad
 def check(op, *args):
     x = eval(f"np.{op}(*args)")
     y = eval(f"jt.{op}(*args).numpy()")
-    convert = lambda x: x.astype("uint8") if x.dtype=="bool" else x
+
+    def convert(value):
+        return value.astype("uint8") if value.dtype == "bool" else value
+
     x = convert(x)
     y = convert(y)
     # str match nan and inf
@@ -32,11 +35,10 @@ class UnaryOpCases:
         check("negative", a)
         check("logical_not", a)
         check("bitwise_not", a)
-        b = np.array([1.1, 2.2, 3.3, 4.4, -1, 0])
-        type = "float16" if (jt.introspection.policy.runtime.amp_reg & 2) else "float32"
-        check("log", a.astype(type))
-        check("exp", a.astype(type))
-        check("sqrt", a.astype(type))
+        dtype = "float16" if (jt.introspection.policy.runtime.amp_reg & 2) else "float32"
+        check("log", a.astype(dtype))
+        check("exp", a.astype(dtype))
+        check("sqrt", a.astype(dtype))
         
     def test_grad(self):
         ops = ["abs", "negative", "log", "exp", "sqrt",
@@ -55,9 +57,12 @@ class UnaryOpCases:
                 b = np.array(a) / 5
             else:
                 b = np.array(a)
-            func = lambda x: eval(f"np.{op}(x[0]).sum()")
+            def func(values):
+                return eval(f"np.{op}(values[0]).sum()")
+
             if op == "sigmoid":
-                func = lambda x: (1/(1+np.exp(-x[0]))).sum()
+                def func(values):
+                    return (1 / (1 + np.exp(-values[0]))).sum()
             x, (da,) = ngrad(func, [b], 1e-8)
             ja = jt.array(b)
             jb = eval(f"jt.{op}(ja)")
@@ -70,7 +75,7 @@ class UnaryOpCases:
         # a = np.array([-150.0, -140.0, -130.0]).astype("float32")
         b = jt.array(a, dtype='float32')
         b1 = b.sigmoid().numpy()
-        assert np.isnan(b1).any() == False
+        assert not np.isnan(b1).any()
 
     def test_safe_clip(self):
         a = jt.array([-1.0,0,0.4,1,2,3])
