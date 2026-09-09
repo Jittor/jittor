@@ -40,7 +40,7 @@ def _tracked_markdown(repo_root):
         if not (repo_root / relative).is_file():
             continue
         parts = Path(relative).parts
-        if len(parts) == 1 or parts[0] in ("agent", "docs", "examples"):
+        if len(parts) == 1 or parts[0] in ("agent", "docs", "examples", "refactor-wip"):
             selected.append(repo_root / relative)
     return sorted(selected)
 

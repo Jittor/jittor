@@ -283,7 +283,7 @@ under `python/jittor` are now below 1,500 lines. The former large compatibility
 NN, numerical, tensor and FlashAttention modules are normal packages with
 separate implementation owners. This source decomposition does not establish
 completion of the independent Torch architecture migration.
-The [Torch API owner contract](torch-api-owners.md) identifies module-level
+The [Torch API owner contract](../../refactor-wip/architecture/torch-api-owners.md) identifies module-level
 implementations, installation-owned native-delegate snapshots and the generated
 fidelity coverage table.
 Runtime-only framework imports are deferred to calls to keep the import-cycle

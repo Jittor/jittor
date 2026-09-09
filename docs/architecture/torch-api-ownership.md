@@ -25,7 +25,7 @@ mutating external/shared modules. Parameter containers use explicit adapter
 mixins. Distribution constructors, methods and properties use the descriptors
 in `distribution_adapters.py`, with separate state for each frontend. Dynamic
 type identity does not justify hiding adaptation algorithms inside a factory.
-See [distribution owners](distribution-frontend-owners.md) and the shared
+See [distribution owners](../../refactor-wip/architecture/distribution-frontend-owners.md) and the shared
 [Installer/Backend protocols](installer-backend-contracts.md).
 
 Use `get_install_context(native_backend)` to resolve the explicitly bound
@@ -74,8 +74,8 @@ Serialization owners separate portable values, restricted pickle loading, Torch
 archives and safetensors. Restricted mode rejects native-only fallback paths that
 cannot enforce its unpickler policy. Autograd/library owners retain one native
 graph and register detached custom-op results with their explicit backward.
-See [serialization](torch-serialization-owners.md) and
-[autograd/library](torch-autograd-library-owners.md) for the detailed boundaries.
+See [serialization](../../refactor-wip/architecture/torch-serialization-owners.md) and
+[autograd/library](../../refactor-wip/architecture/torch-autograd-library-owners.md) for the detailed boundaries.
 
 ## Runtime services and temporary scopes
 

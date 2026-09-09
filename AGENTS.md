@@ -9,9 +9,9 @@
 3. [`agent/manuals/project-context.md`](agent/manuals/project-context.md)：当前状态和主题索引。
 4. 与任务相关的架构文档、已知问题和既有结果报告。
 
-整改任务的唯一状态源是 [`docs/architecture/refactor-board.md`](docs/architecture/refactor-board.md)。
-按同目录的 [交接](docs/architecture/refactor-handoff.md)与
-[分工](docs/architecture/refactor-dispatch.md)协作，不在 agent/ 下另建看板或结果树。
+整改任务的唯一状态源是 [`refactor-wip/architecture/refactor-board.md`](refactor-wip/architecture/refactor-board.md)。
+按同目录的 [交接](refactor-wip/architecture/refactor-handoff.md)与
+[分工](refactor-wip/architecture/refactor-dispatch.md)协作，不在 agent/ 下另建看板或结果树。
 
 ## Working Method
 

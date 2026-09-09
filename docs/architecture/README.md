@@ -1,8 +1,8 @@
 # 设计与分析文档
 
-当前任务状态唯一记录在[整改看板](refactor-board.md)，接手时读取
-[交接](refactor-handoff.md)与[分工](refactor-dispatch.md)。下面的设计摘要保留其
-写作时的判断，不代替看板的当前状态。
+本目录只保留长期有效的设计说明。整改期的看板、计划、交接、分工和审计快照
+已经移出文档树，放在 [`refactor-wip/`](../../refactor-wip/README.md)，整改收口后
+整个目录删除。下面的设计摘要保留其写作时的判断。
 
 这一目录写给人读：本轮性能工作里查清的成因、已经落地的机制，以及尚未
 实施的方案。每篇都自带证据（实测数字或源码位置），不需要先读代码。
@@ -34,23 +34,23 @@
   运行期切卡不再重启进程、按设备的内存池与库句柄。两个并行实现分别在
   `device-select` 与 `multi-device` 分支，第 5 节记下差异与合并前要定的事。
 
-## 整改计划
+## 整改计划（已移至 `refactor-wip/`）
 
-- [Jittor 2.0 整改计划](refactor-plan.md) —— 把下面两份审计的每一条发现转成可分派的任务：
+- [Jittor 2.0 整改计划](../../refactor-wip/architecture/refactor-plan.md) —— 把下面两份审计的每一条发现转成可分派的任务：
   一行一个，排好先后（先让门禁真、再还原不可见的核心、架构改动前置、点修复并行），
   每行带前置、出处与验收，并列出已完成事项与热点文件分区。给执行 agent 用。
-- [2.0 版本策略备忘](2.0-version-policy-memo.md) —— `__version__` 是 `1.3.11.0` 而分支叫 2.0。三个候选（改成 2.0.0 / 保持到发布 / 包版本与 API 版本分开）各自的
+- [2.0 版本策略备忘](../../refactor-wip/architecture/2.0-version-policy-memo.md) —— `__version__` 是 `1.3.11.0` 而分支叫 2.0。三个候选（改成 2.0.0 / 保持到发布 / 包版本与 API 版本分开）各自的
   影响面与需要同时改的清单，加上查到的事实。**只陈述不选择**：这是发布决定，
   由维护者在发布节点做。
-- [目标目录布局](target-layout.md) —— 仓库应该长成什么样：C++ 核心与后端搬出 Python 包、
+- [目标目录布局](../../refactor-wip/architecture/target-layout.md) —— 仓库应该长成什么样：C++ 核心与后端搬出 Python 包、
   同一概念只在一处、构建系统与用户 API 分层；每处搬动的理由、打包耦合与顺序。
   取代 `docs/architecture/repository-layout.md` 里那棵把现状冻成目标的树。
 
-## 全局审计
+## 全局审计（已移至 `refactor-wip/`）
 
-- [代码库设计审计](codebase-audit/README.md) —— 七个方向分头审计 2.0 分支的全部代码，
+- [代码库设计审计](../../refactor-wip/architecture/codebase-audit/README.md) —— 七个方向分头审计 2.0 分支的全部代码，
   每条发现带 `文件:行号` 证据。总览页给出五条贯穿全局的判断与三档优先级，细节在七份
   分报告里：核心 C++ 运行时、Python API 层、Torch 兼容层、构建与工具链、测试体系、
   后端与分布式、架构与代码组织。
-- [系统设计审计](system-design-audit.md) —— 六个方面 27 条，本轮性能工作过程中产出，
+- [系统设计审计](../../refactor-wip/architecture/system-design-audit.md) —— 六个方面 27 条，本轮性能工作过程中产出，
   上面几篇是其中若干条的展开。范围更全的是上一条。

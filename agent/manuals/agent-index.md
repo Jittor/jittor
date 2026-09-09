@@ -12,9 +12,9 @@
    [已知问题总账](known-issues.md)或对应的 `docs/` 文档。
 4. 在[结果索引](../../docs/results/README.md)中查找已有验证和性能结论，
    在[设计文档](../../docs/architecture/README.md)中查找某个机制为什么是现在这样。
-5. 领取工作前读取[看板](../../docs/architecture/refactor-board.md)、
-   [交接](../../docs/architecture/refactor-handoff.md)和
-   [分工](../../docs/architecture/refactor-dispatch.md)，只更新这三处权威文件。
+5. 领取工作前读取[看板](../../refactor-wip/architecture/refactor-board.md)、
+   [交接](../../refactor-wip/architecture/refactor-handoff.md)和
+   [分工](../../refactor-wip/architecture/refactor-dispatch.md)，只更新这三处权威文件。
 6. 需要对拍或专项基准时，优先复用 `agent/skills/` 中已有工具。
 
 ## 目录

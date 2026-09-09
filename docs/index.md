@@ -33,7 +33,7 @@ releases/index
 contributing
 ```
 
-维护者的[整改看板](architecture/refactor-board.md)与[验证结果索引](results/README.md)
+维护者的[整改看板](../refactor-wip/architecture/refactor-board.md)与[验证结果索引](results/README.md)
 均在本棵文档树中；[社区项目列表](community/index.md)收录使用 Jittor 的项目。
 
 ## Project links

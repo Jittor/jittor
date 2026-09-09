@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-BOARD = REPO_ROOT / "docs" / "architecture" / "refactor-board.md"
+BOARD = REPO_ROOT / "refactor-wip" / "architecture" / "refactor-board.md"
 MANIFEST = REPO_ROOT / "agent" / "manuals" / "deferred-hardware.md"
 NOXFILE = REPO_ROOT / "noxfile.py"
 
