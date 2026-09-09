@@ -16,6 +16,27 @@ still open.
 This note records the current evidence behind the two rows that were most often
 reported as “almost closed”. It does not close either row by itself.
 
+## Functional closure matrix
+
+The following rows have a functional result, but remain open when their task
+also requires a performance, hardware, or aggregate acceptance. Keeping this
+matrix explicit prevents a passing functional sub-batch from being mistaken
+for a closed task row:
+
+| row | functional evidence | remaining acceptance |
+| --- | --- | --- |
+| 0.15 | worker supervision and fail-closed gate contracts are implemented | full smoke budget |
+| 0.22 | conclusion comparison and CPU reference caching are implemented | acceptable device-gate duration |
+| 2.19 | Python and backend user-boundary migrations are implemented | aggregate C++/CUDA negative inventory |
+| 3.20 | `submit_pending` and `ExecPlan` submission path are implemented | end-to-end performance |
+| 3.22 | opt-in shared-reduce implementation and measurement harness are implemented | default performance acceptance |
+| 3.23 | roofline measurement and attribution are implemented | remaining PyTorch speed gap |
+| 8.05 | oneDNN capability and v3 preparation are implemented | v3 build, cache, and performance acceptance |
+| 8.06 | ACL runner, typed attributes, multi-grad, and failure propagation are implemented | remaining owner families and Ascend hardware |
+| 8.21 | backward GroupNorm cost is measured and attributed | kernel optimization and performance acceptance |
+
+Only the right-hand column is allowed to change a task-row status to closed.
+
 ## 2.19 user and internal errors
 
 The Python native and ACL owner scans now have no production user-facing

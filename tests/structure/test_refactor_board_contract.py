@@ -35,3 +35,13 @@ def test_board_task_ids_match_plan_without_duplicates():
 def test_board_has_no_two_column_acl_note_rows():
     board = (ROOT / "docs/architecture/refactor-board.md").read_text().splitlines()
     assert not any(line.startswith("| 8.06 note |") for line in board)
+
+
+def test_functional_audit_covers_every_open_ledger_row():
+    """The audit must distinguish functional evidence from closure criteria."""
+    audit = (ROOT / "docs/results/2026-09-09-functional-board-audit.md").read_text()
+    matrix = audit.split("## Functional closure matrix", 1)[1]
+    for task_id in ("0.15", "0.22", "2.19", "3.20", "3.22", "3.23",
+                    "8.05", "8.06", "8.21"):
+        assert f"| {task_id} |" in matrix
+    assert "Only the right-hand column" in matrix
