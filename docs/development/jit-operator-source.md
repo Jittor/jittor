@@ -1,34 +1,28 @@
-# JIT operator source contract
+# JIT 算子源码契约
 
-Jittor compiles an operator source file twice. The ordinary C++ build uses the
-non-`JIT` branch, while `OpCompiler` preprocesses the `JIT` branch, extracts its
-`jit_run` body, renames operator-local identifiers, and parses the fused body as
-`KernelIR`. Code in `jit_run` must therefore follow both C++ and KernelIR rules.
+Jittor 会把一个算子源文件**编译两遍**。普通 C++ 构建走非 `JIT` 分支；`OpCompiler`
+则预处理 `JIT` 分支、抽取其中的 `jit_run` 函数体、重命名算子局部标识符，并把融合后的
+函数体按 `KernelIR` 解析。因此 **`jit_run` 里的代码必须同时满足 C++ 和 KernelIR 的
+规则**。
 
-## Supported source
+## 支持的写法
 
-- Put headers and reusable declarations outside `jit_run`. Includes are copied
-  to the fused translation unit, but an include is not a statement in the
-  generated kernel body.
-- Use normal C++ quoted strings and character literals. Escapes are supported;
-  their contents, including `%`, braces, parentheses, and identifier-like text,
-  are copied without identifier renaming.
-- `_Pragma("...")` is supported immediately before a statement. KernelIR keeps
-  the pragma as raw source and parses the following loop or statement normally.
-- Keep CPU-only and CUDA-only directives behind `JIT_cpu` / `JIT_cuda`. A
-  directive accepted by one compiler is not automatically valid for the other.
-- Operator-local names may be renamed when fused. Global helper types and
-  functions must be declared by an included header or registered as reserved
-  identifiers in `op_compiler.cc`.
+- **头文件与可复用声明放在 `jit_run` 之外。** include 会被复制到融合的翻译单元里，
+  但 **include 不是生成 kernel 函数体中的一条语句**。
+- 使用普通的 C++ 引号字符串和字符字面量。支持转义；其内容——包括 `%`、花括号、
+  圆括号和看起来像标识符的文本——会被原样复制，不做标识符重命名。
+- 语句之前紧邻的 `_Pragma("...")` 受支持。KernelIR 把该 pragma 当作原始源码保留，
+  并正常解析后面的循环或语句。
+- **仅 CPU 或仅 CUDA 的指令要放在 `JIT_cpu` / `JIT_cuda` 之后。** 一个编译器接受的
+  指令对另一个不自动有效。
+- 算子局部的名字在融合时可能被重命名。**全局的辅助类型与函数必须由某个 include 的
+  头文件声明，或在 `op_compiler.cc` 中注册为保留标识符。**
 
-Do not hide unmatched braces or parentheses in preprocessor tricks. Prefer a
-small helper declared outside `jit_run` when a construct cannot be represented
-as a regular statement or loop.
+**不要把不配对的花括号或圆括号藏进预处理技巧里。** 当某个构造无法表示成常规语句或
+循环时，宁可在 `jit_run` 之外声明一个小的辅助函数。
 
-## Diagnostics
+## 诊断
 
-The fused source contains a `#line` directive before each extracted operator
-body. C++ compiler diagnostics therefore point back to the operator source file
-and line instead of only naming the generated cache file. KernelIR parser
-failures report the line within the source fragment they were parsing; malformed
-`_Pragma` directives report the directive line explicitly.
+融合后的源码在每段抽取出来的算子体之前都有一条 `#line` 指令，因此 C++ 编译器的诊断
+会**指回算子源文件和行号**，而不是只报出生成的缓存文件名。KernelIR 解析失败会报告它
+当时所解析片段内的行号；格式错误的 `_Pragma` 指令会显式报出该指令所在行。

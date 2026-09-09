@@ -1,59 +1,52 @@
-# Async Error Diagnostics Contract
+# 异步错误诊断契约
 
-The existing `TraceData` stack is graph metadata: it is keyed by nodes and
-may be disabled by `trace_py_var`. It is not a recent-launch history and must
-not be read as one.
+已有的 `TraceData` 栈是**图的元数据**：它以节点为键，并且可以被 `trace_py_var` 关闭。
+**它不是最近发射历史，也不能当作发射历史来读。**
 
-The native Runtime owns a bounded per-thread ring of launch records, each containing:
+原生 Runtime 拥有一个**每线程、有界的发射记录环**，每条记录包含：
 
-- operator id/name and fused member ids;
-- Python file and line, copied at launch time;
-- device/stream identity and a monotonic sequence number.
+- 算子 id / 名字，以及融合成员的 id；
+- 发射时刻拷贝下来的 Python 文件与行号；
+- 设备 / 流标识和一个单调递增的序号。
 
-Recording is allocation-free on the launch path after initialization. Each
-thread has 64 records, with at most 64 simultaneously registered thread slots;
-retired slots retain their records until subsequent writers overwrite them.
-Mutex-protected snapshots tolerate concurrent writers. A Runtime-wide sequence
-orders records; reports show the most recent 16 matching entries and explicit
-overwrite, omission and unavailable-thread counts. Thread leases retain native
-implementation storage, not a raw owner pointer, so thread exit is safe even
-when a standalone history object has already been destroyed.
+初始化之后，**发射路径上的记录是免分配的**。每个线程 64 条记录，同时注册的线程槽最多
+64 个；已退役的槽保留其记录，直到后续写入者覆盖它们。带互斥保护的快照容忍并发写入者。
+一个 Runtime 级的序号为记录排序；报告展示最近 16 条匹配项，并显式给出**覆盖数、
+省略数和线程不可用数**。线程租约持有的是原生实现存储而非裸的 owner 指针，因此即使一个
+独立的历史对象已被销毁，线程退出也是安全的。
 
-Python file and line are captured at construction without retaining Python
-frames, code objects, Vars or Ops. Source locations are interned native values;
-the launch copies the location into the ring before graph nodes may be freed.
-The source table admits at most 8192 locations; ids are never reused while Ops
-may hold them. Overflow produces unavailable origins and an explicit
-`unrecorded_origin_captures` count rather than unbounded dynamic-source growth.
-Source keys longer than 4096 bytes are also rejected and counted, so dynamic
-`exec` filenames cannot bypass the byte bound of the table.
-Fused records include up to eight member ids and an explicit total when
-truncated. Python paths and operator names have bounded storage. No source is
-invented when no Python frame was available: that record prints `not-found`.
+Python 文件与行号在构造时捕获，**不持有 Python 帧、code 对象、Var 或 Op**。源位置是
+内化的原生值；发射会在图节点可能被释放之前把位置拷进环里。源表最多容纳 8192 个位置，
+且在 Op 可能仍持有 id 期间**绝不复用 id**。溢出会产生"来源不可用"和一个显式的
+`unrecorded_origin_captures` 计数，而不是让动态源无界增长。超过 4096 字节的源键同样被
+拒绝并计数，因此动态 `exec` 的文件名无法绕过该表的字节上限。
 
-CUDA errors automatically include recent launch candidates. Stream waits and
-readbacks use the known stream; device or event waits without a known stream
-report device-wide candidates and label the stream unknown. A candidate is
-not proof of which launch caused the fault: asynchronous errors can be
-reported by later API calls or propagate through dependencies. The original
-CUDA error is retained. `core.async_launch_history(backend, device, stream)`
-is a read-only native snapshot; `stream=-1` requests all streams on a device.
-The supported Python observation is
-`jt.introspection.diagnostics.launch_history(backend="cuda", device=0, stream=None)`;
-`None` selects the native all-streams sentinel without querying the device.
-It validates backend spelling and nonnegative device/stream values without
-initializing or querying a hardware backend (`-1` is the only stream sentinel).
+融合记录最多包含 8 个成员 id，被截断时给出显式总数。Python 路径与算子名的存储都有上限。
+**没有可用 Python 帧时不会编造来源**：那条记录打印 `not-found`。
 
-Do not use `trace_py_var>=2` for this test: the legacy graph tracer deliberately
-synchronizes after each Op. The new history is independent of that tracer and
-does not add synchronization.
+CUDA 错误会自动附上最近的发射候选。流等待与回读使用已知的流；没有已知流的设备等待或
+event 等待会报告设备范围的候选，并把流标注为未知。
 
-The implementation cannot be fully accepted on a CPU-only host: the static
-contract may validate record layout, bounded capacity, overwrite ordering, and
-report formatting, but the final gate requires a CUDA probe that injects an
-asynchronous error and checks the reported Python line.
+> **候选不是"哪次发射导致了故障"的证明**：异步错误可能由更晚的 API 调用报告，也可能
+> 沿依赖传播。原始的 CUDA 错误会被保留。
 
-Suggested CUDA acceptance command:
+`core.async_launch_history(backend, device, stream)` 是只读的原生快照，`stream=-1`
+表示该设备上的所有流。受支持的 Python 观察入口是
+
+```python
+jt.introspection.diagnostics.launch_history(backend="cuda", device=0, stream=None)
+```
+
+`None` 会选中原生的"全部流"哨兵值而**不查询设备**。它校验后端拼写和非负的设备/流值，
+过程中不初始化也不查询硬件后端（`-1` 是唯一的流哨兵值）。
+
+**不要用 `trace_py_var>=2` 来测这个**：旧的图追踪器会在每个 Op 之后刻意同步。新的历史
+与该追踪器无关，**不引入额外同步**。
+
+本实现**无法在纯 CPU 主机上完整验收**：静态契约可以校验记录布局、容量上界、覆盖顺序和
+报告格式，但最终门禁需要一次 CUDA 探测——注入一个异步错误并检查报告出来的 Python 行号。
+
+建议的 CUDA 验收命令：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 JITTOR_TORCH_SHIM=1 JT_SYNC=0 trace_py_var=0 \

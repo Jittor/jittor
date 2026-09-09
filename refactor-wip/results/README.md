@@ -10,6 +10,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-09-09 Torch tf32 控制项的归属与执行接线](2026-09-09-torch-tf32-wiring.md)
 - [2026-09-09 device→host 拷贝在设备侧分配目标缓冲](2026-09-09-device-copy-host-destination.md)
 - [2026-09-04 整改分区的 CUDA 可用性实机核实](2026-09-04-cuda-availability-verification.md)
 - [2026-09-02 verl 核心算法 Ascend 数值、梯度与性能复验](2026-09-02-verl-ascend-core-algorithms.md)

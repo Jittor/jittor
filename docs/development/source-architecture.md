@@ -1,762 +1,570 @@
-# Source Architecture and Module Boundaries
+# 源码架构与模块边界
 
-- Status: Accepted
-- Last reviewed: 2026-09-08
-- Baseline: [architecture integration](../../refactor-wip/results/2026-09-08-architecture-integration.md)
-- Owner: Jittor core maintainers
-- Review when: a public module moves, an implementation domain is added, or a
-  runtime resource path changes
+- 状态：已接受
+- 上次复查：2026-09-09
+- 基线：[架构整合记录](../../refactor-wip/results/2026-09-08-architecture-integration.md)
+- Owner：Jittor 核心维护者
+- 复查触发：公开模块搬动、新增实现域、或运行时资源路径变化时
 
-This document defines how Python source is decomposed inside Jittor. Repository,
-packaging, and runtime-resource ownership is defined by the broader
-[repository layout decision](repository-layout.md).
+本文定义 Jittor 内部 Python 源码的分解方式。仓库、打包与运行时资源的归属由更上层的
+[仓库布局决定](repository-layout.md)定义。
 
-The [Torch API ownership contract](../../refactor-wip/architecture/torch-api-ownership.md) defines stable API
-objects, installation-owned state and the Runtime service boundary.
+## 原则
 
-## Principles
+1. **一个物理归属者。** 一个公开领域就是一个常规包；它**不再有第二棵藏着真实实现的
+   私有树**。
+2. **导入跟随归属。** 实现的元数据与回溯信息报告**拥有该代码的那个模块**。再导出模块
+   不递归改写 `__module__`。
+3. **组合保持浅层。** 包的 `__init__.py` 负责组合与导出公开名字；大块实现住在有意义的
+   子模块里。
+4. **运行时路径是契约。** 编译器加载的 C++/CUDA 资源只能随着显式的编译器与打包迁移一起
+   移动。
+5. **兼容是分层的。** 框架原生能力、可复用的兼容机制、导入 shim 和下游集成，各有不同的
+   归属者。
+6. **每次搬动都保持行为。** 重构要保留公开名字、承诺过的可调用对象标识、支持范围内的
+   pickle 行为、后端分派，以及定向回归覆盖。
 
-1. **One physical owner.** A public domain is a normal package; it does not have
-   a second private tree containing the real implementation.
-2. **Imports follow ownership.** Implementation metadata and tracebacks report
-   the module that owns the code. Re-export modules do not rewrite
-   `__module__` recursively.
-3. **Composition stays shallow.** A package `__init__.py` composes and exports
-   public names. Large implementations live in meaningful child modules.
-4. **Runtime paths are contracts.** Compiler-loaded C++/CUDA resources move only
-   with an explicit compiler and packaging migration.
-5. **Compatibility is layered.** Native framework capability, reusable
-   compatibility mechanisms, import shims, and downstream integrations have
-   distinct owners.
-6. **Every move preserves behavior.** Refactors retain public names, callable
-   identity where promised, pickling behavior where supported, backend dispatch,
-   and focused regression coverage.
-
-## Current domains
+## 当前的领域划分
 
 ```text
 python/
 ├── jittor/
-│   ├── __init__.py              # root composition and runtime initialization
-│   ├── __init__.pyi             # public root typing surface
-│   ├── _core/                  # native Python API implementation domains
-│   │   ├── api.py              # explicit composition after compiled-core bootstrap
-│   │   ├── var.py              # tensor construction, operations and Var bindings
-│   │   ├── module.py           # Module and parameter/buffer ownership
-│   │   ├── function.py         # custom autograd contexts and gradient hooks
-│   │   ├── hooks.py            # removable handles and hook support
-│   │   ├── flags.py            # native scopes and the shared runtime state
-│   │   ├── arg_policy.py       # explicit unsupported/ignored argument policy
-│   │   └── diagnostics.py      # logs, profiling, process scopes and exit cleanup
+│   ├── __init__.py              # 根组合与运行时初始化
+│   ├── __init__.pyi             # 公开根的类型标注面
+│   ├── _core/                   # 原生 Python API 的实现域
+│   │   ├── api.py               # 编译核心引导之后的显式组合
+│   │   ├── var.py               # 张量构造、运算与 Var 绑定
+│   │   ├── module.py            # Module 与参数/缓冲归属
+│   │   ├── function.py          # 自定义自动微分上下文与梯度钩子
+│   │   ├── hooks.py             # 可移除句柄与钩子支持
+│   │   ├── flags.py             # 原生作用域与共享运行时状态
+│   │   ├── arg_policy.py        # 显式的不支持/忽略参数策略
+│   │   └── diagnostics.py       # 日志、性能分析、进程作用域与退出清理
 │   ├── _runtime/
-│   │   ├── core_api.py          # same-object legacy alias of _core.api
-│   │   ├── composition.py       # explicit namespace publication
-│   │   ├── install_order.py     # ordered installer registration and verification
-│   │   └── state.py             # injected native Flags views, no bootstrap imports
+│   │   ├── core_api.py          # _core.api 的同对象历史别名
+│   │   ├── composition.py       # 显式的命名空间发布
+│   │   ├── install_order.py     # 有序的安装器注册与校验
+│   │   └── state.py             # 注入的原生 Flags 视图，不做引导期导入
 │   ├── serialization/
-│   │   └── native.py            # native save/load and safe-pickle implementation
-│   ├── build/                   # compiler/bootstrap implementation ownership
-│   │   ├── compiler.py          # startup state and build orchestration
-│   │   ├── codegen.py           # native binding/registration source generation
-│   │   ├── compilation.py       # compilation and custom-extension operations
-│   │   └── utils/               # standalone utilities, imported as jittor_utils
-│   ├── contrib/                 # contributed algorithms and composition helpers
-│   │   ├── ccl/                 # connected-component labeling
-│   │   ├── loss3d/              # Chamfer and earth-mover losses
-│   │   ├── math_util/           # gamma functions and shared native resources
-│   │   └── einops/              # vendored tensor-expression algorithms
-│   ├── nn/                      # neural-network public API
-│   │   ├── modules/             # stateful Module implementations
-│   │   ├── functional/          # stateless tensor functions
-│   │   ├── backends/            # cuDNN and read-only hook call adapters
-│   │   ├── utils/               # construction helpers such as weight norm
+│   │   └── native.py            # 原生 save/load 与安全 pickle 实现
+│   ├── build/                   # 编译器/引导的实现归属
+│   │   ├── compiler.py          # 启动状态与构建编排
+│   │   ├── codegen.py           # 原生绑定/注册的源码生成
+│   │   ├── compilation.py       # 编译与自定义扩展操作
+│   │   └── utils/               # 独立工具，以 jittor_utils 名义导入
+│   ├── contrib/                 # 贡献算法与组合助手
+│   │   ├── ccl/                 # 连通域标记
+│   │   ├── loss3d/              # Chamfer 与推土机损失
+│   │   ├── math_util/           # gamma 函数与共享原生资源
+│   │   └── einops/              # 内置的张量表达式算法
+│   ├── nn/                      # 神经网络公开 API
+│   │   ├── modules/             # 有状态的 Module 实现
+│   │   ├── functional/          # 无状态的张量函数
+│   │   ├── backends/            # cuDNN 与只读的钩子调用适配
+│   │   ├── utils/               # weight norm 等构造助手
 │   │   └── attention.py
-│   ├── autograd/                # functional automatic differentiation
-│   ├── fft/                     # differentiable native FFT namespace
-│   ├── linalg/                  # decompositions, solving, norms and contractions
-│   ├── distributions/           # probability families and shared constraints
-│   ├── init/                    # initialization families and shared fan/gain rules
-│   ├── ops/                     # tensor, indexing, reduction and shape implementations
-│   ├── misc/                    # deprecated same-object tensor API facade
-│   ├── pool/                    # deprecated same-object pooling API facade
-│   ├── optim/                   # optimizer facade and algorithm modules
-│   ├── sparse/                  # COO tensors and sparse convolution
+│   ├── autograd/                # 函数式自动微分
+│   ├── fft/                     # 可导的原生 FFT 命名空间
+│   ├── linalg/                  # 分解、求解、范数与缩并
+│   ├── distributions/           # 概率分布族与共享约束
+│   ├── init/                    # 初始化族与共享的 fan/gain 规则
+│   ├── ops/                     # 张量、索引、归约与形状实现
+│   ├── misc/                    # 已弃用的同对象张量 API 门面
+│   ├── pool/                    # 已弃用的同对象池化 API 门面
+│   ├── optim/                   # 优化器门面与算法模块
+│   ├── sparse/                  # COO 稀疏张量与稀疏卷积
 │   ├── compat/
-│   │   ├── torch/               # canonical Torch-style API compatibility
-│   │   ├── fsdp2/               # distributed FSDP2 compatibility
-│   │   ├── triton/              # Triton API bridge and deployment command
-│   │   ├── shim/                # Torch shim runtime and deployment command
+│   │   ├── torch/               # 规范的 Torch 风格 API 兼容
+│   │   ├── fsdp2/               # 分布式 FSDP2 兼容
+│   │   ├── triton/              # Triton API 桥接与部署命令
+│   │   ├── shim/                # Torch shim 运行时与部署命令
 │   │   ├── module_patcher.py
 │   │   └── external_backend.py
-│   ├── selftest.py              # installed smoke test
-│   ├── tools/                   # user tools, including benchmarking.py
-│   ├── backends/                # source-checkout package path bridge
-│   └── distributed/             # native launch, rendezvous and communication helpers
-└── jittor_utils/                # standalone import bridge into jittor/build/utils
+│   ├── selftest.py              # 安装后的冒烟测试
+│   ├── tools/                   # 用户工具，含 benchmarking.py
+│   ├── backends/                # 源码 checkout 的包路径桥接
+│   └── distributed/             # 原生启动、rendezvous 与通信助手
+└── jittor_utils/                # 通向 jittor/build/utils 的独立导入桥
 ```
 
-## Package composition contracts
+## 包组合契约
 
-### Neural network API
+### 神经网络 API
 
-`jittor.nn` is the public package. Stateful layers live under `nn.modules`,
-stateless operations under `nn.functional`, and optional accelerated paths under
-`jittor.backends.cuda.kernels`. `nn.backends` retains call adapters, not CUDA
-implementations. A public re-export must point at the canonical implementation
-object; wrappers are justified only when they enforce a real API contract.
+`jittor.nn` 是公开包。有状态的层在 `nn.modules`，无状态运算在 `nn.functional`，可选的
+加速路径在 `jittor.backends.cuda.kernels`。`nn.backends` 保留的是**调用适配器，不是 CUDA
+实现**。公开的再导出必须指向规范实现对象；只有当包装器确实在强制某条真实的 API 契约时
+才成立。
 
-Dependency direction is:
+依赖方向是：
 
 ```text
-nn.modules -> nn.functional -> Jittor tensor/core operations
-nn.backends ----------------> explicit backend/compiler interfaces
+nn.modules -> nn.functional -> Jittor 张量/核心运算
+nn.backends ----------------> 显式的后端/编译器接口
 ```
 
-Functional modules must not import stateful layer implementations. Backend
-adapters must remain optional and fail with an actionable capability error when
-their toolchain is unavailable.
+**functional 模块不得导入有状态的层实现。** 后端适配器必须保持可选，并在其工具链不可用
+时以**可执行的能力错误**失败。
 
-### Miscellaneous and pooling APIs
+### 杂项与池化 API
 
-`jittor.ops` owns tensor, shape, indexing and composition operations. Historical
-`jittor.misc` imports remain deprecated same-object facades, including the old
-submodule paths. Public names and pickle globals resolve to the canonical
-implementations; there is no second editable mathematics tree under `misc`.
+`jittor.ops` 拥有张量、形状、索引与组合运算。历史的 `jittor.misc` 导入仍是**已弃用的
+同对象门面**，包括旧的子模块路径。公开名字与 pickle 全局符号解析到规范实现；
+**`misc` 下不存在第二棵可编辑的数学实现树。**
 
-Pooling mathematics and parameter validation live in the normal
-`nn.functional.pooling` package, separated into average, 2-D/3-D core,
-adaptive, 1-D and unpooling owners. `nn.modules.pooling` stores constructor
-parameters and calls these stateless implementations; functional calls do not
-construct a temporary Module. CPU/CUDA generated source remains single-source
-with backend launch builders at the existing registration boundaries.
+池化的数学与参数校验在常规的 `nn.functional.pooling` 包里，按平均池化、2D/3D 核心、
+自适应、1D 和反池化分成不同归属者。`nn.modules.pooling` 只保存构造参数并调用这些无状态
+实现；**functional 调用不会构造临时 Module**。CPU/CUDA 的生成源码保持单一来源，后端发射
+构造器停在既有的注册边界上。
 
-`jittor.pool` and its historical child modules are deprecated re-exports.
-`nn.modules.pooling_legacy` keeps the three historical classes with their
-original class names: `AvgPool2d` and `AvgPool3d` retain their forwarding layer
-state for old pickles, while `AdaptiveAvgPool2d` retains its fixed-window
-algorithm. The latter intentionally differs from the current NN overlapping-bin
-algorithm; a layout move does not silently change its numerical rule. Adaptive
-window intermediates are function locals, not persistent Module state.
+`jittor.pool` 及其历史子模块是**已弃用的再导出**。`nn.modules.pooling_legacy` 以原类名
+保留三个历史类：`AvgPool2d` 和 `AvgPool3d` 为旧 pickle 保留其转发层状态，而
+`AdaptiveAvgPool2d` 保留其固定窗口算法——**后者刻意不同于当前 NN 的重叠分箱算法；
+一次布局搬动不会静默改变它的数值规则。** 自适应窗口的中间量是函数局部变量，不是持久的
+Module 状态。
 
-The legacy `pool_use_code_op` switch has one owner in
-`nn.functional.pooling._state`. `jt.pool`, `jt.nn` and the functional pooling
-package expose live reads/writes of that same value, including temporary
-attribute override/restore. Backend execution never reads a copied facade value.
-NN constructs its functional and module owners before loading the old facade,
-so the compatibility import does not create a bootstrap cycle.
+历史开关 `pool_use_code_op` 的唯一归属者是 `nn.functional.pooling._state`。`jt.pool`、
+`jt.nn` 和 functional 池化包暴露的是对**同一个值**的实时读写，包括临时的属性覆盖/还原。
+**后端执行绝不读取被复制过的门面值。** NN 在加载旧门面之前先构造它的 functional 与
+module 归属者，因此这条兼容导入不会造成引导循环。
 
-`jittor.sparse` owns both coordinate-format sparse tensors and sparse neural
-network kernels in separate child modules. The historical `jittor.nn.sparse`
-name is a same-object alias of `jittor.sparse.convolution`; `jittor.nn` and
-`jittor.nn.functional` re-export those canonical callables.
+`jittor.sparse` 在不同子模块中分别拥有坐标格式稀疏张量和稀疏神经网络 kernel。历史名字
+`jittor.nn.sparse` 是 `jittor.sparse.convolution` 的同对象别名；`jittor.nn` 与
+`jittor.nn.functional` 再导出那些规范可调用对象。
 
-`jittor.autograd` owns functional automatic differentiation. `jittor.fft` owns
-the differentiable FFT/shift/frequency namespace shared by native Jittor and
-Torch mode. Concatenation and
-indexing live in `jittor.ops`, pooling in `jittor.nn`, optimized softmax in
-`jittor.backends.cuda.kernels.nn`, and weight normalization in `jittor.nn.utils`. Historical
-root spellings are import aliases only; they do not retain physical source
-files or wrapper implementations.
+`jittor.autograd` 拥有函数式自动微分。`jittor.fft` 拥有原生 Jittor 与 Torch 模式共享的
+可导 FFT/shift/frequency 命名空间。拼接与索引在 `jittor.ops`，池化在 `jittor.nn`，
+优化后的 softmax 在 `jittor.backends.cuda.kernels.nn`，权重归一化在 `jittor.nn.utils`。
+**历史的根级拼写只是导入别名**，不保留物理源文件或包装实现。
 
-### Root module ownership
+### 根模块归属
 
-The only Python files directly under `python/jittor/` are `__init__.py` and
-`selftest.py`; including `__init__.pyi`, the root has three source files.
-Argument policy lives in `_core.arg_policy`, namespace composition and installer
-ordering in `_runtime.composition` and `_runtime.install_order`, and timing APIs
-in `tools.benchmarking`. Historical imports remain explicit same-object aliases.
-`__init__.py` publishes the explicit `jittor._core.api.__all__` after compiled-core
-bootstrap. The composition module imports canonical objects from `_core.var`,
-`module`, `function`, `hooks`, `flags`, and `diagnostics`; implementations no
-longer share one large `core_api.py` namespace. Native save/load and safe-pickle
-algorithms belong to `serialization.native` and are re-exported by the same
-composition layer. `jittor._core.module` owns the native Module implementation.
-Public root exports retain object identity and
-legacy root pickle paths remain loadable. The historical
-`jittor._runtime.core_api` import resolves to the same module object as
-`jittor._core.api`, with no second implementation.
+`python/jittor/` 下直接存在的 Python 文件只有 `__init__.py` 与 `selftest.py`；算上
+`__init__.pyi`，根目录共三个源文件。参数策略在 `_core.arg_policy`，命名空间组合与安装器
+排序在 `_runtime.composition` 与 `_runtime.install_order`，计时 API 在 `tools.benchmarking`。
+历史导入保持为显式的同对象别名。
 
-`_core/__init__.py` does not export callable or state objects named `var`,
-`flags`, or `hooks`: those package attributes must continue to resolve to their
-modules. Object-level exports belong to `_core.api` and the public Jittor root.
-The API composition installs exit hooks after importing its implementation
-domains, preserving the existing registration order. `__init__.pyi` owns the
-public root typing surface. `_core.flags` constructs the single native Flags
-object, its runtime context and runtime scope API; native and Torch composition
-retain that same object.
-`_runtime.flag_policy` classifies native flags for both binding generation and
-the Python API. `_runtime.state` provides immutable `jt.config`, writable
-`jt.runtime` switches and read-only `jt.runtime.context` diagnostics. Runtime
-writes call the original native setters, preserving their side effects;
-`jt.runtime.scope(...)` uses the existing reentrant flag-scope implementation.
-Snapshots contain detached Python values, including copies of mapping values.
-Execution and allocator counters are read-only through both runtime and legacy
-Flags objects.
+`__init__.py` 在编译核心引导之后发布显式的 `jittor._core.api.__all__`。组合模块从
+`_core.var`、`module`、`function`、`hooks`、`flags`、`diagnostics` 导入规范对象；
+**实现不再共用一个巨大的 `core_api.py` 命名空间**。原生 save/load 与安全 pickle 算法属于
+`serialization.native`，由同一层组合再导出。`jittor._core.module` 拥有原生 Module 实现。
+公开的根导出保持对象标识，历史的根级 pickle 路径仍可加载。历史的
+`jittor._runtime.core_api` 导入解析到与 `jittor._core.api` **同一个模块对象**，没有第二份
+实现。
 
-`jt.introspection` offers three supported read-only observation layers:
-capabilities query named backend/device registries and existing library evidence;
-policy views forward startup configuration and effective runtime settings;
-counters observe executor, allocator and native graph liveness services.
-There is no second Runtime state, implicit optional-library load, graph flush,
-or writable observation path. See [runtime introspection](../../refactor-wip/architecture/runtime-introspection.md)
-for failure/UNPROBED handling, frozen snapshots and test-consumer mappings.
+`_core/__init__.py` **不导出**名为 `var`、`flags`、`hooks` 的可调用对象或状态对象——这些
+包属性必须继续解析到它们各自的模块；对象级导出属于 `_core.api` 和公开的 Jittor 根。
+API 组合在导入其实现域之后安装退出钩子，保持既有的注册顺序。`__init__.pyi` 拥有公开根的
+类型标注面。`_core.flags` 构造唯一的原生 Flags 对象、它的运行时上下文和运行时作用域
+API；原生与 Torch 两种组合都保留**同一个对象**。
 
-Startup configuration includes compiler/tool paths, compiler flags, cache/source
-paths, CUDA architectures and the cache-lock policy. After backend post-processing
-and compatibility composition, a one-way native seal rejects writes through
-every `Flags` instance, including `jt.flags`, `compiler.flags` and `core.Flags()`.
-The compiler module also rejects late public assignments to these fields.
-`jt.config` captures a detached immutable snapshot; architecture lists become
-tuples. Set startup options in the environment before importing Jittor.
-New operators still accept local `extra_flags` and per-op `compile_options`;
-loading an extension does not reopen startup configuration. The classification
-file participates in the binding-generator build fingerprint.
+`_runtime.flag_policy` 为绑定生成和 Python API 两侧分类原生 flag。`_runtime.state` 提供
+不可变的 `jt.config`、可写的 `jt.runtime` 开关和只读的 `jt.runtime.context` 诊断。运行时
+写入调用**原始的原生 setter**，保留其副作用；`jt.runtime.scope(...)` 使用既有的可重入
+flag 作用域实现。快照包含分离出来的 Python 值，包括映射值的拷贝。执行与分配器计数器
+通过 runtime 和旧的 Flags 对象都是只读的。
 
-Native held-root storage lives in `src/runtime/holder_state.{h,cc}`.
-`RuntimeHolderState` owns both the holder list and the weak-sync cursor; the
-executor, autograd, graph inspection and memory diagnostics share its exported
-core accessor. It never runs a graph when registering or removing a holder.
-Weak sync peeks before checking the target cutoff and advances only after that
-check. Removal repairs the cursor before liveness release can re-enter the
-runtime. The owner is non-copyable and has process lifetime to support late
-extension/static holder destruction; it does not own the pointed-to holders.
-This preserves the existing serialized mutation requirement, not a new
-thread-safety guarantee.
+`jt.introspection` 提供三层受支持的只读观察：**capabilities** 查询具名的后端/设备注册表
+与既有的库证据；**policy** 视图转发启动配置与生效的运行时设置；**counters** 观察执行器、
+分配器和原生图的存活服务。**不存在第二份 Runtime 状态、隐式的可选库加载、图冲刷或可写
+的观察路径。**
 
-`src/runtime/runtime.{h,cc}` owns the process-lifetime `NativeRuntime`, containing
-the executor, held-root, traversal and device state. `runtime_executor()` and `runtime_holder_state()`
-resolve to that same owner from the core, JIT operators and backend libraries.
-The executor starts with null allocator pointers; construction does not select
-a device or initialize a backend. Fork initialization resets its existing device
-state without recreating inherited holders. `runtime_traversal_state()` shares
-the stamp counter and active-epoch count across core and JIT libraries.
-`TraversalEpoch` lives in `src/runtime/`; nested traversal marks are restored
-before leaving the epoch, including exception unwinding. Fork preserves the
-counter to avoid colliding with inherited node stamps.
+启动配置包括编译器/工具路径、编译选项、缓存/源码路径、CUDA 架构和缓存锁策略。在后端
+后处理与兼容组合完成之后，一次**单向的原生封印**会拒绝经由任何 `Flags` 实例的写入，
+包括 `jt.flags`、`compiler.flags` 和 `core.Flags()`；编译器模块也拒绝对这些字段的迟到
+公开赋值。`jt.config` 捕获一份分离的不可变快照，架构列表变成元组。**启动选项要在导入
+Jittor 之前通过环境设置。** 新算子仍然接受局部的 `extra_flags` 和逐算子的
+`compile_options`；加载一个扩展**不会重新打开启动配置**。分类文件参与绑定生成器的构建
+指纹。
 
-`runtime/device_state.h` stores `use_cuda`, `device_id`, `sync_run`, the cached
-device count/current device, device-switch hooks and peer-access bookkeeping.
-`runtime/device.{h,cc}` supplies device operations; the old `misc/cuda_flags.*`
-files are removed. `DEFINE_RUNTIME_FLAG` registers Python/environment access
-through exported storage accessors, not global variables or dynamically
-initialized global references. Setter correction, rollback and backend-switch
-flushing retain their previous ordering. CPU-only operator routing stays
-constant CPU, while flag bindings still read the real runtime state.
-ROCm callback selection is explicit in the header, no longer dependent on the
-legacy binary converter recognizing the old filename. Domain-specific native
-flags not listed as runtime-owned storage above remain in their owning modules;
-the Python lifecycle partition does not claim to move all C++ storage.
+原生的 held-root 存储在 `src/runtime/holder_state.{h,cc}`。`RuntimeHolderState` 同时拥有
+holder 列表和弱同步游标；执行器、自动微分、图检查和内存诊断共享它导出的核心访问器。
+**注册或移除一个 holder 时它绝不运行图。** 弱同步先 peek 再检查目标截止点，并且只在该
+检查之后前进。移除操作在存活性释放可能重入运行时之前先修复游标。该 owner 不可拷贝、
+具有进程生命期，以支持迟到的扩展/静态 holder 析构；它**不拥有**所指向的 holder。这保持
+的是既有的"变更需序列化"要求，**不是新的线程安全保证**。
 
-`runtime/jit_policy` owns CUDA kernel math policy (`default`, `strict`, `backend`).
-Ordinary and fused CUDA keys capture the policy before compilation, and the
-compiler transforms startup flags according to that captured value. Switching
-policy submits pending graphs under their previous policy. Explicit per-op
-flags remain local overrides. Torch preflight selects this runtime policy,
-rather than rewriting startup NVCC flags or creating a different core-build
-configuration just to change kernel math. The ACL preflight still removes
-legacy CUDA-specific strict flags from its startup environment.
+`src/runtime/runtime.{h,cc}` 拥有进程生命期的 `NativeRuntime`，内含执行器、held-root、
+遍历与设备状态。`runtime_executor()` 与 `runtime_holder_state()` 从核心、JIT 算子和后端库
+解析到**同一个 owner**。执行器以空分配器指针启动；**构造过程不选择设备、不初始化后端。**
+fork 初始化重置其既有设备状态，不重建继承来的 holder。`runtime_traversal_state()` 在核心
+与 JIT 库之间共享戳记计数器和活跃 epoch 计数。`TraversalEpoch` 位于 `src/runtime/`；嵌套的
+遍历标记在离开 epoch 前恢复，**包括异常展开时**。fork 保留计数器以避免与继承的节点戳记
+冲突。
 
-The former exported `Executor exe` data symbol is removed. In-tree CUDA/ACL
-consumers and embedded CUDA templates use `runtime_executor()` from `executor.h`.
-Out-of-tree C++ extensions must update that access and rebuild against the new
-headers/core library; old precompiled extensions are not binary compatible.
-The former `tflag_count` symbol and `misc/traversal_epoch.h` path are also removed;
-extensions using traversal internals must use the runtime header and rebuild.
-The `use_cuda`, `device_id` and `sync_run` data symbols are also removed.
-External native consumers must include `runtime/device.h` or
-`runtime/device_state.h` and rebuild; Python `jt.flags` names remain unchanged.
-Compiler, external-library setup, binding generation and CuPy bootstrap
-implementations live under `build/`; historical root-module imports are
-same-object aliases. `distributions/`, `init/`, and `linalg/` are public native
-packages; `selftest.py` is the installed smoke-test entry point. New root files
-require an ownership review and a corresponding structure-gate update.
+`runtime/device_state.h` 存放 `use_cuda`、`device_id`、`sync_run`、缓存的设备数/当前设备、
+设备切换钩子和 peer access 记账。`runtime/device.{h,cc}` 提供设备操作；旧的
+`misc/cuda_flags.*` 已删除。`DEFINE_RUNTIME_FLAG` 通过导出的存储访问器注册 Python/环境
+访问，**而不是全局变量或动态初始化的全局引用**。setter 的纠正、回滚和后端切换冲刷保持
+原有顺序。仅 CPU 的算子路由保持常量 CPU，而 flag 绑定仍读取真实的运行时状态。ROCm 的
+回调选择在头文件中显式给出，不再依赖旧的二进制转换器识别旧文件名。上面未列为运行时
+所有的领域专属原生 flag 仍留在各自的模块里——**Python 侧的生命周期划分并不声称搬走了
+所有 C++ 存储**。
 
-The three domain initializers explicitly re-export their implementation objects.
-Linear algebra separates complex routines, decompositions, solving, norms and
-contractions, with shared array helpers and result types. Distributions separate
-base contracts, constraints, helpers, discrete/continuous/relaxed/multivariate
-families and KL divergence. Initialization separates basic filling, fan/gain
-rules, scaled initializers and truncated normal; its facade retains the existing
-Var method bindings. Function metadata names the physical owner, while historical
-public pickle globals continue to resolve through the facades. All `.py` files
-under `python/jittor` are now below 1,500 lines. The former large compatibility
-NN, numerical, tensor and FlashAttention modules are normal packages with
-separate implementation owners. This source decomposition does not establish
-completion of the independent Torch architecture migration.
-The [Torch API owner contract](../../refactor-wip/architecture/torch-api-owners.md) identifies module-level
-implementations, installation-owned native-delegate snapshots and the generated
-fidelity coverage table.
-Runtime-only framework imports are deferred to calls to keep the import-cycle
-surface from growing. The six legacy complex linalg functions are lazily
-re-exported as their original objects, preserving concrete ComplexNumber type
-annotations without making package bootstrap depend on the NN facade.
+`runtime/jit_policy` 拥有 CUDA kernel 的数学策略（`default`、`strict`、`backend`）。普通与
+融合的 CUDA key 在编译前捕获策略，编译器按捕获到的值转换启动 flag。切换策略会先按**旧
+策略**提交待定图。显式的逐算子 flag 仍是局部覆盖。Torch 预检选择的是这个运行时策略，
+而不是改写启动 NVCC flag 或仅仅为了改变 kernel 数学而创建另一份核心构建配置。ACL 预检
+仍会从其启动环境中移除历史的 CUDA 专属 strict flag。
 
-Contributed algorithms physically live under `contrib/{ccl,loss3d,math_util,
-einops}`. Their historical packages and child-module paths are deprecated
-same-object aliases, resolved on demand rather than by eagerly importing all
-four domains. The `igamma.h` resource follows its owner into
-`contrib/math_util/src`; source checkout and installed resource lookup use the
-same module-relative path. The public `contrib` package also owns the historical
-composition helpers; `jittor.compat.contrib` now aliases it. Alias publication
-preserves same-named package functions such as `math_util.igamma` and
-`ccl.ccl_2d` instead of replacing them with child-module objects. Einops parsing
-and transformation share one `EinopsError` class in `einops._errors`, re-exported
-by the public package without an implementation-to-facade import cycle.
+原先导出的 `Executor exe` 数据符号已删除。树内 CUDA/ACL 消费者与内嵌 CUDA 模板改用
+`executor.h` 的 `runtime_executor()`。**树外的 C++ 扩展必须更新该访问方式并针对新的
+头文件/核心库重新构建；旧的预编译扩展二进制不兼容。** `tflag_count` 符号与
+`misc/traversal_epoch.h` 路径同样删除；使用遍历内部的扩展必须改用 runtime 头文件并重建。
+`use_cuda`、`device_id`、`sync_run` 数据符号也已删除——外部原生消费者必须 include
+`runtime/device.h` 或 `runtime/device_state.h` 并重建；**Python 的 `jt.flags` 名字不变**。
 
-Standalone build utilities physically live in `build/utils` while retaining the
-`jittor_utils` runtime namespace, so utility imports can run before Jittor core
-bootstrap. `jittor.build.utils` imports alias those same objects. This separates
-physical ownership from the standalone bootstrap namespace without introducing
-duplicate utility implementations or an eager inverse import of Jittor. Source
-and dependency scanners inspect the real `build/utils` tree, not just the
-standalone import bridge.
+编译器、外部库设置、绑定生成和 CuPy 引导的实现都在 `build/` 下；历史的根模块导入是同
+对象别名。`distributions/`、`init/`、`linalg/` 是公开的原生包；`selftest.py` 是安装后的
+冒烟测试入口。**新增根级文件需要一次归属评审和相应的结构门禁更新。**
 
-The compiler is split by responsibility: `build/compiler.py` retains startup
-state and orchestration (1,472 lines at this migration), `build/codegen.py` owns
-source generation (626 lines), and `build/compilation.py` owns compilation and
-custom-extension operations (534 lines). Generator fingerprints include the
-extracted owners so a change cannot silently reuse an obsolete build stamp.
-Compatibility cleanup and independent Torch packaging remain separate work;
-these native moves alone do not close the entire Python layout task.
+这三个领域的初始化文件显式再导出其实现对象。线性代数把复数例程、分解、求解、范数和缩并
+分开，并共享数组助手与结果类型。分布把基础契约、约束、助手、离散/连续/松弛/多元族和
+KL 散度分开。初始化把基础填充、fan/gain 规则、带缩放的初始化器和截断正态分开，其门面
+保留既有的 Var 方法绑定。函数元数据指名物理归属者，而历史的公开 pickle 全局符号继续
+经由门面解析。`python/jittor` 下所有 `.py` 文件现在都在 1,500 行以内。原先庞大的兼容 NN、
+数值、张量和 FlashAttention 模块已变成有独立实现归属者的常规包。**这次源码分解并不等于
+独立 Torch 架构迁移已经完成。**
 
-Backend configuration is now a frozen `BuildConfig` returned by the selected
-provider, with explicit services in `BuildContext`. Providers do not mutate
-compiler globals or append to its source list; bootstrap publishes compatibility
-attributes centrally. Entry points are loaded only for the selected backend,
-and explicit CPU selection bypasses CUDA discovery. The build utilities receive
-their binding/compiler services by injection and no longer import Jittor.
-Tensor checkpoint algorithms live in `jittor.serialization`, with native
-save/load and safe-pickle code in `serialization.native`; legacy utility
-paths query runtime-injected loaders after bootstrap. See
-[backend build configuration](../../refactor-wip/architecture/backend-build-configuration.md) for the service
-protocol, cache compatibility and pre-bootstrap/hardware limits.
+仅在运行时需要的框架导入被推迟到调用处，以免导入循环面继续扩大。六个历史的复数线代
+函数被惰性再导出为它们原来的对象，从而保留具体的 ComplexNumber 类型标注，又不让包引导
+依赖 NN 门面。
 
-### CUDA Resource Layout
+贡献算法物理上位于 `contrib/{ccl,loss3d,math_util,einops}`。它们的历史包与子模块路径是
+**按需解析的**弃用同对象别名，而不是急切导入全部四个域。`igamma.h` 资源随其归属者进入
+`contrib/math_util/src`；源码 checkout 与安装后的资源查找使用**同一条模块相对路径**。
+公开的 `contrib` 包同时拥有历史的组合助手；`jittor.compat.contrib` 现在是它的别名。别名
+发布保留同名的包函数（如 `math_util.igamma`、`ccl.ccl_2d`），**而不是用子模块对象替换
+它们**。einops 的解析与变换共用 `einops._errors` 中的同一个 `EinopsError` 类，由公开包
+再导出，不产生"实现到门面"的导入循环。
 
-The checkout's `backends/cuda/` is the physical CUDA owner. Library operators
-live under `kernels/<library>`, library wrappers and headers under
-`libraries/<library>/{src,include}`, and common support under `src` and `include`.
-Native indexing/where/candidate/transpose implementations live under
-`kernels/core`; diagnostic kernels live under `kernels/debug`. Python CUDA
-implementations and source builders live under `kernels/{nn,misc,math,pooling,
-sparse,ccl,loss3d}`. ACL KV implementations live under `backends/acl/kernels`.
+独立的构建工具物理上在 `build/utils`，同时保留 `jittor_utils` 这个运行时命名空间，使工具
+导入可以在 Jittor 核心引导**之前**运行。`jittor.build.utils` 的导入是同一批对象的别名。
+这把物理归属与独立引导命名空间分开，既没有引入重复的工具实现，也没有对 Jittor 的急切
+反向导入。源码与依赖扫描器检查的是真实的 `build/utils` 树，不只是那座独立导入桥。
 
-Python imports use the canonical `jittor.backends` namespace in both checkouts
-and wheels. A source-only path bridge and explicit package-directory mappings
-avoid a second editable implementation tree under `python/`. Old NN module
-spellings remain same-object aliases. `nn/` has no CUDA kernel modules or ACL
-KV module; `nn/backends` contains only its initializer, cuDNN adapter and hook view.
+编译器按职责拆分：`build/compiler.py` 保留启动状态与编排，`build/codegen.py` 拥有源码
+生成，`build/compilation.py` 拥有编译与自定义扩展操作。**生成器指纹包含被抽出的归属者**，
+因此一次改动不会静默复用过时的构建戳。
 
-Shared indexing and pooling mathematics remain single-source. The registration
-generator composes backend indexing fragments with the shared source into an
-atomically published, content-stable JIT source, preserving each segment's
-`#line` mapping. CPU-only builds still compile the pure host loop-schedule helper.
-The legacy `type/cuda_atomic.h` include forwards to the backend-owned header;
-it no longer contains the CUDA implementation.
+后端配置现在是由选定 provider 返回的**冻结** `BuildConfig`，显式服务放在 `BuildContext`。
+**Provider 不修改编译器全局变量，也不向其源码列表追加内容**；引导过程集中发布兼容属性。
+entry point 只为选中的后端加载，显式选择 CPU 会跳过 CUDA 发现。构建工具通过注入获得其
+绑定/编译器服务，**不再导入 Jittor**。张量 checkpoint 算法在 `jittor.serialization`，
+原生 save/load 与安全 pickle 在 `serialization.native`；历史工具路径在引导后查询运行时
+注入的 loader。
 
-Resource lookup distinguishes source checkouts and installed packages.
-The whole-tree source conversion mechanism has been removed.
-A directory containing only `__pycache__`
-cannot mask the real source owner. Packaging tests check every backend file in
-the sdist, wheel and isolated installation.
+### CUDA 资源布局
 
-The shared C++ core is under top-level `src` (packaged as `jittor/src`), and
-MPI/NCCL/HCCL wrappers are under `backends/comm`. Neither `python/jittor/src`
-nor `python/jittor/extern` remains in the checkout. The external FlashAttention
-integration retains its separate compatibility-package migration. `fused_adamw` has no
-CUDA algorithm to relocate; its existing ACL implementation and shared error
-entry do not establish CUDA support.
+checkout 的 `backends/cuda/` 是 CUDA 的物理归属者。库算子在 `kernels/<library>`，库包装器
+与头文件在 `libraries/<library>/{src,include}`，通用支持在 `src` 与 `include`。原生的
+索引/where/candidate/转置实现在 `kernels/core`，诊断 kernel 在 `kernels/debug`。Python 侧
+的 CUDA 实现与源码构造器在 `kernels/{nn,misc,math,pooling,sparse,ccl,loss3d}`。ACL 的 KV
+实现在 `backends/acl/kernels`。
 
-### Native Support Layout
+Python 导入在 checkout 与 wheel 中都使用规范的 `jittor.backends` 命名空间。一条仅限源码的
+路径桥接加上显式的 package-directory 映射，避免在 `python/` 下出现第二棵可编辑实现树。
+旧的 NN 模块拼写保持同对象别名。**`nn/` 里没有 CUDA kernel 模块，也没有 ACL KV 模块**；
+`nn/backends` 只含它的初始化文件、cuDNN 适配器和钩子视图。
 
-The native `BackendRegistry` in `runtime/backend*` is owned by `NativeRuntime`.
-It publishes version-checked callback tables with owned names and stable
-process-lifetime callbacks. Registering CPU and CUDA descriptors does not
-initialize a driver; a CPU-only build still knows CUDA but reports zero devices.
-`runtime/backends/` implements raw pool selection, device operations, copies,
-synchronization and streams. Public allocator code retains the SFRL/NFEF/Temp/
-Stat composition and obtains raw pools from the registry, never the reverse.
+共享的索引与池化数学保持单一来源。注册生成器把后端索引片段与共享源码组合成一份**原子
+发布、内容稳定**的 JIT 源码，并保留每一段的 `#line` 映射。纯 CPU 构建仍然编译那份纯主机
+的循环调度助手。历史的 `type/cuda_atomic.h` include 转发到后端拥有的头文件，其中不再含有
+CUDA 实现。
 
-Array creation, host/device migration, device-copy operators, fetch and swap
-transfers call this interface. `allocation_device()` derives the physical
-device from the allocator; it does not mistake a Var's retained device affinity
-for its current residency. Dual staging and delayed-free storage report their
-actual pool device. Ordered peer copies preserve both source and destination
-stream dependencies, and fetch retains blocks through its callback.
-The old CUDA stream functions remain adapters into the registered stream hook;
-shared implementation lives in `src/runtime/backend_streams.cc`, with SDK
-operations in the corresponding backend driver.
+资源查找区分源码 checkout 与已安装包。**整棵树的源码转换机制已被移除。** 一个只含
+`__pycache__` 的目录不能遮蔽真正的源码归属者。打包测试检查 sdist、wheel 和隔离安装中的
+**每一个**后端文件。
 
-`core.registered_backends()` and `core.backend_device_count(name)` query the
-native registry. The four legacy accelerator-mode aliases in `jt.flags` emit
-`DeprecationWarning` but retain their setter behavior. ACL publishes the canonical
-name `acl`; the old `acl_legacy` spelling resolves to that same native descriptor
-and Python kernel table without registering duplicate implementations.
-Python selection consumes the native device
-context; there is no separate Python allocator or hard-coded backend-capability
-prototype.
+共享 C++ 核心在顶层 `src`（打包为 `jittor/src`），MPI/NCCL/HCCL 包装器在 `backends/comm`。
+`python/jittor/src` 与 `python/jittor/extern` **在 checkout 中均已不存在**。外部
+FlashAttention 集成保留其独立的兼容包迁移。`fused_adamw` 没有可搬迁的 CUDA 算法——它既有
+的 ACL 实现与共享错误入口**不构成 CUDA 支持**。
 
-### Native Operator Dispatch
+### 原生支持层布局
 
-`ops/op_register` publishes immutable `OpDef` objects with stable process-local
-`OpId` values. An instantiated graph pins its definition; replacing a registry
-entry affects new graphs, not live graphs. Each definition combines backend-keyed
-`Kernel` callbacks with a `Codegen` interface for source fragments, preparation,
-optimization and source metadata. Shape and gradient semantics remain on graph
-operators. Replacement and unregister/re-register receive unique compilation
-identities; ordinary and fused keys include the identities of their definitions
-and fused children. Initial registrations retain stable disk-cache keys.
-The executor, parallel compiler, tracer and relay use these registered
-interfaces, including a dedicated fused implementation that retains its context
-and relay cache. The old virtual execution methods are source adapters, not the
-executor's dispatch path.
+`runtime/backend*` 中的原生 `BackendRegistry` 由 `NativeRuntime` 拥有。它发布带版本校验的
+回调表，名字由其自有、回调具进程生命期。**注册 CPU 与 CUDA 描述符不会初始化驱动**：
+纯 CPU 构建仍然"知道" CUDA，但报告设备数为零。`runtime/backends/` 实现原始池选择、设备
+操作、拷贝、同步与流。公开的分配器代码保留 SFRL/NFEF/Temp/Stat 组合，并从注册表获取原始
+池——**方向绝不反过来**。
 
-Generated core and extension registrations bind concrete operator implementations
-with `register_op_definition<T>`. CUDA libraries register accelerator-only kernels;
-MKL registers CPU kernels. Core CPU-only operators declare their backend mask.
-`core.backend_supported_ops(name)` enumerates these registered implementations;
-individual shape/dtype restrictions still apply. Missing implementations raise
-instead of falling through to an empty virtual `run()`.
+数组创建、主机/设备迁移、device-copy 算子、fetch 与换出传输都调用该接口。
+`allocation_device()` 从分配器推导物理设备；**它不会把一个 Var 保留的设备亲和性误当成
+它当前的驻留位置**。双重暂存与延迟释放的存储报告其真实的池设备。有序的 peer 拷贝同时保留
+源与目的的流依赖，fetch 通过其回调持有块。旧的 CUDA 流函数保留为已注册流钩子的适配器，
+共享实现在 `src/runtime/backend_streams.cc`，SDK 操作在对应的后端驱动中。
 
-Optional libraries publish typed semantic capabilities in their own translation
-units. Core replacement sites and matmul/conv tuners query those capabilities,
-without naming CUB, cuRAND, cuTT, cuBLAS, cuDNN or MKL implementations. Capability
-lookup resolves constructors at use time, so a lookup before a library loads does
-not permanently cache a miss. `core.backend_supported_capabilities(name)` exposes
-the available semantic families. Backend selection precedes source-fragment
-generation, including dual-source CodeOp cache lookup.
+`core.registered_backends()` 与 `core.backend_device_count(name)` 查询原生注册表。`jt.flags`
+中四个历史加速器模式别名会发出 `DeprecationWarning`，但保留其 setter 行为。ACL 发布规范
+名字 `acl`；旧拼写 `acl_legacy` 解析到**同一个**原生描述符和 Python kernel 表，不注册重复
+实现。Python 侧的选择消费原生设备上下文；**不存在独立的 Python 分配器或写死的后端能力
+原型**。
 
-Native extensions must rebuild: `Op` layout changed, `OpInfo` is now the compatibility
-alias for `OpDef`, and source metadata lives under `definition.codegen`. Converted
-ACL/ROCm/Corex backends retain their legacy build path. Host-only syntax checks are
-not CANN ABI or device verification; those machines must build and execute the
-changed backend before hardware support is claimed.
+### 原生算子分派
 
-`jittor_utils.compile_module` compiles its generated wrapper and argument-printer
-definitions as one translation unit. Two compiler inputs previously overwrote a
-single depfile, omitting extension headers and silently reusing obsolete ABI
-layouts. The changed command invalidates those old cache entries automatically;
-subsequent header changes are tracked without renaming the extension or deleting
-the cache. Already loaded extension modules still require a fresh process.
+`ops/op_register` 发布不可变的 `OpDef` 对象，带进程内稳定的 `OpId`。**已实例化的图钉住它
+的定义**；替换注册表条目影响新图，不影响活跃的图。每个定义把按后端索引的 `Kernel` 回调与
+一个 `Codegen` 接口（源码片段、准备、优化、源码元数据）组合起来。形状与梯度语义仍在图
+算子上。替换以及注销/重注册会获得唯一的编译标识；普通与融合 key 包含其定义及融合子项的
+标识。首次注册保持稳定的磁盘缓存 key。执行器、并行编译器、tracer 和 relay 使用这些已注册
+接口，包括一个保留其上下文与 relay 缓存的专用融合实现。**旧的虚执行方法只是源码适配器，
+不是执行器的分派路径。**
 
-### Python Kernel Dispatch
+生成的核心与扩展注册用 `register_op_definition<T>` 绑定具体算子实现。CUDA 库注册仅限
+加速器的 kernel，MKL 注册 CPU kernel，核心的仅 CPU 算子声明其后端掩码。
+`core.backend_supported_ops(name)` 枚举这些已注册实现；**个别的形状/dtype 限制仍然适用**。
+缺失的实现**抛出异常**，而不是落进一个空的虚 `run()`。
 
-`_runtime.dispatch` owns Python kernel registrations. Each entry declares its
-operator, backend, accepted tensor dtypes, shape/gradient predicate and priority.
-`select_kernel` returns the actual implementation; `try_dispatch` and the
-`optional_kernel` adapter use the same selection. A miss permits an explicit
-same-device generic implementation, not an implicit move to the CPU. Predicate
-and implementation errors propagate without trying another kernel. Legacy
-mode-specific restrictions are registration qualifiers rather than separate
-backend guards at call sites.
+可选库在自己的翻译单元中发布带类型的语义能力。核心的替换点和 matmul/conv 调优器查询这些
+能力，**不点名** CUB、cuRAND、cuTT、cuBLAS、cuDNN 或 MKL 实现。能力查找在使用时解析构造器，
+因此**库加载之前的一次查找不会把"未命中"永久缓存**。`core.backend_supported_capabilities(name)`
+暴露可用的语义族。后端选择先于源码片段生成，包括双源 CodeOp 的缓存查找。
 
-`core.dispatch_context(inputs)` returns the runtime target and input-selected
-device without materializing tensors or probing a driver. Python recursively
-collects Vars in positional and keyword containers and records all their dtypes.
-The native query checks mixed device inputs, preserving the bounded pending
-scalar retargeting rule. Storage residency alone is not execution policy:
-pending and host-staged inputs can still target the accelerator. Device-keyed
-FFT and attention caches use this context, including non-default device ids.
+**原生扩展必须重建**：`Op` 布局变了，`OpInfo` 现在是 `OpDef` 的兼容别名，源码元数据位于
+`definition.codegen` 之下。已转换的 ACL/ROCm/Corex 后端保留其历史构建路径。**仅主机的语法
+检查不是 CANN ABI 或设备验证**；那些机器必须先构建并执行改动后的后端，才能声称硬件支持。
 
-CUDA/legacy library adapters, matrix/conv/RNN selection, normalization/inference,
-indexing/scan and other native domains use this table. Non-ACL converted CUDA
-implementations keep their explicitly declared ROCm/Corex registrations where
-the old guards allowed them; this does not certify those devices. The old
-`_runtime.registry` prototype and its bytearray allocator are removed. Root
-flatten/clamp/outer now register portable implementations in the same table.
+`jittor_utils.compile_module` 把生成的包装器与参数打印器定义作为**一个翻译单元**编译。
+此前两个编译器输入会互相覆盖同一个 depfile，漏掉扩展头文件并静默复用过时的 ABI 布局。
+改动后的命令会自动使旧缓存项失效；之后的头文件变化会被正确跟踪，无需重命名扩展或删缓存。
+**已加载的扩展模块仍然需要一个新进程。**
 
-`_runtime.backend_libraries` owns loaded modules, their derived `.ops`, resources,
-loader callbacks and availability policies. Missing queries are not permanently
-cached; explicit loading propagates errors. MKL disablement is checked before
-both cached-module lookup and loading, and reenabling can reuse the loaded
-module. `compile_extern.*` and root library attributes remain dynamic read-only
-queries, not mutable snapshots. Existing bootstrap ordering is retained; fully
-lazy core import remains a separate task.
+### Python kernel 分派
 
-`nn.backends.hooks` is a read-only compatibility view into this table. ACL
-providers publish implementations directly; the view never stores an independent
-callback. Internal tests use `override_kernel` for scoped replacement or absence,
-and restore the prior registration on exit. Direct legacy hook/library attribute
-assignment is rejected. The ACL source converter remains a separate migration;
-Python kernel publication no longer replaces the native public API.
+`_runtime.dispatch` 拥有 Python kernel 注册。每个条目声明它的算子、后端、接受的张量 dtype、
+形状/梯度谓词和优先级。`select_kernel` 返回真正的实现；`try_dispatch` 与 `optional_kernel`
+适配器使用同一套选择逻辑。**未命中只允许一个显式的同设备通用实现，不允许隐式挪到 CPU。**
+谓词与实现的错误向上传播，**不会去试另一个 kernel**。历史的模式专属限制变成注册限定词，
+而不是调用点上的独立后端守卫。
 
-### ACL Kernel Registration
+`core.dispatch_context(inputs)` 返回运行时目标与由输入决定的设备，**不实体化张量、不探测
+驱动**。Python 递归收集位置与关键字容器中的 Var，并记录它们全部的 dtype。原生查询检查混合
+设备输入，保留有界的待定标量重定向规则。**存储驻留位置本身不是执行策略**：待定和主机暂存
+的输入仍然可以以加速器为目标。按设备索引的 FFT 与注意力缓存使用这个上下文，含非默认设备
+编号。
 
-The ACL build entry point is `jittor.backends.acl`. SDK support translation
-units live in `backends/acl/src`, SDK-facing headers in `include/{aclops,aclnn}`,
-and native operator translation units in `kernels/native`. The provider uses
-an explicit 45-file build inventory (42 core, 3 registration), preserving the
-previous ordering without accidentally globbing the independent backend and
-workspace runtime sources. Source builders include `aclops/aclops.h` through
-the backend include root; actual SDK `acl/acl.h` references are unchanged.
-MPI, NCCL and HCCL resources live under `backends/comm/{mpi,nccl,hccl}` with
-matching `inc`, `src` and `ops` directories. NCCL also owns its no-MPI header.
-Compiler lookup uses `backend_root(..., "comm")` in both checkouts and wheels;
-the removed `python/jittor/extern` path is not an include root or package input.
+CUDA/历史库适配器、矩阵/卷积/RNN 选择、归一化/推理、索引/扫描等原生领域都使用这张表。
+非 ACL 的已转换 CUDA 实现在旧守卫允许处保留其显式声明的 ROCm/Corex 注册——**这不构成对
+那些设备的认证**。旧的 `_runtime.registry` 原型及其 bytearray 分配器已删除。根级的
+flatten/clamp/outer 现在在同一张表里注册可移植实现。
 
-`backends/acl/kernels/install.py` publishes module-level tensor, neural-network
-and normalization implementations in the existing Python dispatch table.
-The paired SDK source builders live in `backends/acl/kernels/ops`; old Python
-module paths are same-object aliases. Native functions and Module classes keep
-their own identities, validation, parameter management and generic mathematics.
-There is no `change_function` or `warp` installer. An unsupported Python variant
-returns `None` to its same-device generic owner; execution errors propagate.
+`_runtime.backend_libraries` 拥有已加载模块、由其派生的 `.ops`、资源、loader 回调和可用性
+策略。**未命中的查询不会被永久缓存**；显式加载会传播错误。MKL 的禁用在缓存模块查找与加载
+**之前**检查，重新启用可以复用已加载模块。`compile_extern.*` 与根级库属性仍是动态只读查询，
+不是可变快照。既有的引导顺序保持不变；完全惰性的核心导入是另一项独立任务。
 
-The native registry composes ACL `OpImplementation` values when definitions
-are published, including extensions loaded after initialization. Installing
-the composer also handles existing definitions transactionally. Definitions
-remain immutable and existing graphs keep their pinned values. A stable startup
-version preserves cross-process JIT keys; dynamic implementation replacement
-still receives a unique identity. A late extension cannot acquire ACL support
-merely by avoiding an initialization-time scan.
+`nn.backends.hooks` 是这张表的只读兼容视图。ACL provider 直接发布实现，该视图**绝不存储
+独立回调**。内部测试用 `override_kernel` 做带作用域的替换或缺席，并在退出时恢复先前注册。
+**直接给历史钩子/库属性赋值会被拒绝。** ACL 源码转换器仍是一项独立迁移；Python kernel
+发布不再替换原生公开 API。
 
-`Kernel.compile` replaces the global compilation hook. ACL registers distinct
-fused, mapped, primitive and explicitly unsupported paths; fused relay selection
-still follows tuning. SDK-native extensions such as HCCL explicitly declare
-their compiler. Unsupported fallback entries do not appear as implemented
-operators or capabilities, and other backends' constructors are not deleted.
+### ACL kernel 注册
 
-`jt.code(..., backend="acl")` identifies the accelerator source as ACL SDK code.
-It does not change the active device. Constructors validate the marker, cache
-keys include it, ordinary and multi-output gradients inherit it, and a wrong
-accelerator target is rejected before execution. `cpu_src` remains independent.
-Third-party code that relied on `// aclop` or another incidental `acl` substring
-must add the marker; comment-based recognition is deliberately removed.
+ACL 的构建入口是 `jittor.backends.acl`。SDK 支持翻译单元在 `backends/acl/src`，面向 SDK 的
+头文件在 `include/{aclops,aclnn}`，原生算子翻译单元在 `kernels/native`。provider 使用一份
+显式的 45 文件构建清单（42 核心 + 3 注册），保持原有顺序，**不会误用通配把独立后端和
+workspace 运行时源码卷进来**。源码构造器经由后端 include 根包含 `aclops/aclops.h`；真正的
+SDK `acl/acl.h` 引用保持不变。
 
-Typed native Getitem/Setitem entries cover basic positive-step slices, integer
-indices, new axes, ellipses, empty selections and broadcast assignment. A pure
-checked address plan coalesces contiguous suffixes; device copies are queued on
-the existing ACL computation stream. No tensor data is staged through the CPU.
-Only exact shared mappings are no-ops; unsafe overlap, advanced/string indexing,
-negative steps and native reduction assignment are explicitly unsupported by
-this entry. Existing Python ACL builders retain their separate variants.
-Scalar broadcast copies are conservative and are not a performance claim.
-Native integer views retain the producer needed for chained writeback; basic
-index gradients make assignment casts explicit without changing indexed-add
-accumulation. Basic indexed assignment now follows native `VarView` records;
-the former Python parent-chain writeback is removed. This does not imply that
-every advanced indexing or cross-backend view variant has hardware coverage.
+MPI、NCCL、HCCL 资源在 `backends/comm/{mpi,nccl,hccl}` 下，各有对应的 `inc`、`src`、`ops`
+目录，NCCL 另外拥有它的 no-MPI 头文件。编译器查找在 checkout 与 wheel 中都用
+`backend_root(..., "comm")`；已删除的 `python/jittor/extern` 路径**既不是 include 根也不是
+包输入**。
 
-ACL post-processing only publishes its native implementations. Its pinned-host,
-compiler-concurrency and reduction requirements belong to the backend descriptor
-and are consumed by the allocator, compiler and reduction owners; public flags
-are not overwritten. BackendOps ABI 3 rejects older descriptors and extensions
-must rebuild. The legacy whole-tree SDK translation (`process_acl`,
-`process_jittor_source`) is gone; real CANN/NPU verification is still required.
+`backends/acl/kernels/install.py` 在既有的 Python 分派表中发布模块级的张量、神经网络和
+归一化实现。配套的 SDK 源码构造器在 `backends/acl/kernels/ops`；旧的 Python 模块路径是同
+对象别名。原生函数与 Module 类保留各自的标识、校验、参数管理和通用数学。**不存在
+`change_function` 或 `warp` 式的安装器。** 不支持的 Python 变体向其同设备的通用归属者
+返回 `None`；执行错误向上传播。
 
-### Distributed Ownership
+原生注册表在定义发布时组合 ACL 的 `OpImplementation` 值，**包括初始化之后才加载的扩展**。
+安装组合器时也会**事务性地**处理已有定义。定义保持不可变，已有的图保留其钉住的值。一个
+稳定的启动版本保持跨进程的 JIT key；动态的实现替换仍会获得唯一标识。**一个迟到的扩展
+不能仅仅靠避开初始化期扫描就获得 ACL 支持。**
 
-`jittor.distributed.process_group` owns `ProcessGroup`, `Work`, communicator
-creation and live native rank/world queries. Launching and rendezvous are owned
-by `distributed.launch` and `distributed.store`. The Torch installer delegates
-to these objects, retaining only Torch spelling, argument adaptation and its
-installation/bootstrap transaction. Historical `_JittorProcessGroup` and
-`_JittorWork` imports remain aliases, so old pickle globals resolve to the same
-canonical classes. Invalid native world-size metadata now raises instead of
-being silently treated as a single-process runtime.
+`Kernel.compile` 取代了全局编译钩子。ACL 分别注册融合、映射、原语和显式不支持这几条路径；
+融合 relay 的选择仍然跟随调优。HCCL 这类 SDK 原生扩展显式声明它们的编译器。**不支持的
+回退条目不会表现为已实现的算子或能力**，其它后端的构造器也不会被删除。
 
-### Backend Fallback Policy
+`jt.code(..., backend="acl")` 把加速器源码标识为 ACL SDK 代码。**它不改变当前设备。**
+构造器校验该标记，缓存 key 包含它，普通与多输出梯度继承它，错误的加速器目标在执行前就被
+拒绝。`cpu_src` 保持独立。依赖 `// aclop` 或其它偶然出现的 `acl` 子串的第三方代码**必须
+补上该标记**——基于注释的识别被刻意移除了。
 
-`NativeRuntime` owns `backend_fallback`, exposed through both `jt.flags` and
-`jt.runtime`. The default is `warn`; `error` rejects an automatic cross-backend
-computation, and `allow` permits it without warning. Invalid assignments leave
-the previous policy intact. The executor checks CPU-only execution before
-migrating inputs; array staging, fetch and explicit device transfers are not
-computational fallback. A generic kernel on the requested device is not a
-cross-backend fallback either.
+带类型的原生 Getitem/Setitem 条目覆盖基本的正步长切片、整数索引、新轴、省略号、空选择和
+广播赋值。一份纯粹的、经过检查的地址计划会合并连续的后缀；设备拷贝排在既有的 ACL 计算流
+上。**没有张量数据经由 CPU 暂存。** 只有完全相同的共享映射才是 no-op；不安全的重叠、
+高级/字符串索引、负步长和原生归约赋值**由该入口显式声明不支持**。既有的 Python ACL
+构造器保留其独立变体。标量广播拷贝是保守的，**不构成性能主张**。原生整数视图保留链式
+回写所需的生产者；基本索引的梯度让赋值转换显式化，同时不改变 indexed-add 的累加。基本的
+索引赋值现在遵循原生 `VarView` 记录，此前 Python 侧的父链回写已移除。**这并不意味着每一种
+高级索引或跨后端视图变体都有硬件覆盖。**
 
-The legacy ACL executor preflights the complete fused group or standalone
-operation before execution. Only an explicitly unsupported operation/variant
-can request CPU fallback. SDK, shape and kernel execution failures clean up and
-propagate their original exception; they are not routing signals. A permitted
-fallback restores the prior execution mode, operator flags and fused context
-even if CPU execution fails. Family-internal SDK resource cleanup still has
-separately tracked work; host-only tests do not establish NPU hardware support.
+ACL 后处理只发布它的原生实现。它对锁页主机内存、编译器并发和归约的要求属于**后端描述符**，
+由分配器、编译器和归约的归属者消费；**公开 flag 不会被覆盖**。BackendOps ABI 3 拒绝更旧的
+描述符，扩展必须重建。历史的整树 SDK 转换（`process_acl`、`process_jittor_source`）已经
+消失；**真实的 CANN/NPU 验证仍然是必需的**。
 
-`core.backend_fallback_count()` counts cross-backend decisions, including denied
-attempts, not completed CPU computations. Hardware gates use `error`.
-`_runtime.fallback.forbid_backend_fallbacks()` also checks a count delta after a
-normal return, detecting attempts whose exceptions were swallowed by a caller.
-It preserves a primary exception and does not synchronize implicitly: the caller
-must execute and synchronize the work inside the scope. NPU pytest fixtures and
-standalone ecosystem runners use this interface instead of parsing log wording.
+### 分布式归属
 
-The C++ `src/misc/` directory no longer exists. Support code is grouped by its
-actual role; this is a source-layout change, not a change to helper algorithms
-or a claim that the backend registry migration is complete.
+`jittor.distributed.process_group` 拥有 `ProcessGroup`、`Work`、通信器创建以及实时的原生
+rank/world 查询。启动与 rendezvous 由 `distributed.launch` 和 `distributed.store` 拥有。
+Torch 安装器委托给这些对象，只保留 Torch 拼写、参数适配和它自己的安装/引导事务。历史的
+`_JittorProcessGroup` 与 `_JittorWork` 导入仍是别名，因此旧的 pickle 全局符号解析到同一批
+规范类。**非法的原生 world-size 元数据现在报错**，不再被静默当成单进程运行时。
 
-| Owner | Support Code |
+### 后端回退策略
+
+`NativeRuntime` 拥有 `backend_fallback`，经由 `jt.flags` 与 `jt.runtime` 暴露。默认是
+`warn`；`error` 拒绝自动的跨后端计算，`allow` 允许且不警告。**非法赋值保持原策略不变。**
+执行器在迁移输入之前检查仅 CPU 的执行；数组暂存、fetch 和显式设备传输**不是计算性回退**，
+在所请求设备上的通用 kernel **也不是**跨后端回退。
+
+历史的 ACL 执行器在执行前对完整的融合组或独立运算做预检。**只有显式不支持的运算/变体才能
+请求 CPU 回退。** SDK、形状和 kernel 执行失败会清理并传播其原始异常——**它们不是路由信号**。
+一次被允许的回退即使 CPU 执行失败，也会恢复先前的执行模式、算子 flag 和融合上下文。族内的
+SDK 资源清理仍有单独跟踪的工作；**仅主机的测试不构成 NPU 硬件支持**。
+
+`core.backend_fallback_count()` 统计跨后端**决策**（含被拒绝的尝试），而不是已完成的 CPU
+计算。硬件门禁使用 `error`。`_runtime.fallback.forbid_backend_fallbacks()` 还会在正常返回后
+检查计数增量，从而发现那些异常被调用方吞掉的尝试。它保留主异常，并且**不隐式同步**：
+调用方必须在作用域内执行并同步该工作。NPU 的 pytest fixture 与独立的生态 runner 使用这个
+接口，**而不是去解析日志措辞**。
+
+C++ 的 `src/misc/` 目录已不存在，支持代码按其实际角色分组。**这是源码布局变化，不是助手
+算法的改变，也不表示后端注册表迁移已完成。**
+
+| 归属 | 支持代码 |
 | --- | --- |
-| `src/debug/` | CPU/CUDA NaN checking and diagnostics |
-| `src/runtime/` | Device streams, float32 precision policy, traversal indexing, RingBuffer, collective dtype and rendezvous helpers |
-| `src/type/` | Nano types and scalar math, atomic, intrinsic and numeric-limit helpers used by generated kernels |
-| `src/utils/` | Generic strings, hashes, containers, shared pointers and cleanup helpers |
-| `src/third_party/` | Vendored miniz |
+| `src/debug/` | CPU/CUDA 的 NaN 检查与诊断 |
+| `src/runtime/` | 设备流、float32 精度策略、遍历索引、RingBuffer、集合通信 dtype 与 rendezvous 助手 |
+| `src/type/` | Nano 类型与标量数学、原子操作、intrinsic 和生成 kernel 使用的数值极限助手 |
+| `src/utils/` | 通用字符串、哈希、容器、共享指针与清理助手 |
+| `src/third_party/` | 内置的 miniz |
 
-Both generated includes and backend source transformations use these paths.
-Source extensions that included `misc/...` must update their includes before
-rebuilding. Basenames are unchanged so existing ROCm/Corex conversion rules
-retain their dispatch identity. Moving these support files does not complete
-the separate `init`/profiler/lock or Python-binding layout migrations.
+生成的 include 与后端源码转换都使用这些路径。**此前 include `misc/...` 的源码扩展必须先
+更新 include 再重建。** 基名保持不变，因此既有的 ROCm/Corex 转换规则保留其分派标识。搬动
+这些支持文件**并不等于**完成了另外的 `init`/profiler/锁或 Python 绑定的布局迁移。
 
-On a reused transformed-source cache, native files absent from the original
-source tree are moved out of `src/` and `extern/` before compilation. They are
-preserved under `<backend>_source_stale_*` in the cache directory, not deleted.
-This prevents old and new translation units from being compiled together after
-a source move. Non-native cache artifacts are left alone.
+在复用被转换过的源码缓存时，原始源码树中不存在的原生文件会在编译前被移出 `src/` 和
+`extern/`，**保存**在缓存目录的 `<backend>_source_stale_*` 下而不是删除。这防止源码搬动之后
+新旧翻译单元被一起编译。非原生的缓存产物不受影响。
 
-### Compatibility APIs
+### 兼容 API
 
-Independent activation constructs its TorchNamespace before installation.
-Installers publish APIs and context on that target; a transactional backend-to-owner
-binding routes leaf, retained-gradient and optimizer bookkeeping to one state.
-Legacy native attributes alias that state, and rolled-back installation steps
-are replayed against the same state on retry.
+独立激活在安装之前先构造它的 TorchNamespace。安装器把 API 与上下文发布到那个目标上；
+一次事务性的"后端到归属者"绑定把 leaf、retained-gradient 和优化器记账路由到**同一份状态**。
+历史的原生属性是该状态的别名，被回滚的安装步骤在重试时**针对同一份状态重放**。
 
-The TorchNamespace owns its public writes and deletions. Missing reads
-may still use its native owner; deletion masks that fallback locally. Transaction
-rollback restores the exact local binding and deletion state. InstallContext
-separates the installation target from its native backend and never inherits
-install markers through namespace fallback. Publication keeps the root self-alias
-consistent in the registry and import mapping. Independent activation owns real
-Tensor/Parameter subclasses and Module/NN adapters, reusing the native Var/Op
-graph and mathematics without installing those APIs on native classes.
-State lookup uses private weak module bindings, with transactional rollback;
-independent activation does not publish leaf/retained/optimizer state aliases
-on the native module or keep an unloaded frontend alive through owner lookup.
+TorchNamespace 拥有它自己的公开写入与删除。缺失的读取仍可使用它的原生归属者；删除会在
+局部遮蔽这条回退。事务回滚恢复**确切的**局部绑定与删除状态。InstallContext 把安装目标与其
+原生后端分开，**绝不通过命名空间回退继承安装标记**。发布过程让根的自别名在注册表与导入
+映射中保持一致。独立激活拥有真正的 Tensor/Parameter 子类和 Module/NN 适配器，复用原生的
+Var/Op 图与数学，**而不把这些 API 安装到原生类上**。状态查找使用私有的弱模块绑定并带事务
+回滚；独立激活**不在原生模块上发布** leaf/retained/optimizer 状态别名，也不通过归属者查找
+让一个已卸载的前端活着。
 
-The canonical Torch-style implementation is `jittor.compat.torch`. The legacy
-attribute/module spelling `jittor.torch_compat` loads its optional alias provider
-on explicit import; it is not a second source file. Likewise, the canonical Triton
-implementation is `jittor.compat.triton`, with `jittor.triton_shim` retained as
-an object-identity alias.
+规范的 Torch 风格实现是 `jittor.compat.torch`。历史的属性/模块拼写 `jittor.torch_compat`
+在显式导入时加载其可选的别名 provider，**它不是第二份源文件**。同理，规范的 Triton 实现是
+`jittor.compat.triton`，`jittor.triton_shim` 作为对象标识别名保留。
 
-Compatibility installers for NN, numerical and tensor APIs, and the
-FlashAttention adapter, are normal packages split by implementation family.
-Public callables without installation-state captures can retain module-level
-identity; stateful installation paths keep explicit context and their original
-registration order. Task 7.12 remains open: remaining runtime ownership and the
-legacy activation path still need consolidation. Native Parameter is a real Var
-subclass; native Module registers parameters and buffers by attribute name and
-does not read or write Torch-role markers. Torch-specific assignment rules live
-in the independent Module adapter or the explicit legacy installer. The
-physical `compat/` tree is now the independent `jittor-torch` distribution; core
-packaging excludes it. The explicit legacy mode still
-adapts native classes and must not be confused with independent activation.
+NN、数值与张量 API 的兼容安装器以及 FlashAttention 适配器都是按实现族拆分的常规包。没有
+安装状态捕获的公开可调用对象可以保留模块级标识；**有状态的安装路径保留显式上下文和其原有
+注册顺序**。原生 Parameter 是真正的 Var 子类；原生 Module 按属性名注册参数与缓冲，
+**不读写 Torch 角色标记**。Torch 专属的赋值规则住在独立 Module 适配器或显式的历史安装器里。
+物理的 `compat/` 树现在就是独立的 `jittor-torch` 发行物，**核心打包排除它**。显式的历史模式
+仍然改造原生类，**不得与独立激活混为一谈**。
 
-Basic indexing uses native `VarView` tracking instead of a parallel Python
-`_torch_index_parent`/slice chain. Torch-specific slice forms that do not yet
-have a native view record explicitly attach one with `_set_view_of`. The
-detached `.data` API retains its separate owner/path bookkeeping; assignment
-uses a detached right-hand-side node so stopping the data alias does not freeze
-its trainable owner. The write-only strong-reference table for `requires_grad`
-has been removed. Leaf registration, retained-gradient tracking and optimizer
-registration remain because they have actual consumers. Independent Tensor
-holders use a weak identity index, while the native graph query determines leaf
-identity. An unrelated backward never erases a live independent holder's
-registration; retain_grad lasts for the holder's lifetime. Its flag, gradients,
-data-view owner/path, device hints and RMSNorm cache belong to TensorObjectState.
-Legacy non-weak-referenceable Vars retain their separate cleanup path.
+基本索引使用原生 `VarView` 跟踪，而不是平行的 Python `_torch_index_parent`/切片链。尚无原生
+视图记录的 Torch 专属切片形式会用 `_set_view_of` 显式挂上一个。分离的 `.data` API 保留其
+独立的归属者/路径记账；赋值使用一个分离的右值节点，**这样停止 data 别名不会冻结它那个可
+训练的归属者**。`requires_grad` 的只写强引用表已被移除。leaf 注册、retained-gradient 跟踪
+和优化器注册被保留，因为它们有真实的消费者。独立的 Tensor holder 使用弱标识索引，而 leaf
+标识由原生图查询决定。**一次无关的反向绝不会抹掉一个存活的独立 holder 的注册**；
+retain_grad 持续到该 holder 的生命期结束。它的 flag、梯度、data 视图的归属者/路径、设备
+提示和 RMSNorm 缓存都属于 TensorObjectState。历史的不可弱引用 Var 保留其独立的清理路径。
 
-`jittor.compat.shim` owns the runtime and deployment code for the optional
-top-level `torch` surface used by applications that import Torch directly. The
-name `jittor.torch_shim` is retained only as a same-object legacy alias. The shim
-delegates Torch-style semantics to `jittor.compat.torch`; neither the alias nor
-the deployed package owns a second implementation.
+`jittor.compat.shim` 拥有可选的顶层 `torch` 接口的运行时与部署代码，供直接 import torch 的
+应用使用。`jittor.torch_shim` 仅作为同对象的历史别名保留。shim 把 Torch 风格语义委托给
+`jittor.compat.torch`；**别名与已部署的包都不拥有第二份实现**。
 
-Plain Jittor startup uses `_runtime.import_aliases` for native aliases and
-`_runtime.compat_bootstrap` for optional activation. It does not import any
-`jittor.compat` module; a missing optional package produces an installation
-error only when compatibility is requested. The
-Torch installer runs after an explicit Torch-mode preflight, through a deployed
-`torch` entry point, or when the historical `jittor.torch_compat` alias is
-imported. This prevents class-level Torch adaptations from changing native
-Jittor APIs in unrelated processes.
+普通的 Jittor 启动使用 `_runtime.import_aliases` 处理原生别名、`_runtime.compat_bootstrap`
+处理可选激活。**它不导入任何 `jittor.compat` 模块**；只有在请求兼容时，缺失的可选包才会
+产生安装错误。Torch 安装器在显式的 Torch 模式预检之后运行，或经由已部署的 `torch` entry
+point，或在历史别名 `jittor.torch_compat` 被导入时运行。**这防止类级的 Torch 改造在无关
+进程中改变原生 Jittor API。**
 
-vLLM implementation and its dedicated tests live under the main repository's
-`adapters/jittor_adapters/vllm` and `adapters/tests/vllm`, shipped by the existing
-`jittor-torch-adapters` distribution, not by Jittor or jittor-torch.
-The optional Torch stage selects its `jittor.module_patches` entry point named
-`jittor_vllm`, targeting `jittor_adapters.vllm:register`. Its
-`register(callback) -> None` registrar arms the before-import
-extension setup and registers after-import layer patches through the shared
-transaction mechanism. Missing installation reports `unavailable` without
-breaking Torch. Public Jittor primitives remain the mathematical implementation.
-This extraction does not contain the separately maintained Ascend platform and
-worker sources, and does not claim complete NPU serving or hardware validation.
+vLLM 的实现及其专属测试位于主仓库的 `adapters/jittor_adapters/vllm` 与
+`adapters/tests/vllm`，由既有的 `jittor-torch-adapters` 发行物分发，**不由 Jittor 或
+jittor-torch 分发**。可选的 Torch 阶段选择名为 `jittor_vllm` 的 `jittor.module_patches`
+entry point，指向 `jittor_adapters.vllm:register`。它的 `register(callback) -> None` 注册器
+装配导入前的扩展设置，并通过共享的事务机制注册导入后的层补丁。**未安装时报告 `unavailable`
+而不破坏 Torch。** 公开的 Jittor 原语仍然是数学实现本身。该抽离**不包含**单独维护的昇腾
+platform 与 worker 源码，**也不声称完整的 NPU serving 或硬件验证**。
 
-The ownership order is:
+归属顺序是：
 
-1. native Jittor semantics and broadly useful operations;
-2. reusable mechanisms in `jittor.compat`;
-3. optional import/deployment shims;
-4. project-specific integrations outside the core distribution.
+1. 原生 Jittor 语义与普遍有用的运算；
+2. `jittor.compat` 中可复用的机制；
+3. 可选的导入/部署 shim；
+4. 核心发行物之外的项目专属集成。
 
-See [Torch compatibility principles](../../refactor-wip/architecture/torch-compatibility-principles.md) for the
-behavioral decision rules.
+行为层面的判定规则见
+[Torch 兼容原则](../../refactor-wip/architecture/torch-compatibility-principles.md)。
 
-## Import and initialization rules
+## 导入与初始化规则
 
-Torch dtype objects and their native/NumPy consumption points follow the
-[dtype boundary contract](../../refactor-wip/architecture/torch-dtype-boundary.md). Frontend dtypes are immutable
-objects; native code uses the core-owned name normalizer for metadata and the
-checked native converter for computation, including placeholder rejection.
+Torch 的 dtype 对象及其原生/NumPy 消费点遵循
+[dtype 边界契约](../../refactor-wip/architecture/torch-dtype-boundary.md)。前端 dtype 是
+不可变对象；原生代码用核心拥有的名字规范化器处理元数据、用带检查的原生转换器处理计算，
+**包括对占位符的拒绝**。
 
-- Module imports must not compile kernels, download assets, mutate the source
-  checkout, or silently install external packages.
-- Registration is idempotent. Re-importing a compatibility module must not wrap
-  the same callable twice or create a second module object.
-- Optional dependency checks happen at the operation boundary unless import-time
-  discovery is itself the API.
-- Broad exception handlers may annotate and re-raise a failure; they must not
-  convert a partially installed compatibility surface into apparent success.
-- Expensive imports stay out of collection-only structure tests.
-- A top-level definition may not be silently replaced by a later definition in
-  the same file. Cross-file identical implementations are scanned as well;
-  retained duplicates require a narrow reviewed category such as standalone
-  deployment entry points, backend code-generation templates, model-local
-  architecture blocks, or legacy serialization readers.
+- 模块导入**不得**编译 kernel、下载资源、修改源码 checkout，或静默安装外部包。
+- **注册必须幂等。** 重新导入一个兼容模块不得把同一个可调用对象包两次，也不得创建第二个
+  模块对象。
+- 可选依赖的检查发生在**运算边界**，除非导入期发现本身就是那个 API。
+- 宽泛的异常处理器可以标注并**重新抛出**失败；**不得**把一个只安装了一半的兼容接口转成
+  表面上的成功。
+- 昂贵的导入不进入仅做收集的结构测试。
+- 同一文件里的顶层定义**不得**被后面的定义静默替换。跨文件的相同实现同样被扫描；保留的
+  重复需要属于一个窄的、经过评审的类别，例如独立的部署入口、后端代码生成模板、模型局部的
+  架构块，或历史的序列化读取器。
 
-## Runtime resources
+## 运行时资源
 
-The following trees are consumed by compiler or packaging code using physical
-paths and therefore require special review:
+以下几棵树被编译器或打包代码按**物理路径**消费，因此改动需要特别评审：
 
-- `src/` (installed as `jittor/src/`)
+- `src/`（安装为 `jittor/src/`）
 - `backends/acl/{include,kernels/native,src}/`
 - `backends/comm/`
 - `python/jittor/contrib/math_util/src/`
-- `compat/shim/cpp_extension/` (optional `jittor-torch` distribution)
+- `compat/shim/cpp_extension/`（可选的 `jittor-torch` 发行物）
 
-A move is complete only when source checkouts, sdists, wheels, cold JIT builds,
-and installed smoke tests all agree. Directory aesthetics alone are not a reason
-to relocate these resources.
+**只有当源码 checkout、sdist、wheel、冷 JIT 构建和安装后冒烟测试全部一致时，一次搬动才算
+完成。** 目录美观本身不是搬动这些资源的理由。
 
-## Refactor protocol
+## 重构流程
 
-For each module move:
+每次模块搬动：
 
-1. Inventory definitions, assignments, imports, registrations, and consumers.
-2. Define the canonical destination and any compatibility alias explicitly.
-3. Move a coherent domain slice without unrelated behavior changes.
-4. Compare the moved definition set and public exports mechanically where
-   possible.
-5. Test import identity, public calls, dynamic dispatch, serialization where
-   applicable, and the relevant CPU/accelerator behavior.
-6. Delete the transitional source path and add it to the structure gate.
-7. Update durable documentation and active links in the same change.
+1. 清点定义、赋值、导入、注册和消费者；
+2. 显式定义规范目的地以及任何兼容别名；
+3. 搬动一个**连贯的领域切片**，不夹带无关的行为改动；
+4. 尽可能**机械地**比对搬动前后的定义集合与公开导出；
+5. 测试导入标识、公开调用、动态分派、适用时的序列化，以及相关的 CPU/加速器行为；
+6. 删除过渡源码路径，并把它加进结构门禁；
+7. 在**同一次改动中**更新长期文档与活跃链接。
 
-Do not preserve two editable implementations after a move. Compatibility must
-delegate to the canonical object and have an exit condition.
+**搬动之后不得保留两份可编辑的实现。** 兼容必须委托给规范对象，并且有退出条件。
 
-## Acceptance
+## 验收
 
-A source-layout change is acceptable when:
+一次源码布局改动在满足下列条件时可以接受：
 
-- imports and public names retain their documented behavior;
-- no legacy implementation tree or root-level compatibility file remains;
-- the wheel contains every required runtime resource and excludes repository-only
-  tests/tools;
-- `bash tools/check_repo_layout.sh` passes;
-- focused tests, structure tests, and every affected backend gate pass;
-- any deliberate incompatibility is documented in release notes.
+- 导入与公开名字保持其有文档记载的行为；
+- 不残留任何历史实现树或根级兼容文件；
+- wheel 含有全部必需的运行时资源，并排除仅供仓库使用的测试/工具；
+- `bash tools/check_repo_layout.sh` 通过；
+- 定向测试、结构测试和每一个受影响的后端门禁都通过；
+- 任何**刻意的不兼容**都记入发布说明。

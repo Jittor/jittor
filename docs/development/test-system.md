@@ -1,165 +1,145 @@
-# Test System
+# 测试体系
 
-- Status: Accepted
-- Last reviewed: 2026-09-03
-- Baseline: `6b8fb594` plus task 10.03
-- Owner: test infrastructure maintainers
-- Review when: collection roots, process-mode ownership, markers, OpInfo
-  contracts, or backend gates change
+- 状态：已接受
+- 上次复查：2026-09-03
+- 基线：`6b8fb594` 加任务 10.03
+- Owner：测试基础设施维护者
+- 复查触发：收集根目录、进程模式归属、marker、OpInfo 契约或后端门禁发生变化时
 
-Jittor uses pytest as the repository test runner while retaining compatible
-`unittest.TestCase` tests. The suite lives under root `tests/` and is not part of
-the installed package. [`pyproject.toml`](https://github.com/Jittor/jittor/blob/master/pyproject.toml)
-is the authoritative collection and marker configuration;
+Jittor 用 pytest 作为仓库的测试运行器，同时保留兼容的 `unittest.TestCase` 测试。
+套件位于顶层 `tests/`，**不属于已安装的包**。
+[`pyproject.toml`](https://github.com/Jittor/jittor/blob/master/pyproject.toml)
+是收集与 marker 配置的权威来源；
 [`noxfile.py`](https://github.com/Jittor/jittor/blob/master/noxfile.py)
-is the reproducible command surface.
+是可复现的命令面。
 
-## Goals
+## 目标
 
-- Compare forward behavior with an independent reference.
-- Verify analytical gradients numerically and across devices.
-- Keep structure, CPU, and hardware requirements explicit.
-- Preserve useful legacy edge cases while replacing cross-test imports and
-  ad-hoc discovery with shared helpers and registries.
-- Make unsupported behavior visible through specific skips or strict expected
-  failures.
-- Keep collection free of compilation, downloads, and hardware side effects.
+- 用**独立参考**比对前向行为；
+- 数值化验证解析梯度，并跨设备验证；
+- 让结构、CPU 与硬件要求保持显式；
+- 保留有价值的历史边界用例，同时把跨测试导入和临时发现替换为共享 helper 与注册表；
+- 通过**具体的 skip 或严格的预期失败**让不支持的行为可见；
+- 让收集阶段不产生编译、下载和硬件副作用。
 
-## Layout
+## 目录布局
 
 ```text
 tests/
-├── _fixtures/            # versioned test data
-├── _helpers/             # explicit shared test utilities
-├── opinfo/               # operator metadata, samples, references, skip policy
-├── ops/                  # generic OpInfo forward and gradient batteries
-├── backends/             # CPU/CUDA/ROCm/NPU and cross-device parity
-├── compiler/             # JIT/compiler behavior and kernel traps
-├── core/                 # tensor, dtype, graph, and autograd contracts
-├── nn/                   # neural-network operations and modules
-├── optim/                # optimizer contracts
-├── distributed/          # MPI and distributed behavior
-├── compat/               # compatibility surfaces and import behavior
-├── integration/          # notebooks and cross-component workflows
-├── structure/            # repository, packaging, and static contracts
-├── models/               # maintained model-level tests
-└── system/               # process/environment integration tests
+├── _fixtures/            # 版本化的测试数据
+├── _helpers/             # 显式的共享测试工具
+├── opinfo/               # 算子元数据、样本、参考、skip 策略
+├── ops/                  # 通用 OpInfo 前向与梯度批测
+├── backends/             # CPU/CUDA/ROCm/NPU 与跨设备一致性
+├── compiler/             # JIT/编译器行为与 kernel 陷阱
+├── core/                 # 张量、dtype、图与自动微分契约
+├── nn/                   # 神经网络算子与模块
+├── optim/                # 优化器契约
+├── distributed/          # MPI 与分布式行为
+├── compat/               # 兼容接口与导入行为
+├── integration/          # notebook 与跨组件工作流
+├── structure/            # 仓库、打包与静态契约
+├── models/               # 维护中的模型级测试
+└── system/               # 进程/环境集成测试
 ```
 
-Test modules may import `tests/_helpers` and `tests/opinfo` through the pytest
-Python path configured for the suite. They must not import another test module as
-an implicit helper API. Shared utilities need their own focused tests when they
-contain nontrivial comparison or device logic.
+测试模块可以经由为套件配置的 pytest Python 路径导入 `tests/_helpers` 和 `tests/opinfo`。
+**不得把另一个测试模块当作隐式的 helper API 导入。** 共享工具若含有非平凡的比较或设备
+逻辑，需要有自己的定向测试。
 
-## Process-mode isolation
+## 进程模式隔离
 
-Torch compatibility installation is process-global and changes public methods,
-dtype promotion, reduction defaults, and lazy execution. Native and Torch-facing
-tests therefore run in separate pytest processes.
-`tests/_helpers/process_modes.py` owns the `TORCH_MODE_PATHS` list;
-`tests/conftest.py` applies it by ignoring those paths during a broad native
-collection and activating Torch mode when one of them is selected explicitly.
-The shared OpInfo and device-parity suites use Torch-facing signatures and
-therefore belong to the Torch process.
+Torch 兼容的安装是**进程级**的，会改变公开方法、dtype 提升、归约默认值和惰性执行。
+因此**原生测试与面向 Torch 的测试跑在不同的 pytest 进程里**。
 
-`tools/run_test_suite.py` is the complete-suite entry point. It runs native and
-Torch sessions with separate state, caches, and mode variables, then reports a
-combined result. A direct `python -m pytest tests` command is intentionally only
-the native session and must not be reported as full-suite coverage. A test that
-asserts `result_type`, Torch cast aliases, typed-tensor names, or Torch-specific
-defaults belongs to the Torch session even if the file also carries a low-level
-contract and remains under `tests/core/`.
+`tests/_helpers/process_modes.py` 拥有 `TORCH_MODE_PATHS` 列表；`tests/conftest.py`
+在广泛的原生收集中忽略这些路径，并在显式选中其中之一时激活 Torch 模式。共享的 OpInfo
+与设备一致性套件使用面向 Torch 的签名，因此属于 Torch 进程。
 
-An in-process independent PyTorch oracle requires `REAL_TORCH_SITE` to point to
-a site-packages directory containing PyTorch's binary `_C` extension. Pytest
-preloads that implementation before Jittor. Without this explicit oracle, tests
-skip optional PyTorch comparisons even when a deployed Jittor-backed `torch`
-stub is discoverable; the stub must never be accepted as an independent
-reference.
+`tools/run_test_suite.py` 是**完整套件的入口**：它以各自独立的状态、缓存和模式变量运行
+原生与 Torch 两个会话，再汇总结果。直接执行 `python -m pytest tests` **有意只是原生
+会话**，不得作为全套件覆盖来报告。
 
-## Three layers of operator evidence
+一个断言 `result_type`、Torch cast 别名、带类型的张量名或 Torch 特有默认值的测试属于
+Torch 会话——即使该文件同时携带底层契约并且位于 `tests/core/` 下。
 
-### 1. Independent forward reference
+进程内的独立 PyTorch oracle 要求 `REAL_TORCH_SITE` 指向一个含 PyTorch 二进制 `_C`
+扩展的 site-packages 目录，pytest 会在 Jittor 之前预加载该实现。**没有这个显式 oracle
+时，测试会跳过可选的 PyTorch 对比**，即使能发现一个已部署的、由 Jittor 支撑的 `torch`
+stub 也一样——**该 stub 绝不能被当作独立参考**。
 
-Each `OpInfo` describes the callable, sample builder, dtypes, autograd support,
-tolerances, and targeted skip/xfail policy. `tests/ops/test_ops.py` expands the
-database across requested devices and compares outputs with independent NumPy or
-mathematical references.
+## 算子证据的三层
 
-The reference must not call the Jittor operation under test. Sample builders
-cover meaningful shapes, axes, broadcasting, optional arguments, and error-prone
-dtypes rather than generating volume without semantic variety.
+### 1. 独立前向参考
 
-### 2. Numerical gradients
+每个 `OpInfo` 描述可调用对象、样本构造器、dtype、自动微分支持、容差，以及定向的
+skip/xfail 策略。`tests/ops/test_ops.py` 把这个数据库在所请求的设备上展开，并与独立的
+NumPy 或数学参考比对。
 
-Differentiable OpInfo entries run float64 CPU `gradcheck`; operations that
-support second-order differentiation also run `gradgradcheck`. Marking
-`supports_autograd=False` or `supports_gradgrad=False` is a contract decision,
-not a way to make a failing test green, and requires a reason in the definition
-or known-issues ledger.
+**参考实现不得调用被测的那个 Jittor 运算。** 样本构造器要覆盖有意义的形状、轴、广播、
+可选参数和容易出错的 dtype，而不是**在没有语义多样性的前提下堆数量**。
 
-Numerical checks prove derivative formulas on CPU. They do not prove that an
-accelerator executes the same backward kernel correctly.
+### 2. 数值梯度
 
-### 3. Device parity
+可导的 OpInfo 条目跑 float64 的 CPU `gradcheck`；支持二阶微分的运算还跑 `gradgradcheck`。
+标注 `supports_autograd=False` 或 `supports_gradgrad=False` 是**契约决定，不是把失败的
+测试弄绿的手段**，必须在定义中或问题总账里给出理由。
+
+数值检查在 CPU 上证明导数公式。**它不证明加速器正确执行了同一个反向 kernel。**
+
+### 3. 设备一致性
 
 [`tests/backends/parity/test_device_parity.py`](https://github.com/Jittor/jittor/blob/master/tests/backends/parity/test_device_parity.py)
-runs identical inputs and cotangents on CPU and the available accelerator,
-comparing forward outputs and gradients with both global and per-element error
-metrics. This layer catches device-specific compile failures, dropped gradient
-contributions, and silent kernel divergence.
+在 CPU 和可用的加速器上跑相同的输入与余切，用全局与逐元素两种误差度量比较前向输出和
+梯度。这一层捕获设备特有的编译失败、丢失的梯度贡献，以及静默的 kernel 偏差。
 
-CPU is a practical parity oracle only after its behavior is independently pinned
-by the forward and numerical-gradient layers. Backend environment failures are
-reported separately from framework defects.
+> **CPU 只有在被前向层与数值梯度层独立钉死之后，才是有效的一致性参考。** 后端环境
+> 失败要与框架缺陷分开报告。
 
-## Test categories and markers
+## 测试分类与 marker
 
-Markers are registered in
-[`pyproject.toml`](https://github.com/Jittor/jittor/blob/master/pyproject.toml):
+Marker 在 [`pyproject.toml`](https://github.com/Jittor/jittor/blob/master/pyproject.toml)
+中注册：
 
-| Marker | Contract |
+| Marker | 契约 |
 | --- | --- |
-| `structure` | no device execution; layout, packaging, and static checks |
-| `cpu` | maintained CPU behavior |
-| `cuda` | requires an NVIDIA CUDA environment |
-| `rocm` | requires an AMD ROCm environment |
-| `npu` | requires an Ascend CANN environment |
-| `mpi` | requires an MPI launcher or multiple processes |
-| `slow` | excluded from the fast pull-request gate |
-| `network` | requires external network access |
-| `manual` | selected explicitly; never part of automatic default runs |
+| `structure` | 不执行设备代码；布局、打包与静态检查 |
+| `cpu` | 维护中的 CPU 行为 |
+| `cuda` | 需要 NVIDIA CUDA 环境 |
+| `rocm` | 需要 AMD ROCm 环境 |
+| `npu` | 需要昇腾 CANN 环境 |
+| `mpi` | 需要 MPI 启动器或多进程 |
+| `slow` | 排除在快速 PR 门禁之外 |
+| `network` | 需要外部网络访问 |
+| `manual` | 显式选择；**绝不进入自动的默认运行** |
 
-Apply the narrowest applicable marker. Hardware tests probe a real operation and
-must not silently pass on CPU. Network and manual tests explain their external
-requirements in the module docstring.
+**使用适用范围最窄的 marker。** 硬件测试要探测真实运算，**不得在 CPU 上静默通过**。
+network 与 manual 测试要在模块 docstring 里说明其外部要求。
 
-## Skips and known failures
+## Skip 与已知失败
 
-- A skip represents an unavailable prerequisite or an intentionally unsupported
-  contract. Its reason identifies the exact prerequisite or limitation.
-- An expected failure represents a reproduced framework defect. Pytest uses
-  strict xfail behavior, so a fix produces an XPASS and forces ledger cleanup.
-- Do not catch arbitrary exceptions around a test body and convert them to a
-  skip. Probe optional environments narrowly before execution.
-- Every persistent expected failure is listed in the
-  [known-issues ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)
-  with an owner and an
-  exit condition.
+- **skip** 表示前置条件不可用，或某个契约有意不被支持；它的 reason 要指明**确切的
+  前置条件或限制**。
+- **预期失败** 表示一个已复现的框架缺陷。pytest 使用严格 xfail，因此修复会产生 XPASS
+  并**强制清理总账**。
+- **不要**在测试体外面捕获任意异常再转成 skip。要在执行前**窄范围地**探测可选环境。
+- 每个持久的预期失败都要列进
+  [问题总账](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)，
+  带 owner 和退出条件。
 
-## Commands
+## 命令
 
 ```bash
-# Complete two-process suite, native-only collection, or a focused module
+# 完整双进程套件、仅原生收集、或单个模块
 python tools/run_test_suite.py
 python -m pytest --collect-only -q tests
 python -m pytest -v tests/ops/test_ops.py
 
-# Select one operation or backend marker
+# 选择某个运算或后端 marker
 JITTOR_TEST_DEVICES=cpu python -m pytest tests/ops/test_ops.py -k exp
 python -m pytest -m structure tests/structure
 
-# Reproducible gates
+# 可复现门禁
 python -m nox -s structure
 python -m nox -s cpu
 python -m nox -s optional
@@ -170,75 +150,62 @@ python -m nox -s mpi
 python -m nox -s nccl
 ```
 
-The nox sessions create isolated state and caches. Direct concurrent runs must
-also use distinct `JITTOR_HOME` or `cache_name` values. The first build of a new
-JIT operation or extension should run serially.
+nox 会话会建立隔离的状态与缓存。**直接并发运行时也必须使用不同的 `JITTOR_HOME` 或
+`cache_name`；新 JIT 运算或扩展的首次构建应当串行执行。**
 
-## CI support matrix
+## CI 支持矩阵
 
-The workflow status is explicit because a working Nox session is not evidence
-that CI owns the required hardware or dependencies. "Manual" means maintainers
-must run the named fail-closed session on a provisioned machine before claiming
-that surface as verified; it must not be described as an automated check.
+工作流状态是**显式声明**的，因为"某个 nox 会话能跑"并不等于 CI 拥有所需的硬件或依赖。
+"手动"意味着维护者必须在已配置的机器上运行指定的 fail-closed 会话，之后才能声称该接口
+已验证——**不得把它描述成自动检查**。
 
-| Session | CI status | Runner and trigger |
+| 会话 | CI 状态 | Runner 与触发 |
 | --- | --- | --- |
-| `cuda` | Automated | Pushes and the weekly schedule use the declared RTX 4090 / CUDA 12.2 runner. A maintainer can add the `ci:cuda` label to a pull request; labeled, reopened, and subsequent synchronize events then run the same gate. |
-| `optional` | Manual | No dependency-complete CUDA runner is declared. Run `python -m nox -s optional` in the pre-provisioned environment described below. |
-| `rocm` | Manual | No AMD/ROCm runner is declared. Run `python -m nox -s rocm` on a real supported AMD GPU. |
-| `mpi` | Manual | No multi-process MPI runner is declared. Run `python -m nox -s mpi` with a working launcher and compiler wrapper. |
-| `nccl` | Manual | The declared CUDA runner guarantees one RTX 4090, not the two visible GPUs this gate requires. Run `python -m nox -s nccl` on a multi-GPU host. |
+| `cuda` | 自动 | 推送与每周计划使用声明的 RTX 4090 / CUDA 12.2 runner。维护者可给 PR 打 `ci:cuda` 标签；打标签、重开和之后的 synchronize 事件都会跑同一门禁。 |
+| `optional` | 手动 | 未声明依赖完备的 CUDA runner。请在下述预置环境中运行 `python -m nox -s optional`。 |
+| `rocm` | 手动 | 未声明 AMD/ROCm runner。请在真实受支持的 AMD GPU 上运行 `python -m nox -s rocm`。 |
+| `mpi` | 手动 | 未声明多进程 MPI runner。请在有可用启动器与编译器包装器的环境运行 `python -m nox -s mpi`。 |
+| `nccl` | 手动 | 声明的 CUDA runner 只保证一块 RTX 4090，而该门禁需要两块可见 GPU。请在多卡主机上运行 `python -m nox -s nccl`。 |
 
-The matrix describes current scheduling, not backend support. A manual result
-must record the tested commit, toolchain, device topology, command, and pytest
-outcome in `docs/results/`; an unavailable runner is not a passing result.
+**该矩阵描述的是当前调度，不是后端支持程度。** 手动结果必须记录被测提交、工具链、
+设备拓扑、命令和 pytest 结果；**runner 不可用不是通过。**
 
-The maintained CUDA session runs the complete CUDA backend directory, dtype
-coverage, CPU/CUDA device parity, Torch TF32 controls, and the strict CUDA
-OpInfo suite. Its accepted real-device baseline is recorded in the
-[complete CUDA suite report](../../refactor-wip/results/2026-08-22-cuda-test-suite.md).
+维护中的 CUDA 会话跑完整的 CUDA 后端目录、dtype 覆盖、CPU/CUDA 设备一致性、Torch TF32
+控制项和严格的 CUDA OpInfo 套件。
 
-The `nccl` session defaults to two visible NVIDIA GPUs. It serially prewarms one
-isolated JIT cache per rank, then uses `jittor.distributed.launch` to verify real
-flat FSDP2 parameter sharding, NCCL all-gather and reduce-scatter, and a sharded
-optimizer update against an independent NumPy result. Set
-`JITTOR_NCCL_WORLD_SIZE` and expose at least that many devices to exercise more
-than two ranks.
+`nccl` 会话默认需要两块可见的 NVIDIA GPU。它先为每个 rank 串行预热一个隔离的 JIT 缓存，
+再用 `jittor.distributed.launch` 验证真实的扁平 FSDP2 参数分片、NCCL all-gather 与
+reduce-scatter，以及针对独立 NumPy 结果的分片优化器更新。设置 `JITTOR_NCCL_WORLD_SIZE`
+并暴露至少那么多设备，可以跑多于两个 rank。
 
-The `optional` session is a fail-closed, offline CUDA gate for pre-provisioned
-TorchMetrics, mmcv-lite/MMEngine, PEFT, Safetensors, TensorDict, and the deployed
-FlashAttention adapter. It probes every package before pytest, enables the
-Jittor Torch shim explicitly, and treats PEFT import failures as errors instead
-of optional skips. When `JITTOR_FLASH_ATTN_JITTOR_SRC` names an official
-FlashAttention checkout, the session uses two phases: the normal optional tests
-run with the deployed math adapter, then a native-required phase runs fused
-fp16 forward, dense/varlen/packed backward, dropout RNG replay, GQA, and
-float32 opt-in tests. The native phase defaults to head dimension 32 and fp16;
-the FlashAttention capability environment variables extend that base set rather
-than replacing it. The native phase cannot be satisfied by fallback.
+`optional` 会话是一个 fail-closed 的离线 CUDA 门禁，针对预置的 TorchMetrics、
+mmcv-lite/MMEngine、PEFT、Safetensors、TensorDict 和已部署的 FlashAttention 适配器。
+它在 pytest 之前逐个探测每个包、显式启用 Jittor Torch shim，并把 **PEFT 导入失败当作
+错误而不是可选 skip**。当 `JITTOR_FLASH_ATTN_JITTOR_SRC` 指向官方 FlashAttention
+checkout 时，该会话分两阶段：常规可选测试用已部署的 math 适配器运行，然后一个
+**要求原生实现**的阶段跑融合 fp16 前向、稠密/变长/打包反向、dropout RNG 重放、GQA 和
+float32 opt-in 测试。原生阶段默认 head 维度 32 与 fp16；FlashAttention 的能力环境变量
+是在这个基础集上**扩展**而非替换。**原生阶段不能靠回退来满足。**
 
-## Adding coverage
+## 增加覆盖
 
-Use an OpInfo definition when one operation can share the standard sample,
-reference, dtype, gradient, and device-parity machinery. Use a focused test when
-the contract concerns state, mutation, serialization, error behavior, module
-lifecycle, import order, distributed coordination, or a specific regression not
-expressible through OpInfo.
+当一个运算可以共享标准的样本、参考、dtype、梯度和设备一致性机制时，用 **OpInfo 定义**。
+当契约涉及状态、变更、序列化、错误行为、模块生命周期、导入顺序、分布式协调，或某个
+无法用 OpInfo 表达的具体回归时，用**定向测试**。
 
-A new operation normally needs:
+一个新运算通常需要：
 
-1. independent forward samples and reference;
-2. dtype, shape, axis, empty, broadcast, and non-contiguous cases as applicable;
-3. gradient and grad-gradient declarations backed by tests;
-4. device parity for every advertised accelerator;
-5. explicit error-contract tests;
-6. an OpInfo report entry or focused test name that makes missing coverage
-   discoverable.
+1. 独立的前向样本与参考；
+2. 适用的 dtype、形状、轴、空张量、广播和非连续用例；
+3. 有测试支撑的梯度与二阶梯度声明；
+4. 对**每一个宣称支持的加速器**做设备一致性；
+5. 显式的错误契约测试；
+6. 一条 OpInfo 报告条目或定向测试名，使**缺失的覆盖可被发现**。
 
-## Acceptance
+## 验收
 
-A test-system change is complete when collection succeeds without device side
-effects, focused self-tests cover new harness logic, the structure gate passes,
-at least one mandatory CPU case executes, and each hardware result distinguishes
-pass, framework failure, and unavailable environment. Counts alone are not an
-acceptance criterion; the evidence must exercise the claimed semantics.
+一次测试体系改动在满足下列条件时算完成：收集过程无设备副作用、新的 harness 逻辑有定向
+自测、结构门禁通过、至少有一个强制 CPU 用例真正执行，并且每个硬件结果都区分了通过、
+框架失败与环境不可用。
+
+**数量本身不是验收标准**——证据必须真正检验所声称的语义。
