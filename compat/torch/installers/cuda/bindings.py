@@ -5,7 +5,6 @@ from .api import (
     CUDAPluggableAllocator,
     CudaRuntimeState,
     EXPECTED,
-    InstallContext,
     OutOfMemoryError,
     TorchFunctionMode,
     _CUDA_TENSOR_TYPES,
@@ -109,10 +108,10 @@ from .api import (
     get_install_context,
     is_available,
     jt,
-    registry_for,
     set_device,
     swallowed,
 )
+from ...context import InstallContext, registry_for
 
 
 def _install_cuda(g, registry=None):
