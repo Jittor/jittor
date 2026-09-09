@@ -8,6 +8,7 @@ from ..diagnostics import EXPECTED, swallowed
 
 
 import math as _math
+from typing import Any, cast
 
 def _base_lrs(opt):
     out = []
@@ -434,6 +435,7 @@ def _install_lr_scheduler(g, registry=None):
     _optim = getattr(g, "optim", None)
     if getattr(_optim, "Optimizer", None) is None:
         raise RuntimeError("jittor.optim has no Optimizer owner")
+    _optim = cast(Any, _optim)
     if getattr(_optim, "_torch_lr_installed", False):
         _modules.setdefault("torch.optim", _optim)
         if hasattr(_optim, "lr_scheduler"):
@@ -462,11 +464,11 @@ def _install_lr_scheduler(g, registry=None):
     _modules.setdefault("torch.optim.lr_scheduler", ns)
     _modules.setdefault("jittor.optim.lr_scheduler", ns)
     swa_utils = _types.ModuleType("torch.optim.swa_utils")
-    swa_utils.SWALR = SWALR
-    swa_utils.AveragedModel = AveragedModel
-    swa_utils.get_swa_avg_fn = get_swa_avg_fn
-    swa_utils.get_ema_avg_fn = get_ema_avg_fn
-    swa_utils.update_bn = _update_bn
+    setattr(swa_utils, "SWALR", SWALR)
+    setattr(swa_utils, "AveragedModel", AveragedModel)
+    setattr(swa_utils, "get_swa_avg_fn", get_swa_avg_fn)
+    setattr(swa_utils, "get_ema_avg_fn", get_ema_avg_fn)
+    setattr(swa_utils, "update_bn", _update_bn)
     _optim.swa_utils = swa_utils
     _modules["torch.optim.swa_utils"] = swa_utils
     register_api_bindings(swa_utils, "torch.optim.swa_utils",
