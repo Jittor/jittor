@@ -1,6 +1,6 @@
 """Torch serialization composed from module-owned codecs and readers."""
 from .portable import load, save
-from .safetensors import _install_safetensors_shim
+from .safetensors import _install_safetensors_shim as _install_safetensors_shim
 from ..fidelity import Fidelity, register_api_bindings
 
 
