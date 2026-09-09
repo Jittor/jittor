@@ -17,10 +17,7 @@ from ..api_delegates import bind_delegates
 import jittor as jt
 import numpy as np
 
-from ..types import (
-    _device_is_cpu, _device_is_cuda, _dtype_to_str, _make_cuda_resident,
-    _cuda_index_of,
-)
+from ..types import _dtype_to_str
 from ..nested import _torch_register_leaf
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed

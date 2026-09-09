@@ -985,7 +985,6 @@ def _install_distributed(g, registry=None):
     c10d._get_default_store = _api_c10d_get_default_store
     c10d.Work = _JittorWork
     c10d.default_pg_timeout = getattr(c10d, "default_pg_timeout", None)
-    import datetime as _datetime_c10d
     c10d._get_default_timeout = _api_c10d_get_default_timeout
     c10d._unregister_process_group = _api_c10d_unregister_process_group
     c10d._register_process_group = _api_c10d_register_process_group

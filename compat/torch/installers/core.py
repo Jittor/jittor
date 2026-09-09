@@ -18,9 +18,6 @@ from ..grad import (
     autocast_is_enabled as _autocast_is_enabled,
     autocast_dtype as _autocast_dtype,
 )
-from ..nested import (
-    _torch_make_parameter, _torch_prune_leaf_registry,
-)
 from ..types import (
     _dtype_to_str,
     _make_dtypes, device, dtype, make_torch_types_module,
@@ -29,7 +26,7 @@ from ..types import (
 from ..core_install_api import bind_core_install_api
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
-from ...transaction import set_flag, set_attr
+from ...transaction import set_flag
 
 
 _LN2 = 0.6931471805599453
