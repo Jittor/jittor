@@ -119,7 +119,9 @@ def matmul_transpose(a, b):
         aa = a.reshape((-1, a.shape[-1]))
         cc = jt.nn.matmul_transpose(aa, b)
         return cc.reshape(a.shape[:-1] + (-1,))
-    assert len(a.shape) == 2 and len(b.shape) == 2
+    assert len(a.shape) == 2 and len(b.shape) == 2, (
+        f"matmul_transpose expects two 2-D operands here, "
+        f"a.shape:{a.shape}, b.shape:{b.shape}")
     fast = _matmul_2d_cublas(a, b, 0, 1)
     if fast is not None:
         return fast
@@ -136,7 +138,9 @@ def bmm_transpose(a, b):
     """
     returns a * b^T
     """
-    assert a.ndim > 2 and b.ndim > 2
+    assert a.ndim > 2 and b.ndim > 2, (
+        f"bmm_transpose expects batched operands with more than 2 dimensions, "
+        f"a.shape:{a.shape}, b.shape:{b.shape}")
     _check_matmul_shapes(a, b, trans_b=True)
     # The amp_reg scope is matmul's and matmul_transpose's too. It is what tells
     # the reduce in the generic path below to keep its input dtype rather than
@@ -169,7 +173,9 @@ def bmm(a, b):
         b = jt.random((batch, m, k))
         c = nn.bmm(a, b)
     """
-    assert len(a.shape) > 2 and len(b.shape) > 2
+    assert len(a.shape) > 2 and len(b.shape) > 2, (
+        f"bmm expects batched operands with more than 2 dimensions, "
+        f"a.shape:{a.shape}, b.shape:{b.shape}")
     return jt.nn.matmul(a, b)
 
 

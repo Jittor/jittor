@@ -4,7 +4,7 @@ import jittor as jt  # noqa: F401
 
 
 def unfold(X, kernel_size, dilation=1, padding=0, stride=1):
-    assert X.ndim == 4
+    assert X.ndim == 4, f"unfold expects a 4-D input, got shape {X.shape}"
     # Accept int OR (tuple/list) pairs -- torch passes lists, e.g. convbert's
     # nn.functional.unfold(kernel_size=[k, 1], padding=[(k-1)//2, 0]).
     _pair = lambda v: tuple(v) if isinstance(v, (tuple, list)) else (v, v)  # noqa: E731
@@ -43,7 +43,7 @@ def unfold(X, kernel_size, dilation=1, padding=0, stride=1):
 
 
 def fold(X, output_size, kernel_size, dilation=1, padding=0, stride=1):
-    assert X.ndim == 3
+    assert X.ndim == 3, f"fold expects a 3-D input, got shape {X.shape}"
     assert output_size[0] > 0 and output_size[1] > 0, "output size must be positive."
     _pair = lambda v: tuple(v) if isinstance(v, (tuple, list)) else (v, v)  # noqa: E731
     kernel_size = _pair(kernel_size)

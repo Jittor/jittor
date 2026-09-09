@@ -194,10 +194,16 @@ def gaussian_nll_loss(input, target, var, full=False, eps=1e-6, reduction="mean"
 
 
 def nll_loss(output,target,weight=None,ignore_index=-100,reduction='mean'):
-    assert output.ndim<=2 and output.ndim>0 and target.ndim==1
+    assert output.ndim<=2 and output.ndim>0 and target.ndim==1, (
+        f"nll_loss expects a 1-D or 2-D output and a 1-D target, "
+        f"output.shape:{output.shape}, target.shape:{target.shape}")
     n_classes = output.shape[-1]
-    assert weight is None or weight.numel()==n_classes
-    assert ignore_index<0 or ignore_index<n_classes
+    assert weight is None or weight.numel()==n_classes, (
+        f"nll_loss weight must have one entry per class, "
+        f"got {weight.numel()} for {n_classes} classes")
+    assert ignore_index<0 or ignore_index<n_classes, (
+        f"nll_loss ignore_index {ignore_index} is out of range for "
+        f"{n_classes} classes")
     if weight is None:
         weight = jt.ones((n_classes,))
     # torch ignores the class `ignore_index` (any value >=0 is a valid class id, incl.
