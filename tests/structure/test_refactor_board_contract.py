@@ -44,4 +44,5 @@ def test_functional_audit_covers_every_open_ledger_row():
     for task_id in ("0.15", "0.22", "2.19", "3.20", "3.22", "3.23",
                     "8.05", "8.06", "8.21"):
         assert f"| {task_id} |" in matrix
-    assert "Only the right-hand column" in matrix
+    assert "| row | implementation | functional verification | performance | hardware |" in matrix
+    assert "Only the performance and hardware columns" in matrix

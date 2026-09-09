@@ -23,19 +23,21 @@ also requires a performance, hardware, or aggregate acceptance. Keeping this
 matrix explicit prevents a passing functional sub-batch from being mistaken
 for a closed task row:
 
-| row | functional evidence | remaining acceptance |
-| --- | --- | --- |
-| 0.15 | worker supervision and fail-closed gate contracts are implemented | full smoke budget |
-| 0.22 | conclusion comparison and CPU reference caching are implemented | acceptable device-gate duration |
-| 2.19 | Python and backend user-boundary migrations are implemented | aggregate C++/CUDA negative inventory |
-| 3.20 | `submit_pending` and `ExecPlan` submission path are implemented | end-to-end performance |
-| 3.22 | opt-in shared-reduce implementation and measurement harness are implemented | default performance acceptance |
-| 3.23 | roofline measurement and attribution are implemented | remaining PyTorch speed gap |
-| 8.05 | oneDNN capability and v3 preparation are implemented | v3 build, cache, and performance acceptance |
-| 8.06 | ACL runner, typed attributes, multi-grad, and failure propagation are implemented | remaining owner families and Ascend hardware |
-| 8.21 | backward GroupNorm cost is measured and attributed | kernel optimization and performance acceptance |
+| row | implementation | functional verification | performance | hardware |
+| --- | --- | --- | --- | --- |
+| 0.15 | worker supervision and fail-closed gate contracts | targeted worker and gate tests | full smoke budget | — |
+| 0.22 | conclusion comparison and CPU reference caching | identical conclusion-set comparison | acceptable device-gate duration | — |
+| 2.19 | Python/backend user-boundary migrations | cross-`pyjt` negative inventory | — | CUDA/NCCL coverage where applicable |
+| 3.20 | `submit_pending` and `ExecPlan` submission path | CPU submission tests | end-to-end performance | — |
+| 3.22 | opt-in shared-reduce implementation and harness | generated-kernel correctness | default performance acceptance | CUDA |
+| 3.23 | roofline measurement and attribution | reproducible bandwidth report | remaining PyTorch speed gap | CUDA |
+| 8.05 | oneDNN capability and v3 preparation | CPU functional matrix | build/cache/performance acceptance | CPU oneDNN |
+| 8.06 | ACL runner, typed attributes, multi-grad, failure propagation | host structural contracts | — | Ascend/CANN |
+| 8.21 | GroupNorm backward measurement and attribution | numerical parity | kernel optimization/performance acceptance | CUDA |
 
-Only the right-hand column is allowed to change a task-row status to closed.
+Only the performance and hardware columns (where present), together with any
+aggregate verification named in the functional-verification column, are
+allowed to change a task-row status to closed.
 
 ## 2.19 user and internal errors
 
