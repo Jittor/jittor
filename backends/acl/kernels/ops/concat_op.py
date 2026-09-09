@@ -27,7 +27,6 @@ class ConcatACL:
     def execute(self, input_tensors, dim=0):
         for _ in input_tensors:
             if not (-_.ndim <= dim < _.ndim):
-                print(_.shape, dim)
                 raise ValueError("dim out of range")
 
         if dim < 0:

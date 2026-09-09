@@ -300,8 +300,6 @@ class GetItemACL(jt.Function):
             output = jt.empty((x_len), dtype=x.dtype)
             outputs = [output]
             inputs = [x, slices]
-            # print(inputs,outputs)
-            # print(output.shape)
             self.mask = slices
             self.type_ = "mask"
             attr_code = f"""
