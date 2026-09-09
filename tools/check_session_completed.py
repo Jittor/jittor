@@ -88,7 +88,23 @@ def main(argv=None):
 
     sentinel = pathlib.Path(args.sentinel) if args.sentinel else None
     if sentinel is not None and not sentinel.is_file():
-        print("FAIL: the session never wrote its completion sentinel (%s).\n"
+        # Two different states produce a missing sentinel, and calling both
+        # "the process died" is a false positive that teaches people to ignore
+        # this check. If the log shows the run reached its end, the plugin
+        # simply was not installed -- a real configuration gap, worth failing
+        # on, but not the same finding and not the same fix.
+        finished, how, _detail = evidence(log_text, None)
+        if finished:
+            print("FAIL: the session finished (evidence: %s) but wrote no "
+                  "sentinel at %s.\n"
+                  "      The completion plugin was not installed for this run, "
+                  "so nothing here could have detected a process death either. "
+                  "Register tests/_helpers/session_completion.py (pytest_policy "
+                  "does this) and set JITTOR_SESSION_SENTINEL before the run."
+                  % (how, sentinel))
+            return 1
+        print("FAIL: the session never wrote its completion sentinel (%s), and "
+              "its log does not reach a summary.\n"
               "      That is what a process death looks like: the run stopped "
               "without reaching pytest_sessionfinish, so the tests after it "
               "never ran and nothing recorded a failure." % sentinel)

@@ -91,6 +91,23 @@ class TestTheCheckerFires(unittest.TestCase):
         result = _run("--sentinel", str(sentinel))
         self.assertEqual(result.returncode, 0, result.stdout)
 
+    def test_a_finished_run_without_a_sentinel_says_so_not_that_it_died(self):
+        # The third state, and the reason it needs its own message: a run taken
+        # before the plugin was installed also has no sentinel. Reporting that
+        # as a process death is a false positive, and a checker that cries wolf
+        # is one people stop reading -- at which point the real truncation goes
+        # past too. Observed for real on the first native coverage baseline.
+        log = self.tmp / "finished.log"
+        log.write_text(COMPLETED_LOG, encoding="utf-8")
+        result = _run("--log", str(log), "--sentinel", str(self.tmp / "absent.json"))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("was not installed", result.stdout)
+        # It must not report the death case's finding. Matching on the phrase
+        # alone would be wrong -- this message mentions process death to say
+        # the run could not have detected one -- so the discriminator is the
+        # death message's own wording.
+        self.assertNotIn("its log does not reach a summary", result.stdout)
+
     def test_finishing_with_too_few_collected_fails(self):
         # The other way a run loses coverage without failing anything: it
         # completes, but over a smaller selection than the gate intends.
