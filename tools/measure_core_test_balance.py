@@ -117,10 +117,8 @@ def measure_sizes():
         "core_cxx": core,
         "core_cxx_vendored": _tree(src / "third_party", CXX_SUFFIXES),
         "core_cxx_unit_tests": _tree(src / "tests", CXX_SUFFIXES),
-        # 4.10 moved the accelerator kernels to a top-level ``backends/``; the
-        # legacy per-library trees under ``python/jittor/extern`` still exist.
+        # 4.10 moved the accelerator kernels to a top-level ``backends/``.
         "backends_cxx": _tree(REPO_ROOT / "backends", CXX_SUFFIXES),
-        "extern_cxx": _tree(REPO_ROOT / "python/jittor/extern", CXX_SUFFIXES),
         "tests_core": _tree(REPO_ROOT / "tests/core", (".py",)),
         "tests_structure": _tree(REPO_ROOT / "tests/structure", (".py",)),
         "tests_compat": _tree(REPO_ROOT / "compat/tests", (".py",)),
