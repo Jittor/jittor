@@ -9,9 +9,14 @@ import numpy as np
 from _helpers.numerical_grad import ngrad
 
 def all_eq(x, y):
-    if len(x.shape) == 0: x = np.array([x])
-    if len(y.shape) == 0: y = np.array([y])
-    convert = lambda x: x.astype("uint8") if x.dtype=="bool" else x
+    if len(x.shape) == 0:
+        x = np.array([x])
+    if len(y.shape) == 0:
+        y = np.array([y])
+
+    def convert(value):
+        return value.astype("uint8") if value.dtype == "bool" else value
+
     x = convert(x)
     y = convert(y)
     if str(x.dtype).startswith("float"):
@@ -55,7 +60,7 @@ class BinaryOpCases:
                 a = np.float32(a)
                 b = np.float32(b)
             ja = jt.array(a)
-            jb = jt.array(b)
+            jb = jt.array(b)  # noqa: F841 - referenced by the exec expression
             exec(f"ja {op}= jb")
             ja = ja.fetch_sync()
             
@@ -97,7 +102,7 @@ class BinaryOpCases:
             b = np.array(b)
             if jt.introspection.policy.runtime.use_cuda and op == "@":
                 return
-            jb = jt.array(b)
+            jb = jt.array(b)  # noqa: F841 - referenced by the eval expression
             jc = eval(f"a {op} jb").data
 
             
@@ -131,7 +136,8 @@ class BinaryOpCases:
         c = np.random.rand(10)
         tol = 1e-2 if jt.introspection.policy.runtime.amp_reg & 2 else 1e-4
         for op in ops:
-            func = lambda x: eval(f"((x[0]{op}x[1])*x[2]).sum()")
+            def func(values):
+                return eval(f"((values[0]{op}values[1])*values[2]).sum()")
             x, grads = ngrad(func, [a,b,c], 1e-8)
             ja = jt.array(a).name("ja")
             jb = jt.array(b).name("jb")
@@ -150,7 +156,8 @@ class BinaryOpCases:
         b = jt.random((10,), 'float64')
         c = a % b
         assert np.allclose(c.data, a.data % b.data, a.data, b.data)
-        if jt.introspection.policy.runtime.amp_reg & 2: return
+        if jt.introspection.policy.runtime.amp_reg & 2:
+            return
         a = jt.random((10,)) * 1000
         b = (jt.random((10,)) * 10).int() + 1
         c = a % b
