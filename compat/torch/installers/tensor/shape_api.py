@@ -1,6 +1,6 @@
 """Stable Torch shape and reduction adapters using native Tensor operations."""
 from ...context import get_install_context
-from . import jt, np, dtype, _TorchSize, _jittor_dtype_name, _dtype_to_str, _diff, _trapz, nn
+from . import jt, np, dtype, _jittor_dtype_name, _dtype_to_str, _diff, _trapz, nn
 
 def _torch_size(self, dim=None):
     _context = get_install_context(jt)
@@ -81,13 +81,16 @@ def _norm_reduce_kw(a, k):
         d = k.pop("dims")
     if d is None and len(a) >= 1:
         if isinstance(a[0], (tuple, list)):
-            d = a[0]; a = a[1:]            # consume positional tuple-of-dims
+            d = a[0]
+            a = a[1:]  # consume positional tuple-of-dims
         elif isinstance(a[0], (int, np.integer)) and not isinstance(a[0], bool):
-            d = a[0]; a = a[1:]            # consume positional scalar dim
+            d = a[0]
+            a = a[1:]  # consume positional scalar dim
     # torch spells it keepdim; jittor's tuple overload spells it keepdims.
     keep = k.pop("keepdim", k.pop("keepdims", None))
     if keep is None and d is not None and len(a) >= 1 and isinstance(a[0], bool):
-        keep = a[0]; a = a[1:]             # consume positional keepdim
+        keep = a[0]
+        a = a[1:]  # consume positional keepdim
     if d is not None:
         # jittor's scalar `dim` overload rejects keepdims, while its tuple
         # `dims` overload supports it -> always route through `dims` when a
@@ -158,11 +161,15 @@ def _plain_reduce(name, self, *a, **k):
 def _anyall_reduce(name, self, *a, **k):
     orig = get_install_context(jt).state["tensor_shape_api"]["reductions"][name]
     d = None
-    if "axis" in k: d = k.pop("axis")
-    if "dim" in k:  d = k.pop("dim")
-    if "dims" in k: d = k.pop("dims")
+    if "axis" in k:
+        d = k.pop("axis")
+    if "dim" in k:
+        d = k.pop("dim")
+    if "dims" in k:
+        d = k.pop("dims")
     if d is None and len(a) >= 1 and isinstance(a[0], (tuple, list)):
-        d = a[0]; a = a[1:]
+        d = a[0]
+        a = a[1:]
     keep = k.pop("keepdim", k.pop("keepdims", None))
     if d is None:
         return orig(self, *a, **k)
