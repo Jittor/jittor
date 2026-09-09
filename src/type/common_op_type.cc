@@ -159,6 +159,12 @@ struct CommonOpType : OpByType {
             ret = cuda_map[args.at(0)];
         else
             ret = cpu_map[args.at(0)];
+        // `~` on a C++ bool promotes to int first, so ~true is -2 and
+        // ~false is -1 -- both non-zero, and the cast below turns either
+        // back into true. NumPy and Torch define bitwise_not on bool as
+        // logical negation, so the bool case needs `!`, not `~`.
+        if (args.at(1) == "bool" && args.at(0) == "bitwise_not")
+            ret = "(!($2))";
         if (args.at(1) == "bool") ret = "((bool)"+ret+")";
         return format(ret, args);
     }
