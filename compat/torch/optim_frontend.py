@@ -58,7 +58,7 @@ def make_optimizer_frontend(native, tensor_type):
     module = ModuleType("torch.optim")
     module.__package__ = "torch.optim"
     module.__path__ = []
-    module._native_optimizer_module = native
+    setattr(module, "_native_optimizer_module", native)
     get_install_context(tensor_type._frontend_backend).state["optimizer_frontend_native"] = MappingProxyType({
         "tensor_type": tensor_type,
         "base_init": native.Optimizer.__init__,
@@ -70,7 +70,7 @@ def make_optimizer_frontend(native, tensor_type):
         "__module__": "torch.optim",
         "__init__": initialize_base,
     })
-    module.Optimizer = base
+    setattr(module, "Optimizer", base)
     for name in ("SGD", "Adam", "AdamW", "RMSprop", "Adan"):
         algorithm = getattr(native, name, None)
         if algorithm is None:
@@ -85,5 +85,5 @@ def make_optimizer_frontend(native, tensor_type):
     for name in ("opt_grad", "LRScheduler", "LambdaLR"):
         if hasattr(native, name):
             setattr(module, name, getattr(native, name))
-    module.__all__ = [name for name in vars(module) if not name.startswith("_")]
+    setattr(module, "__all__", [name for name in vars(module) if not name.startswith("_")])
     return module
