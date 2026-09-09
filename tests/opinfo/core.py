@@ -155,6 +155,15 @@ class OpInfo:
         self.reference_tol = reference_tol
         self.sample_inputs_func = sample_inputs_func
         self.error_inputs_func = error_inputs_func
+        # Whether this entry *chose* its dtype coverage or inherited the
+        # default. 193 of 231 entries never wrote `dtypes=`, so a default
+        # nobody looked at decided what 84% of the operator database is tested
+        # on -- and it decided "floats only". `bitwise_not` returned True for
+        # every bool while reading as covered; that one at least narrowed on
+        # purpose. Silent narrowing is the wider problem, so it is recorded
+        # here and held to a shrinking list by
+        # tests/structure/test_opinfo_dtype_declaration.py.
+        self.dtypes_are_explicit = dtypes is not None
         self.dtypes = tuple(dtypes) if dtypes is not None else cu.floating_types()
         self.dtypesIfCUDA = tuple(dtypesIfCUDA) if dtypesIfCUDA is not None else self.dtypes
         self.supports_autograd = supports_autograd
