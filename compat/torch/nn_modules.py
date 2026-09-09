@@ -2,6 +2,7 @@
 
 import types
 import weakref
+from typing import Any, cast
 from collections import namedtuple
 
 import jittor as jt
@@ -59,7 +60,7 @@ def module_setattr(self, name, value):
     return state["setattr"](self, name, value)
 
 
-setattr(module_setattr, "_torch_module_registration_hooks", True)
+setattr(cast(Any, module_setattr), "_torch_module_registration_hooks", True)
 
 
 def install_module_namespace(nn, registry=None):
@@ -74,6 +75,7 @@ def install_module_namespace(nn, registry=None):
     if modules_pkg is None:
         modules_pkg = types.ModuleType("torch.nn.modules")
     modules["torch.nn.modules"] = modules_pkg
+    modules_pkg = cast(Any, modules_pkg)
     modules_pkg.__path__ = getattr(modules_pkg, "__path__", [])
 
     module_mod = modules.get("torch.nn.modules.module")
