@@ -794,7 +794,6 @@ if os.name == 'nt':
                 if " -shared " in cmd:
                     cmd = cmd.replace(" -o ", " -Fe: ")
                     output = shsplit(cmd.split("-Fe:")[1].strip())[0]
-                    base_output = os.path.basename(output).split('.')[0]
                     cmd += f" -DEF:{output}.def -IGNORE:4102 -IGNORE:4197 -IGNORE:4217 "
 
                 elif " -c -o " in cmd:

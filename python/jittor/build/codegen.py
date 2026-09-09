@@ -422,7 +422,6 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
             """)
             assert len(cc_args)>1 and cc_args[1].startswith("VarHolder* "), cc_args
             r_cc_args = [cc_args[1], cc_args[0]] + cc_args[2:]
-            r_py_args = [py_args[1], py_args[0]] + py_args[2:]
             jit_cc_src.append(f"""
             VarHolder* r{cc_func_name}({", ".join(r_cc_args)}) {{
                 return new VarHolder(make_{cc_func_name}({", ".join(op_args)}));

@@ -838,7 +838,6 @@ Example::
                     batch_data.append(self[int(idx)])
                     if len(batch_data) == self.real_batch_size:
                         batch_data = self.collate_batch(batch_data)
-                        tmp = batch_data
                         batch_data = self.to_jittor(batch_data)
                         # breakpoint()
                         yield batch_data

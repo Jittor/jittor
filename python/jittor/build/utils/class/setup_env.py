@@ -79,7 +79,6 @@ def start(n, n_gpu):
     assert os.path.exists(student_files_dir+'/user_info.json')
     user_info = js.load(open(student_files_dir+'/user_info.json', 'r'))
     for i in range(len(user_info)):
-        id = i % n
         ids = ''
         for j in range(n_gpu):
             if j > 0:
@@ -149,4 +148,3 @@ elif (args[0] == 'report'):
     report()
 else:
     assert(False)
-
