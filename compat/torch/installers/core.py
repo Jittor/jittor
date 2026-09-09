@@ -496,13 +496,13 @@ def bincount(input, weights=None, minlength=0):
 
 def segment_reduce(data, reduce="sum", *, lengths=None, **kw):
     assert lengths is not None, "torch_compat segment_reduce requires lengths="
-    lengths_list = [int(l) for l in lengths]
+    lengths_list = [int(length) for length in lengths]
     tail = list(data.shape[1:])
     segs = []
     start = 0
-    for l in lengths_list:
-        chunk = data[start : start + l]
-        start += l
+    for length in lengths_list:
+        chunk = data[start : start + length]
+        start += length
         if reduce == "sum":
             r = chunk.sum(dim=0)
         elif reduce == "mean":

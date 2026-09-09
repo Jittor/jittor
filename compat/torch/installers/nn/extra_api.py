@@ -377,8 +377,8 @@ class Hardshrink(nn.Module):
 class Softshrink(nn.Module):
     def __init__(self, lambd=0.5): super().__init__(); self.lambd=lambd
     def execute(self, x):
-        l = self.lambd
-        return _jt.maximum(x - l, 0.0) - _jt.maximum(-x - l, 0.0)
+        lambd = self.lambd
+        return _jt.maximum(x - lambd, 0.0) - _jt.maximum(-x - lambd, 0.0)
 
 
 class Hardsigmoid(nn.Module):
@@ -435,7 +435,8 @@ class ConvTranspose1d(nn.Module):
                  padding=0, output_padding=0, groups=1, bias=True,
                  dilation=1, **k):
         super().__init__()
-        import jittor as _jt2, math as _math
+        import math as _math
+        import jittor as _jt2
         g1 = lambda v: v[0] if isinstance(v, (tuple, list)) else v
         self.in_channels = in_channels
         self.out_channels = out_channels

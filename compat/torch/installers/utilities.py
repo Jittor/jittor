@@ -535,11 +535,11 @@ def _api_g_compiled_with_cxx11_abi():
 
 
 def _api_pytree_tree_all(pred, x):
-    return all((pred(l) for l in _tree_flatten(x)[0]))
+    return all((pred(leaf) for leaf in _tree_flatten(x)[0]))
 
 
 def _api_pytree_tree_any(pred, x):
-    return any((pred(l) for l in _tree_flatten(x)[0]))
+    return any((pred(leaf) for leaf in _tree_flatten(x)[0]))
 
 
 def _api_pytree_tree_leaves(x):
@@ -626,7 +626,9 @@ def install(ctx):
     g._utils = _tutils
 
     # ---- torch.hub ----
-    import types as _types_hub, os as _os_hub, urllib.request as _urlreq_hub
+    import types as _types_hub
+    import os as _os_hub
+    import urllib.request as _urlreq_hub
     from urllib.parse import urlparse as _urlparse_hub
     hub = _types_hub.ModuleType("torch.hub")
     hub.download_url_to_file = _download_url_to_file
