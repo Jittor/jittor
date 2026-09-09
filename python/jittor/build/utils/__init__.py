@@ -1196,7 +1196,7 @@ def dirty_fix_pytorch_runtime_error():
         flags = os.RTLD_GLOBAL | os.RTLD_NOW | \
             getattr(os, "RTLD_DEEPBIND", 0)
         with jittor_utils.import_scope(flags):
-            import torch
+            __import__("torch")
 
 is_in_ipynb = in_ipynb()
 #: The compiled jit_utils_core extension, or None until it is imported.
