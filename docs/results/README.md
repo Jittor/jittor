@@ -6,10 +6,11 @@
 [环境规则](../../agent/manuals/environment.md)。
 每份报告保留其原基线和验证边界，历史结果不代表当前分支已通过同一验收。
 只读打包基线位于 `baselines/`；当前任务状态唯一记录在
-[整改看板](../architecture/refactor-board.md)。
+[整改看板](../../refactor-wip/architecture/refactor-board.md)。
 
 ## 兼容性与功能验证
 
+- [2026-09-09 device→host 拷贝在设备侧分配目标缓冲](2026-09-09-device-copy-host-destination.md)
 - [2026-09-04 整改分区的 CUDA 可用性实机核实](2026-09-04-cuda-availability-verification.md)
 - [2026-09-02 verl 核心算法 Ascend 数值、梯度与性能复验](2026-09-02-verl-ascend-core-algorithms.md)
 - [2026-09-01 当前 AArch64 CPU native/Torch 全量门禁](2026-09-01-current-cpu-suite.md)
