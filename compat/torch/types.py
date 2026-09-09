@@ -10,6 +10,9 @@ from ..diagnostics import EXPECTED, swallowed
 class dtype:
     """Immutable Torch dtype identity, independent of Python strings."""
     __slots__ = ("name", "_is_fp")
+    if typing.TYPE_CHECKING:
+        name: str
+        _is_fp: bool
     _registry: typing.ClassVar[typing.Dict[str, "dtype"]] = {}
     _supported = frozenset({
         "bool", "uint8", "uint16", "uint32", "uint64", "int8", "int16",
@@ -159,6 +162,9 @@ def _dtype_to_str(d):
 
 
 class device:
+    type: str
+    index: typing.Optional[int]
+
     def __init__(self, type="cpu", index=None):
         if isinstance(type, device):
             self.type, self.index = type.type, type.index
