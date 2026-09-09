@@ -26,3 +26,12 @@ prints `jittor ok`.
 
 The CPU cached extension is intentionally not a substitute for this command:
 when CUDA is discoverable, Jittor rejects a CPU `jittor_core` as a build shadow.
+
+## Ecosystem probe
+
+With this CUDA core environment, importing `transformers`/`diffusers` reaches
+the installed Python 3.11 `torch` package, but that package is the local Torch
+shim and requires the `jittor.compat` distribution (`ModuleNotFoundError:
+No module named 'jittor.compat'`). The independent binary PyTorch available on
+the machine is Python 3.12, so it cannot share this Python 3.11 Jittor core.
+Consequently no ecosystem forward/backward claim is made from this probe.
