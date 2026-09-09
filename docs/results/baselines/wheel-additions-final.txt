@@ -1,2 +1,1 @@
-# Final steady-state wheel policy.
-# No wheel member additions are approved by default.
+# approved additions

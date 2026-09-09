@@ -1,2 +1,1 @@
-# Final steady-state wheel policy.
-# No wheel member content changes are approved by default.
+# approved content changes
