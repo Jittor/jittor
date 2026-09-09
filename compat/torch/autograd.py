@@ -65,9 +65,11 @@ def _sum_grad_to(grad, shape):
     # inputs; emulate by returning a correctly-shaped zero (jittor still tapes
     # the placeholder Var, so it needs a shape-matching grad, not None).
     tgt_items = 1
-    for s in shape: tgt_items *= int(s)
+    for s in shape:
+        tgt_items *= int(s)
     g_items = 1
-    for s in gshape: g_items *= int(s)
+    for s in gshape:
+        g_items *= int(s)
     if tgt_items == 0 or (tgt_items != g_items and g_items % max(tgt_items, 1) != 0):
         # The returned grad cannot be reduced to this input's shape by any
         # broadcast rule, so it is almost certainly a mistake in the

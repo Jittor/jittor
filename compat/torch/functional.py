@@ -121,8 +121,10 @@ def _diff(x, n=1, dim=-1, prepend=None, append=None):
         x = jt.concat(parts, dim=dim)
     for _ in range(n):
         idx = [slice(None)] * x.ndim
-        idx0 = list(idx); idx1 = list(idx)
-        idx0[dim] = slice(1, None); idx1[dim] = slice(0, -1)
+        idx0 = list(idx)
+        idx1 = list(idx)
+        idx0[dim] = slice(1, None)
+        idx1[dim] = slice(0, -1)
         x = x[tuple(idx0)] - x[tuple(idx1)]
     return x
 
@@ -168,7 +170,8 @@ def _trapz(y, x=None, dx=1, dim=-1, *, out=None):
 
 def _repeat_interleave(x, repeats, dim=None, *, output_size=None):
     if dim is None:
-        x = x.reshape(-1); dim = 0
+        x = x.reshape(-1)
+        dim = 0
     if hasattr(jt, "repeat_interleave"):
         try:
             return jt.repeat_interleave(x, repeats, dim=dim, output_size=output_size)
