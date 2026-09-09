@@ -293,7 +293,7 @@ class TestRealHeadersStillParse(unittest.TestCase):
     """The hardening must not change how today's headers are read."""
 
     def test_all_annotated_headers_generate_balanced_code(self):
-        source_root = os.path.join(REPO_ROOT, "python", "jittor", "src")
+        source_root = os.path.join(REPO_ROOT, "src")
         seen = 0
         for dirpath, _dirnames, filenames in os.walk(source_root):
             for name in sorted(filenames):
@@ -311,6 +311,17 @@ class TestRealHeadersStillParse(unittest.TestCase):
                 self.assertEqual(
                     code.count("{"), code.count("}"),
                     "unbalanced braces generated for " + path)
+                # Balanced braces do not prove the templates were substituted:
+                # a `f` prefix dropped from a template emits `{{`, `}}` and the
+                # Python expression itself, all of which balance. Those three
+                # spellings never occur in correctly generated code (measured
+                # across every annotated header), so they name the defect
+                # directly rather than counting brackets around it.
+                for leaked in ("{{", "}}", '["'):
+                    self.assertNotIn(
+                        leaked, code,
+                        "unsubstituted template placeholder %r generated for %s"
+                        % (leaked, path))
         self.assertGreater(seen, 5, "no annotated headers were generated")
 
 
