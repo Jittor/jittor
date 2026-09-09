@@ -9,9 +9,7 @@
 import multiprocessing as mp
 import numpy as np
 import ctypes
-import random
 import pickle
-import ctypes
 
 recv_raw_call = 0.0
 
@@ -265,4 +263,3 @@ class RingBuffer:
         ts = self.recv_fix_len_str()
         recv = getattr(self, "recv_"+ts, self.recv_pickle)
         return recv()
-
