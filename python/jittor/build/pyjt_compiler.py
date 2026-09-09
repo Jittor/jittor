@@ -838,7 +838,7 @@ def compile_src(src, h, basename):
         elif name == "__getitem__":
             slot_name = "tp_as_sequence->sq_item"
             func_head = "(PyObject* self, Py_ssize_t arg0) -> PyObject*"
-            func_fill = f"""
+            func_fill = """
                 int64 n = 1;
                 (void)n;
                 if (arg0 >= GET_RAW_PTR({dfs[0]["scope_name"]},self)->size()) {{
@@ -850,7 +850,7 @@ def compile_src(src, h, basename):
         elif name == "__map_getitem__":
             slot_name = "tp_as_mapping->mp_subscript"
             func_head = "(PyObject* self, PyObject* arg0) -> PyObject*"
-            func_fill = f"""
+            func_fill = """
                 int64 n = 1;
                 PyObject* args[] = {{arg0}};
                 (void)n;
@@ -862,7 +862,7 @@ def compile_src(src, h, basename):
 
         else:
             func_head = "(PyObject* self, PyObject** args, int64 n, PyObject* kw) -> PyObject*"
-            func_cast = f"(PyCFunction)(PyObject* (*)(PyObject*,PyObject**,int64,PyObject*))"
+            func_cast = "(PyCFunction)(PyObject* (*)(PyObject*,PyObject**,int64,PyObject*))"
             # if not return, return py_none
             arr_has_return = [ True for _ in arr_has_return ]
 
@@ -1168,15 +1168,15 @@ def compile_src(src, h, basename):
         f"auto& tp = Pyjt{class_name};"}
         tp.tp_as_number = &number_methods;
 
-        {f"static PyMappingMethods class_map_defs = {{0}};" if has_map else ""}
-        {f"tp.tp_as_mapping = &class_map_defs;" if has_map else ""}
+        {"static PyMappingMethods class_map_defs = {0};" if has_map else ""}
+        {"tp.tp_as_mapping = &class_map_defs;" if has_map else ""}
 
-        {f"static PySequenceMethods class_seq_defs = {{0}};" if has_seq else ""}
-        {f"tp.tp_as_sequence = &class_seq_defs;" if has_seq else ""}
+        {"static PySequenceMethods class_seq_defs = {0};" if has_seq else ""}
+        {"tp.tp_as_sequence = &class_seq_defs;" if has_seq else ""}
 
         tp.tp_name = "{core_name}.{class_info["pynames"][0]}";
         tp.tp_basicsize = GET_OBJ_SIZE({class_name});
-        {f"tp.tp_dictoffset = tp.tp_basicsize; tp.tp_basicsize += sizeof(PyObject*); " if has_attr_dict else ""}
+        {"tp.tp_dictoffset = tp.tp_basicsize; tp.tp_basicsize += sizeof(PyObject*); " if has_attr_dict else ""}
         {"tp.tp_basicsize += sizeof(uint64); // GET_INITED_FLAG slot" if has_dealloc else ""}
         tp.tp_new = PyType_GenericNew;
         tp.tp_flags = Py_TPFLAGS_DEFAULT;
