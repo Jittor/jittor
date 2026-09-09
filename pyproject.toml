@@ -122,6 +122,7 @@ files = [
     "compat/torch/functional.py",
     "compat/torch/nn_adoption.py",
     "compat/torch/lr_scheduler.py",
+    "compat/torch/nn_modules.py",
     "compat/torch/optimizers.py",
     "compat/torch/api_delegates.py",
     "compat/torch/fidelity.py",

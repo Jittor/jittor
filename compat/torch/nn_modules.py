@@ -59,7 +59,7 @@ def module_setattr(self, name, value):
     return state["setattr"](self, name, value)
 
 
-module_setattr._torch_module_registration_hooks = True
+setattr(module_setattr, "_torch_module_registration_hooks", True)
 
 
 def install_module_namespace(nn, registry=None):
@@ -67,10 +67,10 @@ def install_module_namespace(nn, registry=None):
     modules_pkg = getattr(nn, "modules", None)
     if modules_pkg is None:
         try:
-            from jittor.nn import modules as modules_pkg
+            from jittor.nn import modules as imported_modules_pkg
         except EXPECTED as exc:
             swallowed("torch/nn_modules.py install_module_namespace: from jittor.nn import modules as modules_pkg", exc)
-            modules_pkg = None
+            modules_pkg = imported_modules_pkg
     if modules_pkg is None:
         modules_pkg = types.ModuleType("torch.nn.modules")
     modules["torch.nn.modules"] = modules_pkg
@@ -109,8 +109,8 @@ def install_module_namespace(nn, registry=None):
     register_fidelity("torch.nn.modules.module.register_module_module_registration_hook",
                       register_module_module_registration_hook, Fidelity.APPROXIMATE,
                       "Ordered module replacement hooks; ownership follows the active frontend context")
-    modules_pkg.Module = nn.Module
-    modules_pkg.module = module_mod
+    setattr(modules_pkg, "Module", nn.Module)
+    setattr(modules_pkg, "module", module_mod)
     for class_name in dir(nn):
         if class_name and class_name[0].isupper() and not hasattr(modules_pkg, class_name):
             try:
@@ -125,5 +125,5 @@ def install_module_namespace(nn, registry=None):
     for class_name in ("Sequential", "ModuleList", "ModuleDict", "ParameterList", "ParameterDict"):
         if hasattr(nn, class_name):
             setattr(container_mod, class_name, getattr(nn, class_name))
-    modules_pkg.container = container_mod
+    setattr(modules_pkg, "container", container_mod)
     return modules_pkg
