@@ -252,6 +252,17 @@ def test_skip_reason_buckets_are_stable_and_other_is_counted(monkeypatch):
         assert buckets["other"] == 1
         assert policy.classify_skip_reason_bucket("torch download") == "torch"
         assert policy.classify_skip_reason_bucket("manual backend") == "backend"
+        # "wants more devices than this box has" is not "this box has no
+        # accelerator": the reason names CUDA either way, so without its own
+        # bucket the first reads as an environment fact and the lost coverage
+        # is never counted. Both directions are asserted so the split cannot
+        # collapse back by widening either pattern list.
+        assert policy.classify_skip_reason_bucket(
+            "two CUDA devices are required") == "insufficient-devices"
+        assert policy.classify_skip_reason_bucket(
+            "at least 2 devices are required") == "insufficient-devices"
+        assert policy.classify_skip_reason_bucket("No CUDA found") == "accelerator"
+        assert policy.classify_skip_reason_bucket("cuda is required") == "accelerator"
         assert policy._other_skip_count() == 1
     finally:
         policy._SKIP_REASON_BUCKETS.clear()

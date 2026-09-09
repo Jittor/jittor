@@ -549,8 +549,29 @@ _FILE_OUTCOMES = {}
 _FILES_WITH_ITEMS = set()
 _SKIP_REASON_BUCKETS = Counter()
 _ACCELERATOR_EXECUTED = 0
-_SKIP_BUCKET_ORDER = ("accelerator", "backend", "mpi", "torch", "network", "manual", "other")
+#: Ordered, and the order is the classification: the first bucket whose pattern
+#: appears in the reason wins. "insufficient-devices" therefore has to precede
+#: "accelerator", because its reasons name the accelerator too.
+_SKIP_BUCKET_ORDER = ("insufficient-devices", "accelerator", "backend", "mpi",
+                      "torch", "network", "manual", "other")
 _SKIP_BUCKET_PATTERNS = {
+    # Not the same fact as "this box has no accelerator", and the difference is
+    # the whole point of counting it apart. A test that wants two devices skips
+    # on a one-GPU machine with a reason that names CUDA, so it landed in
+    # "accelerator" and read as an environment fact -- while the machine has the
+    # accelerator and the coverage was lost anyway. Every Var/Module device
+    # method contract sat behind that skip: four cases that never ran outside a
+    # multi-GPU box, reported exactly like four that passed.
+    "insufficient-devices": (
+        "two cuda devices",
+        "two devices",
+        "2 devices",
+        "at least two",
+        "at least 2",
+        "more than one device",
+        "second device",
+        "multiple devices",
+    ),
     "accelerator": (
         "cuda",
         "cudnn",
@@ -869,6 +890,13 @@ def _report_skip_reason_buckets(terminalreporter):
     for bucket, count in buckets:
         terminalreporter.write_line("%d skipped: %s" % (count, bucket))
     terminalreporter.write_line("other skipped: %d" % _other_skip_count())
+    short = _SKIP_REASON_BUCKETS.get("insufficient-devices", 0)
+    if short:
+        # Said out loud because it is the one bucket that is not an environment
+        # fact: the hardware is present and the coverage was still skipped.
+        terminalreporter.write_line(
+            "note: %d case(s) skipped for wanting more devices than this "
+            "machine has -- coverage lost on hardware that is present" % short)
 
 
 def _report_reference_caches(terminalreporter):
