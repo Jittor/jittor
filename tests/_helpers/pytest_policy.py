@@ -251,6 +251,7 @@ def _torch_mode_paths_named_on_the_command_line(config):
 
 
 def pytest_sessionstart(session):
+    _install_api_coverage()
     _require_real_accelerator()
     found = [name for name in _LEGACY_SELECTION if name in os.environ]
     if found:
@@ -476,6 +477,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     _report_files_that_executed_nothing(terminalreporter, config)
     _report_skip_reason_buckets(terminalreporter)
     _report_reference_caches(terminalreporter)
+    _report_api_coverage(terminalreporter)
     if _MISSING_REAL_TORCH:
         terminalreporter.write_sep(
             "=", "skipped for want of the PyTorch this session declared it has"
@@ -964,3 +966,37 @@ def pytest_sessionfinish(session, exitstatus):
     unexplained += [path for path in _files_that_collected_nothing() if path not in exemptions]
     if unexplained or _other_skip_count() > 0:
         session.exitstatus = 1
+
+
+def _install_api_coverage():
+    """Wrap the public surface so the session can say what it actually called.
+
+    Inert unless ``JITTOR_API_COVERAGE=1``: a normal run must not pay for a
+    diagnostic, and a wrapper on every public entry point is not something to
+    leave on by default.
+    """
+    from _helpers import api_coverage
+    if not api_coverage.enabled():
+        return
+    api_coverage.install()
+
+
+def _report_api_coverage(terminalreporter):
+    """Print exercised/unexercised public entry points, and save the detail.
+
+    The manifest gate proves 1294 names still resolve. This says how many the
+    suite *called* -- the number a textual measure cannot give, because every
+    one of those names appears somewhere under tests/ and would score ~96%.
+    """
+    from _helpers import api_coverage
+    if not api_coverage.enabled():
+        return
+    data = api_coverage.report()
+    terminalreporter.write_sep("=", "public API coverage")
+    terminalreporter.write_line(
+        "called %d of %d wrapped entry points (%d unwrappable)"
+        % (data["called"], data["wrapped"], data["unwrappable"]))
+    destination = os.environ.get("JITTOR_API_COVERAGE_REPORT")
+    if destination:
+        api_coverage.write_report(destination)
+        terminalreporter.write_line("detail written to %s" % destination)
