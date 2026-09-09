@@ -7,6 +7,7 @@ import numpy as np
 from .context import get_install_context
 from .types import _dtype_to_str
 from ..diagnostics import EXPECTED, swallowed
+from typing import Any, Dict, List
 from .. import fsdp_hooks as _fsdp_hooks
 from .. import optimizer_kinds as _optimizer_kinds
 from .tensor_state import get_tensor_state
@@ -201,7 +202,7 @@ def _state_dict_torch(self):
     _context = get_install_context(jt)
     g = _context.target_namespace
     kind = _torch_optimizer_kind(self)
-    param_ids = {}
+    param_ids: Dict[int, int] = {}
     param_groups = []
     next_id = 0
     for pg in self.param_groups:
@@ -396,7 +397,7 @@ def _zero_grad_compat(self, set_to_none=True):
     _orig_zero = _context.state["optimizer_native_api"]['_orig_zero']
     for _pg in getattr(self, "param_groups", []):
         _params = list(_pg.get("params", []))
-        _new_grads = []
+        _new_grads: List[Any] = []
         if set_to_none:
             _pg.pop("grads", None)
         else:
