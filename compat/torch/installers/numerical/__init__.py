@@ -1079,7 +1079,6 @@ def install(ctx):
     g = ctx.jittor_module
     Var = ctx.state["Var"]
     _DTYPE_OBJS = ctx.state["dtypes"]
-    import collections as _collections
     # complex-dtype API (#3): jittor represents complex via nn.ComplexNumber (real/imag
     # pair); wire the torch entry points onto it. torch.complex(re,im), view_as_complex
     # (last dim of 2 -> complex), view_as_real (complex -> last dim of 2), polar, real/
