@@ -838,7 +838,7 @@ def compile_src(src, h, basename):
         elif name == "__getitem__":
             slot_name = "tp_as_sequence->sq_item"
             func_head = "(PyObject* self, Py_ssize_t arg0) -> PyObject*"
-            func_fill = """
+            func_fill = f"""
                 int64 n = 1;
                 (void)n;
                 if (arg0 >= GET_RAW_PTR({dfs[0]["scope_name"]},self)->size()) {{
@@ -850,7 +850,7 @@ def compile_src(src, h, basename):
         elif name == "__map_getitem__":
             slot_name = "tp_as_mapping->mp_subscript"
             func_head = "(PyObject* self, PyObject* arg0) -> PyObject*"
-            func_fill = """
+            func_fill = f"""
                 int64 n = 1;
                 PyObject* args[] = {{arg0}};
                 (void)n;
