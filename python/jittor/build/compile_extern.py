@@ -133,7 +133,10 @@ def cudnn_split_libraries(cudnn_major):
         cudnn_major, CUDNN_SPLIT_LIBRARIES[max(CUDNN_SPLIT_LIBRARIES)])
 
 # Keep the legacy inspection spelling as a same-object alias to the provider.
-from .onednn import LIBRARY_NAMES as MKL_LIBRARY_NAMES, library_layout as mkl_library_layout
+from .onednn import (  # noqa: F401 - compatibility aliases are public here
+    LIBRARY_NAMES as MKL_LIBRARY_NAMES,
+    library_layout as mkl_library_layout,
+)
 from . import onednn as _onednn_provider
 
 
@@ -231,7 +234,7 @@ def setup_cuda_extern():
         if "cuda" in cp and \
             "lib" in cp and \
             "jtcuda" not in cp:
-            LOG.w(f"CUDA related path found in LD_LIBRARY_PATH or PATH, "
+            LOG.w("CUDA related path found in LD_LIBRARY_PATH or PATH, "
             "This path may cause jittor found the wrong libs, "
             "please unset LD_LIBRARY_PATH and remove cuda lib path in Path. \n"
             "Or you can let jittor install cuda for you: `python3.x -m jittor_utils.install_cuda`")
@@ -346,7 +349,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
         if lib_name == "cublas" and nvcc_version[0] >= 10:
             # manual link libcublasLt.so
             try:
-                cublas_lt_lib_path = search_file(library_search_dirs, f"libcublasLt.so", nvcc_version)
+                cublas_lt_lib_path = search_file(library_search_dirs, "libcublasLt.so", nvcc_version)
                 ctypes.CDLL(cublas_lt_lib_path, dlopen_flags)
             except:
                 # some aarch64 os, such as uos with FT2000 cpu,
@@ -367,8 +370,8 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
             # available without relying on LD_LIBRARY_PATH.
             if nvcc_version >= (11,0,0) and not cuda_wheel_stack:
                 prefer = (str(cudnn_major),) if cudnn_major else ()
-                for l in cudnn_split_libraries(cudnn_major):
-                    ex_cudnn_path = search_file(library_search_dirs, l, prefer)
+                for library in cudnn_split_libraries(cudnn_major):
+                    ex_cudnn_path = search_file(library_search_dirs, library, prefer)
                     ctypes.CDLL(ex_cudnn_path, dlopen_flags)
 
         if not cuda_wheel_stack:
