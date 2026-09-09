@@ -52,10 +52,17 @@ void CubArgReduceOp::infer_shape() {
     if (keepdims) {
         shape.push_back(1);
     }
-    if (shape.size() == 0)
-        shape.push_back(1);
     y->set_shape(shape);
     y_key->set_shape(shape);
+    // A rank-0 result -- arg_reduce over a 1-D input without keepdims -- is a
+    // scalar, which is what ArgReduceOp's own kernel produces and what numpy
+    // and torch return. Padding it to shape (1,) here made the same call
+    // answer with a different rank depending on whether a CUDA device was
+    // present.
+    if (shape.size() == 0) {
+        y->set_flag(VarFlags::_is_scalar);
+        y_key->set_flag(VarFlags::_is_scalar);
+    }
 }
 
 void CubArgReduceOp::jit_prepare(JK& jk) {

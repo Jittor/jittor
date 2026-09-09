@@ -188,7 +188,12 @@ void ArgReduceOp::jit_run() {
     // define y shape
     @for(i, 0, YDIM, index_t yshape@i = y->shape[@i];)
     // define y stride
-    index_t ystride@{YDIM-1} = 1;
+    // YDIM is the *output* rank, and it is 0 for the commonest call there is:
+    // argmax/argmin over a 1-D input without keepdims. The templates below all
+    // degenerate correctly there -- the @for loops expand to nothing and no yid
+    // term references a stride -- but this line spelled ystride@{-1}, which is
+    // not a name, and the kernel failed to compile. Guard it the same way.
+    @if(YDIM>0, index_t ystride@{YDIM-1} = 1;)
     @for(i, YDIM-2, -1, -1, auto ystride@i = ystride@{i+1} * yshape@{i+1};)
 
     auto* __restrict__ yp = y->ptr<Ty>();
