@@ -30,7 +30,6 @@ import ast
 import os
 import pprint
 import re
-import shutil
 import inspect
 import subprocess
 import sys
@@ -178,7 +177,7 @@ def gen_ops_stub(jittor_path, runtime=None):
         if docstring:
             hint += add_indent(f"\n'''{docstring}'''\n", 2) + "\t\t...\n"
         else:
-            hint += f" ...\n"
+            hint += " ...\n"
         return hint
 
     for func_name, func in jittor.ops.__dict__.items():
@@ -218,11 +217,11 @@ def gen_ops_stub(jittor_path, runtime=None):
             if docstring:
                 func_text += add_indent(f"'''{docstring}'''\n") + "\t...\n"
             else:
-                func_text += f" ...\n"
+                func_text += " ...\n"
 
             f.write(func_text)
 
-            if not param_hints or not "Var" in param_hints[0]:
+            if not param_hints or "Var" not in param_hints[0]:
                 continue
             var_methods.add(func_name)
             var_hint += generate_var_hint(decorators, return_type, param_hints[1:], docstring)

@@ -284,10 +284,11 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
             elif arg.startswith("vector<VarHolder*>"):
                 op_arg = f"convert({pre_arg})"
             if "&&" in arg:
-                if op_arg == None:
+                if op_arg is None:
                     op_arg = "move("+pre_arg+")"
                 op_make_args[i] = "move("+pre_arg+")"
-            if op_arg==None: op_arg = pre_arg
+            if op_arg is None:
+                op_arg = pre_arg
             op_args.append(op_arg)
             py_arg = py_args[i]
             if "_a=" not in py_arg:
@@ -521,7 +522,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
                 elif arg_type.startswith("VarSlices"):
                     new_args_def.append(arg_def)
                     new_args.append(arg)
-                    more_src.append(f"""
+                    more_src.append("""
                         vector<Var*> svars;
                         for (int i=0; i<_op->vs.n; i++)
                             if (_op->vs.slices[i].is_var())
