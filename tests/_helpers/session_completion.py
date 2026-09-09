@@ -55,6 +55,17 @@ def summary():
     return dict(_STATE)
 
 
+def restore(state):
+    """Put the counters back, for callers that had to disturb them.
+
+    The plugin is registered for the same session its own tests run in, so a
+    test that writes a count is writing the live session's count. Restoring is
+    what keeps the sentinel describing the run rather than the last test that
+    touched it.
+    """
+    _STATE.update(state)
+
+
 def write_sentinel(path=None, extra=None):
     """Record that this session reached its end. Returns the path, or None."""
     path = path or sentinel_path()

@@ -169,6 +169,16 @@ def pytest_addoption(parser):
 def pytest_configure(config):
     global _PYTEST_ROOT
     _PYTEST_ROOT = Path(config.rootpath)
+    # Registered rather than reimplemented here: its hooks have to run even when
+    # this module's own sessionfinish raises, because the thing it records is
+    # whether the session reached its end at all. A native crash takes the
+    # interpreter with it, so nothing writes a result line, a traceback or a
+    # summary -- the log just stops, and a reader scanning for failures finds
+    # none. That is how the CPU-only gate ran only 48% of the Torch selection
+    # without reporting anything wrong.
+    from _helpers import session_completion
+    if not config.pluginmanager.has_plugin("jittor_session_completion"):
+        config.pluginmanager.register(session_completion, "jittor_session_completion")
     # Both repository test roots use exactly this marker policy, including
     # sessions launched from compat/ with its own pytest configuration.
     for marker in (

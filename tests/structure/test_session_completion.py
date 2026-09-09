@@ -104,6 +104,21 @@ class TestTheCheckerFires(unittest.TestCase):
 
 
 class TestThePluginRecordsCompletion(unittest.TestCase):
+    """Exercising the recorder must not corrupt what it is recording.
+
+    These cases write into the module's counters, which the live session is
+    using at the same time -- the plugin is registered for this very run. The
+    first draft did not restore them and the session's own sentinel came out
+    saying `collected=3, executed=7`, a count belonging to a test rather than to
+    the run. That is the cross-test state leak this repository keeps a ledger
+    for, produced by the guard against silent gaps.
+    """
+
+    def setUp(self):
+        self._saved = session_completion.summary()
+
+    def tearDown(self):
+        session_completion.restore(self._saved)
 
     def test_the_marker_line_carries_the_counts(self):
         session_completion.record_collected(7)
@@ -118,6 +133,14 @@ class TestThePluginRecordsCompletion(unittest.TestCase):
         data = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(data["marker"], session_completion.MARKER)
         self.assertEqual(data["collected"], 3)
+
+    def test_the_restore_helper_actually_restores(self):
+        # Without this, the two cases above would silently stop protecting the
+        # session's counters the moment restore() drifted.
+        before = session_completion.summary()
+        session_completion.record_collected(999)
+        session_completion.restore(before)
+        self.assertEqual(session_completion.summary(), before)
 
 
 if __name__ == "__main__":
