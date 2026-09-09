@@ -406,7 +406,6 @@ def _torch_seed():
 
 def _seed(value=_seed_sentinel):
     ctx = _misc_context()
-    g = ctx.jittor_module
     if value is _seed_sentinel:
         return _torch_seed()
     value = int(value)

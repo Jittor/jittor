@@ -656,7 +656,6 @@ def _check_to_pybool(cond):
 
 def cat(tensors, dim=0, out=None, axis=None):
     g = compatibility_owner(jt)
-    Var = g.Var
     if axis is not None: dim = axis      # torch accepts axis= (mmrotate PSC head)
     # Honor the __torch_function__ protocol: tensordict (and other tensor-likes)
     # override torch.cat to handle their own structure -- e.g. cat a list of
