@@ -3,10 +3,11 @@
 ## Counting rule
 
 The rendered board contains historical evidence and aggregate rows, so a raw
-Markdown line count is not a task count. The maintained task-row ledger used by
-the coordinator currently reports **263 rows marked `已合并` and 9 rows marked
-`待领`**. The 9 open rows are 0.15, 0.22, 2.19, 3.20, 3.22, 3.23, 8.05,
-8.06, and 8.21. Hardware and multi-machine rows are tracked separately.
+Markdown line count is not a task count. The latest board header reports **264
+rows marked `已合并`**; code/performance and hardware rows are tracked
+separately. A historical parser may report 263 because it treats the long 2.19
+evidence row as a separate aggregate entry. That is a ledger-format discrepancy,
+not a new code gap.
 
 The code evidence below records functional sub-batches; it does not silently
 change a task-row status when performance, hardware, or aggregate acceptance is
@@ -35,8 +36,7 @@ modules include `functional.py`, `fidelity.py`, `context.py`, `library.py`,
 `lr_scheduler.py`, `nn_modules.py`, `nn_frontend.py`, `optim_frontend.py`,
 `autograd.py`, `distribution_api.py`, and `core_install_api.py`.
 
-The row remains partially merged: the remaining `compat/torch/types.py`
-errors depend on the external `jittor_core.Var` type contract (dynamic device
-methods and residency markers), while `optimizer_api.py` still depends on the
-external writable `Var.grad` contract. These require a shared core stub or
-Protocol design before expanding the scope safely.
+The row remains partially merged because `optimizer_api.py` still depends on
+the external writable `Var.grad` contract. The `types.py` protocol batch is now
+clean and formally in scope; remaining work requires a shared core stub or
+Protocol design for optimizer gradient ownership.
