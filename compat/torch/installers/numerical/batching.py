@@ -4,7 +4,7 @@ The public implementation is stable. Each invocation constructs a transform
 over its callable and batching dimensions; no installer-owned closure is used.
 """
 import jittor as jt
-from builtins import all as _py_all, any as _py_any
+from builtins import any as _py_any
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context, getitem_transform_active
 

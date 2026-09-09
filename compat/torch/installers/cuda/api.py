@@ -12,7 +12,7 @@ import types as _types
 
 import jittor as jt
 
-from ...context import InstallContext, get_install_context, registry_for
+from ...context import get_install_context
 from ...fidelity import Fidelity, register_fidelity
 from ....stub_policy import unimplemented as _unimplemented
 
