@@ -23,21 +23,23 @@ class RingBufferAllocator:
         self.cv = mp.Condition(self.lock)
 
     def __repr__(self):
-        l = self.l.value
+        left = self.l.value
         r = self.r.value
         is_full = self.is_full.value
         if is_full:
             cap = 0
         else:
-            cap = (r - l) / self.size
-            if cap<=0: cap += 1
-        return f"Buffer(free={cap*100:.3f}% l={l} r={r} size={self.size})"
+            cap = (r - left) / self.size
+            if cap <= 0:
+                cap += 1
+        return f"Buffer(free={cap*100:.3f}% l={left} r={r} size={self.size})"
 
     def alloc_with_lock(self, size):
         with self.lock:
             while True:
                 location = self.alloc(size)
-                if location is not None: break
+                if location is not None:
+                    break
                 self.cv.wait()
         return location
 
@@ -56,25 +58,26 @@ class RingBufferAllocator:
     def alloc(self, size):
         if size > self.size:
             raise RuntimeError(f"Buffer size too small {self.size}<{size}")
-        l = self.l.value
+        left = self.l.value
         r = self.r.value
         is_full = self.is_full.value
-        if is_full: return None
-        if l == r and l > 0:
-            self.l.value = self.r.value = l = r = 0
+        if is_full:
+            return None
+        if left == r and left > 0:
+            self.l.value = self.r.value = left = r = 0
         # [l, r)
-        if r > l:
-            freed = r - l
+        if r > left:
+            freed = r - left
             if freed < size:
                 # |----l......r---|
                 # |----#########--|
                 return None
             # |----l......r---|
             # |----#####------|
-            location = l
-            self.l.value = l = l + size
+            location = left
+            self.l.value = left = left + size
         else:
-            freed = self.size - l
+            freed = self.size - left
             if freed < size:
                 # |.....r------l...|
                 # |------------#######
@@ -85,29 +88,30 @@ class RingBufferAllocator:
                 # |.....r------l...|
                 # |#####-----------
                 if size == r:
-                    self.is_full.value = is_full= True
+                    self.is_full.value = is_full = True
                 location = 0
-                self.l.value = l = size
+                self.l.value = left = size
             else:
                 # |.....r------l...|
                 # |------------##--|
-                location = l
+                location = left
                 if freed == size:
-                    self.l.value = l = 0
+                    self.l.value = left = 0
                 else:
-                    self.l.value = l = l + size
-        if l == r:
+                    self.l.value = left = left + size
+        if left == r:
             self.is_full.value = is_full = True
         return location
 
     def free(self, size):
-        l = self.l.value
+        left = self.l.value
         r = self.r.value
         is_full = self.is_full.value
-        if size==0: return r
+        if size == 0:
+            return r
         if is_full:
             self.is_full.value = is_full = False
-        elif l == r:
+        elif left == r:
             return None
         location = r
         self.r.value = r = r + size
@@ -119,7 +123,8 @@ class RingBufferAllocator:
         return location
 
 def str_to_char_array(s, array_len):
-    if len(s) > array_len: s = s[:array_len]
+    if len(s) > array_len:
+        s = s[:array_len]
     a = np.array(s, dtype='c')
     if len(s) < array_len:
         a = np.pad(a, (0,array_len-len(s)), constant_values=' ')
