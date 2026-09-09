@@ -181,32 +181,48 @@ class _DeviceProps:
                 f"multi_processor_count={self.multi_processor_count})")
 
 
-#: ``torch.backends``' TF32 switches, and the single Jittor flag behind each.
+#: ``torch.backends``' TF32 switches, and the single precision tier behind each.
 #:
 #: torch spells "may fp32 math use reduced-precision tensor cores" three ways
-#: per domain, and Jittor keeps one flag per domain (matmul and cuDNN are
-#: genuinely independent in torch too):
+#: per domain, and this installation keeps one precision tier per domain
+#: (matmul and cuDNN are genuinely independent in torch too):
 #:
-#: =========================================== =============================
-#: torch spelling                              Jittor flag
-#: =========================================== =============================
-#: ``backends.cuda.matmul.allow_tf32``         ``flags.cuda_allow_tf32``
+#: =========================================== ==============================
+#: torch spelling                              ``CudaRuntimeState`` field
+#: =========================================== ==============================
+#: ``backends.cuda.matmul.allow_tf32``         ``matmul_precision``
 #: ``backends.cuda.matmul.fp32_precision``     (same)
 #: ``get/set_float32_matmul_precision()``      (same)
-#: ``backends.cudnn.allow_tf32``               ``flags.cuda_allow_cudnn_tf32``
+#: ``backends.cudnn.allow_tf32``               ``cudnn_precision``
 #: ``backends.cudnn.conv.fp32_precision``      (same)
 #: ``backends.cudnn.rnn.fp32_precision``       (same)
-#: =========================================== =============================
+#: =========================================== ==============================
 #:
-#: Every spelling is a *view* of its flag. It did not use to be: each kept its
-#: own state, so one semantic had three answers that disagreed the moment a
-#: write went through a spelling other than the one holding the state.
+#: Every spelling is a *view* of its domain's tier. It did not use to be: each
+#: kept its own state, so one semantic had three answers that disagreed the
+#: moment a write went through a spelling other than the one holding the state.
 #: ``fp32_precision`` was the literal string ``"ieee"`` on all four objects --
 #: it never reflected tf32 being on, and assigning to it did nothing at all --
 #: and ``get_float32_matmul_precision()`` read a string that
 #: ``matmul.allow_tf32 = True`` never touched.
 #:
-#: tests/compat/torch/test_torch_backends_tf32.py drives this table.
+#: These fields are the *frontend's own* policy, and they are what the ops this
+#: frontend builds actually execute with: ``frontend.py`` resolves the pair
+#: from this same state into a thread-local native scope, each Op captures it
+#: at construction, and execution restores it. They are deliberately not views
+#: of ``cuda_allow_tf32`` / ``cuda_allow_cudnn_tf32``: those are deprecated
+#: native overrides that can only raise the tier of a native
+#: Runtime-following call, and an independent frontend does not reach into the
+#: native policy in either direction (7.19/7.20; before that these two names
+#: were where a torch write landed). Because the tiers are stored rather than
+#: pushed to a flag, "the write was accepted and reads back" is not evidence
+#: that it took effect -- what pins that is the compute type the library call
+#: logs. See docs/notes/float32-precision-policy.md and
+#: refactor-wip/results/2026-09-08-frontend-precision-isolation.md.
+#:
+#: compat/tests/torch/test_torch_backends_tf32.py drives this table;
+#: compat/tests/torch/test_torch_compat_cuda_tf32.py pins each spelling to the
+#: cuBLAS/cuDNN call it selects on a real device.
 _PRECISION_FIELDS = {
     "matmul": "matmul_precision",
     "cudnn": "cudnn_precision",

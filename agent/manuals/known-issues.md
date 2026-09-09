@@ -2,7 +2,7 @@
 
 - Status: Maintained
 - Last reviewed: 2026-09-09
-- Baseline: `715009c02` plus KI-PRECISION-001
+- Baseline: `715009c02`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -207,36 +207,6 @@ framework defects.
   of the contract
 - Review/expiry condition: retain both default and explicit-dtype assertions until
   a public dtype-default decision changes them together
-
-## KI-PRECISION-001: Torch tf32 controls accept a write that never reaches the flag
-
-- Severity: Critical
-- Status: Reproduced, unfixed
-- Owner: Torch compatibility and CUDA precision maintainers
-- Evidence: with `JITTOR_TORCH_SHIM=1` on real CUDA,
-  `torch.backends.cuda.matmul.allow_tf32 = True` reads back `True` while both
-  `jt.flags.cuda_allow_tf32` and `jt.introspection.policy.runtime.cuda_allow_tf32`
-  stay `0`. Writing `jt.flags.cuda_allow_tf32 = 1` directly moves both to `1`, so
-  the flag path is live and the shim setter is what fails to use it.
-  `tests/compat/torch/test_torch_compat_cuda_tf32.py` has two matching failures.
-- Symptom: a precision policy the user sets is silently not applied. The write is
-  accepted, the read-back confirms it, and matmul keeps using the previous
-  precision. `installers/cuda/api.py` documents the intended contract -- every
-  spelling is a *view* of its flag -- and records that this exact defect was
-  fixed once before, so this is a regression of a closed bug.
-- Additional exposure: the ecosystem parity harness asserts that both runtimes
-  report the same `tf32`. If the shim reports a stored value rather than the
-  runtime flag, that assertion compares two stored values and no longer
-  guarantees the two sides ran under the same precision policy.
-- Suspected cause: the wave-217 `cuda_allow_tf32` Runtime-owner migration
-  (`98c8ee94`) without a matching update to the compatibility setter. Not yet
-  bisected.
-- Workaround: set `jt.flags.cuda_allow_tf32` (and `cuda_allow_cudnn_tf32`)
-  directly; do not rely on the `torch.backends` spellings to change precision.
-- Review/expiry condition: every spelling in the `_PRECISION_FIELDS` table
-  round-trips through its Jittor flag on real CUDA, the two
-  `test_torch_compat_cuda_tf32.py` failures pass, and the ecosystem harness
-  reads the runtime flag rather than a stored value.
 
 ## KI-FFT-001: withdrawn -- current CUDA sequence regression is clean
 

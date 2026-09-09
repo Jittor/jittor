@@ -2,7 +2,8 @@
 
 - Status: KI-PRECISION-001 撤销——前提已过期；契约注释、回归测试与生态口径已修正
 - Date: 2026-09-09
-- Baseline commit: `df6c221db`（`2.0-refactor`，HEAD）；行为变更来自 `abd299137`
+- Baseline commit: 复现与归因在 `df6c221db`，结论在 `f2692a2eb` 上逐条复验；
+  行为变更来自 `abd299137`
 - Owner: Torch 兼容与 CUDA 精度维护者
 - Review when: `_PRECISION_FIELDS` 的归属再次迁移、
   `compat/torch/frontend.py::_frontend_precision_policy` 改变它读的字段、
@@ -90,6 +91,9 @@ use_tensorcore=0, cuda_allow_tf32=0, cuda_allow_cudnn_tf32=0)` 下，
 4. `agent/manuals/known-issues.md`：删除 KI-PRECISION-001，头部 Baseline 改回
    `715009c02`。
 
+顺带修掉的：旧文件的两条测试在断言失败处中断后不恢复前端 tier，把 tf32 泄漏给了
+同一进程里后跑的文件（见下面的基线对照）。新文件用 `addCleanup` 恢复。
+
 `compat/torch/` 下**没有行为改动**：本条不是代码缺陷。
 
 ## 回退验证（三个反例都变红）
@@ -106,11 +110,34 @@ use_tensorcore=0, cuda_allow_tf32=0, cuda_allow_cudnn_tf32=0)` 下，
 
 ## 基线对照
 
-| 口径 | 改前 | 改后 |
+同机同缓存，Torch shim + 真实 CUDA，逐条 A/B（`-p no:randomly`）。任务进行中
+共享 checkout 的 HEAD 由 `df6c221db` 前进到 `f2692a2eb`（他人提交），下表两侧
+都在 `f2692a2eb` 上重跑过，数字与 `df6c221db` 上一致：
+
+| 口径 | 改前（`df6c221db`） | 改后 |
 | --- | --- | --- |
 | `test_torch_compat_cuda_tf32.py` | 2 failed | 5 passed |
 | `test_torch_backends_tf32.py` | 13 passed | 13 passed |
-| `compat/tests/torch/`（Torch shim，真实 CUDA） | 见下 | 见下 |
+| 精度与生态定向集合（7 个文件） | **3 failed / 38 passed / 42 skipped** | **0 failed / 44 passed / 42 skipped** |
+
+定向集合 = `test_torch_compat_cuda_tf32` + `test_torch_backends_tf32` +
+`test_precision_policy_isolation` + `test_basic_api_precision_memory` +
+`test_ecosystem_parity` + `test_ecosystem_device_selection` +
+`test_ecosystem_speed`。42 skipped 全部是生态对拍（`real_torch_python is not
+configured`），因此 harness 的改动在本机没有可执行门禁覆盖——它只是给两侧对称
+地多报一个字段。
+
+改前那 3 条里的第三条不是一条独立的既存缺陷，而是**旧测试文件的状态泄漏**：
+`test_basic_api_precision_memory::TestBasicPrecision::test_matmul_and_bmm_match_numpy`
+单独跑 11 passed，把旧的 `test_torch_compat_cuda_tf32.py` 排在它前面就 3 failed。
+旧文件那两条测试在断言失败处中断，`finally` 只恢复了 native scope，**没有恢复前端
+tier**，于是把 matmul 留在 tf32 上泄漏给后面的文件——那条 k=48 的 fp32 matmul
+因此对 NumPy 差到 1.3e-4 相对误差（float32 该有的量级是 3.5e-7，实测同一用例在
+干净进程里就是 3.5e-7）。新文件在 `addCleanup` 里恢复前端 tier，这条连带失败随之
+转绿。
+
+`compat/torch/installers/cuda/api.py` 的 diff 逐行核对过：**改动全部是 `#:` 注释**，
+没有一行可执行代码变化。
 
 ## 生态对拍 harness 的那条断言
 
@@ -135,6 +162,10 @@ torch 侧默认允许 cuDNN tf32——差异方向是更精确、更慢，不是
 ## 边界
 
 - 只在单卡 RTX 4090 / sm_89 / CUDA 12.2 上验证；未做 NPU、ROCm、多卡与全量门禁声明。
+- `tests/structure`（Torch shim）本次为 **71 failed / 1203 passed / 2 skipped**，
+  但这个数字**不可归因**：同一 checkout 上他人的文档迁移与新增测试同时在进行，
+  失败集中在 ACL 注册、error categories 以及仍指向已迁走的 `docs/results/`
+  的看板契约。逐条核对过：没有一条失败提到本次改动的文件。
 - 判据是库选择日志，不是数值差异：允许 tensor-op 只是让相应 engine 可选，
   cuDNN 仍可能自行挑 FMA，数值判据在这里不成立（见
   [float32 精度策略](../../docs/notes/float32-precision-policy.md)）。

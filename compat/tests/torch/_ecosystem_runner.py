@@ -201,10 +201,19 @@ def _configure_tf32(torch, device):
         set_precision = getattr(torch, "set_float32_matmul_precision", None)
         if callable(set_precision):
             set_precision("high" if enabled else "highest")
+    # Each runtime reports its own switches back, which is the comparison that
+    # means something: on both sides these read the policy the runtime's own
+    # ops execute with -- for Jittor the frontend-owned tier that every op it
+    # builds captures at construction, not a value parked beside an unaffected
+    # library call. The tier string is reported alongside the booleans because
+    # "tf32 on" is three states in torch, and two runtimes can agree on the
+    # boolean while one accumulates in bfloat16.
+    get_precision = getattr(torch, "get_float32_matmul_precision", None)
     return {
         "matmul": bool(torch.backends.cuda.matmul.allow_tf32) if device == "cuda" else False,
         "cudnn": bool(torch.backends.cudnn.allow_tf32) if device == "cuda" else False,
         "cudnn_benchmark": bool(torch.backends.cudnn.benchmark) if device == "cuda" else False,
+        "matmul_precision": get_precision() if callable(get_precision) else "",
     }
 
 

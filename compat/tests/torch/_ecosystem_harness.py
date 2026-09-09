@@ -39,7 +39,8 @@ Configuration
 
 ``JITTOR_ECOSYSTEM_TF32``
     CUDA precision policy for both runtimes. It defaults to enabled and controls
-    matmul and cuDNN convolution together; the reports must agree on the state.
+    matmul and cuDNN convolution together; the reports must agree on the state,
+    including the matmul tier and not only the boolean.
 
 ``JITTOR_ECOSYSTEM_CUDNN_BENCHMARK``
     Optional CUDA convolution autotuning switch. It defaults to disabled and is
