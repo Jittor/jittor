@@ -10,7 +10,7 @@ from ..diagnostics import EXPECTED, swallowed
 class dtype:
     """Immutable Torch dtype identity, independent of Python strings."""
     __slots__ = ("name", "_is_fp")
-    _registry = {}
+    _registry: typing.ClassVar[typing.Dict[str, "dtype"]] = {}
     _supported = frozenset({
         "bool", "uint8", "uint16", "uint32", "uint64", "int8", "int16",
         "int32", "int64", "float16", "bfloat16", "float32", "float64", "complex64",
