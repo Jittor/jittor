@@ -1,6 +1,5 @@
 import sys
 import os
-import re
 cmds = sys.argv[1:]
 def replace(cmds, s, t):
     return [ c.replace(s,t) for c in cmds ]
@@ -40,6 +39,8 @@ cmds2 = replace(cmds, "-dc", "")
 cmds2 = replace(cmds2, ".cu", ".o")
 cmds2 = remove_dependency_flags(cmds2)
 ret = os.system(" ".join(cmds1).replace("-x cu", ""))
-if ret: exit(ret)
+if ret:
+    exit(ret)
 ret = os.system(" ".join(cmds2).replace("-x cu", ""))
-if ret: exit(ret)
+if ret:
+    exit(ret)
