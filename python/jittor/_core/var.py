@@ -185,7 +185,12 @@ def to_device(self, device):
     # A host-resident Var remembers the CUDA device it belongs to.  Returning
     # it unchanged merely because the index matches would make ``x.cpu().cuda()``
     # stay on the host.  DeviceCopyOp has an explicit host-to-device path.
-    if device == self.device_id and self.location() != "cpu":
+    #
+    # The skip therefore needs the Var to be *known* to sit on that device.
+    # Testing `location() != "cpu"` also accepted "none", which is what an
+    # unmaterialized Var reports -- so `x.cpu().cuda()` with no sync in between
+    # matched the index, skipped the copy and silently stayed on the host.
+    if device == self.device_id and self.location() == "device":
         return self
     return _core_to_device(self, device)
 
@@ -196,6 +201,35 @@ def _copy_to_cpu(self):
     return _core_to_device(self, -1)
 
 Var._copy_to_cpu = _copy_to_cpu
+
+
+def _device(self):
+    '''Where this Var's data is, as a torch-style ``"cpu"`` or ``"cuda:N"``.
+
+    Reports the residency :meth:`location` reports, not the global
+    ``use_cuda`` flag: a Var that has been copied to the host reads ``"cpu"``
+    even while the flag is on. A Var whose data has not been produced yet has
+    no residency to report, so it answers with where it will land -- the
+    current device when the flag is on, the host when it is off -- which is
+    what ``location() == "none"`` means.
+
+    ``device_id`` is the index alone and keeps the source device across a
+    ``cpu()``; this is the pair, and it is what a torch caller reads.
+    '''
+    where = self.location()
+    if where == "cpu":
+        return "cpu"
+    if where in ("device", "disk"):
+        return "cuda:%d" % ori_int(self.device_id)
+    # Not materialized: no allocation exists to ask, so report the placement it
+    # will get. A test that wants the settled answer syncs first.
+    import jittor as _jt
+    if not _jt.flags.use_cuda:
+        return "cpu"
+    index = ori_int(self.device_id)
+    return "cuda:%d" % (index if index >= 0 else ori_int(core.current_device()))
+
+Var.device = property(_device)
 
 def float_auto(x):
     import jittor as jt
