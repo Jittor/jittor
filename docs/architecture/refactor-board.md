@@ -2,6 +2,8 @@
 
 2026-09-09 最新：本地264条“已合并”，剩10条代码/性能记录，另有9条硬件验收、5条并入其他任务和3条已合并但验收有保留的记录；父项与派生项存在重叠。本轮收口2.19功能边界；其余当前收口项见[当前交接与证据](refactor-handoff.md)。源码/包/测试布局、独立Torch、缓存生命周期、精度与内省接线已收齐；**功能优先**：ACL全属性owner数据通道、oneDNN v3功能路径、3.20部分图提交、7.13 DeviceMesh/原生optimizer复用均已有主机验证，10.21 stub生成已通过；性能项（含descriptor/primitive cache）全部后置。当前 polish 目标是直接维护 `origin/2.0-refactor`，已完成的 polish 批次按提交推送；不要沿用历史“禁止 push”说明。vLLM位于本仓adapters/jittor_adapters/vllm。
 
+当前发布/打包 polish：现代 wheel baseline 为 1033 个成员，canonical wheel 与 sdist 重建 wheel 对比均为 added/changed/removed = 0；release sdist/wheel 测试 28/28 通过。路径迁移后的 include、MANIFEST 和 nox 输入已同步到 canonical `src/`/`backends/` 布局。
+
 下方早期波次记录为历史证据，当前关闭状态以任务表为准；Tensor 子类底层前置见 [类型边界记录](../results/2026-09-08-tensor-frontend-types.md)。
 
 2026-09-07 通信物理布局已迁：35 个 MPI/NCCL/HCCL 文件进 backends/comm，python/jittor/{src,extern} 均不存在，构建/打包路径同步。真实双 rank NCCL 各7 passed；CPU-only/shim structure 1284 collected、8 failed、1272 passed、4 skipped，失败集合不变。8.19 仍缺 Python ProcessGroup 实现归属，4.15 仍需 canonical backend 命名及完整 CUDA structure 验收，不按目录数量提前关闭；详见 layout-handoff-4.15 第3节。
