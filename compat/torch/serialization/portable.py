@@ -197,7 +197,9 @@ def _apply_map_location(obj, map_location, _depth=0, source_devices=None):
 
 def _is_zip(f):
     if hasattr(f, "read"):
-        pos = f.tell(); head = f.read(2); f.seek(pos)
+        pos = f.tell()
+        head = f.read(2)
+        f.seek(pos)
         return head[:2] == b"PK"
     with open(f, "rb") as fh:
         return fh.read(2)[:2] == b"PK"
