@@ -460,8 +460,7 @@ def install_cutt(root_folder):
             zf = zipfile.ZipFile(fullname)
             try:
                 zf.extractall(path=root_folder)
-            except RuntimeError as e:
-                print(e)
+            except RuntimeError:
                 raise
             zf.close()
 
