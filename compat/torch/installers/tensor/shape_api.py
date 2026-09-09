@@ -362,7 +362,17 @@ def _shape_trapezoid(self, x=None, dx=1, dim=-1):
 
 
 def _shape_fmod(self, other):
-    return self - jt.trunc(self / other) * other
+    # Truncated remainder: the result takes the sign of the dividend, which is
+    # what separates `fmod` from `remainder` (floored, sign of the divisor).
+    #
+    # `jt.trunc` does not exist -- `trunc` is installed onto the Torch namespace
+    # by `core.install_misc`, not onto the Jittor one -- so calling it raised
+    # `AttributeError: trunc` for every input and `fmod` never worked. Build the
+    # truncation from primitives Jittor does own instead of reaching for a name
+    # whose owner is a different namespace.
+    quotient = self / other
+    truncated = jt.ternary(quotient >= 0, jt.floor(quotient), jt.ceil(quotient))
+    return self - truncated * other
 
 
 def _shape_remainder(self, other):

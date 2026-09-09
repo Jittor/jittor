@@ -36,7 +36,11 @@ def _nansum_impl(input, dim=None, keepdim=False, **kwargs):
     from . import (
         jt,
     )
-    values = jt.nan_to_num(input, nan=0.0)
+    # `jt.nan_to_num` does not exist -- `nan_to_num` is a tensor method, which is
+    # the spelling `elementwise.nan_to_num_` already uses. Reaching for it in the
+    # Jittor namespace raised `AttributeError: nan_to_num` for every input, so
+    # `nansum` never ran.
+    values = input.nan_to_num(nan=0.0)
     return (values.sum() if dim is None
             else values.sum(dim, keepdims=keepdim))
 
@@ -54,7 +58,7 @@ def _nanmean_impl(input, dim=None, keepdim=False, **kwargs):
         jt,
     )
     count = 1.0 - jt.isnan(input).float32()
-    values = jt.nan_to_num(input, nan=0.0)
+    values = input.nan_to_num(nan=0.0)
     if dim is None:
         return values.sum() / count.sum()
     return (values.sum(dim, keepdims=keepdim)

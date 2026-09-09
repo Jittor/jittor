@@ -128,6 +128,50 @@ framework defects.
 - Review/expiry condition: pass the same fixed-vector and OpInfo coverage on a
   real ROCm device, then remove this entry
 
+## KI-OPS-003: floor division truncates float operands to integers
+
+- Severity: Critical
+- Status: Reproduced, unfixed
+- Owner: binary operator maintainers
+- Evidence: `compat/tests/torch/test_division_remainder_family.py::
+  test_float_floor_divide_matches_numpy` (strict expected failure on CPU and CUDA)
+- Symptom: `floor_divide` casts float operands to integers before dividing, so
+  the fractional part is discarded and the result comes back as `int32` where
+  PyTorch returns a float. For `[-5.0, -2.7, -0.5, 2.7] // 2.0` the operator
+  returns `[-3, -1, 0, 1]` where `numpy.floor_divide` gives `[-3, -2, -1, 1]`.
+  The values match neither flooring nor truncation of the true quotient because
+  the truncation happens to the *operands*: `int(-2.7) // 2 == -1`, and
+  `int(-0.5) // 2 == 0`. Negative dividends whose magnitude is already an exact
+  multiple happen to come out right, which is why a positives-only or
+  whole-number check passes.
+- Distinct from [KI-OPS-002]: that entry covers the *integer* path, whose
+  flooring fix is verified on CPU, CUDA and a real 910B3. The integer path is
+  confirmed correct here; only float operands are affected.
+- Workaround: `(a / b).floor()` for float operands, which computes the quotient
+  first and keeps the floating result type
+- Review/expiry condition: float operands divide at full precision and return a
+  floating dtype, the strict expected failure above turns red, and this entry is
+  removed
+
+## KI-OPS-004: reducing a rank-0 tensor fails an internal invariant
+
+- Severity: High
+- Status: Reproduced on CPU and CUDA, unfixed
+- Owner: reduction operator maintainers
+- Evidence: `compat/tests/torch/test_division_remainder_family.py::
+  test_reducing_a_scalar_tensor` (strict expected failure)
+- Symptom: `sum`, `mean`, `max` and `min` on a rank-0 tensor abort in
+  `expr.cc:304` with `Check failed: nodes.size() == 1  Something wrong... Could
+  you please report this issue?`, reported through
+  `fused_op:( reduce.add,)` with `[Input]: float32[]`. PyTorch returns the value
+  unchanged. Generic code that reduces without checking rank -- `loss.sum()`
+  where the loss is already scalar -- hits this, and the message surfaces an
+  internal invariant rather than naming the unsupported shape.
+- Workaround: skip the reduction when `tensor.ndim == 0`, or `reshape(1)` first
+- Review/expiry condition: rank-0 reductions return the input value on CPU and
+  every advertised accelerator, the strict expected failure above turns red, and
+  this entry is removed
+
 ## KI-SEMANTICS-003: floating-comparison backend verification incomplete
 
 - Severity: Critical
