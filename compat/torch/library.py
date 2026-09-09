@@ -11,6 +11,7 @@ import enum
 import inspect
 import types
 import typing
+from typing import Any, Optional, Tuple, cast
 import jittor as jt
 from ..diagnostics import EXPECTED, swallowed
 from ..transaction import InstallTransaction, current_transaction, _MISSING
@@ -117,15 +118,16 @@ class _AutogradContext:
     """The ``ctx`` handed to a torch.library register_autograd backward."""
 
     def __init__(self):
-        self._saved_tensors = ()
-        self._saved_versions = ()
+        self._saved_tensors: Tuple[Any, ...] = ()
+        self._saved_versions: Tuple[Optional[int], ...] = ()
 
     def save_for_backward(self, *tensors):
         import jittor as jt
 
         self._saved_tensors = tuple(tensors)
-        self._saved_versions = tuple(
+        self._saved_versions = cast(Tuple[Optional[int], ...], tuple(
             (t.id if isinstance(t, jt.Var) else None) for t in tensors)
+        )
 
     @property
     def saved_tensors(self):
@@ -480,7 +482,7 @@ def opcheck(*args, **kwargs):
     return unimplemented("torch.library.opcheck", _OPCHECK_EFFECT, _OPCHECK_HINT)
 
 
-opcheck._jittor_unimplemented = "torch.library.opcheck"
+setattr(cast(Any, opcheck), "_jittor_unimplemented", "torch.library.opcheck")
 
 
 def infer_schema(prototype_function, *, mutates_args, op_name=None):
@@ -586,7 +588,7 @@ def _is_union(origin):
     try:
         import types
 
-        return origin is types.UnionType
+        return origin is getattr(types, "UnionType", None)
     except (ImportError, AttributeError):
         return False
 
