@@ -73,7 +73,8 @@ def hook_jt_rand(jittor, shape, dtype="float32", rtype="uniform"):
 
 def hook_rand():
     global rand_hooked
-    if rand_hooked: return
+    if rand_hooked:
+        return
     rand_hooked = True
     np.random.seed(0)
     if "torch" in sys.modules:
@@ -153,7 +154,7 @@ class Hook:
             else:
                 LOG.e(f"name {name} is non-zero")
             return
-        if type(pre_data) != type(data):
+        if type(pre_data) is not type(data):
             LOG.e(f"type not match, {pre_data.__class__.__name__}!={data.__class__.__name__}, name: {name}")
             has_error += 1
             return
@@ -276,7 +277,7 @@ class Hook:
         else:
             with open(fpath, 'wb') as f:
                 pickle.dump(ps, f)
-            LOG.i(f"save params ok")
+            LOG.i("save params ok")
 
     def hook_function(self, func):
         name = func.__name__
@@ -379,7 +380,7 @@ class Hook:
             fpath = os.path.join(self.base_path, f"__input-{self.record_status['[input]']}.pkl")
             with open(fpath, 'wb') as f:
                 pickle.dump(convert(data), f)
-            LOG.i(f"save input: ok")
+            LOG.i("save input: ok")
         else:
             raise RuntimeError("save_input is invalid in [check] mode")
 
@@ -395,7 +396,7 @@ class Hook:
             fpath = os.path.join(self.base_path, f"__input-{self.record_status['[input]']}.pkl")
             with open(fpath, 'rb') as f:
                 data = pickle.load(f)
-            LOG.i(f"load input: ok")
+            LOG.i("load input: ok")
             return data
         else:
             raise RuntimeError("load_input is invalid in [save] mode")
