@@ -1,5 +1,6 @@
 """Per-construction graph rewriting; external objects are never rewritten."""
 from jittor._core.dtypes import dtype_name
+from typing import Any
 
 
 class ChildAdoption:
@@ -24,13 +25,13 @@ class ChildAdoption:
             native_type = type(value)
             if not native_type.__module__.startswith("jittor.nn.modules."):
                 return value
-            result = object.__new__(owner.adapt_class(native_type))
+            result: Any = object.__new__(owner.adapt_class(native_type))
             self.memo[id(value)] = result
             for name, item in vars(value).items():
                 setattr(result, name, self.adapt_value(item))
             return result
         if isinstance(value, dict):
-            result = value.copy()
+            result: Any = value.copy()
             self.memo[id(value)] = result
             for name, item in value.items():
                 result[name] = self.adapt_value(item)
