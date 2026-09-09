@@ -17,11 +17,9 @@ import contextlib
 import platform
 import threading
 import time
-from ctypes import cdll
 import shutil
 import tempfile
 import urllib.request
-import ctypes
 
 if platform.system() == 'Darwin':
     mp.set_start_method('fork')
@@ -1344,7 +1342,6 @@ PYJT_MODULE_INIT({hash});
 
     return mod
 
-import time
 class time_scope:
     def __init__(self, name):
         self.name = name
