@@ -33,7 +33,6 @@ class DepthwiseConv(Function):
         assert(o == C)
         oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
         ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
-        filter_height, filter_width = Kh, Kw
         self.Khw = Kh, Kw
         assert oh>0 and ow>0
         output = depthwise_forward(

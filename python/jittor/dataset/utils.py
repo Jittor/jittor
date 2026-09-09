@@ -26,7 +26,6 @@ def get_order_list(n):
 
 def collate_batch(batch):
     r"""Puts each data field into a tensor with outer dimension batch size"""
-    real_size = len(batch)
     elem = batch[0]
     elem_type = type(elem)
     if isinstance(elem, jt.Var):
@@ -150,4 +149,3 @@ class HookTimer:
             return self.origin(*args, **kw)
         finally:
             self.duration += time.time() - start
-

@@ -52,7 +52,6 @@ def auto_parallel(n, src, block_num=1024, **kw):
         )
     oargs = args[n*2:]
     pargs = args[:n*2]
-    piargs = pargs[1::2]
     pnargs = pargs[0::2]
     pnargs2 = [ a.split()[-1] for a in pnargs ]
     oargs2 = [ a.split()[-1] for a in oargs ]
