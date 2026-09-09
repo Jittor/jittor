@@ -538,9 +538,9 @@ def get_cpu_version():
                 v = s.split(":")[-1].strip()
         else:
             with open("/proc/cpuinfo", 'r') as f:
-                for l in f:
-                    if l.startswith("model name"):
-                        v = l.split(':')[-1].strip()
+                for cpu_line in f:
+                    if cpu_line.startswith("model name"):
+                        v = cpu_line.split(':')[-1].strip()
                         break
     except:
         pass
