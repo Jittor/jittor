@@ -402,9 +402,6 @@ def _setup_fake_cuda_lib(lib_name=None, link=True, extra_flags=""):
         for lib_name in lib_names:
             _setup_fake_cuda_lib(lib_name, link, extra_flags)
         return
-    arch_key = "x86_64"
-    if platform.machine() not in ["x86_64", "AMD64"]:
-        arch_key = "aarch64"
     LOG.v(f"setup {lib_name}...")
 
     cuda_root = backend_root(jittor_path, "cuda")
