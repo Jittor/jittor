@@ -523,7 +523,10 @@ include docs/results/2026-09-08-vllm-independent-distribution.md
 include docs/results/2026-09-09-2-19-user-error-boundaries.md
 include docs/results/2026-09-09-ecosystem-transformers.md
 include docs/results/2026-09-09-ecosystem-vllm-diffusers.md
+include docs/results/2026-09-09-functional-board-audit.md
+include docs/results/2026-09-09-jittor-core-runtime-path.md
 include docs/results/2026-09-09-onednn-v3-runtime.md
+include docs/results/2026-09-09-pyjt-typing-followup.md
 include docs/results/README.md
 include docs/results/baselines/torch-shim-resources-stage7.txt
 include docs/results/baselines/wheel-additions-final-modernization.txt
