@@ -1,8 +1,8 @@
 # device→host 拷贝在设备侧分配目标缓冲
 
-- Status: 缺陷已复现，未修复
+- Status: 已修复并验证（`715009c02`）；本报告保留复现与归因
 - Date: 2026-09-09
-- Baseline: `33e0e34c6` 加同批 pyjt codegen 修复
+- Baseline: 复现于 `33e0e34c6` 加同批 pyjt codegen 修复；修复于 `715009c02`
 - Owner: 内存与 CUDA 后端维护者
 - Review when: `device_copy` 的 D2H 分支改变目标缓冲归属，或缓存分配器回收策略变化
 
@@ -75,3 +75,20 @@ c = jt.array(b.numpy())   # 需要主机侧 Var
 n = b.numpy()             # 只需要数据
 jt.clean()                # 把缓存真正交还驱动
 ```
+
+## 修复（2026-09-09，`715009c02`）
+
+`VarFlags::_host_resident` 标记 `device < 0` 的 `device_copy` 输出，
+`exec_runner` 的 `output_allocator()` 在普通与 swap 两个分配点把这类输出交给
+`cpu_allocator`，并让两个 `migrate_to_gpu` 循环跳过它们。
+
+真实 RTX 4090 复验：2 GiB `.cpu()` 的设备增量由 `+2048 MiB` 降到 `+4 MiB`；
+24 GiB 卡上 14 GiB 张量 `.cpu()` 由 `cudaMalloc failed` 变为成功。
+回归见 `tests/mem/test_allocator_contracts.py::TestHostCopyDestination`，
+其断言用尺寸契约而非分配器计数——计数版本在未修复时同样通过。
+
+本报告中「不属于本缺陷」的一节仍然有效：`nvidia-smi` 在释放后不下降是缓存
+分配器的既定行为，与本缺陷无关。
+
+未覆盖：主机→设备方向的 `contiguous`+`device_copy` 融合仍有同类峰值问题，
+14 GiB 张量的 `.cuda()` 自身会 OOM，本次未触及。

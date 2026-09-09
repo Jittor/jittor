@@ -2,7 +2,7 @@
 
 - Status: Maintained
 - Last reviewed: 2026-09-09
-- Baseline: `33e0e34c6` plus KI-MEM-001
+- Baseline: `715009c02`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -163,32 +163,6 @@ framework defects.
   of the contract
 - Review/expiry condition: retain both default and explicit-dtype assertions until
   a public dtype-default decision changes them together
-
-## KI-MEM-001: device-to-host copy allocates its destination on the device
-
-- Severity: High
-- Status: Reproduced, unfixed
-- Owner: memory and CUDA backend maintainers
-- Evidence: [device_copy host destination](../../docs/results/2026-09-09-device-copy-host-destination.md)
-- Symptom: `Var.cpu()` and `Var.to("cpu")` run a `device_copy` whose output is
-  allocated on the device, so a device-to-host move transiently needs twice the
-  tensor size in device memory. A tensor occupying more than half of the
-  available device memory therefore cannot be moved to the host: on a 24 GiB
-  card a 14 GiB tensor allocates and computes normally, but `.cpu()` fails with
-  `cudaMalloc failed` for an output of the same shape as its input. The
-  operation whose purpose is to release device memory fails by first doubling
-  it. This is not a limit of the transfer path: `numpy()` succeeds on the same
-  tensor.
-- Not this issue: `nvidia-smi` not dropping after a free is the caching
-  allocator working as designed. Freed blocks are reused by later same-size
-  allocations and `jt.clean()` returns them to the driver; the CUDA context
-  itself holds about 414 MiB for the life of the process.
-- Workaround: `jt.array(b.numpy())` for a host-side Var, `b.numpy()` when only
-  the data is needed, `jt.clean()` to return cached blocks to the driver
-- Review/expiry condition: the D2H branch of `device_copy` allocates its
-  destination in host memory, a tensor larger than half of device memory moves
-  to the host without an extra device allocation, and a targeted regression
-  covers the size relation on real CUDA
 
 ## KI-FFT-001: withdrawn -- current CUDA sequence regression is clean
 
