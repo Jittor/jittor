@@ -208,6 +208,45 @@ network 与 manual 测试要在模块 docstring 里说明其外部要求。
   [问题总账](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)，
   带 owner 和退出条件。
 
+## 门禁诚实度：三种「看起来通过了」
+
+一次运行可以在完全不失败的情况下什么都没证明。三种形态都实际发生过，
+各自的守卫也都因此存在：
+
+**只会 skip 的条目和通过长得一模一样。** 227 个算子的反向公式就是这样在三次全绿里
+保持未验证。`JITTOR_TEST_REQUIRE_EXECUTION=1` 要求一个条目要么执行了什么，
+要么带理由列进 `gate_scope.EXECUTES_NOTHING`。
+
+**「硬件不够」不是「没有硬件」。** 一个要两张卡的测试在单卡机器上跳过时，理由里
+同样写着 CUDA，于是落进 `accelerator` 桶、读起来像一句环境事实——而这台机器有
+加速器，覆盖是白丢的。Var/Module 的**全部**设备方法契约正好坐在这个跳过后面：
+四条用例在非多卡机器上从不执行，报告里和四条通过无法区分。现在
+`insufficient-devices` 单独计数并在汇总里点名。
+
+**中途死掉的会话产出一份「结束了」的日志。** 原生崩溃发生在测试里时不会让那条
+测试失败——它带走整个解释器：pytest 打印完即将执行的 nodeid，进程就没了，
+没有结果行、没有 traceback、没有汇总，后面的测试从未运行。日志里没有任何一处
+写着 failed，扫描失败的人找不到，grep 失败的脚本也同意。这比 skip 更糟——
+skip 至少在汇总里占一行。
+
+维护的 CPU 门禁正是这样只跑了自己的一部分：CPU-only 构建
+（`nvcc_path=""`，即 `tools/run_test_suite.py` 所设）上 `scatter_add` 段错误
+让 Torch 会话在 48% 处消失，而在有 CUDA 的机器上同一会话跑得完——所以它一直
+没被发现。
+
+[`tests/_helpers/session_completion.py`](https://github.com/Jittor/jittor/blob/master/tests/_helpers/session_completion.py)
+让会话自述完成：`pytest_sessionfinish` 在最后一条测试之后运行，无论通过、失败还是
+被 pytest 中断，**唯独进程死亡时不运行**——这正是想要的区分。哨兵同时带上
+collected/executed 计数，于是「完成了但悄悄收集得更少」也可见。
+[`tools/check_session_completed.py`](https://github.com/Jittor/jittor/blob/master/tools/check_session_completed.py)
+是消费者，证据优先级为哨兵 > 日志标记 > pytest 汇总行。**缺哨兵不当作「大概没事」**：
+这个失败模式看起来本来就像什么都没发生。
+
+一条共同的纪律：**新增的门禁必须被证明会红**。写完把它要防的缺陷造出来，
+确认变红，再恢复。没有做过负向验证的守卫，和不存在的守卫在报告里是同一个样子——
+本轮就修好过两个从未检查过任何东西的既存守卫（一个扫描布局迁移后已删除的目录，
+一个读陈旧路径而从未触及运行时行为）。
+
 ## 命令
 
 ```bash
