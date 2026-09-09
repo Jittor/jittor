@@ -33,7 +33,8 @@ def check(dirname, fname):
         if a in src:
             src = src.replace(a, b)
             found = True
-    if ac not in src and not found: return
+    if ac not in src and not found:
+        return
     n = len(dirname.split(os.path.sep))-1
     s = '.' + '/..' * n
     new_src = ""
@@ -56,10 +57,10 @@ def check(dirname, fname):
         x = src[i:j]
         y = x.replace(ac, s)
         if '#' in y:
-            y, l = y.split('#')
-            l = '#'+l
+            y, anchor = y.split('#')
+            anchor = '#'+anchor
         else:
-            l = ""
+            anchor = ""
         # replace xx/xx/ --> xx/xx/index.html
         if y.endswith('/'):
             y += 'index.html'
@@ -68,7 +69,7 @@ def check(dirname, fname):
             # replace xx/xx --> xx/xx/index.html
             if '.' not in z:
                 y += '/index.html'
-        y += l
+        y += anchor
         print("found", x, '-->', y)
         new_src += y
         i = j-1
@@ -92,4 +93,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
-
