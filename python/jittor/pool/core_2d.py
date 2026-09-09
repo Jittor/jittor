@@ -3,3 +3,4 @@
 from jittor.nn.modules.pooling import Pool
 
 _PUBLIC_SYMBOLS = (Pool,)
+__all__ = ("Pool",)

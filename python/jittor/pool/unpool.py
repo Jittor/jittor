@@ -3,3 +3,4 @@
 from jittor.nn.modules.pooling import MaxUnpool2d, MaxUnpool3d
 
 _PUBLIC_SYMBOLS = (MaxUnpool2d, MaxUnpool3d)
+__all__ = ("MaxUnpool2d", "MaxUnpool3d")

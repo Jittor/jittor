@@ -9,3 +9,4 @@ _PUBLIC_SYMBOLS = (
     argmax_pool, pool, pool3d, AvgPool2d, AvgPool3d, avg_pool2d, _no_dilation,
     MaxPool2d, MaxPool3d, max_pool2d, max_pool3d,
 )
+__all__ = tuple(name.__name__ for name in _PUBLIC_SYMBOLS)

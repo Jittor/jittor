@@ -7,3 +7,7 @@ _PUBLIC_SYMBOLS = (
     AdaptiveAvgPool2d, AdaptiveMaxPool2d, AdaptiveAvgPool3d,
     AdaptiveMaxPool3d,
 )
+__all__ = (
+    "AdaptiveAvgPool2d", "AdaptiveMaxPool2d", "AdaptiveAvgPool3d",
+    "AdaptiveMaxPool3d",
+)
