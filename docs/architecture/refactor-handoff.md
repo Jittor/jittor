@@ -63,6 +63,13 @@ launcher ABI 主机检查通过，已删除整头诊断过滤。但旧记录“�
 [注册表证据](../results/2026-09-08-acl-registry.md)与
 [属性通道及上机限制](../results/2026-09-08-acl-code-data-wire.md)。
 
+8.06 当前还收口了 ACL 原生 owner 的失败传播：BaseOpRunner、Conv/MatMul/BMM、
+Reduce/ArgReduce、GroupNorm/Upsample/FlashAttention、getitem 等 tensor 创建、
+数组构造、缓存 memcpy 与中间 buffer 失败均抛出 LOGf，不再 `CHECK_RET` 后静默
+return；完整 launcher 结构合同 77 passed。属性 family 已覆盖 BatchNorm、LayerNorm、
+GroupNorm、RmsNorm、Grouped RmsNorm、Conv2d、FlashAttention、Pool、Dropout、Matmul
+等 forward/backward/multi-grad；剩余是专用 owner、descriptor cache 和 NPU 实机。
+
 8.05 的纯功能迁移已在隔离 CUDA-config 热缓存完成：官方 oneDNN 3.9.1
 源码构建成功，v3 卷积前向/反向三方向与批量矩阵乘复用统一 runtime
 owner；执行前重绑 data handle，公开错误边界走可捕获 RuntimeError。
@@ -74,6 +81,15 @@ owner；执行前重绑 data handle，公开错误边界走可捕获 RuntimeErro
 原生RNN权重打包在独立Torch下的梯度断链同步修复，见
 [精度验证](../results/2026-09-08-frontend-precision-isolation.md)。这批新增Op字段，
 不要混用此前缓存库与新核心头；需要基于相同源码/ABI重用或更新缓存。
+
+10.21 typing 当前安全 scope 已扩至 compat/torch 的 namespace、distribution 全小组、
+nested、parameter containers、tensor state、autograd、nn frontend/modules、functional、
+optim 前端、library、grad 等模块及 Var stub 协议。`types.py` 的 dtype/device/Var
+协议批次已使该文件单独 mypy 0 errors：dtype slots 字段、动态 torch.types facade、
+Device alias 和 Var 的 to_device/_copy_to_cpu/residency 元数据均有静态声明；没有改变
+dtype 继承结构或运行逻辑。剩余未纳入 scope 的 types 动态边界、nn_adoption、
+lr_scheduler 等仍有真实协议错误，不能用 cast 或 ignore 伪绿。详见 pyproject 的
+`[tool.mypy].files` 与当前门禁日志。
 
 最多 root 加三个 subagent。完整依赖批次实现、集中验证和提交，不恢复历史
 “小切片、一提交、一轮验收”的节奏。冲突工作放隔离树，Git 整合和推送由 root 负责。
