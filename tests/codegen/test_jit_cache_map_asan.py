@@ -35,7 +35,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "python/jittor/src"
+SRC = ROOT / "src"
 
 #: The scenario, once against the real header and once against the pattern it
 #: replaced.  Short keys and enough of them to force the holder vector to
