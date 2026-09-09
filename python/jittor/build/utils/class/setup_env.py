@@ -118,16 +118,16 @@ def restart(n, n_gpu):
 args = sys.argv[1:]
 if (args[0] == 'setup'):
     assert(len(args) == 2)
-    assert(type(eval(args[1])) == int)
+    assert(type(eval(args[1])) is int)
     n = int(args[1])
     assert(n < 999)
     setup(n)
 elif (args[0] == 'start'):
     assert(len(args) in [2,3])
-    assert(type(eval(args[1])) == int)
+    assert(type(eval(args[1])) is int)
     n = int(args[1])
     if len(args) == 3:
-        assert(type(eval(args[2])) == int)
+        assert(type(eval(args[2])) is int)
         n_gpu = int(args[2])
     else:
         n_gpu=1
@@ -136,10 +136,10 @@ elif (args[0] == 'stop'):
     stop()
 elif (args[0] == 'restart'):
     assert(len(args) in [2,3])
-    assert(type(eval(args[1])) == int)
+    assert(type(eval(args[1])) is int)
     n = int(args[1])
     if len(args) == 3:
-        assert(type(eval(args[2])) == int)
+        assert(type(eval(args[2])) is int)
         n_gpu = int(args[2])
     else:
         n_gpu=1
