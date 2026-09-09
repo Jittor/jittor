@@ -126,7 +126,6 @@ files = [
     "compat/torch/api_delegates.py",
     "compat/torch/fidelity.py",
     "compat/torch/publication.py",
-    "compat/torch/functional.py",
     "compat/torch/autograd.py",
     "compat/torch/distribution_api.py",
     "compat/torch/fidelity.py",
