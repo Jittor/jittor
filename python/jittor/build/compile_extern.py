@@ -262,7 +262,7 @@ def setup_cuda_extern():
         # with cub silently absent, which is the one outcome the switch exists
         # to prevent.
         raise
-    except Exception as e:
+    except Exception:
         import traceback
         line = traceback.format_exc()
         LOG.w(f"CUDA found but cub is not loaded:\n{line}")

@@ -1338,7 +1338,7 @@ PYJT_MODULE_INIT({hash});
         try:
             with import_scope(os.RTLD_GLOBAL | os.RTLD_NOW):
                 mod = __import__(hash)
-        except Exception as e:
+        except Exception:
             with import_scope(os.RTLD_GLOBAL | os.RTLD_LAZY):
                 mod = __import__(hash)
 

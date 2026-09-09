@@ -53,7 +53,6 @@ class TransformGetItemToIndex:
 
 def getitem_transform_depth(owner):
     """Read this context's nesting depth for one owner by identity."""
-    current: Any
     return sum(current is owner for current in _getitem_transform_owners.get())
 
 
