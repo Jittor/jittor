@@ -531,6 +531,7 @@ include docs/results/2026-09-09-wheel-baseline-candidate.md
 include docs/results/baselines/wheel-contents-modern-candidate.txt
 include docs/results/baselines/wheel-additions-modern-candidate.txt
 include docs/results/baselines/wheel-removals-modern-candidate.txt
+include docs/results/baselines/wheel-removals-final.txt
 include docs/results/README.md
 include docs/results/baselines/torch-shim-resources-stage7.txt
 include docs/results/baselines/wheel-additions-final-modernization.txt
@@ -589,10 +590,10 @@ include examples/gan/simple_cgan.py
 include examples/notebooks/60分钟快速入门Jittor/README.md
 include examples/notebooks/60分钟快速入门Jittor/jittor-star.png
 include examples/notebooks/60分钟快速入门Jittor/mnist.png
-include examples/notebooks/60分钟快速入门Jittor/计图入门教程?0?---?介绍与安装.md
-include examples/notebooks/60分钟快速入门Jittor/计图入门教程?1?---?基本概念.md
-include examples/notebooks/60分钟快速入门Jittor/计图入门教程?2?---?如何训练一个简单线性回归.md
-include examples/notebooks/60分钟快速入门Jittor/计图入门教程?3?---?尝试解决一个实际问题.md
+include examples/notebooks/60分钟快速入门Jittor/计图入门教程 0 --- 介绍与安装.md
+include examples/notebooks/60分钟快速入门Jittor/计图入门教程 1 --- 基本概念.md
+include examples/notebooks/60分钟快速入门Jittor/计图入门教程 2 --- 如何训练一个简单线性回归.md
+include examples/notebooks/60分钟快速入门Jittor/计图入门教程 3 --- 尝试解决一个实际问题.md
 include examples/notebooks/ConditionGAN.md
 include examples/notebooks/LSGAN.md
 include examples/notebooks/README.md
