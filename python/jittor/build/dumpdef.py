@@ -14,11 +14,13 @@ for obj in sys.argv[1:-2]:
     cmd = f'"{dumpbin_path}" -SYMBOLS "{obj}"'
     ret = sp.getoutput(cmd)
     # print(ret)
-    for l in ret.splitlines():
-        if '|' in l:
-            if "UNDEF" in l: continue
-            if "External" not in l: continue
-            sym = l.split('|')[1].strip().split()[0]
+    for sym_line in ret.splitlines():
+        if '|' in sym_line:
+            if "UNDEF" in sym_line:
+                continue
+            if "External" not in sym_line:
+                continue
+            sym = sym_line.split('|')[1].strip().split()[0]
             if sym[0] in '@.': continue
             if sym.startswith("??$get_from_env"): syms[sym] = 1
             # if sym.startswith("??"): continue
