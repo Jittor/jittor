@@ -3,6 +3,7 @@
 import os
 import types as _python_types
 import typing
+from typing import cast
 
 import jittor as jt
 from ..diagnostics import EXPECTED, swallowed
@@ -164,6 +165,7 @@ def _dtype_to_str(d):
 class device:
     type: str
     index: typing.Optional[int]
+    _prev_index: typing.Optional[int]
 
     def __init__(self, type="cpu", index=None):
         if isinstance(type, device):
@@ -246,7 +248,7 @@ class device:
 # Only meta contexts are tracked; real-device `with` blocks stay no-ops.
 # Model construction in from_pretrained is single-threaded, so a plain list
 # is sufficient.
-_DEVICE_CTX_STACK = []
+_DEVICE_CTX_STACK: typing.List[device] = []
 
 
 Number = typing.Union[int, float, bool]
@@ -275,15 +277,15 @@ class Storage:
 
 
 def make_torch_types_module():
-    module = _python_types.ModuleType("torch.types")
-    module.Number = Number
-    module.Device = Device
-    module.FileLike = FileLike
-    module.Storage = Storage
-    module._Number = (int, float, bool)
-    module.py_sym_types = py_sym_types
-    module.PySymType = Number
-    module.__all__ = ["Number", "Device", "FileLike", "Storage"]
+    module = cast(typing.Any, _python_types.ModuleType("torch.types"))
+    setattr(module, "Number", Number)
+    setattr(module, "Device", Device)
+    setattr(module, "FileLike", FileLike)
+    setattr(module, "Storage", Storage)
+    setattr(module, "_Number", (int, float, bool))
+    setattr(module, "py_sym_types", py_sym_types)
+    setattr(module, "PySymType", Number)
+    setattr(module, "__all__", ["Number", "Device", "FileLike", "Storage"])
     return module
 
 
