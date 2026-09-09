@@ -29,7 +29,8 @@ class ReduceOpCases:
                 np_dims = tuple(range(len(a.shape)))
             x = eval(f"np.{op}.reduce(a, {np_dims}, keepdims={self.keepdims})")
             y = eval(f"jt.reduce_{op}(a, {jt_dims}, keepdims={self.keepdims}).data")
-            if len(x.shape) == 0: x = np.array([x]).astype(a.dtype)
+            if len(x.shape) == 0:
+                x = np.array([x]).astype(a.dtype)
             x = x.astype(a.dtype)
             y = y.astype(a.dtype)
             assert x.dtype == y.dtype and x.shape == y.shape and (x==y).all(), \
@@ -74,7 +75,8 @@ class ReduceOpCases:
                 np_dims = tuple(range(len(a.shape)))
             x = eval(f"np.{op}.reduce(a, {np_dims}, keepdims={self.keepdims})")
             y = eval(f"jt.reduce_{op}(a, {jt_dims}, keepdims={self.keepdims}).data")
-            if len(x.shape) == 0: x = np.array([x]).astype(a.dtype)
+            if len(x.shape) == 0:
+                x = np.array([x]).astype(a.dtype)
             x = x.astype(a.dtype)
             y = y.astype(a.dtype)
             assert x.dtype == y.dtype and x.shape == y.shape and (x==y).all(), \

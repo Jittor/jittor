@@ -36,7 +36,8 @@ def conv_naive(x, w):
                     for i4 in range(Kw):
                         for i5 in range(C):
                             for i6 in range(Kc):
-                                if i1-i3<0 or i2-i4<0 or i1-i3>=H or i2-i4>=W: continue
+                                if i1-i3<0 or i2-i4<0 or i1-i3>=H or i2-i4>=W:
+                                    continue
                                 y[i0, i1, i2, i6] += x[i0, i1-i3, i2-i4, i5] * w[i3,i4,i5,i6]
     return y
 
@@ -67,8 +68,11 @@ def conv_transpose_naive(x, w):
                     for i4 in range(Kw):
                         for i5 in range(C):
                             for i6 in range(Kc):
-                                if (i1-i3)//2<0 or (i2-i4)//2<0 or (i1-i3)//2>=H or (i2-i4)//2>=W: continue
-                                if (i1-i3)%2 or (i2-i4)%2: continue
+                                if ((i1-i3)//2<0 or (i2-i4)//2<0
+                                        or (i1-i3)//2>=H or (i2-i4)//2>=W):
+                                    continue
+                                if (i1-i3)%2 or (i2-i4)%2:
+                                    continue
                                 y[i0, i1, i2, i6] += x[i0, (i1-i3)//2, (i2-i4)//2, i5] * w[i3,i4,i5,i6]
     return y
 
@@ -156,7 +160,10 @@ def resize_and_crop_naive(x, bbox, interpolation="nearest"):
         from math import floor, ceil
         data = x
         output = y
-        sample = lambda nj, nk: 0 if nk<0 or nk>=W or nj<0 or nj>=H else data[nj,nk]
+        def sample(nj, nk):
+            if nk < 0 or nk >= W or nj < 0 or nj >= H:
+                return 0
+            return data[nj, nk]
         for i in range(N):
             for j in range(H):
                 for k in range(W):
@@ -278,7 +285,8 @@ class ReindexOpCases:
             mask = jt.random(y.shape)
             # mask = jt.ones(y.shape)
             nmask = mask.data
-            import gc; gc.collect()
+            import gc
+            gc.collect()
             loss = y*mask
             dx, dbbox = jt.grad(loss, [x, bbox])
             _, (ndx, ndbbox) = ngrad(lambda args: \
