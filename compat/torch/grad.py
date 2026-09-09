@@ -2,7 +2,7 @@
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import numpy as np
-from typing import Any, Dict, List
+from typing import Any, Dict, List, cast
 import jittor as jt
 from .. import collectives as _collectives
 
@@ -316,7 +316,7 @@ def _clip_grads_with_norm_device(grads, max_norm, total_norm):
         return
     scalar_type = np.float64 if _jittor_dtype_name(acc_dtype) == "float64" else np.float32
     raw_coef = scalar_type(limit) / (total_norm + scalar_type(1e-6))
-    coef = jt.minimum(raw_coef, jt.array(float(scalar_type(1.0))).cast(acc_dtype))
+    coef = jt.minimum(cast(Any, raw_coef), jt.array(float(scalar_type(1.0))).cast(acc_dtype))
     # CUDA fmin-style minimum may select the finite operand for NaN. Torch
     # propagates a NaN total norm into every gradient when errors are disabled.
     coef = jt.ternary(jt.isnan(raw_coef), raw_coef, coef)
@@ -354,12 +354,11 @@ class _GradScaler:
         # leading device positional (a str like "cuda" or a device object) and
         # shift it out, so BOTH signatures work.
         local_args: Any = list(args)
-        args = local_args
-        if args and (isinstance(args[0], str) or
-                     args[0].__class__.__name__ in ("device", "_Device")):
-            args = args[1:]                     # drop the device positional
+        if local_args and (isinstance(local_args[0], str) or
+                     local_args[0].__class__.__name__ in ("device", "_Device")):
+            local_args = local_args[1:]                     # drop the device positional
         kwargs.pop("device", None)
-        init_scale = kwargs.pop("init_scale", args[0] if len(args) > 0 else 2.0 ** 16)
+        init_scale = kwargs.pop("init_scale", local_args[0] if len(local_args) > 0 else 2.0 ** 16)
         growth_factor = kwargs.pop("growth_factor", args[1] if len(args) > 1 else 2.0)
         backoff_factor = kwargs.pop("backoff_factor", args[2] if len(args) > 2 else 0.5)
         growth_interval = kwargs.pop("growth_interval", args[3] if len(args) > 3 else 2000)
