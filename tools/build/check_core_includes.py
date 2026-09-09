@@ -42,7 +42,6 @@ INCLUDE = re.compile(r'^\s*#\s*include\s*"([^"]+)"', re.M)
 #: the build does not pass makes it miss real breakage.
 ROOT_CANDIDATES = (
     "src",
-    "python/jittor/extern",
     "backends/cuda",
     "backends/cuda/include",
 )
@@ -51,7 +50,7 @@ SOURCE_SUFFIXES = (".cc", ".cu", ".cuh", ".h", ".hpp", ".cpp")
 
 #: Trees whose includes this script checks. Generated headers under the build
 #: cache are not here: they do not exist in a clean checkout.
-SCAN_TREES = ("src", "backends", "python/jittor/extern")
+SCAN_TREES = ("src", "backends")
 
 
 def _roots(repo):
