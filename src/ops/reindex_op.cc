@@ -84,7 +84,7 @@ void ReindexOp::infer_shape() {
     if (shape.size())
         y->set_shape(shape);
     else {
-        ASSERT(extras.size());
+        USER_CHECK(extras.size()) << "Reindex without explicit shape requires an overflow extras tensor.";
         y->set_shape(extras[0]->shape);
     }
     USER_CHECK(y->shape.size()) << "Number of shape should greater than 0.";
