@@ -527,6 +527,10 @@ include docs/results/2026-09-09-functional-board-audit.md
 include docs/results/2026-09-09-jittor-core-runtime-path.md
 include docs/results/2026-09-09-onednn-v3-runtime.md
 include docs/results/2026-09-09-pyjt-typing-followup.md
+include docs/results/2026-09-09-wheel-baseline-candidate.md
+include docs/results/baselines/wheel-contents-modern-candidate.txt
+include docs/results/baselines/wheel-additions-modern-candidate.txt
+include docs/results/baselines/wheel-removals-modern-candidate.txt
 include docs/results/README.md
 include docs/results/baselines/torch-shim-resources-stage7.txt
 include docs/results/baselines/wheel-additions-final-modernization.txt

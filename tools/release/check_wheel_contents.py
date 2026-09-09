@@ -147,6 +147,7 @@ RUNTIME_BUILD_HELPERS = frozenset((
     "jittor/build/dlink_compiler.py",
     "jittor/build/dumpdef.py",
     "jittor/build/init_cupy.py",
+    "jittor/build/onednn.py",
     "jittor/build/pyjt_compiler.py",
     "jittor/build/utils/__init__.py",
     "jittor/build/utils/auto_diff.py",
