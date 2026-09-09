@@ -30,7 +30,6 @@ class MatmulACL:
 
     def execute(self, x1, x2):
         cube_math_type = 1 if getattr(jt, "acl_allow_hf32", False) else 0
-        grad_x1_mode = "matmul" if self.trans_x2 else "matmul_trans_1"
         reshape_grad_x2 = len(x1) != len(x2)
         if self.trans_x2:
             grad_x2_lhs = "dout"

@@ -64,7 +64,6 @@ class FlashAttentionACL:
     ):
         if self.layout == "BSH":
             B, SQ, H = q.shape
-            SKV = k.shape[1]
             N = self.headnum
             D = H // N
         elif self.layout == "SBH":
@@ -77,7 +76,6 @@ class FlashAttentionACL:
             SKV = k.shape[1]
         elif self.layout == "BNSD":
             B, N, SQ, D = q.shape
-            SKV = k.shape[2]
         else:
             raise ValueError(f"got invalid input layout {self.layout}")
 
@@ -222,7 +220,6 @@ class KVCacheMemcpyACL(jt.Function):
         self.slots = [int(slot) for slot in slots]
 
     def execute(self, key, value, kv_cache):
-        slots = ", ".join(map(str, self.slots))
         attr_code = code_program(
             [
                 '\n        op.jt_name = "kv_cache_memcpy";\n        ',

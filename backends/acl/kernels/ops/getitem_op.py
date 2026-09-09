@@ -76,10 +76,6 @@ def basic_slice_acl(x, slices):
     ):
         return x.clone()
 
-    begins_text = ", ".join(map(str, begins))
-    ends_text = ", ".join(map(str, ends))
-    steps_text = ", ".join(map(str, steps))
-    axes_text = ", ".join(map(str, axes))
     forward_attr = code_program(
         [
             '\n    op.jt_name = "slicev2";\n    ',
