@@ -2,6 +2,8 @@
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
+import numpy as np
+from typing import Any
 
 from .types import _dtype_to_str
 from ..diagnostics import swallowed
@@ -80,7 +82,7 @@ def _torch_where_select(condition, input, other):
     cond, a, b = vals
 
     shapes = [tuple(int(d) for d in x.shape) for x in (cond, a, b)]
-    out_shape = ()
+    out_shape: Any = ()
     for shape in shapes:
         res = []
         for i in range(1, max(len(out_shape), len(shape)) + 1):
@@ -138,7 +140,7 @@ def _trapz(y, x=None, dx=1, dim=-1, *, out=None):
         out_shape = list(y.shape)
         out_shape.pop(dim)
         if not out_shape:
-            out_shape = (1,)
+            out_shape = [1]
         return jt.zeros(tuple(out_shape), dtype=y.dtype)
     sl0 = [slice(None)] * ndim
     sl1 = [slice(None)] * ndim
@@ -179,7 +181,7 @@ def _repeat_interleave(x, repeats, dim=None, *, output_size=None):
         r = repeats.numpy() if hasattr(repeats, "numpy") else repeats
         for i, c in enumerate(r):
             parts += [i] * int(c)
-        idx = jt.array(parts)
+        idx = jt.array(np.asarray(parts, dtype=np.int32))
     return x[idx] if dim == 0 else x.transpose(0, dim)[idx].transpose(0, dim)
 
 
