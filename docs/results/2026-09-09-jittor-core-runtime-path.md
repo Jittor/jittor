@@ -17,10 +17,12 @@ PYTHONPATH="$CORE_DIR:python" python -c 'import jittor_core; print(hasattr(jitto
 ```
 
 Importing the full Jittor package with the same environment reaches CUDA
-initialisation and detects architecture 89, but then fails with:
-`TypeError: can only concatenate str (not "list") to str`. The failure occurs
-after the CUDA cache/shadow check and is configuration/cache state dependent;
-no repository source change was made based on this single environment error.
+initialisation, detects architecture 89, and succeeds. The earlier
+`TypeError: can only concatenate str (not "list") to str` came from
+`python/jittor/build/compilation.py:267`, where the include directory list was
+passed into the compiler after the typing rename introduced `include_flags`.
+That repository regression was fixed in `b9d3c1cab`; the same command now
+prints `jittor ok`.
 
 The CPU cached extension is intentionally not a substitute for this command:
 when CUDA is discoverable, Jittor rejects a CPU `jittor_core` as a build shadow.
