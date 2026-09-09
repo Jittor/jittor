@@ -73,9 +73,9 @@ def _analytical_jacobians(vs, outputs, n_in_elems):
     jac = []  # jac[o][i] -> ndarray (out_o.numel, in_i.numel)
     for o in outputs:
         of = o.reshape(-1)
-        O = of.shape[0]
-        per_in = [np.zeros((O, s), dtype="float64") for s in n_in_elems]
-        for k in range(O):
+        output_size = of.shape[0]
+        per_in = [np.zeros((output_size, s), dtype="float64") for s in n_in_elems]
+        for k in range(output_size):
             grads = jt.grad(of[k], vs, retain_graph=True)
             for i, g in enumerate(grads):
                 gi = to_numpy(g).reshape(-1).astype("float64")
