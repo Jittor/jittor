@@ -6,6 +6,7 @@ import importlib
 import importlib.machinery
 import sys
 import types
+from typing import Any
 from collections.abc import MutableMapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -21,7 +22,9 @@ def _native_backend_for(target):
     return target.owner if isinstance(target, TorchNamespace) else target
 
 
-_getitem_transform_owners = ContextVar("jittor_getitem_transform_owners", default=())
+_getitem_transform_owners: ContextVar[Any] = ContextVar(
+    "jittor_getitem_transform_owners", default=()
+)
 
 
 class TransformGetItemToIndex:
@@ -29,7 +32,9 @@ class TransformGetItemToIndex:
 
     def __init__(self, owner):
         self.owner = owner
-        self._tokens = ContextVar("jittor_getitem_transform_tokens", default=())
+        self._tokens: ContextVar[Any] = ContextVar(
+            "jittor_getitem_transform_tokens", default=()
+        )
 
     def __enter__(self):
         owners = _getitem_transform_owners.get()
@@ -48,6 +53,7 @@ class TransformGetItemToIndex:
 
 def getitem_transform_depth(owner):
     """Read this context's nesting depth for one owner by identity."""
+    current: Any
     return sum(current is owner for current in _getitem_transform_owners.get())
 
 
