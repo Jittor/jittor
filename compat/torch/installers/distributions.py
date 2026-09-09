@@ -1,6 +1,5 @@
 """Distribution installation binds stable implementation owners and module paths."""
 import types as _types_dist
-import jittor as jt
 from ..distribution_api import CONSTRAINTS, _Constraint, Gumbel, RelaxedBernoulli, RelaxedOneHotCategorical, unsupported_register_kl
 from ..fidelity import Fidelity, register_api_bindings
 

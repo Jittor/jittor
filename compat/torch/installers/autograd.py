@@ -1,6 +1,4 @@
 """Publish stable autograd owners; mutable delegates belong to the context."""
-import types
-import jittor as jt
 from .. import autograd as api
 from ..context import get_install_context
 from ..fidelity import Fidelity, register_api_bindings
