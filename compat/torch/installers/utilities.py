@@ -292,7 +292,9 @@ class SummaryWriter:
     def flush(self): return None
     def close(self): return None
     def __enter__(self): return self
-    def __exit__(self, *exc): self.close(); return False
+    def __exit__(self, *exc):
+        self.close()
+        return False
 
 
 class _UtilsNS(_types2.ModuleType):
