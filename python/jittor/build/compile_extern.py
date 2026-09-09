@@ -223,7 +223,8 @@ def setup_cub():
     register_library_resources("cub", home=cub_home)
 
 def setup_cuda_extern():
-    if not has_cuda or not (is_cuda or has_corex): return
+    if not has_cuda or not (is_cuda or has_corex):
+        return
     def split(a): return a.replace(";",":").split(":")
     check_ld_path = split(os.environ.get("LD_LIBRARY_PATH", "")) + \
         split(os.environ.get("PATH", ""))
@@ -311,7 +312,8 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     arch_key = "x86_64"
     if platform.machine() not in ["x86_64", "AMD64"]:
         arch_key = "aarch64"
-    if not has_cuda or not (is_cuda or has_corex): return
+    if not has_cuda or not (is_cuda or has_corex):
+        return
     LOG.v(f"setup {lib_name}...")
 
     culib_path = os.path.join(cuda_lib, f"lib{lib_name}.so")
@@ -490,7 +492,8 @@ def setup_cutt():
         use_cutt = False
         return
     use_cutt = build_flag("use_cutt", True, os.environ)
-    if not use_cutt: return
+    if not use_cutt:
+        return
     cutt_include_path = build_env("cutt_include_path", environ=os.environ)
     cutt_lib_path = build_env("cutt_lib_path", environ=os.environ)
 
@@ -715,7 +718,8 @@ def setup_nccl(store=None):
     if not has_cuda or not is_cuda or (not has_mpi and not _jt_nccl_envfile):
         use_nccl = False
         return
-    if not use_nccl: return
+    if not use_nccl:
+        return
     nccl_include_path = build_env("nccl_include_path", environ=os.environ)
     nccl_lib_path = build_env("nccl_lib_path", environ=os.environ)
     nccl_lib_name = None
@@ -732,7 +736,8 @@ def setup_nccl(store=None):
 
             make_cache_dir(nccl_path)
             nccl_home = install_nccl(nccl_path)
-            if nccl_home is None: return
+            if nccl_home is None:
+                return
             nccl_include_path = os.path.join(nccl_home, "build", "include")
             nccl_lib_path = os.path.join(nccl_home, "build", "lib")
 
@@ -941,7 +946,8 @@ def setup_mpi():
     global mpicc_path, has_mpi
     use_mpi = build_flag("use_mpi", True, os.environ)
     has_mpi = False
-    if not use_mpi: return
+    if not use_mpi:
+        return
     mpicc_path = env_or_try_find('mpicc_path', 'mpicc')
     if mpicc_path == "":
         # LOG.i("mpicc not found, distribution disabled.")
@@ -999,8 +1005,10 @@ def setup_mpi():
         inner.__doc__ = func.__doc__
         return inner
     for k in mpi_ops.__dict__:
-        if not k.startswith("mpi_"): continue
-        if k == "mpi_test": continue
+        if not k.startswith("mpi_"):
+            continue
+        if k == "mpi_test":
+            continue
         setattr(core.Var, k, wrapper(mpi_ops.__dict__[k]))
 
 in_mpi = inside_mpi()
