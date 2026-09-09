@@ -451,7 +451,6 @@ def install(ctx):
     _bind_missing(g, "compile", compile)
     # torch.jit: jittor has no TorchScript; the script/trace decorators are pass-throughs
     # (the eager fn already runs), and is_scripting/is_tracing report False.
-    import abc as _abc
     import types as _types2
     import typing as _typing
     _compiler = getattr(g, "compiler", None) or _types2.ModuleType("torch.compiler")
