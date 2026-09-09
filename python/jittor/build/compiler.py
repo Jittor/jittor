@@ -630,7 +630,7 @@ if nvcc_path:
 def check_clang_latest_supported_cpu():
     output = run_cmd('clang --print-supported-cpus')
     def find_latest_chip_version(pattern_prefix):
-        apple_cpus = [l.strip() for l in output.split('\n') if pattern_prefix in l]
+        apple_cpus = [cpu.strip() for cpu in output.split('\n') if pattern_prefix in cpu]
         apple_cpu_id = max([int(cpu[7:]) for cpu in apple_cpus])
         return pattern_prefix + str(apple_cpu_id)
     if 'apple-m' in output:

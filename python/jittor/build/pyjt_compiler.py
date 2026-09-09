@@ -7,11 +7,11 @@
 import re
 import os
 from jittor_utils.backend_resources import core_root
-from jittor_utils import LOG, run_cmd, simple_timer
+from jittor_utils import LOG
 import json
 from collections import OrderedDict
 import glob
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 hash_to_key_map: Dict[int, str] = {}
 
