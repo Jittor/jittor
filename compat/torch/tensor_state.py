@@ -9,12 +9,13 @@ from __future__ import annotations
 from types import ModuleType
 from weakref import WeakKeyDictionary, ref
 from functools import wraps
+from typing import Any, List
 
 from ..transaction import InstallTransaction, TransactionConflict, _MISSING
 from .holder_registry import HolderRegistry
 
 
-_OWNERS = WeakKeyDictionary()
+_OWNERS: WeakKeyDictionary[Any, Any] = WeakKeyDictionary()
 _STATE_SERVICE = "jittor.torch.tensor_states"
 _LEGACY_NAMES = ("_torch_tensor_state", "_torch_leaf_params", "_torch_retained",
                  "_active_optimizers", "_current_optimizer")
@@ -212,7 +213,7 @@ def bind_tensor_state(native_backend, target, transaction, state=None):
                     ("_torch_leaf_params", "_torch_retained", "_active_optimizers")):
                 raise RuntimeError("existing tensor state conflicts with legacy registries")
     if state is None:
-        sources = []
+        sources: List[Any] = []
         for owner in (native_backend, target):
             if any(vars(owner).get(name) for name in
                    ("_torch_leaf_params", "_torch_retained", "_active_optimizers")):
