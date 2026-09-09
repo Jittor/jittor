@@ -31,11 +31,11 @@ class ChildAdoption:
                 setattr(result, name, self.adapt_value(item))
             return result
         if isinstance(value, dict):
-            result: Any = value.copy()
-            self.memo[id(value)] = result
+            rebuilt: Any = value.copy()
+            self.memo[id(value)] = rebuilt
             for name, item in value.items():
-                result[name] = self.adapt_value(item)
-            return result
+                rebuilt[name] = self.adapt_value(item)
+            return rebuilt
         if isinstance(value, list):
             result = []
             self.memo[id(value)] = result
@@ -70,28 +70,28 @@ class ParameterRewrite:
         if id(value) in self.memo:
             return self.memo[id(value)]
         if isinstance(value, dict):
-            result = value.copy()
-            self.memo[id(value)] = result
+            rebuilt: Any = value.copy()
+            self.memo[id(value)] = rebuilt
             for key, item in value.items():
-                result[key] = self.replace(item)
-            return result
+                rebuilt[key] = self.replace(item)
+            return rebuilt
         if isinstance(value, list):
-            result = []
-            self.memo[id(value)] = result
-            result.extend(self.replace(item) for item in value)
-            return result
+            rebuilt = []
+            self.memo[id(value)] = rebuilt
+            rebuilt.extend(self.replace(item) for item in value)
+            return rebuilt
         if isinstance(value, tuple):
             items = tuple(self.replace(item) for item in value)
             if all(item is old for item, old in zip(items, value)):
                 return value
             if type(value) is tuple:
-                result = items
+                rebuilt = items
             elif hasattr(value, "_fields"):
-                result = type(value)(*items)
+                rebuilt = type(value)(*items)
             else:
                 return value
-            self.memo[id(value)] = result
-            return result
+            self.memo[id(value)] = rebuilt
+            return rebuilt
         return value
 
 
