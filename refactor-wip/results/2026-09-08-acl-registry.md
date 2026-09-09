@@ -40,10 +40,10 @@ SDK 查询的 runner 继续保留其查询，不再保存无调用者的查询�
 旧看板“只剩类型擦除”的结论不成立。`acl_data.py` 和 `acl_data_channel.h`
 已有主机 schema/decoder/cache 壳，但生产 `_code.py` 仍生成属性赋值源码，
 runner 尚未消费该 data 通道，也没有使用描述符缓存。属性通道仍有少量 owner 待迁；SwiGlu.dim 已迁为 int64 typed data，并由结构合同覆盖；
-描述符缓存属于用户允许后移的优化。详见[迁移边界](../guides/acl-structure-boundary.md)。
+描述符缓存属于用户允许后移的优化。详见[迁移边界](../architecture/acl-structure-boundary.md)。
 
 在 CANN 机器上必须先用真实 SDK 编译全部 ACL TU，再按
-[Ascend 指南](../guides/ascend-910b.md)证明 NPU 实际驻留与禁止 CPU fallback。
+[Ascend 指南](../../docs/guides/ascend-910b.md)证明 NPU 实际驻留与禁止 CPU fallback。
 本批重点覆盖 Unary/Cast/Binary/Add 查询，以及正反向 runner 的同步和失败传播。
 桩查询声明为 variadic，主机测试的四类签名是自有 mock；两者均不能证明所安装
 CANN 版本的实际查询 ABI。SDK 升级或注册表/查询适配器改变时重新验证。

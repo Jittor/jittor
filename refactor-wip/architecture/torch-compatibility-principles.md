@@ -126,7 +126,7 @@ and framework defects are recorded separately; neither becomes a blanket skip.
 Correctness is required before optimization. Performance claims use warmup,
 synchronization, fixed shapes/dtypes, isolated caches, and an exact revision.
 Compare equivalent execution modes and report both latency and memory when the
-change affects either. See [performance benchmarking](../performance/benchmarking.md).
+change affects either. See [performance benchmarking](../../docs/performance/benchmarking.md).
 
 An optimization must retain a reliable fallback and a way to prove which path
 executed. It may not weaken error reporting or test coverage to improve a

@@ -1,12 +1,11 @@
-# Memory optimization
+# 显存优化
 
-Use the memory profiler to identify large live tensors before enabling swapping.
-Swapping lowers the minimum device-memory requirement, but it cannot replace
-fixing an accidentally retained graph.
+先用内存分析器找出占用大的活跃张量，再考虑开启换出。**换出能降低显存下限，但替代
+不了修好一张被意外留住的图。**
 
-## Profile large allocations
+## 分析大块分配
 
-The memory profiler attributes peak allocations to Python call sites:
+内存分析器把峰值分配归因到 Python 调用点：
 
 ```python
 import jittor as jt
@@ -19,25 +18,20 @@ with jt.flag_scope(trace_py_var=3, profile_memory_enable=1):
     jt.get_max_memory_treemap()
 ```
 
-Inspect the largest branches in the reported tree. Reduce temporary tensor
-sizes, release Python references that keep graphs alive, or split work into
-smaller batches before changing global memory limits.
+看报告里最大的几个分支。在动全局显存上限之前，先做这三件事：缩小临时张量、释放
+那些让图活着的 Python 引用、把工作拆成更小的批次。
 
-## Enable automatic swapping
+## 自动换出（实验性）
 
-Jittor can move values between device memory, host memory, and disk when a
-limit is reached. Limits are bytes; `-1` means unlimited.
+达到上限时，Jittor 可以在显存、主机内存和磁盘之间搬运数据。上限单位是字节，`-1`
+表示不限。
 
-`JT_SAVE_MEM` is a **build** switch, not a runtime flag: it becomes a
-compile-time constant so that the swap branch on every value release costs
-nothing in a build that did not ask for it. Setting it therefore selects a
-separate build configuration, and the first run after setting or clearing it
-recompiles.
+`JT_SAVE_MEM` 是**构建开关，不是运行时 flag**：它会变成编译期常量，好让没启用它的
+构建在每次释放值时不必付出换出分支的代价。因此设置它等于选择了另一套构建配置，
+设置或清除之后的第一次运行会重新编译。
 
-Swapping is **experimental and unfinished** -- aliased values (`share_with`),
-migration between devices, the dual allocator and foreign allocators are all
-still open in its own TODO list. Enable it only if you have measured that you
-need it.
+**换出功能尚未完成**：别名值（`share_with`）、设备间迁移、双分配器和外部分配器都还
+在它自己的 TODO 里。只有在你**实测确认需要**时才开。
 
 ```bash
 export JT_SAVE_MEM=1
@@ -46,12 +40,16 @@ export device_mem_limit=8000000000
 python train.py
 ```
 
-PowerShell uses the corresponding `$env:JT_SAVE_MEM`, `$env:cpu_mem_limit`, and
-`$env:device_mem_limit` variables. Keep swap storage on a local disk with
-enough free space and expect lower throughput while swapping is active.
+PowerShell 用对应的 `$env:JT_SAVE_MEM`、`$env:cpu_mem_limit`、`$env:device_mem_limit`。
+把换出文件放在空间足够的本地磁盘上，并预期换出期间吞吐下降。
 
-Remove stale swap files with:
+清理残留的换出文件：
 
 ```bash
 python -m jittor_utils.clean_cache swap
 ```
+
+## 相关
+
+- 显存到底去哪了、缓存分配器为什么不还给驱动：见[调试指南](debugging.md)
+- 把大张量搬回主机：`.cpu()` 的目标缓冲分配在主机侧，见[设备与放置](../notes/device-placement.md)

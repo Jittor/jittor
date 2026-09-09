@@ -26,7 +26,7 @@ extensions = [
 
 source_suffix = {".md": "markdown"}
 master_doc = "index"
-language = "en"
+language = "zh_CN"
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 myst_enable_extensions = ["colon_fence", "deflist", "substitution"]
@@ -44,10 +44,6 @@ intersphinx_mapping = {
 intersphinx_cache_limit = 7
 intersphinx_timeout = 15
 
-locale_dirs = ["locales/"]
-gettext_compact = False
-gettext_uuid = True
-gettext_location = False
 
 nitpicky = True
 nitpick_ignore = [

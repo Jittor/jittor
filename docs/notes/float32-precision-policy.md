@@ -1,138 +1,60 @@
-# Float32 Accumulate Precision
+# float32 累加精度
 
-## What it was
+矩阵乘和卷积可以用比 float32 更低的精度做累加换取速度。这一页说明 Jittor 提供哪些
+档位、默认是什么、以及在惰性图下什么时候生效。
 
-Four knobs answered "how is this product accumulated", in four encodings,
-and they disagreed with each other.
+## 档位
 
-| knob | scale | reaches |
-| --- | --- | --- |
-| `use_tensorcore` | 0 / 1 / 2 / 3 | matmul *and* convolution; also changed float16 and bfloat16 accumulation |
-| `cuda_allow_tf32` | 0 / 1 | matmul only |
-| `cuda_allow_cudnn_tf32` | 0 / 1 | convolution only |
-| nothing | — | `cublas_acc_matmul`, which hard-coded float16 accumulation |
+一个统一的档位同时决定 cuBLAS 的 compute type 和 cuDNN 的 math type：
 
-`use_tensorcore==1` and `cuda_allow_tf32==1` both mean "tf32 is acceptable
-for a float32 matmul", but only the first also switched float16 products to
-a float16 accumulator; `use_tensorcore>=3` asked for
-`CUBLAS_COMPUTE_32F_FAST_16F`, for which torch has no name at all.
-
-Three cuBLAS ops carried three copies of the selection.
-`cublas_matmul_op.cc` and `cublas_batched_matmul_op.cc` were
-character-for-character identical. `cublas_acc_matmul_op.cc` differed in one
-line: `CUBLAS_COMPUTE_16F` unconditionally where the other two wrote
-`use_tensorcore ? CUBLAS_COMPUTE_16F : CUBLAS_COMPUTE_32F`. So the
-accumulate precision of one float16 matmul was a property of which op the
-graph happened to pick, which no API exposes. Measured against a float64
-reference over k=8192: `cublas_acc_matmul` was off by 0.63 where
-`cublas_matmul` on identical inputs was off by 0.14.
-
-The convolution ops had the same shape of defect twice over.
-`cudnn_conv` and the three `cudnn_conv3d` ops set the convolution
-descriptor's compute type to `CUDNN_DATA_FLOAT` for reduced-precision
-operands and asked for tensor-op math; `cudnn_conv_backward_x` and
-`cudnn_conv_backward_w` passed `getDataType<Ty>()` — float16 accumulate —
-and left the math type at `CUDNN_DEFAULT_MATH`. A float16 convolution
-therefore declared one accumulate precision going forward and another coming
-back, and its own backend-API fast path (`cudnn_conv_plan.h`, which always
-sets `CUDNN_DATA_FLOAT`) declared a third.
-
-## What it is
-
-The native `float32_matmul_precision` Runtime setting writes both native
-matmul and cuDNN tiers. The independent Torch frontend owns a separate pair:
-`torch.set_float32_matmul_precision()` changes only matmul, while
-`torch.backends.cudnn.allow_tf32` changes only cuDNN (convolution and RNN).
-Torch defaults to `highest` matmul and `high` cuDNN; native defaults to
-`highest` for both. Neither frontend's setters mutate the other's state.
-
-| tier | cuBLAS compute type | cuDNN math type | meaning |
+| 档位 | cuBLAS compute type | cuDNN math type | 含义 |
 | --- | --- | --- | --- |
-| `highest` (default) | `CUBLAS_COMPUTE_32F` | `CUDNN_FMA_MATH` | true float32 accumulate |
+| `highest`（默认） | `CUBLAS_COMPUTE_32F` | `CUDNN_FMA_MATH` | 真正的 float32 累加 |
 | `high` | `CUBLAS_COMPUTE_32F_FAST_TF32` | `CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION` | tf32 |
 | `medium` | `CUBLAS_COMPUTE_32F_FAST_16BF` | `CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION` | bfloat16 |
 
-The tier governs **float32 operands only**. float16 and bfloat16 always
-accumulate in float32 (`CUBLAS_COMPUTE_32F` / `CUDNN_DATA_FLOAT`), and
-float64 in float64. That is torch's rule, it was already the default for two
-of the three cuBLAS ops and for the convolution forward, and it is the one
-place where a "faster" setting used to spend accuracy nobody asked to spend.
+**档位只作用于 float32 操作数。** float16 与 bfloat16 一律用 float32 累加
+（`CUBLAS_COMPUTE_32F` / `CUDNN_DATA_FLOAT`），float64 用 float64。这与 torch
+的规则一致——低精度输入本来就需要高精度累加，"更快"的设置不应该在这里额外花掉
+精度。
 
-The cuBLAS algorithm hint mirrors the compute type — tensor-op exactly when
-a reduced-precision compute type was requested — rather than being selected
-separately, which is how the two came to be chosen with opposite senses
-(6.B05).
+cuBLAS 的算法提示跟随 compute type：请求了低精度 compute type 时才用 tensor-op，
+两者不再分别选择。
 
-Where it lives: `src/runtime/float32_precision.{h,cc}` (policy and scopes),
-`backends/cuda/libraries/cublas/include/cublas_compute_type.h` (one `cublas_gemm_mode` for
-all three gemm ops), `backends/cuda/libraries/cudnn/include/cudnn_wrapper.h`
-(`cudnn_conv_compute_type` and `cudnn_conv_math_type` for all six conv ops).
+## 怎么设置
 
-## Delayed graphs and frontend boundaries
+原生接口：Runtime 的 `float32_matmul_precision` 同时写 matmul 与 cuDNN 两层。
 
-The native Runtime stores separate matmul and cuDNN tier fields. A Torch
-binding enters a thread-local pair resolved from its install context; native
-calls retain the existing Runtime-following policy. Each Op captures the
-pair at construction. Fusion requires equal pairs; graph rewriting,
-parallel compilation, execution and native backward construction restore
-the captured pair. Thus changing a Torch switch after constructing a lazy
-graph cannot silently change that graph's requested library precision.
-These scopes do not mutate global flags or synchronize pending tensors.
+Torch 前端是**分开的两个开关**，与 torch 语义一致：
 
-The cuDNN RNN descriptor uses the same cuDNN tier as convolution. Its reserve
-space key includes the selected math type, and Python's flattened-weight
-offset cache includes the cuDNN tier rather than the unrelated matmul tier.
-Float32 native RNN selects FMA by default; Torch's default cuDNN setting
-permits TF32. Half/bfloat16 accumulation rules remain unchanged.
+```python
+torch.set_float32_matmul_precision("high")   # 只影响 matmul
+torch.backends.cudnn.allow_tf32 = True       # 只影响 cuDNN（卷积与 RNN）
+torch.backends.cuda.matmul.allow_tf32 = True # matmul 的另一种拼写，同一个开关
+```
 
-## The default is unchanged, deliberately
+默认值不同：**torch 前端** matmul 为 `highest`、cuDNN 为 `high`；**原生前端**两者
+都是 `highest`。两个前端的 setter 互不影响对方的状态。
 
-`highest` is exactly what `use_tensorcore=0, cuda_allow_tf32=0,
-cuda_allow_cudnn_tf32=0` selected before — `CUBLAS_COMPUTE_32F` with
-`CUBLAS_GEMM_DEFAULT`, and `CUDNN_FMA_MATH`. Nothing about this change asks
-a user to accept different numerics by default, which is why it needed no
-end-to-end ecosystem evidence to land: the two substantive changes are both
-*towards* the value the majority of the code already used.
+同一个语义的多种拼写（`allow_tf32`、`fp32_precision`、
+`get/set_float32_matmul_precision`）都是同一个标志的**视图**，不各自存一份状态，
+因此不会出现三种拼写给出三个答案的情况。
 
-1. `cublas_acc_matmul` accumulates float16 in float32, like the other two
-   gemm ops and like torch. One call site in the repository.
-2. `cudnn_conv_backward_x` / `_w` declare float32 accumulate and tensor-op
-   math for reduced-precision operands, like the forward and like their own
-   backend-plan fast path.
+## 惰性图下什么时候生效
 
-## The deprecated knobs
+Jittor 的执行是惰性的，所以"什么时候读取这个设置"必须明确：
 
-`use_tensorcore`, `cuda_allow_tf32` and `cuda_allow_cudnn_tf32` remain, as
-overrides that can only *raise* the tier for the domain they name:
+- **每个算子在构造时**捕获当时的档位对（matmul 档 + cuDNN 档）；
+- 融合要求两个算子的档位对**相等**；
+- 图重写、并行编译、执行和反向构造都会恢复捕获时的档位对。
 
-    matmul tier = max(policy, use_tensorcore tier, cuda_allow_tf32 ? high : highest)
-    conv   tier = max(policy, use_tensorcore tier, cuda_allow_cudnn_tf32 ? high : highest)
+也就是说，**构造完惰性图之后再改开关，不会偷偷改变那张图已经请求的库精度**。
+这些作用域不修改全局 flag，也不会同步尚未完成的张量。
 
-so every value they had keeps meaning what it meant, and leaving them alone
-makes the policy the whole answer. `use_tensorcore=3` folds into `medium`:
-`CUBLAS_COMPUTE_32F_FAST_16F` and `CUBLAS_COMPUTE_32F_FAST_16BF` cost the
-same on every tensor-core generation and bfloat16 keeps float32's exponent
-range, so the float16 variant was strictly the worse of the two.
+## 实现位置
 
-These deprecated overrides apply only to native Runtime-following calls.
-Torch's explicit context pair bypasses them, so native legacy flags cannot
-raise the precision tier of an independent Torch operation. Torch's
-high/medium boolean-toggle roundtrip remains the shim's documented
-approximation; it does not claim to reproduce PyTorch 2.12's rejection of
-mixed old/new precision-control APIs.
-
-## Reading the choice back
-
-Each op logs its decision immediately before calling the library, at `vvv`:
-
-    cublas_matmul algo select: precision=highest computeType=CUBLAS_COMPUTE_32F algo=CUBLAS_GEMM_DEFAULT
-    cudnn_conv precision select: precision=highest computeType=CUDNN_DATA_FLOAT mathType=CUDNN_FMA_MATH
-
-That line is the observable: several of these choices are invisible in the
-output values. On sm_89 with cuDNN 8.9, setting the convolution descriptor's
-compute type to `CUDNN_DATA_HALF` produced bit-identical gradients to
-`CUDNN_DATA_FLOAT` (max error 0.05796 either way over a 4096-deep reduction),
-because the kernels cuDNN picks accumulate in float32 regardless. The
-convolution half of this change is therefore a latent defect closed, not a
-measured accuracy gain — unlike the cuBLAS half, which moves a real 0.63 to a
-real 0.14.
+| 内容 | 位置 |
+| --- | --- |
+| 策略与作用域 | `src/runtime/float32_precision.{h,cc}` |
+| cuBLAS 选择（三个 gemm 算子共用） | `backends/cuda/libraries/cublas/include/cublas_compute_type.h` |
+| cuDNN 选择（六个卷积算子共用） | `backends/cuda/libraries/cudnn/include/cudnn_wrapper.h` |

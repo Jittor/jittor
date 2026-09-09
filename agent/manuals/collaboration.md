@@ -4,7 +4,7 @@
 
 ## 开工流程
 
-1. **先读上下文**：阅读 [`../skills/jittor-dev-context/SKILL.md`](../skills/jittor-dev-context/SKILL.md)，
+1. **先读上下文**：阅读 [`agent/skills/jittor-dev-context/SKILL.md`](../skills/jittor-dev-context/SKILL.md)，
    再通过 [`project-context.md`](project-context.md) 定位相关架构契约。
 2. **确认环境与问题**：按需阅读 [`environment.md`](environment.md) 和
    [`known-issues.md`](known-issues.md)，不要依赖个人机器路径或过期会话记录。

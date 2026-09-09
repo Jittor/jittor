@@ -98,5 +98,5 @@ Unversioned raw logs under the validation state directory:
 No full-suite, model-performance, NPU/CANN or multi-machine validation is
 claimed. The low-overhead contract is bounded storage and allocation-free
 recording, not an unmeasured throughput claim. See the maintained
-[diagnostic contract](../testing/async-error-diagnostics.md) for the API and
+[diagnostic contract](../../docs/development/async-error-diagnostics.md) for the API and
 limitations.

@@ -1,12 +1,14 @@
-# Jittor documentation
+# Jittor 文档
 
-Jittor is a just-in-time compiled deep learning framework. This site contains
-the maintained API reference, practical guides, compatibility notes, and
-repository documentation.
+Jittor（计图）是一个基于即时编译和元算子的深度学习框架。前端使用 Python 动态图
+接口，后端把算子编译成针对实际负载调优的 C++ 与 CUDA 代码。
+
+本站包含安装与上手、教程、API 参考、使用指南、Torch 兼容说明、框架机制说明，
+以及面向贡献者的开发文档。
 
 ```{toctree}
 :maxdepth: 2
-:caption: Get started
+:caption: 开始使用
 
 guides/index
 tutorials/index
@@ -14,34 +16,39 @@ tutorials/index
 
 ```{toctree}
 :maxdepth: 2
-:caption: Reference
+:caption: 参考
 
 api/index
 compatibility/index
+notes/index
+performance/index
 ```
 
 ```{toctree}
 :maxdepth: 2
-:caption: Project
+:caption: 项目
 
-architecture/index
-testing/index
 development/index
-research/index
-performance/index
 releases/index
+community/index
 contributing
 ```
 
-维护者的[整改看板](../refactor-wip/architecture/refactor-board.md)与[验证结果索引](results/README.md)
-均在本棵文档树中；[社区项目列表](community/index.md)收录使用 Jittor 的项目。
+## 从哪里开始
 
-## Project links
+| 你想做的事 | 去哪里 |
+| --- | --- |
+| 装好并跑通第一个模型 | [安装与快速开始](https://github.com/Jittor/jittor#install)、[教程](tutorials/index.md) |
+| 查某个函数怎么用 | [API 参考](api/index.md) |
+| 把 PyTorch 代码跑在 Jittor 上 | [Torch 兼容](compatibility/index.md) |
+| 在昇腾、天数或多卡上运行 | [使用指南](guides/index.md) |
+| 弄清显存、精度或异步执行的行为 | [机制说明](notes/index.md) |
+| 调查一个报错或性能问题 | [调试指南](guides/debugging.md)、[性能](performance/index.md) |
+| 给 Jittor 提交代码 | [贡献指南](contributing.md)、[开发文档](development/index.md) |
 
-- [Jittor website](https://cg.cs.tsinghua.edu.cn/jittor/)
-- [Source repository](https://github.com/Jittor/jittor)
-- [Issue tracker](https://github.com/Jittor/jittor/issues)
+## 项目链接
 
-The same source tree is published in English and Simplified Chinese. English
-Markdown is canonical; translations are maintained as gettext catalogs under
-`docs/locales/zh_CN`.
+- [官网](https://cg.cs.tsinghua.edu.cn/jittor/)
+- [源码仓库](https://github.com/Jittor/jittor)
+- [问题追踪](https://github.com/Jittor/jittor/issues)
+- [论坛](https://discuss.jittor.org/)

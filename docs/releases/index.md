@@ -1,4 +1,4 @@
-# Release notes
+# 发布说明
 
 ```{toctree}
 :maxdepth: 1

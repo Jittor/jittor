@@ -71,6 +71,6 @@ On Ascend, compile with the real SDK first, then check actual NPU residency,
 zero fallback, distinct positive/negative dimensions, axis order, repeated
 invocations and forward/backward values against independent references. The
 entry and strict fallback scope are in the
-[Ascend guide](../guides/ascend-910b.md) and
-[attribute migration contract](../guides/acl-structure-boundary.md).
+[Ascend guide](../../docs/guides/ascend-910b.md) and
+[attribute migration contract](../architecture/acl-structure-boundary.md).
 Remaining owner families and production descriptor caching still keep 8.06 open.

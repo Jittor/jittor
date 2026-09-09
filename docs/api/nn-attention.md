@@ -1,7 +1,6 @@
-# Attention API
+# 注意力 API
 
-Variable-length scaled dot-product attention is maintained in the canonical
-`jittor.nn.attention` module.
+`jittor.nn.attention` 提供注意力算子，包括缩放点积注意力及其融合实现。
 
 :::{autopublicmodule} jittor.nn.attention
 :::

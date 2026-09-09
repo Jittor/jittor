@@ -18,7 +18,7 @@ description: 接入或验证一个下游 Torch 生态库时的流程与准入标
 | 能力有，拼写/签名不同 | **`jittor.compat.torch`** | compat 只做适配；**出现第二套实现就是放错了** |
 | 这个库私有的实现细节 | **adapter** | 它根本不是 torch API |
 
-[`torch-compatibility-principles`](../../../docs/architecture/torch-compatibility-principles.md)
+[`torch-compatibility-principles`](../../../refactor-wip/architecture/torch-compatibility-principles.md)
 和 [`project-context`](../../manuals/project-context.md) 写了前两行；第三行原先只用
 排除法说"不属于 core"，没给地址，这是 adapter 失控的根源。
 
@@ -100,7 +100,7 @@ fallback 能骗过的那一个**：NPU 真发生 CPU 回退时，它会完美一
 - **③ 拿不到时**（目标卡上的原生下游栈装不起来），退回用 Jittor CPU 对 Jittor device，
   **必须配 `fallback_count == 0`**，并在报告里标成**降级证据**，不能声称"与原生栈一致"。
 - **核心算子门禁里的 device parity 层不要动**。
-  [`test-system`](../../../docs/testing/test-system.md) 第 3 层跨 device 跑整个 OpInfo
+  [`test-system`](../../../docs/development/test-system.md) 第 3 层跨 device 跑整个 OpInfo
   库，那里逐算子的外部 device oracle 根本拿不到，它是唯一可规模化的手段。删的是**新库
   接入流程**里的那一步，不是仓库已有的 parity 层。
 

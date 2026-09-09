@@ -244,14 +244,14 @@ class TestDocsStructure(unittest.TestCase):
             for node in tree.body
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
-        self.assertEqual({"docs", "docs_zh", "docs_links", "tutorials"} - functions, set())
+        self.assertEqual({"docs", "docs_links", "tutorials"} - functions, set())
         for option in ('"-E"', '"-a"', '"-W"', '"--keep-going"', '"-n"'):
             self.assertIn(option, nox_source)
         self.assertIn("autodoc imported the source tree", nox_source)
         workflow = (self.repo_root / ".github" / "workflows" / "docs.yml").read_text(
             encoding="utf-8"
         )
-        for session in ("docs", "docs_zh", "docs_links", "tutorials"):
+        for session in ("docs", "docs_links", "tutorials"):
             self.assertIn(session, workflow)
 
     def _tracked(self, pattern):
@@ -290,8 +290,7 @@ class TestDocsStructure(unittest.TestCase):
             self.repo_root / "noxfile.py",
             self.repo_root / "pyproject.toml",
         ]
-        candidates.extend(path for path in self.docs_root.rglob("*.md")
-                          if "results" not in path.relative_to(self.docs_root).parts)
+        candidates.extend(self.docs_root.rglob("*.md"))
         candidates.extend((self.repo_root / ".github").rglob("*.yml"))
         forbidden = (
             "doc/source",

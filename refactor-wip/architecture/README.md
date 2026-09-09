@@ -16,7 +16,7 @@
   post-process。原生 executor、allocator 与 BackendOps 各自承载运行期契约。
 - [Torch API 与 Runtime 归属](torch-api-ownership.md) —— 独立命名空间、模块级
   实现、原生数学委托与逐 API 保真度记录；完整任务状态仍以看板为准。
-- [惰性图的流水化执行](pipelined-execution.md) —— CUDA 上每步的差距不在
+- [惰性图的流水化执行](../../docs/notes/pipelined-execution.md) —— CUDA 上每步的差距不在
   kernel 而在 GPU 空转：整步图先在 CPU 上建完再发射，建图的 9 ms 里设备
   无事可做。`auto_flush_ops` 按段提前发射后，transformer 类用例全部追平
   PyTorch。含保持了哪些惰性语义，以及按步切窗的测量方法。
@@ -30,7 +30,7 @@
   运行期属性（`use_acl` 等都是 `use_cuda` 的别名），移植靠对整个源码树做
   文本替换，同一个算子的分派散在三处。提出后端注册表加算子分派表，并给出
   六阶段迁移路径。
-- [一个进程用多张卡](device-placement.md) —— 设备成为 `Var` 的属性、
+- [一个进程用多张卡](../../docs/notes/device-placement.md) —— 设备成为 `Var` 的属性、
   运行期切卡不再重启进程、按设备的内存池与库句柄。两个并行实现分别在
   `device-select` 与 `multi-device` 分支，第 5 节记下差异与合并前要定的事。
 

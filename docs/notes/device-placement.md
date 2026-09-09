@@ -1,149 +1,92 @@
-# Device Placement in One Process
+# 设备与放置
 
-Jittor knew one CUDA device per process. `Var` had no notion of where it
-lived; the allocator, the cuDNN/cuBLAS handles and the executor all assumed
-"the" device; and setting `jt.flags.device_id` re-executed the process with
-`CUDA_VISIBLE_DEVICES` rewritten. Under the Torch facade this surfaced as
-`torch.cuda.set_device` doing nothing, `.to("cuda:1")` dropping the index and
-every tensor reporting `cuda:0`. Real multi-GPU use was limited to one device
-per process behind NCCL.
+这篇讲清楚三件事：一个张量到底在哪张卡上、怎么让它换一张卡、以及什么时候
+Jittor 会拒绝你。
 
-This document describes the device model that replaces it. It keeps the
-meta-operator graph and lazy execution untouched; it adds placement. Two
-implementations of this model existed on the branches `device-select` and
-`multi-device`; §5 records what was taken from each and why, and what the
-merged version does *not* prove.
+## 张量的设备是它自己的属性
 
-## 1. Model
+每个 `Var` 带一个 `device_id`，表示它所在（或将被计算于）的加速器编号，创建时
+确定：
 
-- **Every `Var` carries `Var::device_id`**, the accelerator index it lives on
-  or will be computed on, fixed when the Var is created. An op's outputs take
-  the device of its inputs (`Op::propagate_device`); a source op (`array`,
-  `random`, `zeros`, …) takes the *current device*. A Var migrated to host
-  memory keeps its device and returns to it.
-- **The current device** is `jt.flags.device_id` / `jt.current_device()`, set
-  with `jt.set_device(i)` and scoped with `jt.flag_scope(device_id=i)`.
-  Setting it calls `cudaSetDevice` and lets each library wrapper swap in that
-  device's handle. Nothing restarts, and other devices stay visible and
-  usable.
-- **Ops run where their outputs live.** The executor makes each op's device
-  current before allocating its outputs and launching it. A final
-  `device_sync` waits on every device the run touched and restores the
-  caller's current device.
-- **Mixing devices in one op is an error at graph-construction time**, as in
-  torch: `Expected all inputs to be on the same CUDA device`. This runs from
-  `Op::init`, so `jt.grad`'s new operators are checked by the same rule — a
-  forward that is refused cannot be followed by a silently mixed backward.
-  One exception mirrors torch's CPU scalars: a Var that is **both** unfinished
-  **and** flagged `_is_scalar` (the `2` in `x * 2`, a gradient's starting `1`)
-  follows the operand it meets, together with the small pending subgraph
-  behind it. See §5 for why both halves of that test are needed and where its
-  edge is.
-- **`Var.to_device(i)`** is the `device_copy` op and the only way data changes
-  device. The copy runs on the destination's stream after the producer's event
-  on the source, and the source's stream waits for the copy before it may
-  reuse the memory. It is differentiable: the gradient is a copy back. Peer
-  access is enabled once per device pair where the hardware allows it.
-  `device_copy` is the one op whose output device is not its inputs' — it says
-  so with `NodeFlags::_manual_device`, and it is also the one op whose input
-  must be migrated to the *input's* device rather than the op's.
+- 算子的输出**继承输入的设备**；
+- 源算子（`array`、`random`、`zeros` 等）落在**当前设备**上；
+- 被搬到主机内存的 Var 仍记得自己的设备，回到设备时用的还是它。
 
-## 2. Per-device state
+**当前设备**是 `jt.flags.device_id` / `jt.current_device()`，用 `jt.set_device(i)`
+设置，或用 `jt.flag_scope(device_id=i)` 限定作用域。设置它会调用 `cudaSetDevice`
+并让各库句柄切到该设备。**进程不会重启**，其它卡照常可见可用。
 
-| Resource | Before | After |
-| --- | --- | --- |
-| device memory pool | one `cuda_device_allocator` | one pool per device (`get_allocator(device, temp)`); the global instance is device 0's |
-| cuDNN / cuBLAS / cuSPARSE handles | one global | one per device; the global name always means the current device's handle, swapped by a device-switch hook |
-| cuRAND generator | one | one per device, seeded together |
-| cuFFT plans | one cache | one cache per device, swapped like the handles |
-| synchronisation | `cudaDeviceSynchronize()` | every device the run launched on |
-| NCCL | `cudaSetDevice(local_rank)` | goes through the same switch, so handles and pools agree |
+算子在**它的输出所在的设备**上执行：执行器先把该设备设为当前，再分配输出、发射
+kernel。一次运行结束时会等待它触及过的每一张卡，并恢复调用者原本的当前设备。
 
-`Allocator::device()` reports which device a block belongs to, forwarded
-through the SFRL, stat, temp and NFEF wrappers, so host-to-device migration
-and device-to-host fetches always run on the right device.
+## 换设备只有一条路：`device_copy`
 
-## 3. Torch facade
+`Var.to_device(i)` 就是 `device_copy` 算子，是数据改变设备的唯一途径。它：
 
-`torch.cuda.device_count()`, `current_device()`, `set_device()`, the
-`torch.cuda.device(i)` and `device_of(tensor)` contexts,
-`with torch.device("cuda:1")` as the default device for new tensors,
-`Tensor.device` with its real index, `Tensor.get_device()`, `.to("cuda:N")`
-and `.cuda(N)` (a copy when the index differs, identity when it is the
-tensor's own device), `device="cuda:N"` in factory functions (created on N,
-not copied there), and `Module.to("cuda:N")` in place with parameter identity
-preserved. A bare `.to("cuda")` means the current device, as in torch.
+- 在**目标设备的流**上执行，等待源设备上生产者的 event；源设备的流也要等这次拷贝
+  完成才能复用那块显存；
+- **可导**，梯度是一次反向拷贝；
+- 在硬件允许的设备对上，每对只启用一次 peer access。
 
-## 4. Out of scope
+面向用户的写法：
 
-- Streams and events stay the per-device default stream; `torch.cuda.Stream`
-  remains a no-op object.
-- Kernels are compiled for the compute capabilities `query_cuda_cc` found;
-  devices of different architectures in one process are not handled.
-- Memory swapping (`save_mem`) still assumes device 0.
-- Non-CUDA backends. Device placement and backend selection are different
-  axes; see `multi-backend-design.md`, which proposes making the backend a
-  value on the device rather than a build-time property.
+```python
+b = a.cuda(3)            # 复制到 3 号卡；已在 3 号卡则返回自身
+b = a.to("cuda:3")       # 同上
+c = b.cpu()              # 取回主机内存，返回新 Var，源不变
+```
 
-## 5. Merged: what was taken from each branch, and why
+`.cpu()` 的目标缓冲分配在**主机侧**，不会在设备上再占一份等大显存。
 
-Task 4.02 merged the two implementations. The model above is what landed; this
-section records the four choices and the one place where the model has an edge
-that neither branch had noticed.
+## 混设备是构图期的错误
 
-| | taken from | why |
-| --- | --- | --- |
-| `Var::device_id` | `multi-device` | The word "device id" is already the vocabulary of `jt.flags.device_id`, `CUDA_VISIBLE_DEVICES` and `torch.cuda.current_device`. `device-select`'s `Var::cuda_device` / `Var.device_index()` names the same thing twice more. |
-| scalar exemption = `!is_finished() && _is_scalar` | both, as a conjunction | Neither half alone is sound; see below. |
-| copy ordering = destination stream + events both ways | `multi-device` | `device-select` used `cudaMemcpyPeer`, which gets the ordering by being *synchronous* — every move drains both pipelines. Events express the dependency without the drain. |
-| facade surface | union of both | `device-select`'s `Module.cuda(i)`, `multi-device`'s `get/set_default_device` with an index and `torch.accelerator.*`. |
+一个算子的输入落在不同卡上会**在建图时**报错，和 torch 一致：
 
-### Why the scalar rule is a conjunction
+```
+Expected all inputs to be on the same CUDA device
+```
 
-`device-select` exempted by element count, `multi-device` by pendingness. Each
-is wrong on a case the other catches, and the repository has a test for each:
+这条检查在 `Op::init` 里，所以 `jt.grad` 新建的反向算子走同一条规则——**前向被拒绝
+的组合，不会出现一个悄悄混设备的反向**。
 
-* **Element count alone** exempts a real one-element tensor that already holds
-  the user's data (`tests/backends/cuda/test_cuda_multi_device.py::
-  test_a_one_element_tensor_is_not_a_scalar`). `device-select` chose it because
-  a flag bit was said to be unavailable; that is no longer true —
-  `node.h`'s `_is_scalar` has been its own bit (26) since the mixed-precision
-  fix.
-* **Pendingness alone** retargets a `jt.array(np.ones(1000))` that the user
-  deliberately built on `cuda:0` and merely has not synced yet
-  (`::test_a_placed_pending_tensor_is_not_retargeted`) — silently, where torch
-  raises.
+唯一的例外对应 torch 的 CPU 标量：**既未完成计算、又带 `_is_scalar` 标记**的 Var
+（`x * 2` 里的 `2`、梯度起始的 `1`）会跟随它遇到的操作数，连同它背后那一小段待定
+子图一起走。两个条件缺一不可——只看元素个数会放过用户真实存放在某张卡上的单元素
+张量；只看"未完成"会把用户特意建在 `cuda:0` 上、只是还没同步的 `jt.array` 悄悄
+挪走，而 torch 在这里是报错的。
 
-`_is_scalar` is set by `array_op.cc` on a shape-`[1]` source and carried
-through `broadcast_to_op.cc` and `unary_op.cc`, so `x * 2` passes and a real
-array does not.
+已知边界：`jt.zeros(n)` / `jt.ones(n)` 实现为 `unary(0).broadcast(n)`，`_is_scalar`
+会穿过 broadcast，因此一个未同步的 `jt.zeros(1000)` **会**跟随另一张卡上的操作数，
+而 torch 会报错。这一条是**接受**而非修补：它是编译期常量，任何一张卡上按位一致地
+产生，没有用户算出来的数据被搬动。凡是真正携带数据的路径（多于一个元素的
+`jt.array`，或任何已经算出来的值）仍然被拒绝。
 
-### The edge the conjunction does not remove
+## 每张卡各有一份的状态
 
-`jt.zeros(n)` / `jt.ones(n)` are `unary(0).broadcast(n)`: the `_is_scalar` flag
-comes through the broadcast, so an unsynced `jt.zeros(1000)` built on `cuda:0`
-*does* follow an operand on `cuda:1`, where torch would raise. This was
-expected to be excluded by the conjunction and is not; measuring it is what
-`::test_a_pending_broadcast_constant_does_follow` exists for.
+| 资源 | 粒度 |
+| --- | --- |
+| 显存池 | 每设备一个；全局那个实例是 0 号卡的 |
+| cuDNN / cuBLAS / cuSPARSE 句柄 | 每设备一个；全局名字始终指当前设备的句柄 |
+| cuRAND 生成器 | 每设备一个，统一种子 |
+| cuFFT plan 缓存 | 每设备一个缓存 |
+| 同步 | 等待本次运行发射过的每一张卡 |
+| NCCL | 走同一套设备切换，句柄与显存池保持一致 |
 
-It is accepted rather than patched. The value is a compile-time constant with
-no data anywhere, produced bit-identically on either card, so nothing the user
-computed is moved — this is constant placement, not data movement. Every path
-that does carry data (a `jt.array` of more than one element, or any value that
-has already been computed) is still refused. Narrowing it further would need a
-fourth condition, and the obvious candidate — "the Var has no `VarHolder`" —
-breaks the legitimate torch-compatible `two = jt.array(2.0); x_on_cuda1 * two`.
+## Torch 兼容写法
 
-### What the merged version does not prove
+以下都按 torch 的语义工作：`torch.cuda.device_count()`、`current_device()`、
+`set_device()`、`torch.cuda.device(i)` 与 `device_of(tensor)` 上下文、
+`with torch.device("cuda:1")` 作为新张量的默认设备、带真实编号的 `Tensor.device`、
+`Tensor.get_device()`、`.to("cuda:N")` 与 `.cuda(N)`（编号不同则复制，就是本卡则
+返回自身）、工厂函数的 `device="cuda:N"`（**直接在 N 上创建**，不是先建后搬）、
+以及原地生效且保持参数对象标识的 `Module.to("cuda:N")`。不带编号的 `.to("cuda")`
+表示当前设备，与 torch 相同。
 
-The copy ordering is **not** exercised as a regression guard on this hardware.
-All eight GPUs here report `cudaDeviceCanAccessPeer == 0` for every pair
-(consumer cards, P2P disabled), so the driver stages every cross-device copy
-through host memory and serialises it against the source device itself:
-deleting the `cudaEventRecord`/`cudaStreamWaitEvent` pair from
-`DeviceCopyOp::run` leaves the whole file passing. The test is written and
-reports which regime it ran in (`_peer_regime`); it becomes a guard on a
-peer-capable pair. See `agent/skills/multi-device-verification/SKILL.md`.
+## 不在范围内
 
-Streams and events beyond the per-device default stream stay out of scope
-(task 4.08), as does `save_mem`, which still assumes device 0.
+- **流与事件**：只用每设备的默认流，`torch.cuda.Stream` 仍是空对象。
+- **异构架构**：kernel 按 `query_cuda_cc` 探测到的计算能力编译，同一进程里混用不同
+  架构的卡未做处理。
+- **显存换出**（`save_mem`）仍假定 0 号卡。
+- **非 CUDA 后端**：设备放置与后端选择是两个维度，见
+  [多后端设计](../../refactor-wip/architecture/multi-backend-design.md)。

@@ -1,62 +1,55 @@
-# Distributed training with MPI
+# 用 MPI 做分布式训练
 
-Jittor can use MPI to launch data-parallel workers. Supported collective
-operations may use NCCL on NVIDIA devices, while the training algorithm remains
-in Python.
+Jittor 可以用 MPI 启动数据并行的多个 worker。集合通信在 NVIDIA 设备上可以走 NCCL，
+训练算法本身仍然写在 Python 里。
 
-## Install and detect Open MPI
+## 安装与探测 Open MPI
 
-On Debian or Ubuntu, install the launcher and development headers:
+Debian / Ubuntu 上安装启动器与开发头文件：
 
 ```bash
 sudo apt install openmpi-bin openmpi-common libopenmpi-dev
 ```
 
-Jittor discovers `mpicc` from `PATH`. Set `mpicc_path` only when the compiler
-wrapper is installed somewhere non-standard:
+Jittor 从 `PATH` 里找 `mpicc`。只有当编译器包装器装在非标准位置时才需要显式指定：
 
 ```bash
 export mpicc_path=/opt/openmpi/bin/mpicc
 ```
 
-Start the same training program under `mpirun`:
+用 `mpirun` 启动同一个训练程序：
 
 ```bash
-# One process
+# 单进程
 python train.py
 
-# Four processes
+# 四进程
 mpirun -np 4 python train.py
 
-# Two selected NVIDIA devices
+# 指定两张 NVIDIA 卡
 CUDA_VISIBLE_DEVICES=2,3 mpirun -np 2 python train.py
 ```
 
-The dataset layer partitions data across workers, supported optimizers
-synchronize gradients, and synchronized batch-normalization layers exchange
-statistics. Treat a dataset's configured batch size as the global batch size
-and verify the behavior of custom samplers.
+数据集层会在 worker 之间划分数据，受支持的优化器会同步梯度，同步 BN 层会交换统计量。
+**把数据集配置的批次大小当作全局批次大小**，并自行确认自定义 sampler 的行为。
 
-## Side effects belong on rank zero
+## 副作用只放在 rank 0
 
-Every worker executes the Python program. Restrict filesystem and logging side
-effects to rank zero:
+每个 worker 都会执行整个 Python 程序。把文件写入与日志限制在 rank 0：
 
 ```python
-output = model(images)
-loss = nn.cross_entropy_loss(output, labels)
 optimizer.step(loss)
 
 if jt.rank == 0:
     writer.add_scalar("train/loss", float(loss.item()))
 ```
 
-Do not place Jittor operators in a rank-only branch. Workers must construct
-compatible graphs and call collectives in the same order or they can deadlock.
+**不要把 Jittor 算子放进只有某个 rank 才进入的分支。** 所有 worker 必须构造兼容的图、
+以相同顺序调用集合通信，否则会死锁。
 
-## Aggregate validation metrics
+## 聚合验证指标
 
-Reduce values before using them as global metrics:
+作为全局指标使用之前先归约：
 
 ```python
 correct = local_correct(output, labels)
@@ -68,8 +61,7 @@ if jt.rank == 0:
     print("global correct:", int(correct.item()))
 ```
 
-For an operation that should run in one process without manually branching,
-use `jt.single_process_scope()`:
+要让某个操作只在一个进程里跑而又不想手写分支，用 `jt.single_process_scope()`：
 
 ```python
 @jt.single_process_scope()
@@ -77,22 +69,23 @@ def write_summary(metrics):
     save_summary(metrics)
 ```
 
-## Public MPI state and collectives
+## 公开的 MPI 状态与集合通信
 
-- `jt.in_mpi` reports whether the process participates in an MPI world.
-- `jt.world_size` is the number of workers, or `1` outside MPI.
-- `jt.rank` is the current worker index, or `0` outside MPI.
-- `Module.mpi_param_broadcast(root=0)` broadcasts module parameters.
-- `Var.mpi_reduce(op="add", root=0)` reduces a value to one worker.
-- `Var.mpi_broadcast(root=0)` broadcasts a value from one worker.
-- `Var.mpi_all_reduce(op="add")` reduces and returns the result to every worker.
+| 名称 | 含义 |
+| --- | --- |
+| `jt.in_mpi` | 本进程是否处在 MPI world 中 |
+| `jt.world_size` | worker 数量；非 MPI 时为 `1` |
+| `jt.rank` | 当前 worker 编号；非 MPI 时为 `0` |
+| `Module.mpi_param_broadcast(root=0)` | 广播模块参数 |
+| `Var.mpi_reduce(op="add", root=0)` | 归约到某一个 worker |
+| `Var.mpi_broadcast(root=0)` | 从某一个 worker 广播 |
+| `Var.mpi_all_reduce(op="add")` | 归约并把结果发回每个 worker |
 
-Use `"mean"` when each worker contributes equally; otherwise reduce a sum and a
-sample count separately.
+每个 worker 贡献相同时用 `"mean"`；否则分别归约**求和值**与**样本数**。
 
-## Synchronized statistics
+## 同步统计量
 
-Custom synchronized normalization can reduce moments across workers:
+自定义的同步归一化可以跨 worker 归约矩：
 
 ```python
 x_mean = jt.mean(x, dims=[0, 2, 3], keepdims=1)
@@ -103,6 +96,5 @@ if jt.in_mpi:
 x_var = x2_mean - x_mean * x_mean
 ```
 
-Prefer Jittor's maintained synchronized normalization layer when it covers the
-use case; the example illustrates collective ordering rather than a complete
-replacement implementation.
+能用 Jittor 维护的同步归一化层就优先用它；上面的例子演示的是**集合通信的调用顺序**，
+不是一个完整的替代实现。

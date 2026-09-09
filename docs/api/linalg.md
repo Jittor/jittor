@@ -1,7 +1,6 @@
-# Linear algebra API
+# 线性代数 API
 
-The `jittor.linalg` module covers matrix decompositions, linear solves,
-eigenvalue routines, norms, and Einstein summation.
+`jittor.linalg` 覆盖矩阵分解、线性方程求解、特征值例程、范数和爱因斯坦求和。
 
 :::{autopublicmodule} jittor.linalg
 :::

@@ -55,31 +55,8 @@ jobs:
           python-version: ${{ needs.baseline.outputs.python_version }}
       - name: Install pinned development tools
         run: python -m pip install -r requirements/dev-tools.txt
-      - name: Build strict English documentation
+      - name: 构建文档（严格模式）
         run: python -m nox -s docs
-
-  zh-cn:
-    needs: baseline
-    name: nox / docs_zh (zh_CN)
-    runs-on: ${{ needs.baseline.outputs.host_runner }}
-    timeout-minutes: 45
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - name: Install native CPU toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends build-essential libomp-dev
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ needs.baseline.outputs.python_version }}
-      - name: Install pinned development tools
-        run: python -m pip install -r requirements/dev-tools.txt
-      - name: Build strict Simplified Chinese documentation
-        run: python -m nox -s docs_zh
 
   tutorials-fast:
     needs: baseline

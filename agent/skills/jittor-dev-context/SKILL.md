@@ -10,15 +10,15 @@ description: Jittor 开发任务的上下文路由入口。用于定位当前状
 
 ## 必读
 
-开工前**必须阅读** [`../../manuals/project-context.md`](../../manuals/project-context.md)。
+开工前**必须阅读** [`agent/manuals/project-context.md`](../../manuals/project-context.md)。
 它是短索引，不是完整历史。再按任务选择：
 
-- 环境、缓存和后端前置：[`../../manuals/environment.md`](../../manuals/environment.md)
-- 活跃缺陷与 workaround：[`../../manuals/known-issues.md`](../../manuals/known-issues.md)
-- 架构与模块边界：[`../../../docs/architecture/source-architecture.md`](../../../docs/architecture/source-architecture.md)
-- Torch 兼容验收：[`../../../docs/architecture/torch-compatibility-principles.md`](../../../docs/architecture/torch-compatibility-principles.md)
-- 测试体系：[`../../../docs/testing/test-system.md`](../../../docs/testing/test-system.md)
-- 已有验证报告：[`docs/results/README.md`](../../../docs/results/README.md)
+- 环境、缓存和后端前置：[`agent/manuals/environment.md`](../../manuals/environment.md)
+- 活跃缺陷与 workaround：[`agent/manuals/known-issues.md`](../../manuals/known-issues.md)
+- 架构与模块边界：[`docs/development/source-architecture.md`](../../../docs/development/source-architecture.md)
+- Torch 兼容验收：[`refactor-wip/architecture/torch-compatibility-principles.md`](../../../refactor-wip/architecture/torch-compatibility-principles.md)
+- 测试体系：[`docs/development/test-system.md`](../../../docs/development/test-system.md)
+- 已有验证报告：[`refactor-wip/results/README.md`](../../../refactor-wip/results/README.md)
 
 ## 工作纪律速记
 

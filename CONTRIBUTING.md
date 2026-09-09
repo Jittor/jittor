@@ -73,7 +73,7 @@ CI requirements are documented in [`agent/manuals/environment.md`](agent/manuals
 
 Runtime files loaded by path, especially `python/jittor/src/` and
 `python/jittor/extern/`, have packaging and compiler contracts. Read the
-[repository layout decision](docs/architecture/repository-layout.md) before
+[repository layout decision](docs/development/repository-layout.md) before
 moving them.
 
 ## Making a change / 修改代码
@@ -146,7 +146,6 @@ python -m nox -s rocm
 python -m nox -s mpi
 python -m nox -s benchmark
 python -m nox -s docs
-python -m nox -s docs_zh
 python -m nox -s docs_links
 python -m nox -s tutorials
 ```
@@ -154,14 +153,14 @@ python -m nox -s tutorials
 The `structure` session checks repository layout, source and wheel contents, a
 wheel built from the sdist, and the installed `jittor.selftest`. Hardware
 sessions require a provisioned backend and accept pytest targets after `--`.
-`docs` and `docs_zh` build the English and Chinese documentation with warnings
-treated as errors, `docs_links` validates documentation links, and `tutorials`
+`docs` builds the documentation with warnings treated as errors,
+`docs_links` validates documentation links, and `tutorials`
 materializes MyST sources in temporary storage and executes the maintained
 notebook smoke tests.
 
 `structure` 会检查仓库布局、源码包和 wheel 内容、从源码包生成的 wheel，以及安装后的
 `jittor.selftest`。硬件 session 需要预先配置对应后端，并可在 `--` 后传入 pytest 目标；
-`docs` 与 `docs_zh` 分别严格构建英文和中文文档，`docs_links` 验证文档链接，
+`docs` 严格构建文档（警告即错误），`docs_links` 验证文档链接，
 `tutorials` 在临时目录生成 notebook 并执行维护的教程冒烟测试。
 
 ```bash

@@ -107,7 +107,7 @@ survives graph release without holding tensors or Python frames. Its text
 states omissions and truncation. Candidates do not prove which operation
 caused an asynchronous fault. CUDA error handling attaches this information
 automatically; callers do not need to query it first. See the
-[error contract](../testing/async-error-diagnostics.md).
+[error contract](../../docs/development/async-error-diagnostics.md).
 
 ## Test-consumer migration
 

@@ -10,8 +10,8 @@
    [项目上下文](project-context.md)。
 3. 按任务读取[环境规则](environment.md)、
    [已知问题总账](known-issues.md)或对应的 `docs/` 文档。
-4. 在[结果索引](../../docs/results/README.md)中查找已有验证和性能结论，
-   在[设计文档](../../docs/architecture/README.md)中查找某个机制为什么是现在这样。
+4. 在[结果索引](../../refactor-wip/results/README.md)中查找已有验证和性能结论，
+   在[设计文档](../../refactor-wip/architecture/README.md)中查找某个机制为什么是现在这样。
 5. 领取工作前读取[看板](../../refactor-wip/architecture/refactor-board.md)、
    [交接](../../refactor-wip/architecture/refactor-handoff.md)和
    [分工](../../refactor-wip/architecture/refactor-dispatch.md)，只更新这三处权威文件。

@@ -154,7 +154,6 @@ RATCHET_FILES = (
     *PYTEST_POLICY_FILES,
     "tools/release/pack_offline.py",
     "tools/docs/check_build.py",
-    "tools/docs/check_catalogs.py",
     "tools/docs/check_links.py",
     "tools/lint/check_import_layering.py",
     "tests/integration/test_notebooks.py",
@@ -178,7 +177,6 @@ FORMAT_FILES = (
     *PYTEST_POLICY_FILES,
     "tools/release/pack_offline.py",
     "tools/docs/check_build.py",
-    "tools/docs/check_catalogs.py",
     "tools/docs/check_links.py",
     "tools/lint/check_import_layering.py",
     "tests/integration/test_notebooks.py",
@@ -1238,70 +1236,15 @@ def packaging(session):
 
 @nox.session(python="3.11", venv_backend="venv")
 def docs(session):
-    """Build strict English HTML from an installed wheel and audit API anchors."""
+    """Build strict HTML from an installed wheel and audit API anchors."""
     root, env = _session_env(session, "docs-en")
     docs_env = _install_docs_wheel(session, root, env)
-    html = _sphinx_html(session, root, docs_env, "en")
+    html = _sphinx_html(session, root, docs_env, "zh_CN")
     session.run(
         "python",
         str(REPO_ROOT / "tools" / "docs" / "check_build.py"),
-        "--en",
+        "--html",
         str(html),
-        env=docs_env,
-    )
-
-
-@nox.session(python="3.11", venv_backend="venv")
-def docs_zh(session):
-    """Check gettext freshness and build strict English and Simplified Chinese HTML."""
-    root, env = _session_env(session, "docs-zh")
-    docs_env = _install_docs_wheel(session, root, env)
-    gettext_root = root / "gettext"
-    session.run(
-        "python",
-        "-m",
-        "sphinx",
-        "-E",
-        "-a",
-        "-W",
-        "--keep-going",
-        "-n",
-        "-b",
-        "gettext",
-        str(REPO_ROOT / "docs"),
-        str(gettext_root),
-        env=docs_env,
-    )
-    localized_source = root / "docs-source"
-    shutil.copytree(str(REPO_ROOT / "docs"), str(localized_source))
-    catalog_copy = localized_source / "locales"
-    session.run(
-        "sphinx-intl",
-        "update",
-        "-p",
-        str(gettext_root),
-        "-d",
-        str(catalog_copy),
-        "-l",
-        "zh_CN",
-        env=docs_env,
-    )
-    session.run(
-        "python",
-        str(REPO_ROOT / "tools" / "docs" / "check_catalogs.py"),
-        str(REPO_ROOT / "docs" / "locales"),
-        str(catalog_copy),
-        env=docs_env,
-    )
-    english = _sphinx_html(session, root, docs_env, "en", localized_source)
-    chinese = _sphinx_html(session, root, docs_env, "zh_CN", localized_source)
-    session.run(
-        "python",
-        str(REPO_ROOT / "tools" / "docs" / "check_build.py"),
-        "--en",
-        str(english),
-        "--zh-cn",
-        str(chinese),
         env=docs_env,
     )
 

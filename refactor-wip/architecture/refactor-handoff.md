@@ -15,22 +15,22 @@
   `b2e03162b`为起点，原生批已合入`c618d841d`，后续本地vLLM提交见Git历史，不能只看远端。
 - 物理源码固定为顶层 `src/`、`backends/`；`python/jittor/{src,extern}` 已不存在。
   Var/Op 统一图和七个元算子保留。真实 strides/storage、dtype/C++ 边界、
-  动态形状提交与 GIL 前置见[上一批记录](../../docs/results/2026-09-08-architecture-integration.md)。
+  动态形状提交与 GIL 前置见[上一批记录](../results/2026-09-08-architecture-integration.md)。
 - 本批收齐 Runtime 服务、tensor/nn/data、CUDA、utilities/compiler、core misc、
   scheduler/optimizer 的 API 归属与安装事务。接口见
-  [API 与 Runtime](../../docs/architecture/torch-api-ownership.md)、[家族 owner](torch-api-owners.md)、
-  [优化器](torch-optimizer-owners.md)和[事务](../../docs/architecture/runtime-hook-transactions.md)。
+  [API 与 Runtime](torch-api-ownership.md)、[家族 owner](torch-api-owners.md)、
+  [优化器](torch-optimizer-owners.md)和[事务](runtime-hook-transactions.md)。
 - 仓库维护脚本统一进入 `tools/`。core、compat、可选 `adapters/` distribution
   各以自己的 pyproject 声明打包配置，
   MANIFEST 由 `tools/build/generate_manifest.py` 生成，见
-  [打包记录](../../docs/results/2026-09-08-packaging-ownership.md)。
+  [打包记录](../results/2026-09-08-packaging-ownership.md)。
 
 此前原生批次补齐NN/distribution/Parameter类型工厂的模块级实现，TensorPlacement
 接通CPU/CUDA图、执行器及工厂/to/load，并收口7.03、11.04。
 真实CPU/双卡CUDA最终9项通过；完整
 structure 仍有失败，不能把本批收口解释为全仓全绿。运行证据见
-[整合记录](../../docs/results/2026-09-08-frontend-placement-integration.md)与
-[原生验收](../../docs/results/2026-09-08-tensor-backend-placement.md)。
+[整合记录](../results/2026-09-08-frontend-placement-integration.md)与
+[原生验收](../results/2026-09-08-tensor-backend-placement.md)。
 相关修复节点已通过，但非共享分配器的 scalar broadcast/view、旧断言计数及部分
 pytest/子进程合同仍需后续处理；不能把本批收口解释为全仓门禁全绿。
 
@@ -45,13 +45,13 @@ native测试使用JITTOR_TORCH_SHIM=0，Torch测试使用1并通过import torch�
 测试布局已三方整合：native tests、compat/tests及adapters/tests共用
 tests/_helpers/pytest_policy.py，旧路径不再作为可执行选择器。386映射文件保留
 同期断言与新增测试，8318个原实际节点逐条对应；固定seed映射只用于原case输入，
-不修改pytest nodeid。布局与包证据见[记录](../../docs/results/2026-09-08-test-layout-integration.md)。
+不修改pytest nodeid。布局与包证据见[记录](../results/2026-09-08-test-layout-integration.md)。
 legacy移除及只读introspection基座已按新测试路径整合，正式CPU-only入口7项
 通过，已有CUDA构建16项及27个相关兼容契约通过；详见
-[单一前端记录](../../docs/results/2026-09-08-single-torch-frontend.md)。10.20消费者与共享pytest策略已整合，
-能力失败、fixture恢复和启动封印绕过均有定向合同，见[调用者记录](../../docs/results/2026-09-08-introspection-consumers.md)。
+[单一前端记录](../results/2026-09-08-single-torch-frontend.md)。10.20消费者与共享pytest策略已整合，
+能力失败、fixture恢复和启动封印绕过均有定向合同，见[调用者记录](../results/2026-09-08-introspection-consumers.md)。
 8.12的后端plan缓存device生命周期已整合并关闭，双卡cuFFT/cuDNN/cuTT共6项通过，
-最后cuTT析构回调保护由主机负向测试验证，详见[缓存记录](../../docs/results/2026-09-08-backend-plan-cache-lifetime.md)。
+最后cuTT析构回调保护由主机负向测试验证，详见[缓存记录](../results/2026-09-08-backend-plan-cache-lifetime.md)。
 FSDP 的通信、mesh、
 原生 optimizer 复用和生命周期架构已实现；峰值显存性能仍未达，优化后移。
 缺硬件的 ACL/HCCL/NPU、ROCm/Corex 和多机验证继续按上机文档交接。
@@ -60,8 +60,8 @@ FSDP 的通信、mesh、
 launcher ABI 主机检查通过，已删除整头诊断过滤。但旧记录“只剩类型擦除”有误：
 属性通道现已接通Softmax前反向、Triu、Flip、Cumsum、Gather、Scatter及SwiGlu.dim runner；
 其余family及生产描述符缓存仍缺，不能关闭8.06。见
-[注册表证据](../../docs/results/2026-09-08-acl-registry.md)与
-[属性通道及上机限制](../../docs/results/2026-09-08-acl-code-data-wire.md)。
+[注册表证据](../results/2026-09-08-acl-registry.md)与
+[属性通道及上机限制](../results/2026-09-08-acl-code-data-wire.md)。
 
 8.06 当前还收口了 ACL 原生 owner 的失败传播：BaseOpRunner、Conv/MatMul/BMM、
 Reduce/ArgReduce、GroupNorm/Upsample/FlashAttention、getitem 等 tensor 创建、
@@ -79,7 +79,7 @@ owner；执行前重绑 data handle，公开错误边界走可捕获 RuntimeErro
 
 7.19/7.20已完成native/Torch精度隔离及Op捕获，集中CUDA 17项通过；
 原生RNN权重打包在独立Torch下的梯度断链同步修复，见
-[精度验证](../../docs/results/2026-09-08-frontend-precision-isolation.md)。这批新增Op字段，
+[精度验证](../results/2026-09-08-frontend-precision-isolation.md)。这批新增Op字段，
 不要混用此前缓存库与新核心头；需要基于相同源码/ABI重用或更新缓存。
 
 10.21 typing 当前安全 scope 已扩至 compat/torch 的 namespace、distribution 全小组、
@@ -96,7 +96,7 @@ lr_scheduler 等仍有真实协议错误，不能用 cast 或 ignore 伪绿。�
 
 10.17已完成有界launch来源记录与CUDA错误报告，真实异步device wait/readback
 关闭逐算子同步仍能报告创建行，3个CUDA节点通过；公开入口在jt.introspection.diagnostics。
-见[诊断证据](../../docs/results/2026-09-08-async-launch-origins.md)，raw第三方launch并未被自动拦截。
+见[诊断证据](../results/2026-09-08-async-launch-origins.md)，raw第三方launch并未被自动拦截。
 接手先看当前 agent 状态、`git status` 和实际 diff；已整合的隔离树可能仍保留交付快照。
 不要照历史记录重新 rebase、reset、删工作树或清缓存，不动用户未提交文件。
 
@@ -3008,7 +3008,7 @@ warning；`tests/_helpers/cutt.py` 又把加载失败一律转成 `SkipTest`。�
 1. **原生 CPU 门禁现在收集期直接 error**：`14e5920e5 [4.14]` 同时加了 `tests/core/test_device_methods.py` 与 `tests/backends/cuda/test_device_methods.py`，basename 相同而两个目录都没有 `__init__.py`，pytest 默认 prepend 模式下第二个必然报 `import file mismatch`。整套门禁因此拿不到汇总行（`Interrupted: 1 error during collection`）。修法二选一：给其中一个改名，或给 `tests/` 配 `--import-mode=importlib`。**在修掉之前，原生门禁事实上一条用例都没跑**——这正是第 10 节说的「不在门禁里的测试不是覆盖，是装饰」的又一例，只不过这次整套都没跑。
 2. **CPU torch 门禁在 55% 处硬崩**，没有汇总行，两棵树同一位置。
 
-ROCm 那半（计划原文的「需 ROCm 硬件」）本机无卡，四条按序确认项写进 [`../manuals/deferred-hardware.md`](../../agent/manuals/deferred-hardware.md) 的 ROCm 一节，**未声称 ROCm 硬件验证完成**。ACL 描述符注册名 `acl_legacy` 与 `BackendId::Acl` 不一致这条改动面跨 4.12，已归 4.15。
+ROCm 那半（计划原文的「需 ROCm 硬件」）本机无卡，四条按序确认项写进 [`agent/manuals/deferred-hardware.md`](../../agent/manuals/deferred-hardware.md) 的 ROCm 一节，**未声称 ROCm 硬件验证完成**。ACL 描述符注册名 `acl_legacy` 与 `BackendId::Acl` 不一致这条改动面跨 4.12，已归 4.15。
 
 **2026-09-06（compat，7.03）：把任务形状从「再挑几个 cohort」换成「清空整个 installer」，两个 installer 归零。**
 `796b8e43c` 清空 `_install_reductions`（内嵌 def/class **14→0**、lambda **13→0**），
@@ -3485,7 +3485,7 @@ launcher ABI 断言 70 个（比上一波多 2 个，正是新增的 `aclnnProd`
 仍报 `ok`，**只有 `--check-launchers` 挡住**——skill 里那条坑是真的）。第 2 档合同换成不变量式并
 要求两个 ACL 根各自非空，机制在 `tests/_helpers/acl_launch_tails.py`。**设备侧一条指令都没跑**：
 `tests/backends/npu` 在本机是 `164 skipped, 0 executed -- explained: skipped: no acl found`，
-四条上机确认项与精确命令写进 [`../manuals/deferred-hardware.md`](../../agent/manuals/deferred-hardware.md)
+四条上机确认项与精确命令写进 [`agent/manuals/deferred-hardware.md`](../../agent/manuals/deferred-hardware.md)
 的 Ascend/CANN 一节，**未声称硬件验证完成**。
 
 三套门禁与改前同集合：CPU torch 模式 `tests/structure` 改前 15 failed / 887 passed，改后
@@ -3600,7 +3600,7 @@ CUDA 门禁**不含 `tests/ops`**：基线那一跑超时被杀，没有可比�
 
 ### 本波（coreops 分区）：3.21 分相报告已交付，验收的两处前提被实测否决
 
-报告 [`../results/2026-09-07-3.21-per-operator-graph-build-cost.md`](../../docs/results/2026-09-07-3.21-per-operator-graph-build-cost.md)。
+报告 [`refactor-wip/results/2026-09-07-3.21-per-operator-graph-build-cost.md`](../results/2026-09-07-3.21-per-operator-graph-build-cost.md)。
 
 **9 ms 复现不出来。** 同一负载（`_ecosystem_speed` 的 `large_diffusers_unet2d`，CUDA、
 `auto_flush_ops=0`——默认 128 且只对 CUDA 生效，意思是默认配置下建图窗口里每 128 个算子
@@ -3609,7 +3609,7 @@ CUDA 门禁**不含 `tests/ops`**：基线那一跑超时被杀，没有可比�
 记 16 ms），整步 **43.0–45.8 ms**（该文档记 CPU 侧 42 ms）。**总量对得上，错的是前向/反向
 的拆分**——文档那三个数来自 nsys 时间线切段，切段边界与「Python 调用创建算子」不重合。
 原文档不改数字（它测的是另一件事），看板 `3.21` 行与审计
-[`codebase-audit/01-core-runtime.md`](codebase-audit/01-core-runtime.md) 末节按实测更正。
+[`refactor-wip/architecture/codebase-audit/01-core-runtime.md`](codebase-audit/01-core-runtime.md) 末节按实测更正。
 
 **计划点名的三项只解释 16.9%，第四项是 Python 层自身。** pyjt 绑定层 self **14.7%**、
 边表分配 **2.2%**、jit key 拼接 **0.04%**；`Op::init()` 2.5%、`create_output` 1.9%；

@@ -17,7 +17,7 @@
 | FSDP | 真ProcessGroup/mesh；复用native更新数学；持久local shard拥有自己的allocation |
 | 文档 | 看板、设计、结果归docs；Agent目录仅保留协作入口、skills、scripts |
 
-详细接口分别见[存储](../architecture/storage-layout.md)、
+详细接口分别见[存储](../../docs/development/storage-layout.md)、
 [dtype](../architecture/torch-dtype-boundary.md)、
 [提交边界](../architecture/dynamic-shape-submission.md)。
 

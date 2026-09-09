@@ -48,4 +48,4 @@ implemented by promoting their Python objects. Existing gradient option limitati
 single-default-overload semantics and schema annotation limits remain. This boundary
 does not introduce new backend support or close the aggregate 7.03/7.12 tasks.
 
-See [focused evidence](../../docs/results/2026-09-08-autograd-library-owners.md).
+See [focused evidence](../results/2026-09-08-autograd-library-owners.md).

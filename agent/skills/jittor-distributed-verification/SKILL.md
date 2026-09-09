@@ -5,7 +5,7 @@ description: 在单机上验证 Jittor 分布式改动（MPI / NCCL 集合通信
 
 # 单机验证 Jittor 分布式改动
 
-**先读 [`../jittor-worktree-verification/SKILL.md`](../jittor-worktree-verification/SKILL.md)**。
+**先读 [`agent/skills/jittor-worktree-verification/SKILL.md`](../jittor-worktree-verification/SKILL.md)**。
 分布式验证全是多进程，每个 rank 各自 `import jittor`，PYTHONPATH 错了就是每个 rank 都在
 测主树。
 

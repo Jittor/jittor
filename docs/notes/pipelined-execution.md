@@ -1,83 +1,67 @@
-# Pipelined Lazy Execution
+# 流水式惰性执行
 
-Jittor builds a step lazily: Python creates meta-operators, nothing runs until
-a value is fetched or `sync` is called, and the executor then fuses and
-launches the whole pending graph at once. On a GPU this serialises two
-things that PyTorch overlaps: the CPU builds the graph while the device is
-idle, then the device computes while the CPU waits.
+Jittor 惰性地构图：Python 创建元算子，直到取值或调用 `sync` 才真正执行，执行器
+一次性融合并发射整张待定图。在 GPU 上这会把两件 PyTorch 重叠的事情串起来——CPU
+建图时设备闲着，设备计算时 CPU 等着。
 
-Measured on a BERT-base training step (RTX 4090, TF32 on both runtimes, per
-step, nsys timeline cut at the step boundary):
+一个 BERT-base 训练步的实测（RTX 4090，两侧都开 TF32，按步切分 nsys 时间线）：
 
-| | PyTorch | Jittor, fully lazy |
+| | PyTorch | Jittor（完全惰性） |
 | --- | --- | --- |
-| GPU kernel time | 27.3 ms | 24.1 ms |
-| wall time | 29.9 ms | 30.1 ms |
-| GPU idle | 2.6 ms | 6.0 ms |
+| GPU kernel 时间 | 27.3 ms | 24.1 ms |
+| 墙钟时间 | 29.9 ms | 30.1 ms |
+| GPU 空闲 | 2.6 ms | 6.0 ms |
 
-Jittor's kernels are faster; the step is slower because the device sits idle
-for the 9 ms in which Python builds the forward graph, zeroes gradients and
-builds the backward graph.
+**Jittor 的 kernel 更快，但这一步更慢**——设备在 Python 建前向图、清梯度、建反向图
+的那 9 ms 里是闲着的。
 
-## The mechanism
+## 机制
 
-`jt.flags.auto_flush_ops = N` launches the pending graph early. Every
-operator construction is counted; once `N` operators have been created since
-the executor last ran, the next `VarHolder` construction hands everything
-pending to the executor **without a device sync** and returns. The device
-works on that segment while Python keeps building the rest of the step. The
-counter is anchored to every `Executor::run_sync`, so the flush points fall
-at the same positions in every step of a training loop and each segment
-compiles to the same fused kernels as the step before.
+`jt.flags.auto_flush_ops = N` 让待定图提前发射。每次算子构造都会计数；自执行器上次
+运行以来累计创建了 `N` 个算子后，下一次 `VarHolder` 构造就把当前所有待定工作交给
+执行器并返回，**不做设备同步**。设备开始算这一段，Python 继续建这一步的其余部分。
 
-The semantics of lazy execution are kept:
+计数器锚定在每次 `Executor::run_sync` 上，所以训练循环里每一步的切分点位置相同，
+每一段都编译出与上一步相同的融合 kernel。
 
-- Only values Python holds are targets. An intermediate nobody kept is still
-  computed only when a held value needs it, so dead-code elimination and
-  fusion apply within each segment exactly as before; a segment boundary can
-  at most materialise one intermediate that a later consumer would have
-  fused.
-- A flush is never nested, and an execution error is never raised from the
-  `VarHolder` constructor it runs in. A failed flush suspends the pipeline
-  and leaves the failing operators pending; the caller's own `sync` raises
-  the error, as it would have under lazy execution, and a successful sync
-  resumes flushing.
-- An output of `jt.tape` is never a flush target. `tape_together` wires those
-  operators into a `Tapes` node after `jt.Function.execute` has run and must
-  find them pending; eager execution has always applied the same exclusion.
-  `Tapes` now asserts it rather than corrupting liveness bookkeeping.
+惰性执行的语义被保留：
 
-The flag only acts on CUDA. CPU kernels run synchronously on the calling
-thread, so launching early would only cost fusion at segment boundaries.
+- **只有 Python 持有的值才是目标。** 没人持有的中间值仍然只在某个被持有的值需要它
+  时才计算，段内的死代码消除与融合与之前完全一致；一个段边界最多让一个本可被后续
+  消费者融合掉的中间值实体化。
+- **flush 不嵌套**，而且执行错误绝不会从触发它的那次 `VarHolder` 构造里抛出。失败的
+  flush 会挂起流水并把出错的算子留在待定状态，由调用方自己的 `sync` 抛出错误——和
+  惰性执行下的行为一致；同步成功后流水恢复。
+- **`jt.tape` 的输出永远不是 flush 目标。** `tape_together` 要在 `jt.Function.execute`
+  跑完之后把这些算子接进 `Tapes` 节点，必须找到它们仍处于待定状态；`Tapes` 现在会
+  断言这一点，而不是破坏 liveness 记账。
 
-## What it fixes and what it does not
+**这个开关只对 CUDA 生效。** CPU kernel 在调用线程上同步执行，提前发射只会在段边界
+损失融合。
 
-With `N` in the 64–256 range, the GEMM-dominated transformer steps reach the
-PyTorch wall time (ms per step on the same device):
+## 效果与边界
 
-| case | lazy | pipelined | PyTorch |
+`N` 取 64–256 时，以 GEMM 为主的 transformer 步能追上 PyTorch 的墙钟时间
+（同一设备上每步毫秒数）：
+
+| 用例 | 惰性 | 流水 | PyTorch |
 | --- | --- | --- | --- |
 | BERT-base | 31.7 | 26.4 | 26.4 |
 | ViT-base | 29.3 | 24.8 | 23.8 |
-| Llama (8 layers, 1024 hidden) | 43.4 | 39.1 | 37.8 |
-| GPT-2 (8 layers, 1024 hidden) | 42.2 | 38.7 | 40.2 |
+| Llama（8 层，hidden 1024） | 43.4 | 39.1 | 37.8 |
+| GPT-2（8 层，hidden 1024） | 42.2 | 38.7 | 40.2 |
 
-The remaining difference is the drain at the synchronisation points the
-model itself contains (`transformers` reads a mask value on the host three
-times per step in BERT) and the latency before the first segment launches.
+剩余差距来自模型自身包含的同步点造成的排空（`transformers` 在 BERT 里每步要在主机
+上读三次 mask 值），以及第一段发射前的延迟。
 
-Pipelining hides device time behind CPU time; it cannot hide CPU time. A
-diffusers UNet2D step needs 22 ms of GPU work but 42 ms of CPU work -- 16 ms
-in the executor (fusion, scheduling, key construction and launch for about
-1500 kernels), 16 ms building the backward graph, 9 ms building the forward
--- and its wall time does not move. That regime needs the executor's
-per-step work cached across identical steps, which is the next stage of this
-design.
+**流水能把设备时间藏到 CPU 时间背后，藏不掉 CPU 时间本身。** 一个 diffusers UNet2D
+步需要 22 ms GPU 工作、却要 42 ms CPU 工作——执行器里 16 ms（约 1500 个 kernel 的
+融合、调度、key 构造与发射）、建反向图 16 ms、建前向图 9 ms——它的墙钟时间不会因为
+流水而改变。这种情形需要把执行器的每步工作在相同步之间缓存，那是这套设计的下一步。
 
-## Measuring it
+## 怎么测
 
-`tests/compat/torch/test_ecosystem_speed.py` is the gate. To attribute a gap
-use an nsys timeline of the harness runner, cut into steps by a kernel that
-recurs a fixed number of times per step, and compare kernel-sum, wall span
-and idle per step; the whole-run kernel summary also counts the cuDNN
-algorithm trials and process teardown and must not be read as steady state.
+门禁是 `tests/compat/torch/test_ecosystem_speed.py`。要归因一个差距，用 nsys 抓
+harness runner 的时间线，用每步固定出现若干次的某个 kernel 切分成步，再比较每步的
+kernel 总和、墙钟跨度和空闲时间。**整轮的 kernel 汇总不能当稳态读**——它把 cuDNN 的
+算法试跑和进程退出也算进去了。

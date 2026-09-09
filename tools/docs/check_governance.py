@@ -14,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # These trees are historical evidence, not authoritative active documentation.
 EXCLUDED_PREFIXES = (
-    "docs/results/",
+    "refactor-wip/results/",
 )
 
 REQUIRED_DOCUMENTS = (
@@ -24,23 +24,23 @@ REQUIRED_DOCUMENTS = (
     "agent/manuals/project-context.md",
     "agent/manuals/environment.md",
     "agent/manuals/known-issues.md",
-    "docs/architecture/repository-layout.md",
-    "docs/architecture/source-architecture.md",
+    "docs/development/repository-layout.md",
+    "docs/development/source-architecture.md",
     "refactor-wip/README.md",
     "refactor-wip/architecture/refactor-board.md",
     "refactor-wip/architecture/refactor-plan.md",
     "refactor-wip/architecture/refactor-handoff.md",
     "refactor-wip/architecture/refactor-dispatch.md",
     "refactor-wip/architecture/target-layout.md",
-    "docs/results/README.md",
+    "refactor-wip/results/README.md",
     "agent/manuals/agent-index.md",
     "benchmarks/asv.conf.json",
-    "docs/architecture/torch-compatibility-principles.md",
-    "docs/architecture/complex-dtype.md",
-    "docs/testing/test-system.md",
+    "refactor-wip/architecture/torch-compatibility-principles.md",
+    "docs/notes/complex-dtype.md",
+    "docs/development/test-system.md",
     "docs/development/known-issues/parallel-compiler-segfault.md",
     "docs/performance/benchmarking.md",
-    "docs/research/agentic-optimization.md",
+    "refactor-wip/research/agentic-optimization.md",
     "docs/releases/2.0.md",
 )
 
@@ -56,7 +56,7 @@ def _relative(path):
 
 
 def _is_excluded(relative):
-    if relative == "docs/results/README.md":
+    if relative == "refactor-wip/results/README.md":
         return False
     return any(relative.startswith(prefix) for prefix in EXCLUDED_PREFIXES)
 
@@ -179,7 +179,6 @@ def check_contract(documents):
         "python -m pytest",
         "python -m nox -s structure",
         "python -m nox -s docs",
-        "python -m nox -s docs_zh",
         "python -m nox -s docs_links",
         "python -m nox -s tutorials",
     ):

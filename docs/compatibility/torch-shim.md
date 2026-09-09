@@ -1,52 +1,46 @@
 # Torch shim
 
-The torch shim lets a torch-oriented Python application use Jittor as its
-runtime. The independent `jittor-torch` distribution owns the reusable Torch API,
-deployment, extension build, import-patch, and external-backend mechanisms.
-The core `jittor` distribution contains none of these compatibility files.
-Project-specific runtime policy is supplied by optional adapter distributions.
+Torch shim 让一个面向 torch 编写的 Python 应用把 Jittor 当作运行时。可复用的 Torch
+API、部署、扩展构建、导入补丁和外部后端机制，全部归**独立的 `jittor-torch` 发行物**
+所有；核心 `jittor` 发行物**不包含**任何这些兼容文件。项目专属的运行时策略由可选的
+适配器发行物提供。
 
-## Components
+## 组成
 
-- `compat/shim/resources/torch/__init__.py` is the thin installed and deployed
-  `torch/__init__.py` entry point.
-- `resources/stubs/` contains bundled compatibility packages such as `flash_attn`,
-  `torchvision`, `torchaudio`, and `torchdata`.
-- `cpp_extension/` provides the Jittor-backed `torch.utils.cpp_extension`
-  surface used to build source extensions.
-- `runtime.py` implements isolated runtime setup and native extension discovery;
-  `bootstrap.py` is its stable, small public facade.
-- `deploy.py` installs the complete shim tree into a target site-packages
-  directory.
+| 路径 | 作用 |
+| --- | --- |
+| `compat/shim/resources/torch/__init__.py` | 安装与部署后的 `torch/__init__.py` 入口（很薄） |
+| `resources/stubs/` | 随包提供的兼容包，如 `flash_attn`、`torchvision`、`torchaudio`、`torchdata` |
+| `cpp_extension/` | 由 Jittor 支撑的 `torch.utils.cpp_extension` 接口，用于构建源码扩展 |
+| `runtime.py` | 隔离运行时的建立与原生扩展发现 |
+| `bootstrap.py` | 上者稳定而精简的公开门面 |
+| `deploy.py` | 把完整 shim 树安装到目标 site-packages |
 
-The canonical torch-compatible API lives in `jittor.compat.torch`. The shim
-exports that API under the `torch` module name and wires the submodule paths
-expected by third-party libraries.
+规范的 torch 兼容 API 位于 `jittor.compat.torch`。shim 把该 API 以 `torch` 模块名
+导出，并接好第三方库期望的子模块路径。
 
-`jittor.torch_shim` remains an import-compatible alias of
-`jittor.compat.shim`; both names resolve to the same module objects.
+`jittor.torch_shim` 仍是 `jittor.compat.shim` 的导入兼容别名，两个名字解析到**同一批
+模块对象**。
 
-## Bootstrap
+## 引导
 
-For development, install both projects from the checkout root:
+开发时从 checkout 根目录同时安装两个项目：
 
 ```bash
 python -m pip install -e . -e ./compat
 ```
 
-The optional project maps the top-level `compat/` source tree to the installed
-`jittor.compat` package. A `PYTHONPATH=python` setting alone selects only core;
-install the optional editable project in the same interpreter when using
-compatibility APIs or running their tests. When testing a second checkout,
-install that checkout's `compat` project too. Nox runtime gates do this explicitly.
+可选项目把顶层 `compat/` 源码树映射到已安装的 `jittor.compat` 包。**只设
+`PYTHONPATH=python` 仅选中核心**；使用兼容 API 或跑它们的测试时，要在同一个解释器
+里安装这个可选的 editable 项目。测试第二个 checkout 时，也要装那个 checkout 的
+`compat` 项目。nox 的运行时门禁就是这么显式做的。
 
-For wheel deployment, install the matching core and `jittor-torch` wheels in one
-environment. Build them separately with `python -m build .` and
-`python -m build ./compat`; the latter declares its core version dependency.
-The independent wheel provides `torch` itself. The deployment helper below
-additionally installs the bundled third-party stubs when the application needs them.
+wheel 部署时，在同一个环境里安装配套的核心 wheel 与 `jittor-torch` wheel。分别用
+`python -m build .` 和 `python -m build ./compat` 构建，后者声明了对核心版本的依赖。
+**`torch` 本身由这个独立 wheel 提供。** 下面的部署助手在应用需要时会额外装上随包的
+第三方 stub。
 
-Applications that need a project-local runtime can enable it explicitly:
+需要项目局部运行时的应用可以显式启用：
 
 ```python
 from jittor.compat.shim import activate, activation_status
@@ -56,59 +50,53 @@ assert activation_status().active
 import torch
 ```
 
-The default activation and deployed `import torch` publish independent Tensor,
-Parameter and Module types: `torch is not jittor`. Native Var methods retain
-their own contracts. For the legacy Jittor-alias mode, explicitly pass
-`independent_namespace=False`; an already activated process cannot change modes.
-The deployed entry sets `JITTOR_TORCH_INDEPENDENT=1` alongside its activation
-flag so child interpreters select the same mode. `JITTOR_TORCH_SHIM=1` alone
-continues to select the legacy import-time path.
+默认激活与部署后的 `import torch` 发布**独立的** Tensor、Parameter 和 Module 类型：
+**`torch is not jittor`**。原生 Var 方法保留自己的契约。要用历史上的 Jittor 别名模式，
+显式传 `independent_namespace=False`；**已经激活的进程不能再换模式**。部署入口在设置
+激活标志的同时会设 `JITTOR_TORCH_INDEPENDENT=1`，好让子解释器选中同一模式。单独设
+`JITTOR_TORCH_SHIM=1` 仍然选中历史的 import 期路径。
 
-`activate()` is process-wide and idempotent; repeated calls return the original
-activation result without rescanning extensions or reapplying patches. It creates a runtime below
-`${XDG_CACHE_HOME:-~/.cache}/jittor/torch-shim/` unless
-`JITTOR_TORCH_RUNTIME_ROOT` is set. It keeps Jittor, torch extension, CUDA,
-Triton, pip, and temporary caches below that runtime and deploys the shim into
-its local site-packages directory.
+`activate()` 是**进程级且幂等**的：重复调用返回最初的激活结果，不会重新扫描扩展或
+重新打补丁。除非设了 `JITTOR_TORCH_RUNTIME_ROOT`，它会在
+`${XDG_CACHE_HOME:-~/.cache}/jittor/torch-shim/` 下建立运行时，把 Jittor、torch 扩展、
+CUDA、Triton、pip 和临时缓存都放在该运行时之下，并把 shim 部署进它本地的 site-packages。
 
-Local source extensions are discovered from `setup.py`, `pyproject.toml`, and
-`CMakeLists.txt` signals. Missing or stale setuptools extensions are rebuilt
-through the Jittor-backed cpp-extension API. Set
-`JITTOR_TORCH_SKIP_EXT_BUILD=1` to skip warm-run build checks or pass explicit
-`extension_dirs` when automatic discovery is not suitable.
+本地源码扩展从 `setup.py`、`pyproject.toml` 和 `CMakeLists.txt` 的信号中发现。缺失或
+过期的 setuptools 扩展会通过 Jittor 支撑的 cpp-extension API 重建。设
+`JITTOR_TORCH_SKIP_EXT_BUILD=1` 可跳过暖启动的构建检查，或在自动发现不合适时显式传
+`extension_dirs`。
 
-For numerical parity, the bootstrap disables CUDA fast-math contraction for
-Jittor JIT kernels unless `JITTOR_TORCH_KEEP_FAST_MATH=1` is set. Project
-extensions retain the flags requested by their own build definitions.
+**为了数值一致性**，除非设了 `JITTOR_TORCH_KEEP_FAST_MATH=1`，引导过程会为 Jittor 的
+JIT kernel 关闭 CUDA fast-math contraction。项目自己的扩展保留其构建定义所请求的选项。
 
-## Optional adapters
+## 可选适配器
 
-Adapters use two public entry-point groups:
+适配器使用两个公开的 entry-point 组：
 
-- `jittor.module_patches` registers exact module-path callbacks through
-  `jittor.compat.module_patcher`.
-- `jittor.external_backends` registers extension discovery policy through
-  `jittor.compat.external_backend`.
+- **`jittor.module_patches`** —— 通过 `jittor.compat.module_patcher` 注册精确的模块
+  路径回调；
+- **`jittor.external_backends`** —— 通过 `jittor.compat.external_backend` 注册扩展
+  发现策略。
 
-The maintained adapters are separate distributions:
+维护中的适配器都是独立发行物：
 
-- `jittor-trellis` for TRELLIS.2 runtime policy and kernels.
-- `jittor-gs` for graphdeco Gaussian Splatting runtime policy and launch tools.
-- `jittor-hf-compat` for explicitly selected Transformers version adapters.
+| 发行物 | 用途 |
+| --- | --- |
+| `jittor-trellis` | TRELLIS.2 的运行时策略与 kernel |
+| `jittor-gs` | graphdeco Gaussian Splatting 的运行时策略与启动工具 |
+| `jittor-hf-compat` | 显式选择的 Transformers 版本适配 |
 
-Installing an adapter makes its entry points discoverable. Applications may
-also call the adapter's `install()` function explicitly. Jittor itself does not
-import those projects, inspect their directory layouts, or install permanent
-project-specific import finders.
+安装适配器即可让它的 entry point 被发现；应用也可以显式调用适配器的 `install()`。
+**Jittor 自身不导入这些项目、不检查它们的目录结构、也不安装长期存在的项目专属导入
+finder。**
 
-## Deploy
+## 部署
 
-Deploy the complete shim with the maintained helper:
+用维护的助手部署完整的 shim：
 
 ```bash
 jittor-torch-shim --target /path/to/site-packages
 ```
 
-The target contains the torch package, bundled stubs, and distribution metadata.
-Do not copy only `resources/torch/__init__.py`; the nested stub modules and interfaces are
-part of the runtime contract.
+目标目录会包含 torch 包、随包 stub 和发行元数据。**不要只复制
+`resources/torch/__init__.py`**——嵌套的 stub 模块与接口是运行时契约的一部分。

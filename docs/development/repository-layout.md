@@ -137,7 +137,7 @@ the sibling distribution to read a resource list.
 
 The tree below is the destination decided on 2026-09-02. The reasoning, a
 source-to-destination table for every move, the packaging coupling and the
-sequencing live in [`docs/architecture/target-layout.md`](../../refactor-wip/architecture/target-layout.md).
+sequencing live in [`refactor-wip/architecture/target-layout.md`](../../refactor-wip/architecture/target-layout.md).
 It replaces the earlier tree in this section, which described the layout as it
 stood after the 2.0 domain-package migration rather than where it should go.
 
@@ -171,7 +171,7 @@ Three rules the old tree did not state:
   operation lives under `jittor/ops/`.
 - Layout moves are the last step of each refactor phase, never the first. A
   move only makes sense once the code it moves has one shape; see the
-  "布局收尾" rows of [`docs/architecture/refactor-plan.md`](../../refactor-wip/architecture/refactor-plan.md).
+  "布局收尾" rows of [`refactor-wip/architecture/refactor-plan.md`](../../refactor-wip/architecture/refactor-plan.md).
 
 The exact entry set asserted by `test_runtime_root_has_an_exact_reviewed_entry_set`
 freezes the *current* tree, not this one. It is converted into rule-based checks

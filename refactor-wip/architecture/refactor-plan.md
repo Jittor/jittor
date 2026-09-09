@@ -10,12 +10,12 @@
 
 | 缩写 | 文档 | 缩写 | 文档 |
 | --- | --- | --- | --- |
-| 核心 | [codebase-audit/01-core-runtime.md](codebase-audit/01-core-runtime.md) | 测试 | [codebase-audit/05-tests.md](codebase-audit/05-tests.md) |
-| Python | [codebase-audit/02-python-api.md](codebase-audit/02-python-api.md) | 后端 | [codebase-audit/06-backends.md](codebase-audit/06-backends.md) |
-| 兼容 | [codebase-audit/03-compat-shim.md](codebase-audit/03-compat-shim.md) | 架构 | [codebase-audit/07-architecture.md](codebase-audit/07-architecture.md) |
-| 构建 | [codebase-audit/04-build-tooling.md](codebase-audit/04-build-tooling.md) | 系统 | [system-design-audit.md](system-design-audit.md)（条目号 A1…F5） |
-| 多后端 | [multi-backend-design.md](../../docs/architecture/multi-backend-design.md) | 多卡 | [device-placement.md](../../docs/architecture/device-placement.md) |
-| 流水 | [pipelined-execution.md](../../docs/architecture/pipelined-execution.md) | 卷积 | [cudnn-convolution-plans.md](../../docs/architecture/cudnn-convolution-plans.md) |
+| 核心 | [refactor-wip/architecture/codebase-audit/01-core-runtime.md](codebase-audit/01-core-runtime.md) | 测试 | [refactor-wip/architecture/codebase-audit/05-tests.md](codebase-audit/05-tests.md) |
+| Python | [refactor-wip/architecture/codebase-audit/02-python-api.md](codebase-audit/02-python-api.md) | 后端 | [refactor-wip/architecture/codebase-audit/06-backends.md](codebase-audit/06-backends.md) |
+| 兼容 | [refactor-wip/architecture/codebase-audit/03-compat-shim.md](codebase-audit/03-compat-shim.md) | 架构 | [refactor-wip/architecture/codebase-audit/07-architecture.md](codebase-audit/07-architecture.md) |
+| 构建 | [refactor-wip/architecture/codebase-audit/04-build-tooling.md](codebase-audit/04-build-tooling.md) | 系统 | [system-design-audit.md](system-design-audit.md)（条目号 A1…F5） |
+| 多后端 | [multi-backend-design.md](multi-backend-design.md) | 多卡 | [device-placement.md](../../docs/notes/device-placement.md) |
+| 流水 | [pipelined-execution.md](../../docs/notes/pipelined-execution.md) | 卷积 | [cudnn-convolution-plans.md](cudnn-convolution-plans.md) |
 | 布局 | [target-layout.md](target-layout.md)（目标目录树与每处搬动的理由） | | |
 
 **每个任务的完成定义**（表格里的「验收」列只写该任务特有的部分，下面这些对所有任务生效）：
@@ -227,18 +227,18 @@
 | 编号 | 任务 | 前置 | 出处 | 验收 |
 | --- | --- | --- | --- | --- |
 | 4.01 | 分配器 id 空间随分配器实例走，不再是进程静态 2M 单例（`sfrl_allocator.h:35-38`）；索引前断言范围（`sfrl_allocator.cc:81-86`） | 2.04 | [核心](codebase-audit/01-core-runtime.md)§内存与分配器 | CPU 与每个 CUDA 设备各有独立 id 表 |
-| 4.02 | 合并多卡：在 `device-select` 与 `multi-device` 之间选一个字段名与一条标量规则，跑三套门禁，确认结构测试只剩 2.0 上已有的三条失败，合并 | 2.04、4.01 | [多卡](../../docs/architecture/device-placement.md)§5；系统 C1 | `Var` 有设备字段；`set_device` 不重启进程；两卡用例通过 |
-| 4.03 | `BackendRegistry`：CPU 与 CUDA 作为前两个成员（device_count/allocator/set_device/memcpy/synchronize/stream），`use_cuda` 在其上重实现；`use_acl`/`use_rocm`/`use_corex`/`use_device` 别名标记废弃；配套契约测试 | 4.02、2.13 | [多后端](../../docs/architecture/multi-backend-design.md)§3.1、§4 阶段 2；[架构](codebase-audit/07-architecture.md)§重复与一致性 | 全部门禁行为不变 |
-| 4.04 | `OpRegistry`：执行器按（算子 id，后端）查 kernel；CUDA 库算子经注册表登记；核心 5 处 `has_op` 字符串查询与 tuner 两处写死名字（`conv_tuner.cc:371-395`、`matmul_tuner.cc:103`）改查表；`Op` 拆成 OpDef/Kernel/Codegen 三个接口由注册表组合 | 4.03、2.17、2.18 | [多后端](../../docs/architecture/multi-backend-design.md)§3.2；[架构](codebase-audit/07-architecture.md)§分层、§核心抽象 | 核心不再认识任何可选后端的名字；`backend.supported_ops()` 可查 |
+| 4.02 | 合并多卡：在 `device-select` 与 `multi-device` 之间选一个字段名与一条标量规则，跑三套门禁，确认结构测试只剩 2.0 上已有的三条失败，合并 | 2.04、4.01 | [多卡](../../docs/notes/device-placement.md)§5；系统 C1 | `Var` 有设备字段；`set_device` 不重启进程；两卡用例通过 |
+| 4.03 | `BackendRegistry`：CPU 与 CUDA 作为前两个成员（device_count/allocator/set_device/memcpy/synchronize/stream），`use_cuda` 在其上重实现；`use_acl`/`use_rocm`/`use_corex`/`use_device` 别名标记废弃；配套契约测试 | 4.02、2.13 | [多后端](multi-backend-design.md)§3.1、§4 阶段 2；[架构](codebase-audit/07-architecture.md)§重复与一致性 | 全部门禁行为不变 |
+| 4.04 | `OpRegistry`：执行器按（算子 id，后端）查 kernel；CUDA 库算子经注册表登记；核心 5 处 `has_op` 字符串查询与 tuner 两处写死名字（`conv_tuner.cc:371-395`、`matmul_tuner.cc:103`）改查表；`Op` 拆成 OpDef/Kernel/Codegen 三个接口由注册表组合 | 4.03、2.17、2.18 | [多后端](multi-backend-design.md)§3.2；[架构](codebase-audit/07-architecture.md)§分层、§核心抽象 | 核心不再认识任何可选后端的名字；`backend.supported_ops()` 可查 |
 | 4.05 | Python 分派表：98 处 `use_cuda`/`is_cuda`/`has_acl` 判断（18 种写法）收进按（算子，设备，dtype）注册的表；`nn/backends/*.py` 的 39 处守卫删除；`jt.compile_extern.*` 的 globals 注入改后端能力查询接口；Conv 的 depthwise 分派移到 execute | 4.04 | [Python](codebase-audit/02-python-api.md)§后端分派；[架构](codebase-audit/07-architecture.md)§公共 API | `python/jittor` 内（compat/extern 外）直接判 `use_cuda` 的行数为 0 |
-| 4.06 | `jt.flags.backend_fallback ∈ {error, warn, allow}`，默认 warn，harness 设 error；回退必须说明算子、后端与原因；异常不再作为路由机制（`acl_op_exec.cc:223`） | 4.04 | [多后端](../../docs/architecture/multi-backend-design.md)§3.3 | harness 不再 grep `fallback cpu` |
+| 4.06 | `jt.flags.backend_fallback ∈ {error, warn, allow}`，默认 warn，harness 设 error；回退必须说明算子、后端与原因；异常不再作为路由机制（`acl_op_exec.cc:223`） | 4.04 | [多后端](multi-backend-design.md)§3.3 | harness 不再 grep `fallback cpu` |
 | 4.07 | 后端配置改为返回 `BuildConfig` 值：三个 `*_compiler.py` 不再改写 `compiler` 全局（22 处）；`extra_core_files` 不由后端追加；`jittor_utils` 禁止 import jittor（环 1，`jittor_utils/__init__.py:731,807,810,869`）；后端用 entry point 发现并懒加载（corex/rocm 不再每次 import 探测） | 4.03 | [架构](codebase-audit/07-architecture.md)§分层；[构建](codebase-audit/04-build-tooling.md)§跨平台与死代码 | import 顺序不再决定行为 |
 | 4.08 | 流与事件模型：每设备默认流之外的通信流与拷贝流，事件依赖，内存复用按事件而非流序；`fetch_op.cc` 的半套顺序保证补齐（`:121-122,156-159`，源块释放后立即回 free list） | 4.02 | 系统 C3；[核心](codebase-audit/01-core-runtime.md)§补充：内存与分配器 | H2D/D2H 与计算重叠的用例；fetch 不再读到被覆盖的数据 |
-| 4.09 | per-device 库句柄（cuBLAS/cuDNN/cuSPARSE/cuRAND/cuFFT）加每次执行前 `SetStream`；全仓当前无 `cublasSetStream`/`cudnnSetStream` | 4.02、4.08 | [后端](codebase-audit/06-backends.md)§库句柄与资源生命周期；[多卡](../../docs/architecture/device-placement.md)§2 | 两卡各自的句柄；流参数进 harness |
+| 4.09 | per-device 库句柄（cuBLAS/cuDNN/cuSPARSE/cuRAND/cuFFT）加每次执行前 `SetStream`；全仓当前无 `cublasSetStream`/`cudnnSetStream` | 4.02、4.08 | [后端](codebase-audit/06-backends.md)§库句柄与资源生命周期；[多卡](../../docs/notes/device-placement.md)§2 | 两卡各自的句柄；流参数进 harness |
 | 4.10 | CUDA kernel 存放位置统一：`extern/cuda/<lib>/ops`、`nn/backends/*_cuda.py`、`nn/*_cuda.py`、`src/ops` 的 `#ifdef HAS_CUDA` 四处 → 一处加注册表；`nn/` 根下 6 个 `*_cuda.py` 与 `kv_cache_acl.py` 移出，给 `nn/` 加 exact-entry 门禁 | 4.04 | [架构](codebase-audit/07-architecture.md)§重复与一致性、§模块边界 | 找一个算子实现只搜一个目录 |
-| 4.11 | ACL 改为注册表后端：`.py`/`_op_acl.cc` 对转为注册项；`change_function()` 与 `warp()` 闭包删除；`post_process()` 不再改四个无关全局（需昇腾硬件） | 4.04、4.05 | [多后端](../../docs/architecture/multi-backend-design.md)§4 阶段 4 | NPU 测试通过；`acl_compiler.py:803` 消失 |
-| 4.12 | 删除 `process_jittor_source` 与 `process_acl`（整树文本替换、`WTF` 补丁）；ROCm 自己实现并注册（需 ROCm 硬件） | 4.11 | [多后端](../../docs/architecture/multi-backend-design.md)§4 阶段 5；[架构](codebase-audit/07-architecture.md)§代码规模 | 核心源码不再是移植的输入 |
-| 4.13 | 跨后端契约矩阵：一张算子矩阵对每个注册后端跑同一套对拍 | 4.11 | [多后端](../../docs/architecture/multi-backend-design.md)§4 阶段 6 | 新门禁层 |
+| 4.11 | ACL 改为注册表后端：`.py`/`_op_acl.cc` 对转为注册项；`change_function()` 与 `warp()` 闭包删除；`post_process()` 不再改四个无关全局（需昇腾硬件） | 4.04、4.05 | [多后端](multi-backend-design.md)§4 阶段 4 | NPU 测试通过；`acl_compiler.py:803` 消失 |
+| 4.12 | 删除 `process_jittor_source` 与 `process_acl`（整树文本替换、`WTF` 补丁）；ROCm 自己实现并注册（需 ROCm 硬件） | 4.11 | [多后端](multi-backend-design.md)§4 阶段 5；[架构](codebase-audit/07-architecture.md)§代码规模 | 核心源码不再是移植的输入 |
+| 4.13 | 跨后端契约矩阵：一张算子矩阵对每个注册后端跑同一套对拍 | 4.11 | [多后端](multi-backend-design.md)§4 阶段 6 | 新门禁层 |
 | 4.14 | `Module.cuda(i)`/`npu(i)`/`x.to(...)`/`x.cpu()` 语义落实（`core_api.py:1678-1685`、`tensor_ops.py:2604-2618,2849-2853`）：设备号生效，`.to()` 按 torch 签名解析不依赖 kwargs 顺序，`x.cpu()` 真迁移 | 4.02 | [Python](codebase-audit/02-python-api.md)§Module 与参数模型 | `x.to(device='cuda', dtype=float16)` 两者都生效 |
 | 4.15 | 布局收尾：`python/jittor/extern/` 整体搬到顶层 `backends/<name>/`，每后端同一形状（build 片段 + kernels/ + 注册项）；`nn/backends/` 10 个与 `nn/` 根下 6 个 `*_cuda.py` 以及 `flash_attention.py` 的 CUDA 串进 `backends/cuda/kernels/`，Python 层只留调用；`python/jittor/src/` 搬出包到顶层 `src/`，`MANIFEST.in`/`pyproject` 的打包与 `jittor_path` 解析随 9.01 同一提交改 | 4.10、4.12、9.01、0.19 | [布局](target-layout.md)§3、§5 | `python/jittor/` 下无 .cc/.cu；`grep cuda_src` 于 `python/jittor` 为 0 |
 
@@ -420,7 +420,7 @@
 | 8.13 | cuTT 计划未命中时的 `cudaDeviceSynchronize` 删除或降流同步（`cutt_transpose_op.cc:115`） | — | [后端](codebase-audit/06-backends.md)§每次调用 | 首次转置不清空流水 |
 | 8.14 | Corex：`check()` 只读、路径可配置（`corex_compiler.py:68,86,88`）；`process_acl` 同名改写随 4.12 删除 | 4.12 | [后端](codebase-audit/06-backends.md)§其余后端 | 探测无副作用 |
 | 8.15 | 多机 rendezvous：NCCL unique id 经 TCP store 交换，契约为 `MASTER_ADDR/MASTER_PORT/RANK/WORLD_SIZE/LOCAL_RANK`，替代 `nccl_wrapper.cc:82-101` 的共享文件轮询（要求共享文件系统，120 s 后无失败路径）与只认 OpenMPI 的 mpirun 引导；`TCPStore`/`FileStore` 真实实现（`distributed.py:770-788` 当前是进程内字典，7.01 先改报错）；`init_process_group(init_method="env://" \| "tcp://…")` 生效；HCCL 同一套 | 8.08、6.B15 | [后端](codebase-audit/06-backends.md)§分布式；[兼容](codebase-audit/03-compat-shim.md)§分布式与 FSDP2 | 两台机器各 N 卡 all-reduce 对拍；`MASTER_ADDR` 写错在超时内报错而非挂死 |
-| 8.16 | 多机启动器：`jittor.distributed.launch` 今天只有 `-n`（单机，`launch.py:50`），加 `--nnodes/--node_rank/--master_addr/--master_port`；shim 下 `torchrun` 可用（`is_torchelastic_launched` 恒 False，`distributed.py:519`）；`LOCAL_RANK` → 设备映射走 4.02 的 `set_device`，不再改写 `CUDA_VISIBLE_DEVICES` 重启进程 | 4.02、8.15、8.10 | [后端](codebase-audit/06-backends.md)§分布式；[多卡](../../docs/architecture/device-placement.md) | `torchrun --nnodes=2 --nproc_per_node=N` 跑通 transformers 训练脚本，两机 loss 轨迹一致 |
+| 8.16 | 多机启动器：`jittor.distributed.launch` 今天只有 `-n`（单机，`launch.py:50`），加 `--nnodes/--node_rank/--master_addr/--master_port`；shim 下 `torchrun` 可用（`is_torchelastic_launched` 恒 False，`distributed.py:519`）；`LOCAL_RANK` → 设备映射走 4.02 的 `set_device`，不再改写 `CUDA_VISIBLE_DEVICES` 重启进程 | 4.02、8.15、8.10 | [后端](codebase-audit/06-backends.md)§分布式；[多卡](../../docs/notes/device-placement.md) | `torchrun --nnodes=2 --nproc_per_node=N` 跑通 transformers 训练脚本，两机 loss 轨迹一致 |
 | 8.17 | 跨机网络与诊断：`NCCL_SOCKET_IFNAME`/`NCCL_IB_*`/`HCCL_*` 透传并进启动摘要；跨机 all-reduce/all-gather 带宽微基准；通信超时报出对端 rank 与主机名（接 8.09 的 watchdog）；一个 rank 掉线其余在超时内退出 | 8.09、8.15 | [后端](codebase-audit/06-backends.md)§分布式 | 带宽基准进 nightly；掉线用例 |
 | 8.18 | 多机 checkpoint：rank 0 保存、全 rank 加载的 `state_dict` 契约，FSDP 分片 checkpoint 的 `dcp.save/load` 真实实现（接 7.01 的报错），跨 rank 的 optimizer state 合并与重分片 | 7.13、8.15 | [兼容](codebase-audit/03-compat-shim.md)§分布式与 FSDP2 | 2 机保存、4 机加载的续训用例 |
 | 8.19 | 布局收尾：`extern/mpi`、`extern/cuda/nccl`、`extern/acl/hccl` 进 `backends/comm/`；Python 侧的启动器、process group、rendezvous 收进 `python/jittor/distributed/`；`compat` 的 `distributed.py` 只做 torch 命名的委托 | 8.08、8.15、4.15、0.19 | [布局](target-layout.md)§3 | 三个通信后端同一目录形状 |

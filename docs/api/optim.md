@@ -1,12 +1,11 @@
-# Optimizer API
+# 优化器 API
 
-Use `jittor.optim` for optimizers and `jittor.lr_scheduler` for learning-rate
-schedules.
+优化器在 `jittor.optim`，学习率调度在 `jittor.lr_scheduler`。
 
 :::{autopublicmodule} jittor.optim
 :::
 
-## Learning-rate schedules
+## 学习率调度
 
 :::{autopublicmodule} jittor.lr_scheduler
 :::

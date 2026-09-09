@@ -56,7 +56,7 @@ pickle保留，igamma与class资源清单同步。CPU/CUDA/shim和真实自定�
 数据别名/反向短验通过。这是当时的布局证据；截至2026-09-08，默认Torch入口已使用
 独立namespace及Tensor/Parameter/Module/optimizer/Function类型，见
 `docs/results/2026-09-08-independent-default-entry.md`及后续看板记录。
-当前跨层整合见[架构整合记录](../../docs/results/2026-09-08-architecture-integration.md)。
+当前跨层整合见[架构整合记录](../../refactor-wip/results/2026-09-08-architecture-integration.md)。
 真实dtype、storage/strides、动态提交与GIL边界已整合并通过CPU/CUDA验证；文档归位和
 两distribution打包核验已完成。7.12仍须按其余legacy/API边界复核，不能仅凭目录关闭。
 
@@ -66,7 +66,7 @@ pickle保留，igamma与class资源清单同步。CPU/CUDA/shim和真实自定�
   索引已改弱引用、叶子判断走内核，修复断连误删/retain过早清空/强持对象等缺陷。
   安装级状态向native namespace发布的旧别名也已退出独立模式：owner为compat私有弱
   module binding，15项无JIT合同及CPU/CUDA整合通过。legacy activation/类型修改路径
-  路径仍需收口；完整storage/strides已在本批落地。见[参数记录](../../docs/results/2026-09-08-parameter-and-holder-ownership.md)。
+  路径仍需收口；完整storage/strides已在本批落地。见[参数记录](../../refactor-wip/results/2026-09-08-parameter-and-holder-ownership.md)。
 - 原生参数边界已完成：Parameter是真Var子类，Module按名字自持角色；native不再读写
   `_is_torch_parameter`或`_torch_parameter_class`。原生层仍可按名字注册普通Var，
   不再用假isinstance冒充Parameter；Torch前端层构造完成后会提升为真实Parameter。
@@ -79,7 +79,7 @@ pickle保留，igamma与class资源清单同步。CPU/CUDA/shim和真实自定�
 测试node数代替需求完成。3.04/3.05/3.07、5.02及其子项、5.03与7.08已完成本批架构验收；
 7.13真实mesh/共享optimizer/生命周期已实现，四rank小模型通过，显存性能后移。
 1.05/2.23/3.24旧preflight阻塞已由后续冷构建解除，已核目录回填状态，
-不计为新增实现。见[JIT与视图记录](../../docs/results/2026-09-08-jit-target-and-transpose-views.md)。
+不计为新增实现。见[JIT与视图记录](../../refactor-wip/results/2026-09-08-jit-target-and-transpose-views.md)。
 不要逐小改重跑完整test_independent_frontend：它虽仅2个node，本轮CUDA仍花319秒。
 普通状态变更使用无JIT合同加针对性短链路；C++变更合批编译并集中做相关CPU/CUDA验收。
 
@@ -87,7 +87,7 @@ pickle保留，igamma与class资源清单同步。CPU/CUDA/shim和真实自定�
 `_runtime/import_aliases.py`；`jittor/__init__.py`经`_runtime/compat_bootstrap.py`
 仅在显式请求时加载compat preflight/compose，plain native import不再导入兼容域。
 阻止所有compat导入的native前向/反向、按需旧别名与独立入口短验证CPU11/CUDA6项通过。
-见[启动解耦记录](../../docs/results/2026-09-08-native-compat-bootstrap.md)。随后已整树移动到
+见[启动解耦记录](../../refactor-wip/results/2026-09-08-native-compat-bootstrap.md)。随后已整树移动到
 顶层`compat`：独占`jittor.compat`包、shim资源和torch/triton部署命令，core wheel
 排除这些文件。两wheel文件交集为0，Torch入口供打包和deploy复用。未安装compat的
 native前向/反向、两包安装后的torch-first/native-first入口通过；源码短验证21项，
@@ -95,7 +95,7 @@ native前向/反向、两包安装后的torch-first/native-first入口通过；�
 开发环境现在运行`python -m pip install -e . -e ./compat`；仅PYTHONPATH=python不再
 提供可选兼容包。换checkout时重装对应compat editable。下一批继续对象状态归并和
 native角色标记退出，不要退回逐API小修。安装命令、产物与边界见
-[独立发行物记录](../../docs/results/2026-09-08-independent-compat-distribution.md)。
+[独立发行物记录](../../refactor-wip/results/2026-09-08-independent-compat-distribution.md)。
 以下为此前单distribution历史产物，不再代表当前两包交付；旧兼容布局wheel SHA-256：
 `ddb76df749952bf7becfc31c8b0cab05f35c35cbd50833233d4a7d9f1b937244`。
 证据见 `docs/results/2026-09-08-compat-layout-and-view-ownership.md`。

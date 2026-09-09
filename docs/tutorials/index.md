@@ -1,25 +1,24 @@
-# Tutorials
+# 教程
 
-The executable tutorials are maintained only as MyST Markdown under
-`examples/notebooks`. The `tutorials` nox session materializes notebooks in
-external state with Jupytext and executes the offline CPU smoke tutorials.
+可执行教程以 MyST Markdown 维护在 `examples/notebooks` 下。`tutorials` 这个 nox
+会话会用 Jupytext 在仓库外生成 notebook，并执行离线 CPU 冒烟教程。
 
-## Quick start
+## 快速开始
 
-- [Model definition and training](https://github.com/Jittor/jittor/blob/master/examples/notebooks/example.md)
-- [Operators and variables](https://github.com/Jittor/jittor/blob/master/examples/notebooks/basics.md)
-- [Meta-operators](https://github.com/Jittor/jittor/blob/master/examples/notebooks/meta_op.md)
-- [Custom C++ and CUDA operators](https://github.com/Jittor/jittor/blob/master/examples/notebooks/custom_op.md)
-- [Profiler](https://github.com/Jittor/jittor/blob/master/examples/notebooks/profiler.md)
+- [模型定义与训练](https://github.com/Jittor/jittor/blob/master/examples/notebooks/example.md)
+- [算子与变量](https://github.com/Jittor/jittor/blob/master/examples/notebooks/basics.md)
+- [元算子](https://github.com/Jittor/jittor/blob/master/examples/notebooks/meta_op.md)
+- [自定义 C++ 与 CUDA 算子](https://github.com/Jittor/jittor/blob/master/examples/notebooks/custom_op.md)
+- [性能分析器](https://github.com/Jittor/jittor/blob/master/examples/notebooks/profiler.md)
 
-## Models and techniques
+## 模型与技术
 
-- [Residual network training](https://github.com/Jittor/jittor/blob/master/examples/notebooks/resnet_training.md)
-- [Transformer from scratch](https://github.com/Jittor/jittor/blob/master/examples/notebooks/transformer.md)
-- [Denoising diffusion from scratch](https://github.com/Jittor/jittor/blob/master/examples/notebooks/diffusion.md)
-- [LoRA parameter-efficient fine-tuning](https://github.com/Jittor/jittor/blob/master/examples/notebooks/lora.md)
+- [残差网络训练](https://github.com/Jittor/jittor/blob/master/examples/notebooks/resnet_training.md)
+- [从零实现 Transformer](https://github.com/Jittor/jittor/blob/master/examples/notebooks/transformer.md)
+- [从零实现去噪扩散模型](https://github.com/Jittor/jittor/blob/master/examples/notebooks/diffusion.md)
+- [LoRA 参数高效微调](https://github.com/Jittor/jittor/blob/master/examples/notebooks/lora.md)
 
-## Open the notebooks
+## 在本地打开 notebook
 
 ```bash
 python -m pip install -r requirements/examples.txt
@@ -31,7 +30,8 @@ find "$STATE" -type f -name '*.md' ! -name README.md -print0 \
 python -m notebook --ServerApp.root_dir="$STATE"
 ```
 
-Run the reproducibility and offline CPU checks with:
+notebook 由 Markdown 源生成，**生成物不进仓库**，一律写在 `$JITTOR_LAB_ROOT/_state`
+之下。可复现性与离线 CPU 检查用：
 
 ```bash
 python -m nox -s tutorials

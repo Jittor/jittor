@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Last reviewed: 2026-09-08
-- Baseline: [architecture integration](../results/2026-09-08-architecture-integration.md)
+- Baseline: [architecture integration](../../refactor-wip/results/2026-09-08-architecture-integration.md)
 - Owner: Jittor core maintainers
 - Review when: a public module moves, an implementation domain is added, or a
   runtime resource path changes
@@ -11,7 +11,7 @@ This document defines how Python source is decomposed inside Jittor. Repository,
 packaging, and runtime-resource ownership is defined by the broader
 [repository layout decision](repository-layout.md).
 
-The [Torch API ownership contract](torch-api-ownership.md) defines stable API
+The [Torch API ownership contract](../../refactor-wip/architecture/torch-api-ownership.md) defines stable API
 objects, installation-owned state and the Runtime service boundary.
 
 ## Principles
@@ -198,7 +198,7 @@ capabilities query named backend/device registries and existing library evidence
 policy views forward startup configuration and effective runtime settings;
 counters observe executor, allocator and native graph liveness services.
 There is no second Runtime state, implicit optional-library load, graph flush,
-or writable observation path. See [runtime introspection](runtime-introspection.md)
+or writable observation path. See [runtime introspection](../../refactor-wip/architecture/runtime-introspection.md)
 for failure/UNPROBED handling, frozen snapshots and test-consumer mappings.
 
 Startup configuration includes compiler/tool paths, compiler flags, cache/source
@@ -328,7 +328,7 @@ their binding/compiler services by injection and no longer import Jittor.
 Tensor checkpoint algorithms live in `jittor.serialization`, with native
 save/load and safe-pickle code in `serialization.native`; legacy utility
 paths query runtime-injected loaders after bootstrap. See
-[backend build configuration](backend-build-configuration.md) for the service
+[backend build configuration](../../refactor-wip/architecture/backend-build-configuration.md) for the service
 protocol, cache compatibility and pre-bootstrap/hardware limits.
 
 ### CUDA Resource Layout
@@ -692,13 +692,13 @@ The ownership order is:
 3. optional import/deployment shims;
 4. project-specific integrations outside the core distribution.
 
-See [Torch compatibility principles](torch-compatibility-principles.md) for the
+See [Torch compatibility principles](../../refactor-wip/architecture/torch-compatibility-principles.md) for the
 behavioral decision rules.
 
 ## Import and initialization rules
 
 Torch dtype objects and their native/NumPy consumption points follow the
-[dtype boundary contract](torch-dtype-boundary.md). Frontend dtypes are immutable
+[dtype boundary contract](../../refactor-wip/architecture/torch-dtype-boundary.md). Frontend dtypes are immutable
 objects; native code uses the core-owned name normalizer for metadata and the
 checked native converter for computation, including placeholder rejection.
 

@@ -1,9 +1,7 @@
-# API reference
+# API 参考
 
-The API pages discover public exports from the installed Jittor wheel.
-`inventory.json` is the single machine-readable stability contract for the
-objects that receive structured autodoc and stable Python-domain anchors; pages
-do not repeat symbol lists.
+API 页面从已安装的 Jittor 包中读取公开导出，`inventory.json` 是这些对象稳定性
+约定的唯一机器可读来源；页面本身不重复罗列符号。
 
 :::{autosummary}
 jittor

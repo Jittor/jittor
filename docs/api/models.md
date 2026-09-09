@@ -1,7 +1,6 @@
-# Model API
+# 模型库 API
 
-`jittor.models` provides maintained image-classification backbones and vision
-transformers.
+`jittor.models` 提供常用视觉网络的参考实现。
 
 :::{autopublicmodule} jittor.models
 :::

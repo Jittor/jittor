@@ -196,7 +196,7 @@ outcome in `docs/results/`; an unavailable runner is not a passing result.
 The maintained CUDA session runs the complete CUDA backend directory, dtype
 coverage, CPU/CUDA device parity, Torch TF32 controls, and the strict CUDA
 OpInfo suite. Its accepted real-device baseline is recorded in the
-[complete CUDA suite report](../results/2026-08-22-cuda-test-suite.md).
+[complete CUDA suite report](../../refactor-wip/results/2026-08-22-cuda-test-suite.md).
 
 The `nccl` session defaults to two visible NVIDIA GPUs. It serially prewarms one
 isolated JIT cache per rank, then uses `jittor.distributed.launch` to verify real

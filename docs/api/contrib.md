@@ -1,8 +1,7 @@
-# Contributed operations API
+# 贡献模块 API
 
-`jittor.contrib` is the historical compatibility entry point for operations now
-owned by `jittor.misc` and `jittor.pool`. Existing imports remain valid and
-resolve to the canonical implementation objects.
+`jittor.contrib` 收录社区贡献的算法与组合工具，包括连通域标记等。稳定性弱于
+核心 API。
 
 :::{autopublicmodule} jittor.contrib
 :::

@@ -1,106 +1,74 @@
-# Native Complex Dtype
+# 复数 dtype
 
-- Status: Accepted with tracked limitations
-- Last reviewed: 2026-08-12
-- Baseline: `582fc51d`
-- Owner: core dtype and linear-algebra maintainers
-- Review when: complex128, second-order complex autograd, or native complex
-  linear-algebra kernels land
+- 状态：已接受，限制已登记
+- 上次复查：2026-08-12
+- 复查触发：complex128、二阶复数自动微分或原生复数线性代数 kernel 落地时
 
-This document records the durable contract for Jittor's native complex dtype.
-Implementation history and individual experiment transcripts belong in Git and
-`docs/results/`; they are intentionally not duplicated here.
+Jittor 的 `complex64` 是**原生 dtype**，不是用两个实数张量模拟出来的。这一页说明
+支持范围到哪里、哪些明确不支持。
 
-## Decision
+## 支持的范围
 
-`complex64` is a first-class `jittor_core` dtype. Public tensor APIs should
-consume and return native complex `Var` objects. The older
-`jt.nn.ComplexNumber` real/imaginary pair remains only as an internal bridge for
-linear-algebra algorithms that have not yet been rewritten. New public APIs must
-not introduce another simulated complex representation.
+CPU 与 CUDA 上有维护测试覆盖的部分：
 
-`complex128` is not registered. Adding it requires expanding and auditing the
-core dtype-size representation before exposing any constructor or promotion
-rule.
+- **构造与转换**：从 NumPy complex64 构造、零初始化、标量赋值、NumPy 往返、
+  实数与复数互转；
+- **算术**：加减乘除、取负、与标量混合、相等/不等、三元选择；
+- **结构操作**：reshape、转置、索引、切片、广播、拼接、堆叠；
+- **归约与线代**：`sum`、`mean`、`abs`、`conj`、二维与批量矩阵乘；
+- **超越函数**：`exp`、`log`、`sin`、`cos`、`sqrt`；
+- **实部虚部视图**：`.real`、`.imag`、`.angle()`、`view_as_real`、
+  `view_as_complex`、`polar`；
+- **一阶梯度**：上述算术、模长、矩阵乘、桥接操作与超越函数的 Wirtinger 型梯度；
+- FFT、VJP 以及维护中的线性代数接口都接受并返回原生复数。
 
-## Supported contract
+## dtype 与梯度的不变量
 
-The maintained CPU and CUDA tests cover:
+- `complex64` 元素占 8 字节，被归类为**复数**，既不是浮点也不是整数。
+- 复数转实数取实部；复数转 bool 时，任一分量非零即为真。
+- `abs(complex64)` 返回 `float32`；算术与复数归约保持 `complex64`，除非有明确约定。
+- 可导的复数值可以携带梯度，但**反向模式的标量 loss 仍然必须是实数**。
+- 复数二元算子的梯度按 torch 的实 loss 约定对另一个操作数取共轭；全纯一元函数对
+  局部导数取共轭。
+- **不支持的梯度会显式报错，不会静默返回零。**
 
-- construction from NumPy complex64, zero initialization, scalar assignment,
-  NumPy round trips, and real/complex casts;
-- add, subtract, multiply, divide, negate, scalar mixing, equality, inequality,
-  and ternary selection;
-- reshape, transpose, indexing, slicing, broadcasting, concatenation, and stack;
-- `sum`, `mean`, `abs`, `conj`, 2-D and batched matrix multiplication;
-- `exp`, `log`, `sin`, `cos`, and `sqrt`;
-- `.real`, `.imag`, `.angle()`, `view_as_real`, `view_as_complex`, and `polar`;
-- Wirtinger-style first-order gradients for supported arithmetic, magnitude,
-  matrix multiplication, bridge operations, and transcendental functions;
-- native-complex inputs and outputs for FFT, VJP, and the maintained
-  linear-algebra surface.
+## 明确不支持
 
-The primary regression files are:
+- **`complex128` 未注册。** 要加它必须先扩展并审计核心的 dtype 尺寸表示，然后才能
+  暴露构造函数与提升规则。
+- **CUDA 上的复数 `prod`** 缺少所需的原子乘实现。CPU 已覆盖；CUDA 必须报错而不是
+  返回部分结果。
+- **原生复数 JVP** 依赖尚未实现的二阶自动微分，`jvp` 抛 `NotImplementedError`；
+  原生复数 VJP 是支持的。
+- **CUDA 上的一般复数特征分解**依赖可用的 CuPy 线代路径，在某些本来正常的 CUDA
+  环境下可能不可用。
+- 部分超越函数尚未支持。
 
-- [`tests/core/test_complex64_native.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex64_native.py)
-- [`tests/core/test_complex64_linalg.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex64_linalg.py)
-- [`tests/core/test_complex64_gradfunctional.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex64_gradfunctional.py)
-- [`tests/core/test_complex.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex.py), for the
-  remaining internal bridge
+限制只有在**配套一个覆盖此前不支持的后端或导数阶的定向回归测试**时才会被移除。
 
-## Dtype and gradient invariants
+## 内部桥接
 
-- `complex64` has an eight-byte element size and is classified as complex, not
-  floating-point or integer.
-- Complex-to-real casts select the real component. Complex-to-bool is true when
-  either component is nonzero.
-- `abs(complex64)` returns `float32`; arithmetic and complex reductions retain
-  `complex64` unless an explicit contract says otherwise.
-- A differentiable complex value is allowed to carry gradients, but a scalar
-  loss supplied to reverse-mode differentiation remains real.
-- Complex binary gradients conjugate the opposite operand according to the
-  real-loss convention used by Torch. Holomorphic unary gradients conjugate the
-  local derivative.
-- Unsupported gradients fail explicitly; they do not silently return zeros.
+`view_as_real` 与其逆在设备上完成 `complex64[...]` 与 `float32[..., 2]` 的互转，
+并保持一阶梯度。这是**实现桥接，不承诺零拷贝别名**。
 
-## Bridge boundary
+`jittor.linalg` 里仍有部分函数把原生复数转成内部的 `ComplexNumber` 实部/虚部表示、
+跑既有的实数算法、再转回原生复数。`jt.nn.ComplexNumber` 只作为这类尚未重写的线代
+算法的内部桥接保留，**新的公开 API 不得再引入第二种模拟复数表示**。该桥接对用户
+可见结果已废弃，但要等所有这类 kernel 都有原生实现和等价测试后才能删除。
 
-`view_as_real` and its inverse convert between `complex64[...]` and
-`float32[..., 2]` on device and preserve first-order gradients. The conversion is
-an implementation bridge, not a promise of zero-copy aliasing.
+## 新增复数算子的检查清单
 
-Some functions in `jittor.linalg` currently convert native values to the
-internal `ComplexNumber` substrate, execute an existing real/imaginary
-algorithm, and convert outputs back to native complex tensors. That substrate is
-deprecated for user-facing results but cannot be deleted until all such kernels
-have native implementations and equivalent tests.
+1. 独立于 kernel 代码指明输入提升规则与输出 dtype；
+2. CPU 前向与 NumPy 或精确数学参考对拍；
+3. 声称支持的设备上补 CUDA/NPU 执行与设备一致性覆盖；
+4. 按实 loss 约定推导并测试一阶梯度；
+5. 覆盖零值、分支切割、空张量、批量与非连续等情形；
+6. 对不支持的导数阶或后端**显式报错**；
+7. 更新本文与问题总账，不要把实验过程复制进任何一份。
 
-## Known limitations
-
-- CUDA complex `prod` lacks the required atomic multiply implementation. CPU is
-  covered; CUDA must fail rather than return a partial result.
-- Native complex JVP relies on second-order autograd that is not implemented.
-  `jvp` raises `NotImplementedError`; native complex VJP is supported.
-- General complex eigendecomposition on CUDA depends on an available CuPy
-  linear-algebra path and may be unavailable in otherwise valid CUDA setups.
-- `complex128` and several transcendental operations are unsupported.
-- Native complex linear algebra still uses the internal bridge described above.
-
-These limitations are indexed in the
-[known-issues ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md).
-A limitation is
-removed only together with a focused regression that exercises the previously
-unsupported backend or derivative order.
-
-## Extension checklist
-
-When adding a complex operation:
-
-1. Specify input promotion and output dtype independently from kernel code.
-2. Add CPU forward comparison against NumPy or a precise mathematical oracle.
-3. Add CUDA/NPU execution and device-parity coverage where support is claimed.
-4. Derive and test first-order gradients under the real-loss convention.
-5. Test zero, branch-cut, empty, batched, and non-contiguous cases as applicable.
-6. Raise an explicit error for unsupported derivative orders or backends.
-7. Update this contract and the known-issues ledger without copying experiment
-   history into either document.
+主要回归文件：
+[`test_complex64_native.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex64_native.py)、
+[`test_complex64_linalg.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex64_linalg.py)、
+[`test_complex64_gradfunctional.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex64_gradfunctional.py)、
+以及覆盖剩余内部桥接的
+[`test_complex.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex.py)。
