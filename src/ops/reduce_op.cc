@@ -346,11 +346,27 @@ VarPtr ReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         return make_binary(a, n, ns_multiply);
     }
     if (ns == ns_maximum || ns == ns_minimum) {
+        // Every element equal to the extremum is on the mask, so handing each
+        // of them the whole cotangent multiplies the gradient by the number of
+        // ties: max([1,3,3]) produced [0,1,1], which sums to 2. A subgradient
+        // of a 1-homogeneous selection has to sum to 1 whichever tie-breaking
+        // rule is chosen, so this splits it evenly -- the rule torch's `amax`
+        // uses, and the one that matches this op's shape (it returns values,
+        // not the (values, indices) pair `torch.max(dim)` returns).
+        //
+        // The extra reduction counts the ties. With no ties it divides by one,
+        // which is the common case and the reason the cost is acceptable here:
+        // this is the backward, which already broadcasts twice.
         VarPtr zeros = make_number(0, v);
+        VarPtr ones = make_number(1, v);
         VarPtr a = make_broadcast_to(out, v, reduce_mask, keepdims_mask);
         VarPtr cond = make_binary(v, a, ns_equal);
+        VarPtr hits = make_ternary(cond, ones, zeros);
+        VarPtr n = make_reduce2(hits, ns_add, reduce_mask, keepdims_mask);
+        VarPtr nb = make_broadcast_to(n, v, reduce_mask, keepdims_mask);
         VarPtr dv = make_broadcast_to(dout, v, reduce_mask, keepdims_mask);
-        return make_ternary(cond, dv, zeros);
+        VarPtr share = make_binary(dv, nb, ns_divide);
+        return make_ternary(cond, share, zeros);
     }
     return nullptr;
 }

@@ -272,8 +272,71 @@ def probe_view_semantics(jt, device):
           jt.sum(jt.transpose(A, (1, 0)), 0).numpy(), a.T.sum(axis=0))
 
 
+def probe_gradient_edges(jt, device):
+    """Gradients at the points where the derivative is not unique.
+
+    These are the silent ones: the forward value is right, so nothing looks
+    wrong, and the gradient is only wrong at a measure-zero set of inputs --
+    which real data reaches constantly (a relu at exactly 0, tied maxima in a
+    pooling window, a clamp sitting on its bound). Two reasonable
+    implementations disagree here, and the convention is a choice each
+    framework writes down. NumPy has no autograd, so the expectations below are
+    PyTorch's documented subgradient choices.
+    """
+    def grad_of(fn, x_np):
+        x = jt.array(x_np)
+        y = fn(x)
+        return jt.grad(y.sum(), x).numpy()
+
+    # abs'(0): torch picks 0.
+    check("grad abs at 0", "grad-edge",
+          grad_of(jt.abs, np.array([-1.0, 0.0, 1.0], dtype="float32")),
+          np.array([-1.0, 0.0, 1.0], dtype="float32"))
+
+    # relu'(0): torch picks 0.
+    if hasattr(jt.nn, "relu"):
+        check("grad relu at 0", "grad-edge",
+              grad_of(jt.nn.relu, np.array([-1.0, 0.0, 1.0], dtype="float32")),
+              np.array([0.0, 0.0, 1.0], dtype="float32"))
+
+    # A tie in max: torch routes the whole gradient to the first maximum for
+    # `max()` over all elements. Splitting it evenly is the other defensible
+    # answer, so this pins which one is implemented rather than assuming.
+    x = jt.array(np.array([1.0, 3.0, 3.0], dtype="float32"))
+    g = jt.grad(jt.max(x), x).numpy()
+    check("grad max with a tie sums to one", "grad-edge",
+          np.array([float(g.sum())]), np.array([1.0]))
+
+    # minimum/maximum against a constant, exactly on the boundary.
+    if hasattr(jt, "clamp"):
+        v = np.array([-2.0, -1.0, 0.0, 1.0, 2.0], dtype="float32")
+        xx = jt.array(v)
+        yy = jt.clamp(xx, -1.0, 1.0)
+        gg = jt.grad(yy.sum(), xx).numpy()
+        # torch passes gradient through at the bounds themselves.
+        check("grad clamp at its bounds", "grad-edge",
+              gg, np.array([0.0, 1.0, 1.0, 1.0, 0.0], dtype="float32"))
+
+    # sqrt'(0) is infinite; the finite-difference expectation is that it is not
+    # silently zero, which is the failure that hides a vanishing gradient.
+    g = grad_of(jt.sqrt, np.array([0.0, 1.0, 4.0], dtype="float32"))
+    check("grad sqrt away from 0", "grad-edge", g[1:],
+          np.array([0.5, 0.25], dtype="float32"))
+    check("grad sqrt at 0 is not silently finite", "grad-edge",
+          np.array([bool(np.isinf(g[0]) or np.isnan(g[0]))]), np.array([True]))
+
+    # A gradient that must not flow: the second argument of a comparison.
+    a = jt.array(np.array([1.0, 2.0], dtype="float32"))
+    b = jt.array(np.array([2.0, 1.0], dtype="float32"))
+    out = (a > b).float_auto() * a
+    ga = jt.grad(out.sum(), a).numpy()
+    check("grad through a comparison mask", "grad-edge",
+          ga, np.array([0.0, 1.0], dtype="float32"))
+
+
 PROBES = (
     ("rounding", probe_rounding),
+    ("grad-edge", probe_gradient_edges),
     ("empty", probe_empty_and_zero_size),
     ("broadcast", probe_broadcasting),
     ("aliasing", probe_inplace_aliasing),
