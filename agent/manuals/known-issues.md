@@ -496,6 +496,62 @@ framework defects.
   the input contains one, a parity case covers a NaN-bearing reduction, and the
   remaining four operators from that sweep are triaged.
 
+## KI-BACKEND-008: CUDA flushes subnormals to zero, CPU keeps them
+
+- Severity: Medium
+- Status: Reproduced; a documented decision is what is missing, not a fix
+- Owner: CUDA backend maintainers
+- Evidence: float32, smallest normal is `1.18e-38`.
+
+  | value | CPU | CUDA | NumPy |
+  | --- | --- | --- | --- |
+  | `1e-45` (subnormal) | kept | **0.0** | kept |
+  | `1e-40` (subnormal) | kept | **0.0** | kept |
+  | `1e-30` (normal) | kept | kept | kept |
+
+  Two of the seven operator disagreements found by the adversarial sweep have
+  this single cause: `count_nonzero` counts `1e-45` on CPU and not on CUDA, and
+  `lgamma(1e-45)` gives the correct `103.28` on CPU and `inf` on CUDA -- the
+  input reached the function already flushed to zero, and `lgamma(0)` is `inf`.
+- Symptom: a gradient that underflows into the subnormal range is exactly zero
+  on CUDA and a tiny non-zero on CPU. The two devices then take different
+  update paths for the same model, which is invisible until someone compares
+  them.
+- This one is a decision, not a mistake: flush-to-zero is the normal CUDA
+  trade -- subnormal arithmetic is slow, and most training does not care. What
+  is missing is that the decision is nowhere written down, so it reads as a
+  defect when a parity comparison hits it, and the two devices are documented
+  as equivalent when they are not.
+- Fix direction: state it. Either document flush-to-zero as CUDA's contract and
+  make the parity suite tolerate it explicitly, or disable it (`-ftz=false`) and
+  measure the cost. Silently differing is the only option that should be off
+  the table.
+- Review/expiry condition: the subnormal behaviour of each backend is stated in
+  the backend documentation, and the parity suite either asserts agreement or
+  names this as a known and accepted difference.
+
+## KI-OPS-011: CPU `digamma` returns -inf where NaN and +inf are correct
+
+- Severity: Medium
+- Status: Reproduced, unfixed
+- Owner: operator maintainers
+- Evidence: against `scipy.special.digamma` as the reference:
+
+  | input | CPU | CUDA | scipy |
+  | --- | --- | --- | --- |
+  | `nan` | **-inf** | `nan` | `nan` |
+  | `-0.0` | **-inf** | `inf` | `inf` |
+
+  CUDA is right in both rows and CPU is wrong; the other eight inputs agree.
+- Symptom: `digamma` of a NaN produces a finite-signed infinity rather than
+  propagating the NaN, so a NaN entering here is converted into a value that
+  looks like a legitimate pole. At `-0.0` the sign of the pole is inverted.
+- Notable for the direction: every other divergence this sweep found had CUDA
+  as the wrong side. Recorded because "CPU is the reference" is an assumption
+  the parity suite makes, and this is a counter-example to it.
+- Review/expiry condition: CPU `digamma` matches scipy for NaN and both signed
+  zeros, and the probe's device-agreement case covers it.
+
 ## Three CPU float defects share one surface
 
 `KI-BACKEND-004`, `KI-BACKEND-005` and `KI-BACKEND-006` were found separately
