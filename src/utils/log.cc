@@ -739,7 +739,7 @@ string Utf8ToGbk(const char *src_str)
 	return strTemp;
 }
 
-int system_popen(const char *cmd, const char* cwd) {
+int system_popen(const char *cmd, const char* cwd, string* captured) {
     HANDLE g_hChildStd_OUT_Rd = NULL;
     HANDLE g_hChildStd_OUT_Wr = NULL;
     SECURITY_ATTRIBUTES saAttr;
@@ -824,10 +824,15 @@ int system_popen(const char *cmd, const char* cwd) {
         check_cuda_unsupport_version(output);
         check_cuda_gcc_version(output);
     }
+    if (captured) *captured = output;
     return ec;
 }
-#else
+
 int system_popen(const char* cmd, const char* cwd) {
+    return system_popen(cmd, cwd, nullptr);
+}
+#else
+int system_popen(const char* cmd, const char* cwd, string* captured) {
     char buf[BUFSIZ];
     string cmd2;
     cmd2 = cmd;
@@ -842,6 +847,9 @@ int system_popen(const char* cmd, const char* cwd) {
     }
     if (output.size()) std::cerr.flush();
     auto ret = pclose(ptr);
+    // Before every early return below: a failure whose output was too short to
+    // classify still has output, and it is the only thing that says why.
+    if (captured) *captured = output;
     if (ret && !log_v)
         std::cerr << output;
     if (output.size()<10 && ret) {
@@ -854,14 +862,153 @@ int system_popen(const char* cmd, const char* cwd) {
     }
     return ret;
 }
+
+int system_popen(const char* cmd, const char* cwd) {
+    return system_popen(cmd, cwd, nullptr);
+}
 #endif
 
+// Drop ANSI SGR sequences. Jittor compiles with `-fdiagnostics-color=always`,
+// so the compiler's output carries escapes; they render in a terminal and are
+// unreadable everywhere an exception message actually ends up -- a log file, a
+// captured traceback, a bug report pasted into an issue.
+static string strip_ansi_escapes(const string& text) {
+    string out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size(); i++) {
+        if (text[i] != '\033') { out += text[i]; continue; }
+        size_t j = i + 1;
+        if (j < text.size() && text[j] == '[') {
+            j++;
+            while (j < text.size() && !(text[j] >= '@' && text[j] <= '~')) j++;
+        }
+        i = j;  // the loop's ++ steps past the final byte
+    }
+    return out;
+}
+
+// See the declaration in log.h for why an exception must not carry the log
+// line's prefix. Two steps, in this order: the colour escapes wrap the prefix,
+// so they have to go first for the prefix to be recognisable.
+string message_without_log_prefix(const string& message) {
+    auto text = strip_ansi_escapes(message);
+    // `[f 0911 00:12:17.212067 84 binary_op.cc:426] rest` -> `binary_op.cc:426: rest`
+    if (text.size() < 4 || text[0] != '[') return text;
+    char level = text[1];
+    if (level != 'f' && level != 'e' && level != 'w' && level != 'i') return text;
+    auto close = text.find(']');
+    // A bound, so a message that merely begins with '[' -- a shape, a list --
+    // cannot have an arbitrary span of itself eaten as a prefix.
+    if (close == string::npos || close > 120) return text;
+    auto inner = text.substr(1, close - 1);
+    auto space = inner.rfind(' ');
+    if (space == string::npos) return text;
+    auto fileline = inner.substr(space + 1);
+    // The last field of a real prefix is `file.cc:426`. Without the colon this
+    // is not one, and the text is returned untouched.
+    if (fileline.find(':') == string::npos) return text;
+    auto rest = text.substr(close + 1);
+    size_t cut = 0;
+    while (cut < rest.size() && (rest[cut] == ' ' || rest[cut] == '\n')) cut++;
+    rest = rest.substr(cut);
+    return rest.size() ? fileline + ": " + rest : fileline;
+}
+
+static bool is_diagnostic_head(const string& line) {
+    static const char* markers[] = {
+        "error:", "Error:", "ERROR:", "undefined reference",
+        "No such file or directory", "ld returned", "Segmentation fault",
+        "internal compiler error",
+    };
+    for (auto marker : markers)
+        if (line.find(marker) != string::npos) return true;
+    return false;
+}
+
+// gcc, clang and nvcc all print `path:line:col: error: text`, then the source
+// line, then a caret line, the last two indented. Keeping a head with its
+// indented continuation reproduces what a person reads in a terminal.
+static bool is_diagnostic_context(const string& line) {
+    return line.size() && (line[0] == ' ' || line[0] == '\t');
+}
+
+// What a compiler failure is about, pulled out of the noise around it.
+//
+// This function exists because the message it replaces did not contain the
+// reason. Measured on this tree before the change: a one-symbol typo in a
+// `jt.code` source produced a 2463-character exception that was almost
+// entirely `-I` and `-L` flags, and the compiler's own
+// `error: ... was not declared in this scope` appeared in it **zero** times --
+// it went to stderr and nowhere else. Anyone who caught the exception, logged
+// it, or ran under a harness that captured output instead of a terminal got a
+// message with no cause in it at all.
+//
+// The command line is not in the replacement either. It is the same ~1.5 KB of
+// include and library paths on every failure, it is reproducible from the
+// build configuration, and `log_v=1` prints it -- so it is a debugging aid,
+// not the answer, and it does not belong above the answer.
+static string compile_failure_message(const char* cmd, const string& raw_output,
+                                      int exit_code) {
+    const size_t max_lines = 24;
+    auto text = strip_ansi_escapes(raw_output);
+    vector<string> lines;
+    size_t start = 0;
+    while (start <= text.size()) {
+        auto stop = text.find('\n', start);
+        if (stop == string::npos) {
+            if (start < text.size()) lines.push_back(text.substr(start));
+            break;
+        }
+        lines.push_back(text.substr(start, stop - start));
+        start = stop + 1;
+    }
+
+    vector<string> kept;
+    size_t i = 0, elided = 0;
+    while (i < lines.size()) {
+        if (!is_diagnostic_head(lines[i])) { i++; continue; }
+        if (kept.size() >= max_lines) { elided++; i++; continue; }
+        kept.push_back(lines[i++]);
+        size_t context = 0;
+        while (i < lines.size() && context < 3 && is_diagnostic_context(lines[i])) {
+            if (kept.size() < max_lines) kept.push_back(lines[i]);
+            i++; context++;
+        }
+    }
+    if (kept.empty()) {
+        // Nothing matched the shape of a diagnostic. The tail of the output is
+        // still the compiler talking, which beats the command line.
+        size_t from = lines.size() > max_lines ? lines.size() - max_lines : 0;
+        for (size_t k = from; k < lines.size(); k++) kept.push_back(lines[k]);
+    }
+
+    string program(cmd);
+    if (program.size() && program[0] == '"') {
+        auto close = program.find('"', 1);
+        program = close == string::npos ? program : program.substr(1, close - 1);
+    } else {
+        auto space = program.find(' ');
+        if (space != string::npos) program = program.substr(0, space);
+    }
+
+    string out = "compilation failed with exit code " + std::to_string(exit_code) + ".";
+    for (auto& line : kept) { out += "\n  "; out += line; }
+    if (elided) out += "\n  ... " + std::to_string(elided) + " further diagnostic(s) elided";
+    out += "\n\ncompiler: " + program +
+           "\n(set the log_v flag to 1 to see the full command line and output)";
+    return out;
+}
+
 void system_with_check(const char* cmd, const char* cwd) {
-    auto ret = system_popen(cmd, cwd);
+    string output;
+    auto ret = system_popen(cmd, cwd, &output);
     CHECK(ret>=0 && ret<=256) << "Run cmd failed:" << cmd <<
             "\nreturn ">> ret >> ". This might be an overcommit issue or out of memory."
             << "Try : sudo sysctl vm.overcommit_memory=1, or set enviroment variable `export DISABLE_MULTIPROCESSING=1`";
-    CHECKop(ret,==,0) << "Run cmd failed:" << cmd;
+    // `LOG_IF` rather than `CHECK`/`CHECKop`: those prepend
+    // `Check failed ret(256) == 0(0)`, which restates the exit code in a form
+    // nobody reads and pushes the diagnostic one line further down.
+    LOG_IF(f, ret != 0) >> compile_failure_message(cmd, output, ret);
 }
 
 #ifdef LOG_ASYNC
