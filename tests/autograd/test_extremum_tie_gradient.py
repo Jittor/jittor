@@ -36,13 +36,6 @@ import numpy as np
 import jittor as jt
 
 
-def _has_cuda():
-    return bool(_test_capability.check_accelerator('cuda', backend=jt).enabled)
-
-
-requires_cuda = unittest.skipUnless(_has_cuda(), "a CUDA device is required")
-
-
 class _TieContract:
 
     device_flag = 0
@@ -105,9 +98,11 @@ class TestExtremumTieGradientCpu(_TieContract, unittest.TestCase):
     device_flag = 0
 
 
-@requires_cuda
 class TestExtremumTieGradientCuda(_TieContract, unittest.TestCase):
     device_flag = 1
+
+    def setUp(self):
+        _test_capability.require_accelerator("cuda")
 
 
 if __name__ == "__main__":

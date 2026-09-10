@@ -12,47 +12,6 @@ they are not copied here. Every entry needs executable evidence and an exit
 condition. Environment outages are recorded in result reports rather than as
 framework defects.
 
-## KI-BACKEND-009: ACL OpInfo advertises unsupported float64 operations
-
-- Severity: Medium
-- Status: Open; reproduced on Ascend 910B3 / CANN 9.0.0
-- Owner: ACL provider and OpInfo capability maintainers
-- Baseline: `1a1f175e` plus the 2026-09-10 validation patches
-- Evidence: `tests/ops/test_ops.py::TestCommonNPU::test_reference_abs_float64`;
-  raw `$JITTOR_LAB_ROOT/_state/ascend-refactor/compat/logs/final-suite.log`
-  records `Abs does not support input dtype` and a rejected CPU fallback.
-  See the [validation report](../../refactor-wip/results/2026-09-10-ascend-refactor-validation.md).
-- Symptom: NPU capability metadata selects float64 Abs even though the real ACL
-  implementation rejects it. The expanded compat/OpInfo gate stopped at this
-  failure; the passing focused compat suite does not close full dtype coverage.
-- Workaround: stay within independently verified per-operation dtypes. A narrower
-  float16/float32 run is a separate selection, not a passing full gate; do not
-  enable CPU fallback or silently add skips to present float64 as supported.
-- Exit condition: reconcile per-operation dtype declarations with real provider
-  support, test supported dtypes on device without fallback and unsupported
-  dtypes through explicit rejection contracts, then rerun the expanded gate.
-
-## KI-BACKEND-010: non-global adaptive average pooling lacks ACL reindex
-
-- Severity: High
-- Status: Open; reproduced on Ascend 910B3 / CANN 9.0.0
-- Owner: ACL pooling/reindex provider and capability maintainers
-- Baseline: `1a1f175e` plus the 2026-09-10 validation patches
-- Evidence: `tests/ops/test_ops.py::TestCommonNPU::test_reference_adaptive_avg_pool2d_float32`;
-  raw `$JITTOR_LAB_ROOT/_state/ascend-refactor/compat/logs/opinfo-float16-float32.log`
-  records `unregistered fused operator variant: reindex/0` for the composed
-  `reindex, reduce.add` path. See the
-  [validation report](../../refactor-wip/results/2026-09-10-ascend-refactor-validation.md).
-- Symptom: non-global output shapes enter a composed path without an ACL
-  reindex implementation. The explicit float16/float32 OpInfo selection stopped
-  after three passing nodes and this failure; global pooling or ordinary
-  max/average pooling coverage does not establish this capability.
-- Workaround: use only verified pooling domains; CPU execution must be selected
-  and reported separately, never counted as successful NPU fallback.
-- Exit condition: supply the missing real ACL execution path or accurately
-  declare its unsupported domain, add independent forward/backward numerical
-  coverage across non-global output shapes, and rerun the expanded device gate.
-
 ## Severity guide
 
 - **Critical:** silent wrong result, gradient, state, or device placement.

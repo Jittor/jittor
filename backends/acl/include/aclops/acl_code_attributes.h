@@ -55,6 +55,8 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
     if (name == "GroupNorm") return {{"batch", required(Type::int64)}, {"channels", required(Type::int64)}, {"spatialSize", required(Type::int64)}, {"groups", required(Type::int64)}, {"eps", required(Type::float64)}};
     if (name == "GroupNormBackward") return {{"batch", required(Type::int64)}, {"channels", required(Type::int64)}, {"spatialSize", required(Type::int64)}, {"groups", required(Type::int64)}, {"eps", required(Type::float64)}};
     if (name == "RmsNorm") return {{"eps", required(Type::float64)}};
+    if (name == "AdaptiveAvgPool2d") return {{"outputSize", required(Type::int64_vector)}};
+    if (name == "AdaptiveAvgPool2dBackward") return {};
     if (name == "Maxpool") return {{"kernel_size", required(Type::int64_vector)}, {"poolStrides", required(Type::int64_vector)}, {"poolPads", required(Type::int64_vector)}, {"poolDilations", required(Type::int64_vector)}, {"poolCeil", required(Type::boolean)}, {"countIncludePad", required(Type::boolean)}};
     if (name == "Avgpool") return {{"kernel_size", required(Type::int64_vector)}, {"poolStrides", required(Type::int64_vector)}, {"poolPads", required(Type::int64_vector)}, {"poolDilations", required(Type::int64_vector)}, {"poolCeil", required(Type::boolean)}, {"countIncludePad", required(Type::boolean)}};
     if (name == "MaxpoolBackward") return {{"kernel_size", required(Type::int64_vector)}, {"poolStrides", required(Type::int64_vector)}, {"poolPads", required(Type::int64_vector)}, {"poolDilations", required(Type::int64_vector)}, {"poolCeil", required(Type::boolean)}, {"countIncludePad", required(Type::boolean)}};
@@ -244,6 +246,19 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         attr->eps = fields.at("eps").float_value;
         op.op_attr=std::move(attr);
         op.jt_name="rmsnorm";
+        return;
+    }
+    if (name == "AdaptiveAvgPool2d") {
+        auto attr=std::unique_ptr<AdaptiveAvgPool2dAttr>(new AdaptiveAvgPool2dAttr());
+        attr->outputSize = fields.at("outputSize").int_values;
+        if (attr->outputSize.size() != 2 || attr->outputSize[0] <= 0 || attr->outputSize[1] <= 0)
+            acl_data::user_error("adaptive average pooling requires two positive output dimensions");
+        op.op_attr=std::move(attr);
+        op.jt_name="adaptive_avg_pool2d";
+        return;
+    }
+    if (name == "AdaptiveAvgPool2dBackward") {
+        op.jt_name="adaptive_avg_pool2d_backward";
         return;
     }
     if (name == "Maxpool") {

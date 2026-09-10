@@ -10,16 +10,16 @@ MIGRATED_DIMENSION_BOUNDARIES = {
 }
 
 MIGRATED_SHAPE_CARDINALITY_BOUNDARIES = {
-    "src/ops/composite/code_op.cc": 5,
-    "src/ops/composite/numpy_code_op.cc": 4,
-    "src/ops/reindex_op.cc": 2,
-    "src/ops/reindex_reduce_op.cc": 3,
+    "src/ops/composite/code_op.cc": 14,  # shapes, callbacks and alias metadata
+    "src/ops/composite/numpy_code_op.cc": 17,  # input/output limits, shapes, backward index
+    "src/ops/reindex_op.cc": 8,  # tensor indices and explicit shape
+    "src/ops/reindex_reduce_op.cc": 4,  # includes reduction operation kind
 }
 
 MIGRATED_VIEW_SHAPE_BOUNDARIES = {
     "src/ops/composite/transpose_op.cc": 3,
     "src/ops/composite/fuse_transpose_op.cc": 3,
-    "src/ops/composite/reshape_op.cc": 3,
+    "src/ops/composite/reshape_op.cc": 5,  # includes storage-stride view checks
 }
 
 MIGRATED_BROADCAST_SHAPE_BOUNDARIES = {
@@ -27,7 +27,7 @@ MIGRATED_BROADCAST_SHAPE_BOUNDARIES = {
 }
 
 MIGRATED_REINTERPRET_VIEW_BOUNDARIES = {
-    "src/ops/composite/reinterpret_view_op.cc": 6,
+    "src/ops/composite/reinterpret_view_op.cc": 8,  # contiguous storage and alignment
 }
 
 MIGRATED_BINARY_SHAPE_BOUNDARIES = {
@@ -220,7 +220,7 @@ INTERNAL_BACKEND_ASSERTION_CONTRACTS = {
     "backends/cuda/kernels/cudnn/cudnn_conv3d_backward_w_op.cc": "ASSERT(best_algo_idx!=-1)",
     "backends/cuda/libraries/cudnn/include/cudnn_conv_plan.h": "ASSERT(ok)",
     "backends/cuda/libraries/cudnn/src/cudnn_rnn_descriptor.cc": "ASSERT(linLayerMat)",
-    "backends/cuda/libraries/cutt/src/cutt_wrapper.cc": "CHECK(ret == CUTT_SUCCESS)",
+    "backends/cuda/libraries/cutt/src/cutt_wrapper.cc": "CHECK(status == CUTT_SUCCESS)",
     "backends/cuda/kernels/cub/cub_test_op.cc": "ASSERT(cub_test_entry",
     "backends/cuda/kernels/cublas/cublas_test_op.cc": "ASSERT(cublas_test_entry",
     "backends/cuda/kernels/cudnn/cudnn_test_op.cc": "ASSERT(cudnn_test_entry",
@@ -279,7 +279,8 @@ def test_grad_dtype_boundaries_are_user_errors():
     assert 'USER_CHECK(var->is_float() || var->dtype().is_complex())' in source
     assert '\n    CHECK(loss->is_float())' not in source
     assert '\n        CHECK(var->is_float() || var->dtype().is_complex())' not in source
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    actual = source.count("USER_CHECK(loss->is_float())")
+    actual += source.count("USER_CHECK(var->is_float() || var->dtype().is_complex())")
     assert actual == MIGRATED_GRAD_DTYPE_USER_BOUNDARIES[
         "src/core/grad.cc"]
 
@@ -293,6 +294,8 @@ def test_public_dimension_boundary_migration_is_explicit_and_bounded():
         # checks by their diagnostic so the independent ledgers do not overlap.
         if relative == "src/ops/broadcast_to_op.cc":
             actual = source.count('USER_CHECK(dim>=0 && dim<ydim)')
+        elif relative == "src/ops/reduce_op.cc":
+            actual = source.count("USER_CHECK(dim>=0 && dim<xdim)")
         else:
             actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
         counts[relative] = actual
@@ -312,7 +315,7 @@ def test_public_shape_cardinality_migration_is_explicit_and_bounded():
                 actual -= 1
         counts[relative] = actual
         assert actual == expected, (relative, actual, expected)
-    assert sum(counts.values()) == 14
+    assert sum(counts.values()) == 43
 
 
 def test_public_view_shape_migration_is_explicit_and_bounded():
@@ -322,7 +325,7 @@ def test_public_view_shape_migration_is_explicit_and_bounded():
         actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
         counts[relative] = actual
         assert actual == expected, (relative, actual, expected)
-    assert sum(counts.values()) == 9
+    assert sum(counts.values()) == 11
 
 
 def test_broadcast_shape_migration_is_explicit_and_bounded():
@@ -341,7 +344,7 @@ def test_reinterpret_view_migration_is_explicit_and_bounded():
 
 def test_binary_shape_migration_is_explicit_and_bounded():
     source = (ROOT / "src/ops/binary_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    actual = source.count("USER_CHECKop(xshape,==,yshape)")
     assert actual == MIGRATED_BINARY_SHAPE_BOUNDARIES[
         "src/ops/binary_op.cc"]
 
@@ -651,17 +654,19 @@ def test_cusparse_spmmcsr_dtype_user_boundary_migration_is_explicit_and_bounded(
 
 def test_cusparse_spmmcsr_shape_is_a_catchable_user_error():
     source = (ROOT / "backends/cuda/kernels/cusparse/cusparse_spmmcsr_op.cc").read_text()
+    # Both formats now share transposition-aware metadata validation. Check
+    # the actual call and shared predicates, not the removed square-only test.
+    assert '#include "cusparse_user_checks.h"' in source
+    assert "cusparse_check_spmm_metadata(outputVar, x, value," in source
+    assert "A_row, A_col, trans_A, trans_B, true)" in source
+    checks = (ROOT / "backends/cuda/libraries/cusparse/include/cusparse_user_checks.h").read_text()
     markers = (
-        "USER_CHECKop(xs,==,os)",
-        "USER_CHECKop(A_col,==,xs[0])",
+        "USER_CHECK(k == b_rows)",
+        "USER_CHECK(output->shape[0] == m && output->shape[1] == n)",
     )
-    assert all(marker in source for marker in markers)
-    assert "ASSERT(xs==os)" not in source
-    assert "ASSERT(A_col==xs[0])" not in source
-    assert "sizes must match" in source
-    assert "columns must match" in source
-    assert sum(source.count(marker) for marker in markers) == MIGRATED_CUSPARSE_SPMMCSR_SHAPE_USER_BOUNDARIES[
-        "backends/cuda/kernels/cusparse/cusparse_spmmcsr_op.cc"]
+    assert all(marker in checks for marker in markers)
+    assert "transpose_a ? a_rows : a_columns" in checks
+    assert "dense->shape[transpose_b ? 1 : 0]" in checks
 
 
 def test_cusparse_spmmcoo_dtype_user_boundary_migration_is_explicit_and_bounded():
@@ -676,17 +681,19 @@ def test_cusparse_spmmcoo_dtype_user_boundary_migration_is_explicit_and_bounded(
 
 def test_cusparse_spmmcoo_shape_is_a_catchable_user_error():
     source = (ROOT / "backends/cuda/kernels/cusparse/cusparse_spmmcoo_op.cc").read_text()
+    # Both formats now share transposition-aware metadata validation. Check
+    # the actual call and shared predicates, not the removed square-only test.
+    assert '#include "cusparse_user_checks.h"' in source
+    assert "cusparse_check_spmm_metadata(outputVar, x, value," in source
+    assert "A_row, A_col, trans_A, trans_B, false)" in source
+    checks = (ROOT / "backends/cuda/libraries/cusparse/include/cusparse_user_checks.h").read_text()
     markers = (
-        "USER_CHECKop(xs,==,os)",
-        "USER_CHECKop(A_col,==,xs[0])",
+        "USER_CHECK(k == b_rows)",
+        "USER_CHECK(output->shape[0] == m && output->shape[1] == n)",
     )
-    assert all(marker in source for marker in markers)
-    assert "ASSERT(xs==os)" not in source
-    assert "ASSERT(A_col==xs[0])" not in source
-    assert "sizes must match" in source
-    assert "columns must match" in source
-    assert sum(source.count(marker) for marker in markers) == MIGRATED_CUSPARSE_SPMMCOO_SHAPE_USER_BOUNDARIES[
-        "backends/cuda/kernels/cusparse/cusparse_spmmcoo_op.cc"]
+    assert all(marker in checks for marker in markers)
+    assert "transpose_a ? a_rows : a_columns" in checks
+    assert "dense->shape[transpose_b ? 1 : 0]" in checks
 
 
 def test_nccl_reduce_scatter_shape_user_boundary_migration_is_explicit_and_bounded():
@@ -736,7 +743,7 @@ def test_cudnn_conv_format_compare_is_a_catchable_user_error():
 
 def test_cudnn_conv_bwd_x_format_user_boundary_migration_is_explicit_and_bounded():
     source = (ROOT / "backends/cuda/kernels/cudnn/cudnn_conv_backward_x_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    actual = source.count("USER_CHECKop(")
     assert actual == MIGRATED_CUDNN_CONV_BWD_X_FORMAT_USER_BOUNDARIES[
         "backends/cuda/kernels/cudnn/cudnn_conv_backward_x_op.cc"]
     assert "Not a valid format" in source
@@ -753,7 +760,7 @@ def test_cudnn_conv_bwd_x_format_compare_is_a_catchable_user_error():
 
 def test_cudnn_conv_bwd_w_format_user_boundary_migration_is_explicit_and_bounded():
     source = (ROOT / "backends/cuda/kernels/cudnn/cudnn_conv_backward_w_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    actual = source.count("USER_CHECKop(")
     assert actual == MIGRATED_CUDNN_CONV_BWD_W_FORMAT_USER_BOUNDARIES[
         "backends/cuda/kernels/cudnn/cudnn_conv_backward_w_op.cc"]
     assert "Not a valid format" in source
@@ -792,33 +799,36 @@ def test_backend_internal_assertion_classification_is_explicit():
     cudnn_conv_bwd_x = (ROOT / "backends/cuda/kernels/cudnn/cudnn_conv_backward_x_op.cc").read_text()
     assert cudnn_conv_bwd_x.count("ASSERT(best_algo_idx!=-1)") == 1
     cutt_wrapper = (ROOT / "backends/cuda/libraries/cutt/src/cutt_wrapper.cc").read_text()
-    assert cutt_wrapper.count("CHECK(ret == CUTT_SUCCESS)") == 2
+    assert cutt_wrapper.count("CHECK(status == CUTT_SUCCESS)") == 1
+    # Destruction is now noexcept and reports failures in the device cache.
+    cache = (ROOT / "backends/cuda/include/device_plan_cache.h").read_text()
+    assert "destroy_failures" in cache
 
 
 def test_cudnn_conv3d_x_rank_user_boundary_migration_is_explicit_and_bounded():
     source = (ROOT / "backends/cuda/kernels/cudnn/cudnn_conv3d_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    actual = source.count("USER_CHECKop(")
     assert actual == MIGRATED_CUDNN_CONV3D_X_RANK_USER_BOUNDARIES[
         "backends/cuda/kernels/cudnn/cudnn_conv3d_op.cc"]
 
 
 def test_cudnn_conv3d_bwd_x_w_rank_user_boundary_migration_is_explicit_and_bounded():
     source = (ROOT / "backends/cuda/kernels/cudnn/cudnn_conv3d_backward_x_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    actual = source.count("USER_CHECKop(")
     assert actual == MIGRATED_CUDNN_CONV3D_BWD_X_W_RANK_USER_BOUNDARIES[
         "backends/cuda/kernels/cudnn/cudnn_conv3d_backward_x_op.cc"]
 
 
 def test_cudnn_conv3d_bwd_w_x_rank_user_boundary_migration_is_explicit_and_bounded():
     source = (ROOT / "backends/cuda/kernels/cudnn/cudnn_conv3d_backward_w_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    actual = source.count("USER_CHECKop(")
     assert actual == MIGRATED_CUDNN_CONV3D_BWD_W_X_RANK_USER_BOUNDARIES[
         "backends/cuda/kernels/cudnn/cudnn_conv3d_backward_w_op.cc"]
 
 
 def test_fused_adamw_cardinality_migration_is_explicit_and_bounded():
     source = (ROOT / "src/ops/composite/fused_adamw_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    actual = source.count("USER_CHECKop(parameters.size(),")
     assert actual == MIGRATED_FUSED_ADAMW_CARDINALITY_BOUNDARIES[
         "src/ops/composite/fused_adamw_op.cc"]
 

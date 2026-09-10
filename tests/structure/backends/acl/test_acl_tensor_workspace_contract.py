@@ -75,6 +75,6 @@ def test_ascend_guide_has_workspace_failure_and_release_checks():
         "backend_fallback=error",
         "before-workspace",
         "after-workspace",
-        "process exit",
+        "进程退出",
     ):
         assert required in guide

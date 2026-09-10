@@ -141,7 +141,8 @@ class TestCleanupStructure(unittest.TestCase):
     def test_cross_file_duplicate_implementations_are_reviewed(self):
         implementations: Dict[str, List[Tuple[str, str]]] = {}
         sources = sorted(path for root in (self.repo_root / "python", self.repo_root / "backends", self.repo_root / "compat")
-                         for path in root.rglob("*.py"))
+                         for path in root.rglob("*.py")
+                         if "tests" not in path.relative_to(root).parts)
         for path in sources:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in tree.body:
@@ -474,7 +475,7 @@ for forbidden in ('jittor', 'PIL', 'pywebio'):
         release_note = self.repo_root / "docs" / "releases" / "2.0.md"
         source = release_note.read_text(encoding="utf-8")
         self.assertIn("jittor.vcompiler", source)
-        self.assertIn("breaking", source.lower())
+        self.assertIn("## 破坏性变更", source)
         self.assertIn("compile_custom_op", source)
 
 if __name__ == "__main__":

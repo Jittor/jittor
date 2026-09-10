@@ -159,7 +159,9 @@ with jt.profile_scope() as report:
     assert b.data[1] == 0
 print("RESULT=" + json.dumps({
     "data_is_numpy": isinstance(x.data, np.ndarray),
-    "profile_entries": len(report),
+    "native_profile": (isinstance(report, list) and len(report) > 1
+                       and report[0][0] == "Name"
+                       and all(len(row) == len(report[0]) for row in report[1:])),
     "shared_write": x.numpy().tolist(),
     "torch_registered": "torch" in sys.modules,
     "torch_installed": bool(getattr(jt, "_torch_compat_install_complete", False)),
@@ -169,7 +171,7 @@ print("RESULT=" + json.dumps({
             result,
             {
                 "data_is_numpy": True,
-                "profile_entries": 2,
+                "native_profile": True,
                 "shared_write": [1, 7, 3],
                 "torch_registered": False,
                 "torch_installed": False,
@@ -403,12 +405,12 @@ print("RESULT=" + json.dumps({
 
     def test_source_architecture_names_the_core_api_owner(self):
         source = (
-            self.repo / "docs" / "architecture" / "source-architecture.md"
+            self.repo / "docs" / "development" / "source-architecture.md"
         ).read_text(encoding="utf-8")
         normalized = " ".join(source.split())
         self.assertIn("`jittor._core.api`", normalized)
         self.assertIn("`jittor._core.module`", normalized)
-        self.assertIn("Public root exports retain object identity", normalized)
+        self.assertIn("公开的根导出保持对象标识", normalized)
 
     def test_preflight_and_lazy_shim_are_stdlib_only(self):
         stdlib = {

@@ -1,6 +1,6 @@
 # 整改看板
 
-2026-09-10 当前实机复验：[Ascend 原生/独立 Torch 验证与性能记录](../results/2026-09-10-ascend-refactor-validation.md)。已同步到`86086396`；独立compat合并38项通过（含CPU共享用例），slice/mask修复已验，原生完整选择集185通过、2项既有FlashAttention入口跳过（187项全部完成）。扩大OpInfo仍有两项能力缺口，CPU structure未全绿；性能保留初始`1a1f175e`的临时采样证据。不改写下方历史验收结论。
+2026-09-10 当前实机复验：[Ascend 原生/独立 Torch 验证与性能记录](../results/2026-09-10-ascend-refactor-validation.md)。已按远端`7df15e31`同步并重放本地修复至`952b5042`后继续修改；Abs独立NPU dtype声明及一般adaptive pooling前后向两项缺口已真机修复，追加amax/amin keepdim与共享allocator view修复。独立compat+定向OpInfo最终65项首轮55通过/1失败、56执行，新增NPU amax keepdim descriptor问题已修并通过28项CPU/NPU归约回归，65项正在重跑；完整CPU structure已1357通过/4跳过、1361项全部处理，最后归约改动追加370项结构回归通过、native-only6项另行通过；原生最终215通过/2项既有FlashAttention类入口跳过、217项全部处理；未审计NPU算子标记UNVERIFIED，不宣称全库OpInfo通过。性能保留初始`1a1f175e`的临时采样证据。不改写下方历史验收结论。
 
 2026-09-09 最新：本地264条“已合并”，剩10条代码/性能记录，另有9条硬件验收、5条并入其他任务和3条已合并但验收有保留的记录；父项与派生项存在重叠。本轮收口2.19功能边界；其余当前收口项见[当前交接与证据](refactor-handoff.md)。源码/包/测试布局、独立Torch、缓存生命周期、精度与内省接线已收齐；**功能优先**：ACL全属性owner数据通道、oneDNN v3功能路径、3.20部分图提交、7.13 DeviceMesh/原生optimizer复用均已有主机验证，10.21 stub生成已通过；性能项（含descriptor/primitive cache）全部后置。当前 polish 目标是直接维护 `origin/2.0-refactor`，已完成的 polish 批次按提交推送；不要沿用历史“禁止 push”说明。vLLM位于本仓adapters/jittor_adapters/vllm。
 

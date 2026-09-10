@@ -28,9 +28,35 @@
 #include "utils/str_utils.h"
 #include "aclnn/aclnn.h"
 #include "pool_op_acl.h"
+#include "aclnnop/aclnn_adaptive_avg_pool2d.h"
+#include "aclnnop/aclnn_adaptive_avg_pool2d_backward.h"
 
 namespace jittor
 {
+    AdaptiveAvgPool2dOpRunner::AdaptiveAvgPool2dOpRunner()
+        : BaseOpRunner("AdaptiveAvgPool2d", Dispatch::Direct) { use_nchw = true; }
+
+    void AdaptiveAvgPool2dOpRunner::executeOp(AclOpRegistry::const_iterator &it)
+    {
+        auto attr = dynamic_cast<AdaptiveAvgPool2dAttr *>(op_attr.get());
+        CHECK(attr);
+        auto output_size = aclCreateIntArray(attr->outputSize.data(), attr->outputSize.size());
+        ret = aclnnAdaptiveAvgPool2dGetWorkspaceSize(inputTensors[0], output_size,
+            outputTensors[0], &workspaceSize, &executor);
+        launch(ret, aclnnAdaptiveAvgPool2d, true);
+        aclDestroyIntArray(output_size);
+    }
+
+    AdaptiveAvgPool2dBackwardOpRunner::AdaptiveAvgPool2dBackwardOpRunner()
+        : BaseOpRunner("AdaptiveAvgPool2dBackward", Dispatch::Direct) { use_nchw = true; }
+
+    void AdaptiveAvgPool2dBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
+    {
+        ret = aclnnAdaptiveAvgPool2dBackwardGetWorkspaceSize(inputTensors[0], inputTensors[1],
+            outputTensors[0], &workspaceSize, &executor);
+        launch(ret, aclnnAdaptiveAvgPool2dBackward, true);
+    }
+
     MaxpoolOpRunner::MaxpoolOpRunner() : BaseOpRunner("Maxpool")
     {
         use_nchw = true;

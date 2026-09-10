@@ -184,6 +184,9 @@ def test_encoded_values_reach_real_cpp_attribute_types(pipeline, tmp_path):
     stub = tmp_path / "sdk"
     stubber.build(ROOT / "backends/acl", stub)
     cases = [
+        ("AdaptiveAvgPool2d", {"outputSize": [3, 4]},
+         "dynamic_cast<AdaptiveAvgPool2dAttr*>(runner.op_attr.get())->outputSize == std::vector<int64_t>({3, 4})"),
+        ("AdaptiveAvgPool2dBackward", {}, 'runner.jt_name == "adaptive_avg_pool2d_backward"'),
         ("Softmax", {"dim": -1}, "dynamic_cast<SoftmaxAttr*>(runner.op_attr.get())->dim == -1"),
         (
             "SoftmaxBackward",

@@ -34,13 +34,6 @@ import numpy as np
 import jittor as jt
 
 
-def _has_cuda():
-    return bool(_test_capability.check_accelerator('cuda', backend=jt).enabled)
-
-
-requires_cuda = unittest.skipUnless(_has_cuda(), "a CUDA device is required")
-
-
 class TestLazyResidency(unittest.TestCase):
     """A Var that has not been computed yet has nothing to be resident in."""
 
@@ -73,7 +66,9 @@ class TestLazyResidency(unittest.TestCase):
 class TestHostReadMovesStorage(unittest.TestCase):
     """Reading the data of a device Var moves it, and says so."""
 
-    @requires_cuda
+    def setUp(self):
+        _test_capability.require_accelerator("cuda")
+
     def test_numpy_migrates_a_device_var_to_the_host(self):
         with jt.flag_scope(use_cuda=1):
             a = jt.ones((64, 64)).cuda()
@@ -85,7 +80,6 @@ class TestHostReadMovesStorage(unittest.TestCase):
             self.assertEqual(a.location(), "cpu")
             self.assertEqual(a.device, "cpu")
 
-    @requires_cuda
     def test_a_device_op_brings_a_read_var_back(self):
         with jt.flag_scope(use_cuda=1):
             a = jt.ones((64, 64)).cuda()
@@ -96,7 +90,6 @@ class TestHostReadMovesStorage(unittest.TestCase):
             self.assertEqual(total, 2 * 64 * 64)
             self.assertEqual(a.location(), "device")
 
-    @requires_cuda
     def test_repr_moves_the_storage_the_same_way_numpy_does(self):
         # repr() reaches the data through the same path, so a debugging print
         # costs what an explicit read costs. Pinned so the two spellings cannot
@@ -123,7 +116,9 @@ class TestReadingDoesNotRelocate(unittest.TestCase):
     behaves, and so the defect is never restated as "reading anything moves it".
     """
 
-    @requires_cuda
+    def setUp(self):
+        _test_capability.require_accelerator("cuda")
+
     @unittest.expectedFailure
     def test_numpy_leaves_the_source_on_the_device(self):
         with jt.flag_scope(use_cuda=1):
@@ -132,7 +127,6 @@ class TestReadingDoesNotRelocate(unittest.TestCase):
             a.numpy()
             self.assertEqual(a.location(), "device")
 
-    @requires_cuda
     @unittest.expectedFailure
     def test_repr_leaves_the_source_on_the_device(self):
         with jt.flag_scope(use_cuda=1):
@@ -141,7 +135,6 @@ class TestReadingDoesNotRelocate(unittest.TestCase):
             repr(a)
             self.assertEqual(a.location(), "device")
 
-    @requires_cuda
     @unittest.expectedFailure
     def test_reading_one_element_does_not_move_the_whole_tensor(self):
         with jt.flag_scope(use_cuda=1):
@@ -150,7 +143,6 @@ class TestReadingDoesNotRelocate(unittest.TestCase):
             a[0][0].item()
             self.assertEqual(a.location(), "device")
 
-    @requires_cuda
     def test_a_reduction_read_leaves_the_source_alone(self):
         # The spelling every training loop uses. Not broken, and asserted so it
         # cannot become broken while the three above are being fixed.
@@ -165,7 +157,9 @@ class TestReadingDoesNotRelocate(unittest.TestCase):
 class TestCopyToHost(unittest.TestCase):
     """``cpu()`` copies; it does not move the Var it was called on."""
 
-    @requires_cuda
+    def setUp(self):
+        _test_capability.require_accelerator("cuda")
+
     def test_cpu_returns_a_new_var_and_leaves_the_source_on_the_device(self):
         with jt.flag_scope(use_cuda=1):
             a = jt.ones((32, 32)).cuda()
@@ -177,7 +171,6 @@ class TestCopyToHost(unittest.TestCase):
             self.assertEqual(a.location(), "device")
             self.assertIsNot(host, a)
 
-    @requires_cuda
     def test_device_id_keeps_the_source_device_across_cpu(self):
         # device_id is the index alone and deliberately survives the copy, so
         # `x.cpu().cuda()` returns to the device it came from. `device` and
@@ -191,7 +184,6 @@ class TestCopyToHost(unittest.TestCase):
             self.assertEqual(host.device_id, a.device_id)
             self.assertEqual(host.device, "cpu")
 
-    @requires_cuda
     def test_the_round_trip_returns_the_same_values_to_the_device(self):
         with jt.flag_scope(use_cuda=1):
             a = jt.ones((32, 32)).cuda() * 3
@@ -219,8 +211,8 @@ class TestDeviceAgreesWithLocation(unittest.TestCase):
             a.sync()
             self._assert_consistent(a)
 
-    @requires_cuda
     def test_device_var_is_consistent_through_a_host_read(self):
+        _test_capability.require_accelerator("cuda")
         with jt.flag_scope(use_cuda=1):
             a = jt.ones((8, 8)).cuda()
             a.sync()

@@ -164,7 +164,8 @@ def test_worker_split_updates_every_thread_pool(monkeypatch, tmp_path):
 
     split = module["_split_threads"](env, workers=4)
 
-    expected = str(module["worker_thread_budget"](4))
+    from _helpers.tiers import worker_thread_budget
+    expected = str(worker_thread_budget(4))
     assert {split[name] for name in module["_THREAD_ENV_NAMES"]} == {expected}
 
 

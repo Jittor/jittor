@@ -120,7 +120,7 @@ def providers(monkeypatch):
         module = load("jittor.backends.acl.kernels." + name, KERNELS / (name + ".py"))
         setattr(sys.modules["jittor.backends.acl.kernels"], name, module)
         modules[name] = module
-    return SimpleNamespace(native=native, dispatch=dispatch, calls=calls, **modules)
+    return SimpleNamespace(native=native, dispatch=dispatch, calls=calls, load=load, **modules)
 
 
 def test_acl_install_publishes_real_owners_idempotently_without_facade_writes(providers):
@@ -131,7 +131,9 @@ def test_acl_install_publishes_real_owners_idempotently_without_facade_writes(pr
     assert providers.dispatch._kernels == first
     assert vars(providers.native) == before
     assert providers.calls == []
-    assert len(providers.install.KERNELS) == 44
+    operations = [operation for operation, _ in providers.install.KERNELS]
+    assert len(operations) == len(set(operations)), "duplicate ACL registrations"
+    assert len(first) == len(operations)
     for operation, implementation in providers.install.KERNELS:
         assert providers.dispatch.registered_kernel(operation, "acl") is implementation
         assert implementation.__module__.startswith("jittor.backends.acl.kernels.") or (
@@ -310,7 +312,13 @@ def test_acl_transpose_preserves_argument_forms_with_real_shape_builder(
         for node in ast.parse(source).body
         if isinstance(node, ast.ClassDef) and node.name == "TransPoseACL"
     )
-    namespace = {"Sequence": Sequence, "transpose_cmd": record_transpose}
+    # Load the production typed-data helpers, not their former C++ string API.
+    providers.load("jittor.backends.acl.kernels.ops.acl_data", KERNELS / "ops/acl_data.py")
+    attributes = providers.load("jittor.backends.acl.kernels.ops._attributes",
+                                KERNELS / "ops/_attributes.py")
+    namespace = {"Sequence": Sequence, "transpose_cmd": record_transpose,
+                 "attribute_program": attributes.attribute_program,
+                 "code_program": attributes.code_program}
     exec(
         compile(ast.get_source_segment(source, implementation), "<actual_transpose_acl>", "exec"),
         namespace,
@@ -351,8 +359,17 @@ def test_acl_transpose_preserves_argument_forms_with_real_shape_builder(
     name, output_shapes, forward_source, backward_source = launches[0]
     assert name == "Transpose"
     assert output_shapes == [list(expected)]
-    assert "attr->axes = { " + ", ".join(map(str, axes)) + " };" in forward_source
-    assert "attr->axes = { " + ", ".join(map(str, inverse)) + " };" in backward_source[0]
+    for program, expected_axes, slot in (
+        (forward_source, axes, "Transpose_op"),
+        (backward_source[0], inverse, "transpose_backward"),
+    ):
+        prefix = "acl_payload." + slot + "."
+        assert isinstance(program, attributes.AttributeCode)
+        assert program.data == attributes.attribute_data(
+            "Transpose", {"axes": list(expected_axes)}, prefix=prefix)
+        assert ('apply_acl_code_attributes(op, data, "' + prefix + '", "Transpose");') in program.source
+        assert "attr->axes" not in program.source
+    assert "op.run();" in backward_source[0].source
 
 
 def test_acl_compiler_no_longer_contains_python_replacement_installer():

@@ -105,8 +105,8 @@ def test_ascend_guide_records_runner_failure_attribution():
         "aclnn workspace-size query failed",
         "ACL operator has no registered launcher",
         "current fused operator input",
-        "return code",
-        "operator name",
+        "返回码",
+        "算子名",
         "forbid_backend_fallbacks()",
         "backend_fallback_count()",
         "backend_fallback=error",
@@ -121,7 +121,7 @@ def test_ascend_guide_states_the_launcher_migration_is_closed():
     standard owners still drove the execute call, so what is and is not covered
     is pinned here rather than left to prose.
     """
-    guide = GUIDE.read_text(encoding="utf-8")
+    guide = (REPO_ROOT / "refactor-wip/architecture/ascend-migration-notes.md").read_text(encoding="utf-8")
     for required in (
         "Shared launcher migration is closed for the standard owners",
         "SWhere, Sigmoid backward, BatchNorm",

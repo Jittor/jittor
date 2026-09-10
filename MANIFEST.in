@@ -403,6 +403,8 @@ include src/codegen/opt/pass/assume_aligned_pass.cc
 include src/codegen/opt/pass/assume_aligned_pass.h
 include src/codegen/opt/pass/atomic_tuner_pass.cc
 include src/codegen/opt/pass/atomic_tuner_pass.h
+include src/codegen/opt/pass/blocked_reduction_pass.cc
+include src/codegen/opt/pass/blocked_reduction_pass.h
 include src/codegen/opt/pass/check_cache_pass.cc
 include src/codegen/opt/pass/check_cache_pass.h
 include src/codegen/opt/pass/compile_shapes_pass.cc
@@ -532,6 +534,7 @@ include src/mem/allocator/nfef_allocator.cc
 include src/mem/allocator/nfef_allocator.h
 include src/mem/allocator/sfrl_allocator.cc
 include src/mem/allocator/sfrl_allocator.h
+include src/mem/allocator/shared_allocator.h
 include src/mem/allocator/stat_allocator.cc
 include src/mem/allocator/stat_allocator.h
 include src/mem/allocator/temp_allocator.cc
@@ -572,6 +575,7 @@ include src/ops/composite/fused_adamw_op.cc
 include src/ops/composite/fused_adamw_op.h
 include src/ops/composite/getitem_op.cc
 include src/ops/composite/getitem_op.h
+include src/ops/composite/index_bounds.h
 include src/ops/composite/index_op.cc
 include src/ops/composite/index_op.h
 include src/ops/composite/numpy_code_op.cc

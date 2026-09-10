@@ -134,3 +134,24 @@ class PoolACL(jt.Function):
         else:
             raise ValueError("no this type pool")
         return result
+
+
+class AdaptiveAvgPool2dACL(jt.Function):
+    """CANN adaptive windows, including overlapping bins and upsampling."""
+
+    def execute(self, x, output_size):
+        from ._code import check_acl_float_dtype
+        check_acl_float_dtype(x, "adaptive_avg_pool2d")
+        self.input = x
+        return pool_cmd(
+            "AdaptiveAvgPool2d", [x], output_dtypes=[x.dtype],
+            output_shapes=[tuple(x.shape[:-2]) + tuple(output_size)],
+            attributes={"outputSize": list(output_size)},
+        )[0]
+
+    def grad(self, dout):
+        x = self.input
+        return pool_cmd(
+            "AdaptiveAvgPool2dBackward", [dout, x],
+            output_dtypes=[x.dtype], output_shapes=[x.shape], attributes={},
+        )[0], None

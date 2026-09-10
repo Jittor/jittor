@@ -19,16 +19,7 @@ import unittest
 import numpy as np
 import torch
 
-
-def _cuda_available():
-    try:
-        return bool(torch.cuda.is_available())
-    except Exception:
-        return False
-
-
-requires_cuda = unittest.skipUnless(
-    _cuda_available(), "cuda is required for device memory residue contracts")
+from _helpers.capability import require_accelerator
 
 
 def _collect():
@@ -88,13 +79,15 @@ def _operations(a, b):
     yield a.to(torch.float16).to(torch.float32)
 
 
-@requires_cuda
 class TestApiSurfaceMemoryResidue(unittest.TestCase):
     """A broad pass over the API returns to its own starting point."""
 
     #: Bytes tolerated between two collected baselines. Not zero: the allocator
     #: keeps small bookkeeping blocks whose count depends on which kernels ran.
     residue_tolerance = 8 * 1024 * 1024
+
+    def setUp(self):
+        require_accelerator("cuda")
 
     def _tensors(self):
         rng = np.random.RandomState(20260909)

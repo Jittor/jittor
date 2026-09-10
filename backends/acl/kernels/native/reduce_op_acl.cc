@@ -103,7 +103,12 @@ namespace jittor
 
         if (op_idx <= 13)
         {
-            if (input_padded_1d || attr->axes.size() == in_[0]->shape.size())
+            // Sum/mean/extrema require the retained singleton axes when
+            // keepdims is true. The full-product API has no keepdims argument
+            // and always consumes a scalar descriptor over the same storage.
+            if (input_padded_1d ||
+                (attr->axes.size() == in_[0]->shape.size() &&
+                 (!keepdims || op_idx == 13)))
                 outputShapes[0] = {};
         }
 

@@ -1,24 +1,38 @@
 # 2.0-refactor 原生与独立 Torch compat 的 Ascend 复验
 
-- 日期：2026-09-10；状态：原生/独立compat选择集验收完成，性能采样完成（临时证据）；扩展门禁仍有未关闭项
+- 日期：2026-09-10；状态：两项已复现OpInfo缺口已修复；原生选择集215通过/2跳过；独立compat与定向OpInfo 65通过/0跳过；完整CPU structure 1357通过/4跳过，后续受影响结构回归通过
 - 初始基线：`1a1f175e7d7f2403353bb7e4d5da13f42f02dff8`
-- 续测基线：`2.0-refactor` / `860863960f9fd38a1c28398d54268dd0166a7414`
+- 历史续测基线：`2.0-refactor` / `860863960f9fd38a1c28398d54268dd0166a7414`
+- 当前续测基线：远端 `2.0-refactor` / `7df15e31`；本地修复重放后 `952b5042` 加本轮工作树补丁
 - 修改状态：测试时工作树补丁未提交；最终源码随本报告所在修复提交保存，不能把测试时间追溯为提交后
 - Owner：Jittor 核心、ACL 后端、独立 Torch compat 与测试基础设施维护者
 - 当前状态入口：[整改看板](../architecture/refactor-board.md)
 
 ## 结论与验收范围
 
-已在 Ascend 910B3 上执行原生 Jittor 与独立 Torch frontend。续测基线的独立
-compat合并门禁 **38 passed / 0 skipped，20.22s**，包括额外的CPU共享语义用例，
-不能把38项全称为NPU用例。原生与独立compat的slice/mask赋值前后向均已定向通过；
-原生完整选择集 **185 passed / 2 skipped，82.10s**，187项全部完成。两个skip
-是历史FlashAttention类入口缺失，不是本轮为失败新增的跳过。
+已在 Ascend 910B3 上执行原生 Jittor 与独立 Torch frontend。本轮已修复此前两项
+OpInfo失败：Abs的NPU dtype不再继承CUDA声明，支持的float16/float32与明确拒绝的
+float64均经过真机测试；非全局 `adaptive_avg_pool2d` 已有CANN前向/反向实现，
+覆盖非整除重叠窗口、输出大于输入、3D/4D输入以及`None`保留轴。
+池化float16/bfloat16/float32保持输入dtype，按独立NumPy窗口与梯度累加参考验算。
 
-这不等于全兼容层通过：扩大的 OpInfo 门禁分别在 float64 能力声明和非全局
-`adaptive_avg_pool2d` 缺少 ACL `reindex/0` 处失败。完整 CPU structure 也仍为
-**1257 passed / 85 failed / 5 skipped**，后续manifest及部分fixture定向修复已通过，未重跑完整门禁。
-未通过项没有改成 skip、没有启用 CPU fallback，也没有移除数值断言。
+当前基线原生Jittor完整选择集已 **215 passed / 2 skipped，886.79s**，217项全部处理。
+两个skip来自既有FlashAttention类入口缺失，函数式SDPA另有真机通过证据。
+独立compat与定向OpInfo合并轮已 **65 passed / 0 skipped，25.44s**，65项全部处理。选择集含58项独立compat及7项原生OpInfo，其中12项为CPU共享语义用例，
+不能把65项全部称为独立compat的NPU计算。完整CPU structure已 **1357 passed / 4 skipped，
+914.54s**，1361项全部处理；最后归约及nox改动另通过370项受影响结构回归。
+
+65项首轮发现ACL归约descriptor错误压掉保留维度，55通过/1失败后中断。
+修复后先通过28项CPU/NPU归约前后向，再完整重跑65项得到上述结果；
+最终日志为`compat/logs/final-65-compat-opinfo-fixed.log`，失败轮保留用于缺陷追踪。
+
+**本报告不声称全库或全部OpInfo算子验收通过。** 扩展扫描曾在后续`amax`失败处
+停止，Python层keepdim、标量参考及新增回归暴露的NPU descriptor问题均已修复，
+上述定向回归已通过。
+之后的全库扫描尚未完成。
+未单独审计的NPU dtype条目在OpInfo报告中标为 **UNVERIFIED**，仍是待验证候选，
+不能从CUDA声明或少量已通过的算子推导支持。历史`86086396`的原生185通过/2跳过、
+独立compat38通过/0跳过保留在下表，不冒充当前补丁的验收结果；其中compat包含CPU共享用例。
 
 ## 环境、复现与证据位置
 
@@ -35,6 +49,8 @@ compat合并门禁 **38 passed / 0 skipped，20.22s**，包括额外的CPU共享
 工具与known-issues；已保护并重新应用本地补丁，known-issues三方整合保留双方。
 下表中明确标注“续测”的结果属于86086396；先前门禁、性能JSON仍属于1a1f175e，
 不追溯更改基线。core未被这6个上游提交修改，不据此免除本地修复的定向复验。
+本轮恢复后再次以远端为准同步至`7df15e31`，本地既有修复重放至`952b5042`后再修改。
+以下新增复验记录基于该HEAD加本轮补丁；旧日志仍保留原基线，性能未在新基线重测。
 
 下文日志路径相对此产物根。设备映射、环境完整快照、个人路径、机器标识只保留在
 外部原始记录，不写入本文。读取 tensor 到 NumPy 会改变驻留，故先检查设备再取值。
@@ -61,14 +77,26 @@ JITTOR_TORCH_SHIM=0 JITTOR_HOME="$validation_run/native/jittor-home" \
   tests/backends/acl/test_acl.py tests/backends/acl/test_aclop.py \
   tests/backends/acl/test_acl_indexing.py tests/backends/acl/test_acl_random.py \
   tests/backends/acl/test_acl_scope.py tests/backends/acl/test_acl_pooling.py \
+  tests/backends/acl/test_acl_adaptive_pool.py tests/backends/acl/test_acl_reduce_keepdims.py \
+  tests/ops/test_opinfo_npu_dtypes.py \
+  tests/ops/test_comparison_tolerances.py tests/ops/test_adaptive_pool_output_size.py \
   tests/ops/test_floor_divide.py::TestFloorDivideNPU \
   tests/debug/test_kernel_traps.py::TestKernelTraps::test_nan_handling_isfinite_isnan_isinf \
   tests/ops/test_fusion_correctness.py::TestFusionCorrectness::test_float_comparisons_with_nan
 JITTOR_TORCH_SHIM=1 JITTOR_HOME="$validation_run/compat/jittor-home" \
   TMPDIR="$validation_run/compat/tmp" \
-  "$VALIDATION_PYTHON" -m pytest -q --timeout=600 \
+  "$VALIDATION_PYTHON" -m pytest -q --timeout=600 -x \
   tests/backends/acl/test_acl_torch_compat.py compat/tests/torch/test_contiguous_storage.py \
-  compat/tests/torch/test_slice_assignment.py
+  compat/tests/torch/test_slice_assignment.py \
+  compat/tests/torch/test_adaptive_avg_pool2d.py \
+  compat/tests/torch/test_extreme_reduction_scalar.py \
+  tests/ops/test_ops.py::TestCommonNPU::test_reference_abs_float16 \
+  tests/ops/test_ops.py::TestCommonNPU::test_reference_abs_float32 \
+  tests/ops/test_ops.py::TestCommonNPU::test_reference_adaptive_avg_pool2d_float16 \
+  tests/ops/test_ops.py::TestCommonNPU::test_reference_adaptive_avg_pool2d_bfloat16 \
+  tests/ops/test_ops.py::TestCommonNPU::test_reference_adaptive_avg_pool2d_float32 \
+  tests/ops/test_ops.py::TestCommonNPU::test_reference_amax_float32 \
+  tests/ops/test_ops.py::TestCommonNPU::test_reference_amin_float32
 ```
 
 累计原生复验实际复用了外部名为 `cpu/jittor-home` 的已热缓存；目录名称不是执行
@@ -111,7 +139,49 @@ KV 原始探针的 K/V 最大误差为 `0.00097581744` / `0.00097092986`，符�
 舍入量级；output/cache 均 finite，未写区域绝对值0。通用 CodeOp writable-view
 构造安全边界仍需单独证据，本次不声称所有共享可写 view 问题都已解决。
 
-## 验收结果与未关闭能力
+## 本轮追加修复与验收
+
+| 缺陷与根因 | 修改及范围 | 证据 |
+| --- | --- | --- |
+| KI-BACKEND-009：NPU dtype错误继承CUDA，Abs选择不支持的float64 | 新增逐OpInfo独立`dtypesIfNPU`；Abs声明float16/float32，保留CPU/CUDA float64覆盖；未审计项明确UNVERIFIED，不通过空集合隐藏 | `compat/logs/opinfo-npu-dtypes-fixed-env.log` 12 passed；含Abs两种支持dtype执行、float64拒绝与声明结构合同 |
+| KI-BACKEND-010：非全局adaptive pooling进入ACL未注册的reindex | 注册CANN AdaptiveAvgPool2d及梯度runner，typed属性传递output_size；公开入口正规化3D/4D、整数和None轴，拒绝无效维度/输出大小 | `native/logs/adaptive-pool-final.log` 2 passed；`compat/logs/adaptive-pool-compat-final.log` 12 passed，覆盖三dtype前后向 |
+| amax/amin全维归约忽略keepdim；OpInfo参考把真实标量强制转成1D | 归约传递keepdims；NumPy参考保留0D；追加标量rank、保留维度和并列极值梯度测试 | `compat/logs/opinfo-extrema-abs-pool-final.log` 定向11 passed / 522 deselected；新独立compat keepdim=True/NPU样本进一步暴露descriptor压维问题，修后28项通过，见下一行 |
+| ACL全轴归约无条件把输出descriptor改为标量，破坏keepdims=True | Sum/Mean/Max/Min保留singleton维度；Prod全归约SDK无keepdims参数，保留其scalar descriptor特殊处理 | `compat/logs/reduce-keepdim-focused-final.log` 28 passed；20项CPU/NPU×五归约×keepdims，另8项独立compat；每种归约检查rank1/2、数值和加权梯度 |
+| 比较助手在NumPy staging后丢失BF16原dtype，错误套用FP32容差 | 在传输前读取tensor精度，沿用已有BF16容差，显式容差优先；FP32/FP64严度不变 | `tests/ops/test_comparison_tolerances.py` 3项正负断言；纳入最终原生选择集 |
+| 非缓存allocator不支持共享view；释放broadcast/strided view错误使用逻辑tensor大小 | 为不支持共享的策略加共享所有权包装，仍保留原分配策略；按实际storage span释放 | `structure-cpu/logs/shared-allocator-regression-final.log` 17 passed / 5 CUDA skipped；`native/logs/shared-allocator-npu-final.log` 12 passed / 6 deselected，其中10项CPU/NPU五种策略回归、2项池化入参回归 |
+| structure夹具/路径/接口合同过时以及环境隔离缺失 | 更新当前typed code_program夹具、错误分类、optimizer与runtime接口合同、文档路径；修正子进程依赖/构建环境和Python3.9清理兼容 | 中间完整轮 `structure-cpu/logs/followup-full.log` 1338 passed / 18 failed / 5 skipped；剩余失败已修复；`structure-cpu/logs/final-full-fixed.log` 最终1357 passed / 4 skipped |
+| 收集测试时查询后端并吞异常；flag清理不被结构门禁识别 | CUDA capability查询移至setup，失败不转skip；PEFT仅缺包可skip；可写flag显式finally恢复，不可写flag保留拒绝和原值断言 | `structure-cpu/logs/hygiene-targeted.log` 13 passed；未扩充scanner豁免 |
+
+两项KI-BACKEND记录已关闭并移出活动问题总账，原始失败与修后证据在本报告保留。
+Abs不支持float64的事实仍由负向测试明确保证；关闭的是错误能力声明，不是新增float64实现。
+池化覆盖一般窗口，未依赖CPU fallback，也不是只对原先4×4→2×2样本进行特判。
+
+| 当前基线最终范围 | 结果 | 原始日志 |
+| --- | --- | --- |
+| 原生完整选择集，descriptor修后重跑 | 215 passed / 2 skipped，587 warnings，886.79s；217 collected / 217 executed，exit0 | `native/logs/final-followup-native-fixed.log` |
+| 独立compat与定向OpInfo，遇错停止 | 55 passed / 1 failed，604.91s；65 collected / 56 executed，未完成；后续修复保留维度descriptor，首轮结果不改写 | `compat/logs/final-65-compat-opinfo.log` |
+| 独立compat与定向OpInfo，descriptor修后重跑 | 65 passed / 0 skipped，196 warnings，25.44s；65 collected / 65 executed，exit0 | `compat/logs/final-65-compat-opinfo-fixed.log` |
+| 完整CPU structure | 1357 passed / 4 skipped，914.54s；1361 collected / 1361 executed | `structure-cpu/logs/final-full-fixed.log` |
+| descriptor修后受影响structure | 370 passed / 0 skipped，141.82s，exit0；覆盖ACL结构、nox、grad、打包、cleanup、pytest与flag合同 | `structure-cpu/logs/post-reduce-affected-final.log` |
+| native-only dtype-preservation及warning-as-error | 6 passed / 0 skipped，1.33s；独立native模式CPU进程 | `structure-cpu/logs/native-mode-extra-final.log` |
+
+最终compat轮仍报告holder/lived-var各`0→1`的状态诊断（未计失败）；通过计数不等于证明零残留。
+
+本轮structure的4个skip为2项CUDA专项nn测试，以及2项环境配置owner文件的既有豁免。
+`tests/structure/backends/acl/test_acl_dtype_preservation.py`按native-only模式规则在该
+CPU/shim结构轮收集0项，其5项已与warning-as-error另在独立native模式CPU进程通过，
+不把模式排除冒充执行，也不再列为未验证缺口。完整结构轮早于随后追加的ACL归约
+descriptor修复及nox目标更新；后者另有28项CPU/NPU数值/梯度回归及370项受影响structure复验，
+完整结构结果不追溯到后续补丁。最后的构建边界子进程环境清理补丁另通过19项定向回归
+（`host/logs/build-boundary-final.log`，0.53s），避免canonical `JT_BUILD_*`污染隔离构建。
+
+`native/logs/final-followup-native.log`原197项轮次为冻结源码修改窗口而中断，
+不计完整门禁；后续使用`final-followup-native-fixed.log`补入20项归约回归，完整重跑217项。
+
+## 历史验收记录与范围边界
+
+下表是初始`1a1f175e`及历史续测`86086396`上的原始记录。失败和中断结果保留用于
+追踪修复，不作为本轮未修复项重复列账；表内“续测”“最终”均指该历史轮次。
 
 | 范围 | 结果 | 原始日志 |
 | --- | --- | --- |
@@ -137,20 +207,18 @@ KV 原始探针的 K/V 最大误差为 `0.00097581744` / `0.00097092986`，符�
 66项静态基线合同/fixture（28 ACL fixture、7 ACL文档、17错误边界静态guard、14其他），
 12项环境/隔离、6项运行时或运行时合同（未用旧binary确认基线归因）、1项manifest。
 Python3.9缺 `TestCase.enterContext`、缺pytest-xdist等环境项不等于框架修复。
-后续manifest已通过；pool fixture子集14通过，但未重跑整体，仍保留原完整结果。
+当时后续manifest已通过、pool fixture子集14通过，但未重跑整体，保留该历史完整结果。
 最终host追加的23项失败均属于已核实初始HEAD合同：20项transpose fixture缺code_program、
-2项runner旧文档字面断言、1项flag_scope静态扫描的5处既有未恢复赋值。没有把该轮
+2项runner旧文档字面断言、1项flag_scope静态扫描报告的5处写入（后续复核包含已有scope恢复及预期拒绝写入）。没有把该轮
 149 passed隐藏23项失败后当作全绿；MANIFEST生成检查及layout检查已通过。
 
 原生最终轮的两个skip来自既有 `test_aclop` 中历史FlashAttention类不存在的
 `test_flashattention` 与 `test_flashattention_grad`，本轮没有为失败新增skip。
 
-两个 OpInfo 能力缺口已登记到 [known-issues](../../agent/manuals/known-issues.md)：
-
-- `test_reference_abs_float64` 被NPU capability声明为可测试，但 CANN Abs不接受该dtype，
-  `backend_fallback=error`明确拒绝。需要对齐逐算子dtype声明与实际provider能力。
-- `test_reference_adaptive_avg_pool2d_float32` 的非全局输出路径进入 reindex+reduce，
-  ACL未注册 `reindex/0`。需要真实实现或精确的能力声明，不能以CPU执行充当支持。
+历史扩展OpInfo分别在`test_reference_abs_float64`及
+`test_reference_adaptive_avg_pool2d_float32`处停止，原始失败日志保留如上。
+两项修复及关闭证据见“本轮追加修复与验收”，不能再把历史中断描述为当前仍待修复。
+后续amax的Python语义修复已落地，独立compat新增NPU descriptor失败也已修复并通过28项定向回归；剩余全库算子扫描未完成。
 
 模块构造参数及其前向/梯度已验证；构造后修改activation公开属性的动态配置不在
 本轮保证内。CPU复核LeakyReLU把slope属性从0.2改成0.5后仍输出旧配置的-0.2，
@@ -158,8 +226,8 @@ Python3.9缺 `TestCase.enterContext`、缺pytest-xdist等环境项不等于框�
 不能把构造时参数修复外推为动态修改属性受支持。
 
 初始基线compat冻结轮曾为24 passed，续测合并轮已扩到38 passed；pytest整轮耗时
-含编译/CPU参考等，不是算子性能。最新compat仍报告holder/lived-var各1残留（非失败）；
-原生最终轮依次报告各`0→6→8→26`，indexing新增18中FFT有界缓存解释6、另12未解释；
+含编译/CPU参考等，不是算子性能。该历史compat轮报告holder/lived-var各1残留（非失败）；
+该历史原生轮依次报告各`0→6→8→26`，indexing新增18中FFT有界缓存解释6、另12未解释；
 前两个文件新增的8也保留原始观察。passing计数不等于没有状态诊断，
 已解释的有界缓存也不直接等同于泄漏。
 
