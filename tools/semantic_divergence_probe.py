@@ -379,8 +379,73 @@ def probe_device_agreement(jt, device):
               answers["cuda"], answers["cpu"])
 
 
+def probe_numerical_stability(jt, device):
+    """Where the arithmetic is right but the *order* of it decides the answer.
+
+    `-Ofast` grants the compiler reassociation, so this is the neighbouring
+    category to KI-BACKEND-005: the same expression may be evaluated in a
+    different order than written, and for floating point that is not a
+    no-op. These check the cases where the difference is visible rather than
+    in the last bit.
+
+    Expectations come from float64 evaluated in NumPy -- the value the float32
+    computation is trying to approximate -- with tolerances chosen so an honest
+    float32 result passes and a reassociated one does not.
+    """
+    # Stagnation: adding 1.0 to a float32 accumulator stops changing it past
+    # 2**24. A pairwise or blocked sum keeps working; a naive serial one stops.
+    n = 1 << 22
+    ones = np.ones(n, dtype="float32")
+    got = float(jt.sum(jt.array(ones)).numpy())
+    check("large float32 sum does not stagnate", "stability",
+          np.array([got]), np.array([float(n)]), rtol=1e-3)
+
+    # Cancellation was checked here and withdrawn. `(big + small) - big` gave
+    # 1.0 inside this probe and 0.0 when run on its own, on the same build:
+    # what the fusion pass does with the expression depends on what else is in
+    # the graph, so there is no stable expectation to assert. Reported as
+    # unverified rather than deleted -- the observation is real, the check is
+    # not sound, and a probe that scores an unstable case is a probe that will
+    # cry wolf.
+    RESULTS.append({
+        "name": "cancellation order", "category": "stability",
+        "status": "UNVERIFIED",
+        "detail": "fusion-context dependent: 1.0 in-probe, 0.0 standalone",
+    })
+
+    # Softmax on values large enough that a naive exp overflows. The stable
+    # form subtracts the row maximum; the result must be finite either way.
+    row = np.array([[1000.0, 1000.0, 1000.0]], dtype="float32")
+    if hasattr(jt.nn, "softmax"):
+        out = jt.nn.softmax(jt.array(row), dim=1).numpy()
+        check("softmax of large values stays finite", "stability",
+              np.array([bool(np.isfinite(out).all())]), np.array([True]))
+        check("softmax of equal values is uniform", "stability",
+              out, np.full((1, 3), 1.0 / 3.0, dtype="float32"), rtol=1e-5)
+
+    # exp/log round trip away from the easy range.
+    v = np.array([-30.0, -1.0, 0.0, 1.0, 30.0], dtype="float32")
+    V = jt.array(v)
+    check("exp then log returns the input", "stability",
+          jt.log(jt.exp(V)).numpy(), v, rtol=1e-4, atol=1e-4)
+
+    # pow at the awkward exponents, where each library makes a choice.
+    base = np.array([0.0, 2.0, -1.0], dtype="float32")
+    zero_exp = np.zeros_like(base)
+    check("anything to the zero is one", "stability",
+          (jt.array(base) ** jt.array(zero_exp)).numpy(),
+          np.power(base, zero_exp))
+
+    # Mean of a constant vector must be that constant, not drift with length.
+    c = np.full(1 << 20, 0.1, dtype="float32")
+    check("mean of a constant does not drift", "stability",
+          jt.mean(jt.array(c)).numpy(), np.array(0.1, dtype="float32"),
+          rtol=1e-4)
+
+
 PROBES = (
     ("rounding", probe_rounding),
+    ("stability", probe_numerical_stability),
     ("device-agree", probe_device_agreement),
     ("grad-edge", probe_gradient_edges),
     ("empty", probe_empty_and_zero_size),

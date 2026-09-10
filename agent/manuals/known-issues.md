@@ -498,6 +498,44 @@ framework defects.
   at every length, a probe case covers infinities on both devices, and the
   throughput change from the flag is measured and recorded.
 
+## KI-BACKEND-006: CPU float32 sum/mean accumulate serially, so error grows with size
+
+- Severity: Critical
+- Status: Reproduced, unfixed
+- Owner: CPU backend and reduction maintainers
+- Evidence: summing `n` copies of `0.1` as float32, relative error against the
+  exact value:
+
+  | n | Jittor CPU | Jittor CUDA | NumPy |
+  | --- | --- | --- | --- |
+  | 65,536 | 6.2e-4 | 1.6e-7 | 1.6e-7 |
+  | 1,048,576 | 9.9e-3 | 1.6e-7 | 9.8e-7 |
+  | 16,777,216 | **1.5e-1** | 4.3e-7 | 1.6e-5 |
+
+  `mean` inherits it: 1M copies of `0.1` average to `0.09975` on CPU
+  (2.5e-3 relative) against `0.10000002` on CUDA.
+- Symptom: at sixteen million elements the CPU sum is **15% wrong**. The growth
+  is linear in `n`, the signature of a single serial accumulator; CUDA's tree
+  reduction and NumPy's pairwise summation both stay near machine epsilon and
+  do not grow. Nothing warns, and the result is a plausible number rather than
+  an obviously broken one.
+- Blast radius: any large reduction on CPU -- a loss averaged over a big batch,
+  BatchNorm statistics, a norm, an accumulated metric. It also silently widens
+  every CPU-versus-CUDA comparison, so a real backend divergence investigated
+  at that size would be measured against a CPU reference that is itself wrong.
+- Why the parity suite misses it: `tests/backends/parity` compares CPU against
+  the accelerator, which is exactly the comparison that would show this, but its
+  cases are small enough that the serial error is still near epsilon.
+- Fix direction: pairwise or blocked accumulation for the CPU reduction, or
+  accumulating float32 inputs in float64. Both cost throughput, and which one is
+  right depends on whether the contract is "as accurate as NumPy" or "the same
+  as CUDA" -- they differ at 16M (1.6e-5 against 4.3e-7). Measure before
+  choosing, as KI-OPS-006 records for the other reduction change.
+- Workaround: reduce in float64 (`x.float64().sum()`), or reduce in chunks.
+- Review/expiry condition: CPU relative error stays within an order of magnitude
+  of NumPy's for n up to 16M in float32, a parity case covers a reduction large
+  enough to have failed, and the throughput change is measured and recorded.
+
 ## KI-FFT-001: withdrawn -- current CUDA sequence regression is clean
 
 - Severity: n/a
