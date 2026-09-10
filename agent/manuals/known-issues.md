@@ -346,6 +346,9 @@ framework defects.
   tensor at a REPL relocates it.
   Reading a *single element* is worse: `d[0].item()` leaves `d` itself on the
   host, so a one-element read moves 40 MiB off the device.
+  `tolist()` is a third spelling of the same relocation, found by
+  `tools/side_effect_probe.py` rather than by hand; it was not in this entry
+  when the entry was written, which is the argument for the probe.
 - Not this issue: a reduction result. `u.sum().item()` leaves `u` on the
   device, because the scalar is a new Var rather than a view of `u`. The common
   training-loop spelling `loss.item()` is therefore unaffected, and the defect
@@ -364,6 +367,26 @@ framework defects.
   immediately after such a read costs the same as one without it, and
   `tests/core/test_var_residency_contract.py` covers all three spellings
   including the reduction case that must stay unaffected.
+
+## KI-AUTOGRAD-003: register_hook discards the receiver's materialized value
+
+- Severity: Medium
+- Status: Reproduced, unfixed
+- Owner: autograd maintainers
+- Evidence: real CUDA. `a = jt.array(...); a.sync()` gives `a.location() ==
+  "device"`; `a.register_hook(lambda g: g)` leaves `a.location() == "none"`,
+  which is the state of a Var whose data has not been produced. The forward
+  value already computed is gone and the next read recomputes it.
+- Symptom: attaching a gradient hook is a declaration about the backward pass.
+  It silently invalidates the forward result, so a hook added for debugging
+  makes the graph in front of it run twice. Nothing reports the recompute.
+- Found by: `tools/side_effect_probe.py`, which compares a Var against a
+  snapshot of itself across every public operation. It was not looking for this;
+  the operation appears because it changes an input it was not asked to change.
+- Workaround: register hooks before the forward value is needed, so the
+  recompute coincides with the first evaluation rather than repeating one.
+- Review/expiry condition: `register_hook` leaves `location()` unchanged on CPU
+  and real CUDA, and the side-effect probe reports no mutation for it.
 
 ## KI-FFT-001: withdrawn -- current CUDA sequence regression is clean
 
