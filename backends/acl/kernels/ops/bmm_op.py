@@ -24,6 +24,48 @@ def _matmul_attributes(mode):
     )
 
 
+def _batch_matmul(x1, x2, mode=0):
+    """Normalize broadcast batches to the rank-three ACL BatchMatMul ABI."""
+    shape1, shape2 = tuple(x1.shape), tuple(x2.shape)
+    if len(shape1) < 2 or len(shape2) < 2:
+        raise ValueError("BatchMatMul inputs must have at least two dimensions")
+    batch_rank = max(len(shape1), len(shape2)) - 2
+    batch1 = (1,) * (batch_rank - len(shape1) + 2) + shape1[:-2]
+    batch2 = (1,) * (batch_rank - len(shape2) + 2) + shape2[:-2]
+    batch = []
+    for left, right in zip(batch1, batch2):
+        if left != right and left != 1 and right != 1:
+            raise ValueError("BatchMatMul batch dimensions cannot broadcast")
+        batch.append(right if left == 1 else left)
+    batch = tuple(batch)
+    rows, inner1 = (shape1[-1], shape1[-2]) if mode == 2 else shape1[-2:]
+    inner2, cols = (shape2[-1], shape2[-2]) if mode == 1 else shape2[-2:]
+    if inner1 != inner2:
+        raise ValueError("BatchMatMul contraction dimensions must match")
+    count = math.prod(batch)
+    inputs = []
+    for value, shape in ((x1, shape1), (x2, shape2)):
+        expanded = batch + shape[-2:]
+        if shape != expanded:
+            value = value.broadcast(expanded)
+        inputs.append(value.reshape((count,) + shape[-2:]))
+    result = acl_cmd(
+        "BatchMatMul", inputs, output_dtypes=[x1.dtype],
+        output_shapes=[(count, rows, cols)], attr_code=_matmul_attributes(mode),
+    )[0]
+    return result.reshape(batch + (rows, cols))
+
+
+def _sum_batch_gradient(value, shape):
+    shape = tuple(shape)
+    padded = (1,) * (len(value.shape) - len(shape)) + shape
+    axes = tuple(i for i, (actual, target) in enumerate(zip(value.shape, padded))
+                 if target == 1 and actual != 1)
+    if axes:
+        value = value.sum(axes, keepdims=True)
+    return value.reshape(shape)
+
+
 class BmmACL(jt.Function):
     def __init__(self, trans_x2=False):
         super(BmmACL, self).__init__()
@@ -31,75 +73,12 @@ class BmmACL(jt.Function):
 
     def execute(self, x1, x2):
         self.input = [x1, x2]
-        result = acl_cmd(
-            "BatchMatMul",
-            [x1, x2],
-            output_dtypes=[x1.dtype],
-            output_shapes=[
-                x1.shape[:-1] + x2.shape[-2:-1] if self.trans_x2 else x1.shape[:-1] + x2.shape[-1:]
-            ],
-            attr_code=_matmul_attributes(1) if self.trans_x2 else _matmul_attributes(0),
-        )[0]
-
-        return result
+        return _batch_matmul(x1, x2, 1 if self.trans_x2 else 0)
 
     def grad(self, grad_output):
         x1, x2 = self.input
-        if len(x1) != len(x2):
-            reshape_grad_x2 = True
-        else:
-            reshape_grad_x2 = False
-        grad_x1 = acl_cmd(
-            "BatchMatMul",
-            [grad_output, x2],
-            output_dtypes=[x1.dtype],
-            output_shapes=[
-                grad_output.shape[:-1] + x2.shape[-2:-1]
-                if not self.trans_x2
-                else grad_output.shape[:-1] + x1.shape[-1:]
-            ],
-            attr_code=_matmul_attributes(1) if not self.trans_x2 else _matmul_attributes(0),
-        )[0]
-        if self.trans_x2:
-            if reshape_grad_x2:
-                output_shape = grad_output.shape[1:-2] + grad_output.shape[-1:] + x1.shape[-1:]
-                grad_x2 = acl_cmd(
-                    "BatchMatMul",
-                    [grad_output.reshape(-1, grad_output.shape[-1]), x1.reshape(-1, x1.shape[-1])],
-                    output_dtypes=[x2.dtype],
-                    output_shapes=[output_shape],
-                    attr_code=_matmul_attributes(2),
-                )[0]
-            else:
-                output_shape = grad_output.shape[:-2] + grad_output.shape[-1:] + x1.shape[-1:]
-                grad_x2 = acl_cmd(
-                    "BatchMatMul",
-                    [grad_output, x1],
-                    output_dtypes=[x2.dtype],
-                    output_shapes=[output_shape],
-                    attr_code=_matmul_attributes(2),
-                )[0]
-        else:
-            if reshape_grad_x2:
-                output_shape = x1.shape[1:-2] + x1.shape[-1:] + grad_output.shape[-1:]
-                grad_x2 = acl_cmd(
-                    "BatchMatMul",
-                    [x1.reshape(-1, x1.shape[-1]), grad_output.reshape(-1, grad_output.shape[-1])],
-                    output_dtypes=[x2.dtype],
-                    output_shapes=[output_shape],
-                    attr_code=_matmul_attributes(2),
-                )[0]
-            else:
-                output_shape = x1.shape[:-2] + x1.shape[-1:] + grad_output.shape[-1:]
-                grad_x2 = acl_cmd(
-                    "BatchMatMul",
-                    [x1, grad_output],
-                    output_dtypes=[x2.dtype],
-                    output_shapes=[output_shape],
-                    attr_code=_matmul_attributes(2),
-                )[0]
-        if len(grad_x1.shape) > len(x1.shape):
-            grad_x1 = grad_x1.sum(0)
-        if len(grad_x2.shape) > len(x2.shape):
-            grad_x2 = grad_x2.sum(0)
-        return grad_x1, grad_x2
+        grad_x1 = _batch_matmul(grad_output, x2, 0 if self.trans_x2 else 1)
+        grad_x2 = (_batch_matmul(grad_output, x1, 2) if self.trans_x2
+                   else _batch_matmul(x1, grad_output, 2))
+        return (_sum_batch_gradient(grad_x1, x1.shape),
+                _sum_batch_gradient(grad_x2, x2.shape))

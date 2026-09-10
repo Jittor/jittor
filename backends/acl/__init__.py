@@ -7,7 +7,7 @@
 import os
 import shutil
 from jittor_utils.env_config import build_env
-from jittor_utils.build_config import BuildConfig, BuildContext
+from jittor_utils.build_config import BuildConfig, BuildContext, BuildSource
 # export LD_LIBRARY_PATH=/usr/local/Ascend/ascend-toolkit/latest/tools/aoe/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/plugin/opskernel:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/plugin/nnengine:/usr/local/Ascend/ascend-toolkit/latest/runtime/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/stub:/usr/local/Ascend/ascend-toolkit/latest/tools/tikicpulib/lib/Ascend910A:/usr/local/Ascend/ascend-toolkit/latest/toolkit/tools/simulator/Ascend910A/lib:/opt/AXESMI/lib64:/usr/local/Ascend/driver/lib64/driver/
 # export PYTHONPATH=/home/cjld/new_jittor/jittor/python
 # export JT_BUILD_TIKCC_PATH=g++
@@ -39,6 +39,7 @@ REGISTRATION_SOURCES = (
     "src/acl_jittor.cc",
     "src/aclnn.cc",
 )
+RUNTIME_SOURCES = ("src/backend.cc", "src/workspace.cc")
 CORE_SOURCES = (
     "src/acl_op_exec.cc",
     "kernels/native/adamw_op_acl.cc",
@@ -108,7 +109,7 @@ def configure(context: BuildContext) -> BuildConfig:
     extra_core_files = list(config.extra_core_files) + [
         os.path.join(acl_compiler_home, name) for name in CORE_SOURCES
     ]
-    cc_flags = f" -MD -DHAS_CUDA -DIS_ACL  \
+    cc_flags = f" -MD -DHAS_ACCELERATOR -DHAS_CUDA -DIS_ACL  \
     -I{ascend_toolkit_home}/include/ \
     -I{ascend_toolkit_home}/include/acl/ \
     -I{ascend_toolkit_home}/include/aclnn/ \
@@ -138,10 +139,25 @@ void init_acl_ops();
     final_flags = config.cc_flags + cc_flags
     return config.evolve(
         backend="acl", has_acl=True, has_cuda=True, is_cuda=False,
-        has_rocm=False, has_corex=False,
+        has_accelerator=True, has_rocm=False, has_corex=False,
         tikcc_path=tikcc_path, nvcc_path=tikcc_path,
         cc_flags=final_flags, nvcc_flags=final_flags.replace("-std=c++14", ""),
-        setup_fake_cuda_lib=True, extra_core_files=tuple(extra_core_files),
+        # ACL owns its CANN kernels; NVIDIA library sources require vendor
+        # headers and must not be compiled as historical fake CUDA libraries.
+        setup_fake_cuda_lib=False, extra_core_files=tuple(extra_core_files),
+        backend_sources=config.backend_sources + tuple(
+            BuildSource(os.path.join(acl_compiler_home, name), flags=cc_flags)
+            for name in RUNTIME_SOURCES
+        ),
+        # ACL operations emit host C++ CANN launchers. ccec remains the SDK
+        # discovery/legacy nvcc alias, not a CUDA source compiler. Explicitly
+        # override the CPU/CUDA bootstrap defaults consumed by the JIT.
+        kernel_compiler=config.cc_path, kernel_language="cxx",
+        kernel_compile_flags=final_flags + " " + config.kernel_flags,
+        kernel_flag_filter=(), kernel_source_roots=(),
+        kernel_source_suffix=".cc", kernel_device_link=False,
+        extension_compile_flags=config.extension_compile_flags + cc_flags,
+        convert_nvcc_flags=None,
         environment={**config.environment, "use_mkl": "0"},
         resources={**config.resources, "acl_initializer": mod, "acl_library": library},
     )

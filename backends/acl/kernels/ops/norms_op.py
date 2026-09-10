@@ -39,7 +39,6 @@ class BatchNormACL:
             multi_grad_src=code_program(
                 [
                     "\n            // aclop\n            BatchNormBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(in1, true);\n            op.add(in3, true);\n            op.add(in4, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
-                    "\n            op.run();\n            ",
                 ]
             ),
             multi_grad_attributes=self._attributes(),
@@ -76,7 +75,6 @@ class LayerNormACL:
             multi_grad_src=code_program(
                 [
                     "\n            // aclop\n            LayerNormBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(in1, true);\n            op.add(in2, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
-                    "\n            op.run();\n            ",
                 ]
             ),
             multi_grad_attributes=self._attributes(),
@@ -117,7 +115,6 @@ class GroupNormACL:
             multi_grad_src=code_program(
                 [
                     "\n            // aclop\n            GroupNormBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(in1, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
-                    "\n            op.run();\n            ",
                 ]
             ),
             multi_grad_attributes=self._attributes(),

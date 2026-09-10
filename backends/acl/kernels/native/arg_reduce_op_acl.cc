@@ -8,7 +8,7 @@
 namespace jittor
 {
     ArgReduceOpRunner::ArgReduceOpRunner(bool is_max, int64_t dim, bool keepdims)
-        : BaseOpRunner(is_max ? "MaxDim" : "MinDim"),
+        : BaseOpRunner(is_max ? "MaxDim" : "MinDim", Dispatch::Direct),
           is_max(is_max),
           dim(dim),
           keepdims(keepdims)

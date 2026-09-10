@@ -77,7 +77,7 @@ namespace jittor
         return;
     }
 
-    IncreFlashAttentionOpRunner::IncreFlashAttentionOpRunner() : BaseOpRunner("IncreFlashAttention")
+    IncreFlashAttentionOpRunner::IncreFlashAttentionOpRunner() : BaseOpRunner("IncreFlashAttention", Dispatch::Direct)
     {
     }
 
@@ -146,15 +146,30 @@ namespace jittor
         return;
     }
 
-    KVCacheMemcpyOpRunner::KVCacheMemcpyOpRunner() : BaseOpRunner("KVCacheMemcpy")
+    KVCacheMemcpyOpRunner::KVCacheMemcpyOpRunner()
+        : BaseOpRunner("KVCacheMemcpy", Dispatch::Direct)
     {
     }
 
     void KVCacheMemcpyOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<KVCacheMemcpyAttr *>(op_attr.get());
-        CHECK(in_.size() == 2);
+        CHECK(in_.size() == 3);
         CHECK(out_.size() == 1);
+        // The input edge materializes the old cache before this partial write.
+        // outputs= requests sharing, but a materialized broadcast initializer
+        // can have a different buffer. Preserve its untouched rows explicitly.
+        CHECK(inputShapes[2] == outputShapes[0]);
+        CHECK(in_[2]->is_contiguous());
+        CHECK(in_[2]->size == out_[0]->size);
+        if (in_[2]->mem_ptr != out_[0]->mem_ptr)
+        {
+            ret = aclrtMemcpyAsync(out_[0]->mem_ptr, out_[0]->size,
+                in_[2]->mem_ptr, in_[2]->size,
+                ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
+            if (ret != ACL_SUCCESS)
+                LOGf << name << ": previous cache copy failed. ERROR:" << ret;
+        }
         CHECK(inputShapes[0].size() == 3);
         CHECK(inputShapes[1] == inputShapes[0]);
         CHECK(outputShapes[0].size() == 5);

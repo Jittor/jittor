@@ -16,6 +16,9 @@ struct RuntimeDeviceState {
     int sync_run = 1;
     int device_count = -1;
     int current_device = -1;
+    struct ModeScopeSnapshot { uint64 token; int use_cuda; };
+    uint64 next_mode_scope_token = 0;
+    vector<ModeScopeSnapshot> mode_scope_snapshots;
     vector<device_switch_hook_t> switch_hooks;
     vector<char> peer_enabled;
     vector<unique_ptr<Allocator>> device_pools;

@@ -15,6 +15,7 @@ jit-operator-source
 error-categories
 async-error-diagnostics
 test-system
+npu-validation-templates
 known-issues/parallel-compiler-segfault
 ```
 
@@ -27,4 +28,5 @@ known-issues/parallel-compiler-segfault
 | [错误分级](error-categories.md) | 用户错误与内部不变量各走哪个入口 |
 | [异步错误诊断契约](async-error-diagnostics.md) | 有界发射记录环，与图元数据的区别 |
 | [测试体系](test-system.md) | 测试分层、门禁与验证口径 |
+| [NPU 记录模板](npu-validation-templates.md) | 原生与独立 Torch compat 的缺陷、回归及性能证据格式 |
 | [已知问题](known-issues/parallel-compiler-segfault.md) | 并行编译器可能破坏进程状态 |

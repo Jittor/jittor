@@ -1002,8 +1002,13 @@ def _api_tolist(self):
     return self.item() if getattr(self, '_torch_0d', False) else self.numpy().tolist()
 
 
-def _api_contiguous(self):
-    return self
+def _api_contiguous(self, memory_format="contiguous_format"):
+    if memory_format not in (None, "contiguous_format"):
+        raise NotImplementedError("contiguous supports contiguous_format")
+    if self._storage_is_contiguous():
+        return self
+    with _new_scope(self, None):
+        return _owner.jt.core.ops.contiguous(self)
 
 
 def _api_argwhere(input):

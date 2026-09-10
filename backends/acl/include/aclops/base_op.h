@@ -10,7 +10,11 @@ namespace jittor
 
     class BaseOpRunner
     {
+    public:
+        enum class Dispatch { Registry, Direct };
+
     protected:
+        Dispatch dispatch;
         vector<Var *> in_;
         vector<Var *> out_;
 
@@ -31,7 +35,8 @@ namespace jittor
         std::unique_ptr<AclOpAttr> op_attr;
         bool use_nchw = false;
 
-        BaseOpRunner(const string &name = "") : name(name) {}
+        BaseOpRunner(const string &name = "", Dispatch dispatch = Dispatch::Registry)
+            : dispatch(dispatch), name(name) {}
         virtual ~BaseOpRunner() = default;
 
         // Common functionality for adding input/output variables

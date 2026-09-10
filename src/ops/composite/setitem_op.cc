@@ -23,6 +23,19 @@ static auto make_getitem2 = op_constructor<vector<VarPtr>, Var*, VarSlices&&, in
 static auto make_setitem = op_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>("setitem");
 static auto make_binary = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
 static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
+static auto make_reduce = op_constructor<VarPtr, Var*, NanoString, NanoVector, bool>("reduce");
+static auto make_reshape = op_constructor<VarPtr, Var*, NanoVector>("reshape");
+
+static VarPtr sum_setitem_value_gradient(Var* gradient, Var* value) {
+    NanoVector axes;
+    int extra = int(gradient->shape.size()) - int(value->shape.size());
+    for (int i=0; i<int(gradient->shape.size()); ++i)
+        if (i < extra || (value->shape[i-extra] == 1 && gradient->shape[i] != 1))
+            axes.push_back(i);
+    VarPtr result = gradient;
+    if (axes.size()) result = make_reduce(result, ns_add, axes, true);
+    return make_reshape(result, value->shape);
+}
 
 SetitemOp::SetitemOp(Var* x, VarSlices&& slices, Var* y, NanoString op)
     : vs(move(slices)), op(op) {
@@ -120,7 +133,7 @@ void SetitemOp::grads(Var** dout, VarPtr* dins) {
     if (!dout[0]) return;
     auto outs = make_getitem2(dout[0], VarSlices(vs, true), 0);
     dins[0] = move(outs[1]);
-    dins[1] = move(outs[0]);
+    dins[1] = sum_setitem_value_gradient(outs[0], input(1));
 }
 
 VarPtr SetitemOp::grad(Var* out, Var* dout, Var* v, int v_index) {
@@ -133,7 +146,7 @@ VarPtr SetitemOp::grad(Var* out, Var* dout, Var* v, int v_index) {
             if (zero->dtype() != dout->dtype()) zero = make_unary(zero, dout->dtype());
             return make_setitem(dout, VarSlices(vs, true), zero, ns_void);
         } else {
-            return make_getitem(dout, VarSlices(vs, true));
+            return sum_setitem_value_gradient(make_getitem(dout, VarSlices(vs, true)), v);
         }
     }
     if (op == ns_add) {

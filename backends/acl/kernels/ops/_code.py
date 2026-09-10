@@ -121,15 +121,18 @@ def acl_code(
     if multi_grad_attributes is not None:
         if not multi_grad_src:
             raise ValueError("multi_grad_attributes requires multi_grad_src")
-        from ._attributes import attribute_data
+        from ._attributes import attribute_program
         backward_name = name + "Backward"
-        data.update(attribute_data(backward_name, multi_grad_attributes))
-        cuda_header += '\n#include "aclops/acl_code_attributes.h"\n'
+        # Forward and backward share CodeOp.data, but own independent schemas
+        # and values. Reuse the structural payload namespace instead of merging
+        # a second record into the forward record's acl_attr. fields. In this
+        # mode multi_grad_src only declares the runner and binds its tensors;
+        # this owner installs attributes and launches in that order.
         multi_grad_src = code_program([
             multi_grad_src,
-            '\n            apply_acl_code_attributes(op, data, "acl_attr.", "',
-            backward_name,
-            '");\n            ',
+            "\n",
+            attribute_program(backward_name, multi_grad_attributes),
+            "\nop.run();\n",
         ])
     if multi_grad_src:
         if cuda_grad_src:

@@ -133,7 +133,7 @@ namespace jittor
         kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
         strides = aclCreateIntArray(attr->poolStrides.data(), 2);
         pads = aclCreateIntArray(attr->poolPads.data(), 2);
-        ret = aclnnAvgPool2dBackwardGetWorkspaceSize(inputTensors[0], inputTensors[1], kernel_size, strides, pads, attr->countIncludePad, attr->divisorOverride, attr->divisorOverride, attr->poolCeil, outputTensors[0], &workspaceSize, &executor);
+        ret = aclnnAvgPool2dBackwardGetWorkspaceSize(inputTensors[0], inputTensors[1], kernel_size, strides, pads, attr->poolCeil, attr->countIncludePad, attr->divisorOverride, 0, outputTensors[0], &workspaceSize, &executor);
 
         launch(ret, aclnnAvgPool2dBackward, true);
 

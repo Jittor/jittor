@@ -34,10 +34,8 @@ def acl(monkeypatch):
 
 @pytest.fixture
 def setup(acl, monkeypatch, tmp_path):
-    api = _load_module(
-        monkeypatch, "acl_build_config_values_test",
-        ROOT / "python/jittor/build/utils/build_config.py",
-    )
+    # BuildSource values must use the provider's canonical dataclass identity.
+    import jittor_utils.build_config as api
     toolkit = tmp_path / "toolkit"
     toolkit.mkdir()
     monkeypatch.setenv("ASCEND_TOOLKIT_HOME", str(toolkit))
@@ -49,6 +47,7 @@ def setup(acl, monkeypatch, tmp_path):
     converter = SimpleNamespace(process=lambda *args: "converted",
                                 init_acl_ops=lambda: calls.append(("init",)))
     base = api.BuildConfig(
+        cc_path="/host/bin/c++", kernel_flags=" -O2 ",
         cc_flags="-std=c++14 -I/source/src", jittor_path="/source",
         cache_path="/cache", extra_core_files=("existing.cc",),
         environment={"existing_env": "yes"}, resources={"existing_resource": 3},
@@ -68,13 +67,24 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
     before_environment = dict(os.environ)
     config = acl.configure(setup.context)
     assert config.backend == "acl"
-    assert config.has_acl and config.has_cuda and not config.is_cuda
+    assert config.has_acl and config.has_cuda and config.has_accelerator and not config.is_cuda
     assert not config.has_rocm and not config.has_corex
     assert config.nvcc_path == config.tikcc_path == "/cann/bin/selected-ccec"
-    assert config.setup_fake_cuda_lib
+    assert not config.setup_fake_cuda_lib
     assert "-I/source/src" in config.cc_flags
     assert "-DIS_ACL" in config.cc_flags
+    # Accelerator-guarded headers can precede core/common.h (e.g. fetch_op.cc).
+    # The macro must therefore exist from the start of every translation unit.
+    assert "-DHAS_ACCELERATOR" in config.cc_flags.split()
     assert config.nvcc_flags == config.cc_flags.replace("-std=c++14", "")
+    assert config.kernel_compiler == "/host/bin/c++"
+    assert config.kernel_language == "cxx"
+    assert config.kernel_compile_flags == config.cc_flags + " " + setup.base.kernel_flags
+    assert config.kernel_source_suffix == ".cc"
+    assert not config.kernel_device_link
+    assert config.kernel_source_roots == config.kernel_flag_filter == ()
+    assert config.convert_nvcc_flags is None
+    assert "-DIS_ACL" in config.extension_compile_flags
     assert config.environment == {"existing_env": "yes", "use_mkl": "0"}
     assert config.resources["acl_initializer"] is setup.converter
     assert config.resources["acl_library"] is setup.library
@@ -91,12 +101,21 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
     assert [call[0] for call in setup.calls] == ["load", "compile"]
     assert setup.calls[0][1:] == ("libascendcl.so", os.RTLD_NOW | os.RTLD_GLOBAL)
     converter_flags = setup.calls[1][2]
+    assert "-DHAS_ACCELERATOR" in converter_flags.split()
     assert "-I/source/src" in converter_flags
     assert all(name in converter_flags for name in converter_sources)
     assert all(name not in converter_flags for name in expected_extra)
     for name in ("backend.cc", "workspace.cc"):
         assert str(SOURCE.parent / "src" / name) not in converter_flags
         assert str(SOURCE.parent / "src" / name) not in config.extra_core_files
+    assert tuple(source.path for source in config.backend_sources) == tuple(
+        str(SOURCE.parent / "src" / name) for name in ("backend.cc", "workspace.cc"))
+    for source in config.backend_sources:
+        assert isinstance(source, setup.api.BuildSource)
+        assert source.language == "cxx" and source.compiler == ""
+        assert "-DHAS_ACCELERATOR" in source.flags.split()
+        assert "-DIS_ACL" in source.flags.split()
+    assert setup.base.backend_sources == ()
     for directory in ("include", "include/aclnn", "include/aclops"):
         assert "-I" + str(SOURCE.parent / directory) in config.cc_flags
     assert setup.base.extra_core_files == ("existing.cc",)
@@ -113,8 +132,27 @@ def test_configuration_declares_accelerator_independently_of_nvcc(acl, setup, in
     from dataclasses import replace
     base = setup.base.evolve(has_cuda=initial_cuda)
     context = replace(setup.context, config=base)
-    assert acl.configure(context).has_cuda
+    config = acl.configure(context)
+    assert config.has_cuda and config.has_accelerator
     assert acl.install_extern(context) is False
+
+
+def test_provider_sources_preserve_existing_units_and_override_kernel_defaults(acl, setup):
+    existing = setup.api.BuildSource("existing-runtime.cc")
+    base = setup.base.evolve(
+        backend_sources=(existing,), kernel_compiler="old-nvcc",
+        kernel_language="cuda", kernel_compile_flags="--use_fast_math",
+        kernel_source_roots=("old-cuda-kernels",), kernel_source_suffix=".cu",
+        kernel_device_link=True, kernel_flag_filter=("old-filter",),
+    )
+    config = acl.configure(setup.context.with_config(base))
+    assert config.backend_sources[0] is existing
+    assert len(config.backend_sources) == 3
+    assert config.kernel_compiler == base.cc_path
+    assert config.kernel_language == "cxx"
+    assert "--use_fast_math" not in config.kernel_compile_flags
+    assert config.kernel_source_roots == config.kernel_flag_filter == ()
+    assert config.kernel_source_suffix == ".cc" and not config.kernel_device_link
 
 
 @pytest.mark.parametrize("compiler", ["", "missing-ccec"])
@@ -195,5 +233,6 @@ def test_provider_source_inventory_is_explicit_and_complete(acl):
     assert all((SOURCE.parent / name).is_file() for name in sources)
     actual = {str(path.relative_to(SOURCE.parent))
               for path in SOURCE.parent.rglob("*.cc")}
-    assert actual == set(sources) | {"src/backend.cc", "src/workspace.cc"}
+    assert acl.RUNTIME_SOURCES == ("src/backend.cc", "src/workspace.cc")
+    assert actual == set(sources) | set(acl.RUNTIME_SOURCES)
     assert "glob" not in vars(acl)

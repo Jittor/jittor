@@ -33,6 +33,7 @@
 namespace jittor
 {
     static void setupNormTensorDescs(
+        const string &name,
         const vector<Var *> &vars,
         vector<vector<int64_t>> &shapes,
         vector<aclTensor *> &tensors,
@@ -62,12 +63,12 @@ namespace jittor
 
     void BatchNormOpRunner::setupInputDesc()
     {
-        setupNormTensorDescs(in_, inputShapes, inputTensors, 1);
+        setupNormTensorDescs(name, in_, inputShapes, inputTensors, 1);
     }
 
     void BatchNormOpRunner::setupOutputDesc()
     {
-        setupNormTensorDescs(out_, outputShapes, outputTensors, 1);
+        setupNormTensorDescs(name, out_, outputShapes, outputTensors, 1);
     }
 
     void BatchNormOpRunner::executeOp(AclOpRegistry::const_iterator &it)
@@ -86,12 +87,12 @@ namespace jittor
 
     void BatchNormBackwardOpRunner::setupInputDesc()
     {
-        setupNormTensorDescs(in_, inputShapes, inputTensors, 2);
+        setupNormTensorDescs(name, in_, inputShapes, inputTensors, 2);
     }
 
     void BatchNormBackwardOpRunner::setupOutputDesc()
     {
-        setupNormTensorDescs(out_, outputShapes, outputTensors, 1);
+        setupNormTensorDescs(name, out_, outputShapes, outputTensors, 1);
     }
 
     void BatchNormBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
@@ -124,7 +125,7 @@ namespace jittor
         return;
     }
 
-    LayerNormBackwardOpRunner::LayerNormBackwardOpRunner() : BaseOpRunner("LayerNormBackward")
+    LayerNormBackwardOpRunner::LayerNormBackwardOpRunner() : BaseOpRunner("LayerNormBackward", Dispatch::Direct)
     {
     }
 
@@ -150,7 +151,7 @@ namespace jittor
         return;
     }
 
-    GroupNormOpRunner::GroupNormOpRunner() : BaseOpRunner("GroupNorm")
+    GroupNormOpRunner::GroupNormOpRunner() : BaseOpRunner("GroupNorm", Dispatch::Direct)
     {
     }
 
@@ -166,7 +167,7 @@ namespace jittor
     }
 
     GroupNormBackwardOpRunner::GroupNormBackwardOpRunner()
-        : BaseOpRunner("GroupNormBackward")
+        : BaseOpRunner("GroupNormBackward", Dispatch::Direct)
     {
     }
 
@@ -185,7 +186,7 @@ namespace jittor
         launch(ret, aclnnGroupNormBackward, true);
     }
 
-    RmsNormOpRunner::RmsNormOpRunner() : BaseOpRunner("RmsNorm")
+    RmsNormOpRunner::RmsNormOpRunner() : BaseOpRunner("RmsNorm", Dispatch::Direct)
     {
     }
 
@@ -201,7 +202,7 @@ namespace jittor
         return;
     }
 
-    RmsNormGradOpRunner::RmsNormGradOpRunner() : BaseOpRunner("RmsNormGrad")
+    RmsNormGradOpRunner::RmsNormGradOpRunner() : BaseOpRunner("RmsNormGrad", Dispatch::Direct)
     {
     }
 

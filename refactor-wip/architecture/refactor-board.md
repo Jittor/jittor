@@ -1,5 +1,7 @@
 # 整改看板
 
+2026-09-10 当前实机复验：[Ascend 原生/独立 Torch 验证与性能记录](../results/2026-09-10-ascend-refactor-validation.md)。已同步到`86086396`；独立compat合并38项通过（含CPU共享用例），slice/mask修复已验，原生完整选择集185通过、2项既有FlashAttention入口跳过（187项全部完成）。扩大OpInfo仍有两项能力缺口，CPU structure未全绿；性能保留初始`1a1f175e`的临时采样证据。不改写下方历史验收结论。
+
 2026-09-09 最新：本地264条“已合并”，剩10条代码/性能记录，另有9条硬件验收、5条并入其他任务和3条已合并但验收有保留的记录；父项与派生项存在重叠。本轮收口2.19功能边界；其余当前收口项见[当前交接与证据](refactor-handoff.md)。源码/包/测试布局、独立Torch、缓存生命周期、精度与内省接线已收齐；**功能优先**：ACL全属性owner数据通道、oneDNN v3功能路径、3.20部分图提交、7.13 DeviceMesh/原生optimizer复用均已有主机验证，10.21 stub生成已通过；性能项（含descriptor/primitive cache）全部后置。当前 polish 目标是直接维护 `origin/2.0-refactor`，已完成的 polish 批次按提交推送；不要沿用历史“禁止 push”说明。vLLM位于本仓adapters/jittor_adapters/vllm。
 
 当前发布/打包 polish：现代 wheel baseline 为 1033 个成员，canonical wheel 与 sdist 重建 wheel 对比均为 added/changed/removed = 0；release sdist/wheel 测试 28/28 通过。路径迁移后的 include、MANIFEST 和 nox 输入已同步到 canonical `src/`/`backends/` 布局。

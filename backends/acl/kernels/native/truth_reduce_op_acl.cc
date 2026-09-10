@@ -10,7 +10,7 @@
 namespace jittor
 {
     TruthReduceOpRunner::TruthReduceOpRunner(bool reduce_all)
-        : BaseOpRunner(reduce_all ? "All" : "Any"),
+        : BaseOpRunner(reduce_all ? "All" : "Any", Dispatch::Direct),
           reduce_all(reduce_all),
           attr(nullptr)
     {

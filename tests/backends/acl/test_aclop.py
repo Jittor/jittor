@@ -252,8 +252,8 @@ class TestACL(unittest.TestCase):
     @jt.flag_scope(use_acl=1)
     def test_triu(self):
         a = jt.ones(3, 3)
-        b = self.measure_time(lambda: jt.triu_(a, 0))
-        c = self.measure_time(lambda: jt.triu_(a, 1))
+        b = self.measure_time(lambda: jt.triu(a, 0))
+        c = self.measure_time(lambda: jt.triu(a, 1))
         np.testing.assert_allclose(b.numpy(),
                                    [[1, 1, 1], [0, 1, 1], [0, 0, 1]])
         np.testing.assert_allclose(c.numpy(),
@@ -968,22 +968,38 @@ class TestACL(unittest.TestCase):
     
     @jt.flag_scope(use_acl=1)
     def test_softmax(self):
-        a = jt.array([[1, 2], [3, 4]])
+        a = jt.float32([[1, 2], [3, 4]])
         res = self.measure_time(lambda: jt.nn.softmax(a, dim = -1))
         np.testing.assert_allclose(res.numpy(), [[0.26894143, 0.7310586], [0.26894143, 0.7310586]])
         print("test softmax success")
     
     @jt.flag_scope(use_acl=1)
     def test_softmax_grad(self):
-        a = jt.float32([[1, 2], [3, 4]])
-        b = jt.nn.softmax(a, dim = -1)
-        res = self.measure_time(lambda: jt.grad(b.max(), a))
-        np.testing.assert_allclose(res.numpy(), [[-0.19661194, 0.19661193], [-0.19661194, 0.19661193]])
+        # Equal logits give exact binary probabilities on both CPU and ACL,
+        # isolating the tie-gradient contract from exp approximation rounding.
+        source = np.asarray([[1, 1], [3, 3]], dtype=np.float64)
+        probabilities = np.exp(source - source.max(axis=-1, keepdims=True))
+        probabilities /= probabilities.sum(axis=-1, keepdims=True)
+        # Native value-only max divides its cotangent equally among ties.
+        # The last-column values tie; the old reference counted them twice.
+        selected = probabilities[:, -1]
+        cotangent = np.zeros_like(probabilities)
+        ties = selected == selected.max()
+        cotangent[:, -1] = ties / ties.sum()
+        expected = probabilities * (cotangent - (probabilities * cotangent).sum(axis=-1, keepdims=True))
+        for mode in (0, 1):
+            with jt.flag_scope(use_cuda=mode):
+                a = jt.float32(source)
+                b = jt.nn.softmax(a, dim=-1)
+                res = self.measure_time(lambda: jt.grad(b[:, -1].max(), a))
+                res.sync()
+                self.assertEqual(res.location(), "device" if mode else "cpu")
+                np.testing.assert_allclose(res.numpy(), expected)
         print("test softmax grad success")
 
     @jt.flag_scope(use_acl=1)
     def test_relu(self):
-        a = jt.array([[1, -2, 3], [-4, 5, -6]])
+        a = jt.float32([[1, -2, 3], [-4, 5, -6]])
         res = self.measure_time(lambda: jt.nn.relu(a))
         np.testing.assert_allclose(res.numpy(), [[1, 0, 3], [0, 5, 0]])
         print("test relu success")
@@ -998,7 +1014,7 @@ class TestACL(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1)
     def test_silu(self):
-        a = jt.array([[1, 2, 3]])
+        a = jt.float32([[1, 2, 3]])
         res = self.measure_time(lambda: jt.nn.silu(a))
         np.testing.assert_allclose(res.numpy(), [[0.7310586, 1.761594, 2.8577225]])
         print("test silu success")
@@ -1013,7 +1029,7 @@ class TestACL(unittest.TestCase):
         
     @jt.flag_scope(use_acl=1)
     def test_sigmoid(self):
-        a = jt.array([[1, 2, 3]])
+        a = jt.float32([[1, 2, 3]])
         sig = jt.nn.Sigmoid()
         res = self.measure_time(lambda: sig(a))
         np.testing.assert_allclose(res.numpy(), [[0.7310586, 0.880797, 0.95257413]])
@@ -1068,10 +1084,20 @@ class TestACL(unittest.TestCase):
         
     @jt.flag_scope(use_acl=1)
     def test_leakyrelu(self):
-        a = jt.array([[1, -2, 3], [-4, 5, -6]])
+        a = jt.float32([[1, -2, 3], [-4, 5, -6]])
         res = self.measure_time(lambda: jt.nn.leaky_relu(a))
         np.testing.assert_allclose(res.numpy(), [[1, -0.02, 3], [-0.04, 5, -0.06]])
         print("test leakyrelu success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_activation_float_providers_reject_integer_input(self):
+        # These ACL providers explicitly support floating dtypes. Keep integer
+        # rejection separate from the floating forward/gradient fixtures above.
+        value = jt.int32([[1, -2, 3]])
+        for operation in (jt.nn.relu, jt.nn.leaky_relu, jt.nn.sigmoid, jt.nn.silu, jt.nn.softmax):
+            with self.subTest(operation=operation.__name__):
+                with self.assertRaisesRegex(TypeError, "on ACL supports .*got int32"):
+                    operation(value)
     
     @jt.flag_scope(use_acl=1)
     def test_leakyrelu_grad(self):

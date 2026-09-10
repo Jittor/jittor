@@ -679,7 +679,7 @@ namespace jittor
              runner.add(_op->y_key, false);
              runner.run();
          }},
-        {"curand_random", [&current_seed, &current_offset](Op *op)
+        {"random", [](Op *op)
          {
              auto _op = (RandomOp *)op;
              AclExecutionRunner<RandomOpRunner> runner(_op->type == ns_uniform ? "RandomUniform" : "RandomNormal");
@@ -721,11 +721,14 @@ namespace jittor
                 USER_CHECK(reduce->op == ns_maximum || reduce->op == ns_minimum)
                     << "arg_reduce requires min or max";
             }
-            if (op->name() == string("curand_random"))
+            if (op->name() == string("random"))
             {
                 auto *random = static_cast<RandomOp *>(op);
                 USER_CHECK(random->type == ns_uniform || random->type == ns_normal)
                     << "random requires uniform or normal";
+                const auto dtype = random->output->dtype();
+                if (dtype != ns_float16 && dtype != ns_bfloat16 && dtype != ns_float32)
+                    unsupported = "random requires float16, bfloat16 or float32 output";
                 const string name = random->type == ns_uniform ? "RandomUniform" : "RandomNormal";
                 if (!acl_op_registry().count(name)) unsupported = "unregistered ACL launcher: " + name;
             }
@@ -830,6 +833,16 @@ namespace jittor
     {
         register_backend_implementation_composer(
             BackendId::Acl, compose_acl_implementation, "acl-native-v1");
+        // Random's CPU OpDef deliberately does not advertise every accelerator;
+        // the composer cannot create an entry missing from its backend mask.
+        // Keep the generated jit callback: Op::run_jit uses it to enter the
+        // provider's compiler even when native execution is also available.
+        auto implementation = get_op_definition("random")->implementations.at(BackendId::Cpu);
+        implementation.kernel.native = exec_mapped_acl_ops;
+        implementation.kernel.compile = compile_acl_mapped;
+        implementation.kernel.fallback_only = false;
+        register_op_implementation("random", BackendId::Acl, implementation,
+            "acl-native-random-v1");
     }
 
 } // jittor

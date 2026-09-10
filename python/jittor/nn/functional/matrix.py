@@ -115,6 +115,15 @@ def matmul_transpose(a, b):
     returns a * b^T
     """
     _check_matmul_shapes(a, b, trans_b=True)
+    if a.ndim >= 2 and b.ndim > 2:
+        # Keep batch dimensions intact. Equalize ranks with singleton batches
+        # so the existing batched relays can broadcast without changing their ABI.
+        rank = max(a.ndim, b.ndim)
+        if a.ndim < rank:
+            a = a.reshape((1,) * (rank - a.ndim) + tuple(a.shape))
+        if b.ndim < rank:
+            b = b.reshape((1,) * (rank - b.ndim) + tuple(b.shape))
+        return bmm_transpose(a, b)
     if len(a.shape) != 2:
         aa = a.reshape((-1, a.shape[-1]))
         cc = jt.nn.matmul_transpose(aa, b)

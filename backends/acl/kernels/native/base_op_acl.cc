@@ -148,30 +148,18 @@ namespace jittor
     // Base run method with common operator lookup logic
     void BaseOpRunner::run()
     {
-        if (is_group_op)
+        auto it = acl_op_registry().find(name);
+        // Direct owners issue typed CANN calls (or runtime memcpy) themselves;
+        // only registry-backed owners may dereference this iterator.
+        if ((is_group_op || dispatch == Dispatch::Registry) &&
+            it == acl_op_registry().end())
         {
-            auto it = acl_op_registry().find(name);
-            if (it == acl_op_registry().end())
-            {
-                LOGf << "ACL operator has no registered launcher:" << name;
-            }
-            setupInputDesc();
-            setupOutputDesc();
-            executeOp(it);
-            cleanupDesc();
+            LOGf << "ACL operator has no registered launcher:" << name;
         }
-        else
-        {
-            auto it = acl_op_registry().find(name);
-            if (it == acl_op_registry().end())
-            {
-                LOGf << "ACL operator has no registered launcher:" << name;
-            }
-            setupInputDesc();
-            setupOutputDesc();
-            executeOp(it);
-            cleanupDesc();
-        }
+        setupInputDesc();
+        setupOutputDesc();
+        executeOp(it);
+        cleanupDesc();
     }
 
 }

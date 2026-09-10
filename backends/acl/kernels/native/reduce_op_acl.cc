@@ -31,7 +31,7 @@
 
 namespace jittor
 {
-    ReduceOpRunner::ReduceOpRunner() : BaseOpRunner("reduce")
+    ReduceOpRunner::ReduceOpRunner() : BaseOpRunner("reduce", Dispatch::Direct)
     {
         use_nchw = false;
     }

@@ -163,3 +163,184 @@ def test_every_exemption_states_a_reason_and_still_exists():
         if not (REPO_ROOT / relative).exists():
             problems.append("%s is exempt but no longer exists" % relative)
     assert problems == [], "\n".join(problems)
+
+
+def _scope_with_aliased_flags(sync_in_setter=False):
+    """Execute production scopes with a host-only flag double, without JIT."""
+    import functools
+    import sys
+    from types import SimpleNamespace
+    class Flags:
+        def __init__(self):
+            self.device = 0
+            self.no_grad = 0
+            self._controlled = 0
+        @property
+        def use_cuda(self):
+            return self.device
+        @use_cuda.setter
+        def use_cuda(self, value):
+            previous = self.device
+            self.device = value
+            if sync_in_setter and previous != value:
+                # Match the native setter: submit on the old device and
+                # transactionally undo the write if submission fails.
+                self.device = previous
+                namespace['sync_all']()
+                self.device = value
+        use_acl = use_cuda
+        @property
+        def controlled(self):
+            return self._controlled
+        @controlled.setter
+        def controlled(self, value):
+            self._controlled = value
+            if value == 99:
+                raise ValueError('rejected setting')
+    state = Flags()
+    synced = []
+    namespace = {'flags': state, 'sync_all': lambda: synced.append(state.device),
+                 '_functools': functools, '_sys': sys}
+    snapshots = []
+    def push_device_mode():
+        token = object()
+        snapshots.append((token, state.device))
+        return token
+    def pop_device_mode(token, restore):
+        saved_token, previous = snapshots.pop()
+        assert token is saved_token
+        if restore:
+            state.device = previous
+    namespace['core'] = SimpleNamespace(
+        _push_device_mode_scope=push_device_mode,
+        _pop_device_mode_scope=pop_device_mode,
+    )
+    path = REPO_ROOT / 'python/jittor/_core/flags.py'
+    tree = ast.parse(path.read_text())
+    tree.body = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+    exec(compile(tree, str(path), 'exec'), namespace)
+    return namespace['flag_scope'], state, synced
+
+
+def test_alias_scope_restores_device_with_both_keyword_orders():
+    for values in ({'use_acl': 1, 'use_cuda': 1}, {'use_cuda': 1, 'use_acl': 1}):
+        scope, flags, synced = _scope_with_aliased_flags()
+        with scope(**values):
+            assert flags.device == 1
+        assert flags.device == 0
+        assert synced == [0, 1]
+
+
+def test_alias_scope_nesting_and_decorated_calls_restore_outer_state():
+    scope, flags, _ = _scope_with_aliased_flags()
+    outer = scope(use_acl=1, use_cuda=1)
+    @scope(use_acl=0, use_cuda=0)
+    def inner(depth):
+        assert flags.device == 0
+        if depth:
+            inner(depth - 1)
+        assert flags.device == 0
+    with outer:
+        inner(2)
+        assert flags.device == 1
+        with outer:
+            assert flags.device == 1
+        assert flags.device == 1
+    assert flags.device == 0
+
+
+def test_alias_scope_body_exception_restores_without_another_flush():
+    import pytest
+    scope, flags, synced = _scope_with_aliased_flags()
+    with pytest.raises(ValueError, match='body failed'):
+        with scope(use_acl=1, use_cuda=1):
+            raise ValueError('body failed')
+    assert flags.device == 0
+    assert synced == [0]
+
+
+def test_alias_scope_setting_failure_rolls_back_and_preserves_outer_entry():
+    import pytest
+    scope, flags, synced = _scope_with_aliased_flags()
+    with scope(use_acl=1, use_cuda=1):
+        failed = scope(use_acl=0, use_cuda=0, controlled=99)
+        with pytest.raises(ValueError, match='rejected setting'):
+            with failed:
+                raise AssertionError('failed setting must not enter body')
+        assert flags.device == 1 and flags.controlled == 0
+        assert failed._flags_bk_stack == []
+        assert synced == [0, 1]
+    assert flags.device == 0
+
+
+def test_alias_only_scope_flushes_both_device_boundaries():
+    scope, flags, synced = _scope_with_aliased_flags()
+    with scope(use_acl=1):
+        assert flags.device == 1
+    assert flags.device == 0 and synced == [0, 1]
+
+
+def test_alias_scope_snapshot_failure_does_not_mutate_or_flush():
+    import pytest
+    scope, flags, synced = _scope_with_aliased_flags()
+    failed = scope(use_acl=1, use_cuda=1, nonexistent=1)
+    with pytest.raises(AttributeError):
+        failed.__enter__()
+    assert flags.device == 0 and synced == []
+    assert failed._flags_bk_stack == []
+
+
+def test_alias_scope_exit_flush_failure_still_restores_all_originals():
+    import pytest
+    scope, flags, _ = _scope_with_aliased_flags()
+    def fail_sync():
+        raise RuntimeError('synchronization failed')
+    with pytest.raises(RuntimeError, match='synchronization failed'):
+        with scope(use_acl=1, use_cuda=1):
+            scope.__enter__.__globals__['sync_all'] = fail_sync
+    assert flags.device == 0
+
+
+def test_scope_body_error_does_not_resubmit_through_native_style_setter():
+    import pytest
+    scope, flags, _ = _scope_with_aliased_flags(sync_in_setter=True)
+    original = ValueError('original body error')
+    attempts = []
+    def failed_pending_graph():
+        attempts.append(flags.device)
+        raise RuntimeError('pending graph must not be resubmitted')
+    with pytest.raises(ValueError) as caught:
+        with scope(use_acl=1, use_cuda=1, no_grad=1):
+            scope.__enter__.__globals__['sync_all'] = failed_pending_graph
+            raise original
+    assert caught.value is original
+    assert attempts == []
+    assert flags.device == 0 and flags.no_grad == 0
+
+
+def test_scope_flush_failure_restores_without_retrying_native_style_setter():
+    import pytest
+    scope, flags, _ = _scope_with_aliased_flags(sync_in_setter=True)
+    original = RuntimeError('first graph submission failed')
+    attempts = []
+    def failed_pending_graph():
+        attempts.append(flags.device)
+        raise original
+    with pytest.raises(RuntimeError) as caught:
+        with scope(use_cuda=1, use_acl=1, no_grad=1):
+            scope.__enter__.__globals__['sync_all'] = failed_pending_graph
+    assert caught.value is original
+    assert attempts == [1]
+    assert flags.device == 0 and flags.no_grad == 0
+
+
+def test_direct_device_setter_still_rejects_switch_on_submission_failure():
+    import pytest
+    scope, flags, _ = _scope_with_aliased_flags(sync_in_setter=True)
+    flags.use_cuda = 1
+    def failed_pending_graph():
+        raise RuntimeError('cannot switch while graph submission fails')
+    scope.__enter__.__globals__['sync_all'] = failed_pending_graph
+    with pytest.raises(RuntimeError, match='cannot switch'):
+        flags.use_cuda = 0
+    assert flags.device == 1

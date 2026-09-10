@@ -236,11 +236,12 @@ def test_acl_pool_uses_canonical_output_geometry(
         geometry_calls.append(args)
         return actual_geometry(*args)
 
-    for name in ("jittor.nn", "jittor.nn.functional", "jittor.nn.functional.pooling"):
+    for name in ("jittor.nn", "jittor.nn.functional", "jittor.nn.functional.pooling",
+                 "jittor.nn.functional.pooling.average"):
         package = ModuleType(name)
         package.__path__ = []
         monkeypatch.setitem(sys.modules, name, package)
-    sys.modules["jittor.nn.functional.pooling"]._pool_output_size = record_geometry
+    sys.modules["jittor.nn.functional.pooling.average"]._pool_output_size = record_geometry
 
     class Function:
         def __call__(self, *args):
@@ -249,8 +250,8 @@ def test_acl_pool_uses_canonical_output_geometry(
     providers.native.Function = Function
     launches = []
 
-    def record_pool(name, inputs, output_dtypes, output_shapes, attr_code):
-        launches.append((name, output_shapes, attr_code))
+    def record_pool(name, inputs, output_dtypes, output_shapes, attributes):
+        launches.append((name, output_shapes, attributes))
         return [_Tensor(shape, dtype) for shape, dtype in zip(output_shapes, output_dtypes)]
 
     pool_source = (KERNELS / "ops/pool_op.py").read_text(encoding="utf-8")
@@ -272,7 +273,7 @@ def test_acl_pool_uses_canonical_output_geometry(
     assert result.shape == (1, 2, expected, expected)
     assert geometry_calls == [(size, kernel, stride, padding, ceil_mode)] * 2
     assert launches[0][0] == ("Maxpool" if op == "maximum" else "Avgpool")
-    assert "attr->countIncludePad = false" in launches[0][2]
+    assert launches[0][2]["countIncludePad"] is False
 
 
 @pytest.mark.parametrize("entry", ["provider", "public"])

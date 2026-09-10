@@ -30,7 +30,7 @@
 
 namespace jittor
 {
-    TernaryOpRunner::TernaryOpRunner() : BaseOpRunner("ternary")
+    TernaryOpRunner::TernaryOpRunner() : BaseOpRunner("ternary", Dispatch::Direct)
     {
         use_nchw = false;
     }

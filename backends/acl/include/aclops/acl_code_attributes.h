@@ -21,6 +21,11 @@ template<class Runner> auto acl_set_cube(Runner& op, int64_t value, int)
 template<class Runner> void acl_set_cube(Runner&, int64_t, long) {
     acl_data::internal_error("runner has no cube math field");
 }
+template<class Runner> auto acl_set_swiglu_dim(Runner& op, int64_t value, int)
+    -> decltype(op.dim = value, void()) { op.dim = value; }
+template<class Runner> void acl_set_swiglu_dim(Runner&, int64_t, long) {
+    acl_data::internal_error("runner has no SwiGlu dimension field");
+}
 template<class Runner> auto acl_set_roll(Runner& op, const vector<int64_t>& shifts, const vector<int64_t>& dims, int)
     -> decltype(op.shifts = shifts, op.dims = dims, void()) { op.shifts = shifts; op.dims = dims; }
 template<class Runner> void acl_set_roll(Runner&, const vector<int64_t>&, const vector<int64_t>&, long) {
@@ -33,6 +38,7 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
         field.required=false; field.has_default=true; field.default_value=std::move(value); return field; };
 
     if (name == "Softmax") return {{"dim", required(Type::int64)}};
+    if (name == "SwiGlu") return {{"dim", required(Type::int64)}};
     if (name == "SoftmaxBackward") return {{"dim", required(Type::int64)}};
     if (name == "Triu") return {{"diagonal", required(Type::int64)}};
     if (name == "Flip") return {{"axes", required(Type::int64_vector)}};
@@ -87,6 +93,11 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         !(name == "TruthReduce" && (op.name == "All" || op.name == "Any")))
         acl_data::internal_error("attribute schema does not belong to actual runner: " + op.name + " / " + name);
 
+    if (name == "SwiGlu") {
+        acl_set_swiglu_dim(op, fields.at("dim").int_value, 0);
+        op.jt_name="swiglu";
+        return;
+    }
     if (name == "Softmax") {
         auto attr=std::unique_ptr<SoftmaxAttr>(new SoftmaxAttr());
         attr->dim = fields.at("dim").int_value;

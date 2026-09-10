@@ -8,6 +8,17 @@
 #include "core/common.h"
 #include "runtime/device_state.h"
 
+namespace jittor {
+
+// Private flag_scope rollback protocol. The caller cannot supply an unchecked
+// device mode: only the saved, previously valid state can be restored.
+// @pyjt(_push_device_mode_scope)
+uint64 push_device_mode_scope();
+// @pyjt(_pop_device_mode_scope)
+void pop_device_mode_scope(uint64 token, bool restore);
+
+} // namespace jittor
+
 
 #ifdef HAS_ACCELERATOR
 
