@@ -686,154 +686,76 @@ framework defects.
   the two concat perf cases measure something again rather than dividing by
   zero.
 
-## KI-EXEC-001: CUDA segfaults when `auto_flush_ops` splits a pending graph
+## KI-EXEC-001: fixed -- a control-only op is no longer held to a compute op's rules
 
-- Severity: Critical
-- Status: **Cause and crash site identified 2026-09-10; four candidate fixes
-  tried and rejected, each for a measured reason.** Workaround available.
-- Owner: executor and CUDA backend maintainers
+- Severity: was Critical (segfault; ResNet50-class backbones did not run on CUDA)
+- Status: Fixed 2026-09-10
+- Symptom it had: five bottleneck blocks segfaulted at `auto_flush_ops` 1, 16,
+  32 and **128, the shipping default**, while 64 and 256 happened not to.
+  Deterministic per setting, five runs each. JSeg and JDet both crashed with a
+  ResNet50 backbone while JSeg's ResNet18 passed. That is what made it read as
+  "past a graph-size threshold": the threshold was not a size, it was the first
+  place the cut landed on a tape.
 
-### What is measured
+  ```
+  Allocator::is_cuda()          src/mem/allocator.h:35     <- segfault
+  run_exec_plan                 src/core/exec_runner.cc:331
+  Executor::run_sync            src/core/executor.cc
+  Executor::submit_pending      src/core/executor.cc
+  schedule_pending_from_python  src/core/var_holder.cc:62
+  to_py_object<VarHolder*>      src/bindings/pyjt/py_converter.h:626
+  ```
 
-`auto_flush_ops` is the cause. ResNet-shaped repro (five bottleneck blocks,
-512 -> 1024 channels), five runs per setting, `O` = pass and `X` = crash:
+  Not a GPU fault: `compute-sanitizer --tool memcheck` reported
+  `ERROR SUMMARY: 0 errors` on a run that segfaulted.
+- Cause: `Tapes` is a **control-only op**. It has no `run` and no `jit_run`; its
+  single output is a zero-sized Var wired as an edge into the producer of each
+  taped output, and it names the pre-tape Vars so the backward can reach them.
+  It reads none of their bytes, sets `_manual_set_vnbb`, and marks none of them
+  needed -- so the executor frees them once their real consumers finish, which
+  is correct. `run_exec_plan` then applied the rule for a *compute* op to it:
+  migrate every input to the device, and assert every input is backed. On a
+  freed Var the first of those is a null dereference. With the whole graph in
+  one batch the two never met; `auto_flush_ops` puts a `Tapes` in a batch whose
+  producers have already finished.
+- Fix: `OpFlags::_no_input_storage`, set by `Tapes` alone, and honoured by the
+  two places in `run_exec_plan` that walk `op->inputs()`. Three files, two
+  lines of behaviour.
+- Verified: no crash at `auto_flush_ops` 0, 1, 16, 32, 64, 128, 256 or 512 at
+  five blocks, nor at six, seven and eight blocks on the default. The loss is
+  **bit-identical** at every setting. With cuDNN autotuning disabled -- so the
+  comparison isolates this defect from [KI-EXEC-003] -- the gradient residue
+  across settings is at most `2e-6`, which is reassociation from different
+  batch boundaries.
 
-| `auto_flush_ops` | 0 | 32 | 64 | 128 (default) | 256 |
-| --- | --- | --- | --- | --- | --- |
-| n=5 | OOOOO | XXXXX | OOOOO | XXXXX | OOOOO |
+### The first rejection of this fix was wrong, and how
 
-Deterministic per value and **non-monotonic**: 64 passes while 32 and 128
-crash. So this is not "flushing is unsafe", it is *where the flush cuts*. That
-is why the defect read as "past a graph-size threshold" -- the threshold is not
-a size limit, it is the first place the cut lands badly.
+This exact fix was tried earlier the same day and rejected on the grounds that
+it "turns the crash into gradients wrong by 40-60% on individual elements".
+Both halves of that were the reviewer's error:
 
-### Crash site
+* the comparison ran with cuDNN autotuning **on**, and autotuning depends on
+  what is resident, which is what the flag under test changes -- worth `3.8e-4`
+  on the gradient norm all by itself ([KI-EXEC-003]);
+* "40-60%" came from dividing a maximum absolute difference by the gradient's
+  **RMS** rather than by the magnitude of the element it belonged to.
 
-Symbolised on a debug build:
+Repeated with autotuning off, the residue is `2e-6`. The lesson is not
+"measure more" -- it is that a comparison across a flag that changes memory
+residency must first hold the autotuner still, and that a relative error needs
+the element it is relative to.
 
-```
-Allocator::is_cuda()            src/mem/allocator.h:35     <- segfault
-run_exec_plan                   src/core/exec_runner.cc:331
-Executor::run_sync              src/core/executor.cc:317
-Executor::submit_pending        src/core/executor.cc:105
-schedule_pending_from_python    src/core/var_holder.cc:62
-to_py_object<VarHolder*>        src/bindings/pyjt/py_converter.h:626
-pyjt_def_jit_op_maker lambda    (an op maker returning its result to Python)
-```
-
-`exec_runner.cc:331` is the input-migration loop; `v->allocator` is null.
-Instrumented, the offending Var is always the same shape:
-
-```
-input var id=1821 shape=[1024] float32 finished=1 mem_ptr=0
-          inputop=contiguous  noutputs=1  consumer_op=tapes
-```
-
-A Var that has already run and been freed, whose one remaining consumer is a
-`Tapes` op. `Tapes` computes nothing: its only output is a zero-sized Var wired
-as a control edge into the producer of each taped output, and it names the
-pre-tape Vars so the backward can reach them. It sets `_manual_set_vnbb` and
-marks none of them needed, so freeing them is correct on its own terms -- and
-the runner requires every input of an executing op to be backed. With the whole
-graph in one batch the two never met.
-
-**Not a GPU fault.** `compute-sanitizer --tool memcheck` reports
-`ERROR SUMMARY: 0 errors` on a run that segfaults. This is host-side.
-
-### Four fixes tried and rejected
-
-1. **One target per `run_sync` instead of the whole selected set.** Still
-   crashes at n=5,6,7. The batch's *size* is not the trigger.
-2. **A flag saying the op reads no input bytes**, skipping the migration and
-   the `mem_ptr || size == 0` check for `Tapes`. Crash gone -- and the
-   gradients came back **wrong**. Against a no-flush baseline, 99.24% of
-   5,981,184 gradient elements differed, worst element by `1.5e-03`, and at
-   `auto_flush_ops=1`/`16`/`32` by `1.1e+01` and `6.9e+00` against a gradient
-   RMS of 18.7, i.e. 40-60% on individual elements. **The null allocator was
-   the executor correctly noticing that data it needed was gone.** Suppressing
-   the check converts a loud crash into silent training corruption, which is
-   worse. Reverted.
-3. **`_needed_by_backward` on the `Tapes` inputs**, so liveness keeps them.
-   Still segfaults. The flag does not keep the *memory* alive across a flush.
-4. **Stand the flush down while any `Tapes` is unresolved** (a counter,
-   incremented in the `Tapes` constructor, decremented when it runs).
-   Crashes gone at every setting and the loss is identical everywhere
-   (23080.078125), but the gradients still move:
-
-   | `auto_flush_ops` | 0 | 32 | 128 | 256 |
-   | --- | --- | --- | --- | --- |
-   | gradient norm | 45839.37890625 | **45822.23046875** | 45839.37109375 | 45839.37890625 |
-
-   0 and 256 agree bit for bit; 32 is off by 17 in 45839, `3.7e-4` relative.
-   So flushing still perturbs the backward by some other path. Not shipped: by
-   this repository's own standard a silent numeric divergence is worse than a
-   crash, and a fix that trades one for the other is not a fix. Reverted.
-
-### What is still true
-
-- Values that never crashed produce gradients matching the no-flush baseline to
-  `2.3e-05` on 5.98M elements (0.015% of elements differ). The **shipping
-  default of 128 is among the bad ones**; 64 and 256 are among the good ones,
-  and which is which depends on the model.
-- The minimal crashing shape is a pure elementwise chain --
-  `for _ in range(200): x = x * 1.0001 + 0.001` -- with no convolution,
-  BatchNorm or residual. It reproduces **intermittently**, unlike the ResNet
-  repro, which is deterministic per setting.
-- Ruled out by measurement: multiple targets per batch, BatchNorm's in-place
-  running-statistic updates (removing BatchNorm entirely still crashes), and
-  convolution.
-
-### Correction, 2026-09-10, after the cuDNN autotuning cause was found
-
-Two things above were wrong, and the record is more useful with them fixed.
-
-**The fourth attempt was judged on a confounded number.** "Stand the flush down
-while any `Tapes` is unresolved" was rejected because gradients still moved by
-`3.7e-4`. That spread was cuDNN autotuning ([KI-EXEC-003]), not the guard.
-Re-run with `set_benchmark(0)` -- which removes the algorithm-selection
-variable -- the guard's residue is `2e-6` at `auto_flush_ops` 16 and 32 and
-`9e-8` at 128, against gradient norms near 45822: reassociation from different
-batch boundaries, three hundred times smaller than the autotuning effect that
-is present whether or not this defect is fixed.
-
-**But the guard is still not a fix, for a different and better reason.**
-Instrumented, `pending_tapes` sat at 16 at every flush point and never came
-back down: the counter's decrement never fired, so after the first tapes were
-built the flush was off for the rest of the run. For a convolutional model --
-the only kind that reaches this defect -- the guard is `auto_flush_ops = 0`
-with extra steps. It disables the feature it is meant to preserve. Rejected on
-those grounds instead.
-
-**`auto_flush_ops=1` fails through a different path.** With the guard applied,
-16, 32, 64, 128 and 256 all pass and 1 still segfaults -- in the *forward*
-alone, and from a different stack:
-
-```
-run_exec_plan <- run_sync <- jittor::sync(vector<VarHolder*>) <- VarHolder::sync
-```
-
-That is the explicit `.sync()`, not `submit_pending`. So flushing after every
-single operator leaves the graph in a state the final synchronisation cannot
-execute, by some route other than the tape one. `1` is not a setting anyone
-uses, but it says the tape story is not the whole story.
-
-### Workaround
-
-`jt.flags.auto_flush_ops = 0`. It costs the pipelining the flag exists for and
-is correct: 0 is one of the settings whose gradients match.
-
-### Same flag, second defect
-
-[KI-EXEC-002] is `jt.profile_scope` reporting nothing for work this flush
-already launched. One flag introduced during the refactor (2026-09-02,
-`c9176652f`), two consequences.
-
-- Review/expiry condition: the repro passes for n in 4..8 **at the default
-  flag value**, gradients agree with the no-flush baseline at every setting on
-  a model containing tapes, both downstream ResNet50 backbones run a forward
-  and backward, and a regression covers a chain long enough to have crashed at
-  the default. A regression that sets the flag to 0 would pass on the unfixed
-  build and prove nothing.
+- Regression: `tests/backends/cuda/test_auto_flush_graph_split.py`. Each
+  setting runs in **its own process**, because the failure is a segfault: in
+  process it ends the suite rather than failing a case, and every later test
+  silently does not run. It asserts the loss is bit-identical **and** compares
+  gradients -- a fix that stops the crash while leaving the backward reading
+  the wrong bytes passes a "did it run" check and fails here, which is the
+  point. It disables cuDNN autotuning so a `3.8e-4` band does not hide
+  anything smaller. Reverting the fix turns it red with
+  `auto_flush_ops=1 produced no result`.
+- Still open on the same flag: [KI-EXEC-002] (the profiler cannot see flushed
+  work) and [KI-EXEC-003] (cuDNN autotuning is not isolated from scheduling).
 
 ## KI-OPS-010: fixed -- an index arriving in a Var is now checked against the dimension
 

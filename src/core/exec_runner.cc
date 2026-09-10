@@ -306,10 +306,11 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             }
         } else {
             for (Var* v : op->inputs()) {
+                if (op->flag(OpFlags::_no_input_storage)) break;
                 // device_copy deliberately accepts a host-resident input and
                 // owns its H2D transfer. Migrating it here first would mutate
                 // the source of x.cpu().cuda(), violating copy semantics.
-                if (!v->allocator->is_cuda()
+                if (v->allocator && !v->allocator->is_cuda()
                         && !op->flag(OpFlags::_manual_device))
                     migrate_to_gpu(v, var_allocator(v, allocator));
             }
@@ -326,7 +327,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             for (auto& vi : fused_op.vars)
                 if (vi.type == 0)
                     ASSERT(vi.var->mem_ptr || vi.var->size == 0) << vi.var;
-        } else {
+        } else if (!op->flag(OpFlags::_no_input_storage)) {
             for (auto* v : op->inputs())
                 ASSERT(v->mem_ptr || v->size == 0) << v;
         }
