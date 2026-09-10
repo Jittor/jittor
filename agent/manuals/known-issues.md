@@ -939,63 +939,133 @@ defer, and where it has been tested it was not true.
   `tests/structure/torch_api_manifest.json` in the same commit, and remove this
   entry when the manifest no longer records them.
 
-## KI-OPS-009: a broadcast index Var reads garbage on a CPU-only build
+## KI-OPS-009: fixed -- an index Var that is a strided view is now read through its strides
 
-- Severity: Critical (out-of-bounds read *and write*)
-- Status: Reproduced and narrowed 2026-09-10; root cause open. The segfault is
-  gone -- it is now a catchable error that names the bad index.
-- Owner: indexing and build-configuration maintainers
-- **The title was too narrow.** This is not about `scatter_add`, and not about
-  `setitem`. It is any indexing operation whose index Var came from a broadcast.
-  Measured on a CPU-only build (`nvcc_path=""`), each row a fresh process:
+- Severity: was Critical (out-of-bounds read *and write*, silent wrong answers)
+- Status: Fixed 2026-09-10
+- Symptom it had: any indexing operation whose index Var came from a broadcast.
+  Not `scatter_add`, where it was first seen, and not `setitem`: the read side
+  (`gather`) failed identically. On a CPU-only build (`nvcc_path=""`), each row
+  a fresh process:
 
   | index expression | result |
   | --- | --- |
   | `jt.zeros((4,5), 'int64')` | index `2697334449954054313`, out of bounds |
   | `jt.zeros((4,5), 'int32')` | index `-1887156860`, out of bounds |
   | `jt.zeros(...)` after `idx.sync()` | index `-356873746589917012`, out of bounds |
-  | `jt.array(np.zeros((4,5), 'int64'))` | **20.0, correct** |
-  | `jt.ones((4,5), 'int64') - 1` | **20.0, correct** |
-  | `jt.array(...) + 0` | **20.0, correct** |
+  | `jt.array(np.zeros((4,5), 'int64'))` | correct |
+  | `jt.ones((4,5), 'int64') - 1` | correct |
   | `jt.zeros(...)` through plain `setitem` | out of bounds |
-  | `jt.zeros(...)` through `gather` (the read side) | out of bounds |
+  | `jt.zeros(...)` through `gather` | out of bounds |
 
-  The offending value differs every run, which is what reading unallocated
-  memory looks like.
-- What the split is: `jt.zeros(shape, dtype)` is
-  `unary(0, dtype).broadcast(shape)` (`python/jittor/_core/var.py`). Every index
-  that goes through *any* real computation is materialised as a side effect and
-  works. So the index Var being a pure broadcast is the discriminator, not the
-  dtype, not laziness -- **`idx.sync()` before the call does not help**, which
-  rules out "the producer had not run yet".
-- Build-specific, not device-specific: on a CUDA build with
-  `jt.flags.use_cuda = 0` -- same device, same kernels' CPU path -- the same
-  four lines give the right answer. Only `nvcc_path=""` fails. Whatever
-  `HAS_ACCELERATOR`/`HAS_CUDA` changes about the indexing path or the registered
-  optimisation passes is where the cause lives.
-- Hypothesis tested and **rejected**: that the broadcast was being fused away
-  and the kernel read an unallocated pointer. Setting `VarFlags::_stop_fuse` on
-  every index Var in both `GetitemOp` constructors and `SetitemOp` -- the idiom
-  `reindex_reduce_op.cc` uses for exactly this requirement -- changed nothing;
-  all three cases still read garbage. The change was reverted rather than
-  shipped with a confident comment. The next hypothesis worth testing is the
-  *stride* the kernel derives for the index Var: a broadcast's storage is not
-  laid out like a dense Var of the same logical shape, and the kernel computes
-  `vp@d[... * vs@d@@s@j ...]` from the output shape.
-- What improved: the index bounds check added the same day (KI-OPS-010) turns
-  this from a segfault that takes the interpreter down into a
-  `UserError` naming the offending index. That is how the values in the table
-  above were obtained -- before it, the process died with no diagnosis. It does
-  not fix the defect: the index is still wrong, the answer would still be wrong
-  if it happened to land in range, and out-of-range values are merely no longer
-  *written*.
-- Why it stayed hidden: `tests/ops/test_ops.py` belongs to the Torch process
-  mode, so a native `pytest tests/ops` never reaches it, and a CUDA-configured
-  run never sees the failure. It needs a CPU-only build to appear, and the
-  crash used to end the session, so every later test in it silently never ran.
-- Review/expiry condition: the table above is all-correct on a CPU-only build,
-  a regression covers a broadcast-produced index on both build configurations,
-  and the reason a CUDA-less build differed is written down.
+- Cause: **a broadcast is a storage descriptor, and the index kernels read
+  index Vars as if they were dense.** `jt.zeros(shape, dtype)` is
+  `unary(0, dtype).broadcast(shape)`, and `BroadcastToOp::infer_shape`
+  ([`broadcast_to_op.cc`](../../src/ops/broadcast_to_op.cc)) gives its output
+  zero strides and `share_with(x)` -- no elementwise kernel, no allocation of
+  the logical footprint. So a `(4,5)` int64 index Var is backed by **eight
+  bytes**. The `getitem`/`setitem` kernels compute the index Var's strides from
+  the *output* shape --
+  `vp@d[0 @for(j,0,VD, @if((VS@d>>j)&1, + i@{j+FOV} * vs@d@@s@j,))]`, with
+  `vs@d@@s@j` folded out of `oshape@{j+FOV}`
+  ([`getitem_op.cc`](../../src/ops/composite/getitem_op.cc),
+  [`setitem_op.cc`](../../src/ops/composite/setitem_op.cc)) -- and so walked 20
+  elements off the end of that one-element buffer and used what it found as an
+  index.
+- Proof that it is the neighbours in memory and not "unallocated pointer", with
+  no heap forensics: broadcast a one-element *view* of a buffer whose next 19
+  elements are a known pattern. `base = jt.array(np.arange(20) % 4)`,
+  `idx = base[0:1].broadcast((4,5))` -- every logical element of `idx` is
+  `base[0] == 0`. Gathering rows out of a source whose values name their row
+  returned `[[0,1,2,3,0],[1,2,3,0,1],[2,3,0,1,2],[3,0,1,2,3]]`: exactly
+  `base[0..19]`, read densely. It is `tests/ops/test_broadcast_index.py::
+  test_a_broadcast_index_reads_its_own_element`, and it fails deterministically
+  on both builds before the fix.
+- **The build was never the discriminator, and the previous reading of this
+  entry had that wrong.** The overshoot for a `(4,5)` int64 index is 152 bytes;
+  whether those bytes are zeroes or garbage is a property of the heap, not of
+  the code. A CUDA build fails too. With `jt.flags.use_cuda = 0` -- same
+  kernel, same device as the build that was called broken -- a `(4,64)` index
+  overshoots 2040 bytes and gives
+  `index 1115160576 is out of bounds for dimension 0 with size 4`; with
+  `use_cuda = 1` the device-side check prints
+  `[jittor] index 4870502260641759232 is out of bounds for dimension 0 with
+  size 4` and traps. That is also why the generated kernel was byte-identical
+  between the two builds: there was nothing build-specific to see.
+  `HAS_CUDA`/`HAS_ACCELERATOR` are not involved.
+- Why the two hypotheses that were tried did nothing: the broadcast Var **is**
+  allocated and its single element **is** correct, so `idx.sync()` cannot help
+  and neither can `VarFlags::_stop_fuse` on the index Vars -- nothing was being
+  fused away. The dtype is irrelevant for the same reason. What was wrong was
+  the arithmetic the kernel used to reach the second element of a Var that has
+  only one.
+- The guard existed and had never once been emitted: `adapt_index_storage`
+  ([`var_slices.h`](../../src/core/var_slices.h)) routes a non-contiguous index
+  Var through `contiguous_storage` before the op is built, and
+  [`codegen.py`](../../python/jittor/build/codegen.py) is supposed to insert a
+  call to it into every generated `make_*` that takes a `VarSlices`. It never
+  did. The argument list is split off the C++ declaration, so every argument
+  after the first still carries the space that followed the comma, and
+  `" VarSlices&& slices".startswith("VarSlices")` is false. `Var*` arguments are
+  rebuilt from the parsed type and happen to arrive clean, which is why
+  `adapt_storage_input` worked and its neighbour did not. `grep
+  adapt_index_storage` over the generated sources returned nothing, for every op
+  and every build.
+- Fix: one `strip()` before the match. `make_getitem` and `make_setitem` now
+  emit `adapt_index_storage(slices, _storage_owners);`, so a non-contiguous
+  index Var is materialised into a dense one before either kernel sees it.
+- Cost, CPU-only build, 8192x256 int64 index into an 8192x256 float32 table,
+  minimum of 20:
+
+  | | before | after |
+  | --- | --- | --- |
+  | dense index (the common case) | 0.000334s | 0.000324-0.000344s |
+  | broadcast index | wrong answer | 0.000473s |
+
+  The dense path is unchanged, and not only by measurement: `is_contiguous()` is
+  true, `contiguous_storage` hands the same Var back, and no op is created. A
+  broadcast index now pays one materialisation -- +42% on this shape, which is
+  what a 16 MB copy costs next to this gather.
+- The cheaper fix that was **not** taken, and why it is the follow-up rather
+  than the fix: `reindex_op.cc` and `reindex_reduce_op.cc` already read their
+  `extras` through `extras[@i]->storage_stride(@j)` and need no copy. The two
+  index kernels could do the same and skip the materialisation entirely. That
+  is one kernel template against every current and future `VarSlices` op, and it
+  would leave `adapt_index_storage` dead -- which is the condition that produced
+  this defect. Worth doing on top, with the copy kept as the fallback for any op
+  that does not opt in.
+- Regression: [`test_broadcast_index.py`](../../tests/ops/test_broadcast_index.py),
+  12 cases over both devices -- `gather` at three index widths and two dtypes
+  (the widths matter: a narrow index can overshoot into zeroed memory and look
+  healthy, which is how this was first mis-recorded as build-specific), the
+  heap-independent neighbour-read case above, `setitem`, `scatter_add`, a dense
+  index that must not move, and the premise itself (`broadcast` still produces a
+  strided view, so the file cannot quietly stop testing anything). Reverting the
+  codegen change turns it red on both builds: **4 failed / 2 passed**
+  on CPU-only, **7 failed / 5 passed** on CUDA, with
+  `index 2796023709697 is out of bounds for dimension 0 with size 4` from
+  `getitem_op.cc:461` and `index 1082130432 ...` from `setitem_op.cc:385`.
+  [`test_index_storage_adaptation.py`](../../tests/structure/codegen/test_index_storage_adaptation.py)
+  is the label: it reads the generated `jit_op_maker.h` and fails naming the
+  maker that lost the call, which is the half a behavioural test cannot cover
+  for an op that does not exist yet.
+- Nothing else moved: `tests/structure` on a CPU-only build reports the same 69
+  failures before and after, name for name (35 ACL, 15 cuDNN/cuSPARSE error
+  boundaries, the rest refactor-era -- see KI-TEST-004), and
+  `tests/ops/test_slice.py` + `tests/ops/test_reindex_op.py` on a CUDA build go
+  from 9 pre-existing failures to 8. Both selections were re-run against the
+  unpatched tree in a separate cache to get those baselines rather than assumed.
+- Also cleared by this: `tests/ops/test_ops.py::TestCommonCPU::
+  test_reference_scatter_add_float32`, which KI-TEST-002 names as one of the
+  four cases that end a CPU-only session. It went from
+  `index 7887331678563036767 is out of bounds for dimension 1 with size 4` to
+  `1 passed`. The reporting hole KI-TEST-002 is about is unaffected.
+- What KI-OPS-010 did and did not do: the index bounds check added the same day
+  turned this from a segfault that took the interpreter down into a `UserError`
+  naming the offending index, which is how the table above was obtained at all.
+  It did not fix this defect, and a reading of it as "no longer crashes" would
+  have been wrong -- the index was still whatever happened to be next to the
+  broadcast's single element.
 
 ## KI-TEST-002: a dead session is indistinguishable from a short one
 
@@ -1006,9 +1076,10 @@ defer, and where it has been tested it was not true.
   `tools/run_test_suite.py` sets), the maintained Torch selection printed
   progress to 48% and then ended with exit 1 -- no result line for the case that
   died, no traceback, no summary, and no mention of the ~2200 tests that never
-  ran. Four cases do this on that build:
+  ran. Four cases did this on that build:
   `tests/ops/test_ops.py::TestCommonCPU::test_reference_scatter_add_float32`
-  (KI-OPS-009),
+  (KI-OPS-009, fixed 2026-09-10 -- that case now passes there, and the
+  reporting hole this entry is about is untouched by it),
   `tests/ops/test_ops.py::TestGradientsCPU::test_gradcheck_interpolate_bilinear`,
   `compat/tests/torch/test_torch_hf_alias.py::TestTorchHFAlias::test_small_transformers_forward_direct_alias`,
   and
