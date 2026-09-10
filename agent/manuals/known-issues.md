@@ -526,11 +526,22 @@ framework defects.
 - Why the parity suite misses it: `tests/backends/parity` compares CPU against
   the accelerator, which is exactly the comparison that would show this, but its
   cases are small enough that the serial error is still near epsilon.
-- Fix direction: pairwise or blocked accumulation for the CPU reduction, or
-  accumulating float32 inputs in float64. Both cost throughput, and which one is
-  right depends on whether the contract is "as accurate as NumPy" or "the same
-  as CUDA" -- they differ at 16M (1.6e-5 against 4.3e-7). Measure before
-  choosing, as KI-OPS-006 records for the other reduction change.
+- Fix direction, and it is not a trade-off. Measured on 16.7M random float32
+  (67 MB), same machine, same run:
+
+  | | throughput | relative error |
+  | --- | --- | --- |
+  | Jittor CPU `sum` | 4.9 GB/s | 9.2e-5 |
+  | NumPy `sum` (pairwise) | **21.3 GB/s** | **8.5e-7** |
+
+  NumPy is **4.4x faster and 108x more accurate at the same time**. Blocked
+  accumulation keeps several partial sums, which is what makes it accurate and
+  also what lets the loop use more than one execution port -- the accuracy is a
+  consequence of the faster shape, not a payment for it. The earlier reading of
+  this entry said the fix would cost throughput and should be measured first;
+  the measurement says the current reduction is leaving both on the table.
+  (The 1.5e-1 in the table above is the worst case, all elements equal; random
+  inputs cancel and land at 9.2e-5. Both are far above NumPy.)
 - Workaround: reduce in float64 (`x.float64().sum()`), or reduce in chunks.
 - Review/expiry condition: CPU relative error stays within an order of magnitude
   of NumPy's for n up to 16M in float32, a parity case covers a reduction large
