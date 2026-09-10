@@ -423,6 +423,81 @@ framework defects.
   downstream ResNet50 backbones run a forward and backward, and a regression
   covers a chain long enough to have crashed.
 
+## KI-BACKEND-004: CUDA `maximum`/`minimum` swallow NaN while CPU propagates it
+
+- Severity: Critical
+- Status: Reproduced, unfixed
+- Owner: CUDA backend and operator maintainers
+- Evidence: `f = [nan, -inf, -0.0, 0.0, inf]` against zeros, float32:
+  CPU gives `[nan, 0.0, -0.0, 0.0, inf]`, CUDA gives `[0.0, 0.0, 0.0, 0.0, inf]`,
+  NumPy gives `[nan, 0.0, 0.0, 0.0, inf]`. The same expression on the same input
+  disagrees between the two devices.
+- Symptom: a NaN entering `maximum`/`minimum` disappears on CUDA. A model that
+  starts producing NaN shows it on CPU and not on the GPU, which is the wrong
+  way round for where people train. This is worse than either convention alone:
+  a device-parity check comparing CPU against CUDA would flag it, and none does
+  because no parity case feeds NaN.
+- Cause: `src/type/common_op_type.cc` maps `maximum` to `::max(...)` for CUDA
+  and `std::max(...)` for CPU. CUDA's overload resolves to `fmaxf`, whose IEEE
+  `maxNum` semantics deliberately return the non-NaN operand; `std::max` is
+  `a<b ? b : a`, and comparison against NaN is false, so the first operand --
+  the NaN -- comes back by accident. Neither was chosen for its NaN behaviour.
+- Also visible there: `maximum(-0.0, 0.0)` gives `-0.0` on CPU and `0.0` on
+  CUDA; NumPy gives `0.0`. Same root, smaller consequence.
+- Entangled with KI-OPS-006: both entries want a NaN-aware max, and the same
+  table row feeds the reduction, whose parallel passes match the literal
+  `std::max(T(a),T(b))` / `::max(...)` spelling to route to atomics. A fix has
+  to satisfy the elementwise case and the reduction together; the measurement in
+  KI-OPS-006 (elementwise 1.2-1.6x, reduction 7.1-7.5x) says they cannot be
+  treated as one change.
+- Workaround: test for NaN explicitly before a max/min on CUDA where its
+  presence matters.
+- Review/expiry condition: CPU and CUDA agree with NumPy on NaN and on the sign
+  of zero for `maximum` and `minimum`, and a device-parity case feeds NaN so the
+  disagreement cannot return unnoticed.
+
+## KI-BACKEND-005: CPU kernels are built with `-Ofast`, so infinities compute wrong
+
+- Severity: Critical
+- Status: Reproduced, unfixed
+- Owner: compiler and CPU backend maintainers
+- Evidence: CPU, float32, vectors of length >= 4 (the vectorised path):
+
+  | expression | Jittor CPU | IEEE / NumPy / Jittor CUDA |
+  | --- | --- | --- |
+  | `inf - inf` | `0.0` | `nan` |
+  | `1 / 0` | `nan` | `inf` |
+  | `-inf / 0` | `nan` | `-inf` |
+  | `inf * 1` | `inf` | `inf` |
+
+  A single element computes correctly; the wrong answers begin at length 4,
+  which is where the kernel vectorises. CUDA is correct for all of them.
+- Cause: `python/jittor/build/compiler.py:834` appends `-Ofast` to
+  `kernel_opt_flags` unconditionally. `-Ofast` implies `-ffast-math`, which
+  implies `-ffinite-math-only` -- a promise to the compiler that no operand is
+  ever infinite or NaN. It then optimises on that promise, and operands that
+  *are* infinite take whatever path the transformed code happens to produce.
+- The project already knows: `compiler.py:89` strips `--use_fast_math` and
+  `-Ofast` and substitutes `-O2` for one file, `nan_checker`. The workaround was
+  applied where it was noticed rather than where it applies.
+- Symptom: silently wrong arithmetic, and the shapes it takes are plausible
+  rather than obviously broken. `inf - inf` returning `0.0` is the dangerous
+  one: a fully masked attention row subtracts its own `-inf` maximum, and a `0`
+  there produces a well-formed but wrong softmax instead of an obvious `nan`.
+  KI-OPS-008 reaches the same input from the other side.
+- Related: KI-OPS-006 measured that `-Ofast` also folds comparison-based NaN
+  tests to false in the shipping build, which is the same flag defeating a
+  different piece of correctness.
+- Fix direction: `-O3` rather than `-Ofast`, or `-Ofast -fno-finite-math-only`.
+  Both cost throughput and the amount is unmeasured -- vectorisation of
+  reductions is the exposed part -- so this needs the same measure-then-decide
+  the KI-OPS-006 entry records, not a straight substitution.
+- Workaround: none within a kernel. Values that may be infinite have to be
+  masked before they reach a CPU kernel.
+- Review/expiry condition: the four expressions above agree with NumPy on CPU
+  at every length, a probe case covers infinities on both devices, and the
+  throughput change from the flag is measured and recorded.
+
 ## KI-FFT-001: withdrawn -- current CUDA sequence regression is clean
 
 - Severity: n/a

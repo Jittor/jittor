@@ -334,8 +334,54 @@ def probe_gradient_edges(jt, device):
           ga, np.array([0.0, 1.0], dtype="float32"))
 
 
+def probe_device_agreement(jt, device):
+    """The same expression on the two devices must give the same answer.
+
+    Every other category here compares against NumPy, which answers "is this
+    right". This one compares CPU against CUDA, which answers "is it at least
+    the same" -- and that catches a class the first cannot: a value that is
+    defensible on both devices under different conventions, like `maximum`
+    returning the NaN on one and the number on the other. The parity suite in
+    tests/backends/parity exists for this, but its cases never feed NaN, an
+    infinity or a signed zero, so the disagreement lived on.
+
+    Only meaningful with an accelerator; on a CPU-only box every pair is
+    trivially equal and the checks are skipped rather than counted as passes.
+    """
+    try:
+        import jittor as _jt
+        has_cuda = bool(_jt.compiler.has_cuda)
+    except Exception:
+        has_cuda = False
+    if not has_cuda:
+        RESULTS.append({"name": "device agreement", "category": "device-agree",
+                        "status": "SKIPPED", "detail": "no accelerator"})
+        return
+
+    hard = np.array([np.nan, -np.inf, -0.0, 0.0, np.inf], dtype="float32")
+    zero = np.zeros_like(hard)
+    cases = (
+        ("maximum", lambda a, b: jt.maximum(a, b)),
+        ("minimum", lambda a, b: jt.minimum(a, b)),
+        ("add", lambda a, b: a + b),
+        ("multiply", lambda a, b: a * b),
+        ("divide", lambda a, b: a / b),
+        ("equal", lambda a, b: (a == b).float_auto()),
+        ("less", lambda a, b: (a < b).float_auto()),
+    )
+    for name, fn in cases:
+        answers = {}
+        for flag, label in ((0, "cpu"), (1, "cuda")):
+            with jt.flag_scope(use_cuda=flag):
+                answers[label] = np.asarray(
+                    fn(jt.array(hard), jt.array(zero)).numpy(), dtype=np.float64)
+        check("%s agrees across devices" % name, "device-agree",
+              answers["cuda"], answers["cpu"])
+
+
 PROBES = (
     ("rounding", probe_rounding),
+    ("device-agree", probe_device_agreement),
     ("grad-edge", probe_gradient_edges),
     ("empty", probe_empty_and_zero_size),
     ("broadcast", probe_broadcasting),
