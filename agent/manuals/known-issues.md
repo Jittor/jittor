@@ -631,60 +631,47 @@ framework defects.
   observed magnitude. A regression sweeps `auto_flush_ops` and compares
   **gradients**, not the loss.
 
-## KI-EXEC-002: the profiler cannot see work that `auto_flush_ops` already launched
+## KI-EXEC-002: fixed -- the profiler no longer loses flushed work, and says when it measured nothing
 
-- Severity: High (measurements are silently partial; two gates are permanently red)
-- Status: Reproduced, unfixed
-- Owner: executor and profiling maintainers
-- Evidence: CUDA, a 64x64x64x64 float32 tensor sliced and concatenated, then
+- Severity: was High (measurements silently partial; two gates permanently red)
+- Status: Fixed 2026-09-10 for the half that is fixable; the other half is now
+  stated rather than silent.
+- Symptom it had: CUDA, a 64x64x64x64 tensor sliced and concatenated, then
   differentiated. Same expression at each row; only the number of slices moves.
 
-  | slices | rows `jt.profile_scope` reported | wall clock inside the scope |
-  | --- | --- | --- |
-  | 1, 2, 8 | 6-7 | 0.09-0.12s |
-  | **16, 32, 64** | **0** | **0.0003-0.025s** |
+  | slices | rows `jt.profile_scope` reported |
+  | --- | --- |
+  | 1, 2, 8 | 6-7 |
+  | **16, 32, 64** | **0** |
 
-  The result is correct at every row -- `b.numpy().sum()` is right -- so the
-  work happened. It happened *before the scope opened*.
-- Cause, established without a rebuild by moving one flag:
-
-  ```
-  auto_flush_ops=128  slices=64  rows=0  total=0
-  auto_flush_ops=0    slices=64  rows=9  total=37740746
-  auto_flush_ops=128  slices=32  rows=0  total=0
-  auto_flush_ops=0    slices=32  rows=9  total=17530765
-  ```
-
-  `auto_flush_ops` (`src/core/executor.cc`, default 128, CUDA only) launches
-  everything pending once that many operators have been created since the
-  executor last ran, so the device computes while Python keeps building. It is
-  a deliberate pipelining feature and it does what it says. What it also does
-  is end the guarantee that a lazily built graph is still pending when the
-  caller comes to run it: build more than ~128 operators' worth of graph and
-  part of it has already executed, outside whatever scope the caller is about
-  to open.
-- Symptom: `jt.profile_scope` returns a report with no rows and no warning.
-  Anything dividing by the total gets a zero -- which is how this was found:
-  `tests/ops/test_concat_op.py::test_concat2_perf` and `::test_concat_perf`
-  fail with `ZeroDivisionError` at every run, and have been doing so long
-  enough that the failure reads as background noise.
-- Why it matters beyond those two tests: the graphs worth profiling are the
-  large ones, and those are exactly the ones that under-report. A profile that
-  came back empty is indistinguishable from one that came back fast, and the
-  report says nothing about the ops that were flushed before it started.
-- Introduced 2026-09-02 (`c9176652f`), so this is a refactor-era regression
-  rather than an old defect: the tests were written against fully lazy
-  execution and the flag changed what "pending" means underneath them.
-- Not the same as KI-EXEC-001, but the same shape and worth reading together:
-  behaviour that changes once a graph passes a size threshold, where nothing in
-  the API says a threshold exists.
-- Workaround: `jt.flag_scope(auto_flush_ops=0)` around graph construction *and*
-  execution. Setting it inside the profile scope alone does not help -- by then
-  the flush has already happened.
-- Review/expiry condition: a profile taken over a graph of any size either
-  accounts for every operator that ran, or says out loud that it did not; and
-  the two concat perf cases measure something again rather than dividing by
-  zero.
+  The result was correct at every row, so the work happened -- outside the
+  scope. `auto_flush_ops` (`src/core/executor.cc`, default 128, CUDA only)
+  launches everything pending once that many operators have been built, so a
+  graph constructed before `with jt.profile_scope()` may already have run by
+  the time the scope opens.
+- Fix, two parts, because the problem has two:
+  * **Work built inside the scope is no longer launched behind the profiler's
+    back.** `profile_scope` now sets `auto_flush_ops=0` for its duration unless
+    the caller overrides it. Profiling is a measurement; the pipelining it
+    would otherwise measure is not what is being asked about. With the graph
+    built inside the scope, 64 and 32 slices went from **0 rows to 9**.
+  * **A report with no operators is no longer silent.** Nothing can recover
+    work that ran before the scope opened, but the scope can say so: it now
+    raises a `RuntimeWarning` naming the cause and what to do about it. "It ran
+    fast" and "nothing was measured" used to be the same output.
+- The two gates it kept red: `tests/ops/test_concat_op.py::test_concat_perf`
+  and `::test_concat2_perf` divided the transferred bytes by the profiler's
+  total and failed with `ZeroDivisionError` on every run -- a message naming
+  neither the profiler nor the cause. Both now build their graph **inside** the
+  scope, which is the right window to measure anyway, and the file passes
+  3/3.
+- Residual, stated: a graph built before the scope still cannot be measured.
+  That is inherent -- the work is gone -- and the warning is the honest
+  answer rather than a fix.
+- Same flag, still open: [KI-EXEC-003] (cuDNN autotuning is not isolated from
+  scheduling). [KI-EXEC-001] is fixed.
+- Review/expiry condition: met -- a profile over a graph built inside the scope
+  accounts for its operators at any size, and one that measures nothing says so.
 
 ## KI-EXEC-001: fixed -- a control-only op is no longer held to a compute op's rules
 
