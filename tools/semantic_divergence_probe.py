@@ -443,8 +443,143 @@ def probe_numerical_stability(jt, device):
           rtol=1e-4)
 
 
+def probe_state_and_reproducibility(jt, device):
+    """Process-global state must come back, and a seed must mean something.
+
+    Jittor's device selection, gradient mode and RNG are process-wide, so a
+    scope that fails to restore leaks into every test that runs after it -- the
+    class the repository keeps a cross-test leak ledger for. These check the
+    restore rather than the entry, because entering is the part that obviously
+    works.
+    """
+    # flag_scope restores, including when the body raises.
+    before = int(jt.flags.use_cuda)
+    with jt.flag_scope(use_cuda=before):
+        pass
+    check("flag_scope restores use_cuda", "state",
+          np.array([int(jt.flags.use_cuda)]), np.array([before]))
+
+    try:
+        with jt.flag_scope(use_cuda=before):
+            raise RuntimeError("probe")
+    except RuntimeError:
+        pass
+    check("flag_scope restores after an exception", "state",
+          np.array([int(jt.flags.use_cuda)]), np.array([before]))
+
+    # Nesting: the inner scope must restore the outer value, not the original.
+    with jt.flag_scope(no_grad=1):
+        outer = int(jt.flags.no_grad)
+        with jt.flag_scope(no_grad=0):
+            pass
+        check("nested flag_scope restores its caller", "state",
+              np.array([int(jt.flags.no_grad)]), np.array([outer]))
+    check("no_grad does not leak out of its scope", "state",
+          np.array([int(jt.flags.no_grad)]), np.array([0]))
+
+    # A seed has to make two runs identical, and two different seeds differ.
+    jt.set_global_seed(1234)
+    a = jt.random((64,)).numpy().copy()
+    jt.set_global_seed(1234)
+    b = jt.random((64,)).numpy().copy()
+    check("the same seed reproduces the same draw", "state", b, a)
+
+    jt.set_global_seed(4321)
+    c = jt.random((64,)).numpy().copy()
+    check("a different seed draws differently", "state",
+          np.array([bool(not np.allclose(c, a))]), np.array([True]))
+
+    # Two draws under one seed must not repeat each other: a seed that resets
+    # per call would make a stream of "random" numbers constant.
+    jt.set_global_seed(99)
+    d1 = jt.random((64,)).numpy().copy()
+    d2 = jt.random((64,)).numpy().copy()
+    check("consecutive draws differ under one seed", "state",
+          np.array([bool(not np.allclose(d1, d2))]), np.array([True]))
+
+    # no_grad really stops the graph rather than only marking it.
+    x = jt.array(np.ones((4,), dtype="float32"))
+    with jt.flag_scope(no_grad=1):
+        y = (x * 2).sum()
+    try:
+        g = jt.grad(y, x)
+        produced = bool(np.any(np.abs(g.numpy()) > 0))
+    except Exception:
+        produced = False
+    check("no_grad yields no gradient", "state",
+          np.array([produced]), np.array([False]))
+
+
+def probe_dtype_preservation(jt, device):
+    """An operation must return the dtype its inputs imply, not a convenient one.
+
+    A silent widening reads as harmless -- the values are right -- until the
+    result is compared, stored or fed to something that dispatches on dtype. A
+    silent narrowing loses data. Both are invisible at the call site, which is
+    why they are worth asserting rather than assuming.
+    """
+    def out_dtype(fn, dtype, binary=False):
+        # Built through arr() under the flag: jt.array narrows 64-bit inputs by
+        # default (KI-DTYPE-002), so without this every 64-bit row would report
+        # the construction-time narrowing as if the operator had done it. The
+        # shift category already learned this; the helper exists for it.
+        with jt.flag_scope(auto_convert_64_to_32=0):
+            a = arr(jt, np.ones((4,), dtype=dtype), dtype)
+            return str(fn(a, a).dtype if binary else fn(a).dtype)
+
+    for dtype in ("float16", "float32", "float64", "int32", "int64"):
+        check("%s add keeps its dtype" % dtype, "dtype-keep",
+              np.array([out_dtype(lambda a, b: a + b, dtype, True) == dtype]),
+              np.array([True]))
+        check("%s multiply keeps its dtype" % dtype, "dtype-keep",
+              np.array([out_dtype(lambda a, b: a * b, dtype, True) == dtype]),
+              np.array([True]))
+
+    for dtype in ("float16", "float32", "float64"):
+        check("%s abs keeps its dtype" % dtype, "dtype-keep",
+              np.array([out_dtype(jt.abs, dtype) == dtype]), np.array([True]))
+        check("%s sum keeps its dtype" % dtype, "dtype-keep",
+              np.array([out_dtype(jt.sum, dtype) == dtype]), np.array([True]))
+
+    # A comparison is a predicate; its result is a truth value whatever the
+    # operands were.
+    a = jt.array(np.ones((4,), dtype="float32"))
+    check("comparison returns bool", "dtype-keep",
+          np.array([str((a > a).dtype) == "bool"]), np.array([True]))
+
+
+def probe_serialization_roundtrip(jt, device):
+    """What goes to disk has to come back unchanged.
+
+    Corruption here is the quietest kind there is: the failure appears in a
+    later run, in a different process, with nothing left to point at the save.
+    """
+    import tempfile, os
+    cases = (
+        ("float32", np.arange(12, dtype="float32").reshape(3, 4)),
+        ("float64", np.linspace(-1, 1, 12, dtype="float64").reshape(3, 4)),
+        ("int64", np.arange(-6, 6, dtype="int64").reshape(3, 4)),
+        ("bool", (np.arange(12) % 2 == 0).reshape(3, 4)),
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, value in cases:
+            path = os.path.join(tmp, name + ".pkl")
+            with jt.flag_scope(auto_convert_64_to_32=0):
+                original = jt.array(value)
+                jt.save(original.numpy(), path)
+                restored = np.asarray(jt.load(path))
+            check("%s survives save/load" % name, "serialize",
+                  restored.astype(np.float64), value.astype(np.float64))
+            check("%s keeps its dtype on disk" % name, "serialize",
+                  np.array([str(restored.dtype) == str(value.dtype)]),
+                  np.array([True]))
+
+
 PROBES = (
     ("rounding", probe_rounding),
+    ("dtype-keep", probe_dtype_preservation),
+    ("serialize", probe_serialization_roundtrip),
+    ("state", probe_state_and_reproducibility),
     ("stability", probe_numerical_stability),
     ("device-agree", probe_device_agreement),
     ("grad-edge", probe_gradient_edges),
