@@ -423,6 +423,42 @@ framework defects.
   downstream ResNet50 backbones run a forward and backward, and a regression
   covers a chain long enough to have crashed.
 
+## KI-OPS-010: the indexing family does not bounds-check, and reads out of memory
+
+- Severity: Critical
+- Status: Reproduced, unfixed
+- Owner: operator and memory-safety maintainers
+- Evidence: a length-5 float32 source, one index, CPU:
+
+  | index | `take` | `gather` | `index_select` |
+  | --- | --- | --- | --- |
+  | 99 | `0.0` | `0.0` | `0.0` |
+  | 100,000 | `0.0` | `0.0` | `0.0` |
+  | 100,000,000 | **segfault** | **segfault** | **segfault** |
+  | 2,000,000,000 | **segfault** | — | — |
+
+  NumPy and Torch both raise `IndexError` for every row above.
+- Symptom: no bounds check at all. A modestly out-of-range index reads whatever
+  is mapped after the tensor and returns it as a value -- `0.0` here, which is
+  the most plausible wrong answer there is. A large one reads unmapped memory
+  and takes the process down.
+- Why it matters more than the numbers suggest: `gather` and `index_select` are
+  how embeddings are looked up, how attention gathers, how labels are indexed.
+  Their indices come from *data* -- token ids, class ids, offsets -- so an
+  out-of-range index is a malformed dataset or an off-by-one, not a programming
+  exotic. The two outcomes are a silently wrong training signal, or a crash with
+  no Python traceback.
+- Found by: `tools/adversarial_device_sweep.py`, which ran every OpInfo operator
+  on inputs containing NaN and both infinities. Cast to integers those become
+  huge indices, so the sweep segfaulted -- and the first version of the sweep
+  could not say which operator did it, because it did not record progress per
+  operator. That is the same lesson `tools/side_effect_probe.py` records.
+- Workaround: validate indices before a gather. `jt.clamp(idx, 0, n-1)` makes
+  the read safe but silently changes the result, so it is a stopgap, not a fix.
+- Review/expiry condition: all three raise for an out-of-range index on CPU and
+  CUDA, none can be made to read unmapped memory from Python, and a regression
+  covers a modest and an extreme index for each.
+
 ## Three CPU float defects share one surface
 
 `KI-BACKEND-004`, `KI-BACKEND-005` and `KI-BACKEND-006` were found separately
