@@ -423,12 +423,11 @@ framework defects.
   downstream ResNet50 backbones run a forward and backward, and a regression
   covers a chain long enough to have crashed.
 
-## KI-OPS-010: the indexing family does not bounds-check, and reads out of memory
+## KI-OPS-010: fixed -- an index arriving in a Var is now checked against the dimension
 
-- Severity: Critical
-- Status: Reproduced, unfixed
-- Owner: operator and memory-safety maintainers
-- Evidence: a length-5 float32 source, one index, CPU:
+- Severity: was Critical (memory safety and silent wrong answers)
+- Status: Fixed 2026-09-10
+- Symptom it had: a length-5 float32 source, one index, CPU:
 
   | index | `take` | `gather` | `index_select` |
   | --- | --- | --- | --- |
@@ -437,27 +436,46 @@ framework defects.
   | 100,000,000 | **segfault** | **segfault** | **segfault** |
   | 2,000,000,000 | **segfault** | — | — |
 
-  NumPy and Torch both raise `IndexError` for every row above.
-- Symptom: no bounds check at all. A modestly out-of-range index reads whatever
-  is mapped after the tensor and returns it as a value -- `0.0` here, which is
-  the most plausible wrong answer there is. A large one reads unmapped memory
-  and takes the process down.
-- Why it matters more than the numbers suggest: `gather` and `index_select` are
-  how embeddings are looked up, how attention gathers, how labels are indexed.
-  Their indices come from *data* -- token ids, class ids, offsets -- so an
-  out-of-range index is a malformed dataset or an off-by-one, not a programming
-  exotic. The two outcomes are a silently wrong training signal, or a crash with
-  no Python traceback.
-- Found by: `tools/adversarial_device_sweep.py`, which ran every OpInfo operator
-  on inputs containing NaN and both infinities. Cast to integers those become
-  huge indices, so the sweep segfaulted -- and the first version of the sweep
-  could not say which operator did it, because it did not record progress per
-  operator. That is the same lesson `tools/side_effect_probe.py` records.
-- Workaround: validate indices before a gather. `jt.clamp(idx, 0, n-1)` makes
-  the read safe but silently changes the result, so it is a stopgap, not a fix.
-- Review/expiry condition: all three raise for an out-of-range index on CPU and
-  CUDA, none can be made to read unmapped memory from Python, and a regression
-  covers a modest and an extreme index for each.
+  NumPy and Torch both raise `IndexError` for every row above. `setitem` shared
+  the hole and was worse: it *wrote* past the buffer, so an out-of-range index
+  corrupted the heap and surfaced somewhere else entirely.
+- Cause: the check was in the wrong place, not missing everywhere. A Python
+  `int` index is normalised and range-checked while the op is being built
+  (`getitem_op.cc`, `User check failed: v>=0`), and a slice clamps to the tensor
+  the way NumPy does. An index arriving in a **Var** took neither path: the
+  kernel wrapped negatives (`if (iid@d < 0) iid@d += ishape@d;`) and then read,
+  with nothing between. `take`, `gather`, `index_select` and every embedding
+  lookup funnel into exactly that expression, and their indices come from *data*
+  -- token ids, class ids, offsets -- so an out-of-range value is a malformed
+  dataset or an off-by-one, not a programming exotic.
+- Fix: `src/ops/composite/index_bounds.h` normalises and validates one index,
+  and both `getitem_op.cc` and `setitem_op.cc` route the Var-index expression
+  through it. The loop cannot raise from inside itself -- OpenMP region on CPU,
+  kernel on CUDA -- so the two devices report differently: CPU clamps the
+  offending index, records it, and the host raises after the loop (the clamp is
+  what keeps the read inside the buffer until then); CUDA prints the index and
+  traps, which is the bargain PyTorch makes for its own device-side asserts.
+- What the first attempt got wrong: the post-loop check was emitted for both
+  devices, and `cuda_indexing_optimize` takes `func->children.back()` to be the
+  loop nest. It moved the check into the kernel in the loop's place and
+  rewrote it as a loop, so six of eleven CUDA cases "raised" -- a **false
+  green**, since they were failing in codegen rather than on the index. The
+  check is now guarded with `@if(@is_def(JIT_cpu), ...)`, and
+  `backends/cuda/kernels/core/indexing_codegen.cc` asserts its own structural
+  assumption with a message that names it instead of `l->inner.size() == 3`.
+- Cost: an in-kernel compare per indexed element. A separate measurement of the
+  weaker alternative -- one extra reduction over the index tensor in the graph
+  -- came to 13.3% on an 8192-index lookup into a 50000x256 table. An earlier
+  note in this file claimed 276,183% for a host-side pre-check; that figure was
+  wrong and has been withdrawn. It timed `.item()`, which is a synchronisation
+  wait, not the check.
+- Regression: `tests/ops/test_index_bounds.py`, 10 cases over both devices --
+  `getitem`, `gather`, `index_select`, 2-D row indexing, `setitem`, and the
+  backward pass (which scatters through `setitem` and so needs its own case).
+  It asserts the message names the offending index, not merely that something
+  failed, and it pins the two paths that were already right: a Python `int`
+  index still raises and `x[2:99]` still clamps. The CUDA out-of-range case
+  runs in a subprocess because a device trap takes the context with it.
 
 ## KI-BACKEND-007: CUDA `std`/`norm` return a small finite number instead of NaN
 
@@ -649,6 +667,21 @@ defer, and where it has been tested it was not true.
   the NaN -- comes back by accident. Neither was chosen for its NaN behaviour.
 - Also visible there: `maximum(-0.0, 0.0)` gives `-0.0` on CPU and `0.0` on
   CUDA; NumPy gives `0.0`. Same root, smaller consequence.
+- **The reduction is worse than the elementwise case, and this entry had it
+  wrong.** Measured 2026-09-10 on both devices, `n` = 5, 4096 and 1,048,576,
+  one NaN among ones:
+
+  ```
+  jt.max(x)   CPU 1.0   CUDA 1.0   NumPy nan
+  jt.min(x)   CPU 1.0   CUDA 1.0   NumPy nan
+  ```
+
+  So CPU does *not* propagate NaN in general -- it propagated in the evidence
+  above only because `std::max(a, b)` is `a<b ? b : a` and the NaN happened to
+  be the **first** argument. A reduction accumulates `tmp = std::max(tmp, b)`,
+  where an incoming NaN is always the *second* argument, so it is discarded on
+  every device at every size. `x.max()` is a common way to ask whether a tensor
+  has gone bad; it cannot see a NaN at all.
 - Entangled with KI-OPS-006: both entries want a NaN-aware max, and the same
   table row feeds the reduction, whose parallel passes match the literal
   `std::max(T(a),T(b))` / `::max(...)` spelling to route to atomics. A fix has
@@ -657,8 +690,15 @@ defer, and where it has been tested it was not true.
   treated as one change.
 - Workaround: test for NaN explicitly before a max/min on CUDA where its
   presence matters.
+- Blocked on KI-BACKEND-005, and this is an ordering constraint rather than a
+  preference. A NaN-propagating max is written `a != a ? a : ...`, and `-Ofast`
+  implies `-ffinite-math-only`, under which the compiler folds `a != a` to
+  false -- KI-OPS-006 measured exactly that. Writing the fix before the flag is
+  removed produces code that reads correct and compiles to the old behaviour,
+  which is worse than not writing it.
 - Review/expiry condition: CPU and CUDA agree with NumPy on NaN and on the sign
-  of zero for `maximum` and `minimum`, and a device-parity case feeds NaN so the
+  of zero for `maximum` and `minimum`, **and for `jt.max`/`jt.min` over an
+  array containing one**, and a device-parity case feeds NaN so the
   disagreement cannot return unnoticed.
 
 ## KI-BACKEND-005: CPU kernels are built with `-Ofast`, so infinities compute wrong

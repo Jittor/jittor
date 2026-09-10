@@ -51,6 +51,20 @@ void cuda_indexing_optimize(Op* op, NanoVector o_shape, string& src) {
             }
         }
     }
+    // The loop nest has to be the last statement in `jit_run`: it is moved
+    // into the kernel wholesale, so anything appended after it is moved in its
+    // place and then rewritten as though it were a loop. That arrives three
+    // lines below as `l->inner.size() == 3` failing with "Something wrong",
+    // which names neither the file nor the edit that caused it. Say it here,
+    // where the assumption actually lives.
+    ASSERT(func->children.size() &&
+           func->children.back()->type == KernelIRType::loop)
+        << "the CUDA indexing pass moves the last statement of jit_run into the"
+        << "kernel and requires it to be the loop nest, but found"
+        << (func->children.size()
+                ? to_string(func->children.back()->type) : "nothing")
+        << "-- a statement emitted after the loop in getitem_op.cc or"
+        << "setitem_op.cc has to be guarded with @if(@is_def(JIT_cpu), ...)";
     new_func->push_back(func->children.back()->move_out());
     auto& loop = new_func->children.back();
     int no = o_shape.size();
