@@ -173,6 +173,50 @@ def working_set_bytes(backend_name: str, backend: Any, device: str) -> int:
     raise NotImplementedError("CPU working-set tracking is unavailable on this platform")
 
 
+def reset_peak_device_bytes(backend_name: str, backend: Any, device: str) -> None:
+    """Start a peak measurement from a known floor.
+
+    Torch keeps a real high-water counter. Jittor does not expose one, so the
+    proxy below reads its caching pool, which only grows within a process --
+    that is only a peak if the pool starts empty, which is what the collection
+    here is for.
+    """
+
+    if device != "cuda":
+        return
+    if backend_name == "torch":
+        backend.cuda.reset_peak_memory_stats()
+        return
+    backend.clean()
+
+
+def peak_device_bytes(backend_name: str, backend: Any, device: str) -> int:
+    """The high-water device allocation since the last reset.
+
+    Not the same measurement as :func:`working_set_bytes`, and deliberately a
+    second metric rather than a redefinition of it: that one reads the
+    allocation still standing *after* an operation, so a transient spike that is
+    freed again is invisible to it. A device-to-host copy that allocated its
+    destination on the device held twice the tensor for the length of the
+    transfer and then released it -- a real defect, and one the existing metric
+    structurally could not see.
+
+    The two backends measure this differently and the difference is worth
+    stating rather than smoothing over. Torch reports its own high-water mark
+    exactly. Jittor has no such counter, so this reads the size of its caching
+    pool, which never shrinks inside a process: after
+    :func:`reset_peak_device_bytes` empties it, growth is the peak. That proxy
+    is exact only while nothing else in the process allocates, which holds
+    inside one benchmark and would not hold in a shared session.
+    """
+
+    if device != "cuda":
+        return working_set_bytes(backend_name, backend, device)
+    if backend_name == "torch":
+        return int(backend.cuda.max_memory_allocated())
+    return int(backend.get_mem_info().total_cuda_used)
+
+
 def cleanup_backend(backend_name: str, backend: Any) -> None:
     gc.collect()
     if backend_name == "jittor":
