@@ -7,7 +7,7 @@
 import os
 import shutil
 from jittor_utils.env_config import build_env
-from jittor_utils.build_config import BuildConfig, BuildContext
+from jittor_utils.build_config import BuildConfig, BuildContext, BuildSource
 # export LD_LIBRARY_PATH=/usr/local/Ascend/ascend-toolkit/latest/tools/aoe/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/plugin/opskernel:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/plugin/nnengine:/usr/local/Ascend/ascend-toolkit/latest/runtime/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/stub:/usr/local/Ascend/ascend-toolkit/latest/tools/tikicpulib/lib/Ascend910A:/usr/local/Ascend/ascend-toolkit/latest/toolkit/tools/simulator/Ascend910A/lib:/opt/AXESMI/lib64:/usr/local/Ascend/driver/lib64/driver/
 # export PYTHONPATH=/home/cjld/new_jittor/jittor/python
 # export JT_BUILD_TIKCC_PATH=g++
@@ -38,6 +38,10 @@ REGISTRATION_SOURCES = (
     "src/acl_error_code.cc",
     "src/acl_jittor.cc",
     "src/aclnn.cc",
+)
+PROVIDER_RUNTIME_SOURCES = (
+    "src/backend.cc",
+    "src/workspace.cc",
 )
 CORE_SOURCES = (
     "src/acl_op_exec.cc",
@@ -108,7 +112,7 @@ def configure(context: BuildContext) -> BuildConfig:
     extra_core_files = list(config.extra_core_files) + [
         os.path.join(acl_compiler_home, name) for name in CORE_SOURCES
     ]
-    cc_flags = f" -MD -DHAS_CUDA -DIS_ACL  \
+    cc_flags = f" -MD -DHAS_ACCELERATOR -DHAS_CUDA -DIS_ACL  \
     -I{ascend_toolkit_home}/include/ \
     -I{ascend_toolkit_home}/include/acl/ \
     -I{ascend_toolkit_home}/include/aclnn/ \
@@ -136,12 +140,30 @@ namespace jittor {
 void init_acl_ops();
 }''', config.cc_flags + " " + " ".join(cc_files) + cc_flags)
     final_flags = config.cc_flags + cc_flags
+    provider_sources = tuple(
+        BuildSource(os.path.join(acl_compiler_home, name), flags=cc_flags)
+        for name in PROVIDER_RUNTIME_SOURCES
+    )
     return config.evolve(
         backend="acl", has_acl=True, has_cuda=True, is_cuda=False,
-        has_rocm=False, has_corex=False,
+        has_accelerator=True, has_rocm=False, has_corex=False,
+        backend_sources=config.backend_sources + provider_sources,
         tikcc_path=tikcc_path, nvcc_path=tikcc_path,
         cc_flags=final_flags, nvcc_flags=final_flags.replace("-std=c++14", ""),
-        setup_fake_cuda_lib=True, extra_core_files=tuple(extra_core_files),
+        # A generated ACL operator is host C++ that calls aclnn, not device
+        # source for ccec, so the JIT accelerator compiler is the host compiler
+        # carrying the full ACL flags. Without this the accelerator branch of
+        # jit_compiler::compile inherits the CPU defaults and emits a command
+        # with no include paths at all.
+        kernel_compiler=config.cc_path, kernel_language="cxx",
+        kernel_compile_flags=final_flags, kernel_source_suffix=".cc",
+        kernel_device_link=False,
+        # No fake CUDA libraries: that path compiles backends/cuda/kernels/<lib>
+        # sources, which are real CUDA/cuDNN translation units. They only ever
+        # built under ACL because the 1.x provider rewrote every jittor source
+        # through process_acl(); this provider exposes no converter, and ACL
+        # publishes its own conv/matmul kernels from kernels/install.py.
+        setup_fake_cuda_lib=False, extra_core_files=tuple(extra_core_files),
         environment={**config.environment, "use_mkl": "0"},
         resources={**config.resources, "acl_initializer": mod, "acl_library": library},
     )

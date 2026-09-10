@@ -73,6 +73,20 @@ public:
     }
 };
 
+// Whether a backend executes this op through a native callback of its own,
+// as opposed to a generated-JIT entry or a placeholder that can only fall
+// back. A backend may implement a core op directly instead of publishing a
+// separate capability op for it; requiring the callback keeps an op whose
+// accelerator JIT body is an unimplemented stub from claiming the device.
+inline bool backend_runs_op_natively(BackendId backend, const string& name) {
+    auto definition = get_op_definition(name, false);
+    if (!definition) return false;
+    auto implementation = definition->implementations.find(backend);
+    return implementation != definition->implementations.end()
+        && implementation->second.kernel.native != nullptr
+        && !implementation->second.kernel.fallback_only;
+}
+
 inline shared_ptr<const OpDef> op_capability_definition(const OpCapabilityRegistration& registration) {
     if (!registration.entry) return nullptr;
     auto definition = get_op_definition(registration.implementation, false);

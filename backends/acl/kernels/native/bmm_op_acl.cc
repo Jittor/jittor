@@ -31,7 +31,7 @@
 
 namespace jittor
 {
-    BatchMatMulOpRunner::BatchMatMulOpRunner() : BaseOpRunner("BatchMatMulMatMul")
+    BatchMatMulOpRunner::BatchMatMulOpRunner() : BaseOpRunner("BatchMatMul")
     {
     }
     void BatchMatMulOpRunner::setupInputDesc()

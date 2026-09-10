@@ -66,6 +66,27 @@ def check_acl_float_dtype(x, op_name):
     return x
 
 
+GRAD_ATTRIBUTE_PREFIX = "acl_grad_attr."
+
+
+def _insert_before_run(program, injection):
+    """Place generated code ahead of a runner program's `op.run();` call.
+
+    A runner reads `op_attr` inside run(), so appending the attribute
+    application after the program would launch the operator with no attributes
+    at all. Every ACL gradient program ends in that call.
+    """
+    from ._attributes import AttributeCode, code_program
+
+    source = program.source if isinstance(program, AttributeCode) else str(program)
+    marker = "op.run();"
+    index = source.rfind(marker)
+    if index < 0:
+        raise ValueError("ACL gradient program does not call op.run()")
+    head = AttributeCode(source[:index], dict(getattr(program, "data", {}) or {}))
+    return code_program([head, injection, source[index:]])
+
+
 def acl_code(
     name,
     inputs,
@@ -123,14 +144,21 @@ def acl_code(
             raise ValueError("multi_grad_attributes requires multi_grad_src")
         from ._attributes import attribute_data
         backward_name = name + "Backward"
-        data.update(attribute_data(backward_name, multi_grad_attributes))
+        # Forward and gradient programs share one CodeOp data map, so the two
+        # records need separate namespaces. Under a single prefix the second
+        # encode overwrites `version`/`fields`/`field.N.*` and leaves a second
+        # `op.<name>` marker that the first program's decoder then rejects as
+        # an unknown key.
+        if any(key.startswith(GRAD_ATTRIBUTE_PREFIX) for key in data):
+            raise ValueError("extra_data uses the reserved ACL gradient attribute namespace")
+        data.update(attribute_data(backward_name, multi_grad_attributes,
+                                   prefix=GRAD_ATTRIBUTE_PREFIX))
         cuda_header += '\n#include "aclops/acl_code_attributes.h"\n'
-        multi_grad_src = code_program([
-            multi_grad_src,
-            '\n            apply_acl_code_attributes(op, data, "acl_attr.", "',
+        multi_grad_src = _insert_before_run(multi_grad_src, code_program([
+            '\n            apply_acl_code_attributes(op, data, "' + GRAD_ATTRIBUTE_PREFIX + '", "',
             backward_name,
             '");\n            ',
-        ])
+        ]))
     if multi_grad_src:
         if cuda_grad_src:
             raise ValueError("ACL code cannot combine multi_grad_src with cuda_grad_src")

@@ -54,7 +54,7 @@ class PoolACL(jt.Function):
         self.count_include_pad = count_include_pad
 
     def execute(self, input):
-        from jittor.nn.functional.pooling import _pool_output_size
+        from jittor.nn.functional.pooling.average import _pool_output_size
 
         self.input = input
         attributes = {

@@ -34,10 +34,11 @@ def acl(monkeypatch):
 
 @pytest.fixture
 def setup(acl, monkeypatch, tmp_path):
-    api = _load_module(
-        monkeypatch, "acl_build_config_values_test",
-        ROOT / "python/jittor/build/utils/build_config.py",
-    )
+    # The provider now returns BuildSource values, and BuildConfig validates
+    # them with isinstance. A second copy of build_config.py loaded by path
+    # would define a different BuildSource class than the provider imports, so
+    # take the canonical module -- the same one the ROCm provider test uses.
+    import jittor_utils.build_config as api
     toolkit = tmp_path / "toolkit"
     toolkit.mkdir()
     monkeypatch.setenv("ASCEND_TOOLKIT_HOME", str(toolkit))
@@ -71,7 +72,24 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
     assert config.has_acl and config.has_cuda and not config.is_cuda
     assert not config.has_rocm and not config.has_corex
     assert config.nvcc_path == config.tikcc_path == "/cann/bin/selected-ccec"
-    assert config.setup_fake_cuda_lib
+    # No fake CUDA libraries: that path compiles backends/cuda/kernels/<lib>,
+    # which are CUDA/cuDNN translation units. They only built under ACL while
+    # the 1.x provider rewrote every jittor source through process_acl(); this
+    # provider exposes no converter.
+    assert not config.setup_fake_cuda_lib
+    assert config.has_accelerator
+    # The provider runtime is compiled by BuildConfig, not folded into the
+    # registration module.
+    assert [os.path.basename(source.path) for source in config.backend_sources] == [
+        "backend.cc", "workspace.cc"]
+    assert all(isinstance(source, setup.api.BuildSource)
+               for source in config.backend_sources)
+    # A generated ACL operator is host C++ calling aclnn, not ccec device source.
+    assert config.kernel_language == "cxx"
+    assert config.kernel_compiler == setup.base.cc_path
+    assert config.kernel_compile_flags == config.cc_flags
+    assert config.kernel_source_suffix == ".cc"
+    assert not config.kernel_device_link
     assert "-I/source/src" in config.cc_flags
     assert "-DIS_ACL" in config.cc_flags
     assert config.nvcc_flags == config.cc_flags.replace("-std=c++14", "")

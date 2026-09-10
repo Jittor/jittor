@@ -642,6 +642,23 @@ namespace jittor
     extern int current_seed;
     extern int64 current_offset;
 
+    static void exec_acl_random(Op *op)
+    {
+        auto _op = (RandomOp *)op;
+        AclExecutionRunner<RandomOpRunner> runner(
+            _op->type == ns_uniform ? "RandomUniform" : "RandomNormal");
+        auto out = op->output(0);
+        RandomAttr *attr = new RandomAttr();
+        attr->seed = current_seed;
+        attr->offset = current_offset;
+        runner.jt_name = "random";
+        runner.op_attr.reset(attr);
+
+        runner.add(out, false);
+        runner.run();
+        current_offset += out->numel();
+    }
+
     static unordered_map<string, std::function<void(Op *)>> acl_ops = {
         {"getitem", exec_native_acl_getitem},
         {"setitem", exec_native_acl_setitem},
@@ -679,22 +696,17 @@ namespace jittor
              runner.add(_op->y_key, false);
              runner.run();
          }},
-        {"curand_random", [&current_seed, &current_offset](Op *op)
-         {
-             auto _op = (RandomOp *)op;
-             AclExecutionRunner<RandomOpRunner> runner(_op->type == ns_uniform ? "RandomUniform" : "RandomNormal");
-             auto out = op->output(0);
-             RandomAttr *attr = new RandomAttr();
-             attr->seed = current_seed;
-             attr->offset = current_offset;
-             runner.jt_name = "random";
-             runner.op_attr.reset(attr);
-
-             runner.add(out, false);
-             runner.run();
-             current_offset += out->numel();
-         }},
+        {"curand_random", exec_acl_random},
+        // `curand_random` is the accelerator capability op the CUDA-family
+        // backends publish. ACL has no separate capability op, so the core
+        // `random` op reaches the same launcher under its own name.
+        {"random", exec_acl_random},
     };
+
+    static bool is_acl_random(const string &name)
+    {
+        return name == string("random") || name == string("curand_random");
+    }
 
     static void exec_mapped_acl_ops(Op *op)
     {
@@ -721,7 +733,7 @@ namespace jittor
                 USER_CHECK(reduce->op == ns_maximum || reduce->op == ns_minimum)
                     << "arg_reduce requires min or max";
             }
-            if (op->name() == string("curand_random"))
+            if (is_acl_random(op->name()))
             {
                 auto *random = static_cast<RandomOp *>(op);
                 USER_CHECK(random->type == ns_uniform || random->type == ns_normal)
@@ -788,6 +800,10 @@ namespace jittor
     {
         const auto *code = static_cast<CodeOp *>(op);
         if (code->backend != "acl") return &exec_unmarked_acl_code;
+        // Diagnostic marker for an ACL CodeOp compile, as before the registered
+        // execution refactor. Tests capture acl_op_exec.cc at verbosity 100 and
+        // look for it; a source without it makes every such capture silent.
+        LOGv << "compile acl op";
         return compile_registered_source(op);
     }
 

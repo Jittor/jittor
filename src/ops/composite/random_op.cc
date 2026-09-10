@@ -32,6 +32,14 @@ RandomOp::RandomOp(NanoVector shape, NanoString dtype, NanoString type) {
     output = create_output(shape, dtype);
     this->type = type;
     USER_CHECK(type == ns_normal || type == ns_uniform);
+    #ifdef HAS_ACCELERATOR
+    // No capability op, but the backend may run `random` itself -- ACL does,
+    // through its own launcher. Without this flag the executor treats the op
+    // as CPU-only and reports a backend fallback for every weight
+    // initialisation, dropout mask and sampled tensor.
+    if (backend != BackendId::Cpu && backend_runs_op_natively(backend, "random"))
+        set_flag(OpFlags::_cuda);
+    #endif
 }
 
 void RandomOp::jit_prepare(JK& jk) {
