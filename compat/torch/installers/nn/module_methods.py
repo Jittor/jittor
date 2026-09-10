@@ -13,7 +13,7 @@ from ...context import registry_for
 from ...fidelity import Fidelity, register_fidelity
 from ...nested import _torch_register_leaf
 from ...tensor_state import get_tensor_state
-from ...types import _device_is_cpu, _device_is_cuda, _make_cpu_resident, _make_cuda_resident, device, dtype, _cuda_index_of
+from ...types import _device_is_cpu, _device_is_cuda, _device_is_meta, _make_cpu_resident, _make_cuda_resident, _set_meta_placeholder, device, dtype, _cuda_index_of
 from ....diagnostics import EXPECTED, swallowed
 from .... import fsdp_hooks as _fsdp_hooks
 
@@ -342,6 +342,31 @@ def _find_state_target(root, key):
     return obj
 
 
+def _find_state_owner(root, key):
+    """Resolve a state key to its owning module, local name, and value."""
+    parts = str(key).split(".")
+    obj = root
+    for part in parts[:-1]:
+        if isinstance(obj, nn.Sequential):
+            if part in obj.layers:
+                obj = obj.layers[part]
+            elif part.isdigit() and int(part) in obj.layers:
+                obj = obj.layers[int(part)]
+            else:
+                return None, None, None
+        elif hasattr(obj, part):
+            obj = getattr(obj, part)
+        else:
+            return None, None, None
+    leaf = parts[-1]
+    if isinstance(obj, nn.ParameterList):
+        key = int(leaf) if leaf.isdigit() and int(leaf) in obj.params else leaf
+        return (obj, key, obj.params[key]) if key in obj.params else (None, None, None)
+    if not hasattr(obj, leaf):
+        return None, None, None
+    return obj, leaf, getattr(obj, leaf)
+
+
 def _state_source_to_var(value):
     """Coerce one state-dict value to a Jittor Var."""
     if isinstance(value, jt.Var):
@@ -380,6 +405,35 @@ def _preserve_target_dtypes_for_load(root, state_dict):
             converted = dict(state_dict)
         converted[key] = src.cast(target_dtype)
     return state_dict if converted is None else converted
+
+
+def _assign_state_value(root, key, value):
+    """Replace one parameter/buffer for Torch ``assign=True`` semantics."""
+    owner, leaf, target = _find_state_owner(root, key)
+    if owner is None or not isinstance(target, jt.Var):
+        return False
+    source = _state_source_to_var(value)
+    if not isinstance(source, jt.Var) or source.shape != target.shape:
+        return False
+    role = next((item_role for item_name, item, item_role in owner._var_roles()
+                 if str(item_name) == str(leaf) and item is target), None)
+    if role == "parameter":
+        replacement = type(target)(source, requires_grad=bool(target.requires_grad))
+    else:
+        replacement = source.clone().detach()
+        replacement.requires_grad = False
+        if role in ("buffer", "non_persistent_buffer"):
+            replacement.is_buffer = True
+            replacement.persistent = role == "buffer"
+    if getattr(source, "_jittor_torch_meta", False):
+        _set_meta_placeholder(replacement)
+    else:
+        _set_meta_placeholder(replacement, False)
+    if isinstance(owner, nn.ParameterList):
+        owner.params[leaf] = replacement
+    else:
+        setattr(owner, leaf, replacement)
+    return True
 
 
 def _state_dict_key_diff(root, state_dict):
@@ -458,7 +512,16 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
         # here so a strict=False load stays quiet, exactly like torch.
         load_state = {k: v for k, v in load_state.items()
                       if str(k) not in set(unexpected)}
-    _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)
+    if assign and isinstance(load_state, dict):
+        remaining = {
+            key: value for key, value in load_state.items()
+            if str(key) not in set(unexpected)
+            and not _assign_state_value(self, key, value)
+        }
+        if remaining:
+            _ORIG_MODULE_LOAD_STATE_DICT(self, remaining)
+    else:
+        _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)
     try:
         for n, p in self.named_parameters():
             if n in trainable and p.is_stop_grad():
@@ -744,6 +807,8 @@ def _module_to_conversion(ds, dev, copy, v):
                     out = v
                 else:
                     out = moved
+    elif _device_is_meta(dev):
+        out = _set_meta_placeholder(out)
     return out
 
 
@@ -766,7 +831,7 @@ def _module_to(self, *args, **kwargs):
             bare = a.replace("torch.", "")
             if bare in dtype._registry:
                 ds = bare
-            elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
+            elif bare.split(":")[0] in ("cpu", "cuda", "npu", "meta"):
                 dev = bare
     if _device_is_cuda(dev):
         jt.flags.use_cuda = 1
@@ -918,6 +983,9 @@ def _register_parameter(self, name, param):
     self.__dict__.setdefault("_buffer_names", set()).discard(name)
     self.__dict__.setdefault("_non_persistent_buffer_names", set()).discard(name)
     object.__setattr__(self, name, param)
+
+
+_register_parameter._jittor_torch_native_registration = True
 
 
 def _module_type(self, dst_type=None):

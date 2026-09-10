@@ -660,7 +660,7 @@ Var.squeeze = squeeze
 
 def _clamp_cpu(x, min_v=None, max_v=None):
     import jittor as jt
-    if x.shape[0]==0:
+    if x.numel() == 0:
         return x
     # Torch allows tensor bounds and reversed scalar bounds. Applying the lower
     # then upper bound also gives Torch's all-max result when min_v > max_v.

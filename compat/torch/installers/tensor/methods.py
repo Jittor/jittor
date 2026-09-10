@@ -444,11 +444,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # (int64/int32 -> float64, int8/int8 -> float16, float16/int64 -> float64),
     # which loses torch parity. Cast operands to the torch target float, then div.
 
-    # Jittor Vars do not expose PyTorch-style strided non-contiguous storage;
-    # materialized op outputs are already laid out for their logical shape. The
-    # The old jittor.misc.tensor_ops.contiguous hook returned clone(), which
-    # adds avoidable graph nodes and copies in PyTorch code that calls
-    # transpose(...).contiguous() before export or parameter construction.
+    # The refactored core exposes true strided storage. Preserve identity for
+    # dense tensors and materialize non-contiguous views before Torch callers
+    # reshape them.
     Var.contiguous = _api_contiguous
     # torch's Tensor.is_cuda / .is_cpu report the tensor's ACTUAL residency.
     # A Var built/migrated to host (torch.zeros(device='cpu'), .cpu()) is on the

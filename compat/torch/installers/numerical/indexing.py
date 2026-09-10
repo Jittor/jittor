@@ -11,7 +11,10 @@ def take_along_dim(input, indices, dim=None):
     target = list(input.shape)
     target[d] = indices.shape[d]
     if list(indices.shape) != target:
-        indices = jt.broadcast(indices, target)
+        # Native gather kernels index the index buffer densely.  A broadcast
+        # view has zero strides and may own fewer elements than its logical
+        # shape, so materialize it before handing it to the native boundary.
+        indices = jt.broadcast(indices, target).contiguous()
     return jt.gather(input, d, indices)
 
 
@@ -27,6 +30,11 @@ def masked_select(input, mask, out=None):
         _masked_select_impl,
     )
     return _masked_select_impl(input, mask, out=out)
+
+
+def masked_fill(input, mask, value):
+    """Return a copy of ``input`` with true mask elements replaced."""
+    return input.masked_fill(mask, value)
 
 
 def split_with_sizes(input, split_sizes, dim=0):

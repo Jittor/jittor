@@ -22,13 +22,15 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_serialize.py
 
 from _helpers import capability as _test_capability
 import os
+import json
 import shutil
+import struct
 import tempfile
 import unittest
 import numpy as np
 import torch
 import jittor as jt
-import jittor.nn as nn
+import torch.nn as nn
 
 # The legacy cuda sweep label also exercises the registered ACL/ROCm backend.
 _DEVICES = [("cpu", 0)] + ([("cuda", 1)] if _test_capability.any_accelerator_enabled(backend=jt) else [])
@@ -64,6 +66,78 @@ class Base(unittest.TestCase):
 # torch.save / torch.load
 # ---------------------------------------------------------------------------
 class TestSaveLoad(Base):
+    def _write_bfloat16_safetensor(self, name="weight"):
+        values = np.asarray(
+            [1.0, -2.5, 3.125, 0.0078125, 128.0, -0.25], dtype=np.float32)
+        payload = (values.view(np.uint32) >> 16).astype(np.uint16).tobytes()
+        header = json.dumps({
+            name: {
+                "dtype": "BF16",
+                "shape": [2, 3],
+                "data_offsets": [0, len(payload)],
+            }
+        }, separators=(",", ":")).encode("utf-8")
+        header += b" " * (-len(header) % 8)
+        path = self.path("bf16.safetensors")
+        with open(path, "wb") as handle:
+            handle.write(struct.pack("<Q", len(header)))
+            handle.write(header)
+            handle.write(payload)
+        return path, values.reshape(2, 3)
+
+    def test_safetensors_bfloat16_load_honors_device(self):
+        from safetensors import safe_open
+
+        path, expected = self._write_bfloat16_safetensor()
+        # The loader's default CPU contract must override a globally active CUDA
+        # mode. This is the real-checkpoint path used by Transformers before a
+        # module is explicitly moved to its execution device.
+        with jt.flag_scope(use_cuda=1 if jt.has_cuda else 0):
+            with safe_open(path, framework="pt", device="cpu") as handle:
+                value = handle.get_tensor("weight")
+                sliced = handle.get_slice("weight")[:]
+            self.assertEqual(str(value.dtype), "torch.bfloat16")
+            self.assertEqual(str(sliced.dtype), "torch.bfloat16")
+            self.assertEqual(str(value.device), "cpu")
+            self.assertEqual(str(sliced.device), "cpu")
+            self.ac(value.float32().numpy(), expected, atol=0, rtol=0)
+            self.ac(sliced.float32().numpy(), expected, atol=0, rtol=0)
+
+        if jt.has_cuda:
+            with safe_open(path, framework="pt", device="cuda") as handle:
+                value = handle.get_tensor("weight")
+            self.assertEqual(str(value.dtype), "torch.bfloat16")
+            self.assertTrue(value.is_cuda)
+            self.ac(value.float32().numpy(), expected, atol=0, rtol=0)
+
+    def test_safetensors_bfloat16_save_preserves_dtype(self):
+        from safetensors import safe_open
+        from safetensors.torch import save_file
+
+        expected = np.asarray(
+            [[1.0, -2.5, 3.125], [0.0078125, 128.0, -0.25]], dtype=np.float32)
+        value = torch.tensor(expected, dtype=torch.bfloat16, device="cpu")
+        path = self.path("bf16-save.safetensors")
+        save_file({"weight": value}, path)
+        with safe_open(path, framework="pt", device="cpu") as handle:
+            self.assertEqual(handle.get_dtype("weight"), "BF16")
+            loaded = handle.get_tensor("weight")
+        self.assertEqual(str(loaded.dtype), "torch.bfloat16")
+        self.assertEqual(str(loaded.device), "cpu")
+        self.ac(loaded.float32().numpy(), expected, atol=0, rtol=0)
+
+    def test_safetensors_short_payload_fails_explicitly(self):
+        from safetensors import safe_open
+
+        path, _ = self._write_bfloat16_safetensor("truncated")
+        with open(path, "rb+") as handle:
+            handle.seek(-2, os.SEEK_END)
+            handle.truncate()
+        with safe_open(path, framework="pt", device="cpu") as handle:
+            with self.assertRaisesRegex(
+                    EOFError, "short safetensors payload.*truncated"):
+                handle.get_tensor("truncated")
+
     def test_save_load_tensor_zero_error(self):
         x = np.random.RandomState(0).randn(3, 4, 5).astype("float32")
         def body(dev):
@@ -107,14 +181,14 @@ class TestSaveLoad(Base):
         rs = np.random.RandomState(3)
         x = rs.randn(2, 3, 8, 8).astype("float32")
         def body(dev):
-            src = nn.Conv2d(3, 5, 3, padding=1)
-            out_src = src(torch.tensor(x)).numpy()
+            src = nn.Conv2d(3, 5, 3, padding=1).to(dev)
+            out_src = src(torch.tensor(x, device=dev)).numpy()
             p = self.path(f"sd_{dev}.pkl")
             torch.save(src.state_dict(), p)
             sd = torch.load(p)
-            dst = nn.Conv2d(3, 5, 3, padding=1)
+            dst = nn.Conv2d(3, 5, 3, padding=1).to(dev)
             dst.load_state_dict(sd)
-            out_dst = dst(torch.tensor(x)).numpy()
+            out_dst = dst(torch.tensor(x, device=dev)).numpy()
             self.ac(out_dst, out_src, atol=1e-5, msg=f"module roundtrip forward {dev}")
         both_devices(body)
 
@@ -172,6 +246,44 @@ class TestStateDict(Base):
             self.assertEqual(tuple(sd["bias"].shape), (3,), f"bias shape {dev}")
         both_devices(body)
 
+    def test_state_dict_keeps_tied_weight_aliases(self):
+        # PyTorch de-duplicates tied Parameters in named_parameters(), but keeps
+        # every public attribute path in state_dict() for checkpoint compatibility.
+        class TiedLinear(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.encoder = nn.Linear(3, 3, bias=False)
+                self.decoder = nn.Linear(3, 3, bias=False)
+                self.decoder.weight = self.encoder.weight
+
+        def body(dev):
+            model = TiedLinear()
+            self.assertEqual(
+                [name for name, _ in model.named_parameters()],
+                ["encoder.weight"],
+                f"tied parameter is enumerated once {dev}",
+            )
+            state = model.state_dict()
+            self.assertEqual(
+                set(state), {"encoder.weight", "decoder.weight"},
+                f"tied state keys {dev}",
+            )
+            self.assertEqual(
+                state["encoder.weight"].untyped_storage().data_ptr(),
+                state["decoder.weight"].untyped_storage().data_ptr(),
+                f"tied state aliases share storage {dev}",
+            )
+            weight = state["encoder.weight"]
+            storage = weight.untyped_storage()
+            self.assertEqual(weight.data_ptr(), storage.data_ptr(), dev)
+            self.assertEqual(
+                weight.view(-1)[-1].data_ptr() + weight.element_size(),
+                storage.data_ptr() + storage.nbytes(),
+                f"full view covers its root storage {dev}",
+            )
+
+        both_devices(body)
+
     def test_state_dict_to_numpy(self):
         def body(dev):
             m = nn.Conv2d(2, 3, 3)
@@ -187,14 +299,15 @@ class TestStateDict(Base):
         rs = np.random.RandomState(10)
         x = rs.randn(1, 2, 6, 6).astype("float32")
         def body(dev):
-            src = nn.Conv2d(2, 4, 3)
+            src = nn.Conv2d(2, 4, 3).to(dev)
             sd = src.state_dict(to="numpy")
-            dst = nn.Conv2d(2, 4, 3)
+            dst = nn.Conv2d(2, 4, 3).to(dev)
             dst.load_state_dict(sd)
             for k, v in dst.named_parameters():
                 self.ac(v.numpy(), sd[k], atol=0, rtol=0,
                         msg=f"param {k} restored {dev}")
-            self.ac(dst(torch.tensor(x)).numpy(), src(torch.tensor(x)).numpy(),
+            input_tensor = torch.tensor(x, device=dev)
+            self.ac(dst(input_tensor).numpy(), src(input_tensor).numpy(),
                     atol=1e-5, msg=f"forward after load_state_dict {dev}")
         both_devices(body)
 
@@ -228,6 +341,147 @@ class TestStateDict(Base):
 
         both_devices(body)
 
+    def test_load_state_dict_assign_replaces_tied_parameter(self):
+        class TiedBias(nn.Module):
+            def __init__(self, device):
+                super().__init__()
+                self.decoder = nn.Linear(1, 2, bias=False)
+                self.bias = nn.Parameter(torch.zeros(2, device=device))
+                self.decoder.bias = self.bias
+
+            def tie_weights(self):
+                self.decoder.bias = self.bias
+
+        def body(dev):
+            model = TiedBias(dev)
+            canonical = torch.tensor([-3.0, 0.5], device=dev)
+            duplicate = torch.zeros(2, device=dev)
+
+            model.load_state_dict(
+                {"bias": canonical}, strict=False, assign=True)
+            self.assertIsNot(model.bias, model.decoder.bias, dev)
+            self.ac(model.bias.numpy(), [-3.0, 0.5], atol=0, rtol=0, msg=dev)
+
+            model.decoder.load_state_dict(
+                {"bias": duplicate}, strict=False, assign=True)
+            self.ac(model.bias.numpy(), [-3.0, 0.5], atol=0, rtol=0, msg=dev)
+            self.ac(model.decoder.bias.numpy(), [0.0, 0.0], atol=0, rtol=0, msg=dev)
+
+            model.tie_weights()
+            self.assertIs(model.bias, model.decoder.bias, dev)
+            self.ac(model.decoder.bias.numpy(), [-3.0, 0.5], atol=0, rtol=0, msg=dev)
+
+        both_devices(body)
+
+    def test_load_state_dict_assign_does_not_mutate_shared_source(self):
+        class Roles(nn.Module):
+            def __init__(self, device):
+                super().__init__()
+                self.p1 = nn.Parameter(torch.zeros(2, device=device))
+                self.p2 = nn.Parameter(torch.zeros(2, device=device))
+                self.register_buffer(
+                    "buf", torch.zeros(2, device=device), persistent=True)
+                # The module-owned name remains the stable buffer contract even
+                # if a prior replacement lost the per-Var role marker.
+                self.buf.is_buffer = False
+                self.buf._is_torch_parameter = True
+
+        def body(dev):
+            source = torch.tensor([4.0, 5.0], device=dev)
+            source.requires_grad_(False)
+            before = (
+                source.requires_grad,
+                getattr(source, "is_buffer", False),
+                getattr(source, "_is_torch_parameter", False),
+                source.is_meta,
+            )
+            model = Roles(dev)
+            model.load_state_dict(
+                {"p1": source, "p2": source, "buf": source}, assign=True)
+
+            after = (
+                source.requires_grad,
+                getattr(source, "is_buffer", False),
+                getattr(source, "_is_torch_parameter", False),
+                source.is_meta,
+            )
+            self.assertEqual(after, before, dev)
+            self.assertIsNot(model.p1, source, dev)
+            self.assertIsNot(model.p2, source, dev)
+            self.assertIsNot(model.buf, source, dev)
+            self.assertIsNot(model.p1, model.p2, dev)
+            self.assertIsNot(model.p1, model.buf, dev)
+            self.assertTrue(isinstance(model.p1, nn.Parameter), dev)
+            self.assertTrue(isinstance(model.p2, nn.Parameter), dev)
+            self.assertFalse(isinstance(model.buf, nn.Parameter), dev)
+            self.assertTrue(model.p1.requires_grad, dev)
+            self.assertTrue(model.p2.requires_grad, dev)
+            self.assertFalse(model.buf.requires_grad, dev)
+            self.assertTrue(getattr(model.buf, "is_buffer", False), dev)
+            self.assertEqual([name for name, _ in model.named_buffers()], ["buf"])
+            for value in (model.p1, model.p2, model.buf):
+                value.sync()
+                self.assertEqual(value.dtype, source.dtype, dev)
+                self.assertEqual(value.device.type, dev, dev)
+                self.assertEqual(value.is_cuda, dev == "cuda", dev)
+                self.assertEqual(
+                    value.location(), "device" if dev == "cuda" else "cpu", dev)
+                self.ac(value.numpy(), [4.0, 5.0], atol=0, rtol=0, msg=dev)
+
+        both_devices(body)
+
+    def test_meta_tied_bias_survives_until_checkpoint_retie(self):
+        class TiedBias(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.decoder = nn.Linear(1, 2, bias=False)
+                self.bias = nn.Parameter(torch.zeros(2))
+                self.decoder.bias = self.bias
+
+            def roberta_tie_weights(self):
+                if self.decoder.bias.device.type == "meta":
+                    self.decoder.bias = self.bias
+                    return "decoder_from_bias"
+                self.bias = self.decoder.bias
+                return "bias_from_decoder"
+
+        def body(dev):
+            real = torch.tensor([3.0], device=dev)
+            with torch.device("meta"):
+                self.assertFalse(real.is_meta, dev)
+                model = TiedBias()
+
+            accelerate_model = TiedBias()
+            accelerate_model.bias = nn.Parameter(
+                accelerate_model.bias.to(torch.device("meta")))
+            accelerate_model.decoder.bias = accelerate_model.bias
+
+            for route, candidate in (
+                ("device_context", model),
+                ("accelerate_parameter_to", accelerate_model),
+            ):
+                label = f"{dev}:{route}"
+                self.assertTrue(candidate.bias.is_meta, label)
+                self.assertTrue(candidate.decoder.bias.is_meta, label)
+                self.assertFalse(candidate.bias.is_cpu, label)
+                self.assertFalse(candidate.bias.is_cuda, label)
+                self.assertTrue(candidate.state_dict()["bias"].is_meta, label)
+
+                canonical = torch.tensor([-0.75, 0.5], device=dev)
+                candidate.load_state_dict(
+                    {"bias": canonical}, strict=False, assign=True)
+
+                self.assertFalse(candidate.bias.is_meta, label)
+                self.assertTrue(candidate.decoder.bias.is_meta, label)
+                self.assertIsNot(candidate.bias, candidate.decoder.bias, label)
+                self.assertEqual(
+                    candidate.roberta_tie_weights(), "decoder_from_bias", label)
+                self.assertIs(candidate.bias, candidate.decoder.bias, label)
+                self.ac(candidate.decoder.bias.numpy(), [-0.75, 0.5],
+                        atol=0, rtol=0, msg=label)
+
+        both_devices(body)
+
     def test_state_dict_load_state_dict_multilayer(self):
         # A small Sequential-like stack: keys are dotted submodule paths.
         rs = np.random.RandomState(11)
@@ -244,17 +498,18 @@ class TestStateDict(Base):
                 return self.conv2(self.bn(self.conv1(x)))
 
         def body(dev):
-            src = Net(); src.eval()
+            src = Net().to(dev); src.eval()
             sd = src.state_dict()
             keys = set(sd.keys())
             self.assertTrue(any(k.startswith("conv1.") for k in keys),
                             f"dotted conv1 key {dev}: {sorted(keys)}")
             self.assertTrue(any("bn" in k and "running_mean" in k for k in keys),
                             f"bn running_mean in state_dict {dev}")
-            out_src = src(torch.tensor(x)).numpy()
-            dst = Net(); dst.eval()
+            input_tensor = torch.tensor(x, device=dev)
+            out_src = src(input_tensor).numpy()
+            dst = Net().to(dev); dst.eval()
             dst.load_state_dict(sd)
-            out_dst = dst(torch.tensor(x)).numpy()
+            out_dst = dst(input_tensor).numpy()
             self.ac(out_dst, out_src, atol=1e-4, msg=f"multilayer roundtrip {dev}")
         both_devices(body)
 

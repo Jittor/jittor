@@ -35,9 +35,9 @@ class TestSortSelect(Base):
     def test_sort(self):
         x = np.random.RandomState(0).randn(4, 5).astype("float32")
         def body(dev):
-            r = torch.sort(torch.tensor(x), dim=-1)
+            r = torch.sort(torch.tensor(x, device=dev), dim=-1)
             self.ac(r.values.numpy(), np.sort(x, axis=-1), msg=f"sort values {dev}")
-            r2 = torch.sort(torch.tensor(x), dim=-1, descending=True)
+            r2 = torch.sort(torch.tensor(x, device=dev), dim=-1, descending=True)
             self.ac(r2.values.numpy(), np.sort(x, axis=-1)[:, ::-1], msg=f"sort desc {dev}")
         both_devices(body)
 
@@ -45,7 +45,7 @@ class TestSortSelect(Base):
         x = np.random.RandomState(1).randn(3, 6).astype("float32")
         def body(dev):
             # argsort indices must reproduce the sorted order
-            idx = np.asarray(torch.argsort(torch.tensor(x), dim=-1).numpy())
+            idx = np.asarray(torch.argsort(torch.tensor(x, device=dev), dim=-1).numpy())
             self.ac(np.take_along_axis(x, idx, axis=-1), np.sort(x, axis=-1),
                     msg=f"argsort {dev}")
         both_devices(body)
@@ -53,10 +53,10 @@ class TestSortSelect(Base):
     def test_topk(self):
         x = np.random.RandomState(2).randn(4, 7).astype("float32")
         def body(dev):
-            r = torch.topk(torch.tensor(x), 3, dim=-1)
+            r = torch.topk(torch.tensor(x, device=dev), 3, dim=-1)
             self.ac(r.values.numpy(), np.sort(x, axis=-1)[:, ::-1][:, :3],
                     msg=f"topk values {dev}")
-            rs = torch.topk(torch.tensor(x), 2, dim=-1, largest=False)
+            rs = torch.topk(torch.tensor(x, device=dev), 2, dim=-1, largest=False)
             self.ac(rs.values.numpy(), np.sort(x, axis=-1)[:, :2],
                     msg=f"topk smallest {dev}")
         both_devices(body)
@@ -68,7 +68,7 @@ class TestSortSelect(Base):
         ], dtype="float32")
 
         def body(dev):
-            global_input = torch.tensor(x, requires_grad=True)
+            global_input = torch.tensor(x, device=dev, requires_grad=True)
             global_result = torch.median(global_input)
             if dev == "cuda":
                 self.assertTrue(global_input.is_cuda)
@@ -97,7 +97,7 @@ class TestSortSelect(Base):
                     else:
                         expected_indices = np.expand_dims(expected_indices, axis)
 
-                    value = torch.tensor(x, requires_grad=True)
+                    value = torch.tensor(x, device=dev, requires_grad=True)
                     if dev == "cuda":
                         self.assertTrue(value.is_cuda)
                     result = torch.median(value, dim=dim, keepdim=keepdim)
@@ -115,7 +115,7 @@ class TestSortSelect(Base):
                         1, result.values.numel() + 1, dtype=np.float32
                     ).reshape(result.values.shape)
                     grad = jt.grad(
-                        (result.values * torch.tensor(weights)).sum(), value
+                        (result.values * torch.tensor(weights, device=dev)).sum(), value
                     ).numpy()
                     expected_grad = np.zeros_like(x)
                     grad_indices = expected_indices
@@ -138,18 +138,18 @@ class TestSortSelect(Base):
                             msg=f"Tensor.median dim={dim} keep={keepdim} {dev}")
 
             with self.assertRaises(IndexError):
-                torch.median(torch.tensor(x), dim=x.ndim)
+                torch.median(torch.tensor(x, device=dev), dim=x.ndim)
             with self.assertRaises(IndexError):
-                torch.tensor(x).median(dim=-x.ndim - 1)
+                torch.tensor(x, device=dev).median(dim=-x.ndim - 1)
 
         both_devices(body)
 
     def test_max_min_with_dim(self):
         x = np.random.RandomState(3).randn(3, 4).astype("float32")
         def body(dev):
-            self.ac(torch.max(torch.tensor(x), dim=1).values.numpy(), x.max(1),
+            self.ac(torch.max(torch.tensor(x, device=dev), dim=1).values.numpy(), x.max(1),
                     msg=f"max dim {dev}")
-            self.ae(torch.argmax(torch.tensor(x), dim=1).numpy(), x.argmax(1),
+            self.ae(torch.argmax(torch.tensor(x, device=dev), dim=1).numpy(), x.argmax(1),
                     msg=f"argmax dim {dev}")
         both_devices(body)
 
@@ -158,7 +158,7 @@ class TestSearch(Base):
     def test_nonzero(self):
         x = (np.random.RandomState(4).randn(5) > 0).astype("float32")
         def body(dev):
-            nz = np.asarray(torch.nonzero(torch.tensor(x)).numpy()).reshape(-1)
+            nz = np.asarray(torch.nonzero(torch.tensor(x, device=dev)).numpy()).reshape(-1)
             self.ae(np.sort(nz), np.nonzero(x)[0], msg=f"nonzero {dev}")
         both_devices(body)
 
@@ -166,7 +166,9 @@ class TestSearch(Base):
         seq = np.array([1., 3., 5., 7., 9.], dtype="float32")
         vals = np.array([0., 4., 6., 10.], dtype="float32")
         def body(dev):
-            r = torch.searchsorted(torch.tensor(seq), torch.tensor(vals)).numpy()
+            r = torch.searchsorted(
+                torch.tensor(seq, device=dev), torch.tensor(vals, device=dev)
+            ).numpy()
             self.ae(np.asarray(r), np.searchsorted(seq, vals), msg=f"searchsorted {dev}")
         both_devices(body)
 
@@ -174,28 +176,32 @@ class TestSearch(Base):
 class TestCreation(Base):
     def test_arange_linspace(self):
         def body(dev):
-            self.ac(torch.arange(0, 10, 2).numpy(), np.arange(0, 10, 2),
+            self.ac(torch.arange(0, 10, 2, device=dev).numpy(), np.arange(0, 10, 2),
                     msg=f"arange {dev}")
-            self.ac(torch.linspace(0, 1, 5).numpy(), np.linspace(0, 1, 5),
+            self.ac(torch.linspace(0, 1, 5, device=dev).numpy(), np.linspace(0, 1, 5),
                     atol=1e-6, msg=f"linspace {dev}")
         both_devices(body)
 
     def test_eye_diag_tri(self):
         def body(dev):
-            self.ac(torch.eye(4).numpy(), np.eye(4), msg=f"eye {dev}")
+            self.ac(torch.eye(4, device=dev).numpy(), np.eye(4), msg=f"eye {dev}")
             x = np.random.RandomState(5).randn(4, 4).astype("float32")
-            self.ac(torch.triu(torch.tensor(x)).numpy(), np.triu(x), msg=f"triu {dev}")
-            self.ac(torch.tril(torch.tensor(x), -1).numpy(), np.tril(x, -1),
+            self.ac(torch.triu(torch.tensor(x, device=dev)).numpy(), np.triu(x),
+                    msg=f"triu {dev}")
+            self.ac(torch.tril(torch.tensor(x, device=dev), -1).numpy(), np.tril(x, -1),
                     msg=f"tril diag {dev}")
             v = np.array([1., 2., 3.], dtype="float32")
-            self.ac(torch.diag(torch.tensor(v)).numpy(), np.diag(v), msg=f"diag vec {dev}")
+            self.ac(torch.diag(torch.tensor(v, device=dev)).numpy(), np.diag(v),
+                    msg=f"diag vec {dev}")
         both_devices(body)
 
     def test_meshgrid(self):
         a = np.array([1., 2., 3.], dtype="float32")
         b = np.array([4., 5.], dtype="float32")
         def body(dev):
-            gx, gy = torch.meshgrid(torch.tensor(a), torch.tensor(b), indexing="ij")
+            gx, gy = torch.meshgrid(
+                torch.tensor(a, device=dev), torch.tensor(b, device=dev), indexing="ij"
+            )
             rx, ry = np.meshgrid(a, b, indexing="ij")
             self.ac(gx.numpy(), rx, msg=f"meshgrid x {dev}")
             self.ac(gy.numpy(), ry, msg=f"meshgrid y {dev}")
@@ -204,11 +210,12 @@ class TestCreation(Base):
     def test_like_constructors(self):
         x = np.random.RandomState(6).randn(2, 3).astype("float32")
         def body(dev):
-            self.ac(torch.zeros_like(torch.tensor(x)).numpy(), np.zeros_like(x),
+            self.ac(torch.zeros_like(torch.tensor(x, device=dev)).numpy(), np.zeros_like(x),
                     msg=f"zeros_like {dev}")
-            self.ac(torch.ones_like(torch.tensor(x)).numpy(), np.ones_like(x),
+            self.ac(torch.ones_like(torch.tensor(x, device=dev)).numpy(), np.ones_like(x),
                     msg=f"ones_like {dev}")
-            self.ac(torch.full((2, 3), 1.5).numpy(), np.full((2, 3), 1.5, "float32"),
+            self.ac(torch.full((2, 3), 1.5, device=dev).numpy(),
+                    np.full((2, 3), 1.5, "float32"),
                     msg=f"full {dev}")
         both_devices(body)
 

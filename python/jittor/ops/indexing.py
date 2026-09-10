@@ -46,15 +46,33 @@ def _native_bool_coordinates(slices):
     return slices
 
 
+def _materialize_index_views(slices):
+    """Make advanced-index buffers dense for native generated kernels."""
+    import jittor as jt
+    if isinstance(slices, jt.Var):
+        if slices._storage_is_contiguous():
+            return slices
+        return jt.ops.contiguous(slices)
+    if isinstance(slices, tuple):
+        return tuple(_materialize_index_views(item) for item in slices)
+    return slices
+
+
 def var_getitem(x, slices, return_x=None):
     """Native getitem overloads with optional backend execution."""
+    import jittor as jt
+    if not _is_basic_index(slices) and not x._storage_is_contiguous():
+        # Advanced indexing returns a copy, so densifying its source preserves
+        # aliasing semantics while keeping generated gather kernels away from
+        # storage offsets/strides they do not encode in their index expression.
+        x = jt.ops.contiguous(x)
     # Integer views retain their native producer so chained assignment can
     # discover the held ancestor without a second Python view graph.
     if return_x is None and not _is_cascade_index(slices):
         result = try_dispatch("tensor.getitem", x, slices, return_x)
         if result is not None:
             return result
-    slices = _native_bool_coordinates(slices)
+    slices = _materialize_index_views(_native_bool_coordinates(slices))
     if return_x is None:
         return _native_var_getitem(x, slices)
     return _native_var_getitem(x, slices, return_x)
@@ -67,7 +85,7 @@ def var_setitem(x, slices, value, reduce=None):
         result = try_dispatch("tensor.setitem", x, slices, value, reduce)
         if result is not None:
             return result
-    slices = _native_bool_coordinates(slices)
+    slices = _materialize_index_views(_native_bool_coordinates(slices))
     if reduce is None:
         return _native_var_setitem(x, slices, value)
     return _native_var_setitem(x, slices, value, reduce)
@@ -119,6 +137,109 @@ def _maybe_constant_index_gather(x, slices):
     return base.broadcast(output_shape)
 
 
+def _as_integer_array_index(value):
+    import jittor as jt
+
+    if isinstance(value, jt.Var):
+        if _jittor_dtype_name(value.dtype) in ("int32", "int64"):
+            return value
+        return None
+    if not isinstance(value, (list, np.ndarray)):
+        return None
+    array = np.asarray(value)
+    if array.size == 0:
+        array = array.astype(np.int64)
+    elif array.dtype.kind not in ("i", "u"):
+        return None
+    return jt.array(array)
+
+
+def _single_integer_array_index(x, index, axis=0):
+    """Implement one integer-array index with all other axes unchanged."""
+    import jittor as jt
+
+    index = _as_integer_array_index(index)
+    if x.ndim < 1 or index is None:
+        return None
+    if axis < 0:
+        axis += x.ndim
+    if axis < 0 or axis >= x.ndim:
+        return None
+    source_axes = (axis,) + tuple(i for i in range(x.ndim) if i != axis)
+    source = x if axis == 0 else x.transpose(source_axes)
+    if not source._storage_is_contiguous():
+        source = jt.ops.contiguous(source)
+    if not index._storage_is_contiguous():
+        index = jt.ops.contiguous(index)
+    index = jt.where(index < 0, index + int(x.shape[axis]), index)
+    row_size = 1
+    for size in source.shape[1:]:
+        row_size *= int(size)
+    flat_index = index.reshape((-1,))
+    gather_index = flat_index.reshape((-1, 1)).broadcast(
+        (int(flat_index.shape[0]), row_size)
+    )
+    if not gather_index._storage_is_contiguous():
+        gather_index = jt.ops.contiguous(gather_index)
+    gathered = jt.gather(
+        source.reshape((int(source.shape[0]), row_size)), 0, gather_index
+    )
+    result = gathered.reshape(tuple(index.shape) + tuple(source.shape[1:]))
+    index_rank = index.ndim
+    source_positions = {
+        original_axis: index_rank + position
+        for position, original_axis in enumerate(source_axes[1:])
+    }
+    output_axes = []
+    for original_axis in range(x.ndim):
+        if original_axis == axis:
+            output_axes.extend(range(index_rank))
+        else:
+            output_axes.append(source_positions[original_axis])
+    if output_axes != list(range(result.ndim)):
+        result = result.transpose(tuple(output_axes))
+    return result
+
+
+def _single_integer_array_tuple_index(x, slices):
+    if (not isinstance(slices, tuple)
+            or sum(item is Ellipsis for item in slices) > 1):
+        return None
+    consumed = sum(item is not None and item is not Ellipsis for item in slices)
+    missing = x.ndim - consumed
+    if missing < 0:
+        return None
+    expanded = []
+    found_ellipsis = False
+    for item in slices:
+        if item is Ellipsis:
+            expanded.extend([slice(None)] * missing)
+            found_ellipsis = True
+        else:
+            expanded.append(item)
+    if not found_ellipsis:
+        expanded.extend([slice(None)] * missing)
+
+    candidate = None
+    axis = 0
+    for item in expanded:
+        if item is None:
+            return None
+        index = _as_integer_array_index(item)
+        if index is not None:
+            if candidate is not None:
+                return None
+            candidate = (axis, index)
+        elif not (isinstance(item, slice)
+                  and item.start is None and item.stop is None
+                  and item.step is None):
+            return None
+        axis += 1
+    if candidate is None:
+        return None
+    return _single_integer_array_index(x, candidate[1], candidate[0])
+
+
 def getitem(x, slices):
     """Apply Jittor indexing, recording a view when the index is a basic one."""
     import jittor as jt
@@ -133,6 +254,8 @@ def _getitem_result(x, slices):
     """Apply Jittor indexing with the established Torch-compatible extensions."""
     import jittor as jt
 
+    if not _is_basic_index(slices) and not x._storage_is_contiguous():
+        x = jt.ops.contiguous(x)
     if isinstance(slices, jt.Var) and _jittor_dtype_name(slices.dtype) == "uint8":
         slices = slices != 0
     slices = _dispatch_slices(slices)
@@ -144,6 +267,9 @@ def _getitem_result(x, slices):
         return getitem(x, slices.where())
     if isinstance(slices, range):
         slices = jt.array(list(slices))
+    integer_result = _single_integer_array_index(x, slices)
+    if integer_result is not None:
+        return integer_result
 
     constant_gather = _maybe_constant_index_gather(x, slices)
     if constant_gather is not None:
@@ -161,6 +287,9 @@ def _getitem_result(x, slices):
             else:
                 normalized.append(item)
         slices = tuple(normalized)
+        integer_result = _single_integer_array_tuple_index(x, slices)
+        if integer_result is not None:
+            return integer_result
     return x.getitem(slices)
 
 

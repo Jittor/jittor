@@ -862,6 +862,16 @@ register_fidelity(
     _MASKED_SELECT_FIDELITY_DETAIL,
 )
 
+from .indexing import masked_fill
+
+register_fidelity(
+    "torch.masked_fill",
+    masked_fill,
+    Fidelity.APPROXIMATE,
+    "delegates to the Torch-compatible Tensor method with broadcast mask "
+    "semantics on supported CPU and accelerator backends",
+)
+
 _NARROW_FIDELITY_DETAIL = (
     "matches Torch contiguous slice values and shape for supported real tensors "
     "but omits device, layout, and dtype keyword semantics"
@@ -1232,6 +1242,7 @@ def install(ctx):
     _bind_missing(g, "mm", mm)
     _bind_missing(g, "mv", mv)
     _bind_missing(g, "masked_select", masked_select)
+    g.masked_fill = masked_fill
     _bind_missing(g, "split_with_sizes", split_with_sizes)
     _bind_missing(g, "_shape_as_tensor", _shape_as_tensor)
     _bind_missing(g, "nan_to_num_", nan_to_num_)

@@ -4,6 +4,8 @@ Each exported operation is a stable module object. Its implementation remains
 the native backend's function, executed under the frontend's result-type and
 autograd policy. Native-only utilities are not exposed through missing reads.
 """
+import numbers
+
 from .api_delegates import bind_delegates
 from .context import get_install_context
 from .frontend import tensor_frontend
@@ -57,12 +59,53 @@ class NativeOperation:
             kwargs = dict(kwargs)
             device = kwargs.pop("device", None)
         with tensor_frontend(context.state["Var"], device=device):
+            if self._operation_key in ("div", "divide"):
+                return _torch_div(context, *args, **kwargs)
             if isinstance(implementation, type) and issubclass(implementation, context.native_backend.Function):
                 implementation = implementation()
             return implementation(*args, **kwargs)
 
     def __reduce__(self):
         return operation, (self._operation_key,)
+
+
+def _integral_operand(value, var_type):
+    if isinstance(value, var_type):
+        return str(value.dtype).removeprefix("torch.").startswith(("int", "uint"))
+    return isinstance(value, numbers.Integral) and not isinstance(value, bool)
+
+
+def _torch_div(context, input, other, *, rounding_mode=None, out=None):
+    if rounding_mode not in (None, "trunc", "floor"):
+        raise RuntimeError(
+            "div expected rounding_mode to be one of None, 'trunc', or 'floor'"
+        )
+    var_type = context.native_backend.Var
+    input_is_var = isinstance(input, var_type)
+    other_is_var = isinstance(other, var_type)
+    inputs_are_integral = (
+        _integral_operand(input, var_type)
+        and _integral_operand(other, var_type)
+    )
+    if not input_is_var and not other_is_var:
+        input = context.target_namespace.tensor(input)
+    result = input / other
+    if rounding_mode == "trunc":
+        result = result.trunc()
+    elif rounding_mode == "floor":
+        result = result.floor()
+    if rounding_mode is not None and inputs_are_integral:
+        if input_is_var and other_is_var:
+            dtype = context.target_namespace.promote_types(input.dtype, other.dtype)
+        elif other_is_var:
+            dtype = other.dtype
+        else:
+            dtype = input.dtype
+        result = result.to(dtype=dtype)
+    if out is not None:
+        out.copy_(result)
+        return out
+    return result
 
 
 _OPERATIONS = {name: NativeOperation(name) for name in _NATIVE_NAMES}

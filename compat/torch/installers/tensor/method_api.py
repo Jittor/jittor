@@ -195,6 +195,13 @@ def _ip(self, value):
         return self
     target = self
     was_trainable = not target.is_stop_grad()
+    value_is_trainable = isinstance(value, _NativeVar) and not value.is_stop_grad()
+    if not was_trainable and value_is_trainable:
+        # assign() deliberately copies the old holder's stop-grad state onto
+        # the new graph. Torch instead lets a constant destination become
+        # differentiable when an in-place result depends on a trainable source.
+        target._update(value)
+        return self
     target.assign(value)
     if was_trainable and target.is_stop_grad():
         target.start_grad()
@@ -234,6 +241,8 @@ def _new_finish(v, device=None, requires_grad=False):
         if v.placement_backend < 0:
             _owner._set_use_cuda()
         v = _owner._make_cuda_resident(v, force=True, device=device)
+    if _owner._device_is_meta(device):
+        _owner._set_meta_placeholder(v)
     if requires_grad:
         v.requires_grad_(True)
         _owner._torch_register_leaf(v)
@@ -344,12 +353,21 @@ def _element_size(self):
 class _Storage:
     def __init__(self, var):
         self._var = var
+
+    def _owner(self):
+        owner = getattr(self._var, "_torch_data_owner", None)
+        return owner if isinstance(owner, _NativeVar) else self._var
+
+    def _element_size(self):
+        return _DTYPE_BYTES.get(_jittor_dtype_name(self._owner().dtype), 4)
+
     def data_ptr(self):
-        return id(self._var)
+        first_element = int(self._var._storage_address)
+        return first_element - int(self._var._storage_offset()) * self._element_size()
     def size(self):
-        return int(self._var.numel())
+        return int(self._owner().numel())
     def nbytes(self):
-        return int(self._var.numel()) * _DTYPE_BYTES.get(_jittor_dtype_name(self._var.dtype), 4)
+        return self.size() * self._element_size()
 
 
 def _add(input, other, *, alpha=1, out=None):
@@ -371,16 +389,13 @@ def _invert(self):
 
 
 def _device(self):
+    if getattr(self, "_jittor_torch_meta", False):
+        return _owner.device("meta")
     if self.placement_backend >= 0:
         if self.placement_backend == 0:
             return _owner.device("cpu")
         name = "npu" if self.placement_backend == 2 else "cuda"
         return _owner.device(name, int(self.device_id))
-    # Inside a `with torch.device("meta")` block (transformers'
-    # from_pretrained), report "meta" so its meta-context detection
-    # fires and eager weight init is skipped. See device.__enter__.
-    if _owner._DEVICE_CTX_STACK:
-        return _owner._DEVICE_CTX_STACK[-1]
     # Report the Var's ACTUAL memory residency (matches jtorch's C++
     # is_cpu()/device()): a Var built/migrated to host -- e.g. via
     # torch.zeros(device='cpu') or .cpu() -- is "cpu" even while the
@@ -520,7 +535,7 @@ def _to(self, *args, **kwargs):
             bare = a.replace("torch.", "")
             if bare in _owner.dtype._registry:
                 ds = bare
-            elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
+            elif bare.split(":")[0] in ("cpu", "cuda", "npu", "meta"):
                 dev = bare
     if dev is None:
         dev = self.device
@@ -533,16 +548,18 @@ def _to(self, *args, **kwargs):
         out = _owner._make_cpu_resident(out)
     elif _owner._device_is_cuda(dev):
         if out.placement_backend >= 0:
-            return _owner._make_cuda_resident(out, force=True, device=dev)
-        src_index = getattr(self, "device_id", -1)
-        out = _owner._make_cuda_resident(out, force=True)
-        # .to("cuda:N") copies across devices when N is not where the Var
-        # already is; a bare .to("cuda") leaves the tensor on its own
-        # device, as in torch.
-        moved = _owner._move_to_cuda_index(out, dev, src_index)
-        if moved is not out and getattr(out, "_torch_0d", False):
-            moved._torch_0d = True
-        out = moved
+            out = _owner._make_cuda_resident(out, force=True, device=dev)
+        else:
+            src_index = getattr(self, "device_id", -1)
+            out = _owner._make_cuda_resident(out, force=True)
+            # .to("cuda:N") copies across devices when N is not where the Var
+            # already is; a bare .to("cuda") leaves the tensor on its own
+            # device, as in torch.
+            out = _owner._move_to_cuda_index(out, dev, src_index)
+    elif _owner._device_is_meta(dev):
+        if out is self and not getattr(self, "_jittor_torch_meta", False):
+            out = self.clone()
+        _owner._set_meta_placeholder(out)
     if getattr(self, "_torch_0d", False):
         out._torch_0d = True
     return out
@@ -568,6 +585,8 @@ def _var_detach(self):
         out = out.stop_grad()
     if getattr(self, "_torch_0d", False):
         out._torch_0d = True
+    if getattr(self, "_jittor_torch_meta", False):
+        _owner._set_meta_placeholder(out)
     return out
 
 
@@ -583,12 +602,12 @@ def _var_numpy(self, *args, **kwargs):
 
 def _var_cpu(self, *a, **k):
     out = _owner._make_cpu_resident(self)
+    if getattr(self, "_torch_0d", False):
+        out._torch_0d = True
     if out.placement_backend >= 0:
         return out
     try:
         out._jittor_torch_force_cpu = True
-        if getattr(self, "_torch_0d", False):
-            out._torch_0d = True
     except (AttributeError, TypeError) as exc:
         _owner.swallowed("torch/installers/tensor.py _var_cpu: out._jittor_torch_force_cpu = True", exc)
     return out
@@ -596,12 +615,13 @@ def _var_cpu(self, *a, **k):
 
 def _var_cuda(self, device=None, *a, **k):
     if self.placement_backend >= 0:
-        return _owner._make_cuda_resident(self, force=True, device=device)
-    _owner._set_use_cuda()
-    src_index = getattr(self, "device_id", -1)
-    out = _owner._make_cuda_resident(self, force=True)
-    # .cuda(N) is .to("cuda:N"); .cuda() keeps the tensor where it is.
-    out = _owner._move_to_cuda_index(out, device, src_index)
+        out = _owner._make_cuda_resident(self, force=True, device=device)
+    else:
+        _owner._set_use_cuda()
+        src_index = getattr(self, "device_id", -1)
+        out = _owner._make_cuda_resident(self, force=True)
+        # .cuda(N) is .to("cuda:N"); .cuda() keeps the tensor where it is.
+        out = _owner._move_to_cuda_index(out, device, src_index)
     if getattr(self, "_torch_0d", False):
         out._torch_0d = True
     return out
@@ -652,6 +672,8 @@ def _scalar_dtype_name(x):
 
 
 def _is_cuda(self):
+    if getattr(self, "_jittor_torch_meta", False):
+        return False
     if self.placement_backend >= 0:
         return self.placement_backend != 0
     if not (_owner.jt.flags.use_cuda or getattr(_owner.jt.compiler, "has_acl", 0)):
@@ -1003,7 +1025,17 @@ def _api_tolist(self):
 
 
 def _api_contiguous(self):
-    return self
+    if self._storage_is_contiguous():
+        return self
+    from ...frontend import tensor_frontend
+    context = get_install_context(_owner.jt)
+    with tensor_frontend(context.state["Var"], like=self):
+        out = _owner.jt.ops.contiguous(self)
+    if getattr(self, "_torch_0d", False):
+        out._torch_0d = True
+    if getattr(self, "_jittor_torch_meta", False):
+        _owner._set_meta_placeholder(out)
+    return out
 
 
 def _api_argwhere(input):
@@ -1059,7 +1091,7 @@ def _api_retains_grad(self):
 
 
 def _api_is_cpu(self):
-    return not _is_cuda(self)
+    return not getattr(self, "_jittor_torch_meta", False) and not _is_cuda(self)
 
 
 def _api_is_mps(self):

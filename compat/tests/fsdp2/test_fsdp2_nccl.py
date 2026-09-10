@@ -12,6 +12,7 @@ from _helpers import capability as _test_capability
 
 import importlib
 import math
+import os
 import unittest
 
 import numpy as np
@@ -363,7 +364,7 @@ class TestFSDP2Nccl(unittest.TestCase):
         output = model(inputs)
         loss = ((output - target) * (output - target)).mean()
         learning_rate = 0.05
-        model.sharded_sgd_step(loss, lr=learning_rate)
+        sharded_grads = model.sharded_sgd_step(loss, lr=learning_rate)
 
         gathered_after = (
             fsdp2._common._all_gather_shards(state.true_fsdp_flat_shard).float32().numpy()
@@ -382,6 +383,15 @@ class TestFSDP2Nccl(unittest.TestCase):
             "weight": initial["weight"] - learning_rate * np.mean(weight_grads, axis=0),
             "bias": initial["bias"] - learning_rate * np.mean(bias_grads, axis=0),
         }
+        expected_grads = {
+            "weight": np.mean(weight_grads, axis=0),
+            "bias": np.mean(bias_grads, axis=0),
+        }
+        for entry, grad in zip(state.true_fsdp_params, sharded_grads):
+            self.assertIs(grad.to_local(), grad)
+            np.testing.assert_allclose(
+                grad.full_tensor().float32().numpy(), expected_grads[entry.name],
+                rtol=2e-5, atol=2e-5)
         expected_after = np.concatenate(
             [expected[entry.name].reshape(-1) for entry in state.true_fsdp_params]
         )
@@ -392,6 +402,54 @@ class TestFSDP2Nccl(unittest.TestCase):
         self.assertTrue(np.isfinite(local_after).all())
         self.assertGreater(float(np.max(np.abs(local_after - local_before))), 0.0)
         self.assertIsNotNone(fsdp2._common._nccl_ops())
+
+    @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
+    def test_nonflat_gradient_full_tensor(self):
+        rank = int(jt.rank)
+        jt.seed(20260825)
+        model = nn.Linear(4, 3)
+        initial = {
+            name: np.asarray(param.float32().numpy()).copy()
+            for name, param in model.named_parameters()
+        }
+        previous = os.environ.get("JITTOR_FSDP2_FLAT")
+        os.environ["JITTOR_FSDP2_FLAT"] = "0"
+        try:
+            fsdp2.fully_shard(model)
+        finally:
+            if previous is None:
+                os.environ.pop("JITTOR_FSDP2_FLAT", None)
+            else:
+                os.environ["JITTOR_FSDP2_FLAT"] = previous
+        state = model._fsdp_state
+        self.assertFalse(state.true_fsdp_flat)
+
+        host_inputs, host_target = _rank_data(rank)
+        inputs = jt.array(host_inputs)
+        target = jt.array(host_target)
+        output = model(inputs)
+        loss = ((output - target) * (output - target)).mean()
+        sharded_grads = model.sharded_sgd_step(loss, lr=0.0)
+
+        weight_grads = []
+        bias_grads = []
+        for data_rank in range(int(jt.world_size)):
+            host_inputs, host_target = _rank_data(data_rank)
+            weight_grad, bias_grad = _linear_grads(
+                initial["weight"], initial["bias"], host_inputs, host_target
+            )
+            weight_grads.append(weight_grad)
+            bias_grads.append(bias_grad)
+        expected_grads = {
+            "weight": np.mean(weight_grads, axis=0),
+            "bias": np.mean(bias_grads, axis=0),
+        }
+        for entry, grad in zip(state.true_fsdp_params, sharded_grads):
+            self.assertIs(grad.to_local(), grad)
+            self.assertEqual(tuple(grad.shape), (entry.shard_numel,))
+            np.testing.assert_allclose(
+                grad.full_tensor().float32().numpy(), expected_grads[entry.name],
+                rtol=2e-5, atol=2e-5)
 
 
 if __name__ == "__main__":

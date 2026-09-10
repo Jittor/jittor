@@ -17,7 +17,12 @@ from ..api_delegates import bind_delegates
 import jittor as jt
 import numpy as np
 
-from ..types import _dtype_to_str
+from ..types import (
+    _DEVICE_CTX_STACK,
+    _device_is_meta,
+    _dtype_to_str,
+    _set_meta_placeholder,
+)
 from ..nested import _torch_register_leaf
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
@@ -206,8 +211,18 @@ def _shape_arg(v):
 
 def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     g = get_install_context(jt).target_namespace
+    requested_device = kwargs.get("device")
+    inherits_device = name.endswith("_like") or name in _TENSOR_ARGUMENT
+    device_input = args[0] if inherits_device and args and isinstance(args[0], jt.Var) else None
+    want_meta = (
+        _device_is_meta(requested_device)
+        or (requested_device is None and device_input is not None
+            and getattr(device_input, "_jittor_torch_meta", False))
+        or (requested_device is None and device_input is None
+            and bool(_DEVICE_CTX_STACK))
+    )
     # ACL adapters call jt.empty thousands of times; keep the FP32 fast path.
-    if (name == "empty" and not kwargs and args and
+    if (name == "empty" and not want_meta and not kwargs and args and
             g.get_default_dtype() == g.float32 and
             (len(args) == 1 or all(type(dim) is int for dim in args))):
         shape = args[0]
@@ -274,6 +289,8 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     if _cast_to is not None:
         out = out.cast(_cast_to)
     out._jittor_torch_ext_mutable = True
+    if want_meta:
+        _set_meta_placeholder(out)
     out.requires_grad_(_requires_grad)
     if _requires_grad:
         _torch_register_leaf(out)

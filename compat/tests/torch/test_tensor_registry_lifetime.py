@@ -17,9 +17,12 @@ import weakref
 import numpy as np
 from jittor.compat.shim import activate
 torch = activate()["torch"]
-x = torch.tensor([2.], requires_grad=True)
 import jittor as jt
-if jt.introspection.policy.runtime.use_cuda:
+device = "cuda" if jt.introspection.policy.runtime.use_cuda else "cpu"
+def tensor(data, **kwargs):
+    return torch.tensor(data, device=device, **kwargs)
+x = tensor([2.], requires_grad=True)
+if device == "cuda":
     x.sync()
     assert x.location() == "device", "CUDA probe silently used host storage"
 case = sys.argv[1]
@@ -30,7 +33,7 @@ if case == "nonleaf":
     assert middle.grad is None, "requires_grad_ registered a non-leaf"
     np.testing.assert_array_equal(x.grad.numpy(), [3.])
 elif case == "disconnected":
-    other = torch.tensor([4.], requires_grad=True)
+    other = tensor([4.], requires_grad=True)
     other.square().sum().backward()
     assert x.grad is None
     x.square().sum().backward()
@@ -58,8 +61,8 @@ elif case == "interleaved":
     second.sum().backward()
     np.testing.assert_array_equal(second.grad.numpy(), [1.])
 elif case == "unowned_parameter":
-    owned = torch.nn.Parameter(torch.tensor([4.]))
-    unowned = torch.nn.Parameter(torch.tensor([5.]))
+    owned = torch.nn.Parameter(tensor([4.]))
+    unowned = torch.nn.Parameter(tensor([5.]))
     optimizer = torch.optim.SGD([owned], lr=0.1)
     owned.square().sum().backward()
     unowned.square().sum().backward()
@@ -69,7 +72,7 @@ elif case == "retain_contract":
     middle = x * 3
     assert middle.retain_grad() is None and middle.retains_grad
     try:
-        torch.tensor([1.]).retain_grad()
+        tensor([1.]).retain_grad()
     except RuntimeError as error:
         assert "requires_grad=False" in str(error)
     else:

@@ -12,6 +12,7 @@ from .api_delegates import bind_delegates
 from .fidelity import Fidelity, register_fidelity
 from ..transaction import set_attr
 from ..diagnostics import EXPECTED, swallowed
+from .types import _DEVICE_CTX_STACK, _set_meta_placeholder
 
 
 class _ModuleRegistrationHandle:
@@ -57,6 +58,18 @@ def module_setattr(self, name, value):
             replacement = hook(self, name, value)
             if replacement is not None:
                 value = replacement
+    elif isinstance(value, jt.Var):
+        parameter_type = context.state.get("Parameter")
+        register_parameter = getattr(type(self), "register_parameter", None)
+        if (parameter_type is not None and isinstance(value, parameter_type)
+                and callable(register_parameter)
+                and not getattr(register_parameter,
+                                "_jittor_torch_native_registration", False)):
+            return register_parameter(self, name, value)
+        if (_DEVICE_CTX_STACK
+                and (getattr(value, "_jittor_torch_meta", False)
+                     or getattr(value, "placement_backend", -1) < 0)):
+            _set_meta_placeholder(value)
     return state["setattr"](self, name, value)
 
 

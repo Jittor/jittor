@@ -69,8 +69,11 @@ def _sync_sharded_grads_from_full_grads(state, full_grads, *, divide_by_world_si
         flat_shard_grad = flat_shard_grad.stop_grad()
         state.true_fsdp_last_flat_grad = flat_shard_grad
         sharded = [
-            grad.stop_grad()
-            for grad in shard._flat_entry_slices(state, flat_shard_grad)
+            shard._mark_fsdp_param_var(
+                grad.stop_grad(), state, entry, "grad_shard")
+            for entry, grad in zip(
+                state.true_fsdp_params,
+                shard._flat_entry_slices(state, flat_shard_grad))
         ]
         for grad in sharded:
             object.__setattr__(grad, "_fsdp_norm_group", getattr(state, "shard_group", None))
@@ -82,7 +85,8 @@ def _sync_sharded_grads_from_full_grads(state, full_grads, *, divide_by_world_si
         shard_grad = common._reduce_scatter_padded(flat, getattr(state, "shard_group", None))
         if divide_by_world_size:
             shard_grad = shard_grad / max(int(state.true_fsdp_world_size), 1)
-        shard_grad = shard_grad.stop_grad()
+        shard_grad = shard._mark_fsdp_param_var(
+            shard_grad.stop_grad(), state, entry, "grad_shard")
         sharded.append(shard_grad)
     for grad in sharded:
         object.__setattr__(grad, "_fsdp_norm_group", getattr(state, "shard_group", None))

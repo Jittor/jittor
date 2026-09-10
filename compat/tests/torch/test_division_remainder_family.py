@@ -100,6 +100,23 @@ class _FamilyChecks(object):
                         np.floor_divide(values, divisor),
                         "int floor_divide({0})".format(divisor))
 
+    def test_div_rounding_modes_accept_tensors_and_python_scalars(self):
+        values = np.array([-5, -4, 3, 6], dtype="int64")
+        tensor = self._tensor(values)
+        truncated = torch.div(tensor, 2, rounding_mode="trunc")
+        floored = torch.divide(tensor, 2, rounding_mode="floor")
+
+        self.assertEqual(str(truncated.dtype), "torch.int64")
+        self.assertEqual(str(floored.dtype), "torch.int64")
+        self._check(truncated, np.trunc(values / 2).astype("int64"),
+                    "div rounding_mode=trunc")
+        self._check(floored, np.floor(values / 2).astype("int64"),
+                    "divide rounding_mode=floor")
+
+        scalar = torch.div(8, 2, rounding_mode="trunc")
+        self.assertEqual(scalar.ndim, 0)
+        self.assertEqual(int(scalar), 4)
+
     @pytest.mark.xfail(strict=True, reason="KI-OPS-003: float operands are truncated to integers")
     def test_float_floor_divide_matches_numpy(self):
         """Float operands are cast to integers before dividing -- see KI-OPS-003.

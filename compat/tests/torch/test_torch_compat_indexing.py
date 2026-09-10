@@ -32,9 +32,9 @@ def both_devices(fn):
             fn(name)
 
 
-def t(a):
+def t(a, *, device=None):
     """np array -> jittor Var (keep dtype, including int64/bool index tensors)."""
-    return torch.tensor(a)
+    return torch.tensor(a, device=device)
 
 
 class Base(unittest.TestCase):
@@ -173,8 +173,8 @@ class TestBooleanMask(Base):
         ref = np.zeros((3, 4, 2), dtype=np.float32)
         ref[mask] = rhs
         def body(dev):
-            x = torch.zeros((3, 4, 2), dtype=torch.float32)
-            x[t(mask)] = t(rhs)
+            x = torch.zeros((3, 4, 2), dtype=torch.float32, device=dev)
+            x[t(mask, device=dev)] = t(rhs, device=dev)
             self.ac(x.numpy(), ref, msg=f"bool mask setitem rhs bcast {dev}")
         both_devices(body)
 
@@ -204,9 +204,10 @@ class TestIndexSelect(Base):
         x = np.arange(20).reshape(5, 4).astype("float32")
         idx = np.array([4, 1, 1], dtype="int64")
         def body(dev):
-            parent = torch.full((5, 4), -1, dtype=torch.float32)
+            parent = torch.full((5, 4), -1, dtype=torch.float32, device=dev)
             out = parent[:3]
-            result = torch.index_select(t(x), 0, t(idx), out=out)
+            result = torch.index_select(
+                t(x, device=dev), 0, t(idx, device=dev), out=out)
             self.assertIs(result, out)
             self.ac(out.numpy(), x[idx], msg=f"index_select out {dev}")
             expected = np.full((5, 4), -1, dtype=np.float32)
@@ -217,11 +218,11 @@ class TestIndexSelect(Base):
 
     def test_add_out_writes_through_slice_view(self):
         def body(dev):
-            parent = torch.zeros(3, dtype=torch.int32)
+            parent = torch.zeros(3, dtype=torch.int32, device=dev)
             out = parent[:1]
             result = torch.add(
-                torch.tensor([2], dtype=torch.int32),
-                torch.tensor([3], dtype=torch.int32),
+                torch.tensor([2], dtype=torch.int32, device=dev),
+                torch.tensor([3], dtype=torch.int32, device=dev),
                 alpha=2,
                 out=out,
             )

@@ -46,6 +46,12 @@ import os
 print("cache_name=%r" % os.environ.get("cache_name"), flush=True)
 """
 
+_PRINT_NCCL_ENV = """
+import os
+print("use_nccl=%s use_mpi=%s" %
+      (os.environ.get("use_nccl"), os.environ.get("use_mpi")), flush=True)
+"""
+
 
 def _launch(nproc, code, logdir, timeout):
     # Through _helpers.child_process: the launcher itself imports jittor (for
@@ -117,6 +123,13 @@ class TestLaunchFailurePropagation(unittest.TestCase):
             names.add(text.strip().split("cache_name=", 1)[1])
         self.assertEqual(len(names), 1,
                          "ranks got different JIT caches: %s" % sorted(names))
+
+    def test_explicit_nccl_launch_enables_nccl_before_rank_import(self):
+        done, _ = _launch(2, _PRINT_NCCL_ENV, self.tmp.name, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stdout[-3000:])
+        for rank in range(2):
+            text = Path(self.tmp.name, "rank%d.log" % rank).read_text()
+            self.assertIn("use_nccl=1 use_mpi=0", text, text)
 
 
 if __name__ == "__main__":

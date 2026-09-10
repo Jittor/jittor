@@ -1,8 +1,8 @@
 # Jittor Project Context
 
 - Status: Current index, not a history log
-- Last reviewed: 2026-09-02
-- Baseline reviewed: `d02a72ed` plus the contiguous slice-gradient follow-up
+- Last reviewed: 2026-09-10
+- Baseline reviewed: `origin/2.0-refactor@86086396` plus the `feature/cgq_transformers@9bac6853` integration
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -80,8 +80,9 @@ independent binary PyTorch oracle, and compact ResNet18, ViT, GPT-2, and
 diffusion UNet forward/backward parity passes on CPU and CUDA. ROCm, most
 optional downstream dependencies, full training, and performance remain
 separate gates. On a real 910B3, the maintained Ascend gate passes `397 passed, 9 skipped`; float16/float32 `arg_reduce` backward and float32/integer `prod` execute without CPU fallback.
-Transformers 4.56.2 Qwen3-8B float32 loads all 8,190,735,360 parameters; SDPA,
-greedy `arg_reduce`, and mask `all` run on ACL without CPU fallback. A native-shape `empty`
+The pre-refactor Transformers 4.56.2 feature branch reached strict cumulative L4 for 17/17 FP32 text implementations on CPU and real A800 CUDA. Those reports remain historical evidence for their recorded commits, not proof that the current refactor integration has rerun the full matrix. See the [strict L4 report](../../refactor-wip/results/transformers/2026-09-06-transformers-text-core-l4-cuda.md) and [earlier matrix](../../refactor-wip/results/transformers/2026-09-03-transformers-text-core-matrix-cuda.md).
+The same feature history includes a bounded six-A800 BF16 Llama 3.1 70B short-SFT result and a later FSDP2 metadata-lifetime fix. The formal run's growing Jittor high-water mark is pre-fix evidence, while the fix was checked with CPU regressions, a real CUDA 20-cycle probe, and short Llama-3.2-1B training. A six-card 70B post-fix rerun and full current-refactor L4 rerun remain open. See the [FSDP2 memory-lifetime report](../../refactor-wip/results/transformers/2026-09-07-fsdp2-memory-lifetime-fix-cuda.md), [representative Llama 70B SFT report](../../refactor-wip/results/transformers/2026-09-07-transformers-llama31-70b-sft-cuda.md), and [formal No Robots resource report](../../refactor-wip/results/transformers/2026-09-07-transformers-llama31-no-robots-sft-cuda.md).
+Qwen3-8B float32 loads all 8,190,735,360 parameters; SDPA, greedy `arg_reduce`, and mask `all` run on ACL without CPU fallback. A native-shape `empty`
 fast path brings 0.6B decode to 15.90 token/s versus native `torch_npu` 16.19 token/s.
 Qwen3-0.6B BF16 SDPA passes zero-fallback generation at 14.92 token/s versus native 15.31 token/s.
 Qwen3-0.6B FP32 eager forward/loss/backward also passes zero-fallback at `1.07x-1.12x` native `torch_npu`. Transformers 5.5.3 BF16 completes forward, backward, and AdamW without CPU fallback; explicit fused AdamW matches CANN/PyTorch for two fixed-gradient steps. BF16 embedding/RMSNorm/RoPE training kernels pass independent real-NPU references. After correcting Python-scalar promotion, RMSNorm rounding order, and BF16 SiLU, all 29 hidden states and logits match native `torch_npu` elementwise for the maintained one-step input. Eliminating 57 no-op full-slice gradients and lowering 112 continuous last-axis gradients to cached-zero CANN Cat preserves the exact snapshot and brings the current same-device protocol from `1.195x` to about `1.063x`; direct CANN RoPE reaches `0.988x` but is rejected because its logits and gradient trajectory differ. Cross-framework long training parity and the exact-path performance gate remain open. See the [training report](../../refactor-wip/results/transformers/2026-08-30-qwen3-ascend-training.md).
@@ -135,7 +136,7 @@ research only; no autonomous mutation path is implemented. See
 1. Read [collaboration rules](collaboration.md).
 2. Configure a portable, isolated run from [environment](environment.md).
 3. Search the [active known-issues ledger](known-issues.md) and
-   [`docs/results/`](../../refactor-wip/results/README.md) for existing evidence.
+   [`refactor-wip/results/`](../../refactor-wip/results/README.md) for existing evidence.
 4. Confirm the branch, exact commit, dirty state, and target backend.
 5. Run the smallest reproduction before editing.
 
@@ -170,11 +171,10 @@ owner, executable evidence, workaround, and exit condition.
 - Update this index only when its current-state summary or links change.
 - Put durable architectural decisions under `docs/`.
 - Put compact, reproducible verification and performance conclusions in a dated
-  `docs/results/YYYY-MM-DD-topic.md` report.
+  `refactor-wip/results/YYYY-MM-DD-topic.md` report during the refactor.
 - Keep raw logs, generated source, caches, wheels, profiles, and large benchmark
   data under `$JITTOR_LAB_ROOT/_state/`.
-- A report names the exact commit, environment, commands, results, limitations,
-  and any unversioned artifact hashes.
+- A report names the exact commit, environment, commands, results, limitations, and any unversioned artifact hashes.
 
 The Git history is the completed-work ledger. Do not rebuild a chronological
 commit diary in this file.
