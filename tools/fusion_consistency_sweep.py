@@ -63,18 +63,65 @@ def evaluate(jt, fn, a_np, b_np, no_fuse, use_cuda):
         return np.asarray(fn(a, b).numpy(), dtype=np.float64)
 
 
+def opinfo_cases(jt):
+    """One case per OpInfo entry, wrapped so fusion has an expression to fuse.
+
+    A bare `op(x)` is a single kernel with nothing to fuse into, so the two
+    evaluations would be trivially identical and the sweep would report a clean
+    bill of health it had not earned. Each operator is therefore placed inside a
+    small chain -- `op(a + b) * 2 - b` -- which is what a real graph looks like
+    and what gives the pass something to do.
+    """
+    import sys, pathlib as _pl
+    sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "tests"))
+    from opinfo.database import op_db
+    cases = []
+    for info in op_db:
+        try:
+            operator = info.op
+        except Exception:
+            continue
+        if operator is None:
+            continue
+        for arity in (1, 2):
+            if arity == 1:
+                fn = (lambda o: lambda a, b: o(a + b) * 2.0 - b)(operator)
+            else:
+                fn = (lambda o: lambda a, b: o(a + b, b) * 2.0 - a)(operator)
+            cases.append(("%s/%d" % (info.name, arity), fn))
+    return cases
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", default="cpu", choices=("cpu", "cuda"))
     parser.add_argument("--json")
+    parser.add_argument("--all-ops", action="store_true",
+                        help="sweep every OpInfo entry instead of the written cases")
+    parser.add_argument("--progress",
+                        help="append each case name before running it, so a "
+                             "crash names its own casualty")
     args = parser.parse_args(argv)
 
     import jittor as jt
     use_cuda = 1 if args.device == "cuda" else 0
     a_np, b_np = inputs()
 
+    cases = opinfo_cases(jt) if args.all_ops else build_cases(jt)
+
+    attempted = set()
+    progress = pathlib.Path(args.progress) if args.progress else None
+    if progress is not None and progress.is_file():
+        attempted = {l.strip() for l in
+                     progress.read_text(encoding="utf-8").splitlines() if l.strip()}
+
     rows, differ = [], 0
-    for name, fn in build_cases(jt):
+    for name, fn in cases:
+        if name in attempted:
+            continue
+        if progress is not None:
+            with progress.open("a", encoding="utf-8") as h:
+                h.write(name + "\n"); h.flush()
         try:
             fused = evaluate(jt, fn, a_np, b_np, 0, use_cuda)
             plain = evaluate(jt, fn, a_np, b_np, 1, use_cuda)
