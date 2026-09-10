@@ -123,7 +123,8 @@ def python_executable():
     return PYTHON
 
 
-def child_env(extra=None, inherit=True, without_torch_mode=False):
+def child_env(extra=None, inherit=True, without_torch_mode=False,
+              repo_paths=True):
     """An environment whose ``PYTHONPATH`` starts at this session's checkout.
 
     ``extra`` is applied on top of the inherited environment, but the pinned
@@ -132,6 +133,15 @@ def child_env(extra=None, inherit=True, without_torch_mode=False):
     Pass ``inherit=False`` when ``extra`` is already the complete environment --
     a caller that *removed* a variable needs that, since merging onto
     ``os.environ`` would put it straight back.
+
+    ``repo_paths=False`` removes ``PYTHONPATH`` instead of pinning it, for the
+    handful of children whose *question* is how an import resolves without this
+    checkout on the path -- "what does `import jittor` find for someone who
+    just installed it". Those children used to call the interpreter directly to
+    get that, which put them outside the contract in
+    ``tests/structure/test_child_process_contract.py`` and made the rule
+    unenforceable for everyone else. The exception is better named here, once,
+    than left as four call sites that look like oversights.
     """
     if inherit and extra and "PATH" in extra:
         # Merging a complete environment onto os.environ cannot *remove*
@@ -151,6 +161,9 @@ def child_env(extra=None, inherit=True, without_torch_mode=False):
     if without_torch_mode:
         for name in TORCH_MODE_VARIABLES:
             env.pop(name, None)
+    if not repo_paths:
+        env.pop("PYTHONPATH", None)
+        return env
     pinned = source_python_dir()
     if pinned is not None:
         existing = env.get("PYTHONPATH", "")
@@ -272,7 +285,7 @@ def _drop_pipes(process):
 
 
 def _run(command, env, timeout, cwd, text, check, input, merge_stderr,
-         shell=False, inherit=True, without_torch_mode=False):
+         shell=False, inherit=True, without_torch_mode=False, repo_paths=True):
     seconds = default_timeout(timeout)
     # Jittor's own logging is not ASCII (op keys are separated by U+00AB), so
     # decoding a child's output by the ambient locale fails outright under
@@ -280,7 +293,8 @@ def _run(command, env, timeout, cwd, text, check, input, merge_stderr,
     decoding = {"encoding": "utf-8", "errors": "replace"} if text else {}
     options = dict(
         env=child_env(env, inherit=inherit,
-                      without_torch_mode=without_torch_mode),
+                      without_torch_mode=without_torch_mode,
+                      repo_paths=repo_paths),
         cwd=None if cwd is None else str(cwd),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
@@ -327,7 +341,8 @@ def _run(command, env, timeout, cwd, text, check, input, merge_stderr,
 
 def run_python_child(args, *, env=None, timeout=None, cwd=None, text=True,
                      check=False, input=None, merge_stderr=False, inherit=True,
-                     crash_isolated=False, without_torch_mode=False):
+                     crash_isolated=False, without_torch_mode=False,
+                     repo_paths=True):
     """Run ``[PYTHON, *args]`` against this tree, with a clear timeout.
 
     ``merge_stderr`` folds stderr into stdout, which is what most callers want
@@ -344,13 +359,14 @@ def run_python_child(args, *, env=None, timeout=None, cwd=None, text=True,
     if crash_isolated:
         command, env = _crash_isolated(command, env)
     return _run(command, env, timeout, cwd, text, check, input, merge_stderr,
-                inherit=inherit, without_torch_mode=without_torch_mode)
+                inherit=inherit, without_torch_mode=without_torch_mode,
+                repo_paths=repo_paths)
 
 
 def run_child_script(source, *, env=None, timeout=None, cwd=None, text=False,
                      check=False, merge_stderr=False, directory=None,
                      name="child", inherit=True, crash_isolated=False,
-                     without_torch_mode=False):
+                     without_torch_mode=False, repo_paths=True):
     """Write ``source`` to a file and run it, so tracebacks name real lines.
 
     ``python -c`` reports ``<string>`` for every frame, which makes a failing
@@ -367,7 +383,7 @@ def run_child_script(source, *, env=None, timeout=None, cwd=None, text=False,
         command, env = _crash_isolated(command, env)
     return _run(command, env, timeout, cwd, text, check, None,
                 merge_stderr, inherit=inherit,
-                without_torch_mode=without_torch_mode)
+                without_torch_mode=without_torch_mode, repo_paths=repo_paths)
 
 
 def mpirun_path():

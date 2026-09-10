@@ -36,10 +36,8 @@ what they say.
 """
 
 from _helpers import capability as _test_capability
+from _helpers.child_process import run_child_script
 
-import os
-import subprocess
-import sys
 import textwrap
 import unittest
 
@@ -151,6 +149,15 @@ class TestVarIndexBoundsCpu(unittest.TestCase):
 
 #: Run in a subprocess: a device-side trap ends the CUDA context, so this
 #: cannot share a process with anything that runs after it.
+#:
+#: Launched through `_helpers.child_process` rather than `subprocess` directly.
+#: `tests/conftest.py` puts this checkout on its own `sys.path` and does not
+#: export `PYTHONPATH`, so a bare `subprocess.run([sys.executable, ...])` hands
+#: the child whatever jittor the environment resolves -- in a development
+#: checkout, an editable install pointing at a *different* tree. The child
+#: would still refuse the index, and the test would pass having proved nothing
+#: about the code under test. `tests/structure/test_child_process_contract.py`
+#: states the rule; this file broke it on its first draft.
 _CUDA_CHILD = textwrap.dedent("""
     import numpy as np, jittor as jt
     jt.flags.use_cuda = 1
@@ -174,19 +181,19 @@ class TestVarIndexBoundsCuda(unittest.TestCase):
                 x[jt.array([-1, 0, 4, -5])].numpy(), [4.0, 0.0, 4.0, 0.0])
 
     def test_out_of_range_does_not_produce_a_value_on_device(self):
-        env = dict(os.environ)
-        env["JITTOR_TORCH_SHIM"] = "0"
-        result = subprocess.run([sys.executable, "-c", _CUDA_CHILD],
-                                capture_output=True, text=True, env=env,
-                                timeout=2400)
+        # `crash_isolated` because this child is *expected* to die: the kernel
+        # traps, which takes the CUDA context with it. Without it a signal
+        # death reaches pytest as a bare negative return code.
+        result = run_child_script(_CUDA_CHILD, text=True, timeout=2400,
+                                  crash_isolated=True, name="index_bounds")
+        stdout = result.stdout or ""
         # Anything but a clean exit-0 means the child never reached the read or
         # never got a value back. Exit 3 is the one outcome this rejects: a
         # number returned for an index that does not exist.
         self.assertNotEqual(
             result.returncode, 3,
-            "CUDA returned a value for an out-of-range index: %s"
-            % result.stdout.strip())
-        self.assertNotIn("RETURNED", result.stdout)
+            "CUDA returned a value for an out-of-range index: %s" % stdout.strip())
+        self.assertNotIn("RETURNED", stdout)
 
 
 if __name__ == "__main__":

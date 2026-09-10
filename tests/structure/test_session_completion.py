@@ -23,7 +23,6 @@ nobody has checked.
 """
 
 import json
-import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -37,6 +36,7 @@ CHECKER = REPO_ROOT / "tools" / "check_session_completed.py"
 
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 from _helpers import session_completion  # noqa: E402
+from _helpers.child_process import run_python_child  # noqa: E402
 
 
 TRUNCATED_LOG = """\
@@ -51,9 +51,7 @@ tests/ops/test_ops.py::TestCommonCPU::test_reference_gather_float32 PASSED
 
 
 def _run(*args):
-    return subprocess.run(
-        [sys.executable, str(CHECKER), *args],
-        capture_output=True, text=True)
+    return run_python_child([str(CHECKER), *args], text=True)
 
 
 class TestTheCheckerFires(unittest.TestCase):

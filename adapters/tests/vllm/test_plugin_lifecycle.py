@@ -2,12 +2,12 @@
 import builtins
 import importlib
 import os
-import subprocess
 import sys
 import types
 
 import pytest
 
+from _helpers.child_process import run_python_child
 from jittor.compat import module_patcher as patcher
 from jittor.compat import transaction
 from jittor_adapters.vllm import bootstrap, register
@@ -58,8 +58,14 @@ def isolated_hooks():
 
 
 def test_importing_distribution_does_not_activate_backend():
-    result = subprocess.run([sys.executable, "-c", "import sys; import jittor_adapters.vllm as jittor_vllm; assert not {'jittor', 'torch', 'vllm'} & sys.modules.keys()"],
-                            env=os.environ.copy(), capture_output=True, text=True)
+    # `env=os.environ.copy()` used to leave the child importing whichever
+    # jittor_adapters the environment resolved -- in a development checkout, an
+    # editable install pointing at another tree. The child would still import
+    # cleanly and the test would pass having proved nothing about this one.
+    result = run_python_child(
+        ["-c", "import sys; import jittor_adapters.vllm as jittor_vllm; "
+               "assert not {'jittor', 'torch', 'vllm'} & sys.modules.keys()"],
+        text=True)
     assert result.returncode == 0, result.stderr
 
 

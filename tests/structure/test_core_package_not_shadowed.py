@@ -32,6 +32,8 @@ import unittest
 
 import pytest
 
+from _helpers.child_process import run_python_child
+
 pytestmark = pytest.mark.structure
 
 _PROBE = (
@@ -47,12 +49,13 @@ _PROBE = (
 
 def _resolve_jittor_without_repo_paths():
     """How `import jittor` resolves for someone who just installed it."""
-    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
-    result = subprocess.run(
-        [sys.executable, "-c", _PROBE],
-        capture_output=True, text=True, env=env,
-        cwd=tempfile.gettempdir(),
-    )
+    # `repo_paths=False` is the whole point: the question is what an import
+    # finds *without* this checkout on the path. It goes through the child
+    # helper anyway, because a bare `subprocess.run([sys.executable, ...])`
+    # here also opts out of the pinned interpreter and the timeout, and left
+    # `tests/structure/test_child_process_contract.py` red for everyone else.
+    result = run_python_child(["-c", _PROBE], repo_paths=False, text=True,
+                              cwd=tempfile.gettempdir())
     if result.returncode != 0:
         raise AssertionError(
             "probe interpreter failed:\n" + result.stderr[-2000:])

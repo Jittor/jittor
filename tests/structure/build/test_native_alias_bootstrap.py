@@ -1,7 +1,6 @@
 """Native import aliases work without loading Jittor or its optional compat tree."""
 
 from pathlib import Path
-import subprocess
 import sys
 
 from _helpers.child_process import run_python_child
@@ -111,9 +110,12 @@ assert not any(name == "jittor.compat" or name.startswith("jittor.compat.")
                for name in sys.modules)
 print("native-alias-bootstrap-ok")
 '''
-    result = subprocess.run(
-        [sys.executable, "-I", "-c", script, str(source)],
-        text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15,
-    )
+    # `-I` already ignores PYTHONPATH -- the child puts `source` on its own
+    # path from argv -- so the pin the helper adds is inert here. It still goes
+    # through the helper: naming the interpreter directly is what the contract
+    # in tests/structure/test_child_process_contract.py forbids, and an
+    # exception that reads as an oversight cannot be told from one.
+    result = run_python_child(["-I", "-c", script, str(source)],
+                              text=True, merge_stderr=True, timeout=15)
     assert result.returncode == 0, result.stdout
     assert "native-alias-bootstrap-ok" in result.stdout
