@@ -396,6 +396,56 @@ framework defects.
 - Review/expiry condition: `register_hook` leaves `location()` unchanged on CPU
   and real CUDA, and the side-effect probe reports no mutation for it.
 
+## KI-TEST-004: 28 ACL structure tests stopped executing and nobody read the report
+
+- Severity: High (a whole backend's structural gates proved nothing for two days)
+- Status: Partly fixed 2026-09-10 -- they execute again; the 28 mismatches they
+  now report are open
+- Owner: ACL backend maintainers
+- Evidence: `tests/structure/backends/acl/test_acl_python_registration.py`
+  collected 40 cases and executed **0** of them. Every one failed at fixture
+  setup with:
+
+  ```
+  ModuleNotFoundError: No module named 'jittor._core'
+  ```
+
+- Cause: the fixture loads `python/jittor/_runtime/dispatch.py` by path --
+  deliberately, so a static structure test does not pull the runtime in -- and
+  builds a stub package tree in `sys.modules` for it to import from. On
+  2026-09-08 (`7e83d6da4`) `dispatch.py` gained
+  `from jittor._core.dtypes import ...` at module scope, and `jittor._core` was
+  not one of the stubs. The module became unloadable in isolation, which is a
+  property nothing had written down.
+- Why it went unnoticed: the session report **said so** -- "files this session
+  proved nothing about: test_acl_python_registration.py 0 skipped, 0 executed"
+  -- and that report is marked "Reported only. Set
+  `JITTOR_TEST_REQUIRE_EXECUTION=1` (the gates do) to make an unexplained entry
+  fail the run." So the machinery for catching exactly this exists and works;
+  what was missing is that a red suite makes one more red line invisible.
+- Fix applied: the fixture stubs `jittor._core` and loads the real
+  `python/jittor/_core/dtypes.py` by path alongside `dispatch.py`. The real
+  module rather than a stub, because `dtypes.py` imports only `typing` at
+  module scope -- its `jittor_core` references are lazy, inside functions -- so
+  it costs nothing and the fixture stays honest about what it exercises.
+  40 errors / 0 executed became **28 failed / 12 passed**.
+- What the 28 are, and why they are left open: the ACL kernels moved to a
+  structured attribute dictionary (`code_with_attributes(..., attributes=...)`,
+  `backends/acl/kernels/ops/pool_op.py`) while the fixture's recorders still
+  model the older positional `attr_code`, so they fail with
+  `record_pool() got an unexpected keyword argument 'attributes'` and similar.
+  The signature moved during the window in which these tests were not running.
+  Reconciling them means deciding, per case, whether the test's expectation or
+  the kernel is the stale one; that needs the ACL maintainers, and this machine
+  has no NPU to settle a runtime question with.
+- Same shape as KI-EXEC-002 and the roundtrip sweep's device defect: a refactor
+  changed something no contract had written down, and a check went from
+  asserting to asserting nothing. The three were found on the same day by
+  asking one question of each gate -- *would this fail if the thing it checks
+  were broken?*
+- Review/expiry condition: the file reports 40 passed, or every remaining
+  failure has an entry saying which side is wrong and why.
+
 ## KI-EXEC-002: the profiler cannot see work that `auto_flush_ops` already launched
 
 - Severity: High (measurements are silently partial; two gates are permanently red)

@@ -53,6 +53,7 @@ def providers(monkeypatch):
 
     for name in (
         "jittor",
+        "jittor._core",
         "jittor._runtime",
         "jittor.backends",
         "jittor.backends.acl",
@@ -68,6 +69,19 @@ def providers(monkeypatch):
     native.flags = SimpleNamespace(no_grad=1)
     native.runtime = SimpleNamespace(use_cuda=1)
     native.ops = SimpleNamespace(arg_reduce=lambda *args: ("indices", "values"))
+    # The real module, not a stub. `dispatch.py` gained
+    # `from jittor._core.dtypes import ...` at module scope on 2026-09-08, and
+    # this fixture -- which loads it by path precisely so a static structure
+    # test does not pull the runtime in -- had no `jittor._core` to satisfy it.
+    # Every test in this file then failed at setup with
+    # `ModuleNotFoundError: No module named 'jittor._core'`, so all 28 of them
+    # went from checking ownership to checking nothing. The session report said
+    # so ("files this session proved nothing about"); nobody was reading it.
+    #
+    # `dtypes.py` imports only `typing` at module scope -- its `jittor_core`
+    # references are lazy, inside functions -- so loading the real thing costs
+    # nothing and keeps the fixture honest about what it is exercising.
+    load("jittor._core.dtypes", ROOT / "python/jittor/_core/dtypes.py")
     dispatch = load("jittor._runtime.dispatch", ROOT / "python/jittor/_runtime/dispatch.py")
 
     def primitive(name):
