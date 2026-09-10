@@ -1,24 +1,29 @@
 # 教程
 
-可执行教程以 MyST Markdown 维护在 `examples/notebooks` 下。`tutorials` 这个 nox
-会话会用 Jupytext 在仓库外生成 notebook，并执行离线 CPU 冒烟教程。
+可执行教程以 MyST Markdown 维护在 `examples/notebooks` 下。
 
-## 快速开始
+**学习路径的唯一权威来源是
+[`examples/notebooks/README.md`](https://github.com/Jittor/jittor/blob/master/examples/notebooks/README.md)**，
+那里有按顺序编排的完整课程，注明每篇教什么、需要什么前置、是否需要显卡。
 
-- [模型定义与训练](https://github.com/Jittor/jittor/blob/master/examples/notebooks/example.md)
-- [算子与变量](https://github.com/Jittor/jittor/blob/master/examples/notebooks/basics.md)
-- [元算子](https://github.com/Jittor/jittor/blob/master/examples/notebooks/meta_op.md)
-- [自定义 C++ 与 CUDA 算子](https://github.com/Jittor/jittor/blob/master/examples/notebooks/custom_op.md)
-- [性能分析器](https://github.com/Jittor/jittor/blob/master/examples/notebooks/profiler.md)
+这里不再重复一份清单。此前本页、根 README 和 notebooks 目录各维护一份，三份互不
+一致且没有一份完整——`tests/integration/test_notebooks.py` 现在会检查权威路径列全了
+所有教程，一篇存在却没被编排的教程会让门禁变红。
 
-## 模型与技术
+## 两条入门线
 
-- [残差网络训练](https://github.com/Jittor/jittor/blob/master/examples/notebooks/resnet_training.md)
-- [从零实现 Transformer](https://github.com/Jittor/jittor/blob/master/examples/notebooks/transformer.md)
-- [从零实现去噪扩散模型](https://github.com/Jittor/jittor/blob/master/examples/notebooks/diffusion.md)
-- [LoRA 参数高效微调](https://github.com/Jittor/jittor/blob/master/examples/notebooks/lora.md)
+* **零基础**：从「60 分钟入门」四篇开始，安装到 MNIST。
+* **有其它框架经验**：走主线，它只讲 Jittor 与它们的差异——先读
+  [算子与 Var](https://github.com/Jittor/jittor/blob/master/examples/notebooks/basics.md)，
+  再读
+  [设备与驻留](https://github.com/Jittor/jittor/blob/master/examples/notebooks/device_placement.md)，
+  然后是
+  [模型定义与训练](https://github.com/Jittor/jittor/blob/master/examples/notebooks/example.md)。
 
-## 在本地打开 notebook
+「设备与驻留」排在训练之前是有意的：Jittor 用一个全局标志移动整张计算图，而不是
+每个张量自带设备；不先弄清这个差异，后面的性能问题会被归因到错误的地方。
+
+## 在本地打开
 
 ```bash
 python -m pip install -r requirements/examples.txt

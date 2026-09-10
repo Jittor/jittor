@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+from urllib.parse import unquote
 import sys
 
 import pytest
@@ -20,6 +21,7 @@ _TOPICS = (
     "LSGAN",
     "basics",
     "custom_op",
+    "device_placement",
     "diffusion",
     "example",
     "gpt2_training",
@@ -37,7 +39,7 @@ _TOPICS = (
 )
 
 _SMOKE_TOPICS = (
-    "basics", "example", "meta_op", "custom_op", "profiler",
+    "basics", "device_placement", "example", "meta_op", "custom_op", "profiler",
     "resnet_training", "transformer", "diffusion", "lora",
     "vit_training", "gpt2_training", "mixed_precision",
 )
@@ -138,6 +140,58 @@ def test_notebook_sources_are_complete_clean_and_portable():
     assert (root / "figs" / "mop.svg").is_file()
     assert (root / "60分钟快速入门Jittor" / "mnist.png").is_file()
     assert (root / "60分钟快速入门Jittor" / "jittor-star.png").is_file()
+
+
+@pytest.mark.structure
+def test_every_tutorial_appears_in_the_learning_path():
+    """A tutorial nobody knows when to read is worth what an absent one is worth.
+
+    ``_TOPICS`` already pins the directory contents, so a new file cannot be
+    added without being declared. Nothing checked the other half: whether the
+    index that tells a reader *what to read and in what order* still mentions
+    it. Three separate lists had drifted apart -- this README, the docs
+    tutorials index and the root README each named a different subset, and none
+    of them was complete -- which is the same silent gap the rest of this
+    repository gates against, in documentation form.
+
+    Both directions are asserted. A path entry for a tutorial that no longer
+    exists sends readers to a dead link, and is exactly as wrong as a missing
+    one.
+    """
+    index = (_notebook_root() / "README.md").read_text(encoding="utf-8")
+    targets = _index_link_targets(index)
+    missing = [topic for topic in _TOPICS if not _index_mentions(targets, topic)]
+    assert missing == [], (
+        "these tutorials exist but the learning path in "
+        "examples/notebooks/README.md never names them: %s" % missing)
+
+
+@pytest.mark.structure
+def test_the_learning_path_links_nowhere_dead():
+    """Every markdown link out of the path resolves to a file that is here."""
+    index_path = _notebook_root() / "README.md"
+    index = index_path.read_text(encoding="utf-8")
+    broken = []
+    for target in _index_link_targets(index):
+        resolved = (index_path.parent / target).resolve()
+        if not resolved.is_file():
+            broken.append(target)
+    assert broken == [], (
+        "the learning path points at files that do not exist: %s" % broken)
+
+
+def _index_link_targets(index):
+    """Every markdown link target in the index, percent-decoding restored.
+
+    Comparing raw strings would make the check depend on whether the author
+    escaped the spaces in a filename, which has nothing to do with whether the
+    tutorial is reachable.
+    """
+    return {unquote(target) for target in re.findall(r"\]\(([^)#]+\.md)\)", index)}
+
+
+def _index_mentions(targets, topic):
+    return (topic + ".md") in targets
 
 
 @pytest.mark.structure

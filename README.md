@@ -288,17 +288,23 @@ not repository sources.
 维护的教程以 MyST Markdown 作为版本化源文件；执行和验证时由 Jupytext 临时生成
 `.ipynb`，生成的 notebook 不进入仓库。
 
-- [Model definition and training / 模型定义与训练](examples/notebooks/example.md)
-- [Ops and Vars / 算子与 Var](examples/notebooks/basics.md)
-- [Meta-operators / 元算子](examples/notebooks/meta_op.md)
-- [Custom C++ and CUDA operators / 自定义 C++ 与 CUDA 算子](examples/notebooks/custom_op.md)
-- [Profiler / 性能分析](examples/notebooks/profiler.md)
-- [Residual network training / 残差网络训练](examples/notebooks/resnet_training.md)
-- [60-minute Chinese introduction / 60 分钟中文入门](examples/notebooks/60分钟快速入门Jittor/README.md)
+The ordered curriculum -- what to read, in what order, and what each tutorial
+needs -- is maintained in one place:
+**[examples/notebooks/README.md](examples/notebooks/README.md)**.
+
+按顺序编排的完整课程（读什么、什么顺序、每篇需要什么前置）维护在唯一一处：
+**[examples/notebooks/README.md](examples/notebooks/README.md)**。
+
+Beginners start with the four-part 60-minute Chinese introduction; readers who
+already know another framework start with `basics`, then `device_placement`,
+then `example`.
+
+零基础从「60 分钟入门」四篇开始；已有其它框架经验的从 `basics`、
+`device_placement`、`example` 三篇入手。
 
 ```bash
 python -m pip install -r requirements/examples.txt
-python -m notebook --ServerApp.root_dir="$PWD/examples/notebooks"
+python -m nox -s tutorials
 ```
 
 <a id="contributing"></a>
