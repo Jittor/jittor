@@ -619,39 +619,59 @@ framework defects.
   the input contains one, a parity case covers a NaN-bearing reduction, and the
   remaining four operators from that sweep are triaged.
 
-## KI-BACKEND-008: CUDA flushes subnormals to zero, CPU keeps them
+## KI-BACKEND-008: fixed -- the flush-to-zero decision is written down and asserted
 
-- Severity: Medium
-- Status: Reproduced; a documented decision is what is missing, not a fix
-- Owner: CUDA backend maintainers
-- Evidence: float32, smallest normal is `1.18e-38`.
+- Severity: was Medium (undocumented device divergence)
+- Status: Fixed 2026-09-10 -- what was missing was the statement, not a change
+- Evidence, measured on both devices and both policies:
 
-  | value | CPU | CUDA | NumPy |
-  | --- | --- | --- | --- |
-  | `1e-45` (subnormal) | kept | **0.0** | kept |
-  | `1e-40` (subnormal) | kept | **0.0** | kept |
-  | `1e-30` (normal) | kept | kept | kept |
+  | value | CPU | CUDA default | CUDA `strict` | NumPy |
+  | --- | --- | --- | --- | --- |
+  | `1e-45` (subnormal) | kept | **0.0** | kept | kept |
+  | `1e-40` (subnormal) | kept | **0.0** | kept | kept |
+  | `1e-30` (normal) | kept | kept | kept | kept |
 
-  Two of the seven operator disagreements found by the adversarial sweep have
-  this single cause: `count_nonzero` counts `1e-45` on CPU and not on CUDA, and
-  `lgamma(1e-45)` gives the correct `103.28` on CPU and `inf` on CUDA -- the
-  input reached the function already flushed to zero, and `lgamma(0)` is `inf`.
-- Symptom: a gradient that underflows into the subnormal range is exactly zero
-  on CUDA and a tiny non-zero on CPU. The two devices then take different
-  update paths for the same model, which is invisible until someone compares
-  them.
-- This one is a decision, not a mistake: flush-to-zero is the normal CUDA
-  trade -- subnormal arithmetic is slow, and most training does not care. What
-  is missing is that the decision is nowhere written down, so it reads as a
-  defect when a parity comparison hits it, and the two devices are documented
-  as equivalent when they are not.
-- Fix direction: state it. Either document flush-to-zero as CUDA's contract and
-  make the parity suite tolerate it explicitly, or disable it (`-ftz=false`) and
-  measure the cost. Silently differing is the only option that should be off
-  the table.
-- Review/expiry condition: the subnormal behaviour of each backend is stated in
-  the backend documentation, and the parity suite either asserts agreement or
-  names this as a known and accepted difference.
+  It reaches past the value: the input is already zero when the function sees
+  it, so `log(1e-45)` is `-103.28` on CPU and `-inf` on CUDA default, and
+  `count_nonzero([1e-45])` is 1 against 0. `lgamma` was the original symptom;
+  `log` reproduces it and is in the regression.
+- Cause: nvcc's `--use_fast_math` implies `-ftz=true`.
+- What was done: `jt.flags.cuda_kernel_math = "strict"` already existed
+  (`src/runtime/jit_policy.cc`) and **fully restores subnormals** -- measured,
+  not assumed, and the `strict` column above is the measurement. The default
+  is unchanged. What is new is that the behaviour is now stated in
+  `docs/notes/float32-precision-policy.md` and asserted by
+  `tests/backends/parity/test_subnormal_contract.py`, so a change to it is
+  visible instead of surfacing as a parity mismatch someone has to diagnose.
+- Cost of turning it off, RTX 4090, two interleaved rounds, minimum of five:
+
+  | 16M float32 | default | strict |
+  | --- | --- | --- |
+  | `divide` | 218.6 us | 218.8 us |
+  | `sqrt` | 148.1 | 148.8 |
+  | `exp` | 150.0 | 150.2 |
+  | `log` | 148.1 | 148.2 |
+  | `mul-add` (control, unaffected by fast-math) | 218.6 | 218.6 |
+
+  **Not measurable at this scale**: 0.1-0.8%, the same spread as the control.
+  These kernels are memory-bound, so the ALU cycles fast-math saves are already
+  hidden behind the loads.
+
+  The compute-bound case is **unresolved, and is recorded that way**. Chaining
+  `exp/log/sqrt` eight and thirty-two deep, the spread between two runs of the
+  *same* policy (1.01e-3 against 4.16e-4, a factor of 2.4) was larger than the
+  spread between the two policies -- fusion variance, not the flag. So the
+  honest statement is that no cost was measured, not that there is none. A
+  usable number needs a benchmark whose fusion shape is pinned.
+- Why the default was left alone: nothing here says flush-to-zero is the wrong
+  trade, and changing a process-wide numeric default on the strength of a
+  measurement that could not resolve the compute-bound case would be the same
+  mistake in the other direction.
+- Regression teeth: the two policies must actually differ for the file to pass.
+  Pointing the `strict` case at `default` turns it red --
+  `AssertionError: 0.0 == 0.0 : cuda_kernel_math='strict' did not stop the
+  flush for 1e-45`. A build where the policy switch did nothing cannot satisfy
+  it, which is the failure mode a one-sided "CUDA flushes" assertion would miss.
 
 ## KI-OPS-011: CPU `digamma` returns -inf where NaN and +inf are correct
 
