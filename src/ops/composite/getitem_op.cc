@@ -441,7 +441,7 @@ void GetitemOp::jit_run() {
     // says so when it happens). The device does not need this: it is handed a
     // null fault and traps where the bad index is, in `index_bounds.h`.
     @if(@is_def(JIT_cpu),
-    CHECK(!index_fault.bad()) << "index" << index_fault.index <<
+    USER_CHECK(!index_fault.bad()) << "index" << index_fault.index <<
         "is out of bounds for dimension" << index_fault.dim <<
         "with size" << index_fault.size;
     )
