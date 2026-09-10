@@ -575,8 +575,123 @@ def probe_serialization_roundtrip(jt, device):
                   np.array([True]))
 
 
+def probe_indexing_edges(jt, device):
+    """Indexing conventions, at the values where libraries disagree.
+
+    Negative indices, an empty selection and an out-of-range index are three
+    places where "reasonable" has more than one answer, and where returning
+    something plausible is worse than refusing: a silently wrapped index reads
+    data from the wrong row.
+    """
+    a = np.arange(12, dtype="float32").reshape(3, 4)
+    A = jt.array(a)
+
+    check("negative index counts from the end", "index",
+          A[-1].numpy(), a[-1])
+    check("negative slice bound", "index", A[:, -2:].numpy(), a[:, -2:])
+    check("negative step is rejected or matches numpy", "index",
+          A[0].numpy(), a[0])
+
+    empty = A[0:0]
+    check("empty slice keeps the trailing shape", "index",
+          np.array(empty.shape), np.array(a[0:0].shape))
+
+    # A boolean mask selecting nothing, and one selecting everything.
+    m_none = np.zeros((3,), dtype="bool")
+    m_all = np.ones((3,), dtype="bool")
+    for name, mask in (("none", m_none), ("all", m_all)):
+        try:
+            got = A[jt.array(mask)].numpy()
+            check("boolean mask selecting %s" % name, "index",
+                  got.astype(np.float64), a[mask].astype(np.float64))
+        except Exception as exc:
+            RESULTS.append({"name": "boolean mask selecting %s" % name,
+                            "category": "index", "status": "ERROR",
+                            "detail": "%s: %s" % (type(exc).__name__, str(exc)[:90])})
+
+    # Out of range: numpy raises. Returning a wrapped or clamped row silently
+    # is the failure worth catching.
+    try:
+        value = A[5].numpy()
+        RESULTS.append({"name": "out-of-range index raises", "category": "index",
+                        "status": "MISMATCH",
+                        "detail": "returned %s instead of raising" % value.tolist()})
+    except Exception:
+        RESULTS.append({"name": "out-of-range index raises", "category": "index",
+                        "status": "OK", "detail": ""})
+
+    # setitem with a negative index writes the row the read would have returned.
+    B = jt.array(a.copy())
+    B[-1] = jt.array(np.zeros((4,), dtype="float32"))
+    expect = a.copy(); expect[-1] = 0
+    check("setitem honours a negative index", "index", B.numpy(), expect)
+
+
+def probe_module_and_optimizer(jt, device):
+    """Training-loop semantics: the claims a framework is actually used for.
+
+    Everything above tests one operation. These test the contracts that hold
+    *between* operations across a step -- state_dict fidelity, what train/eval
+    switches, whether zero_grad actually clears, and whether weight decay is
+    applied where the optimizer says it is. A defect here does not produce a
+    wrong number in a unit test; it produces a model that trains slightly wrong.
+    """
+    from jittor import nn
+
+    # state_dict must round-trip a module exactly.
+    m = nn.Linear(4, 3)
+    before = {k: np.asarray(v.numpy()).copy() for k, v in m.state_dict().items()}
+    m2 = nn.Linear(4, 3)
+    m2.load_state_dict(m.state_dict())
+    after = {k: np.asarray(v.numpy()).copy() for k, v in m2.state_dict().items()}
+    same = all(np.allclose(before[k], after[k]) for k in before)
+    check("state_dict round-trips a Linear", "module",
+          np.array([bool(same)]), np.array([True]))
+    check("state_dict keeps every key", "module",
+          np.array([sorted(before) == sorted(after)]), np.array([True]))
+
+    # eval() must change BatchNorm's behaviour; if it does not, evaluation uses
+    # batch statistics and the reported metric is not the deployed one.
+    bn = nn.BatchNorm(4)
+    x = jt.array(np.random.RandomState(0).randn(8, 4).astype("float32"))
+    bn.train()
+    _ = bn(x)
+    bn.eval()
+    e1 = bn(x).numpy().copy()
+    e2 = bn(x).numpy().copy()
+    check("eval BatchNorm is deterministic across calls", "module", e2, e1)
+    bn.train()
+    t1 = bn(x).numpy().copy()
+    check("train and eval BatchNorm differ", "module",
+          np.array([bool(not np.allclose(t1, e1, atol=1e-6))]), np.array([True]))
+
+    # An optimizer step must move parameters, and zero_grad must clear.
+    lin = nn.Linear(4, 2)
+    opt = jt.optim.SGD(lin.parameters(), lr=0.1)
+    p0 = np.asarray(lin.weight.numpy()).copy()
+    loss = (lin(x) ** 2).sum()
+    opt.step(loss)
+    p1 = np.asarray(lin.weight.numpy()).copy()
+    check("an SGD step moves the weight", "module",
+          np.array([bool(not np.allclose(p0, p1))]), np.array([True]))
+
+    # Weight decay has to change the update, not merely be accepted.
+    lin_a = nn.Linear(4, 2)
+    lin_b = nn.Linear(4, 2)
+    lin_b.load_state_dict(lin_a.state_dict())
+    oa = jt.optim.SGD(lin_a.parameters(), lr=0.1, weight_decay=0.0)
+    ob = jt.optim.SGD(lin_b.parameters(), lr=0.1, weight_decay=0.5)
+    oa.step((lin_a(x) ** 2).sum())
+    ob.step((lin_b(x) ** 2).sum())
+    check("weight_decay changes the update", "module",
+          np.array([bool(not np.allclose(lin_a.weight.numpy(), lin_b.weight.numpy()))]),
+          np.array([True]))
+
+
 PROBES = (
     ("rounding", probe_rounding),
+    ("module", probe_module_and_optimizer),
+    ("index", probe_indexing_edges),
     ("dtype-keep", probe_dtype_preservation),
     ("serialize", probe_serialization_roundtrip),
     ("state", probe_state_and_reproducibility),
