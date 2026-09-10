@@ -8,6 +8,8 @@
 #include "codegen/op_compiler.h"
 #include "codegen/opt/pass_manager.h"
 #include "codegen/opt/pass/reduce_accumulator_pass.h"
+#include "ops/op_register.h"
+#include "ops/reduce_op.h"
 
 namespace jittor {
 
@@ -39,6 +41,38 @@ static bool mentions(const string& text, const string& name) {
         if (!left && !right) return true;
     }
     return false;
+}
+
+// "op3_yp" -> ops[3], the op whose variables the compiler prefixed with it.
+// Returns null when the name is not one of those, which is the safe answer:
+// every caller falls back to the accumulator it would have emitted anyway.
+static Op* owner_of(FusedOp* fused, const string& pointer) {
+    if (!startswith(pointer, "op")) return nullptr;
+    uint i = 2;
+    if (i >= pointer.size() || !isdigit(pointer[i])) return nullptr;
+    int id = 0;
+    while (i < pointer.size() && isdigit(pointer[i]))
+        id = id * 10 + (pointer[i++] - '0');
+    if (i >= pointer.size() || pointer[i] != '_') return nullptr;
+    if (id < 0 || id >= (int)fused->ops.size()) return nullptr;
+    return fused->ops[id];
+}
+
+// Only a floating point *additive* reduction may have its accumulation
+// reassociated into blocks: `+` is associative up to rounding, which is the
+// whole point, while `multiply` is not one people expect to be reordered and
+// `maximum`/`minimum`/the bitwise folds gain nothing from it. An integer sum
+// is exact whatever the order, so it has nothing to gain either.
+static bool is_float_additive_reduce(FusedOp* fused, const string& target) {
+    auto open = target.find('[');
+    if (open == string::npos) return false;
+    Op* owner = owner_of(fused, target.substr(0, open));
+    if (!owner || !owner->is_op(op_ids::reduce())) return false;
+    auto* reduce = dynamic_cast<ReduceOp*>(owner);
+    if (!reduce) return false;
+    if (!(reduce->ns == ns_add || reduce->ns == ns_mean)) return false;
+    auto dtype = reduce->y->dtype();
+    return dtype.is_float() && !dtype.is_complex();
 }
 
 // Split "yp[yid] = rest" into its target and the rest, or return false.
@@ -143,6 +177,7 @@ void ReduceAccumulatorPass::run() {
         }
         if (!ok) continue;
 
+        vector<string> accumulators;
         for (uint s=0; s<stores.size(); s++) {
             const string& target = targets[s];
             string acc = "jt_reduce_acc_" + index_names[s];
@@ -163,6 +198,25 @@ void ReduceAccumulatorPass::run() {
                       + value.substr(at + target.size());
             stores[s]->get_attr(kir::code) = acc + " =" + value;
             node->push_back(target + " = " + acc + ";", &node->after);
+            accumulators.push_back(acc);
+        }
+
+        // One accumulator makes the loop vectorisable; it does not make it
+        // accurate. A single running sum in float32 accumulates a rounding
+        // error that grows with the trip count -- 15% wrong on sixteen
+        // million equal elements -- so record the accumulators here and let
+        // BlockedReductionPass, which runs once the loop nest is final, give
+        // the additive ones a blocked shape. Only when *every* store in the
+        // loop qualifies: they share the iteration space, so they are
+        // reassociated together or not at all.
+        bool additive = true;
+        for (auto& t : targets)
+            if (!is_float_additive_reduce(op, t)) { additive = false; break; }
+        if (additive && accumulators.size()) {
+            string joined = accumulators[0];
+            for (uint s=1; s<accumulators.size(); s++)
+                joined += "," + accumulators[s];
+            node->attrs[kir::reduce_acc] = joined;
         }
     }
 }

@@ -585,7 +585,7 @@ The second vector's zero is a result, not an absence of testing: it says the
 next defect of this kind is more likely to be found by adding another
 special-value case than by adding another magnitude case.
 
-## Three CPU float defects share one surface
+## Three CPU float defects share one surface; two are still open
 
 `KI-BACKEND-004`, `KI-BACKEND-005` and `KI-BACKEND-006` were found separately
 and read as three bugs. They are three symptoms of one thing: **the CPU kernel
@@ -596,8 +596,10 @@ build never decided what its floating-point contract is.**
 - 004 is the expression table. `std::max` and `::max` were each chosen for
   being the obvious spelling, and their NaN behaviour -- accidental on CPU,
   deliberate IEEE `maxNum` on CUDA -- was never part of the choice.
-- 006 is the reduction shape. A single serial accumulator is what you write
-  when accuracy at scale is not a stated requirement.
+- 006 was the reduction shape. A single serial accumulator is what you write
+  when accuracy at scale is not a stated requirement. It is fixed and its entry
+  is gone; see
+  [the result report](../../refactor-wip/results/2026-09-10-cpu-reduction-blocked-pairwise.md).
 
 None of the three is a coding mistake. Each is a reasonable local decision
 taken without a written contract to check it against, which is why they
@@ -606,16 +608,25 @@ one: the same gap produces the same class of defect again.
 
 What is missing is a statement of what CPU float32 promises -- IEEE semantics
 for infinities and NaN, and an accuracy bound for reductions that does not grow
-with size -- and a gate that holds the build to it. The probe categories added
-alongside these entries (`device-agree`, `stability`, `float-edge` in
-`tools/semantic_divergence_probe.py`) are that gate in draft; they are what
-found all three.
+with size. 006 supplies the second half of that as something executable rather
+than prose: `tests/ops/test_reduce_accuracy.py` asserts the *shape of the
+growth* -- the relative error at 16M within a small factor of the error at
+65,536, and within a small factor of NumPy's on the same input -- so it says
+what "accurate enough" means without a threshold that turns red on a different
+machine. The probe categories added alongside these entries (`device-agree`,
+`stability`, `float-edge` in `tools/semantic_divergence_probe.py`) are the rest
+of that gate in draft; they are what found all three, and the CPU `stability`
+mismatch they reported for 006 is now clear.
 
-One more thing they have in common, and it is the practical argument for doing
-this as one piece of work: **006 measured out as free** -- NumPy's pairwise sum
-is 4.4x faster *and* 108x more accurate than the current serial one. The
-assumption that correctness here costs speed is what made all three easy to
-defer, and it is not true for at least one of them.
+One more thing they have in common, and on the one that has been done it is now
+measured rather than predicted: **006 was free.** Blocked accumulation with a
+pairwise fold is **3.7x-4.9x faster** than the serial loop it replaced (4.9 ->
+18.4 GB/s at 64M float32 on the reduction benchmark) *and* leaves the
+worst-case relative error at 16.7M elements at 6.0e-7 instead of 1.5e-1 --
+below NumPy's own 1.6e-5. The one cost found was JIT compile time on large
+fused reduction kernels, +18% after the emitted code was scaled to the body.
+The assumption that correctness here costs speed is what made all three easy to
+defer, and where it has been tested it was not true.
 
 ## KI-BACKEND-004: CUDA `maximum`/`minimum` swallow NaN while CPU propagates it
 
@@ -706,55 +717,6 @@ defer, and it is not true for at least one of them.
 - Review/expiry condition: the four expressions above agree with NumPy on CPU
   at every length, a probe case covers infinities on both devices, and the
   throughput change from the flag is measured and recorded.
-
-## KI-BACKEND-006: CPU float32 sum/mean accumulate serially, so error grows with size
-
-- Severity: Critical
-- Status: Reproduced, unfixed
-- Owner: CPU backend and reduction maintainers
-- Evidence: summing `n` copies of `0.1` as float32, relative error against the
-  exact value:
-
-  | n | Jittor CPU | Jittor CUDA | NumPy |
-  | --- | --- | --- | --- |
-  | 65,536 | 6.2e-4 | 1.6e-7 | 1.6e-7 |
-  | 1,048,576 | 9.9e-3 | 1.6e-7 | 9.8e-7 |
-  | 16,777,216 | **1.5e-1** | 4.3e-7 | 1.6e-5 |
-
-  `mean` inherits it: 1M copies of `0.1` average to `0.09975` on CPU
-  (2.5e-3 relative) against `0.10000002` on CUDA.
-- Symptom: at sixteen million elements the CPU sum is **15% wrong**. The growth
-  is linear in `n`, the signature of a single serial accumulator; CUDA's tree
-  reduction and NumPy's pairwise summation both stay near machine epsilon and
-  do not grow. Nothing warns, and the result is a plausible number rather than
-  an obviously broken one.
-- Blast radius: any large reduction on CPU -- a loss averaged over a big batch,
-  BatchNorm statistics, a norm, an accumulated metric. It also silently widens
-  every CPU-versus-CUDA comparison, so a real backend divergence investigated
-  at that size would be measured against a CPU reference that is itself wrong.
-- Why the parity suite misses it: `tests/backends/parity` compares CPU against
-  the accelerator, which is exactly the comparison that would show this, but its
-  cases are small enough that the serial error is still near epsilon.
-- Fix direction, and it is not a trade-off. Measured on 16.7M random float32
-  (67 MB), same machine, same run:
-
-  | | throughput | relative error |
-  | --- | --- | --- |
-  | Jittor CPU `sum` | 4.9 GB/s | 9.2e-5 |
-  | NumPy `sum` (pairwise) | **21.3 GB/s** | **8.5e-7** |
-
-  NumPy is **4.4x faster and 108x more accurate at the same time**. Blocked
-  accumulation keeps several partial sums, which is what makes it accurate and
-  also what lets the loop use more than one execution port -- the accuracy is a
-  consequence of the faster shape, not a payment for it. The earlier reading of
-  this entry said the fix would cost throughput and should be measured first;
-  the measurement says the current reduction is leaving both on the table.
-  (The 1.5e-1 in the table above is the worst case, all elements equal; random
-  inputs cancel and land at 9.2e-5. Both are far above NumPy.)
-- Workaround: reduce in float64 (`x.float64().sum()`), or reduce in chunks.
-- Review/expiry condition: CPU relative error stays within an order of magnitude
-  of NumPy's for n up to 16M in float32, a parity case covers a reduction large
-  enough to have failed, and the throughput change is measured and recorded.
 
 ## KI-FFT-001: withdrawn -- current CUDA sequence regression is clean
 

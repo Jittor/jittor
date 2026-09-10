@@ -9,10 +9,11 @@
 
 namespace jittor {
 
-struct ReduceAccumulatorPass : Pass {
-    ReduceAccumulatorPass() : Pass("reduce_accumulator") {
-        reads = {kir::code, kir::dtype, kir::lvalue, kir::rvalue};
-        writes = {kir::code, kir::reduce_acc};
+struct BlockedReductionPass : Pass {
+    BlockedReductionPass() : Pass("blocked_reduction") {
+        reads = {kir::code, kir::dtype, kir::lvalue, kir::rvalue,
+                 kir::rvalue2, kir::reduce_acc, kir::has_bc};
+        writes = {kir::code, kir::raw};
     };
     void run() override;
 };

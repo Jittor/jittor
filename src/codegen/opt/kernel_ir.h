@@ -42,6 +42,12 @@ constexpr const char* split_id = "split_id";
 constexpr const char* raw = "raw";
 // set by check_unused; "" means unused, read by remove_unused.
 constexpr const char* used = "used";
+// on an innermost reduction loop, the comma separated accumulator
+//   variables ReduceAccumulatorPass hoisted out of it -- set only when
+//   every accumulating store in that loop is a floating point *additive*
+//   reduction, which is the one case whose accumulation order may be
+//   reassociated. Read by BlockedReductionPass.
+constexpr const char* reduce_acc = "reduce_acc";
 // set by VectorizePass on the loops it handled.
 constexpr const char* vectorized = "vectorized";
 // set by UnrollPass on the loops it handled.
