@@ -423,6 +423,38 @@ framework defects.
   downstream ResNet50 backbones run a forward and backward, and a regression
   covers a chain long enough to have crashed.
 
+## Three CPU float defects share one surface
+
+`KI-BACKEND-004`, `KI-BACKEND-005` and `KI-BACKEND-006` were found separately
+and read as three bugs. They are three symptoms of one thing: **the CPU kernel
+build never decided what its floating-point contract is.**
+
+- 005 is the compile flag. `-Ofast` promises the compiler that infinities and
+  NaN do not occur, and it optimises on that promise.
+- 004 is the expression table. `std::max` and `::max` were each chosen for
+  being the obvious spelling, and their NaN behaviour -- accidental on CPU,
+  deliberate IEEE `maxNum` on CUDA -- was never part of the choice.
+- 006 is the reduction shape. A single serial accumulator is what you write
+  when accuracy at scale is not a stated requirement.
+
+None of the three is a coding mistake. Each is a reasonable local decision
+taken without a written contract to check it against, which is why they
+accumulated quietly and why fixing them one at a time will not stop the next
+one: the same gap produces the same class of defect again.
+
+What is missing is a statement of what CPU float32 promises -- IEEE semantics
+for infinities and NaN, and an accuracy bound for reductions that does not grow
+with size -- and a gate that holds the build to it. The probe categories added
+alongside these entries (`device-agree`, `stability`, `float-edge` in
+`tools/semantic_divergence_probe.py`) are that gate in draft; they are what
+found all three.
+
+One more thing they have in common, and it is the practical argument for doing
+this as one piece of work: **006 measured out as free** -- NumPy's pairwise sum
+is 4.4x faster *and* 108x more accurate than the current serial one. The
+assumption that correctness here costs speed is what made all three easy to
+defer, and it is not true for at least one of them.
+
 ## KI-BACKEND-004: CUDA `maximum`/`minimum` swallow NaN while CPU propagates it
 
 - Severity: Critical
