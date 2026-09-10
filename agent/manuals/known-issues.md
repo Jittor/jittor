@@ -2,7 +2,7 @@
 
 - Status: Maintained
 - Last reviewed: 2026-09-09
-- Baseline: `9f8bd9a79` plus KI-MEM-002
+- Baseline: `7419412e2` plus KI-EXEC-001
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -395,6 +395,33 @@ framework defects.
   `device` immediately after registering a hook.
 - Review/expiry condition: `register_hook` leaves `location()` unchanged on CPU
   and real CUDA, and the side-effect probe reports no mutation for it.
+
+## KI-EXEC-001: CUDA segfaults past a graph-size threshold
+
+- Severity: Critical
+- Status: Reproduced, unfixed
+- Owner: executor and CUDA backend maintainers
+- Evidence: pure Jittor, real CUDA, no compatibility layer. A chain of
+  bottleneck blocks (1x1 -> 3x3 -> 1x1 with a downsample, 512 -> 1024 channels,
+  8x8 input) segfaults at **five blocks and crashes for six and seven; four is
+  fine**. CPU is fine. `use_parallel_op_compiler=0` still crashes, so this is
+  not KI-COMPILER-001. Symbolised backtrace:
+  `run_exec_plan` <- `Executor::run_sync` <- `Executor::submit_pending`.
+- Blast radius: ResNet50-class backbones do not run on CUDA. Two independent
+  downstream projects hit it separately -- JSeg and JDet both crash with a
+  ResNet50 backbone while JSeg's ResNet18 passes -- and per-stage bisection
+  points at layer3 (six blocks, 1024 channels). A single bottleneck and stacks
+  of four are fine, so the trigger is graph size, not the block itself.
+- Not caused by the same-day `device_copy` fix (`715009c02`), which touches
+  `run_exec_plan`: reverting its three hunks and rebuilding still segfaults at
+  five blocks. The defect predates it.
+- Reproduction: `$JITTOR_LAB_ROOT/_state/segv/repro.py <n>` (unversioned);
+  `n=4` prints the output shape, `n=5` dies. Build the core with
+  `addr2line_path=$(which addr2line)` to get the frames above.
+- Workaround: none for CUDA. Shorter backbones (ResNet18) work; CPU works.
+- Review/expiry condition: the repro passes for n in 4..8 on real CUDA, both
+  downstream ResNet50 backbones run a forward and backward, and a regression
+  covers a chain long enough to have crashed.
 
 ## KI-FFT-001: withdrawn -- current CUDA sequence regression is clean
 
