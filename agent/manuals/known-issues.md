@@ -577,6 +577,57 @@ framework defects.
 - Review/expiry condition: the file reports 40 passed, or every remaining
   failure has an entry saying which side is wrong and why.
 
+## KI-EXEC-003: `auto_flush_ops` changes gradients on models that never crash
+
+- Severity: High (silent, deterministic change to training numerics)
+- Status: Reproduced 2026-09-10, unfixed
+- Owner: executor and CUDA backend maintainers
+- Evidence: the same model, the same input, the same build -- only the flag
+  moves. Forward loss is **bit-identical** at every setting; the gradients are
+  not. Five bottleneck blocks, `jt.grad` of `loss.sum()` over 5,981,184
+  parameter elements:
+
+  | `auto_flush_ops` | 0 | 64 | 256 | 512 | 1024 |
+  | --- | --- | --- | --- | --- | --- |
+  | loss | 23080.078125 | 23080.078125 | 23080.078125 | 23080.078125 | 23080.078125 |
+  | gradient norm | 45839.37890625 | **45822.20703125** | 45839.37890625 | 45839.37890625 | 45839.37890625 |
+
+  Four blocks -- a size that never crashes at any setting, so this is not the
+  segfault wearing another hat:
+
+  | `auto_flush_ops` | 0 | 32 | 64 | 128 | 256 |
+  | --- | --- | --- | --- | --- | --- |
+  | loss | 20322.414062 | 20322.414062 | 20322.414062 | 20322.414062 | 20322.414062 |
+  | gradient norm | 33076.39843750 | **33063.71875000** | 33076.39843750 | 33076.39843750 | 33076.39843750 |
+
+  Both outliers are about `3.8e-4` relative. **Deterministic**: the same
+  setting gives the same number three runs out of three, and `auto_flush_ops=0`
+  twice is bit-identical. So this is not a race -- a different computation is
+  being performed.
+- Not the reduction order alone: a tape-free elementwise model
+  (`for _ in range(300): y = y * w + 0.001`) has **identical** gradients at
+  every setting, and only its `sum()` loss moves between two values. So
+  flushing on its own does not perturb the backward; something in the
+  convolution path does.
+- Hypothesis, not measured: the flush changes what else is resident when a
+  convolution backward runs, so cuDNN's algorithm or workspace choice differs
+  and the accumulation order with it. Recording it as a hypothesis because the
+  discriminating experiment -- pinning the algorithm and re-running the sweep
+  -- has not been done.
+- Why it matters more than the size suggests: `3.8e-4` is far above float32
+  rounding for this quantity, it is deterministic rather than jittery, and it
+  is invisible -- the loss agrees to the last bit, so any check that watches
+  the loss reports nothing. Two runs of the same script with different flag
+  values train to different weights.
+- Related, same flag: [KI-EXEC-001] (segfault when the flush splits a graph
+  containing an unresolved tape) and [KI-EXEC-002] (the profiler cannot see
+  flushed work). One flag introduced during the refactor, three consequences.
+- Review/expiry condition: the gradient is bit-identical across
+  `auto_flush_ops` settings for a model containing convolutions, or the
+  difference is explained and documented as a stated non-guarantee with a
+  bound; and a regression sweeps the flag and compares gradients rather than
+  the loss.
+
 ## KI-EXEC-002: the profiler cannot see work that `auto_flush_ops` already launched
 
 - Severity: High (measurements are silently partial; two gates are permanently red)
