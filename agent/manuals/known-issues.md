@@ -552,6 +552,31 @@ framework defects.
 - Review/expiry condition: CPU `digamma` matches scipy for NaN and both signed
   zeros, and the probe's device-agreement case covers it.
 
+## Where the device divergences are, and where they are not
+
+The adversarial sweep was run twice over the same 231 operators with two
+orthogonal input vectors:
+
+| vector | probes | operators compared | disagreements |
+| --- | --- | --- | --- |
+| non-finite (NaN, both infinities, both signed zeros, a subnormal) | what the format treats specially | 225 | **7** |
+| magnitude (1e30 against 1e-30, 2^24 and 2^24+1, both integer extremes, exact ties) | what the arithmetic loses | 44 | **0** |
+
+Every CPU/CUDA divergence found so far lives in the first column. Precision,
+cancellation, integer-boundary and tie handling agreed on both devices
+everywhere they were compared.
+
+That is worth stating because it narrows the problem: this is not a general
+numerical-quality gap between the backends. It is specifically that **neither
+backend has a written contract for the values IEEE-754 treats as special**, and
+each kernel author picked whatever the obvious spelling did with them. The
+entries below -- 004, 007, 008, and OPS-011 -- are all instances, and so is
+KI-BACKEND-005 on the CPU side.
+
+The second vector's zero is a result, not an absence of testing: it says the
+next defect of this kind is more likely to be found by adding another
+special-value case than by adding another magnitude case.
+
 ## Three CPU float defects share one surface
 
 `KI-BACKEND-004`, `KI-BACKEND-005` and `KI-BACKEND-006` were found separately

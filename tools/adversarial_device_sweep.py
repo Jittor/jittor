@@ -29,10 +29,24 @@ import numpy as np
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
-#: The values implementations disagree about, in one vector.
-ADVERSARIAL = np.array(
-    [np.nan, np.inf, -np.inf, 0.0, -0.0, 1.0, -1.0, 1e-45, 3.0, 3.0],
-    dtype="float32")
+#: The values implementations disagree about. Two vectors rather than one,
+#: because they probe different mechanisms: the first is about what the format
+#: cannot represent (non-finite, signed zero, subnormal), the second about what
+#: the *arithmetic* loses (magnitudes far enough apart that addition drops one
+#: of them, values at the edge of the integer range, exact ties). A defect
+#: reachable by only one of them would look like an absence in the other.
+VECTORS = {
+    "nonfinite": np.array(
+        [np.nan, np.inf, -np.inf, 0.0, -0.0, 1.0, -1.0, 1e-45, 3.0, 3.0],
+        dtype="float32"),
+    "magnitude": np.array(
+        [1e30, 1e-30, 1.0, -1.0, 16777216.0, 16777217.0, 2147483647.0,
+         -2147483648.0, 0.5, 0.5],
+        dtype="float32"),
+}
+
+#: Selected at run time; kept as a module global so the evaluator stays simple.
+ADVERSARIAL = VECTORS["nonfinite"]
 
 
 def _load_ops():
@@ -53,7 +67,13 @@ def _evaluate(jt, operator, use_cuda, arity):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json")
+    parser.add_argument("--vector", choices=sorted(VECTORS), default="nonfinite",
+                        help="which adversarial input to sweep with")
     args = parser.parse_args(argv)
+
+    global ADVERSARIAL
+    ADVERSARIAL = VECTORS[args.vector]
+    print("vector: %s" % args.vector)
 
     op_db = _load_ops()
     import jittor as jt
