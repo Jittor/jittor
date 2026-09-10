@@ -2,7 +2,7 @@
 
 - Status: Current index, not a history log
 - Last reviewed: 2026-09-10
-- Baseline reviewed: `origin/2.0-refactor@86086396` plus the `feature/cgq_transformers@9bac6853` integration
+- Baseline reviewed: `origin/2.0-refactor@fe2bf3e9` plus the `feature/cgq_transformers@9bac6853` integration
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an

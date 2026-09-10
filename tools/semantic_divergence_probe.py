@@ -443,8 +443,258 @@ def probe_numerical_stability(jt, device):
           rtol=1e-4)
 
 
+def probe_state_and_reproducibility(jt, device):
+    """Process-global state must come back, and a seed must mean something.
+
+    Jittor's device selection, gradient mode and RNG are process-wide, so a
+    scope that fails to restore leaks into every test that runs after it -- the
+    class the repository keeps a cross-test leak ledger for. These check the
+    restore rather than the entry, because entering is the part that obviously
+    works.
+    """
+    # flag_scope restores, including when the body raises.
+    before = int(jt.flags.use_cuda)
+    with jt.flag_scope(use_cuda=before):
+        pass
+    check("flag_scope restores use_cuda", "state",
+          np.array([int(jt.flags.use_cuda)]), np.array([before]))
+
+    try:
+        with jt.flag_scope(use_cuda=before):
+            raise RuntimeError("probe")
+    except RuntimeError:
+        pass
+    check("flag_scope restores after an exception", "state",
+          np.array([int(jt.flags.use_cuda)]), np.array([before]))
+
+    # Nesting: the inner scope must restore the outer value, not the original.
+    with jt.flag_scope(no_grad=1):
+        outer = int(jt.flags.no_grad)
+        with jt.flag_scope(no_grad=0):
+            pass
+        check("nested flag_scope restores its caller", "state",
+              np.array([int(jt.flags.no_grad)]), np.array([outer]))
+    check("no_grad does not leak out of its scope", "state",
+          np.array([int(jt.flags.no_grad)]), np.array([0]))
+
+    # A seed has to make two runs identical, and two different seeds differ.
+    jt.set_global_seed(1234)
+    a = jt.random((64,)).numpy().copy()
+    jt.set_global_seed(1234)
+    b = jt.random((64,)).numpy().copy()
+    check("the same seed reproduces the same draw", "state", b, a)
+
+    jt.set_global_seed(4321)
+    c = jt.random((64,)).numpy().copy()
+    check("a different seed draws differently", "state",
+          np.array([bool(not np.allclose(c, a))]), np.array([True]))
+
+    # Two draws under one seed must not repeat each other: a seed that resets
+    # per call would make a stream of "random" numbers constant.
+    jt.set_global_seed(99)
+    d1 = jt.random((64,)).numpy().copy()
+    d2 = jt.random((64,)).numpy().copy()
+    check("consecutive draws differ under one seed", "state",
+          np.array([bool(not np.allclose(d1, d2))]), np.array([True]))
+
+    # no_grad really stops the graph rather than only marking it.
+    x = jt.array(np.ones((4,), dtype="float32"))
+    with jt.flag_scope(no_grad=1):
+        y = (x * 2).sum()
+    try:
+        g = jt.grad(y, x)
+        produced = bool(np.any(np.abs(g.numpy()) > 0))
+    except Exception:
+        produced = False
+    check("no_grad yields no gradient", "state",
+          np.array([produced]), np.array([False]))
+
+
+def probe_dtype_preservation(jt, device):
+    """An operation must return the dtype its inputs imply, not a convenient one.
+
+    A silent widening reads as harmless -- the values are right -- until the
+    result is compared, stored or fed to something that dispatches on dtype. A
+    silent narrowing loses data. Both are invisible at the call site, which is
+    why they are worth asserting rather than assuming.
+    """
+    def out_dtype(fn, dtype, binary=False):
+        # Built through arr() under the flag: jt.array narrows 64-bit inputs by
+        # default (KI-DTYPE-002), so without this every 64-bit row would report
+        # the construction-time narrowing as if the operator had done it. The
+        # shift category already learned this; the helper exists for it.
+        with jt.flag_scope(auto_convert_64_to_32=0):
+            a = arr(jt, np.ones((4,), dtype=dtype), dtype)
+            return str(fn(a, a).dtype if binary else fn(a).dtype)
+
+    for dtype in ("float16", "float32", "float64", "int32", "int64"):
+        check("%s add keeps its dtype" % dtype, "dtype-keep",
+              np.array([out_dtype(lambda a, b: a + b, dtype, True) == dtype]),
+              np.array([True]))
+        check("%s multiply keeps its dtype" % dtype, "dtype-keep",
+              np.array([out_dtype(lambda a, b: a * b, dtype, True) == dtype]),
+              np.array([True]))
+
+    for dtype in ("float16", "float32", "float64"):
+        check("%s abs keeps its dtype" % dtype, "dtype-keep",
+              np.array([out_dtype(jt.abs, dtype) == dtype]), np.array([True]))
+        check("%s sum keeps its dtype" % dtype, "dtype-keep",
+              np.array([out_dtype(jt.sum, dtype) == dtype]), np.array([True]))
+
+    # A comparison is a predicate; its result is a truth value whatever the
+    # operands were.
+    a = jt.array(np.ones((4,), dtype="float32"))
+    check("comparison returns bool", "dtype-keep",
+          np.array([str((a > a).dtype) == "bool"]), np.array([True]))
+
+
+def probe_serialization_roundtrip(jt, device):
+    """What goes to disk has to come back unchanged.
+
+    Corruption here is the quietest kind there is: the failure appears in a
+    later run, in a different process, with nothing left to point at the save.
+    """
+    import tempfile, os
+    cases = (
+        ("float32", np.arange(12, dtype="float32").reshape(3, 4)),
+        ("float64", np.linspace(-1, 1, 12, dtype="float64").reshape(3, 4)),
+        ("int64", np.arange(-6, 6, dtype="int64").reshape(3, 4)),
+        ("bool", (np.arange(12) % 2 == 0).reshape(3, 4)),
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, value in cases:
+            path = os.path.join(tmp, name + ".pkl")
+            with jt.flag_scope(auto_convert_64_to_32=0):
+                original = jt.array(value)
+                jt.save(original.numpy(), path)
+                restored = np.asarray(jt.load(path))
+            check("%s survives save/load" % name, "serialize",
+                  restored.astype(np.float64), value.astype(np.float64))
+            check("%s keeps its dtype on disk" % name, "serialize",
+                  np.array([str(restored.dtype) == str(value.dtype)]),
+                  np.array([True]))
+
+
+def probe_indexing_edges(jt, device):
+    """Indexing conventions, at the values where libraries disagree.
+
+    Negative indices, an empty selection and an out-of-range index are three
+    places where "reasonable" has more than one answer, and where returning
+    something plausible is worse than refusing: a silently wrapped index reads
+    data from the wrong row.
+    """
+    a = np.arange(12, dtype="float32").reshape(3, 4)
+    A = jt.array(a)
+
+    check("negative index counts from the end", "index",
+          A[-1].numpy(), a[-1])
+    check("negative slice bound", "index", A[:, -2:].numpy(), a[:, -2:])
+    check("negative step is rejected or matches numpy", "index",
+          A[0].numpy(), a[0])
+
+    empty = A[0:0]
+    check("empty slice keeps the trailing shape", "index",
+          np.array(empty.shape), np.array(a[0:0].shape))
+
+    # A boolean mask selecting nothing, and one selecting everything.
+    m_none = np.zeros((3,), dtype="bool")
+    m_all = np.ones((3,), dtype="bool")
+    for name, mask in (("none", m_none), ("all", m_all)):
+        try:
+            got = A[jt.array(mask)].numpy()
+            check("boolean mask selecting %s" % name, "index",
+                  got.astype(np.float64), a[mask].astype(np.float64))
+        except Exception as exc:
+            RESULTS.append({"name": "boolean mask selecting %s" % name,
+                            "category": "index", "status": "ERROR",
+                            "detail": "%s: %s" % (type(exc).__name__, str(exc)[:90])})
+
+    # Out of range: numpy raises. Returning a wrapped or clamped row silently
+    # is the failure worth catching.
+    try:
+        value = A[5].numpy()
+        RESULTS.append({"name": "out-of-range index raises", "category": "index",
+                        "status": "MISMATCH",
+                        "detail": "returned %s instead of raising" % value.tolist()})
+    except Exception:
+        RESULTS.append({"name": "out-of-range index raises", "category": "index",
+                        "status": "OK", "detail": ""})
+
+    # setitem with a negative index writes the row the read would have returned.
+    B = jt.array(a.copy())
+    B[-1] = jt.array(np.zeros((4,), dtype="float32"))
+    expect = a.copy(); expect[-1] = 0
+    check("setitem honours a negative index", "index", B.numpy(), expect)
+
+
+def probe_module_and_optimizer(jt, device):
+    """Training-loop semantics: the claims a framework is actually used for.
+
+    Everything above tests one operation. These test the contracts that hold
+    *between* operations across a step -- state_dict fidelity, what train/eval
+    switches, whether zero_grad actually clears, and whether weight decay is
+    applied where the optimizer says it is. A defect here does not produce a
+    wrong number in a unit test; it produces a model that trains slightly wrong.
+    """
+    from jittor import nn
+
+    # state_dict must round-trip a module exactly.
+    m = nn.Linear(4, 3)
+    before = {k: np.asarray(v.numpy()).copy() for k, v in m.state_dict().items()}
+    m2 = nn.Linear(4, 3)
+    m2.load_state_dict(m.state_dict())
+    after = {k: np.asarray(v.numpy()).copy() for k, v in m2.state_dict().items()}
+    same = all(np.allclose(before[k], after[k]) for k in before)
+    check("state_dict round-trips a Linear", "module",
+          np.array([bool(same)]), np.array([True]))
+    check("state_dict keeps every key", "module",
+          np.array([sorted(before) == sorted(after)]), np.array([True]))
+
+    # eval() must change BatchNorm's behaviour; if it does not, evaluation uses
+    # batch statistics and the reported metric is not the deployed one.
+    bn = nn.BatchNorm(4)
+    x = jt.array(np.random.RandomState(0).randn(8, 4).astype("float32"))
+    bn.train()
+    _ = bn(x)
+    bn.eval()
+    e1 = bn(x).numpy().copy()
+    e2 = bn(x).numpy().copy()
+    check("eval BatchNorm is deterministic across calls", "module", e2, e1)
+    bn.train()
+    t1 = bn(x).numpy().copy()
+    check("train and eval BatchNorm differ", "module",
+          np.array([bool(not np.allclose(t1, e1, atol=1e-6))]), np.array([True]))
+
+    # An optimizer step must move parameters, and zero_grad must clear.
+    lin = nn.Linear(4, 2)
+    opt = jt.optim.SGD(lin.parameters(), lr=0.1)
+    p0 = np.asarray(lin.weight.numpy()).copy()
+    loss = (lin(x) ** 2).sum()
+    opt.step(loss)
+    p1 = np.asarray(lin.weight.numpy()).copy()
+    check("an SGD step moves the weight", "module",
+          np.array([bool(not np.allclose(p0, p1))]), np.array([True]))
+
+    # Weight decay has to change the update, not merely be accepted.
+    lin_a = nn.Linear(4, 2)
+    lin_b = nn.Linear(4, 2)
+    lin_b.load_state_dict(lin_a.state_dict())
+    oa = jt.optim.SGD(lin_a.parameters(), lr=0.1, weight_decay=0.0)
+    ob = jt.optim.SGD(lin_b.parameters(), lr=0.1, weight_decay=0.5)
+    oa.step((lin_a(x) ** 2).sum())
+    ob.step((lin_b(x) ** 2).sum())
+    check("weight_decay changes the update", "module",
+          np.array([bool(not np.allclose(lin_a.weight.numpy(), lin_b.weight.numpy()))]),
+          np.array([True]))
+
+
 PROBES = (
     ("rounding", probe_rounding),
+    ("module", probe_module_and_optimizer),
+    ("index", probe_indexing_edges),
+    ("dtype-keep", probe_dtype_preservation),
+    ("serialize", probe_serialization_roundtrip),
+    ("state", probe_state_and_reproducibility),
     ("stability", probe_numerical_stability),
     ("device-agree", probe_device_agreement),
     ("grad-edge", probe_gradient_edges),

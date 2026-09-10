@@ -8,6 +8,7 @@
 #include "core/var.h"
 #include "core/executor.h"
 #include "ops/composite/getitem_op.h"
+#include "ops/composite/index_bounds.h"
 #include "ops/op_register.h"
 #ifndef JIT
 #include "utils/stack_vector.h"
@@ -406,6 +407,7 @@ void GetitemOp::jit_run() {
     // excludes host pragmas when a backend specializes this common body.
     // A gather does not vectorise either way, so the `if`
     // clause costs nothing here.
+    @if(@is_def(JIT_cpu), IndexFault index_fault;)
     @if(@is_def(JIT_cpu) && ODIM>0, index_t o_total = 1 @for(d, 0, ODIM, * oshape@d);)
     @if(@is_def(JIT_cpu) && ODIM==1, #pragma omp parallel for if(o_total >= 65536))
     @if(@is_def(JIT_cpu) && ODIM==2, #pragma omp parallel for collapse(2) if(o_total >= 65536))
@@ -420,7 +422,7 @@ void GetitemOp::jit_run() {
             @if(VS@d==-1, vi@d,
             @if(VS@d==-5, VSS@d,
             @if(VS@d>=0,
-                index_t(vp@d[0 @for(j,0,VD,@if((VS@d>>j)&1, + i@{j+FOV} * vs@d@@s@j,))])
+                index_t(bounded_index(int64(vp@d[0 @for(j,0,VD,@if((VS@d>>j)&1, + i@{j+FOV} * vs@d@@s@j,))]), ishape@d, @d, @if(@is_def(JIT_cpu), &index_fault, nullptr)))
             , ??? ))))));
         )
         @for(d, 0, IDIM, if (iid@d < 0) iid@d += ishape@d;
@@ -428,6 +430,21 @@ void GetitemOp::jit_run() {
         auto iid = 0 @for(d, 0, IDIM,  + iid@d * istride@d);
         op[oid] = ip[iid];
     }
+    // An index that arrived in a Var is the one kind the build-time checks never
+    // saw, so the loop above clamped it and left the offender here. Raising
+    // after the loop rather than inside it is not a compromise: the loop is an
+    // OpenMP region on CPU and a kernel on CUDA, and neither can throw.
+    //
+    // Host only. The CUDA indexing pass takes `func->children.back()` to be the
+    // loop nest, so a statement emitted after the loop is moved into the kernel
+    // in the loop's place and rewritten as one (indexing_codegen.cc, which now
+    // says so when it happens). The device does not need this: it is handed a
+    // null fault and traps where the bad index is, in `index_bounds.h`.
+    @if(@is_def(JIT_cpu),
+    USER_CHECK(!index_fault.bad()) << "index" << index_fault.index <<
+        "is out of bounds for dimension" << index_fault.dim <<
+        "with size" << index_fault.size;
+    )
 }
 #endif // JIT
 

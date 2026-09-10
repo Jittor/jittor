@@ -154,6 +154,46 @@ class TestCodeOp(unittest.TestCase):
                 check()
         check()
 
+    def test_backward_dout_is_device_resident(self):
+        # The gradient seed handed to a numpy_code backward is a stride-0
+        # broadcast of a number, so make_numpy_code's adapt_storage_input
+        # replaces it with a contiguous copy before the op is built. The op used
+        # to keep the pre-replacement Var and read its mem_ptr at run time --
+        # null by then, which makes PyArray_New allocate a *host* buffer that
+        # numpy2cupy hands to CuPy as a device address. Asserting the value
+        # alone is not enough: cupy.copyto off a host pointer returns a wrong
+        # gradient without raising, and only an arithmetic kernel takes the
+        # context down.
+        seen = {}
+
+        def forward_code(np, data):
+            np.add(data["inputs"][0], data["inputs"][0], out=data["outputs"][0])
+
+        def backward_code(np, data):
+            dout = data["dout"]
+            seen["dout"] = int(dout.__array_interface__["data"][0]) \
+                if isinstance(dout, numpy.ndarray) else int(dout.data.ptr)
+            np.copyto(data["outputs"][0], dout * 2.0)
+
+        def check(on_cuda):
+            seen.clear()
+            a = jt.random((5, 1))
+            b = jt.numpy_code(a.shape, a.dtype, [a], forward_code,
+                              [backward_code])
+            da = jt.grad(b, a)
+            assert numpy.allclose(da.data, numpy.ones(a.shape) * 2.0)
+            assert "dout" in seen
+            if on_cuda:
+                # 0 is cudaMemoryTypeUnregistered: plain host memory.
+                kind = cupy.cuda.runtime.pointerGetAttributes(seen["dout"]).type
+                assert kind != 0, \
+                    "numpy_code backward received a host pointer for dout"
+
+        if _test_capability.check_accelerator('cuda', backend=jt).enabled:
+            with jt.flag_scope(use_cuda=1):
+                check(True)
+        check(False)
+
     @pytest.mark.slow
     def test_memory_leak(self):
         def forward_code(np, data):

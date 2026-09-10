@@ -388,7 +388,14 @@ void ReduceOp::jit_run() {
     
     @for(i, 0, DIM, index_t xshape@i = x->shape[@i];)
     @for(i, 0, DIM, index_t yshape@i = @if(REDUCE>>i&1,1,xshape@i);)
-    index_t ystride@{DIM-1} = 1;
+    // A rank-0 input reduces over no dimensions at all, and `@{DIM-1}` is
+    // then `-1`: this line used to emit `index_t ystride-1 = 1;`, which does
+    // not compile. `loss.sum()` where the loss is already a scalar is ordinary
+    // code -- PyTorch returns the value unchanged -- and it died here on both
+    // devices (KI-OPS-004). With the guard, every `@for` below produces an
+    // empty nest, the body runs once with `yid == xid == 0`, and the result is
+    // the input value, which is what the reduction of a single element is.
+    @if(DIM>0, index_t ystride@{DIM-1} = 1;)
     @for(i, DIM-2, -1, -1, auto ystride@i = ystride@{i+1} * yshape@{i+1};)
     @for(i, 0, DIM, index_t xstride@i = x->storage_stride(@i);)
     Ty count = x->num*1.0 / y->num;
@@ -409,7 +416,8 @@ void ReduceOp::jit_run() {
             yp[yid] = @expand_op(@OP, @Ty, yp[yid], @Ty, xp[xid], @Tx);
         }
     }
-    (void)count, (void)rcount, (void)yshape0, (void)ystride0;
+    (void)count; (void)rcount;
+    @if(DIM>0, (void)yshape0; (void)ystride0;)
 }
 #endif // JIT
 
