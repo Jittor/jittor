@@ -561,10 +561,18 @@ orthogonal input vectors:
 | --- | --- | --- | --- |
 | non-finite (NaN, both infinities, both signed zeros, a subnormal) | what the format treats specially | 225 | **7** |
 | magnitude (1e30 against 1e-30, 2^24 and 2^24+1, both integer extremes, exact ties) | what the arithmetic loses | 44 | **0** |
+| half (float16 either side of its overflow at 65504 and its subnormal edge at 6.1e-5) | what a narrower format reaches sooner | 7 | **0** |
 
-Every CPU/CUDA divergence found so far lives in the first column. Precision,
-cancellation, integer-boundary and tie handling agreed on both devices
-everywhere they were compared.
+Every CPU/CUDA divergence found so far lives in the first row. Precision,
+cancellation, integer-boundary, tie handling and float16's own limits agreed on
+both devices everywhere they were compared.
+
+The two zeros are weaker evidence than the seven, and the reason is worth
+writing down rather than glossing: the magnitude and half sweeps compared far
+fewer operators (44 and 7 against 225), because most entries reject those
+inputs outright and are recorded as unprobed. They are a real signal about
+where the divergences are *not*, but they are not a clean bill of health for
+those dimensions.
 
 That is worth stating because it narrows the problem: this is not a general
 numerical-quality gap between the backends. It is specifically that **neither

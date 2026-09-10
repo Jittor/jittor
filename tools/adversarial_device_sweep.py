@@ -39,6 +39,15 @@ VECTORS = {
     "nonfinite": np.array(
         [np.nan, np.inf, -np.inf, 0.0, -0.0, 1.0, -1.0, 1e-45, 3.0, 3.0],
         dtype="float32"),
+    # float16 reaches its own limits at ordinary magnitudes: it overflows above
+    # 65504 and goes subnormal below 6.1e-5, both of which a float32 kernel
+    # would never notice. Values are chosen to sit either side of each edge, so
+    # a kernel that computes in float32 and narrows at the end answers
+    # differently from one that computes in float16 throughout.
+    "half": np.array(
+        [65504.0, 65520.0, 60000.0, 6.0e-5, 6.0e-8, 1.0, -1.0, 2048.0,
+         2049.0, 2049.0],
+        dtype="float16"),
     "magnitude": np.array(
         [1e30, 1e-30, 1.0, -1.0, 16777216.0, 16777217.0, 2147483647.0,
          -2147483648.0, 0.5, 0.5],
@@ -56,6 +65,8 @@ def _load_ops():
 
 
 def _evaluate(jt, operator, use_cuda, arity):
+    # The vector carries its own dtype: the half vector is only meaningful as
+    # float16, and building it as float32 would move every edge it probes.
     with jt.flag_scope(use_cuda=use_cuda):
         args = [jt.array(ADVERSARIAL) for _ in range(arity)]
         if arity == 2:
