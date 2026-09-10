@@ -459,6 +459,43 @@ framework defects.
   CUDA, none can be made to read unmapped memory from Python, and a regression
   covers a modest and an extreme index for each.
 
+## KI-BACKEND-007: CUDA `std`/`norm` return a small finite number instead of NaN
+
+- Severity: Critical
+- Status: Reproduced, unfixed
+- Owner: CUDA backend and reduction maintainers
+- Evidence: no exotic input needed -- one NaN among ordinary numbers:
+
+  ```
+  jt.std([nan, 1.0, 2.0])      CPU nan      CUDA 0.0009999999310821295
+  ```
+
+  With `[nan, inf, -inf, 0.0, -0.0, 1.0, -1.0, 1e-45, 3.0, 3.0]`: `std` gives
+  `nan` on CPU and `0.001` on CUDA; `norm` gives `nan` on CPU and `1e-15` on
+  CUDA. NumPy agrees with CPU in both cases.
+- Symptom: a NaN anywhere in the tensor is absorbed and the result is a small
+  finite number. `0.001` and `1e-15` look like an epsilon the implementation
+  adds for numerical safety, which the NaN path collapses onto.
+- Why this is the dangerous shape: `std` is what normalisation layers compute.
+  When a NaN appears in activations, CPU propagates it and the run stops with an
+  obvious symptom; CUDA returns ~1e-3, the normalisation divides by it, and the
+  model produces enormous finite values instead. The training diverges for a
+  reason that no longer points at the NaN, on the device people actually train
+  on.
+- Same family as KI-BACKEND-004 (CUDA `maximum`/`minimum` swallow NaN). That
+  entry is about a binary op; this is a composed reduction, so the suppression
+  is not confined to one expression-table row and a fix has to be checked
+  against both.
+- Found by: `tools/adversarial_device_sweep.py`, comparing every OpInfo operator
+  between CPU and CUDA on inputs built from NaN, both infinities, both signed
+  zeros and a subnormal. Seven operators disagreed; `std`, `norm` and
+  `lgamma` (which returns `inf` on CUDA for a subnormal where CPU gives the
+  correct 103.28) are the ones triaged so far.
+- Workaround: check for NaN explicitly before normalising on CUDA.
+- Review/expiry condition: `std` and `norm` return NaN on both devices whenever
+  the input contains one, a parity case covers a NaN-bearing reduction, and the
+  remaining four operators from that sweep are triaged.
+
 ## Three CPU float defects share one surface
 
 `KI-BACKEND-004`, `KI-BACKEND-005` and `KI-BACKEND-006` were found separately

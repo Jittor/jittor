@@ -77,8 +77,24 @@ def main(argv=None):
             handle.write(name + "\n")
             handle.flush()
 
+    # Resume rather than restart. An operator that segfaults takes the process
+    # with it, so a sweep that always begins at the front can never get past the
+    # first crasher -- `take` stopped this one at 47 of 231. The progress file
+    # is the record of what has been attempted; anything already in it is
+    # skipped, so re-running walks forward through the crashes one at a time
+    # instead of repeating the work before them. Per-operator subprocesses would
+    # also work and cost a jittor import each; this costs one restart per crash.
+    attempted = set()
+    if progress is not None and progress.is_file():
+        attempted = {line.strip() for line in
+                     progress.read_text(encoding="utf-8").splitlines() if line.strip()}
+        if attempted:
+            print("resuming: %d operator(s) already attempted" % len(attempted))
+
     disagree, agree, unprobed = [], 0, 0
     for info in op_db:
+        if info.name in attempted:
+            continue
         announce(info.name)
         try:
             operator = info.op
@@ -111,6 +127,10 @@ def main(argv=None):
         else:
             unprobed += 1
 
+    if progress is not None and attempted:
+        print("note: %d operator(s) were skipped as already attempted; a name "
+              "that appears in the progress file but in no result is one that "
+              "ended the process." % len(attempted))
     print("operators compared=%d  disagreements=%d  unprobed=%d"
           % (agree + len(disagree), len(disagree), unprobed))
     for row in disagree:
