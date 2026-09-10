@@ -783,6 +783,40 @@ graph in one batch the two never met.
   running-statistic updates (removing BatchNorm entirely still crashes), and
   convolution.
 
+### Correction, 2026-09-10, after the cuDNN autotuning cause was found
+
+Two things above were wrong, and the record is more useful with them fixed.
+
+**The fourth attempt was judged on a confounded number.** "Stand the flush down
+while any `Tapes` is unresolved" was rejected because gradients still moved by
+`3.7e-4`. That spread was cuDNN autotuning ([KI-EXEC-003]), not the guard.
+Re-run with `set_benchmark(0)` -- which removes the algorithm-selection
+variable -- the guard's residue is `2e-6` at `auto_flush_ops` 16 and 32 and
+`9e-8` at 128, against gradient norms near 45822: reassociation from different
+batch boundaries, three hundred times smaller than the autotuning effect that
+is present whether or not this defect is fixed.
+
+**But the guard is still not a fix, for a different and better reason.**
+Instrumented, `pending_tapes` sat at 16 at every flush point and never came
+back down: the counter's decrement never fired, so after the first tapes were
+built the flush was off for the rest of the run. For a convolutional model --
+the only kind that reaches this defect -- the guard is `auto_flush_ops = 0`
+with extra steps. It disables the feature it is meant to preserve. Rejected on
+those grounds instead.
+
+**`auto_flush_ops=1` fails through a different path.** With the guard applied,
+16, 32, 64, 128 and 256 all pass and 1 still segfaults -- in the *forward*
+alone, and from a different stack:
+
+```
+run_exec_plan <- run_sync <- jittor::sync(vector<VarHolder*>) <- VarHolder::sync
+```
+
+That is the explicit `.sync()`, not `submit_pending`. So flushing after every
+single operator leaves the graph in a state the final synchronisation cannot
+execute, by some route other than the tape one. `1` is not a setting anyone
+uses, but it says the tape story is not the whole story.
+
 ### Workaround
 
 `jt.flags.auto_flush_ops = 0`. It costs the pipelining the flag exists for and
