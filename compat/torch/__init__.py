@@ -214,6 +214,30 @@ def _abandon(transaction, context):
     transaction.release()
 
 
+class TorchActivationError(ImportError, RuntimeError):
+    """Activation failed while a module import was in flight.
+
+    `install()` runs underneath `import torch`, and a failed import has to
+    raise `ImportError` -- the ecosystem's optional-dependency idiom is
+
+        try:
+            import torch
+        except ImportError:
+            pass
+
+    and a bare `RuntimeError` walks straight through it. That is not a torch
+    problem: on a machine with jittor-torch deployed, `import tensorboardX`
+    failed outright, and it fails the same way for any package written that
+    way, *including for programs using only native Jittor*.
+
+    It also inherits `RuntimeError`, because the same failure reached through
+    an explicit `install()` call is a misuse of an API rather than a missing
+    module, and callers already catching `RuntimeError` keep working. Being
+    both is the honest description: which one it is depends on how the caller
+    got here, and the exception does not know.
+    """
+
+
 def install(torch, strict=True, parent_transaction=None):
     """Install once on the explicit Torch target and return that target."""
 
@@ -249,7 +273,7 @@ def install(torch, strict=True, parent_transaction=None):
                 "(python -m jittor.compat.shim deploy) or remove it; a current "
                 "deployment calls shim.activate() and never reaches here."
                 % deployed)
-        raise RuntimeError(
+        raise TorchActivationError(
             "Torch installation requires an independent TorchNamespace; "
             "install(jittor) is no longer supported. Use shim.activate() and "
             "import torch." + origin)
@@ -261,7 +285,7 @@ def install(torch, strict=True, parent_transaction=None):
     torch = compatibility_owner(torch)
 
     if getattr(torch, "_compat_native_composition_in_progress", False):
-        raise RuntimeError(
+        raise TorchActivationError(
             "cannot activate Torch compatibility while native Jittor "
             "composition is in progress"
         )
@@ -274,7 +298,7 @@ def install(torch, strict=True, parent_transaction=None):
         from .._aliases import torch_namespace_owned
 
         if not torch_namespace_owned(torch):
-            raise RuntimeError(
+            raise TorchActivationError(
                 "completed Torch compatibility graph was changed after install"
             )
         return torch
