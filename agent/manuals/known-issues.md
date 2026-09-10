@@ -939,42 +939,63 @@ defer, and where it has been tested it was not true.
   `tests/structure/torch_api_manifest.json` in the same commit, and remove this
   entry when the manifest no longer records them.
 
-## KI-OPS-009: scatter_add segfaults on a CPU-only build
+## KI-OPS-009: a broadcast index Var reads garbage on a CPU-only build
 
-- Severity: Critical
-- Status: Reproduced, unfixed; CPU-only builds only
-- Owner: indexing/scatter and build-configuration maintainers
-- Evidence: at `65a220d53`, two freshly built cores (215 and 216 objects
-  compiled from scratch, so not a stale cache), same four lines, same machine:
+- Severity: Critical (out-of-bounds read *and write*)
+- Status: Reproduced and narrowed 2026-09-10; root cause open. The segfault is
+  gone -- it is now a catchable error that names the bad index.
+- Owner: indexing and build-configuration maintainers
+- **The title was too narrow.** This is not about `scatter_add`, and not about
+  `setitem`. It is any indexing operation whose index Var came from a broadcast.
+  Measured on a CPU-only build (`nvcc_path=""`), each row a fresh process:
 
-  ```
-  # nvcc_path="" -- the CPU-only build tools/run_test_suite.py configures
-  nvcc_path="" PYTHONPATH=<repo>/python python -c "
-  import jittor as jt
-  x = jt.zeros((4,5)); idx = jt.zeros((4,5), dtype='int64'); src = jt.ones((4,5))
-  print(x.scatter_add(0, idx, src).numpy().sum())"
-  # Caught segfault at address 0x... / Segfault, exit   (exit 1)
+  | index expression | result |
+  | --- | --- |
+  | `jt.zeros((4,5), 'int64')` | index `2697334449954054313`, out of bounds |
+  | `jt.zeros((4,5), 'int32')` | index `-1887156860`, out of bounds |
+  | `jt.zeros(...)` after `idx.sync()` | index `-356873746589917012`, out of bounds |
+  | `jt.array(np.zeros((4,5), 'int64'))` | **20.0, correct** |
+  | `jt.ones((4,5), 'int64') - 1` | **20.0, correct** |
+  | `jt.array(...) + 0` | **20.0, correct** |
+  | `jt.zeros(...)` through plain `setitem` | out of bounds |
+  | `jt.zeros(...)` through `gather` (the read side) | out of bounds |
 
-  # the same command with nvcc on PATH
-  # 20.0                                                (exit 0)
-  ```
-
-  `tests/ops/test_ops.py::TestCommonCPU::test_reference_scatter_add_float32`
-  follows the same split: the process dies on the CPU-only build and the case is
-  `1 passed` on the CUDA build. The Torch spelling
-  (`torch.zeros(4,5).scatter_add(...)`) behaves identically, so it is a core
-  defect and not a frontend one.
-- Symptom: the crash takes the interpreter with it, so on a CPU-only build the
-  OpInfo case ends the pytest process after printing its nodeid -- no result, no
-  traceback, no summary -- and every later test in that session silently never
-  runs. `tests/ops/test_ops.py` belongs to the Torch process mode, so a native
-  `pytest tests/ops` never reaches it, and a CUDA-configured run never sees it.
-- Workaround: on a CPU-only build do not call `scatter_add`; `-k "not
-  scatter_add"` to complete a Torch session. `tests/ops/test_ops.py -k "not
-  interpolate"` is needed for the same reason and is probably the same defect.
-- Review/expiry condition: the four-line reproducer returns the summed tensor on
-  a CPU-only build, the OpInfo case passes there, and a build-configuration
-  difference of this size is either explained or gated.
+  The offending value differs every run, which is what reading unallocated
+  memory looks like.
+- What the split is: `jt.zeros(shape, dtype)` is
+  `unary(0, dtype).broadcast(shape)` (`python/jittor/_core/var.py`). Every index
+  that goes through *any* real computation is materialised as a side effect and
+  works. So the index Var being a pure broadcast is the discriminator, not the
+  dtype, not laziness -- **`idx.sync()` before the call does not help**, which
+  rules out "the producer had not run yet".
+- Build-specific, not device-specific: on a CUDA build with
+  `jt.flags.use_cuda = 0` -- same device, same kernels' CPU path -- the same
+  four lines give the right answer. Only `nvcc_path=""` fails. Whatever
+  `HAS_ACCELERATOR`/`HAS_CUDA` changes about the indexing path or the registered
+  optimisation passes is where the cause lives.
+- Hypothesis tested and **rejected**: that the broadcast was being fused away
+  and the kernel read an unallocated pointer. Setting `VarFlags::_stop_fuse` on
+  every index Var in both `GetitemOp` constructors and `SetitemOp` -- the idiom
+  `reindex_reduce_op.cc` uses for exactly this requirement -- changed nothing;
+  all three cases still read garbage. The change was reverted rather than
+  shipped with a confident comment. The next hypothesis worth testing is the
+  *stride* the kernel derives for the index Var: a broadcast's storage is not
+  laid out like a dense Var of the same logical shape, and the kernel computes
+  `vp@d[... * vs@d@@s@j ...]` from the output shape.
+- What improved: the index bounds check added the same day (KI-OPS-010) turns
+  this from a segfault that takes the interpreter down into a
+  `UserError` naming the offending index. That is how the values in the table
+  above were obtained -- before it, the process died with no diagnosis. It does
+  not fix the defect: the index is still wrong, the answer would still be wrong
+  if it happened to land in range, and out-of-range values are merely no longer
+  *written*.
+- Why it stayed hidden: `tests/ops/test_ops.py` belongs to the Torch process
+  mode, so a native `pytest tests/ops` never reaches it, and a CUDA-configured
+  run never sees the failure. It needs a CPU-only build to appear, and the
+  crash used to end the session, so every later test in it silently never ran.
+- Review/expiry condition: the table above is all-correct on a CPU-only build,
+  a regression covers a broadcast-produced index on both build configurations,
+  and the reason a CUDA-less build differed is written down.
 
 ## KI-TEST-002: a dead session is indistinguishable from a short one
 
