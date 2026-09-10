@@ -635,59 +635,117 @@ framework defects.
 ## KI-EXEC-001: CUDA segfaults when `auto_flush_ops` splits a pending graph
 
 - Severity: Critical
-- Status: **Cause identified 2026-09-10**, fix open. A workaround now exists.
+- Status: **Cause and crash site identified 2026-09-10; four candidate fixes
+  tried and rejected, each for a measured reason.** Workaround available.
 - Owner: executor and CUDA backend maintainers
-- Evidence: pure Jittor, real CUDA, no compatibility layer. A chain of
-  bottleneck blocks (1x1 -> 3x3 -> 1x1 with a downsample, 512 -> 1024 channels,
-  8x8 input) segfaults at **five blocks and crashes for six and seven; four is
-  fine**. CPU is fine. Symbolised backtrace:
-  `run_exec_plan` <- `Executor::run_sync` <- `Executor::submit_pending`.
-- **Cause: `auto_flush_ops`.** Setting it to 0 makes the repro pass at every
-  size that used to crash. Three repetitions each, same process image, same
-  build:
 
-  | | n=5 | n=6 | n=7 |
-  | --- | --- | --- | --- |
-  | `auto_flush_ops=128` (default) | crash, crash, crash | crash | crash |
-  | `auto_flush_ops=0` | **OK, OK, OK** | **OK** | **OK** |
+### What is measured
 
-- And the threshold sweep says it is **not** "flushing is bad", it is *where*
-  the flush lands:
+`auto_flush_ops` is the cause. ResNet-shaped repro (five bottleneck blocks,
+512 -> 1024 channels), five runs per setting, `O` = pass and `X` = crash:
 
-  | `auto_flush_ops` | 0 | 1 | 32 | 64 | 128 | 256 | 512 | 1024 |
-  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-  | n=5 | OK | crash | crash | **OK** | crash | OK | OK | OK |
+| `auto_flush_ops` | 0 | 32 | 64 | 128 (default) | 256 |
+| --- | --- | --- | --- | --- | --- |
+| n=5 | OOOOO | XXXXX | OOOOO | XXXXX | OOOOO |
 
-  Non-monotonic: 64 passes while 32 and 128 crash. So a flush at certain points
-  in the graph corrupts execution, and whether a given threshold lands on such
-  a point depends on the operator-count pattern of the model. That is why the
-  defect reads as "past a graph-size threshold" -- the threshold is not a size
-  limit, it is the first place the flush happens to cut badly.
-- Where to look: `Executor::submit_pending` (`src/core/executor.cc`) selects
-  Vars from `runtime_holder_state().holders()` that have no `_outputs` and are
-  not finished, and calls `run_sync(vars, false, false)` on them -- executing a
-  **subset** of a graph whose remainder is still pending. The backtrace lands in
-  `run_exec_plan`, which is consistent with the executed subset freeing or
-  reusing storage the pending remainder still refers to. That is a hypothesis
-  about the mechanism, not a confirmed one; only the cause above is measured.
-- Blast radius, unchanged: ResNet50-class backbones do not run on CUDA. JSeg
-  and JDet both crash with a ResNet50 backbone while JSeg's ResNet18 passes.
-- **Workaround, effective today**: `jt.flags.auto_flush_ops = 0`. It costs the
-  pipelining that flag exists for -- graph construction no longer overlaps
-  device execution -- but it is correct, and it is a one-line change in a user
-  script.
-- Same flag, second defect: [KI-EXEC-002] is `jt.profile_scope` reporting
-  nothing for work this flush already launched. One flag introduced during the
-  refactor (2026-09-02, `c9176652f`), two Critical/High consequences, and both
-  were found by asking what changes when a graph gets large.
-- Not caused by the same-day `device_copy` fix (`715009c02`): reverting its
-  three hunks and rebuilding still segfaults at five blocks.
-- Reproduction: `$JITTOR_LAB_ROOT/_state/segv/repro.py <n>` (unversioned).
-- Review/expiry condition: the repro passes for n in 4..8 with the default
-  `auto_flush_ops`, both downstream ResNet50 backbones run a forward and
-  backward, and a regression covers a chain long enough to have crashed **at
-  the default flag value** -- a regression that sets the flag to 0 would pass
-  on the unfixed build and prove nothing.
+Deterministic per value and **non-monotonic**: 64 passes while 32 and 128
+crash. So this is not "flushing is unsafe", it is *where the flush cuts*. That
+is why the defect read as "past a graph-size threshold" -- the threshold is not
+a size limit, it is the first place the cut lands badly.
+
+### Crash site
+
+Symbolised on a debug build:
+
+```
+Allocator::is_cuda()            src/mem/allocator.h:35     <- segfault
+run_exec_plan                   src/core/exec_runner.cc:331
+Executor::run_sync              src/core/executor.cc:317
+Executor::submit_pending        src/core/executor.cc:105
+schedule_pending_from_python    src/core/var_holder.cc:62
+to_py_object<VarHolder*>        src/bindings/pyjt/py_converter.h:626
+pyjt_def_jit_op_maker lambda    (an op maker returning its result to Python)
+```
+
+`exec_runner.cc:331` is the input-migration loop; `v->allocator` is null.
+Instrumented, the offending Var is always the same shape:
+
+```
+input var id=1821 shape=[1024] float32 finished=1 mem_ptr=0
+          inputop=contiguous  noutputs=1  consumer_op=tapes
+```
+
+A Var that has already run and been freed, whose one remaining consumer is a
+`Tapes` op. `Tapes` computes nothing: its only output is a zero-sized Var wired
+as a control edge into the producer of each taped output, and it names the
+pre-tape Vars so the backward can reach them. It sets `_manual_set_vnbb` and
+marks none of them needed, so freeing them is correct on its own terms -- and
+the runner requires every input of an executing op to be backed. With the whole
+graph in one batch the two never met.
+
+**Not a GPU fault.** `compute-sanitizer --tool memcheck` reports
+`ERROR SUMMARY: 0 errors` on a run that segfaults. This is host-side.
+
+### Four fixes tried and rejected
+
+1. **One target per `run_sync` instead of the whole selected set.** Still
+   crashes at n=5,6,7. The batch's *size* is not the trigger.
+2. **A flag saying the op reads no input bytes**, skipping the migration and
+   the `mem_ptr || size == 0` check for `Tapes`. Crash gone -- and the
+   gradients came back **wrong**. Against a no-flush baseline, 99.24% of
+   5,981,184 gradient elements differed, worst element by `1.5e-03`, and at
+   `auto_flush_ops=1`/`16`/`32` by `1.1e+01` and `6.9e+00` against a gradient
+   RMS of 18.7, i.e. 40-60% on individual elements. **The null allocator was
+   the executor correctly noticing that data it needed was gone.** Suppressing
+   the check converts a loud crash into silent training corruption, which is
+   worse. Reverted.
+3. **`_needed_by_backward` on the `Tapes` inputs**, so liveness keeps them.
+   Still segfaults. The flag does not keep the *memory* alive across a flush.
+4. **Stand the flush down while any `Tapes` is unresolved** (a counter,
+   incremented in the `Tapes` constructor, decremented when it runs).
+   Crashes gone at every setting and the loss is identical everywhere
+   (23080.078125), but the gradients still move:
+
+   | `auto_flush_ops` | 0 | 32 | 128 | 256 |
+   | --- | --- | --- | --- | --- |
+   | gradient norm | 45839.37890625 | **45822.23046875** | 45839.37109375 | 45839.37890625 |
+
+   0 and 256 agree bit for bit; 32 is off by 17 in 45839, `3.7e-4` relative.
+   So flushing still perturbs the backward by some other path. Not shipped: by
+   this repository's own standard a silent numeric divergence is worse than a
+   crash, and a fix that trades one for the other is not a fix. Reverted.
+
+### What is still true
+
+- Values that never crashed produce gradients matching the no-flush baseline to
+  `2.3e-05` on 5.98M elements (0.015% of elements differ). The **shipping
+  default of 128 is among the bad ones**; 64 and 256 are among the good ones,
+  and which is which depends on the model.
+- The minimal crashing shape is a pure elementwise chain --
+  `for _ in range(200): x = x * 1.0001 + 0.001` -- with no convolution,
+  BatchNorm or residual. It reproduces **intermittently**, unlike the ResNet
+  repro, which is deterministic per setting.
+- Ruled out by measurement: multiple targets per batch, BatchNorm's in-place
+  running-statistic updates (removing BatchNorm entirely still crashes), and
+  convolution.
+
+### Workaround
+
+`jt.flags.auto_flush_ops = 0`. It costs the pipelining the flag exists for and
+is correct: 0 is one of the settings whose gradients match.
+
+### Same flag, second defect
+
+[KI-EXEC-002] is `jt.profile_scope` reporting nothing for work this flush
+already launched. One flag introduced during the refactor (2026-09-02,
+`c9176652f`), two consequences.
+
+- Review/expiry condition: the repro passes for n in 4..8 **at the default
+  flag value**, gradients agree with the no-flush baseline at every setting on
+  a model containing tapes, both downstream ResNet50 backbones run a forward
+  and backward, and a regression covers a chain long enough to have crashed at
+  the default. A regression that sets the flag to 0 would pass on the unfixed
+  build and prove nothing.
 
 ## KI-OPS-010: fixed -- an index arriving in a Var is now checked against the dimension
 
