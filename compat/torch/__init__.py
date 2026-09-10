@@ -219,9 +219,40 @@ def install(torch, strict=True, parent_transaction=None):
 
     from .namespace import TorchNamespace
     if not isinstance(torch, TorchNamespace):
+        # Almost always a deployed `torch/__init__.py` left over from an older
+        # release: that file used to end in `install(jittor)`, and the current
+        # one calls `shim.activate()` instead. Telling such a caller to "use
+        # shim.activate() and import torch" reads as nonsense -- it *did*
+        # import torch, and the stale file is the thing that ignored the
+        # advice. So name the file when the caller is one.
+        # The caller's frame, not sys.modules["torch"]: by the time a stale
+        # deployment reaches here it has already run `import jittor`, which
+        # replaced that entry with the composed TorchNamespace -- an object
+        # with no __file__, so asking it where the caller lives gives nothing.
+        import os as _os
+        import sys as _sys
+        deployed = None
+        frame = _sys._getframe(1)
+        while frame is not None:
+            candidate = frame.f_globals.get("__file__") or ""
+            if _os.path.basename(candidate) == "__init__.py" and \
+                    _os.path.basename(_os.path.dirname(candidate)) == "torch" and \
+                    "compat" not in candidate.split(_os.sep):
+                deployed = candidate
+                break
+            frame = frame.f_back
+        origin = ""
+        if deployed:
+            origin = (
+                "\nThe caller looks like a deployed shim at %s. If it was "
+                "written by an older release, redeploy it "
+                "(python -m jittor.compat.shim deploy) or remove it; a current "
+                "deployment calls shim.activate() and never reaches here."
+                % deployed)
         raise RuntimeError(
             "Torch installation requires an independent TorchNamespace; "
-            "install(jittor) is no longer supported. Use shim.activate() and import torch.")
+            "install(jittor) is no longer supported. Use shim.activate() and "
+            "import torch." + origin)
 
     from .tensor_state import (
         compatibility_owner, bind_tensor_state, snapshot_tensor_state,

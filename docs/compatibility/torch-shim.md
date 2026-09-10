@@ -53,8 +53,16 @@ import torch
 默认激活与部署后的 `import torch` 发布**独立的** Tensor、Parameter 和 Module 类型：
 **`torch is not jittor`**。原生 Var 方法保留自己的契约。要用历史上的 Jittor 别名模式，
 显式传 `independent_namespace=False`；**已经激活的进程不能再换模式**。部署入口在设置
-激活标志的同时会设 `JITTOR_TORCH_INDEPENDENT=1`，好让子解释器选中同一模式。单独设
-`JITTOR_TORCH_SHIM=1` 仍然选中历史的 import 期路径。
+激活标志的同时会设 `JITTOR_TORCH_INDEPENDENT=1`，好让子解释器选中同一模式。单独设 `JITTOR_TORCH_SHIM=1` **就是开启开关**：`import jittor` 时会组合出同一个
+独立 `TorchNamespace`，不需要 PYTHONPATH、也不需要预先部署。它给到的与
+`activate()` 相同——`torch is not jittor`、`torch.Tensor is not Var`。
+（历史上这个变量选中的是把 Torch API 装到原生模块上的 import 期路径，那条路径已经移除，
+`install(jittor)` 现在直接拒绝。）
+
+有一处顺序要求：环境变量能让 `torch` 可导入，但**不能把模块放上 `sys.path`**。
+所以 `import torch` 作为进程里第一个 import 时，仍然需要一份已部署的 `torch` 包
+（或把 `compat/shim/resources` 放进 PYTHONPATH）；先 `import jittor` 则不需要。
+契约由 `compat/tests/torch/test_env_activation_contract.py` 钉住。
 
 `activate()` 是**进程级且幂等**的：重复调用返回最初的激活结果，不会重新扫描扩展或
 重新打补丁。除非设了 `JITTOR_TORCH_RUNTIME_ROOT`，它会在
