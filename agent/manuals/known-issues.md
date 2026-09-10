@@ -368,23 +368,31 @@ framework defects.
   `tests/core/test_var_residency_contract.py` covers all three spellings
   including the reduction case that must stay unaffected.
 
-## KI-AUTOGRAD-003: register_hook discards the receiver's materialized value
+## KI-AUTOGRAD-003: register_hook makes the receiver misreport its residency
 
-- Severity: Medium
-- Status: Reproduced, unfixed
+- Severity: Low
+- Status: Reproduced, unfixed; the original severity was measured down
 - Owner: autograd maintainers
-- Evidence: real CUDA. `a = jt.array(...); a.sync()` gives `a.location() ==
-  "device"`; `a.register_hook(lambda g: g)` leaves `a.location() == "none"`,
-  which is the state of a Var whose data has not been produced. The forward
-  value already computed is gone and the next read recomputes it.
-- Symptom: attaching a gradient hook is a declaration about the backward pass.
-  It silently invalidates the forward result, so a hook added for debugging
-  makes the graph in front of it run twice. Nothing reports the recompute.
+- Evidence: real CUDA. `a = jt.ones((2048,2048)).cuda(); a.sync()` gives
+  `a.location() == "device"`; `a.register_hook(lambda g: g)` then gives
+  `a.location() == "none"`, the state of a Var whose data has not been produced.
+- Not what it looks like: the data is still there. Device memory does not drop
+  (`+32 MiB` before and after), the value reads back correct, and the next
+  device operation costs the same as without the hook -- 0.9x, measured with an
+  expensive forward (`A@B@A` at 2048 square) precisely so a cheap one could not
+  hide a recompute. **Nothing is discarded and nothing is recomputed.**
+- Symptom: `location()` and `device` answer `"none"` for a Var that is resident.
+  Every other reading of them is trustworthy, so a caller who checks residency
+  around a hook gets a wrong answer with no way to tell it apart from a genuine
+  unmaterialized Var.
 - Found by: `tools/side_effect_probe.py`, which compares a Var against a
   snapshot of itself across every public operation. It was not looking for this;
   the operation appears because it changes an input it was not asked to change.
-- Workaround: register hooks before the forward value is needed, so the
-  recompute coincides with the first evaluation rather than repeating one.
+  The probe reports *that* something changed, not what it costs -- the severity
+  came from measurement afterwards, and the first reading of this entry claimed
+  a recompute that measurement did not support.
+- Workaround: none needed for correctness or speed; do not read `location()` or
+  `device` immediately after registering a hook.
 - Review/expiry condition: `register_hook` leaves `location()` unchanged on CPU
   and real CUDA, and the side-effect probe reports no mutation for it.
 
