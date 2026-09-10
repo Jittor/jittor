@@ -682,6 +682,21 @@ defer, and it is not true for at least one of them.
 - Related: KI-OPS-006 measured that `-Ofast` also folds comparison-based NaN
   tests to false in the shipping build, which is the same flag defeating a
   different piece of correctness.
+- And a third consequence, which is the one that makes CPU results
+  irreproducible rather than merely wrong: **whether an expression was fused
+  changes its answer.** `(a + b) - a` with `a = -1e8`, `b = 2.0` in float32
+  gives `0.0` unfused -- `2.0` is below the ULP of `1e8`, so the addition
+  discards it, which is what the written expression says -- and `2.0` fused,
+  because the larger expression handed to the compiler is reassociated to
+  `b + (a - a)`. Measured with `tools/fusion_consistency_sweep.py`: 12 cases,
+  CPU has one differing, CUDA has none.
+
+  Fusion depends on what else is in the graph, so the same code gives different
+  answers in different surroundings. This is what made an earlier probe check
+  unstable -- it returned `1.0` inside the probe and `0.0` standalone and was
+  withdrawn for having no stable expectation. Stated as "fused and unfused must
+  agree" it needs no expectation at all, which is why that invariant is the one
+  worth gating on.
 - Fix direction: `-O3` rather than `-Ofast`, or `-Ofast -fno-finite-math-only`.
   Both cost throughput and the amount is unmeasured -- vectorisation of
   reductions is the exposed part -- so this needs the same measure-then-decide
