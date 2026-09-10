@@ -31,14 +31,32 @@ import tempfile
 import numpy as np
 
 
+#: The child is told which device to use and made to prove it landed there.
+#:
+#: The first version set nothing and relied on the default. `use_cuda` defaults
+#: to **0** in a fresh process even on a machine with eight GPUs, so the
+#: `--device cuda` run was comparing a CUDA parent against a CPU child and
+#: calling the difference a serialisation defect. It reported OK for months
+#: because under `-Ofast` the two devices happened to agree bit-for-bit on this
+#: model; `-O3` moved the CPU result by 1.49e-08 and the luck ran out.
+#:
+#: The `location()` assertion is the part that matters. Passing the flag is
+#: easy to get right and easy to have silently ignored -- a fallback, a missing
+#: driver, a flag consumed too late -- and then the check goes back to
+#: comparing two devices while looking like it compares two processes.
 CHILD = r'''
 import json, sys, numpy as np, jittor as jt
 from jittor import nn
-state_path, input_path, out_path = sys.argv[1:4]
+state_path, input_path, out_path, device = sys.argv[1:5]
+jt.flags.use_cuda = 1 if device == "cuda" else 0
 jt.set_global_seed(0)
 model = nn.Sequential(nn.Linear(8, 16), nn.Relu(), nn.Linear(16, 4))
 model.load(state_path)
 x = jt.array(np.load(input_path))
+x.sync()
+where = x.location()
+expected = "device" if device == "cuda" else "cpu"
+assert where == expected, "child asked for %s, tensor is on %s" % (device, where)
 y = model(x)
 np.save(out_path, y.numpy())
 '''
@@ -66,7 +84,7 @@ def check_no_grad_matches(jt, use_cuda, rows):
     })
 
 
-def check_reload_in_a_fresh_process(jt, use_cuda, rows):
+def check_reload_in_a_fresh_process(jt, use_cuda, rows, device):
     with tempfile.TemporaryDirectory(prefix="jittor-roundtrip-") as tmp:
         tmp = pathlib.Path(tmp)
         state, inp, out = tmp / "m.pkl", tmp / "x.npy", tmp / "y.npy"
@@ -82,11 +100,18 @@ def check_reload_in_a_fresh_process(jt, use_cuda, rows):
         env = dict(os.environ)
         env["JITTOR_TORCH_SHIM"] = "0"
         result = subprocess.run(
-            [sys.executable, str(script), str(state), str(inp), str(out)],
+            [sys.executable, str(script), str(state), str(inp), str(out), device],
             capture_output=True, text=True, env=env, timeout=900)
         if result.returncode != 0 or not out.is_file():
+            # The last 200 characters of stderr are whatever Jittor printed on
+            # the way down, which is rarely the reason. Pull the exception line
+            # out instead -- a failure that does not say why is the thing this
+            # file exists to avoid producing.
+            lines = [l.strip() for l in (result.stderr or "").splitlines() if l.strip()]
+            reason = next((l for l in reversed(lines)
+                           if "Error" in l or "error" in l), "")
             rows.append({"case": "reload in a fresh process", "status": "ERROR",
-                         "detail": (result.stderr or "")[-200:]})
+                         "detail": reason or (result.stderr or "")[-200:]})
             return
         there = np.load(out)
 
@@ -117,7 +142,7 @@ def main(argv=None):
 
     rows = []
     check_no_grad_matches(jt, use_cuda, rows)
-    check_reload_in_a_fresh_process(jt, use_cuda, rows)
+    check_reload_in_a_fresh_process(jt, use_cuda, rows, args.device)
 
     counts = {}
     for row in rows:
