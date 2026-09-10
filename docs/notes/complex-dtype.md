@@ -67,8 +67,8 @@ CPU 与 CUDA 上有维护测试覆盖的部分：
 7. 更新本文与问题总账，不要把实验过程复制进任何一份。
 
 主要回归文件：
-[`test_complex64_native.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex64_native.py)、
-[`test_complex64_linalg.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex64_linalg.py)、
-[`test_complex64_gradfunctional.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex64_gradfunctional.py)、
+[`test_complex64_native.py`](https://github.com/Jittor/jittor/blob/master/tests/type/test_complex64_native.py)、
+[`test_complex64_linalg.py`](https://github.com/Jittor/jittor/blob/master/tests/linalg/test_complex64_linalg.py)、
+[`test_complex64_gradfunctional.py`](https://github.com/Jittor/jittor/blob/master/tests/autograd/test_complex64_gradfunctional.py)、
 以及覆盖剩余内部桥接的
-[`test_complex.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex.py)。
+[`test_complex.py`](https://github.com/Jittor/jittor/blob/master/tests/type/test_complex.py)。

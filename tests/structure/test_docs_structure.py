@@ -348,6 +348,88 @@ class TestDocsStructure(unittest.TestCase):
             merge_stderr=True)
         self.assertEqual(result.returncode, 0, result.stdout)
 
+    def test_every_page_is_reachable_and_every_toctree_entry_exists(self):
+        """No orphan pages, no dangling toctree entries.
+
+        Four contributor documents -- ``storage-layout``,
+        ``jit-operator-source``, ``error-categories`` and
+        ``async-error-diagnostics`` -- sat in ``docs/development`` with zero
+        inbound links and no toctree entry. They built into pages nobody could
+        navigate to, and Sphinx's "not included in any toctree" warning is not
+        an error, so nothing failed. Both directions are checked because the
+        opposite rot -- a toctree naming a page that was moved or deleted --
+        breaks the build instead of hiding, but is cheaper to catch here.
+        """
+        import re
+
+        docs = self.repo_root / "docs"
+        referenced = set()
+        for page in docs.rglob("*.md"):
+            text = page.read_text(encoding="utf-8")
+            blocks = (re.findall(r"```\{toctree\}(.*?)```", text, re.S)
+                      + re.findall(r":::\{toctree\}(.*?):::", text, re.S))
+            for block in blocks:
+                for line in block.splitlines():
+                    entry = line.strip()
+                    if not entry or entry.startswith(":"):
+                        continue
+                    label = re.search(r"<([^>]+)>$", entry)
+                    entry = label.group(1) if label else entry
+                    if not entry.endswith(".md"):
+                        entry += ".md"
+                    referenced.add((page.parent / entry).resolve())
+
+        pages = {page.resolve() for page in docs.rglob("*.md")}
+        orphans = sorted(
+            page.relative_to(self.repo_root).as_posix()
+            for page in pages - referenced - {(docs / "index.md").resolve()})
+        self.assertEqual(
+            orphans, [],
+            "these pages are in no toctree, so the built site has no way to "
+            "reach them; add them to their section index: %s" % orphans)
+
+        dangling = sorted(
+            target.name for target in referenced if not target.exists())
+        self.assertEqual(
+            dangling, [],
+            "these toctree entries name pages that do not exist: %s" % dangling)
+
+    def test_repository_urls_are_checked_like_relative_links(self):
+        """A github.com blob URL naming a local path must be resolved too.
+
+        The checker skipped anything with a scheme, so 28 links pointing into
+        this repository were unverified and four of them had rotted: they still
+        named ``tests/core/test_complex*.py`` long after the layout move put
+        those files under ``tests/type`` and ``tests/autograd``. A rule that has
+        never been shown to fire is a rule nobody has checked, so both
+        directions are exercised here.
+        """
+        import sys
+        sys.path.insert(0, str(self.repo_root / "tools" / "docs"))
+        import check_links
+
+        base = "https://github.com/Jittor/jittor/blob/master/"
+        source = self.repo_root / "docs" / "index.md"
+
+        missing = check_links._resolve(
+            self.repo_root, source, base + "tests/core/test_complex.py", "markdown")
+        self.assertIsNotNone(missing, "a rotted repository URL must be reported")
+        self.assertIn("missing repository URL target", missing)
+
+        present = check_links._resolve(
+            self.repo_root, source, base + "tests/type/test_complex.py", "markdown")
+        self.assertIsNone(present, present)
+
+        # An external reference is not this checker's to verify, and claiming
+        # otherwise would make every third-party link a false failure.
+        external = check_links._resolve(
+            self.repo_root, source,
+            "https://github.com/pytorch/pytorch/blob/main/README.md", "markdown")
+        self.assertIsNone(external, external)
+        website = check_links._resolve(
+            self.repo_root, source, "https://cg.cs.tsinghua.edu.cn/jittor/", "markdown")
+        self.assertIsNone(website, website)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,13 @@
 
 使用 Jittor 的开源项目列表：
 
+```{toctree}
+:hidden:
+
+AWESOME-JITTOR-LIST.cn
+AWESOME-JITTOR-LIST
+```
+
 - [Awesome Jittor（中文）](AWESOME-JITTOR-LIST.cn.md)
 - [Awesome Jittor (English)](AWESOME-JITTOR-LIST.md)
 

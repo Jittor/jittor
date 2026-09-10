@@ -111,13 +111,54 @@ def _markdown_targets(path):
             yield number, label.group(1) if label else value, "doc"
 
 
+#: A ``blob`` URL into this repository names a path in this working tree, so it
+#: can be checked like a relative link -- and it has to be, because the layout
+#: moves. Four links in ``docs/notes/complex-dtype.md`` pointed at
+#: ``tests/core/test_complex*.py`` long after those files moved to
+#: ``tests/type`` and ``tests/autograd``; nothing noticed, because a link with a
+#: scheme was skipped whether or not it named something local.
+_REPOSITORY_BLOB = re.compile(
+    r"^/Jittor/jittor/(?P<kind>blob|tree)/(?P<ref>[^/]+)/(?P<path>.+)$")
+
+
+def _resolve_repository_url(repo_root, split, raw_target):
+    """Check a github.com URL that names a path inside this repository.
+
+    Only this repository's own ``blob``/``tree`` URLs are resolved. Anything
+    else -- another project, an issue, a release page, the website -- is a
+    genuine external reference this checker has no way to verify and must not
+    pretend to.
+    """
+    if split.netloc.lower() not in ("github.com", "www.github.com"):
+        return None
+    match = _REPOSITORY_BLOB.match(unquote(split.path))
+    if not match:
+        return None
+    clean = match.group("path").replace("\\", "/")
+    if any(character in clean for character in "*?["):
+        return None
+    candidate = (repo_root / clean).resolve()
+    try:
+        candidate.relative_to(repo_root)
+    except ValueError:
+        return "repository URL escapes repository: {}".format(raw_target)
+    if not candidate.exists():
+        return ("missing repository URL target: {} (from {})"
+                .format(clean, raw_target))
+    if match.group("kind") == "tree" and not candidate.is_dir():
+        return "tree URL names a file: {}".format(raw_target)
+    if match.group("kind") == "blob" and candidate.is_dir():
+        return "blob URL names a directory: {}".format(raw_target)
+    return None
+
+
 def _resolve(repo_root, source, raw_target, kind):
     target = raw_target.strip()
     if not target or target.startswith("#") or "{{" in target or "${" in target:
         return None
     split = urlsplit(target)
     if split.scheme.lower() in SCHEMES or split.netloc:
-        return None
+        return _resolve_repository_url(repo_root, split, raw_target)
     clean = unquote(split.path).replace("\\", "/")
     if not clean or any(character in clean for character in "*?["):
         return None
