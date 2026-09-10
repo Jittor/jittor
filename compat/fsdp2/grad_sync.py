@@ -129,7 +129,8 @@ def _visible_full_grads_from_shards(state):
                 parts.append(common._flatten_var(part))
                 real_numel += part_numel
         if real_numel < int(state.true_fsdp_flat_shard_numel):
-            parts.append(jt.zeros(
+            parts.append(common._zeros_like_shape(
+                state.true_fsdp_flat_shard,
                 (int(state.true_fsdp_flat_shard_numel) - real_numel,),
                 dtype=state.true_fsdp_flat_shard.dtype))
         local_flat = parts[0] if len(parts) == 1 else jt.concat(parts, dim=0)
@@ -297,7 +298,9 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
             grad = grad_by_id.get(full_id) if full_id is not None else None
             local_used.append(grad is not None)
             if grad is None:
-                grad = jt.zeros(entry.shape, dtype=entry.dtype)
+                reference = full if full is not None else entry.shard
+                grad = common._zeros_like_shape(
+                    reference, entry.shape, dtype=entry.dtype)
             full_grads.append(grad)
         if not any(local_used) and common._world_size() <= 1:
             # This backward pass never reached the state's parameters -- a second

@@ -8,7 +8,7 @@ distribution import the view without pulling in the native shim installer.
 
 from __future__ import annotations
 
-from .namespace import TorchNamespace
+from .namespace import TorchNamespace, _PARENT_BINDING_EXCEPTIONS
 from ..transaction import _MISSING, TransactionConflict
 
 
@@ -73,6 +73,9 @@ def bind_published_namespace(namespace, published, transaction=None):
         parent = parents.get(parent_name)
         if parent is None:
             raise RuntimeError("published namespace parent disappeared: %r" % parent_name)
+        if name in _PARENT_BINDING_EXCEPTIONS:
+            parents[name] = modules[name]
+            continue
         if isinstance(parent, TorchNamespace):
             if transaction is not None:
                 transaction.mutate_attr(parent, attr, modules[name])

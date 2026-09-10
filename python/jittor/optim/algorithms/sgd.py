@@ -36,12 +36,12 @@ class SGD(Optimizer):
         for pg in self.param_groups:
             values = pg["values"] = []
             for p in pg["params"]:
-                values.append(jt.zeros(p.shape, p.dtype).stop_grad())
+                values.append(jt.zeros_like(p).stop_grad())
 
     def add_param_group(self, group):
         values = group["values"] = []
         for p in group["params"]:
-            values.append(jt.zeros(p.shape, p.dtype).stop_grad())
+            values.append(jt.zeros_like(p).stop_grad())
         self.param_groups.append(group)
 
     def step(self, loss=None, retain_graph=False):

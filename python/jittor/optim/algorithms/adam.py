@@ -77,15 +77,15 @@ class Adam(Optimizer):
             values = pg["values"] = []
             m = pg["m"] = []
             for p in pg["params"]:
-                values.append(jt.zeros(p.shape, p.dtype).stop_grad())
-                m.append(jt.zeros(p.shape, p.dtype).stop_grad())
+                values.append(jt.zeros_like(p).stop_grad())
+                m.append(jt.zeros_like(p).stop_grad())
 
     def add_param_group(self, group):
         values = group["values"] = []
         m = group["m"] = []
         for p in group["params"]:
-            values.append(jt.zeros(p.shape, p.dtype).stop_grad())
-            m.append(jt.zeros(p.shape, p.dtype).stop_grad())
+            values.append(jt.zeros_like(p).stop_grad())
+            m.append(jt.zeros_like(p).stop_grad())
         self.param_groups.append(group)
 
     def step(self, loss=None, retain_graph=False):
@@ -129,15 +129,15 @@ class AdamW(Optimizer):
             values = pg["values"] = []
             m = pg["m"] = []
             for p in pg["params"]:
-                values.append(jt.zeros(p.shape, p.dtype).stop_grad())
-                m.append(jt.zeros(p.shape, p.dtype).stop_grad())
+                values.append(jt.zeros_like(p).stop_grad())
+                m.append(jt.zeros_like(p).stop_grad())
 
     def add_param_group(self, group):
         values = group["values"] = []
         m = group["m"] = []
         for p in group["params"]:
-            values.append(jt.zeros(p.shape, p.dtype).stop_grad())
-            m.append(jt.zeros(p.shape, p.dtype).stop_grad())
+            values.append(jt.zeros_like(p).stop_grad())
+            m.append(jt.zeros_like(p).stop_grad())
         self.param_groups.append(group)
 
     def step(self, loss=None, retain_graph=False):

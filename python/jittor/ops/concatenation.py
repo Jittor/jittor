@@ -19,9 +19,11 @@ def _merge_dtypes(dtypes):
 
 def _concat_direct(arr, dim, dtype):
     import jittor as jt
+    from jittor._core.var import _factory_scope_like
     output_shape = list(arr[0].shape)
     output_shape[dim] = sum(value.shape[dim] for value in arr)
-    output = jt.empty(output_shape, dtype=dtype)
+    with _factory_scope_like(arr[0]):
+        output = jt.empty(output_shape, dtype=dtype)
     slices = [slice(None)] * len(output_shape)
     offset = 0
     for value in arr:

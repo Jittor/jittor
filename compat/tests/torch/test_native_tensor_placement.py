@@ -203,3 +203,56 @@ def test_frequency_factories_use_native_placement_for_following_operations():
                 assert value.device.type == result.device.type == device
                 assert value.location() == result.location() == ("cpu" if device == "cpu" else "device")
                 np.testing.assert_array_equal(result.numpy(), reference * 2 + 1)
+
+
+def test_native_like_factories_and_optimizer_state_follow_explicit_placement():
+    import jittor as jt
+    import torch
+    with _cuda_runtime():
+        cpu = torch.tensor([1., 2.], device="cpu", requires_grad=True)
+        cpu_values = (
+            jt.ones_like(cpu), jt.zeros_like(cpu), jt.full_like(cpu, 3.),
+            jt.concat((cpu, cpu)),
+        )
+        cpu_sgd = torch.optim.SGD([cpu], lr=0.1, momentum=0.9)
+        cpu_adamw = torch.optim.AdamW([cpu], lr=0.1, weight_decay=0.0)
+        cpu_values += (
+            cpu_sgd.param_groups[0]["values"][0],
+            cpu_adamw.param_groups[0]["values"][0],
+            cpu_adamw.param_groups[0]["m"][0],
+        )
+        for value in cpu_values:
+            value.sync()
+            _cpu(value)
+        cpu.grad = jt.ones_like(cpu).stop_grad()
+        cpu_adamw.step()
+        cpu.sync()
+        _cpu(cpu)
+        np.testing.assert_allclose(cpu.numpy(), [0.9, 1.9], atol=1e-5)
+
+        cuda = torch.tensor([1., 2.], device="cuda", requires_grad=True)
+        with jt.flag_scope(use_cuda=0):
+            cuda_values = (
+                jt.ones_like(cuda), jt.zeros_like(cuda), jt.full_like(cuda, 3.),
+                jt.concat((cuda, cuda)),
+            )
+            cuda_sgd = torch.optim.SGD([cuda], lr=0.1, momentum=0.9)
+            cuda_adamw = torch.optim.AdamW(
+                [cuda], lr=0.1, weight_decay=0.0)
+            cuda_values += (
+                cuda_sgd.param_groups[0]["values"][0],
+                cuda_adamw.param_groups[0]["values"][0],
+                cuda_adamw.param_groups[0]["m"][0],
+            )
+            for value in cuda_values:
+                value.sync()
+                assert value.placement_backend == 1
+                assert value.device.type == "cuda"
+                assert value.location() == "device"
+            cuda.grad = jt.ones_like(cuda).stop_grad()
+            cuda_adamw.step()
+            cuda.sync()
+            assert cuda.placement_backend == 1
+            assert cuda.device.type == "cuda"
+            assert cuda.location() == "device"
+            np.testing.assert_allclose(cuda.numpy(), [0.9, 1.9], atol=1e-5)

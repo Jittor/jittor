@@ -61,6 +61,16 @@ def install_with_registry(dist, torch_module=None, registry=None):
         if installed_graph is not None:
             for name, installed_module in installed_graph:
                 registry.publish(name, installed_module)
+            # Replaying the child module graph binds this package attribute to
+            # the importable submodule again. The package API itself owns the
+            # callable, while the submodule remains available in sys.modules.
+            composable_fsdp = next(
+                (installed_module for name, installed_module in installed_graph
+                 if name == "torch.distributed._composable.fsdp"),
+                None,
+            )
+            if composable_fsdp is not None:
+                composable_fsdp.fully_shard = api.fully_shard
             return dist
 
     module = _ModuleGraph(registry)

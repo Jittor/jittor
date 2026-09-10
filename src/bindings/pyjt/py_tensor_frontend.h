@@ -19,6 +19,8 @@ void reset_tensor_frontend_type(PyObject* token);
 // Construction-only placement override; independent of Runtime execution flags.
 // @pyjt(_set_tensor_placement)
 PyObject* set_tensor_placement_context(int backend, int device=0);
+// @pyjt(_get_tensor_placement)
+PyObject* get_tensor_placement_context();
 // @pyjt(_reset_tensor_placement)
 void reset_tensor_placement_context(PyObject* token);
 

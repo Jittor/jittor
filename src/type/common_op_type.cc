@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "core/common.h"
+#include "core/op.h"
 #include "runtime/device_state.h"
 #include "utils/str_utils.h"
 #include "ops/op_register.h"
@@ -166,7 +167,7 @@ struct CommonOpType : OpByType {
         string ret;
         if (both_map.count(args.at(0)))
             ret = both_map[args.at(0)];
-        else if (runtime_flag_use_cuda())
+        else if (execution_target_backend() != BackendId::Cpu)
             ret = cuda_map[args.at(0)];
         else
             ret = cpu_map[args.at(0)];

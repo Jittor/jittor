@@ -8,6 +8,7 @@ import types
 import numpy as np
 
 import jittor as jt
+from jittor._core.var import _factory_scope_like
 from ..diagnostics import EXPECTED, swallowed
 # Rank/world queries and the two collectives moved down to jittor/compat/
 # collectives.py: compat/torch/installers/distributed.py needs
@@ -99,8 +100,13 @@ def _pad_flat(flat, padded_numel):
     n = int(flat.numel()) if callable(getattr(flat, "numel", None)) else int(np.prod(flat.shape))
     if n == int(padded_numel):
         return flat
-    pad = jt.zeros((int(padded_numel) - n,), dtype=flat.dtype)
+    pad = _zeros_like_shape(flat, (int(padded_numel) - n,))
     return jt.concat([flat, pad], dim=0)
+
+
+def _zeros_like_shape(reference, shape, dtype=None):
+    with _factory_scope_like(reference):
+        return jt.zeros(shape, dtype=reference.dtype if dtype is None else dtype)
 
 
 def _param_numel(v):
@@ -195,7 +201,8 @@ def _full_gradient_from_shard(gradient, state, entry):
                     parts.append(_flatten_var(value))
                     real_numel += part_numel
             if real_numel < int(state.true_fsdp_flat_shard_numel):
-                parts.append(jt.zeros(
+                parts.append(_zeros_like_shape(
+                    state.true_fsdp_flat_shard,
                     (int(state.true_fsdp_flat_shard_numel) - real_numel,),
                     dtype=state.true_fsdp_flat_shard.dtype))
             local_flat = parts[0] if len(parts) == 1 else jt.concat(parts, dim=0)

@@ -5,6 +5,7 @@ from jittor._core.dtypes import is_dtype as _is_dtype
 
 import functools as _functools
 import numbers
+from contextlib import contextmanager as _contextmanager
 from collections.abc import Sequence
 from builtins import bool as ori_bool, float as ori_float, int as ori_int
 
@@ -295,8 +296,28 @@ def ones(*shape, dtype="float32"):
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
     return unary(1, dtype).broadcast(shape)
 
+@_contextmanager
+def _factory_scope_like(x):
+    """Let no-input factories inherit an explicit reference unless overridden."""
+    frontend_token = None
+    token = None
+    backend = getattr(x, "placement_backend", -1)
+    try:
+        if backend >= 0 and core._get_tensor_placement() is None:
+            frontend_type = getattr(type(x), "_frontend_result_type", type(x))
+            frontend_token = core._set_tensor_frontend_type(frontend_type)
+            device = max(ori_int(getattr(x, "device_id", 0)), 0)
+            token = core._set_tensor_placement(ori_int(backend), device)
+        yield
+    finally:
+        if token is not None:
+            core._reset_tensor_placement(token)
+        if frontend_token is not None:
+            core._reset_tensor_frontend_type(frontend_token)
+
 def new_ones(x, size):
-    return ones(size, x.dtype)
+    with _factory_scope_like(x):
+        return ones(size, x.dtype)
 
 Var.new_ones = new_ones
 
@@ -308,7 +329,8 @@ def ones_like(x):
     :return: The output Var.
     :rtype: jittor.Var
     '''
-    return ones(x.shape,x.dtype)
+    with _factory_scope_like(x):
+        return ones(x.shape,x.dtype)
 
 def zeros(*shape, dtype="float32"):
     ''' Constructs a jittor Var with all elements set to 0.
@@ -331,7 +353,8 @@ def zeros(*shape, dtype="float32"):
     return unary(0, dtype).broadcast(shape)
 
 def new_zeros(x, size):
-    return zeros(size, x.dtype)
+    with _factory_scope_like(x):
+        return zeros(size, x.dtype)
 
 Var.new_zeros = new_zeros
 
@@ -344,7 +367,8 @@ def empty(*shape, dtype="float32"):
     return ops.empty(shape, dtype)
 
 def new_empty(x, size):
-    return empty(size, x.dtype)
+    with _factory_scope_like(x):
+        return empty(size, x.dtype)
 
 Var.new_empty = new_empty
 
@@ -368,7 +392,8 @@ def full(shape,val,dtype="float32"):
     return unary(val, dtype).broadcast(shape)
 
 def new_full(x, size, val):
-    return full(size, val, x.dtype)
+    with _factory_scope_like(x):
+        return full(size, val, x.dtype)
 
 Var.new_full = new_full
 
@@ -391,7 +416,8 @@ def full_like(x, val, dtype=None) -> Var:
     :rtype: jittor.Var
     '''
     if dtype is None: dtype = x.dtype
-    return full(x.shape, val, dtype)
+    with _factory_scope_like(x):
+        return full(x.shape, val, dtype)
 
 def zeros_like(x, dtype=None) -> Var:
     ''' Constructs a jittor Var with all elements set to 0 and shape same with x.
@@ -405,7 +431,8 @@ def zeros_like(x, dtype=None) -> Var:
     :rtype: jittor.Var
     '''
     if dtype is None: dtype = x.dtype
-    return zeros(x.shape, dtype)
+    with _factory_scope_like(x):
+        return zeros(x.shape, dtype)
 
 def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
     """ return the sample variance. If unbiased is True, Bessel's correction will be used.
