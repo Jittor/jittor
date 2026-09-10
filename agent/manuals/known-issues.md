@@ -396,6 +396,61 @@ framework defects.
 - Review/expiry condition: `register_hook` leaves `location()` unchanged on CPU
   and real CUDA, and the side-effect probe reports no mutation for it.
 
+## KI-EXEC-002: the profiler cannot see work that `auto_flush_ops` already launched
+
+- Severity: High (measurements are silently partial; two gates are permanently red)
+- Status: Reproduced, unfixed
+- Owner: executor and profiling maintainers
+- Evidence: CUDA, a 64x64x64x64 float32 tensor sliced and concatenated, then
+  differentiated. Same expression at each row; only the number of slices moves.
+
+  | slices | rows `jt.profile_scope` reported | wall clock inside the scope |
+  | --- | --- | --- |
+  | 1, 2, 8 | 6-7 | 0.09-0.12s |
+  | **16, 32, 64** | **0** | **0.0003-0.025s** |
+
+  The result is correct at every row -- `b.numpy().sum()` is right -- so the
+  work happened. It happened *before the scope opened*.
+- Cause, established without a rebuild by moving one flag:
+
+  ```
+  auto_flush_ops=128  slices=64  rows=0  total=0
+  auto_flush_ops=0    slices=64  rows=9  total=37740746
+  auto_flush_ops=128  slices=32  rows=0  total=0
+  auto_flush_ops=0    slices=32  rows=9  total=17530765
+  ```
+
+  `auto_flush_ops` (`src/core/executor.cc`, default 128, CUDA only) launches
+  everything pending once that many operators have been created since the
+  executor last ran, so the device computes while Python keeps building. It is
+  a deliberate pipelining feature and it does what it says. What it also does
+  is end the guarantee that a lazily built graph is still pending when the
+  caller comes to run it: build more than ~128 operators' worth of graph and
+  part of it has already executed, outside whatever scope the caller is about
+  to open.
+- Symptom: `jt.profile_scope` returns a report with no rows and no warning.
+  Anything dividing by the total gets a zero -- which is how this was found:
+  `tests/ops/test_concat_op.py::test_concat2_perf` and `::test_concat_perf`
+  fail with `ZeroDivisionError` at every run, and have been doing so long
+  enough that the failure reads as background noise.
+- Why it matters beyond those two tests: the graphs worth profiling are the
+  large ones, and those are exactly the ones that under-report. A profile that
+  came back empty is indistinguishable from one that came back fast, and the
+  report says nothing about the ops that were flushed before it started.
+- Introduced 2026-09-02 (`c9176652f`), so this is a refactor-era regression
+  rather than an old defect: the tests were written against fully lazy
+  execution and the flag changed what "pending" means underneath them.
+- Not the same as KI-EXEC-001, but the same shape and worth reading together:
+  behaviour that changes once a graph passes a size threshold, where nothing in
+  the API says a threshold exists.
+- Workaround: `jt.flag_scope(auto_flush_ops=0)` around graph construction *and*
+  execution. Setting it inside the profile scope alone does not help -- by then
+  the flush has already happened.
+- Review/expiry condition: a profile taken over a graph of any size either
+  accounts for every operator that ran, or says out loud that it did not; and
+  the two concat perf cases measure something again rather than dividing by
+  zero.
+
 ## KI-EXEC-001: CUDA segfaults past a graph-size threshold
 
 - Severity: Critical
@@ -603,14 +658,16 @@ The second vector's zero is a result, not an absence of testing: it says the
 next defect of this kind is more likely to be found by adding another
 special-value case than by adding another magnitude case.
 
-## Three CPU float defects share one surface; two are still open
+## Three CPU float defects share one surface; one is still open
 
 `KI-BACKEND-004`, `KI-BACKEND-005` and `KI-BACKEND-006` were found separately
 and read as three bugs. They are three symptoms of one thing: **the CPU kernel
 build never decided what its floating-point contract is.**
 
-- 005 is the compile flag. `-Ofast` promises the compiler that infinities and
-  NaN do not occur, and it optimises on that promise.
+- 005 was the compile flag. `-Ofast` promised the compiler that infinities and
+  NaN do not occur, and it optimised on that promise. Fixed 2026-09-10: kernels
+  build at `-O3`, at no measured cost, and the fused-versus-unfused divergence
+  went with it.
 - 004 is the expression table. `std::max` and `::max` were each chosen for
   being the obvious spelling, and their NaN behaviour -- accidental on CPU,
   deliberate IEEE `maxNum` on CUDA -- was never part of the choice.
@@ -690,73 +747,78 @@ defer, and where it has been tested it was not true.
   treated as one change.
 - Workaround: test for NaN explicitly before a max/min on CUDA where its
   presence matters.
-- Blocked on KI-BACKEND-005, and this is an ordering constraint rather than a
-  preference. A NaN-propagating max is written `a != a ? a : ...`, and `-Ofast`
-  implies `-ffinite-math-only`, under which the compiler folds `a != a` to
-  false -- KI-OPS-006 measured exactly that. Writing the fix before the flag is
-  removed produces code that reads correct and compiles to the old behaviour,
-  which is worse than not writing it.
+- Was blocked on KI-BACKEND-005, now unblocked. A NaN-propagating max is
+  written `a != a ? a : ...`, and `-Ofast` implied `-ffinite-math-only`, under
+  which the compiler is free to fold `a != a` to false -- the fix would have
+  read correct and compiled to the old behaviour, which is worse than not
+  writing it. Kernels now build at `-O3`, and `x != x` on a NaN comes back 1.0,
+  pinned by `tests/ops/test_ieee_arithmetic.py`.
 - Review/expiry condition: CPU and CUDA agree with NumPy on NaN and on the sign
   of zero for `maximum` and `minimum`, **and for `jt.max`/`jt.min` over an
   array containing one**, and a device-parity case feeds NaN so the
   disagreement cannot return unnoticed.
 
-## KI-BACKEND-005: CPU kernels are built with `-Ofast`, so infinities compute wrong
+## KI-BACKEND-005: fixed -- CPU kernels build at `-O3`, not `-Ofast`
 
-- Severity: Critical
-- Status: Reproduced, unfixed
-- Owner: compiler and CPU backend maintainers
-- Evidence: CPU, float32, vectors of length >= 4 (the vectorised path):
+- Severity: was Critical (silently wrong arithmetic, irreproducible results)
+- Status: Fixed 2026-09-10
+- Symptom it had: CPU, float32, vectors of length >= 4 (the vectorised path):
 
-  | expression | Jittor CPU | IEEE / NumPy / Jittor CUDA |
+  | expression | before | IEEE / NumPy / Jittor CUDA |
   | --- | --- | --- |
-  | `inf - inf` | `0.0` | `nan` |
   | `1 / 0` | `nan` | `inf` |
   | `-inf / 0` | `nan` | `-inf` |
-  | `inf * 1` | `inf` | `inf` |
 
-  A single element computes correctly; the wrong answers begin at length 4,
-  which is where the kernel vectorises. CUDA is correct for all of them.
-- Cause: `python/jittor/build/compiler.py:834` appends `-Ofast` to
+  A single element computed correctly; the wrong answers began at length 4, so
+  a scalar spot-check saw nothing.
+- Cause: `python/jittor/build/compiler.py` appended `-Ofast` to
   `kernel_opt_flags` unconditionally. `-Ofast` implies `-ffast-math`, which
-  implies `-ffinite-math-only` -- a promise to the compiler that no operand is
-  ever infinite or NaN. It then optimises on that promise, and operands that
-  *are* infinite take whatever path the transformed code happens to produce.
-- The project already knows: `compiler.py:89` strips `--use_fast_math` and
-  `-Ofast` and substitutes `-O2` for one file, `nan_checker`. The workaround was
-  applied where it was noticed rather than where it applies.
-- Symptom: silently wrong arithmetic, and the shapes it takes are plausible
-  rather than obviously broken. `inf - inf` returning `0.0` is the dangerous
-  one: a fully masked attention row subtracts its own `-inf` maximum, and a `0`
-  there produces a well-formed but wrong softmax instead of an obvious `nan`.
-  KI-OPS-008 reaches the same input from the other side.
-- Related: KI-OPS-006 measured that `-Ofast` also folds comparison-based NaN
-  tests to false in the shipping build, which is the same flag defeating a
-  different piece of correctness.
-- And a third consequence, which is the one that makes CPU results
-  irreproducible rather than merely wrong: **whether an expression was fused
-  changes its answer.** `(a + b) - a` with `a = -1e8`, `b = 2.0` in float32
-  gives `0.0` unfused -- `2.0` is below the ULP of `1e8`, so the addition
-  discards it, which is what the written expression says -- and `2.0` fused,
-  because the larger expression handed to the compiler is reassociated to
-  `b + (a - a)`. Measured with `tools/fusion_consistency_sweep.py`: 12 cases,
-  CPU has one differing, CUDA has none.
+  implies `-ffinite-math-only` -- a promise that no operand is ever infinite or
+  NaN. Operands that *were* infinite then took whatever path the transformed
+  code happened to produce. The project already knew in one place: `nan_checker`
+  had `-Ofast` stripped and `-O2` substituted, and `jt.misc._simple_for` exists
+  to compile the `isnan`/`isinf` kernel at `-O2`. The workaround was applied
+  where the problem was noticed rather than where it applied.
+- Fix: `-O3`. One line, and the reason it is not a trade is that the
+  reassociation `-ffast-math` also granted was not being used: g++ 12.3 does
+  not vectorise the real reduction kernels, because the runtime
+  `storage_stride(0)` blocks it (measured while fixing KI-BACKEND-006).
+  Accuracy at scale is now `BlockedReductionPass`'s job, stated in the code
+  rather than bought from a flag that also breaks arithmetic.
+- Measured cost: none. Same machine, same warm cache, four kernels:
 
-  Fusion depends on what else is in the graph, so the same code gives different
-  answers in different surroundings. This is what made an earlier probe check
-  unstable -- it returned `1.0` inside the probe and `0.0` standalone and was
-  withdrawn for having no stable expectation. Stated as "fused and unfused must
-  agree" it needs no expectation at all, which is why that invariant is the one
-  worth gating on.
-- Fix direction: `-O3` rather than `-Ofast`, or `-Ofast -fno-finite-math-only`.
-  Both cost throughput and the amount is unmeasured -- vectorisation of
-  reductions is the exposed part -- so this needs the same measure-then-decide
-  the KI-OPS-006 entry records, not a straight substitution.
-- Workaround: none within a kernel. Values that may be infinite have to be
-  masked before they reach a CPU kernel.
-- Review/expiry condition: the four expressions above agree with NumPy on CPU
-  at every length, a probe case covers infinities on both devices, and the
-  throughput change from the flag is measured and recorded.
+  | | `-Ofast` | `-O3` |
+  | --- | --- | --- |
+  | elementwise chain (4M) | 0.000320s | 0.000324s |
+  | exp/sqrt chain (4M) | 0.000747s | 0.000679s |
+  | `sum` (4M) | 0.000737s | 0.000719s |
+  | matmul 512 | 0.659172s | 0.660539s |
+  | IEEE table | **7/9** | **9/9** |
+
+- What else stopped being wrong: `tools/fusion_consistency_sweep.py` on CPU
+  went from one DIFFERENT to 12/12 IDENTICAL. That case was `(a + b) - a` with
+  `a = -1e8, b = 2.0`, which gave `0.0` unfused and `2.0` fused because the
+  larger expression was reassociated to `b + (a - a)`. Fusion depends on what
+  else is in the graph, so the same code was giving different answers in
+  different surroundings -- the property that made an earlier probe check
+  unstable and forced it to be withdrawn. `tools/semantic_divergence_probe.py`
+  on CPU went from 4 MISMATCH to 3, and the three that remain are all
+  KI-BACKEND-004.
+- Regression: `tests/ops/test_ieee_arithmetic.py` (ten expressions IEEE-754
+  defines exactly, both devices, length 8 because length 1 passed even when the
+  flag was wrong; plus `x != x` as a predicate, since `-ffinite-math-only` may
+  fold a NaN test to false and then every hand-written check stops checking).
+  Reverting the flag turns it red: `1 / 0 gave [nan ...], IEEE says inf`.
+  `tests/structure/codegen/test_kernel_math_flags.py` names the flag, so a
+  reintroduction says what was changed rather than only that arithmetic broke;
+  it also asserts an optimisation level is still being asked for, since
+  deleting the flag and putting nothing back would satisfy the first check by
+  making things worse.
+- Not covered by this fix: CUDA still compiles with `--use_fast_math`. That
+  flag is about division, square root and transcendental accuracy rather than
+  finite-math, and `jt.flags.cuda_kernel_math = "strict"` already exists to
+  turn it off per process. Whether it should be the default is a separate
+  question with its own measurement, and it is not answered here.
 
 ## KI-FFT-001: withdrawn -- current CUDA sequence regression is clean
 

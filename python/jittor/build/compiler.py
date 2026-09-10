@@ -831,7 +831,27 @@ if ' -O' not in cc_flags:
         opt_flags += " -O0 "
     else:
         opt_flags += " -O2 "
-    kernel_opt_flags += " -Ofast "
+    # -O3, not -Ofast. `-Ofast` implies `-ffast-math`, which implies
+    # `-ffinite-math-only`: a promise that no operand is ever infinite or NaN.
+    # The compiler optimises on that promise, and operands that *are* infinite
+    # take whatever path the transformed code happens to produce -- `1/0` came
+    # back as `nan` instead of `inf`, and `-inf/0` likewise (KI-BACKEND-005).
+    # The wrong answers are plausible rather than obviously broken, which is
+    # what makes them expensive: a fully masked attention row subtracts its own
+    # `-inf` maximum, and a finite result there produces a well-formed but
+    # wrong softmax instead of an obvious `nan`.
+    #
+    # The project already knew: `nan_checker` had `-Ofast` stripped and `-O2`
+    # substituted, because a NaN check compiled under a promise that NaN does
+    # not occur cannot work. That exemption was applied where the problem was
+    # noticed rather than where it applies.
+    #
+    # The reassociation `-ffast-math` also grants is not what was making
+    # reductions fast: g++ 12.3 does not vectorise the real reduction kernels,
+    # because the runtime `storage_stride(0)` blocks it. Accuracy at scale is
+    # now `BlockedReductionPass`'s job, stated in the code rather than left to
+    # a flag that also breaks arithmetic.
+    kernel_opt_flags += " -O3 "
 lto_flags = ""
 if build_flag("enable_lto"):
     if cc_type == "icc":
