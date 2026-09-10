@@ -153,24 +153,41 @@ framework defects.
   floating dtype, the strict expected failure above turns red, and this entry is
   removed
 
-## KI-OPS-004: reducing a rank-0 tensor fails an internal invariant
+## KI-OPS-004: fixed -- reducing a rank-0 tensor returns its value
 
-- Severity: High
-- Status: Reproduced on CPU and CUDA, unfixed
-- Owner: reduction operator maintainers
-- Evidence: `compat/tests/torch/test_division_remainder_family.py::
-  test_reducing_a_scalar_tensor` (strict expected failure)
-- Symptom: `sum`, `mean`, `max` and `min` on a rank-0 tensor abort in
-  `expr.cc:304` with `Check failed: nodes.size() == 1  Something wrong... Could
-  you please report this issue?`, reported through
-  `fused_op:( reduce.add,)` with `[Input]: float32[]`. PyTorch returns the value
-  unchanged. Generic code that reduces without checking rank -- `loss.sum()`
-  where the loss is already scalar -- hits this, and the message surfaces an
-  internal invariant rather than naming the unsupported shape.
-- Workaround: skip the reduction when `tensor.ndim == 0`, or `reshape(1)` first
-- Review/expiry condition: rank-0 reductions return the input value on CPU and
-  every advertised accelerator, the strict expected failure above turns red, and
-  this entry is removed
+- Severity: was High
+- Status: Fixed 2026-09-10, both devices
+- Symptom it had: `sum`, `mean`, `max`, `min` and `prod` on a rank-0 tensor
+  failed in one of two ways, depending on which pass reached it first -- a
+  compiler diagnostic (`expected initializer before '-' token`) or
+  `expr.cc:304 Check failed: nodes.size() == 1  Something wrong... Could you
+  please report this issue?`. Neither named the shape or the operator. Generic
+  code that reduces without checking rank -- `loss.sum()` where the loss is
+  already scalar -- hit it on both devices.
+- Cause: the reduce kernel opens with `index_t ystride@{DIM-1} = 1;`, and `DIM`
+  is zero for a rank-0 input, so the generated source read
+  `index_t ystride-1 = 1;`. A second line, `(void)yshape0, (void)ystride0;`,
+  referred to names that likewise do not exist at rank 0.
+- Fix: both guarded with `@if(DIM>0, ...)`. That is correct rather than merely
+  compilable: with the guard every `@for` in the kernel expands to an empty
+  nest, the body runs once with `yid == xid == 0`, and the result is the single
+  input element -- which is what the reduction of one element is, and what
+  NumPy and PyTorch return.
+- Regression: `tests/ops/test_rank0_reduction.py`, both devices. It asserts the
+  **shape** alongside the value: returning `3.5` with shape `(1,)` satisfies a
+  value-only check and still breaks every caller that feeds the result
+  somewhere expecting a scalar, which is the code this exists for. It also pins
+  the two neighbours -- a one-element rank-1 tensor keeps its own shape, and
+  rank-3 whole-tensor and per-axis reductions are compared elementwise against
+  NumPy, because a `@if(DIM>0)` guard is exactly the kind of edit that can drop
+  a stride declaration for every rank while a whole-tensor sum still looks
+  right. Removing the guard turns it red with the `expr.cc:304` text above.
+- `compat/tests/torch/test_division_remainder_family.py::
+  test_reducing_a_scalar_tensor` was converted from a strict expected failure
+  to an ordinary assertion. **That file could not be run on the machine where
+  this was fixed**: the deployed Torch shim in site-packages is from an older
+  release, so `import torch` raises `TorchActivationError` and the module does
+  not collect. That failure predates and is unrelated to this change.
 
 ## KI-OPS-006: the NaN-correct CPU max/min reduction runs at half the speed
 
@@ -615,32 +632,62 @@ framework defects.
   the two concat perf cases measure something again rather than dividing by
   zero.
 
-## KI-EXEC-001: CUDA segfaults past a graph-size threshold
+## KI-EXEC-001: CUDA segfaults when `auto_flush_ops` splits a pending graph
 
 - Severity: Critical
-- Status: Reproduced, unfixed
+- Status: **Cause identified 2026-09-10**, fix open. A workaround now exists.
 - Owner: executor and CUDA backend maintainers
 - Evidence: pure Jittor, real CUDA, no compatibility layer. A chain of
   bottleneck blocks (1x1 -> 3x3 -> 1x1 with a downsample, 512 -> 1024 channels,
   8x8 input) segfaults at **five blocks and crashes for six and seven; four is
-  fine**. CPU is fine. `use_parallel_op_compiler=0` still crashes, so this is
-  not KI-COMPILER-001. Symbolised backtrace:
+  fine**. CPU is fine. Symbolised backtrace:
   `run_exec_plan` <- `Executor::run_sync` <- `Executor::submit_pending`.
-- Blast radius: ResNet50-class backbones do not run on CUDA. Two independent
-  downstream projects hit it separately -- JSeg and JDet both crash with a
-  ResNet50 backbone while JSeg's ResNet18 passes -- and per-stage bisection
-  points at layer3 (six blocks, 1024 channels). A single bottleneck and stacks
-  of four are fine, so the trigger is graph size, not the block itself.
-- Not caused by the same-day `device_copy` fix (`715009c02`), which touches
-  `run_exec_plan`: reverting its three hunks and rebuilding still segfaults at
-  five blocks. The defect predates it.
-- Reproduction: `$JITTOR_LAB_ROOT/_state/segv/repro.py <n>` (unversioned);
-  `n=4` prints the output shape, `n=5` dies. Build the core with
-  `addr2line_path=$(which addr2line)` to get the frames above.
-- Workaround: none for CUDA. Shorter backbones (ResNet18) work; CPU works.
-- Review/expiry condition: the repro passes for n in 4..8 on real CUDA, both
-  downstream ResNet50 backbones run a forward and backward, and a regression
-  covers a chain long enough to have crashed.
+- **Cause: `auto_flush_ops`.** Setting it to 0 makes the repro pass at every
+  size that used to crash. Three repetitions each, same process image, same
+  build:
+
+  | | n=5 | n=6 | n=7 |
+  | --- | --- | --- | --- |
+  | `auto_flush_ops=128` (default) | crash, crash, crash | crash | crash |
+  | `auto_flush_ops=0` | **OK, OK, OK** | **OK** | **OK** |
+
+- And the threshold sweep says it is **not** "flushing is bad", it is *where*
+  the flush lands:
+
+  | `auto_flush_ops` | 0 | 1 | 32 | 64 | 128 | 256 | 512 | 1024 |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | n=5 | OK | crash | crash | **OK** | crash | OK | OK | OK |
+
+  Non-monotonic: 64 passes while 32 and 128 crash. So a flush at certain points
+  in the graph corrupts execution, and whether a given threshold lands on such
+  a point depends on the operator-count pattern of the model. That is why the
+  defect reads as "past a graph-size threshold" -- the threshold is not a size
+  limit, it is the first place the flush happens to cut badly.
+- Where to look: `Executor::submit_pending` (`src/core/executor.cc`) selects
+  Vars from `runtime_holder_state().holders()` that have no `_outputs` and are
+  not finished, and calls `run_sync(vars, false, false)` on them -- executing a
+  **subset** of a graph whose remainder is still pending. The backtrace lands in
+  `run_exec_plan`, which is consistent with the executed subset freeing or
+  reusing storage the pending remainder still refers to. That is a hypothesis
+  about the mechanism, not a confirmed one; only the cause above is measured.
+- Blast radius, unchanged: ResNet50-class backbones do not run on CUDA. JSeg
+  and JDet both crash with a ResNet50 backbone while JSeg's ResNet18 passes.
+- **Workaround, effective today**: `jt.flags.auto_flush_ops = 0`. It costs the
+  pipelining that flag exists for -- graph construction no longer overlaps
+  device execution -- but it is correct, and it is a one-line change in a user
+  script.
+- Same flag, second defect: [KI-EXEC-002] is `jt.profile_scope` reporting
+  nothing for work this flush already launched. One flag introduced during the
+  refactor (2026-09-02, `c9176652f`), two Critical/High consequences, and both
+  were found by asking what changes when a graph gets large.
+- Not caused by the same-day `device_copy` fix (`715009c02`): reverting its
+  three hunks and rebuilding still segfaults at five blocks.
+- Reproduction: `$JITTOR_LAB_ROOT/_state/segv/repro.py <n>` (unversioned).
+- Review/expiry condition: the repro passes for n in 4..8 with the default
+  `auto_flush_ops`, both downstream ResNet50 backbones run a forward and
+  backward, and a regression covers a chain long enough to have crashed **at
+  the default flag value** -- a regression that sets the flag to 0 would pass
+  on the unfixed build and prove nothing.
 
 ## KI-OPS-010: fixed -- an index arriving in a Var is now checked against the dimension
 
