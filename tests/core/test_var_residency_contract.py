@@ -108,6 +108,60 @@ class TestHostReadMovesStorage(unittest.TestCase):
             self.assertEqual(a.location(), "cpu")
 
 
+class TestReadingDoesNotRelocate(unittest.TestCase):
+    """A read is a query. These say what it currently does instead.
+
+    ``numpy()``, ``repr()`` and an element read all move a device Var's storage
+    to the host; the next device operation then migrates it back, measured at
+    215x the cost of the same operation without the read, with both copies live
+    in device memory meanwhile. Filed as KI-MEM-002 and pinned here as strict
+    xfail so the fix produces XPASS and forces the ledger entry closed.
+
+    The reduction case is *not* xfail: ``u.sum().item()`` leaves ``u`` alone,
+    because the scalar is a new Var rather than a view. It is asserted
+    positively so a future fix cannot regress the one spelling that already
+    behaves, and so the defect is never restated as "reading anything moves it".
+    """
+
+    @requires_cuda
+    @unittest.expectedFailure
+    def test_numpy_leaves_the_source_on_the_device(self):
+        with jt.flag_scope(use_cuda=1):
+            a = jt.ones((256, 256)).cuda()
+            a.sync()
+            a.numpy()
+            self.assertEqual(a.location(), "device")
+
+    @requires_cuda
+    @unittest.expectedFailure
+    def test_repr_leaves_the_source_on_the_device(self):
+        with jt.flag_scope(use_cuda=1):
+            a = jt.ones((256, 256)).cuda()
+            a.sync()
+            repr(a)
+            self.assertEqual(a.location(), "device")
+
+    @requires_cuda
+    @unittest.expectedFailure
+    def test_reading_one_element_does_not_move_the_whole_tensor(self):
+        with jt.flag_scope(use_cuda=1):
+            a = jt.ones((256, 256)).cuda()
+            a.sync()
+            a[0][0].item()
+            self.assertEqual(a.location(), "device")
+
+    @requires_cuda
+    def test_a_reduction_read_leaves_the_source_alone(self):
+        # The spelling every training loop uses. Not broken, and asserted so it
+        # cannot become broken while the three above are being fixed.
+        with jt.flag_scope(use_cuda=1):
+            a = jt.ones((256, 256)).cuda()
+            a.sync()
+            total = a.sum().item()
+            self.assertEqual(total, 256 * 256)
+            self.assertEqual(a.location(), "device")
+
+
 class TestCopyToHost(unittest.TestCase):
     """``cpu()`` copies; it does not move the Var it was called on."""
 

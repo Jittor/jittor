@@ -2,7 +2,7 @@
 
 - Status: Maintained
 - Last reviewed: 2026-09-09
-- Baseline: `28e61e669`
+- Baseline: `9f8bd9a79` plus KI-MEM-002
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -331,6 +331,39 @@ framework defects.
   of the contract
 - Review/expiry condition: retain both default and explicit-dtype assertions until
   a public dtype-default decision changes them together
+
+## KI-MEM-002: reading a device tensor relocates it to the host
+
+- Severity: High
+- Status: Reproduced, unfixed
+- Owner: memory and executor maintainers
+- Evidence: real CUDA, 10M float32 (40 MiB) on device 7.
+  `b.numpy()` moves the storage: `location()` goes `device` -> `cpu`, and it is
+  telling the truth. The next device operation migrates it back, measured at
+  **0.1214s against 0.0006s for the same operation on a tensor already
+  resident -- 215x** -- and device memory goes from `+40 MiB` to `+80 MiB`
+  because both copies are live. `repr()` takes the same path, so printing a
+  tensor at a REPL relocates it.
+  Reading a *single element* is worse: `d[0].item()` leaves `d` itself on the
+  host, so a one-element read moves 40 MiB off the device.
+- Not this issue: a reduction result. `u.sum().item()` leaves `u` on the
+  device, because the scalar is a new Var rather than a view of `u`. The common
+  training-loop spelling `loss.item()` is therefore unaffected, and the defect
+  should not be described as "reading anything moves it".
+- Symptom: a read is a query, and this one mutates placement. Nothing in the
+  API says so, no error is raised, and the cost lands on a later line -- the
+  next device operation, which now pays a round trip. A `print` added while
+  debugging permanently changes where the tensor lives.
+- Divergence: PyTorch refuses `.numpy()` on a CUDA tensor and requires an
+  explicit `.cpu()`; the tensor never moves as a side effect of being read.
+- Workaround: `jt.array(x.numpy())` when a host copy is wanted, keeping `x`
+  where it is; avoid `print(x)` and element indexing on large device tensors in
+  hot paths.
+- Review/expiry condition: `numpy()`, `repr()` and element/slice reads leave the
+  source Var's `location()` unchanged on real CUDA, a device operation
+  immediately after such a read costs the same as one without it, and
+  `tests/core/test_var_residency_contract.py` covers all three spellings
+  including the reduction case that must stay unaffected.
 
 ## KI-FFT-001: withdrawn -- current CUDA sequence regression is clean
 
