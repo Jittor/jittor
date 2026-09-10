@@ -831,7 +831,7 @@ if ' -O' not in cc_flags:
         opt_flags += " -O0 "
     else:
         opt_flags += " -O2 "
-    kernel_opt_flags += " -Ofast "
+    kernel_opt_flags += " -O3 "
 lto_flags = ""
 if build_flag("enable_lto"):
     if cc_type == "icc":

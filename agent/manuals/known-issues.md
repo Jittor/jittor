@@ -172,67 +172,85 @@ framework defects.
   every advertised accelerator, the strict expected failure above turns red, and
   this entry is removed
 
-## KI-OPS-006: max/min drop NaN where every other reduction propagates it
+## KI-OPS-006: the NaN-correct CPU max/min reduction runs at half the speed
 
-- Severity: Critical
-- Status: Reproduced on CPU and CUDA, unfixed; a working implementation was
-  measured and rejected on cost
-- Owner: reduction and binary operator maintainers
-- Evidence:
-  [`test_minmax_nan_propagation.py`](../../tests/ops/test_minmax_nan_propagation.py)
-  `::TestMinMaxNanPropagationCpu::test_max_and_min_reductions_propagate_nan` and
-  `::test_elementwise_maximum_and_minimum_propagate_nan`, strict expected
-  failures, with the same pair on the CUDA class
-- Symptom: `jt.max([nan, 1.0, 2.0])` returns 2.0 and `jt.min` returns 1.0 where
-  NumPy and Torch both return nan. `sum`, `mean` and `prod` propagate correctly,
-  so one reduction family answers a NaN input two different ways. The
-  elementwise operators also disagree with themselves across backends:
-  `jt.maximum(1.0, nan)` is 1.0 on CPU and `jt.maximum(nan, 1.0)` is 1.0 on
-  CUDA, because the two lower the same ternary differently.
-- Cause: `std::max(a, b)` is `a < b ? b : a`, and CUDA's `::max` on floats
-  lowers to `fmaxf`. Every comparison against NaN is false, so the operand that
-  is not NaN survives; the reduction starts at its identity (`lowest()` on CPU,
-  `-inf` on CUDA -- see [KI-OPS-008]) and folds `max(acc, x)`, so a NaN can
-  neither enter the accumulator nor stay in it. The two rows are
-  `maximum`/`minimum` in both tables of
-  [`common_op_type.cc`](../../src/type/common_op_type.cc).
-- Why it is not simply fixed -- three costs, all measured on `1e25ff68a`:
-  1. The NaN test cannot be a comparison. JIT kernels compile with `-Ofast`,
-     which implies `-ffinite-math-only`; `x != x` and `std::isnan(x)` fold to
-     false there, and a max written with either collapses back to a single
-     `vmaxss` (confirmed from the emitted assembly). Only a bit test on the
-     exponent and mantissa survives. [`numerical.py`](../../python/jittor/ops/numerical.py)
-     hits the same wall for isnan/isinf and drops that one kernel to `-O2`
-     through `_simple_for`, which a reduction kernel cannot afford.
-  2. A bit test is not a GCC-recognised reduction, so max/min reductions lose
-     auto-vectorisation. Timed at the kernel's own flags
-     (`-Ofast -march=native`), the NaN-propagating reduce runs at 3.9-4.9 GB/s
-     flat, whatever the working set, because it is scalar and latency-bound;
-     `std::max` vectorises and reaches 28-31 GB/s at 64 MB and 40-109 GB/s while
-     cache-resident. That is 7.4x-8.2x slower out of memory and 10x-28x slower in
-     cache -- the spread is the denominator moving with machine load, not the
-     numerator. In-tree, with the addition-reduce control at 1.00x in the same
-     run, float32 `max()` and `min()` over 1M and 8M elements regressed 7.1x to
-     7.5x. The elementwise operators cost only 1.2x to 1.6x.
-  3. The spelling is load-bearing elsewhere.
-     [`parallel_pass.cc`](../../src/codegen/opt/pass/parallel_pass.cc) and
-     [`atomic_tuner_pass.cc`](../../src/codegen/opt/pass/atomic_tuner_pass.cc)
-     match the literal `std::max(T(a),T(b))` / `::max(T(a),T(b))` to route a
-     parallel reduction through `cpu_atomic_max`/`cuda_atomic_max`, so changing
-     the expression makes CUDA reductions fail to compile outright
-     (`Expr not match`). A complete fix therefore also has to make those atomics
-     NaN-correct -- `cuda_atomic_max` is a CAS over a sign-magnitude integer
-     key, where a negative NaN sorts below -inf -- plus the float16 table and
-     `shared_reduce_max`/`shared_reduce_min`.
-- Workaround: test for NaN separately -- `float('nan') if jt.isnan(x).any() else
-  x.max()` -- rather than reading it out of the reduction. `jt.isnan` is correct
-  on both backends; it is the kernel that already compiles at `-O2`.
-- Review/expiry condition: a max/min reduce that propagates NaN without losing
-  the vectorised reduction -- most plausibly a second, OR-folded NaN accumulator
-  in the reduce codegen, which stays a recognised reduction and costs about two
-  vector operations per eight elements -- lands together with NaN-correct
-  atomics. The four strict expected failures above then turn red and this entry
-  is removed.
+- Severity: Medium (throughput; the answers are correct)
+- Status: Reproduced and measured on CPU, unfixed; CUDA is unaffected
+- Owner: reduction operator and CPU codegen maintainers
+- What this entry used to be: `maximum`/`minimum` and the `max()`/`min()`
+  reductions dropped NaN. That is fixed -- see the KI-BACKEND-004 record below
+  and [`test_minmax_nan_propagation.py`](../../tests/ops/test_minmax_nan_propagation.py),
+  whose four strict expected failures are now ordinary passing cases. What is
+  left is the second of the three costs that entry listed, and it is the only
+  one that survived measurement.
+- Evidence: `benchmarks/reductions.py` driven directly, jittor backend, three
+  interleaved before/after repetitions on the same machine, float32:
+
+  | | before | after | |
+  | --- | --- | --- | --- |
+  | `max` 1M | 14.29 GB/s | 7.24 GB/s | **1.97x slower** |
+  | `max` 16M | 13.99 GB/s | 7.25 GB/s | **1.93x slower** |
+  | `min` 1M | 14.30 GB/s | 7.26 GB/s | **1.97x slower** |
+  | `min` 16M | 13.89 GB/s | 7.23 GB/s | **1.92x slower** |
+  | `sum` 1M (control) | 24.53 GB/s | 24.21 GB/s | 1.01x |
+  | `sum` 16M (control) | 18.67 GB/s | 18.41 GB/s | 1.01x |
+
+  Elementwise `maximum`/`minimum` are unaffected (float32 and int32 at 16M,
+  1056-1585 GB/s across the six runs, with before and after interleaved
+  through that whole range -- the run-to-run spread covers the difference
+  several times over). So is the closest real case: `softmax` over
+  (16, 128, 1024), whose last-dim `max` is exactly this reduction, moves 1.175
+  -> 1.207 ms while the `layernorm` control moves 1.690 -> 1.757 ms in the same
+  run. The control moved more, so there is no measurable cost there.
+- Cause, measured rather than assumed. `std::max(a, b)` is one `maxss`;
+  NumPy's `maximum` is a compare, an or, and a select, and g++ does not
+  recognise the result as a reduction. Timed in isolation on 16.7M float32 at
+  the kernel's own flags (`-O3 -march=native`, one thread):
+
+  | form | unit stride | runtime stride |
+  | --- | --- | --- |
+  | `std::max(a,b)` | 13.9 GB/s | 13.7 GB/s |
+  | `((a>b) \| (a!=a)) ? a : b` -- shipped | 9.8 GB/s | 4.9 GB/s |
+  | `(a>b \|\| a!=a) ? a : b` | 6.9 GB/s | -- |
+  | `if (a!=a) ...; if (b!=b) ...;` | 2.4 GB/s | -- |
+  | eight partials of the shipped form | **13.7 GB/s** | 4.3 GB/s |
+
+  Two things follow. The spelling is worth 4x on its own -- `|` instead of
+  `||` removes a branch the vectoriser will not cross, and the three-way `if`
+  chain is the worst of the three -- which is why the shipped form is the one
+  in the table. And the remaining 2x is **not** the comparison: eight
+  independent partials of the same expression are level with `std::max`. They
+  only are at unit stride.
+- Which is the actual blocker. The reduce kernel indexes with
+  `op0_xid = id0 * op0_xstride0` where `op0_xstride0` is `storage_stride(0)`, a
+  runtime value. The measured fact is the right-hand column above: an opaque
+  stride costs `std::max` nothing (13.9 -> 13.7) and costs the NaN-correct form
+  half (9.8 -> 4.9). The mechanism is presumably loop versioning on the stride,
+  which g++ does for a reduction it recognises and not for one it does not, but
+  the column is the evidence and the mechanism is the reading of it. **Measured, not predicted:** extending
+  `BlockedReductionPass` to `maximum`/`minimum` was implemented and it made
+  things *worse*, 7.24 -> 3.58 GB/s, because there is no vectorisation for the
+  partials to unlock and the block bookkeeping is pure cost. That change is not
+  in the tree.
+- Not a CUDA problem: the CUDA reduction folds in registers and through
+  `cuda_atomic_max`, neither of which depends on this.
+- Why the numbers here are not the 7.1-7.5x the old entry recorded, which was
+  measured on `1e25ff68a`. Both ends moved. The baseline was `-Ofast` then, so
+  `std::max` was reassociated and vectorised at 28-31 GB/s; KI-BACKEND-005
+  removed that flag, and the same expression at `-O3` is 14 GB/s. And the old
+  implementation was a bit test on the exponent inside an `if` chain, timed at
+  3.9-4.9 GB/s; the shipped comparison is 7.2. A smaller numerator over a
+  smaller denominator: 2.0x, not 7.4x. Neither figure was wrong for the tree it
+  was taken on.
+- Workaround: none needed for correctness. Where the throughput matters and the
+  input cannot contain NaN, reduce on CUDA, or reduce in a dtype whose max is
+  already exact (integer max/min never lost their vectorised form -- `a != a` is
+  constant-false there and the compiler deletes it).
+- Review/expiry condition: the reduce kernel's innermost stride is a
+  compile-time constant when it is one -- the loop versioned, or `@if` on a
+  unit-stride specialisation -- and the float32 `max`/`min` reduction is within
+  10% of the `std::max` figures above on the same benchmark. Then this entry
+  goes.
 
 ## KI-OPS-007: the CUDA unary math table narrows float64 to float32
 
@@ -283,13 +301,19 @@ framework defects.
   `::numeric_min<$1>()` in the CUDA table, and the CUDA one resolves to
   `-CUDART_INF` for float and double. `max(lowest(), -inf)` keeps the identity
   instead of the element, so on CPU no reduction can ever report an infinity it
-  was given. Integers are unaffected: `lowest()` *is* their identity and they
-  have no infinity to lose, which is why the fix has to dispatch on the dtype
-  rather than replace the row.
-- Distinct from [KI-OPS-006]: that entry is the NaN behaviour of the `maximum`
-  and `minimum` *operators*, which is expensive to fix. This one is the identity
-  the reduction folds from -- a per-output-element constant, with no effect on
-  the inner loop -- and the two are independent.
+  was given. It is the `init_maximum`/`init_minimum` rows that are wrong, not
+  the `maximum`/`minimum` rows beside them, which is why KI-BACKEND-004
+  changing the latter did nothing here. Integers are unaffected: `lowest()`
+  *is* their identity and they have no infinity to lose, so the fix has to
+  dispatch on the dtype rather than replace the row.
+- Distinct from KI-BACKEND-004, and untouched by it. That was the NaN
+  behaviour of the `maximum`/`minimum` *operators*, now fixed; this is the
+  identity the reduction folds *from* -- a per-output-element constant, with no
+  effect on the inner loop. Re-measured after that fix, 2026-09-10: CPU
+  `jt.max` of an all `-inf` float32 tensor still returns `-3.4028235e38` and
+  CUDA still returns `-inf`, and the strict expected failure above still
+  fails. `jittor::_max(lowest(), -inf)` is `lowest()`, exactly as
+  `std::max(lowest(), -inf)` was, so nothing about this entry moved.
 - Workaround: on CPU, treat a result equal to `numpy.finfo(dtype).min` (or
   `.max` for `min()`) as possibly an infinity, or run the reduction on CUDA.
 - Review/expiry condition: the CPU identity resolves to `-inf`/`+inf` for
@@ -500,10 +524,11 @@ framework defects.
   model produces enormous finite values instead. The training diverges for a
   reason that no longer points at the NaN, on the device people actually train
   on.
-- Same family as KI-BACKEND-004 (CUDA `maximum`/`minimum` swallow NaN). That
-  entry is about a binary op; this is a composed reduction, so the suppression
-  is not confined to one expression-table row and a fix has to be checked
-  against both.
+- Same family as KI-BACKEND-004 (`maximum`/`minimum` swallowed NaN), which is
+  now fixed. This one is not: that was one expression-table row, while `std`
+  and `norm` are composed reductions whose NaN disappears somewhere along
+  `sum` -> `sqrt` rather than in a `max`, so the fix there does not reach it.
+  Re-check against the current tree before triaging further.
 - Found by: `tools/adversarial_device_sweep.py`, comparing every OpInfo operator
   between CPU and CUDA on inputs built from NaN, both infinities, both signed
   zeros and a subnormal. Seven operators disagreed; `std`, `norm` and
@@ -603,7 +628,7 @@ The second vector's zero is a result, not an absence of testing: it says the
 next defect of this kind is more likely to be found by adding another
 special-value case than by adding another magnitude case.
 
-## Three CPU float defects share one surface; two are still open
+## Three CPU float defects share one surface; one is still open
 
 `KI-BACKEND-004`, `KI-BACKEND-005` and `KI-BACKEND-006` were found separately
 and read as three bugs. They are three symptoms of one thing: **the CPU kernel
@@ -611,13 +636,16 @@ build never decided what its floating-point contract is.**
 
 - 005 is the compile flag. `-Ofast` promises the compiler that infinities and
   NaN do not occur, and it optimises on that promise.
-- 004 is the expression table. `std::max` and `::max` were each chosen for
+- 004 was the expression table. `std::max` and `::max` were each chosen for
   being the obvious spelling, and their NaN behaviour -- accidental on CPU,
-  deliberate IEEE `maxNum` on CUDA -- was never part of the choice.
+  deliberate IEEE `maxNum` on CUDA -- was never part of the choice. It is fixed;
+  the record is below, and the numbers are in
+  [the result report](../../refactor-wip/results/2026-09-10-minmax-nan-numpy-parity.md).
 - 006 was the reduction shape. A single serial accumulator is what you write
   when accuracy at scale is not a stated requirement. It is fixed and its entry
   is gone; see
   [the result report](../../refactor-wip/results/2026-09-10-cpu-reduction-blocked-pairwise.md).
+  (`KI-OPS-006`, a different number, is what is left of 004's throughput cost.)
 
 None of the three is a coding mistake. Each is a reasonable local decision
 taken without a written contract to check it against, which is why they
@@ -636,70 +664,98 @@ machine. The probe categories added alongside these entries (`device-agree`,
 of that gate in draft; they are what found all three, and the CPU `stability`
 mismatch they reported for 006 is now clear.
 
-One more thing they have in common, and on the one that has been done it is now
-measured rather than predicted: **006 was free.** Blocked accumulation with a
-pairwise fold is **3.7x-4.9x faster** than the serial loop it replaced (4.9 ->
+One more thing they have in common, and on the two that have been done it is
+now measured rather than predicted. **006 was free**: blocked accumulation with
+a pairwise fold is **3.7x-4.9x faster** than the serial loop it replaced (4.9 ->
 18.4 GB/s at 64M float32 on the reduction benchmark) *and* leaves the
 worst-case relative error at 16.7M elements at 6.0e-7 instead of 1.5e-1 --
 below NumPy's own 1.6e-5. The one cost found was JIT compile time on large
 fused reduction kernels, +18% after the emitted code was scaled to the body.
-The assumption that correctness here costs speed is what made all three easy to
-defer, and where it has been tested it was not true.
 
-## KI-BACKEND-004: CUDA `maximum`/`minimum` swallow NaN while CPU propagates it
+**004 was not free, and it was not the 7.1-7.5x that had been quoted for it
+either.** Elementwise `maximum`/`minimum` and the softmax case cost nothing
+measurable; the CPU `max`/`min` *reduction* costs 1.9-2.0x, and the remaining
+factor is a runtime stride that stops the loop vectorising rather than the
+comparison itself -- eight partials of the shipped expression are level with
+`std::max` at unit stride. The details are in KI-OPS-006. So the shared lesson
+is not "correctness is free" -- it is that the estimates written down to justify
+deferring were wrong in the same direction both times, and by a lot: 006 was
+predicted to cost speed and gained 3.7-4.9x, 004 was quoted at 7.1-7.5x and
+costs 2.0x. In each case taking the measurement was less work than the argument
+about whether to take it.
 
-- Severity: Critical
-- Status: Reproduced, unfixed
-- Owner: CUDA backend and operator maintainers
-- Evidence: `f = [nan, -inf, -0.0, 0.0, inf]` against zeros, float32:
-  CPU gives `[nan, 0.0, -0.0, 0.0, inf]`, CUDA gives `[0.0, 0.0, 0.0, 0.0, inf]`,
-  NumPy gives `[nan, 0.0, 0.0, 0.0, inf]`. The same expression on the same input
-  disagrees between the two devices.
-- Symptom: a NaN entering `maximum`/`minimum` disappears on CUDA. A model that
-  starts producing NaN shows it on CPU and not on the GPU, which is the wrong
-  way round for where people train. This is worse than either convention alone:
-  a device-parity check comparing CPU against CUDA would flag it, and none does
-  because no parity case feeds NaN.
-- Cause: `src/type/common_op_type.cc` maps `maximum` to `::max(...)` for CUDA
-  and `std::max(...)` for CPU. CUDA's overload resolves to `fmaxf`, whose IEEE
-  `maxNum` semantics deliberately return the non-NaN operand; `std::max` is
-  `a<b ? b : a`, and comparison against NaN is false, so the first operand --
-  the NaN -- comes back by accident. Neither was chosen for its NaN behaviour.
-- Also visible there: `maximum(-0.0, 0.0)` gives `-0.0` on CPU and `0.0` on
-  CUDA; NumPy gives `0.0`. Same root, smaller consequence.
-- **The reduction is worse than the elementwise case, and this entry had it
-  wrong.** Measured 2026-09-10 on both devices, `n` = 5, 4096 and 1,048,576,
-  one NaN among ones:
+## KI-BACKEND-004: fixed -- `maximum`/`minimum` and `max`/`min` now answer NaN the way NumPy does
 
-  ```
-  jt.max(x)   CPU 1.0   CUDA 1.0   NumPy nan
-  jt.min(x)   CPU 1.0   CUDA 1.0   NumPy nan
-  ```
-
-  So CPU does *not* propagate NaN in general -- it propagated in the evidence
-  above only because `std::max(a, b)` is `a<b ? b : a` and the NaN happened to
-  be the **first** argument. A reduction accumulates `tmp = std::max(tmp, b)`,
-  where an incoming NaN is always the *second* argument, so it is discarded on
-  every device at every size. `x.max()` is a common way to ask whether a tensor
-  has gone bad; it cannot see a NaN at all.
-- Entangled with KI-OPS-006: both entries want a NaN-aware max, and the same
-  table row feeds the reduction, whose parallel passes match the literal
-  `std::max(T(a),T(b))` / `::max(...)` spelling to route to atomics. A fix has
-  to satisfy the elementwise case and the reduction together; the measurement in
-  KI-OPS-006 (elementwise 1.2-1.6x, reduction 7.1-7.5x) says they cannot be
-  treated as one change.
-- Workaround: test for NaN explicitly before a max/min on CUDA where its
-  presence matters.
-- Blocked on KI-BACKEND-005, and this is an ordering constraint rather than a
-  preference. A NaN-propagating max is written `a != a ? a : ...`, and `-Ofast`
-  implies `-ffinite-math-only`, under which the compiler folds `a != a` to
-  false -- KI-OPS-006 measured exactly that. Writing the fix before the flag is
-  removed produces code that reads correct and compiles to the old behaviour,
-  which is worse than not writing it.
-- Review/expiry condition: CPU and CUDA agree with NumPy on NaN and on the sign
-  of zero for `maximum` and `minimum`, **and for `jt.max`/`jt.min` over an
-  array containing one**, and a device-parity case feeds NaN so the
-  disagreement cannot return unnoticed.
+- Severity: was Critical
+- Status: Fixed 2026-09-10, both devices
+- Symptom it had: `f = [nan, -inf, -0.0, 0.0, inf]` against zeros, float32.
+  CPU gave `[nan, 0.0, -0.0, 0.0, inf]`, CUDA gave `[0.0, 0.0, 0.0, 0.0, inf]`,
+  NumPy gives `[nan, 0.0, 0.0, 0.0, inf]` -- the same expression on the same
+  input disagreeing between the two devices, and neither agreeing with NumPy.
+  The reduction was worse and agreed across devices only by being uniformly
+  wrong: `jt.max`/`jt.min` over an array holding one NaN returned `1.0` on both
+  devices at `n` = 5, 4096 and 1,048,576, where NumPy returns `nan`. `x.max()`
+  is a common way to ask whether a tensor has gone bad and it could not see a
+  NaN at all.
+- Cause: two spellings, each obvious, neither chosen for its NaN behaviour.
+  `std::max(a, b)` is `a < b ? b : a`; every comparison against NaN is false,
+  so it returns whichever operand was written *first*. That looked like
+  propagation in the elementwise evidence above only because the NaN happened
+  to be written first; a reduction folds `acc = max(acc, x)`, where an arriving
+  NaN is always *second*, so it was discarded. CUDA's `::max` lowers to
+  `fmaxf` -- IEEE `maxNum`, which deliberately returns the operand that is not
+  NaN -- so it discarded a NaN in either position.
+- Fix: `src/type/minmax_compute.h` defines `jittor::_max` / `jittor::_min` as
+  NumPy defines them, `((a > b) | (a != a)) ? a : b`, and both tables in
+  [`common_op_type.cc`](../../src/type/common_op_type.cc) now emit those for
+  every dtype. One template covers integers: `a != a` is constant-false there
+  and the compiler deletes it, so the integer lowering is unchanged.
+- The sign of zero came with it, and it is order dependent on purpose. NumPy
+  decides `maximum` with `>` alone, so `maximum(-0.0, 0.0)` is `+0.0` and
+  `maximum(0.0, -0.0)` is `-0.0`; `minimum` mirrors it. That was measured
+  against NumPy rather than assumed, and `a > b` reproduces it exactly, so no
+  signbit special case was needed. CPU used to return its *first* operand for
+  both -- `-0.0` then `+0.0`, wrong in both directions -- and CUDA `+0.0` for
+  both, right by accident in one of them.
+- Two things the fix needed beyond the table, and the second was found by
+  measuring rather than by reading:
+  1. `parallel_pass.cc` and `atomic_tuner_pass.cc` match the *literal*
+     `std::max(T(a),T(b))` / `::max(...)` to route a reduction through
+     `cpu_atomic_max` / `cuda_atomic_max`, so changing the table without them
+     loses the atomic path. `expr::match` does accept a qualified call --
+     `jittor::_max(T(a),T(b))` matches, verified by the emitted kernel still
+     containing `cuda_atomic_max` -- and a spelling that did *not* match would
+     not degrade silently, it reaches a fatal `Expr not match`. The `std::max`
+     and `::max` patterns are still there because the float16 table still emits
+     them.
+  2. With the kernel body correct, CUDA still returned `1.0` from `jt.min` over
+     an array holding `+nan` and from `jt.max` over one holding `-nan`, at every
+     size. `cuda_atomic_max/min(float*)` are an `atomicMax` over an ordered-int
+     encoding in which a positive NaN sorts above `+inf` and a negative NaN
+     below `-inf`, so each operation carried one sign of NaN and dropped the
+     other. Any NaN is now encoded as the extreme key of its operation
+     (`0x7FFFFFFF` for max, `0x80000000` for min), both of which decode back to
+     a NaN, so it outranks every real number in either direction. `fix_float`
+     and `float_atomic_fix_pass` are untouched. `shared_reduce_max/min` and the
+     raw-IEEE `cuda_atomic_max_rmw/min_rmw` used by scatter got the same
+     treatment -- the last one so that a CPU scatter-maximum, which lowers
+     through the table, does not start disagreeing with its CUDA counterpart.
+- Verified against NumPy on both devices: elementwise over every float class in
+  both operand orders, float32 and float64; both signs of NaN through `max` and
+  `min` at `n` = 5, 4096 and 1,048,576; a 64x4096 reduction along a dim, which
+  is the parallel/atomic path rather than the scalar one; and int8/int16/int32/
+  int64/uint8 asserted unchanged.
+- Regression: [`test_minmax_nan_propagation.py`](../../tests/ops/test_minmax_nan_propagation.py),
+  22 cases, including the device-parity class this entry asked for -- the same
+  operands run on both devices and compared to each other as well as to NumPy,
+  so a future divergence cannot pass unnoticed even if each device looks
+  individually plausible. On the unfixed tree 16 of the 22 fail.
+- Cost, measured: the CPU `max`/`min` *reduction* runs at half speed. See
+  [KI-OPS-006], which is what remains of that entry. Elementwise and the
+  softmax case are unaffected, and CUDA is unaffected.
+- Removal condition: delete this record once the result report
+  [2026-09-10-minmax-nan-numpy-parity.md](../../refactor-wip/results/2026-09-10-minmax-nan-numpy-parity.md)
+  has been read by a maintainer.
 
 ## KI-BACKEND-005: CPU kernels are built with `-Ofast`, so infinities compute wrong
 
@@ -730,9 +786,11 @@ defer, and where it has been tested it was not true.
   one: a fully masked attention row subtracts its own `-inf` maximum, and a `0`
   there produces a well-formed but wrong softmax instead of an obvious `nan`.
   KI-OPS-008 reaches the same input from the other side.
-- Related: KI-OPS-006 measured that `-Ofast` also folds comparison-based NaN
-  tests to false in the shipping build, which is the same flag defeating a
-  different piece of correctness.
+- Related: the same flag also folds comparison-based NaN tests to false in the
+  shipping build, which is one flag defeating two separate pieces of
+  correctness. KI-BACKEND-004 could not be fixed until it was removed -- a
+  NaN-propagating `max` is written `a != a`, which `-ffinite-math-only` deletes,
+  so the fix would have read correct and compiled to the old behaviour.
 - And a third consequence, which is the one that makes CPU results
   irreproducible rather than merely wrong: **whether an expression was fused
   changes its answer.** `(a + b) - a` with `a = -1e8`, `b = 2.0` in float32
@@ -750,8 +808,10 @@ defer, and where it has been tested it was not true.
   worth gating on.
 - Fix direction: `-O3` rather than `-Ofast`, or `-Ofast -fno-finite-math-only`.
   Both cost throughput and the amount is unmeasured -- vectorisation of
-  reductions is the exposed part -- so this needs the same measure-then-decide
-  the KI-OPS-006 entry records, not a straight substitution.
+  reductions is the exposed part, and KI-OPS-006 now carries one measurement of
+  it: the same float32 `max` reduction is 14 GB/s at `-O3` where the old
+  `-Ofast` figure was 28-31. So this needs measure-then-decide, not a straight
+  substitution.
 - Workaround: none within a kernel. Values that may be infinite have to be
   masked before they reach a CPU kernel.
 - Review/expiry condition: the four expressions above agree with NumPy on CPU

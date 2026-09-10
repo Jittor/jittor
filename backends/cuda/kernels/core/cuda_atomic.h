@@ -97,6 +97,34 @@ inline static void fix_float(T* x, int num) {
     fix_float_kernel<<<std::min((num-1)/1024+1,256), 1024>>>(x, num);
 }
 
+// A NaN has to win these whichever sign it carries, and the ordered-int
+// encoding does not give that for free. floatToOrderedInt is monotone on real
+// numbers, and it puts a *positive* NaN above +inf (so atomicMax keeps one and
+// atomicMin drops it) and a *negative* NaN below -inf (so atomicMin keeps one
+// and atomicMax drops it). Measured: with the kernel body already NaN correct,
+// `jt.max` over an array holding -nan still returned 1.0 and `jt.min` over one
+// holding +nan did the same, at every size that reaches the atomic.
+//
+// So a NaN is encoded as the extreme key of the operation instead of its own
+// ordered value: 0x7FFFFFFF is the largest key atomicMax can be given and
+// decodes to a NaN, 0x80000000 the smallest for atomicMin and decodes to one
+// too. Any NaN therefore beats every real number in either direction, and a
+// NaN already in the accumulator is never displaced because nothing can
+// outrank the extreme. The decode is unchanged, so float_atomic_fix_pass and
+// fix_float() keep working exactly as before.
+__device__ inline static int orderedIntForMax(float v) {
+    return (v != v) ? (int)0x7FFFFFFF : floatToOrderedInt(v);
+}
+__device__ inline static int orderedIntForMin(float v) {
+    return (v != v) ? (int)0x80000000 : floatToOrderedInt(v);
+}
+__device__ inline static long long orderedIntForMax(double v) {
+    return (v != v) ? (long long)0x7FFFFFFFFFFFFFFFLL : floatToOrderedInt(v);
+}
+__device__ inline static long long orderedIntForMin(double v) {
+    return (v != v) ? (long long)0x8000000000000000LL : floatToOrderedInt(v);
+}
+
 template<class T> __device__
 T cuda_atomic_max(T* a, T b) {
     return atomicMax(a, b);
@@ -104,13 +132,13 @@ T cuda_atomic_max(T* a, T b) {
 
 template<> __device__
 inline float cuda_atomic_max(float* a, float b) {
-    return orderedIntToFloat(atomicMax((int *)a, floatToOrderedInt(b)));
+    return orderedIntToFloat(atomicMax((int *)a, orderedIntForMax(b)));
 }
 
 #ifndef NO_ATOMIC64
 template<> __device__
 inline double cuda_atomic_max(double* a, double b) {
-    return orderedIntToFloat(atomicMax((long long *)a, floatToOrderedInt(b)));
+    return orderedIntToFloat(atomicMax((long long *)a, orderedIntForMax(b)));
 }
 #endif
 
@@ -121,13 +149,13 @@ T cuda_atomic_min(T* a, T b) {
 
 template<> __device__
 inline float cuda_atomic_min(float* a, float b) {
-    return orderedIntToFloat(atomicMin((int *)a, floatToOrderedInt(b)));
+    return orderedIntToFloat(atomicMin((int *)a, orderedIntForMin(b)));
 }
 
 #ifndef NO_ATOMIC64
 template<> __device__
 inline double cuda_atomic_min(double* a, double b) {
-    return orderedIntToFloat(atomicMin((long long *)a, floatToOrderedInt(b)));
+    return orderedIntToFloat(atomicMin((long long *)a, orderedIntForMin(b)));
 }
 #endif
 
@@ -404,7 +432,10 @@ inline float cuda_atomic_max_rmw(float* a, float b) {
     auto a_i = int_mapper<float>::to_intp(a);
     auto old = int_mapper<float>::to_int(old_f);
     while (1) {
-        if (!(b > old_f)) break; // NaN-safe: keep old when b is not strictly greater
+        // NumPy's maximum, matching the CPU lowering: a NaN already in the
+        // slot is sticky, and a NaN arriving replaces whatever is there.
+        if (old_f != old_f) break;
+        if (b == b && !(b > old_f)) break;
         auto assume = old;
         old = atomicCAS(a_i, assume, int_mapper<float>::to_int(b));
         old_f = int_mapper<float>::from_int(old);
@@ -418,7 +449,10 @@ inline float cuda_atomic_min_rmw(float* a, float b) {
     auto a_i = int_mapper<float>::to_intp(a);
     auto old = int_mapper<float>::to_int(old_f);
     while (1) {
-        if (!(b < old_f)) break;
+        // NumPy's minimum, matching the CPU lowering: a NaN already in the
+        // slot is sticky, and a NaN arriving replaces whatever is there.
+        if (old_f != old_f) break;
+        if (b == b && !(b < old_f)) break;
         auto assume = old;
         old = atomicCAS(a_i, assume, int_mapper<float>::to_int(b));
         old_f = int_mapper<float>::from_int(old);
@@ -437,7 +471,8 @@ inline double cuda_atomic_max_rmw(double* a, double b) {
     auto old = __double_as_longlong(*a);
     while (1) {
         double old_f = __longlong_as_double(old);
-        if (!(b > old_f)) break;
+        if (old_f != old_f) break;
+        if (b == b && !(b > old_f)) break;
         auto assume = old;
         old = (long long)atomicCAS(a_i, (unsigned long long)assume,
                                    (unsigned long long)__double_as_longlong(b));
@@ -451,7 +486,8 @@ inline double cuda_atomic_min_rmw(double* a, double b) {
     auto old = __double_as_longlong(*a);
     while (1) {
         double old_f = __longlong_as_double(old);
-        if (!(b < old_f)) break;
+        if (old_f != old_f) break;
+        if (b == b && !(b < old_f)) break;
         auto assume = old;
         old = (long long)atomicCAS(a_i, (unsigned long long)assume,
                                    (unsigned long long)__double_as_longlong(b));
@@ -548,13 +584,23 @@ __device__ inline T shared_reduce_mul(T a, T b) {
     return a * b;
 }
 
+// SharedReducePass replaces the per-thread atomic with a block-wide fold
+// through these and one atomic from thread 0, so they are the same reduction
+// as cuda_atomic_max/min above and have to answer NaN the same way. Written
+// out rather than calling jittor::_max: this header is also compiled where
+// JIT_cuda is not defined, and type/minmax_compute.h is __host__ __device__
+// only under that macro.
 template<typename T>
 __device__ inline T shared_reduce_max(T a, T b) {
+    if (a != a) return a;
+    if (b != b) return b;
     return a > b ? a : b;
 }
 
 template<typename T>
 __device__ inline T shared_reduce_min(T a, T b) {
+    if (a != a) return a;
+    if (b != b) return b;
     return a < b ? a : b;
 }
 

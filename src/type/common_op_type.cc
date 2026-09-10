@@ -55,8 +55,8 @@ unordered_map<string,string> common_op_type_cuda_map = {
     // negative base even with an integer exponent (transformers' tanh-GELU
     // does pow(x, 3.0)); route through jittor::_signed_pow to match std::pow.
     {"pow", "(($1)jittor::_signed_pow(($2),($4)))"},
-    {"maximum", "::max($1($2), $1($4))"},
-    {"minimum", "::min($1($2), $1($4))"},
+    {"maximum", "jittor::_max($1($2), $1($4))"},
+    {"minimum", "jittor::_min($1($2), $1($4))"},
     {"mod", "@if(@strcmp($1,float32)==0,(($2)-::floorf(($2)/($4))*($4)),@if(@strcmp(@Tx,float64)==0,(($2)-::floor(($2)/($4))*($4)),jittor::_floor_mod($1($2), $1($4))))"},
     {"init_maximum", "::numeric_min<$1>()"},
     {"init_minimum", "::numeric_max<$1>()"},
@@ -122,8 +122,8 @@ struct CommonOpType : OpByType {
             {"erfinv", "(jittor::_erfinv($2))"},
             {"cast", "(($1)($2))"},
             {"pow", "std::pow(($2),($4))"},
-            {"maximum", "std::max($1($2), $1($4))"},
-            {"minimum", "std::min($1($2), $1($4))"},
+            {"maximum", "jittor::_max($1($2), $1($4))"},
+            {"minimum", "jittor::_min($1($2), $1($4))"},
             {"mod", "@if(@strcmp($1,float32)==0,(($2)-std::floor(($2)/($4))*($4)),@if(@strcmp(@Tx,float64)==0,(($2)-std::floor(($2)/($4))*($4)),jittor::_floor_mod($1($2), $1($4))))"},
             {"init_maximum", "std::numeric_limits<$1>::lowest()"},
             {"init_minimum", "std::numeric_limits<$1>::max()"},
@@ -190,6 +190,10 @@ struct CommonOpType : OpByType {
         if (src.find("_signed_pow") != string::npos &&
             src.find("type/pow_compute.h") == string::npos)
             includes += "#include \"type/pow_compute.h\"\n";
+        if ((src.find("jittor::_max") != string::npos ||
+             src.find("jittor::_min") != string::npos) &&
+            src.find("type/minmax_compute.h") == string::npos)
+            includes += "#include \"type/minmax_compute.h\"\n";
         if (includes.empty()) return;
         int i = src.rfind("#include");
         if (i<0) i=0;
