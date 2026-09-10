@@ -942,10 +942,20 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // is filtered out above by the !is_float guard (complex grad deferred).
     if (ns == ns_conj) return make_unary(dout, ns_conj);
     if (ns == ns_abs) {
-        auto neg = make_unary(dout, ns_negative);
+        // Three ways, not two. `x >= 0 ? dout : -dout` puts zero in the
+        // positive branch and hands it a gradient of 1, where torch and the
+        // minimum-norm subgradient both give 0. It is not only a convention:
+        // an L1 penalty exists to hold weights at exactly zero, and a gradient
+        // of 1 there pushes them off it, which is the property L1 was chosen
+        // for. `-0.0 >= 0` is also true, so the old form gave +1 for negative
+        // zero as well.
         auto zeros = make_number(0, x);
-        auto cond = make_binary(x, zeros, ns_greater_equal);
-        return make_ternary(cond, dout, neg);
+        auto neg = make_unary(dout, ns_negative);
+        auto no_grad = make_number(0, dout);
+        auto below = make_binary(x, zeros, ns_less);
+        auto above = make_binary(x, zeros, ns_greater);
+        auto negative_side = make_ternary(below, neg, no_grad);
+        return make_ternary(above, dout, negative_side);
     }
     if (ns == ns_log)
         return make_binary(dout, x, ns_divide);
