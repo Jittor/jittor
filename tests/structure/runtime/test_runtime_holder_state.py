@@ -45,7 +45,7 @@ int main() {
     assert(&isolated.devices() != &runtime_device_state());
     assert(isolated.devices().use_cuda == 0);
     assert(isolated.devices().device_id == -1);
-    assert(isolated.devices().sync_run == 1);
+    assert(isolated.devices().sync_run == 0);
     assert(isolated.devices().device_count == -1);
     assert(isolated.devices().current_device == -1);
     assert(isolated.devices().switch_hooks.empty());
