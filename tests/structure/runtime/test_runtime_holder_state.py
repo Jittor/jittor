@@ -15,7 +15,13 @@ def test_native_holder_state_cursor_lifecycle(tmp_path):
 #include "runtime/runtime.h"
 #include <cassert>
 #include <type_traits>
-namespace jittor { struct VarHolder { int id; }; }
+namespace jittor {
+struct VarHolder { int id; };
+// Only LaunchHistory::report needs it, and nothing below calls report.
+// Stubbed rather than linking backend.cc, which drags the whole backend
+// registry into a case about holder-state ownership.
+const char* backend_name(BackendId) { return "cpu"; }
+}
 using namespace jittor;
 int main() {
     NativeRuntime isolated;
@@ -85,6 +91,10 @@ int main() {
         [os.environ.get("CXX", "g++"), "-std=c++14", "-D_GLIBCXX_DEBUG",
          "-I", str(SRC), str(source), str(SRC / "runtime/holder_state.cc"),
          str(SRC / "runtime/runtime.cc"),
+         # NativeRuntime owns a LaunchHistory, whose constructor and destructor
+         # live here. Without it the link fails on a symbol that has nothing to
+         # do with holder-state ownership, which is what this case is about.
+         str(SRC / "runtime/launch_diagnostics.cc"),
          "-o", str(executable)],
         capture_output=True, text=True, timeout=60,
     )
