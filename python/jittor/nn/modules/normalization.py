@@ -11,6 +11,24 @@ from ..functional.normalization import (
 from ... import _arg_policy
 
 
+def _constant_parameter(shape, dtype, value):
+    """A constant-initialised parameter that owns its storage.
+
+    ``init.constant`` returns ``jt.array(value).unary(dtype).broadcast(shape)``
+    -- an expression with no buffer of its own. That is the right answer for a
+    temporary, but a parameter is read by every forward pass, and a consumer
+    that needs real memory (any of the fused normalisation kernels, on any
+    accelerator) cannot use the broadcast: it materialises the constant again,
+    from scratch, on every call. On the ACL backend a 512-element LayerNorm
+    weight cost a 12.8 us device launch per parameter per forward -- 16
+    launches and 0.2 ms per step of a four-block transformer, to copy 8 KB that
+    never changes. ``contiguous()`` is still lazy, so the buffer is filled once,
+    on first use, and then reused.
+    """
+    return init.constant(shape, dtype, value).contiguous()
+
+
+
 class BatchNorm(Module):
     def __init__(
         self,
@@ -31,8 +49,8 @@ class BatchNorm(Module):
         self.momentum = momentum
         self.affine = affine
         self.track_running_stats = track_running_stats
-        self.weight = init.constant((num_features,), "float32", 1.0) if affine else 1.0
-        self.bias = init.constant((num_features,), "float32", 0.0) if affine else 0.0
+        self.weight = _constant_parameter((num_features,), "float32", 1.0) if affine else 1.0
+        self.bias = _constant_parameter((num_features,), "float32", 0.0) if affine else 0.0
         # register_buffer, not a tagged assignment. Tagging the Var
         # (`object.__setattr__(buf, "is_buffer", True)`) records the classification
         # on the OBJECT, and the object does not survive being replaced: after
@@ -44,16 +62,16 @@ class BatchNorm(Module):
         # set is exactly the mechanism this bypassed.
         self.register_buffer(
             "running_mean",
-            init.constant((num_features,), "float32", 0.0).stop_grad())
+            _constant_parameter((num_features,), "float32", 0.0).stop_grad())
         self.register_buffer(
             "running_var",
-            init.constant((num_features,), "float32", 1.0).stop_grad())
+            _constant_parameter((num_features,), "float32", 1.0).stop_grad())
         # Kept non-persistent, as it has always been here: jittor's checkpoints do
         # not carry num_batches_tracked, and load_parameters/load_state_dict both
         # special-case the key rather than report it missing.
         self.register_buffer(
             "num_batches_tracked",
-            init.constant((1,), "int32", 0.0).stop_grad(), persistent=False)
+            _constant_parameter((1,), "int32", 0.0).stop_grad(), persistent=False)
 
     def execute(self, x):
         # Parameters and buffers live here; the arithmetic lives in
@@ -124,8 +142,8 @@ class InstanceNorm(Module):
         self.eps = eps
         self.momentum = momentum
         self.affine = affine
-        self.weight = init.constant((num_features,), "float32", 1.0) if affine else 1.0
-        self.bias = init.constant((num_features,), "float32", 0.0) if affine else 0.0
+        self.weight = _constant_parameter((num_features,), "float32", 1.0) if affine else 1.0
+        self.bias = _constant_parameter((num_features,), "float32", 0.0) if affine else 0.0
 
     def execute(self, x):
         return jt.nn.instance_norm(x, weight=self.weight, bias=self.bias,
@@ -152,9 +170,9 @@ class LayerNorm(Module):
         self.normalized_shape = tuple(normalized_shape)
         self.eps = eps
         self.elementwise_affine = elementwise_affine
-        self.weight = init.constant(normalized_shape, "float32", 1.0) if elementwise_affine else 1.0
+        self.weight = _constant_parameter(normalized_shape, "float32", 1.0) if elementwise_affine else 1.0
         self.bias = (
-            init.constant(normalized_shape, "float32", 0.0) if elementwise_affine and bias else 0.0
+            _constant_parameter(normalized_shape, "float32", 0.0) if elementwise_affine and bias else 0.0
         )
 
     def execute(self, x):
@@ -182,8 +200,8 @@ class GroupNorm(Module):
         self.num_channels = num_channels
         self.eps = eps
         self.affine = affine
-        self.weight = init.constant((num_channels,), "float32", 1.0) if affine else 1.0
-        self.bias = init.constant((num_channels,), "float32", 0.0) if affine else 0.0
+        self.weight = _constant_parameter((num_channels,), "float32", 1.0) if affine else 1.0
+        self.bias = _constant_parameter((num_channels,), "float32", 0.0) if affine else 0.0
 
     def execute(self, x):
         if x.shape[1] != self.num_channels:
