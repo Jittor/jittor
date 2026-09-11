@@ -527,12 +527,56 @@ def test_optional_dependency_probe_rejects_a_deployed_shim_as_real_torch(monkeyp
         assert not torch_runtime.modules_available("torch.autograd")
 
 
+#: Two shapes the mixin rule has to tell apart: a module-level private holder
+#: pytest *does* collect, and a function-local ``TestCase`` fixture it cannot
+#: reach. The second is why the scan is scoped rather than a plain
+#: ``ast.walk`` -- ``tests/runtime/test_capability_queries.py`` builds one to
+#: drive ``setUpClass`` by hand through a ``TestLoader``.
+_MIXIN_SHAPES = """\
+import unittest
+
+
+class _CollectedHolder(unittest.TestCase):
+    def test_body(self):
+        assert True
+
+
+def test_a_local_fixture_is_not_collectible():
+    class _LocalFixture(unittest.TestCase):
+        def test_body(self):
+            assert True
+
+    unittest.TestLoader().loadTestsFromTestCase(_LocalFixture)
+"""
+
+
+def test_the_mixin_rule_only_looks_where_pytest_collects():
+    names = [node.name for node in _collectible_classes(ast.parse(_MIXIN_SHAPES))]
+    assert names == ["_CollectedHolder"]
+
+
 def test_optimizer_roundtrip_helper_is_not_collected_as_a_test():
     path = TEST_ROOT / "optim" / "test_optimizer_save_load.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     module_tests = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
     assert "test_optim" not in module_tests
     assert "_run_optimizer_roundtrip" in module_tests
+
+
+def _collectible_classes(tree):
+    """Class definitions pytest could reach.
+
+    Module scope, plus classes nested inside those. A class defined in a
+    *function* body is built when that function runs and collection never sees
+    it -- so a test-local ``TestCase`` fixture, driven by hand through a
+    ``TestLoader``, is not the defect this rule is about. The rule used to walk
+    every node and report those too.
+    """
+    pending = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+    while pending:
+        node = pending.pop()
+        yield node
+        pending.extend(child for child in node.body if isinstance(child, ast.ClassDef))
 
 
 def test_private_test_method_holders_are_plain_mixins():
@@ -548,8 +592,8 @@ def test_private_test_method_holders_are_plain_mixins():
     offenders = []
     for path in _test_files():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.ClassDef) or not node.name.startswith("_"):
+        for node in _collectible_classes(tree):
+            if not node.name.startswith("_"):
                 continue
             has_tests = any(
                 isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
