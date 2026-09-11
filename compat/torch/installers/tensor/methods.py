@@ -120,6 +120,29 @@ from .method_api import (
 from ...context import get_install_context
 from types import MappingProxyType
 
+
+def _install_expand_shape_adapter(Var):
+    """Accept scalar tensor dimensions in ``Tensor.expand`` shape arguments.
+
+    PyTorch permits a 0-D tensor (and SymInt-like scalar) as a dimension.  A
+    Jittor ``broadcast`` call receives a Python shape vector and therefore
+    needs those values materialized as integers.  Shape conversion is metadata
+    handling; the expanded tensor remains a native view on its original
+    device.
+    """
+    native = getattr(Var, "expand", None)
+    if native is None or getattr(native, "_torch_shape_adapter", False):
+        return
+
+    def expand(self, *shape):
+        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+            shape = tuple(shape[0])
+        normalized = tuple(int(value) for value in shape)
+        return native(self, *normalized)
+
+    expand._torch_shape_adapter = True
+    Var.expand = expand
+
 def _type_attribute(Var, name):
     # A frontend subclass inherits C descriptors and numeric slots; reading
     # only its own __dict__ silently misses the native implementation.
@@ -136,6 +159,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     from importlib import import_module as _import_module
     _owner = _import_module(__package__)
     _NativeVar = _owner.jt.Var
+    _install_expand_shape_adapter(Var)
     _native_operators = {name: getattr(Var, name, None) for name in _BINARY_APIS}
 
     if _jittor_dtype_name(_DTYPE_OBJS) is not None and not getattr(Var, "_dtype_wrapped", False):

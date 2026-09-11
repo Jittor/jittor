@@ -205,6 +205,25 @@ class TestInstallDoesNotDisturbWhatItFinds(Base):
                 self.assertEqual(torch.backends.cudnn.allow_tf32, before)
                 self.assertEqual(_tf32_get("cudnn"), enabled)
 
+    def test_cudnn_flags_restores_all_switches(self):
+        before = (
+            torch.backends.cudnn.enabled,
+            torch.backends.cudnn.benchmark,
+            torch.backends.cudnn.deterministic,
+            torch.backends.cudnn.allow_tf32,
+        )
+        with torch.backends.cudnn.flags(
+                enabled=False, benchmark=True, deterministic=True,
+                allow_tf32=not before[3]):
+            self.assertFalse(torch.backends.cudnn.enabled)
+            self.assertTrue(torch.backends.cudnn.benchmark)
+            self.assertTrue(torch.backends.cudnn.deterministic)
+            self.assertEqual(torch.backends.cudnn.allow_tf32, not before[3])
+        self.assertEqual((torch.backends.cudnn.enabled,
+                          torch.backends.cudnn.benchmark,
+                          torch.backends.cudnn.deterministic,
+                          torch.backends.cudnn.allow_tf32), before)
+
 
 if __name__ == "__main__":
     unittest.main()

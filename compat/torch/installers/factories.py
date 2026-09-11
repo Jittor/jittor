@@ -65,6 +65,15 @@ def _invoke_factory(name, args, kwargs):
     # CUDA.  Like/tensor-transform factories still inherit their input, and a
     # meta device context remains authoritative.
     placement = kwargs.get("device")
+    # ``torch.arange(tensor_bound)`` inherits the bound tensor's device when
+    # no explicit device is supplied.  This matters for CUDA scalar bounds
+    # used by multimodal position-grid construction.  Keep the general
+    # factory default (CPU) unchanged for ordinary Python bounds.
+    if placement is None and name == "arange":
+        for value in args[:3]:
+            if isinstance(value, jt.Var):
+                placement = "cuda" if value.is_cuda else "cpu"
+                break
     if placement is None and like is None and not _DEVICE_CTX_STACK:
         placement = "cpu"
     with tensor_frontend(context.target_namespace.Var, device=placement, like=like):

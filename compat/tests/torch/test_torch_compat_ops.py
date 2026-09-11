@@ -422,6 +422,25 @@ class TestGather(Base):
         both_devices(body)
 
 
+class TestShapeMetadata(Base):
+    def test_expand_accepts_scalar_tensor_dimensions(self):
+        """Scalar tensor dimensions are valid metadata in ``Tensor.expand``."""
+        def body(dev):
+            source = torch.tensor([[1, 2, 3]], dtype=torch.int64, device=dev)
+            width = torch.tensor([3], dtype=torch.int64, device=dev)[0]
+            expanded = source.expand(-1, width)
+            self.assertEqual(tuple(expanded.shape), (1, 3))
+            self.ae(expanded.numpy(), np.array([[1, 2, 3]], dtype=np.int64), msg=f"expand {dev}")
+            grid = torch.arange(width)
+            self.assertEqual(grid.device.type, dev, f"arange scalar placement {dev}")
+            self.ae(grid.numpy(), np.arange(3, dtype=np.int64), msg=f"arange scalar {dev}")
+            rounded = torch.tensor([-1.2, 0.1, 2.9], device=dev)
+            self.assertIs(rounded.floor_(), rounded)
+            self.ac(rounded.numpy(), np.floor([-1.2, 0.1, 2.9]), msg=f"floor_ {dev}")
+
+        both_devices(body)
+
+
 class TestNestedTensor(Base):
     def test_nested_jagged_basic(self):
         def body(dev):

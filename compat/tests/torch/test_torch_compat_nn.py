@@ -199,6 +199,14 @@ class TestActivations(Base):
                         atol=1e-5, msg=f"log_softmax dim={dim} {dev}")
             both_devices(body)
 
+    def test_log_softmax_module(self):
+        x = self.x
+        ref = np.log(np_softmax(x, -1))
+        def body(dev):
+            self.ac(nn.LogSoftmax(dim=-1)(t(x)).numpy(), ref,
+                    atol=1e-5, msg=f"LogSoftmax module {dev}")
+        both_devices(body)
+
 
 # ----------------------------------------------------------------------------- linear
 
@@ -376,6 +384,34 @@ class TestNorms(Base):
 # ---------------------------------------------------------------------------- modules
 
 class TestModules(Base):
+    def test_conv2d_string_padding(self):
+        rng = np.random.RandomState(14)
+        x = rng.randn(1, 3, 5, 7).astype("float32")
+
+        def body(dev):
+            target = "cuda" if dev == "cuda" else "cpu"
+            same = nn.Conv2d(3, 4, kernel_size=3, padding="same").to(target)
+            valid = nn.Conv2d(3, 4, kernel_size=3, padding="valid").to(target)
+            inputs = torch.tensor(x, device=target)
+            self.assertEqual(tuple(same(inputs).shape), (1, 4, 5, 7),
+                             f"Conv2d same shape {dev}")
+            self.assertEqual(tuple(valid(inputs).shape), (1, 4, 3, 5),
+                             f"Conv2d valid shape {dev}")
+            with self.assertRaisesRegex(ValueError, "strided convolutions"):
+                nn.Conv2d(3, 4, kernel_size=3, stride=2, padding="same")
+
+        both_devices(body)
+
+    def test_init_fan_helpers_return_python_ints(self):
+        def body(dev):
+            fan_in, fan_out = nn.init._calculate_fan_in_and_fan_out(
+                torch.empty((4, 3, 3, 3)))
+            self.assertEqual((fan_in, fan_out), (27, 36), f"fan counts {dev}")
+            self.assertIsInstance(fan_in, int)
+            self.assertIsInstance(fan_out, int)
+
+        both_devices(body)
+
     def test_init_constant_writes_through_view(self):
         def body(dev):
             parameter = nn.Parameter(torch.zeros((1, 3)))

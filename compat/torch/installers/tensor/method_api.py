@@ -163,6 +163,24 @@ def _torch_setitem(self, slices, value):
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _orig_setitem = _native['_orig_setitem']
+    # Jittor's indexed-assignment backward exposes one gradient row per
+    # selected position when a rank-1 parameter is assigned through a lower
+    # rank boolean mask (for example Wav2Vec2 SpecAugment's
+    # ``hidden_states[mask] = masked_spec_embed``).  Torch reduces that RHS
+    # gradient to the parameter's shape.  Express the same update as a
+    # device-resident blend so the normal broadcast backward performs the
+    # reduction without changing the visible in-place holder.
+    if (isinstance(slices, _NativeVar)
+            and _jittor_dtype_name(slices.dtype) in ("bool", "uint8")
+            and isinstance(value, _NativeVar)
+            and len(slices.shape) + 1 == len(self.shape)
+            and tuple(value.shape) == (int(self.shape[-1]),)):
+        mask = slices.unsqueeze(-1).broadcast(self.shape)
+        rhs_shape = (1,) * len(slices.shape) + (int(self.shape[-1]),)
+        expanded = value.reshape(rhs_shape).broadcast(self.shape)
+        updated = self + mask * (expanded - self)
+        self.assign(updated)
+        return self
     if _set_data_owner(self, slices, value):
         return self
     try:
@@ -1266,6 +1284,10 @@ def _api_sigmoid_(self):
 def _api_tanh_(self):
     return _ip(self, _owner.jt.tanh(self))
 
+
+def _api_floor_(self):
+    return _ip(self, _owner.jt.floor(self))
+
 _UNARY_INPLACE_APIS.update({
     'log_': _api_log_,
     'exp_': _api_exp_,
@@ -1273,4 +1295,5 @@ _UNARY_INPLACE_APIS.update({
     'abs_': _api_abs_,
     'sigmoid_': _api_sigmoid_,
     'tanh_': _api_tanh_,
+    'floor_': _api_floor_,
 })

@@ -340,6 +340,18 @@ class Hardswish(nn.Module):
         return x * _jt.clamp(x + 3, 0, 6) / 6
 
 
+class LogSoftmax(nn.Module):
+    """Stateful ``log_softmax`` module missing from older jittor.nn builds."""
+    def __init__(self, dim=None):
+        super().__init__()
+        self.dim = dim
+
+    def execute(self, x):
+        return get_install_context(jt).target_namespace.nn.functional.log_softmax(
+            x, dim=self.dim
+        )
+
+
 class CELU(nn.Module):
     def __init__(self, alpha=1.0, inplace=False):
         super().__init__(); self.alpha = alpha

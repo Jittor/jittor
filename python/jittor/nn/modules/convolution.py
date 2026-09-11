@@ -49,6 +49,24 @@ class Conv(jt.Module):
         self.padding_mode = padding_mode
         if padding_mode not in ('zeros',):
             jt.LOG.w(f"Conv: padding_mode={padding_mode!r} not implemented, using 'zeros'")
+        if isinstance(padding, str):
+            # Transformers' SigLIP patch embed uses the case-insensitive Torch
+            # spelling ``padding='SAME'``.  Jittor's convolution kernel takes
+            # an explicit integer/tuple, while Torch supports ``same`` only
+            # for unit stride.  ``valid`` is the same explicit zero padding.
+            # Reject unsupported spellings and strides instead of silently
+            # changing convolution geometry.
+            padding_name = padding.lower()
+            if padding_name not in ('same', 'valid'):
+                raise ValueError("padding must be an integer, tuple, 'same', or 'valid'")
+            if padding_name == 'valid':
+                padding = 0
+            else:
+                stride_pair = _pair(stride)
+                if any(int(value) != 1 for value in stride_pair):
+                    raise ValueError("padding='same' is not supported for strided convolutions")
+                kernel_pair = _pair(kernel_size)
+                padding = tuple((int(value) - 1) // 2 for value in kernel_pair)
         if in_channels <= 0:
             raise ValueError(f"in_channels must be greater than zero, got {in_channels}")
         if out_channels <= 0:

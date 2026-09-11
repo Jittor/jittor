@@ -253,7 +253,13 @@ def _call(self, *args, **kwargs):
             swallowed("torch/installers/nn.py _call: _leaves_published.add(self)", exc)
         try:
             registry = get_tensor_state(jt).leaf_params
-            for _leaf in _ORIG_MODULE_NAMED_PARAMETERS(self, recurse=False):
+            # Register a root module's complete parameter traversal at its
+            # first call.  Registering only direct children makes the global
+            # leaf order depend on the order nested modules execute; Jittor's
+            # multi-target gradient query is sensitive to that order even
+            # though Torch's autograd is not.  The recursive traversal is
+            # de-duplicated and nested calls keep their existing entries.
+            for _leaf in _ORIG_MODULE_NAMED_PARAMETERS(self, recurse=True):
                 _leaf = _leaf[1] if isinstance(_leaf, tuple) else _leaf
                 if isinstance(_leaf, jt.Var) and _leaf.requires_grad:
                     registry[id(_leaf)] = _leaf
