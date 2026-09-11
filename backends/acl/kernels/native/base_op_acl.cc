@@ -78,6 +78,16 @@ namespace jittor
         }
     }
 
+    // A var whose whole storage is a single element but whose logical shape is
+    // larger. jittor materialises `x <op> scalar` this way: the broadcast node
+    // is folded away and the operand becomes a stride-0 view of the four bytes
+    // the `array` op wrote.
+    static inline bool is_scalar_expansion(Var *v)
+    {
+        return v && v->num > 1 && !v->is_contiguous() &&
+               v->storage_span_bytes() == v->dsize();
+    }
+
     // Common functionality for adding input/output variables
     void BaseOpRunner::add(Var *v, bool is_input)
     {
@@ -96,13 +106,34 @@ namespace jittor
     {
         auto input_num = in_.size();
         inputShapes.resize(input_num);
+        // CANN infers the result shape from the operands, so collapsing *every*
+        // operand to one element would make it infer a one-element result and
+        // reject the real output. At least one operand therefore keeps its full
+        // shape; when they are all one-element expansions nothing is collapsed
+        // and the launch is exactly what it was before.
+        bool collapse = false;
+        if (collapsesScalarInputs())
+        {
+            size_t collapsible = 0;
+            for (size_t i = 0; i < input_num; i++)
+                if (is_scalar_expansion(in_[i])) collapsible++;
+            collapse = collapsible && collapsible < input_num;
+        }
         for (size_t input_idx = 0; input_idx < input_num; input_idx++)
         {
             // Built in place: the shape used to be assembled in a temporary
             // vector and then copied into inputShapes, two allocations per
             // input per launch.
             auto &shape = inputShapes[input_idx];
-            const auto &var_shape = in_[input_idx]->shape;
+            Var *v = in_[input_idx];
+            if (collapse && is_scalar_expansion(v))
+            {
+                // One element behind a stride-0 expansion: hand CANN the real
+                // shape and let it broadcast (see collapsesScalarInputs).
+                shape.assign(1, 1);
+                continue;
+            }
+            const auto &var_shape = v->shape;
             shape.resize(var_shape.size());
             for (int j = 0; j < var_shape.size(); j++)
             {
@@ -114,7 +145,12 @@ namespace jittor
         for (size_t idx = 0; idx < input_num; idx++)
         {
             inputTensors[idx] = nullptr;
-            auto ret = AcquireAclTensor(scratch->descriptors, inputShapes[idx], in_[idx]->mem_ptr, in_[idx]->size, get_dtype(in_[idx]->dtype()), &inputTensors[idx], use_nchw, in_[idx]);
+            // A collapsed input is described as a contiguous one-element
+            // tensor, so it must not carry the expanded var as its storage --
+            // apply_storage_strides would put the stride-0 view back.
+            const bool collapsed = inputShapes[idx].size() == 1 && inputShapes[idx][0] == 1
+                                   && in_[idx]->num > 1;
+            auto ret = AcquireAclTensor(scratch->descriptors, inputShapes[idx], in_[idx]->mem_ptr, in_[idx]->size, get_dtype(in_[idx]->dtype()), &inputTensors[idx], use_nchw, collapsed ? nullptr : in_[idx]);
             if (ret != ACL_SUCCESS) LOGf << name << ": input tensor creation failed. ERROR:" << ret;
         }
     }

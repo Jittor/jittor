@@ -98,6 +98,17 @@ namespace jittor
 
     protected:
         // Virtual method for specific operator execution
+        // A var that is a stride-0 expansion of a one-element buffer reaches
+        // CANN as a full-size tensor whose every element aliases the same four
+        // bytes, and that view is not free: measured on this machine at
+        // 16.8 MB, aclnnMul with a stride-0 other takes 13.12 us against
+        // 6.27 us when the same buffer is described by its real shape and CANN
+        // broadcasts it (2.1x); at 1 MB it is 8.30 us against 2.56 us (3.2x).
+        // Collapsing it is only meaningful where the operator broadcasts its
+        // inputs, so each runner opts in; matmul and friends read the expanded
+        // shape as part of their contract and must not.
+        virtual bool collapsesScalarInputs() const { return false; }
+
         virtual void executeOp(AclOpRegistry::const_iterator &it) = 0;
         void cleanupAttr();
     };
