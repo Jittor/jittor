@@ -887,6 +887,55 @@ the element it is relative to.
   flush for 1e-45`. A build where the policy switch did nothing cannot satisfy
   it, which is the failure mode a one-sided "CUDA flushes" assertion would miss.
 
+## KI-CLEANUP-001: the duplicate-implementation gate is red with 24 groups and no decision
+
+- Severity: Medium (a gate nobody can act on is a gate nobody reads)
+- Status: Reproduced and enumerated 2026-09-11, undecided
+- Owner: cleanup and packaging maintainers
+- Evidence:
+  `tests/structure/test_cleanup_structure.py::TestCleanupStructure::test_cross_file_duplicate_implementations_are_reviewed`
+  fingerprints every top-level function and class under `python/`, `backends/`
+  and `compat/` and requires each cross-file duplicate to be in one of three
+  allowlists. Three are; twenty-one are not, and the failure prints them as one
+  3300-character diff that truncates. Run on `57e243968`, the full list splits
+  into two kinds that want different answers:
+
+  **Shipped code, genuinely duplicated (13 groups)**
+
+  | duplicate | files |
+  | --- | --- |
+  | ten helpers, incl. `persistent_load`, `StorageType`, `jittor_rebuild_var`, `_check_seekable` | `python/jittor/serialization/load_pytorch.py` and `load_pytorch_old.py` |
+  | `BasicConv2d` | `python/jittor/models/googlenet.py` and `inception.py` |
+  | `can_broadcast_and_shape` | `backends/acl/kernels/ops/getitem_op.py` and `setitem_op.py` |
+  | `_ntuple` | already allowlisted |
+
+  The ten in `serialization/` are one decision, not ten: `load_pytorch_old.py`
+  is a kept older reader, so either it is still reachable and the shared
+  helpers should move to one module, or it is not and it should go.
+
+  **Test-local boilerplate under `compat/tests/` (8 groups)**
+
+  `_cuda_available` (3 files), `both_devices` (two groups covering ~10 files),
+  `Base` (five groups covering ~14 files), `_output_tensor` (2 files).
+
+- Symptom: the gate's own name says the duplicates should be *reviewed*, and
+  none of these has been. Because it asserts one list against another, a single
+  new duplicate anywhere produces the same undifferentiated failure, so the
+  gate currently reports "something is duplicated" and nothing more -- it
+  cannot tell a newly copied kernel from a test fixture that has been repeated
+  since before the ledger existed.
+- Note on scope. The gate scans `compat/`, which contains `compat/tests/`. A
+  test file repeating a four-line `Base` class is not the failure mode the gate
+  was built for, but excluding the tree outright would also stop it noticing a
+  real implementation copied into a test. Reporting the two kinds separately is
+  the shape that keeps both.
+- Workaround: none needed at runtime; this is a gate, not a defect in shipped
+  behaviour. Do not read its red as evidence of a new duplicate.
+- Review/expiry condition: every group above has an answer -- deduplicated, or
+  allowlisted with the reason written next to it -- and the gate distinguishes
+  a shipped-code duplicate from a test-tree one in its message, so the next
+  failure names what changed.
+
 ## KI-BACKEND-009: CUDA cannot compile a logical or narrow-integer reduction
 
 - Severity: High (a whole family of reductions is unusable on CUDA, and the
