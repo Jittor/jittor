@@ -305,7 +305,12 @@ ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, uint keepdims_mask)
     if (op.get(NanoString::_no_need_back_in))
         set_flag(OpFlags::_manual_set_vnbb);
     ns = op;
-    USER_CHECK(ns.is_binary()) << "reduce requires a binary reduction operation, got" << ns;
+    // This constructor is `@pybind(None)`: the generic `reduce(x, op, ...)`
+    // overload is not generated for it, and the per-op aliases that are
+    // (`reduce_add(x, dims_mask, keepdims_mask)` and friends) bind `op` to a
+    // compile-time constant. `op` is therefore never caller data here -- unlike
+    // the `reduce(x, op, dims, keepdims)` constructor above, where it is.
+    ASSERT(ns.is_binary()) << "reduce requires a binary reduction operation, got" << ns;
     reduce_mask = dims_mask;
     this->keepdims_mask = keepdims_mask;
     y = create_output(nullptr, reduce_dtype_infer(ns, x->ns, policy.preserve_reduction_dtype));
