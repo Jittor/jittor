@@ -2,6 +2,11 @@
 
 面向 Jittor 贡献者：代码怎么组织、测试怎么跑、当前有哪些已知缺陷。
 
+已知缺陷的**总账**是仓库里的
+[`agent/manuals/known-issues.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)：
+每个条目带严重度、证据、workaround 和退出条件。`known-issues/` 下只放那些需要
+长篇调查记录的条目，目前只有一个。
+
 先读仓库根目录的 [`CONTRIBUTING.md`](https://github.com/Jittor/jittor/blob/master/CONTRIBUTING.md)
 和 [贡献指南](../contributing.md)，再按需要查下面的文档。
 
@@ -27,4 +32,4 @@ known-issues/parallel-compiler-segfault
 | [错误分级](error-categories.md) | 用户错误与内部不变量各走哪个入口 |
 | [异步错误诊断契约](async-error-diagnostics.md) | 有界发射记录环，与图元数据的区别 |
 | [测试体系](test-system.md) | 测试分层、门禁与验证口径 |
-| [已知问题](known-issues/parallel-compiler-segfault.md) | 并行编译器可能破坏进程状态 |
+| [并行编译器段错误](known-issues/parallel-compiler-segfault.md) | `KI-COMPILER-001` 的调查记录：症状、复现协议与验收门槛 |

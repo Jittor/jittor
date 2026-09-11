@@ -101,7 +101,7 @@ JIT_TEST(jit_key_grows) {
 // with nothing printed. Until 3.02 the check was an mprotect'ed guard page at
 // the end of a fixed 2 MB array: an overrun raised SIGSEGV, jittor's handler
 // wrote "Accessing protect pages, maybe jit_key too long" and `_exit`ed, and
-// tests/compiler/test_jit_tests.py had to run the case in a child process and
+// tests/codegen/test_jit_tests.py had to run the case in a child process and
 // assert on its exit status because there was nothing to catch. There is now:
 // the limit is enforced before every store and raises `UserError`, which
 // reaches Python as a RuntimeError.

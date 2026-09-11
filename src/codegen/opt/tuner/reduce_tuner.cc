@@ -32,7 +32,7 @@ DECLARE_FLAG(int, l1_cache_size);
 //    (parallel_pass.cc, "Check failed: def"). CUDA always runs ParallelPass, so
 //    every `split{i}` candidate would turn a working reduction into a compile
 //    error. It is not CUDA-specific: `{"parallel":1, "split1":256}` fails the
-//    same way on CPU. tests/compiler/test_reduce_tuner.py pins this.
+//    same way on CPU. tests/codegen/test_reduce_tuner.py pins this.
 //  * The tile size itself is a CPU idea: `l1_cache_size / var_size` blocks a
 //    loop for a core's private cache. What decides a CUDA reduction's speed is
 //    the thread decomposition, which ParallelPass picks, and how the trailing

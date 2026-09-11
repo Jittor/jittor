@@ -63,7 +63,7 @@ template <class Ta, class Tb> using unordered_map = std::unordered_map<Ta,Tb>;
 // This list is the C++ half of the one partition; `_runtime/flag_policy.py`'s
 // STARTUP_FLAGS is the Python half, and it is the one the bindings, `jt.config`
 // and the cache fingerprint use. Two copies drift, so
-// `tests/structure/test_env_var_manifest.py` reads both and fails the gate
+// `tests/structure/build/test_env_var_manifest.py` reads both and fails the gate
 // when they stop being the same set.
 static const char* startup_flag_names[] = {
     "cache_path", "cc_flags", "cc_path", "cc_type", "cuda_archs", "disable_lock",

@@ -85,8 +85,9 @@ Torch 这一轮之前先踩了一个坑：缓存上一层残留的 CPU-only `jit
 父目录之前后，`tests/structure` 从 3 failed / 209 passed 变成 **212 passed**。
 
 剩下这 22 条里有相当一部分是顺序相关的：`tests/compat/torch/test_torch_compat_norm.py`
-单独跑 27 条全过，整轮跑却有 3 条失败；`tests/structure` 单独跑全过。与 KI-TEST-001
-是同一类问题——上一个用例留下的未求值计算图或设备状态被下一个用例撞上。
+单独跑 27 条全过，整轮跑却有 3 条失败；`tests/structure` 单独跑全过。与 KI-TEST-005
+（本报告写作时编号为 KI-TEST-001，2026-09-11 因编号冲突改号）是同一类问题——上一个
+用例留下的未求值计算图或设备状态被下一个用例撞上。
 
 原生这 137 条失败绝大多数是 CUDA 构建特有的。把失败最多的三个文件
 （`test_parallel_pass`、`test_transpose_op`、`test_where_op`，CUDA 构建下合计 25 条

@@ -227,7 +227,7 @@ void CudnnConv3dBackwardWOp::jit_run() {
     bool benchmark = cudnn_benchmark != 0;
 
     // The key is a POD struct hashed as its bytes; see cudnn_conv_algo_key.h,
-    // and tests/compiler/test_cudnn_conv_algo_key.py for what keeps two
+    // and tests/backends/cuda/test_cudnn_conv_algo_key.py for what keeps two
     // configurations that need different algorithms from sharing an entry.
     //
     // conv3d shares this table with conv2d, which `spatial_dims` is what

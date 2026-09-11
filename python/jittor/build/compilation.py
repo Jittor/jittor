@@ -86,7 +86,13 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="",
             cmd = f"\"{cc}\" {cmd}"
             cmd = _compiler_state.fix_cl_flags(cmd)
         if "nan_checker" in input:
-            # nan checker needs to disable fast_math
+            # nan checker needs to disable fast_math: a NaN check compiled under
+            # a promise that NaN does not occur cannot work. `--use_fast_math`
+            # is still the CUDA default, so that half is live. `-Ofast` is no
+            # longer added to kernel flags (KI-BACKEND-005 replaced it with
+            # `-O3`) and is only caught here in case a user's flags carry it.
+            # The same exemption is applied to the backend sources in
+            # `compiler.py`; both copies exist because both build paths do.
             if "--use_fast_math" in cmd:
                 cmd = cmd.replace("--use_fast_math", "")
             if "-Ofast" in cmd:

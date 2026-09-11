@@ -114,7 +114,7 @@ import。`test_editing_an_unnamed_header_changes_the_answer` 用两个子进程�
 | 大小写与前缀四套并存 | 小写：cc_path、nvcc_path、cache_name、debug、enable_lto、kernel_flags、use_mkl、conv_opt、log_v；大写无前缀：CUTT_PATH、CUTLASS_PATH、DISABLE_MULTIPROCESSING、FIX_TORCH_ERROR；JITTOR_ 前缀；JT_ 前缀 | 没有任何一处能查全；`debug=1` 这种名字在任何 CI 里都可能被误设 | 同上，并生成自动导出的变量清单 | 主要 |
 | 导入过程反向写环境变量 | `jittor_utils/__init__.py:519` 写 cache_name、`:758` 写 cc_path；`install_cuda.py:178-179` 无条件追加 LD_LIBRARY_PATH（重复 exec 会不断变长）、`:177` 把 lib64 塞进 sys.path；`compile_extern.py:655` 写 NCCL_P2P_DISABLE、`:931` 写 use_mpi | 污染被继承到用户子进程（含 DataLoader worker、torchrun），行为随父进程是否 import 过 jittor 变化 | 需要传给子进程的配置显式构造 env 传参 | 主要 |
 | 一个坏掉且无人读的环境变量 | `compiler.py:1057-1058` `os.environ["cuda_arch"] = " ".join(cu)`，cu 是字符串，结果是 `'c u 1 2 . 2 _ s m _ 8 0'`；全仓无读取方 | 死代码且往每个子进程注入垃圾 | 删除 | 次要 |
-| flag 拼装顺序是巧合 | `compiler.py:1131` `kernel_opt_flags = env("kernel_flags") + opt_flags`，此时 opt_flags 还是空串（`:1121` 定义，`:1229-1233` 才填充） | kernel flags 拿不到 -O2，靠 `:1234` 单独追加的 -Ofast 兜底；用户设了含 -O 的 cc_flags 时两者都不加 | flag 组装收进一个函数一次性求值 | 次要 |
+| flag 拼装顺序是巧合 | `compiler.py:1131` `kernel_opt_flags = env("kernel_flags") + opt_flags`，此时 opt_flags 还是空串（`:1121` 定义，`:1229-1233` 才填充） | kernel flags 拿不到 -O2，靠单独追加的 kernel_opt_flags 兜底（审计时是 -Ofast，KI-BACKEND-005 后是 -O3）；用户设了含 -O 的 cc_flags 时两者都不加 | flag 组装收进一个函数一次性求值 | 次要 |
 
 **已修（2.22）。** 两个命名空间落地：`JT_BUILD_<NAME>` 是构建期（决定编译产物、进缓存指纹），`JT_<NAME>` 是运行期原生 flag，分界线直接用 `2.13` 已经定好的 `flag_policy.STARTUP_FLAGS`。旧的无前缀小写名**全部仍然生效**（`nvcc_path=`、`use_mpi=`、`log_v=` 等 gate 与文档在用的写法不受影响），但会被记录，并在启动时打成一行摘要加一次 `DeprecationWarning`；替代掉原来"每个 flag 一行 `LOGi`、而默认 `log_v=0` 与 `log_silent` 都把它吞掉"的报告方式。
 

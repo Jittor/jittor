@@ -253,7 +253,7 @@ void CudnnConvOp::jit_run() {
     bool benchmark = cudnn_benchmark != 0;
 
     // The key is a POD struct hashed as its bytes; see cudnn_conv_algo_key.h,
-    // and tests/compiler/test_cudnn_conv_algo_key.py for what keeps two
+    // and tests/backends/cuda/test_cudnn_conv_algo_key.py for what keeps two
     // configurations that need different algorithms from sharing an entry.
     // This used to be decimal and hexadecimal text written into the shared jit
     // key buffer -- which the executor had already filled with the key of the

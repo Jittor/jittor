@@ -1,8 +1,10 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-09-09
-- Baseline: `7419412e2` plus KI-EXEC-001
+- Last reviewed: 2026-09-11 -- a documentation pass over id collisions and
+  statements the `-Ofast` removal made stale, not a re-verification of every
+  entry
+- Baseline: `2d716db31`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -633,12 +635,16 @@ framework defects.
   has the same property and **says so in its documentation**; here the coupling
   is undocumented and reached through a flag that reads as a scheduling knob.
 - Related, same flag: [KI-EXEC-001] and [KI-EXEC-002].
-- Review/expiry condition: either the algorithm chosen for a given shape does
-  not depend on what else is resident -- measure into a scratch buffer of a
-  fixed size, or key the cache on something stable -- or the coupling is stated
-  where users of `cudnn_benchmark` and `auto_flush_ops` will read it, with the
-  observed magnitude. A regression sweeps `auto_flush_ops` and compares
-  **gradients**, not the loss.
+- The "state it where users will read it" half of the exit condition is done
+  as of 2026-09-11: `docs/notes/numerics-contract.md` carries the measured
+  table, the `set_benchmark(0)` workaround and the discipline that a numeric
+  comparison across a residency-changing flag must hold the autotuner still.
+  What keeps this entry open is the coupling itself and the unexplained
+  residue above.
+- Review/expiry condition: the algorithm chosen for a given shape does not
+  depend on what else is resident -- measure into a scratch buffer of a fixed
+  size, or key the cache on something stable. A regression sweeps
+  `auto_flush_ops` and compares **gradients**, not the loss.
 
 ## KI-EXEC-002: fixed -- the profiler no longer loses flushed work, and says when it measured nothing
 
@@ -846,7 +852,9 @@ the element it is relative to.
   (`src/runtime/jit_policy.cc`) and **fully restores subnormals** -- measured,
   not assumed, and the `strict` column above is the measurement. The default
   is unchanged. What is new is that the behaviour is now stated in
-  `docs/notes/float32-precision-policy.md` and asserted by
+  `docs/notes/numerics-contract.md` (it was written into
+  `docs/notes/float32-precision-policy.md` first, and moved 2026-09-11 when the
+  numeric contracts were collected onto one page) and asserted by
   `tests/backends/parity/test_subnormal_contract.py`, so a change to it is
   visible instead of surfacing as a parity mismatch someone has to diagnose.
 - Cost of turning it off, RTX 4090, two interleaved rounds, minimum of five:
@@ -1111,17 +1119,39 @@ about whether to take it.
   withdrawn for having no stable expectation. Stated as "fused and unfused must
   agree" it needs no expectation at all, which is why that invariant is the one
   worth gating on.
-- Fix direction: `-O3` rather than `-Ofast`, or `-Ofast -fno-finite-math-only`.
-  Both cost throughput and the amount is unmeasured -- vectorisation of
-  reductions is the exposed part, and KI-OPS-006 now carries one measurement of
-  it: the same float32 `max` reduction is 14 GB/s at `-O3` where the old
-  `-Ofast` figure was 28-31. So this needs measure-then-decide, not a straight
-  substitution.
-- Workaround: none within a kernel. Values that may be infinite have to be
-  masked before they reach a CPU kernel.
-- Review/expiry condition: the four expressions above agree with NumPy on CPU
-  at every length, a probe case covers infinities on both devices, and the
-  throughput change from the flag is measured and recorded.
+- Fix applied 2026-09-10 (`1e50d76c5`): `python/jittor/build/compiler.py`
+  appends `-O3` to `kernel_opt_flags`. The alternative considered was
+  `-Ofast -fno-finite-math-only`; `-O3` was taken because the reassociation
+  `-ffast-math` also grants was not being used -- g++ 12.3 does not vectorise
+  the real reduction kernels, the runtime `storage_stride(0)` blocks it -- so
+  the throughput it was thought to buy was not there to lose.
+- Cost, measured, in two parts. On the shapes measured with the change, none:
+  same machine, same warm cache, elementwise chain 4M 0.000320 -> 0.000324 s;
+  `exp`/`sqrt` chain 4M 0.000747 -> 0.000679; `sum` 4M 0.000737 -> 0.000719;
+  matmul 512 0.659172 -> 0.660539. Full `tests/ops` + `tests/opinfo` compared
+  nodeid by nodeid: 260 failures at `-O3` against 261 at `-Ofast`, and **the
+  set that fails only at `-O3` is empty**.
+
+  One shape did pay, and KI-OPS-006 carries the number: the float32 `std::max`
+  reduction ran at 28-31 GB/s under `-Ofast`, where the reassociation did
+  vectorise it, and runs at 14 GB/s at `-O3`. That is a 2x on that one kernel,
+  paid for IEEE arithmetic everywhere. It is recorded rather than netted out,
+  and it is the reason KI-OPS-006's ratio changed without either measurement
+  being wrong.
+- The fused-versus-unfused divergence went with it:
+  `tools/fusion_consistency_sweep.py` on CPU went from 1 differing case to
+  12/12 identical.
+- No workaround is needed any more. Before the fix there was none inside a
+  kernel: values that might be infinite had to be masked before they reached
+  one.
+- Regression: `tests/ops/test_ieee_arithmetic.py` (ten IEEE-defined
+  expressions, both devices, length 8 -- at length 1 they all pass even with
+  the flag wrong) and `tests/structure/codegen/test_kernel_math_flags.py`,
+  which names the flag so a reintroduction says what changed, and separately
+  asserts an optimisation level is still requested so "delete the flag and put
+  nothing back" cannot satisfy it.
+- Review/expiry condition: met. Delete this record once a maintainer has read
+  it.
 
 ## KI-FFT-001: withdrawn -- current CUDA sequence regression is clean
 
@@ -1391,10 +1421,14 @@ about whether to take it.
 - Lesson for the next probe: never use `.data` to force evaluation inside a
   `log_capture_scope`; call `jt.sync_all()` and keep a reference to the Var.
 
-## KI-TEST-001: fixed -- device tests now restore `use_cuda` instead of zeroing it
+## KI-TEST-005: fixed -- device tests now restore `use_cuda` instead of zeroing it
 
 - Severity: was Medium (test isolation)
 - Status: Fixed 2026-08-20
+- Renumbered 2026-09-11: this entry was filed as `KI-TEST-001`, an id already
+  held by the open "formerly silent test cases" entry at the top of this
+  ledger. Every `KI-TEST-001` citation under `tests/` means that one; a
+  citation about cross-file device-state leakage means this one.
 - Symptom it had: `tests/ops` reported 127 failed / 105 passed / 26 errors as a
   single process against 51 failed / 200 passed one file at a time. Later files
   failed with `Op array doesn't have cuda version`, the signature of a Var built
