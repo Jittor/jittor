@@ -762,6 +762,7 @@ include tools/docs/check_governance.py
 include tools/docs/check_links.py
 include tools/docs/local_doc_builder.py
 include tools/equivalent_form_sweep.py
+include tools/error_message_probe.py
 include tools/fusion_consistency_sweep.py
 include tools/gate_budget_report.py
 include tools/gate_conclusion_diff.py
