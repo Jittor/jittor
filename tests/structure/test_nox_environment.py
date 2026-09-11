@@ -159,13 +159,25 @@ def test_session_env_records_the_exact_cpu_affinity(monkeypatch, tmp_path):
 
 
 def test_worker_split_updates_every_thread_pool(monkeypatch, tmp_path):
+    """Every thread-pool variable gets the shared per-worker budget.
+
+    The expected value comes from ``_helpers.tiers``, which is where the
+    budget is defined and what ``noxfile._split_threads`` delegates to. It
+    used to be read out of the noxfile's own namespace, which stopped
+    containing the name once the noxfile narrowed its import to
+    ``apply_worker_thread_budget`` -- so the check failed with a ``KeyError``
+    on its own expectation and never reached the split it exists to measure.
+    """
+    from _helpers.tiers import worker_thread_budget
+
     module = _load_noxfile(monkeypatch, tmp_path)
     env = {name: "99" for name in module["_THREAD_ENV_NAMES"]}
 
     split = module["_split_threads"](env, workers=4)
 
-    expected = str(module["worker_thread_budget"](4))
+    expected = str(worker_thread_budget(4))
     assert {split[name] for name in module["_THREAD_ENV_NAMES"]} == {expected}
+    assert expected != "99"
 
 
 def test_gate_workers_respect_a_smaller_cgroup_quota(monkeypatch, tmp_path):
