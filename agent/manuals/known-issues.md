@@ -130,30 +130,48 @@ framework defects.
 - Review/expiry condition: pass the same fixed-vector and OpInfo coverage on a
   real ROCm device, then remove this entry
 
-## KI-OPS-003: floor division truncates float operands to integers
+## KI-OPS-003: fixed -- floor division no longer truncates its float operands
 
-- Severity: Critical
-- Status: Reproduced, unfixed
-- Owner: binary operator maintainers
-- Evidence: `compat/tests/torch/test_division_remainder_family.py::
-  test_float_floor_divide_matches_numpy` (strict expected failure on CPU and CUDA)
-- Symptom: `floor_divide` casts float operands to integers before dividing, so
-  the fractional part is discarded and the result comes back as `int32` where
-  PyTorch returns a float. For `[-5.0, -2.7, -0.5, 2.7] // 2.0` the operator
-  returns `[-3, -1, 0, 1]` where `numpy.floor_divide` gives `[-3, -2, -1, 1]`.
-  The values match neither flooring nor truncation of the true quotient because
-  the truncation happens to the *operands*: `int(-2.7) // 2 == -1`, and
-  `int(-0.5) // 2 == 0`. Negative dividends whose magnitude is already an exact
-  multiple happen to come out right, which is why a positives-only or
-  whole-number check passes.
-- Distinct from [KI-OPS-002]: that entry covers the *integer* path, whose
-  flooring fix is verified on CPU, CUDA and a real 910B3. The integer path is
-  confirmed correct here; only float operands are affected.
-- Workaround: `(a / b).floor()` for float operands, which computes the quotient
-  first and keeps the floating result type
-- Review/expiry condition: float operands divide at full precision and return a
-  floating dtype, the strict expected failure above turns red, and this entry is
-  removed
+- Severity: was Critical (silently wrong answers from a published operator)
+- Status: Fixed and verified 2026-09-11
+- Owner: operator and dtype maintainers
+- What it was: `floor_divide` was listed in `int_ops` in
+  [`src/type/nano_string.cc`](../../src/type/nano_string.cc), which forces the
+  output dtype to int32. The kernel expansion casts *both operands* to the
+  output type before dividing, so the truncation landed on the inputs rather
+  than on the quotient. Measured on `17ae0a880`, identically on CPU and CUDA:
+
+  | | before | after | numpy |
+  | --- | --- | --- | --- |
+  | `-2.7 // 2.0` | **-1.0** | -2.0 | -2.0 |
+  | `-0.5 // 2.0` | **0.0** | -1.0 | -1.0 |
+  | output dtype | **int32** | float32 | float64 |
+
+  `-2.7 // 2.0` divided `int(-2.7) == -2` by 2. The other four float cases in
+  the probe and every integer case agreed before and after.
+- Why the dtype had to move too. `floor_divide`'s result is integer-*valued*
+  but carries the operands' dtype, the way `floor` does; numpy and torch both
+  answer a float for float operands. Leaving the output at int32 and only
+  fixing the expansion would have kept a second divergence.
+- The fix: remove `floor_divide` from `int_ops`, and give it a width-dispatched
+  expansion in the CPU, CUDA and fp16 tables that divides at full precision and
+  floors the quotient. Integers keep the existing truncate-and-correct helper.
+- Regression:
+  [`tests/ops/test_floor_divide.py`](../../tests/ops/test_floor_divide.py),
+  12 cases across both devices. Teeth: on the tree without the fix, 8 of the 12
+  fail (both `test_float_operands_divide_before_flooring` and
+  `test_float_tensor_divisor_and_mixed_dtypes`, on both devices, among others);
+  with it, 12 passed.
+- Attribution: `tests/ops` in native mode, before and after, separate caches --
+  39 failed before, 35 after, **no test went green to red**. The four that went
+  red to green (`test_concat2_perf`, `test_matmul::test_backward`,
+  `test_reshape`, `test_singular_input_raises_instead_of_reporting_through_info`)
+  are not plausibly this change and were most likely flaky under the parallel
+  load the two runs shared; they are not claimed as fixes.
+- Not done: the Torch-mode `tests/ops/test_ops.py` battery (1565 cases) was
+  running at 41% when the machine had to come down, so the before/after
+  comparison on that surface is missing. It is the one selection most likely to
+  notice the dtype change, since it compares dtypes against torch directly.
 
 ## KI-OPS-004: fixed -- reducing a rank-0 tensor returns its value
 

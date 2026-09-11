@@ -58,6 +58,10 @@ unordered_map<string,string> common_op_type_cuda_map = {
     {"maximum", "jittor::_max($1($2), $1($4))"},
     {"minimum", "jittor::_min($1($2), $1($4))"},
     {"mod", "@if(@strcmp($1,float32)==0,(($2)-::floorf(($2)/($4))*($4)),@if(@strcmp(@Tx,float64)==0,(($2)-::floor(($2)/($4))*($4)),jittor::_floor_mod($1($2), $1($4))))"},
+    // See the CPU table. The width is dispatched the way the rest of this
+    // table dispatches it, so a float64 quotient is not narrowed to float
+    // before flooring.
+    {"floor_divide", "@if(@strcmp($1,float32)==0,(($1) ::floorf(($1($2))/($1($4)))),@if(@strcmp($1,float64)==0,(($1) ::floor(($1($2))/($1($4)))),jittor::_floor_divide($1($2), $1($4))))"},
     {"init_maximum", "::numeric_min<$1>()"},
     {"init_minimum", "::numeric_max<$1>()"},
 };
@@ -125,6 +129,11 @@ struct CommonOpType : OpByType {
             {"maximum", "jittor::_max($1($2), $1($4))"},
             {"minimum", "jittor::_min($1($2), $1($4))"},
             {"mod", "@if(@strcmp($1,float32)==0,(($2)-std::floor(($2)/($4))*($4)),@if(@strcmp(@Tx,float64)==0,(($2)-std::floor(($2)/($4))*($4)),jittor::_floor_mod($1($2), $1($4))))"},
+            // Floats divide at full precision and floor the quotient; integers
+            // keep the truncate-and-correct helper, which is what `%` is for.
+            // Casting the operands to the output type first discarded the
+            // fraction of the *inputs*: KI-OPS-003.
+            {"floor_divide", "@if(@strcmp($1,float32)==0,(($1)std::floor(($1($2))/($1($4)))),@if(@strcmp($1,float64)==0,(($1)std::floor(($1($2))/($1($4)))),jittor::_floor_divide($1($2), $1($4))))"},
             {"init_maximum", "std::numeric_limits<$1>::lowest()"},
             {"init_minimum", "std::numeric_limits<$1>::max()"},
         };
@@ -135,7 +144,6 @@ struct CommonOpType : OpByType {
             {"subtract", "(($2)-($4))"},
             {"multiply", "(($2)*($4))"},
             {"divide", "($1(($1($2))/($1($4))))"},
-            {"floor_divide", "jittor::_floor_divide($1($2), $1($4))"},
             {"less", "(($2)<($4))"},
             {"less_equal", "(($2)<=($4))"},
             {"greater", "(($2)>($4))"},
