@@ -22,6 +22,16 @@ def is_dtype(value):
     return native_type is not None and isinstance(value, native_type)
 
 
+#: Spellings that are not canonical jittor dtype names. Hoisted out of
+#: dtype_name because that runs a few hundred times per training step and was
+#: rebuilding this literal on every call.
+_CANONICAL_ALIASES = {
+    "float": "float32", "double": "float64", "half": "float16",
+    "long": "int64", "short": "int16", "int": "int32",
+    "cfloat": "complex64", "cdouble": "complex128",
+}
+
+
 def dtype_name(value):
     """Return a canonical name for metadata; this does not enable computation."""
     if value is None:
@@ -33,9 +43,7 @@ def dtype_name(value):
         name = str(value)
     if name.startswith("torch."):
         name = name[6:]
-    return {"float": "float32", "double": "float64", "half": "float16",
-            "long": "int64", "short": "int16", "int": "int32",
-            "cfloat": "complex64", "cdouble": "complex128"}.get(name, name)
+    return _CANONICAL_ALIASES.get(name, name)
 
 
 def dtype_for_compute(value):
