@@ -269,34 +269,43 @@ framework defects.
   10% of the `std::max` figures above on the same benchmark. Then this entry
   goes.
 
-## KI-OPS-007: the CUDA unary math table narrows float64 to float32
+## KI-OPS-007: fixed -- the CUDA unary math table dispatches on dtype
 
-- Severity: Critical
-- Status: Reproduced on CUDA, unfixed for every entry except `round`
-- Owner: unary operator maintainers
-- Evidence:
-  [`test_float64_unary_precision.py`](../../tests/ops/test_float64_unary_precision.py)
-  `::TestFloat64UnaryPrecisionCuda::test_unary_family_keeps_float64_precision`,
-  a strict expected failure; the CPU class of the same file passes, which is
-  what makes this a backend divergence rather than a shared limitation
-- Symptom: nearly every row of `common_op_type_cuda_map` in
-  [`common_op_type.cc`](../../src/type/common_op_type.cc) is the `f` -- that is,
-  single-precision -- spelling of its libm function: `::floorf`, `::ceilf`,
-  `::sqrtf`, `::expf`, `::logf`, `::sinf` and the rest. A float64 operand is
-  converted to float on the way in, so the result carries 24 mantissa bits
-  instead of 53. Above 2**24 the answer is not merely imprecise:
-  `jt.ceil(12345678901234.5)` is 12345678901235.0 on CPU and 12345679020032.0
-  on CUDA, and `jt.log(1.0000000000000002)` is 2.22e-16 on CPU and exactly 0.0
-  on CUDA.
-- Cause: the table was written for float32 and the width was never dispatched.
-  `round` now is -- `@if(@strcmp($1,float32)==0, ::rintf, ::rint)` -- and is the
-  shape the remaining rows need.
-- Workaround: run float64 unary math on CPU, or accept float32 accuracy and say
-  so. A float64 tensor whose values stay inside 2**24 is unaffected.
-- Review/expiry condition: the remaining rows dispatch on width the way `round`
-  does, keeping the `f` spelling for float32 so consumer GPUs -- where float64
-  throughput is a fraction of float32 -- do not pay for the fix; the strict
-  expected failure above turns red and this entry is removed.
+- Severity: was High (silent precision loss on CUDA for every float64 transcendental)
+- Status: Fixed 2026-09-11
+- Symptom it had: nineteen entries in the CUDA expression table spelled their
+  function with the float-only C variant -- `::logf`, `::expf`, `::sinf`,
+  `::tanhf`, `::erff` and so on -- whatever the operand's dtype. A float64
+  operand was narrowed to float32, evaluated at single precision and widened
+  back. Most inputs hide it; it shows where the answer lives below float32's
+  resolution:
+
+  ```
+  log(1 + 2**-51)   CPU 4.4408920985006252e-16   CUDA 0.0   NumPy 4.4408920985006252e-16
+  ```
+
+  `1 + 2**-51` is exactly `1.0` in float32, and `log(1.0)` is zero. Not
+  slightly off -- gone.
+- Cause: `round` had been given a dtype dispatch
+  (`@if(@strcmp($1,float32)==0, ::rintf(...), ::rint(...))`) at some point;
+  the other nineteen had not. `mod` had one too. The idiom existed in the file
+  and was applied to one row.
+- Fix: the same dispatch on the nineteen. For a float32 operand the template
+  emits exactly the `::xxxf` text it emitted before, so the single-precision
+  path is unchanged by construction; only float64 operands now reach the
+  double-precision function. `src/type/common_op_type.cc`.
+- Verified: `log`, `sqrt`, `sin`, `tanh`, `erf`, `exp` in float64 agree
+  **bit for bit** across CPU, CUDA and NumPy at inputs chosen to collapse in
+  float32. float32 `log`/`exp`/`sqrt`/`sin`/`tanh` over 1M elements unchanged
+  against NumPy (the ~1e-7 spread is `--use_fast_math`, present before and
+  after) and 23-25 us per call before and after.
+- Regression: `tests/ops/test_float64_unary_math.py`, both devices. Inputs
+  are chosen so the float32 answer is *qualitatively* wrong (zero, or equal to
+  the input) rather than merely less precise -- a tolerance test passes on the
+  old build for several of them. It also pins that the inputs really do
+  collapse in float32, and that float32 is unchanged. Reverting the table turns
+  it red: `log(1.0000000000000004) in float64 gave 0.0, NumPy gives
+  4.440892098500625e-16`.
 
 ## KI-OPS-008: the CPU max/min reduction starts from a finite identity
 
@@ -798,43 +807,23 @@ the element it is relative to.
   index still raises and `x[2:99]` still clamps. The CUDA out-of-range case
   runs in a subprocess because a device trap takes the context with it.
 
-## KI-BACKEND-007: CUDA `std`/`norm` return a small finite number instead of NaN
+## KI-BACKEND-007: fixed -- CUDA `std`/`norm` propagate NaN
 
-- Severity: Critical
-- Status: Reproduced, unfixed
-- Owner: CUDA backend and reduction maintainers
-- Evidence: no exotic input needed -- one NaN among ordinary numbers:
-
-  ```
-  jt.std([nan, 1.0, 2.0])      CPU nan      CUDA 0.0009999999310821295
-  ```
-
-  With `[nan, inf, -inf, 0.0, -0.0, 1.0, -1.0, 1e-45, 3.0, 3.0]`: `std` gives
-  `nan` on CPU and `0.001` on CUDA; `norm` gives `nan` on CPU and `1e-15` on
-  CUDA. NumPy agrees with CPU in both cases.
-- Symptom: a NaN anywhere in the tensor is absorbed and the result is a small
-  finite number. `0.001` and `1e-15` look like an epsilon the implementation
-  adds for numerical safety, which the NaN path collapses onto.
-- Why this is the dangerous shape: `std` is what normalisation layers compute.
-  When a NaN appears in activations, CPU propagates it and the run stops with an
-  obvious symptom; CUDA returns ~1e-3, the normalisation divides by it, and the
-  model produces enormous finite values instead. The training diverges for a
-  reason that no longer points at the NaN, on the device people actually train
-  on.
-- Same family as KI-BACKEND-004 (`maximum`/`minimum` swallowed NaN), which is
-  now fixed. This one is not: that was one expression-table row, while `std`
-  and `norm` are composed reductions whose NaN disappears somewhere along
-  `sum` -> `sqrt` rather than in a `max`, so the fix there does not reach it.
-  Re-check against the current tree before triaging further.
-- Found by: `tools/adversarial_device_sweep.py`, comparing every OpInfo operator
-  between CPU and CUDA on inputs built from NaN, both infinities, both signed
-  zeros and a subnormal. Seven operators disagreed; `std`, `norm` and
-  `lgamma` (which returns `inf` on CUDA for a subnormal where CPU gives the
-  correct 103.28) are the ones triaged so far.
-- Workaround: check for NaN explicitly before normalising on CUDA.
-- Review/expiry condition: `std` and `norm` return NaN on both devices whenever
-  the input contains one, a parity case covers a NaN-bearing reduction, and the
-  remaining four operators from that sweep are triaged.
+- Severity: was Critical
+- Status: Fixed 2026-09-10, as a consequence of [KI-BACKEND-004]
+- Symptom it had: `jt.std([nan, 1.0, 2.0])` gave `nan` on CPU and
+  `0.0009999999310821295` on CUDA; `norm` gave `nan` against `1e-15`. NumPy
+  agrees with CPU.
+- Cause: both are composed reductions that pass through the `maximum`/
+  `minimum` rows of the expression table, and CUDA's `::max` resolves to
+  `fmaxf`, whose IEEE `maxNum` semantics deliberately return the non-NaN
+  operand. The NaN was dropped inside the composition and the small finite
+  number is the epsilon the composition adds.
+- Fix: none of its own. With `maximum`/`minimum` propagating NaN the way NumPy
+  does, re-measured 2026-09-11: `std` and `norm` of `[nan, 1.0, 2.0]` are `nan`
+  on both devices.
+- Regression: covered by `tests/ops/test_minmax_nan_propagation.py` (the row
+  it passes through) and the semantic divergence probe's `std`/`norm` cases.
 
 ## KI-BACKEND-008: fixed -- the flush-to-zero decision is written down and asserted
 
