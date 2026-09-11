@@ -13,7 +13,7 @@ struct RuntimeDeviceState {
     ~RuntimeDeviceState();
     int use_cuda = 0;
     int device_id = -1;
-    int sync_run = 1;
+    int sync_run = 0;
     int device_count = -1;
     int current_device = -1;
     vector<device_switch_hook_t> switch_hooks;

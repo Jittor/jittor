@@ -13,7 +13,17 @@ DEFINE_RUNTIME_FLAG_WITH_SETTER(int, use_cuda, 0,
     "Use cuda or not. 1 for trying to use cuda, 2 for forcing to use cuda.");
 DEFINE_RUNTIME_FLAG_WITH_SETTER(int, device_id, -1,
     "Current accelerator device for new Vars; setting it switches device in place without restarting the process.");
-DEFINE_RUNTIME_FLAG(int, sync_run, 1, "Enable per-op-sync or not");
+// Diagnostic, off by default -- the accelerator analogue of
+// CUDA_LAUNCH_BLOCKING. With it on, every ACL operator waits for its own
+// launch, which attributes a device error to the operator that caused it but
+// also removes all overlap between the host and the accelerator: on an
+// Ascend950PR a 4 MB elementwise binary went from 6.2 us to 14.1 us and a
+// four-layer transformer training step from 5.05 ms to 10.39 ms, for results
+// that are bit-identical either way.
+DEFINE_RUNTIME_FLAG(int, sync_run, 0,
+    "Wait for each accelerator operator right after launching it. Diagnostic "
+    "only: it makes a device error name the operator that raised it, at the "
+    "cost of all host/device overlap.");
 
 EXTERN_LIB void sync_all(bool device_sync);
 

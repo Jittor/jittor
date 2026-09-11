@@ -40,7 +40,10 @@ __device__ inline T cuda_atomic_narrow_rmw(T* address, T val) {
         T next = op == 0 ? (T)(current + val) :
                  op == 1 ? (T)(current * val) :
                  op == 2 ? (val > current ? val : current) :
-                           (val < current ? val : current);
+                 op == 3 ? (val < current ? val : current) :
+                 op == 4 ? (T)(current | val) :
+                 op == 5 ? (T)(current & val) :
+                           (T)(current ^ val);
         unsigned int merged = (assumed & ~mask)
             | ((((unsigned int)next) & value_mask) << shift);
         old = atomicCAS(base, assumed, merged);
@@ -56,6 +59,34 @@ __device__ inline signed char atomicAdd(signed char* a, signed char b) {
 }
 __device__ inline short atomicAdd(short* a, short b) {
     return cuda_atomic_narrow_rmw<short, 0>(a, b);
+}
+
+// CUDA exposes atomicOr/atomicAnd/atomicXor only for 32/64-bit words, but the
+// parallel and atomic-tuner passes lower a narrow `a = a || b` (bool
+// semantics) or `a = a | b` reduction to `atomicOr(&a, bool(b))`. With no
+// matching overload nvcc rejects the generated fused operator with
+//   error: no instance of overloaded function "atomicOr" matches the argument
+//   list -- argument types are: (jittor::uint8 *, jittor::uint8)
+// which is how a uint8/bool `any()` reduction fails to COMPILE on CUDA. The
+// narrow forms go through the same 32-bit CAS helper the narrow atomicAdd
+// above uses; the op codes are 4=or, 5=and, 6=xor.
+__device__ inline unsigned char atomicOr(unsigned char* a, unsigned char b) {
+    return cuda_atomic_narrow_rmw<unsigned char, 4>(a, b);
+}
+__device__ inline unsigned char atomicAnd(unsigned char* a, unsigned char b) {
+    return cuda_atomic_narrow_rmw<unsigned char, 5>(a, b);
+}
+__device__ inline unsigned char atomicXor(unsigned char* a, unsigned char b) {
+    return cuda_atomic_narrow_rmw<unsigned char, 6>(a, b);
+}
+__device__ inline signed char atomicOr(signed char* a, signed char b) {
+    return cuda_atomic_narrow_rmw<signed char, 4>(a, b);
+}
+__device__ inline signed char atomicAnd(signed char* a, signed char b) {
+    return cuda_atomic_narrow_rmw<signed char, 5>(a, b);
+}
+__device__ inline signed char atomicXor(signed char* a, signed char b) {
+    return cuda_atomic_narrow_rmw<signed char, 6>(a, b);
 }
 #endif
 
