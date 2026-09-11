@@ -61,6 +61,8 @@ CORE_SOURCES = (
     "kernels/native/flip_op_acl.cc",
     "kernels/native/floor_op_acl.cc",
     "kernels/native/gather_scatter_op_acl.cc",
+    "kernels/native/fused_sgd_op_acl.cc",
+    "kernels/native/gelu_op_acl.cc",
     "kernels/native/getitem_op_acl.cc",
     "kernels/native/index_op_acl.cc",
     "kernels/native/matmul_op_acl.cc",

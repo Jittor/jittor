@@ -27,6 +27,7 @@
 #include "ops/composite/array_op.h"
 #include "ops/composite/code_op.h"
 #include "ops/composite/fused_adamw_op.h"
+#include "ops/composite/fused_sgd_op.h"
 #include "core/fused_op.h"
 #include "ops/unary_op.h"
 #include "ops/ternary_op.h"
@@ -683,6 +684,30 @@ namespace jittor
              for (auto value : _op->new_parameters) runner.add(value, false);
              for (auto value : _op->new_moments) runner.add(value, false);
              for (auto value : _op->new_variances) runner.add(value, false);
+             runner.run();
+         }},
+        {"fused_sgd", [](Op *op)
+         {
+             auto _op = (FusedSgdOp *)op;
+             AclExecutionRunner<FusedSgdOpRunner, false> runner;
+             FusedSgdAttr *attr = new FusedSgdAttr();
+             attr->tensorCount = _op->parameters.size();
+             attr->lr = _op->lr;
+             attr->momentum = _op->momentum;
+             attr->weightDecay = _op->weight_decay;
+             attr->dampening = _op->dampening;
+             attr->nesterov = _op->nesterov;
+             attr->maximize = _op->maximize;
+             // The velocity buffers jittor hands over already hold the running
+             // momentum, so the kernel must never re-seed them from the grad.
+             attr->isFirstStep = false;
+             runner.jt_name = "fused_sgd";
+             runner.op_attr.reset(attr);
+             for (auto value : _op->parameters) runner.add(value, true);
+             for (auto value : _op->velocities) runner.add(value, true);
+             for (auto value : _op->gradients) runner.add(value, true);
+             for (auto value : _op->new_parameters) runner.add(value, false);
+             for (auto value : _op->new_velocities) runner.add(value, false);
              runner.run();
          }},
         {"arg_reduce", [](Op *op)

@@ -217,8 +217,9 @@ def test_encoded_values_reach_real_cpp_attribute_types(pipeline, tmp_path):
                     "convDilations": [1, 2],
                     "group": 3,
                     "convOutPads": [0, 0],
+                    "cube_math_type": 1,
                 },
-                "dynamic_cast<ConvAttr*>(runner.op_attr.get())->group == 3 && dynamic_cast<ConvAttr*>(runner.op_attr.get())->convStrides[0] == 2",
+                "dynamic_cast<ConvAttr*>(runner.op_attr.get())->group == 3 && dynamic_cast<ConvAttr*>(runner.op_attr.get())->convStrides[0] == 2 && runner.cube_math_type == 1",
             ),
             (
                 "LayerNormBackward",

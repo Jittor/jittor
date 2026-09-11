@@ -7,6 +7,7 @@ import jittor as jt
 from .ops._code import ACL_FLOAT_DTYPES
 from .ops.conv_op import ConvACL
 from .ops.bmm_op import BmmACL
+from .ops.gelu_op import GeluACL
 from .ops.matmul_op import MatmulACL
 from .ops.transpose_op import TransPoseACL
 from .ops.upsample_op import UpsampleNearest2dACL
@@ -72,6 +73,15 @@ def relu(x, inplace=False):
 
 def leaky_relu(x, scale=0.01, inplace=False):
     return LeakyReLUACL()(x, scale)
+
+
+def gelu_acl(x, approximate="none"):
+    """CANN's aclnnGelu covers the exact form only; tanh keeps the generic path."""
+    if approximate != "none":
+        return None
+    if isinstance(x, jt.Var) and _jittor_dtype_name(x.dtype) in ("float16", "float32", "bfloat16"):
+        return GeluACL()(x)
+    return None
 
 
 def _silu_acl(x, inplace=False):

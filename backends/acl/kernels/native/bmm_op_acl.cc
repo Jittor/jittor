@@ -34,6 +34,20 @@ namespace jittor
     BatchMatMulOpRunner::BatchMatMulOpRunner() : BaseOpRunner("BatchMatMul")
     {
     }
+    // CANN's batched matmul is rank-3 only, while the attention shapes every
+    // transformer writes are rank-4 ([batch, heads, tokens, width]). The extra
+    // axes are pure batching over a contiguous buffer, so fold them into the
+    // leading dimension when building the descriptor. Doing it here rather
+    // than in the Python builder keeps the reshape out of the graph entirely.
+    static void collapse_batch_dims(std::vector<int64_t> &shape)
+    {
+        if (shape.size() <= 3) return;
+        int64_t batch = 1;
+        for (size_t i = 0; i + 2 < shape.size(); i++) batch *= shape[i];
+        std::vector<int64_t> folded{batch, shape[shape.size() - 2], shape[shape.size() - 1]};
+        shape.swap(folded);
+    }
+
     void BatchMatMulOpRunner::setupInputDesc()
     {
         auto input_num = in_.size();
@@ -44,6 +58,7 @@ namespace jittor
             {
                 shape.push_back(in_[input_idx]->shape[j]);
             }
+            collapse_batch_dims(shape);
             inputShapes.push_back(shape);
         }
         for (int idx = 0; idx < input_num; idx++)
@@ -61,6 +76,29 @@ namespace jittor
             }
         }
     }
+    void BatchMatMulOpRunner::setupOutputDesc()
+    {
+        auto output_num = out_.size();
+        for (int output_idx = 0; output_idx < output_num; output_idx++)
+        {
+            std::vector<int64_t> shape;
+            for (int j = 0; j < out_[output_idx]->shape.size(); j++)
+            {
+                shape.push_back(out_[output_idx]->shape[j]);
+            }
+            collapse_batch_dims(shape);
+            outputShapes.push_back(shape);
+        }
+        for (int idx = 0; idx < output_num; idx++)
+        {
+            outputTensors.push_back(nullptr);
+            auto ret = CreateAclTensor(outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size,
+                                       get_dtype(out_[idx]->dtype()), &outputTensors[idx],
+                                       use_nchw, out_[idx]);
+            if (ret != ACL_SUCCESS) LOGf << name << ": output tensor creation failed. ERROR:" << ret;
+        }
+    }
+
     void BatchMatMulOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
 

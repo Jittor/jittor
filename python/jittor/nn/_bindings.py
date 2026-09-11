@@ -23,11 +23,17 @@ def _install_complex_scalar_binary_bindings():
     if getattr(jt.Var, "_native_complex_scalar_binary", False):
         return
 
+    var_type = jt.Var
+
     def wrap(name):
         native = getattr(jt.Var, name)
 
         def binary(self, other):
-            if isinstance(other, (complex, np.complexfloating)):
+            # Var-with-Var is the overwhelmingly common case and it sits on the
+            # hot path of every model: this wrapper runs for each +, -, * and /
+            # in the graph, so settle it before the complex-scalar check.
+            if other.__class__ is not var_type and isinstance(
+                    other, (complex, np.complexfloating)):
                 other = jt.array(np.asarray([other], dtype=np.complex64))
             return native(self, other)
 

@@ -43,6 +43,7 @@ def _conv_attr_code(stride, padding, dilation, groups, name):
                     "convDilations": [dilation[0], dilation[1]],
                     "group": groups,
                     "convOutPads": [0, 0],
+                    "cube_math_type": 1 if getattr(jt, "acl_allow_hf32", False) else 0,
                 },
                 variable="op",
             ),
@@ -72,7 +73,7 @@ class _ConvACLNoBias:
         dilation = _pair(dilation)
         if groups <= 0:
             raise ValueError("groups must be a positive integer")
-        attributes = {"convStrides": list(stride), "convPads": list(padding), "convDilations": list(dilation), "group": groups, "convOutPads": [0, 0]}
+        attributes = {"convStrides": list(stride), "convPads": list(padding), "convDilations": list(dilation), "group": groups, "convOutPads": [0, 0], "cube_math_type": 1 if getattr(jt, "acl_allow_hf32", False) else 0}
         output_shape = _conv_output_shape(x, weight, stride, padding, dilation)
         result = conv_cmd(
             "Conv2d",
@@ -102,7 +103,7 @@ class ConvACL:
         stride = _pair(stride)
         dilation = _pair(dilation)
         output_shape = _conv_output_shape(x, weight, stride, padding, dilation)
-        attributes = {"convStrides": list(stride), "convPads": list(padding), "convDilations": list(dilation), "group": groups, "convOutPads": [0, 0]}
+        attributes = {"convStrides": list(stride), "convPads": list(padding), "convDilations": list(dilation), "group": groups, "convOutPads": [0, 0], "cube_math_type": 1 if getattr(jt, "acl_allow_hf32", False) else 0}
 
         return conv_cmd(
             "Conv2d",

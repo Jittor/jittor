@@ -117,9 +117,12 @@ const AclOpRegistry& acl_op_registry() {
         // entry here; BaseOpRunner::run refuses to launch a name the table
         // does not carry. These launchers are already called from
         // kernels/native, so the table was simply missing their names.
+        {"Gelu", AclOpFunctions::direct(aclnnGeluV2)},
+        {"GeluBackward", AclOpFunctions::direct(aclnnGeluBackwardV2)},
         {"All", AclOpFunctions::direct(aclnnAll)},
         {"Any", AclOpFunctions::direct(aclnnAny)},
         {"AdamWList", AclOpFunctions::direct(aclnnApplyAdamWV2)},
+        {"FusedSgd", AclOpFunctions::direct(aclnnFusedSgd)},
         {"ClampTensor", AclOpFunctions::direct(aclnnClampTensor)},
         {"GroupNorm", AclOpFunctions::direct(aclnnGroupNorm)},
         {"GroupNormBackward", AclOpFunctions::direct(aclnnGroupNormBackward)},
