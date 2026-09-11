@@ -46,7 +46,7 @@ HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md
 | --- | --- |
 | 命令 | `nox -s npu`（需 `CANN_SET_ENV` 指向 `set_env.sh`，否则 session 直接 error） |
 | fail-closed | `JITTOR_TEST_REQUIRE_ACL=1`、`JITTOR_TEST_ACCELERATOR_MIN_EXECUTED=1`；session 先跑 `npu-smi info`，再跑一个带精确期望值的 matmul 探针 |
-| 覆盖 | `tests/backends/npu/test_acl.py`、`test_acl_torch_compat.py`、`test_aclop.py`、`test_acl_indexing.py`、`tests/ops/test_ops.py`、`tests/core/test_floor_divide.py::TestFloorDivideNPU` 等 |
+| 覆盖 | `tests/backends/acl/test_acl.py`、`test_acl_torch_compat.py`、`test_aclop.py`、`test_acl_indexing.py`、`tests/ops/test_ops.py`、`tests/ops/test_floor_divide.py::TestFloorDivideNPU` 等 |
 | 步骤 | [`docs/guides/ascend-910b.md`](../../docs/guides/ascend-910b.md) |
 
 绿了之后可以判定的看板项：**`6.B02`**（executeOp 失败都抛；静态侧已由
@@ -82,7 +82,7 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
    nox -s npu   # JITTOR_TEST_REQUIRE_ACL=1 JITTOR_TEST_ACCELERATOR_MIN_EXECUTED=1
    ```
 
-   判据：`tests/backends/npu/test_aclop.py`（114 条）、`test_acl.py`（43 条）、
+   判据：`tests/backends/acl/test_aclop.py`（114 条）、`test_acl.py`（43 条）、
    `test_acl_indexing.py`（7 条）全部**执行**而非 skip——本机这 164 条一条都没执行。
    重点算子：`prod`（三条路径都要覆盖：整张量归约、单轴、多轴分步）、`argmax`/`argmin`、
    `all`/`any`、`GroupNorm` 前反向、`UpsampleNearest2d` 前反向。
@@ -105,7 +105,7 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 | --- | --- |
 | 命令 | **尚无 nox session** ← 硬件日之前要建 |
 | 现有材料 | [`hccl-on-device-verification.md`](hccl-on-device-verification.md) 的四步：第 0 步先证明没静默回落 CPU、A/B 数值对拍、200 轮压竞态、证明时序真的变了 |
-| 主机侧已可跑 | `tests/distributed/test_hccl_check_macros.py`、`test_hccl_collective_sync_switch.py`（对桩编译，任何机器都能跑），但**它们不在任何 nox session 里** |
+| 主机侧已可跑 | `tests/backends/comm/hccl/test_hccl_check_macros.py`、`test_hccl_collective_sync_switch.py`（对桩编译，任何机器都能跑），但**它们不在任何 nox session 里** |
 
 等它的看板项：**`8.02`** 的 HCCL 那半（4 次全设备同步收进了 `JT_HCCL_COLLECTIVE_SYNC` 开关，
 默认 `full` 与改前逐字等价，删除要等实机 A/B）、**`10.19`** 的 HCCL 四项（`HcclAllGatherOp::grad()`
@@ -116,8 +116,8 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 | | |
 | --- | --- |
 | 命令 | `nox -s rocm` |
-| 覆盖 | `tests/backends/rocm/test_rocm.py` 与 `tests/distributed/` 的 MPI 组 |
-| 静态侧 | `tests/structure/test_no_unexplained_binaries.py`、`tests/structure/test_rocm_library_provider.py`、`tests/structure/test_rocm_native_provider.py` |
+| 覆盖 | `tests/backends/rocm/test_rocm.py` 与 `tests/backends/comm/mpi/` 的 MPI 组 |
+| 静态侧 | `tests/structure/test_no_unexplained_binaries.py`、`tests/structure/backends/rocm/test_rocm_library_provider.py`、`tests/structure/backends/rocm/test_rocm_native_provider.py` |
 
 等它的看板项：**`4.12`** 的 ROCm 那半。**代码半已闭合并标已合并**，这里只剩真卡确认。
 
@@ -198,8 +198,8 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 
 | kind | 含义 | 硬件到手那天跑什么 | 通过判据 |
 | --- | --- | --- | --- |
-| `mpi_hardware` | MPI collective 的反向，要 `mpirun` 起多进程 | `tests/distributed/test_mpi_op.py` | 各 rank 的梯度与单进程 CPU 参考一致 |
-| `nccl_hardware` | NCCL collective 的反向，要多卡 launcher | `tests/distributed/test_nccl_ops.py`、`tests/distributed/test_fsdp2_nccl.py` | 同上；`all_gather` 的反向要真的走 reduce-scatter |
+| `mpi_hardware` | MPI collective 的反向，要 `mpirun` 起多进程 | `tests/backends/comm/mpi/test_mpi_op.py` | 各 rank 的梯度与单进程 CPU 参考一致 |
+| `nccl_hardware` | NCCL collective 的反向，要多卡 launcher | `tests/backends/comm/nccl/test_nccl_ops.py`、`compat/tests/fsdp2/test_fsdp2_nccl.py` | 同上；`all_gather` 的反向要真的走 reduce-scatter |
 | `npu_hardware` | ACL/CANN 的反向，已有梯度用例，缺卡 | `nox -s npu` | 用例内已带 CPU 对照，全绿即判定 |
 | `npu_hardware_no_grad_test` | **有 `grad()` 但只有前向用例**——即使有卡也测不到反向 | 见下面逐条 | 要先补用例，不是跑一遍就行 |
 | `rocm_hardware` | ROCm 的反向，已有 CPU 对拍用例，缺卡 | `nox -s rocm` | `TestBMM::test_bmm_rocm` 自带 `calc(0)`/`calc(1)` 双跑对拍 |

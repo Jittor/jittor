@@ -38,9 +38,15 @@ def test_every_hardware_bucket_task_is_in_the_manifest():
         "run for them: %s" % missing)
 
 
+#: Every test root, not just ``tests/``. The pattern used to read ``tests/``
+#: alone, so a promise that moved to ``compat/tests`` left the check behind
+#: with it -- the manifest kept naming the old path and nothing said so.
+_TEST_PATH = re.compile(r"`((?:tests|compat/tests|adapters/tests)/[\w/]+\.py)(?:::[\w:]+)?`")
+
+
 def test_the_manifest_names_test_paths_that_exist():
     manifest = MANIFEST.read_text(encoding="utf-8")
-    referenced = set(re.findall(r"`(tests/[\w/]+\.py)(?:::[\w:]+)?`", manifest))
+    referenced = set(_TEST_PATH.findall(manifest))
     missing = sorted(path for path in referenced
                      if not (REPO_ROOT / path).is_file())
     assert missing == [], "manifest names paths that do not exist: %s" % missing
