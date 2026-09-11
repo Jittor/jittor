@@ -21,6 +21,9 @@ namespace jittor {
 bool g_supports_color = false;
 void print_prefix(std::ostream*) {}
 void flush_log() {}
+// Reached from the throwing log macros in log.h, which are header-inline, so
+// every standalone snippet that includes a jittor header has to provide it.
+string message_without_log_prefix(const string& message) { return message; }
 std::map<string, OpInfo>& definitions() {
     static std::map<string, OpInfo> value;
     return value;
