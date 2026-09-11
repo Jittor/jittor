@@ -403,7 +403,7 @@ print("RESULT=" + json.dumps({
 
     def test_source_architecture_names_the_core_api_owner(self):
         source = (
-            self.repo / "docs" / "architecture" / "source-architecture.md"
+            self.repo / "docs" / "development" / "source-architecture.md"
         ).read_text(encoding="utf-8")
         normalized = " ".join(source.split())
         self.assertIn("`jittor._core.api`", normalized)

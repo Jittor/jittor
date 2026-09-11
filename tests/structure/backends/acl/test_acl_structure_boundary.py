@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[4]
-GUIDE = ROOT / "docs/guides/acl-structure-boundary.md"
+GUIDE = ROOT / "refactor-wip/architecture/acl-structure-boundary.md"
 
 
 def test_acl_structure_boundary_names_atomic_migrations_and_hardware_gate():

@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[3]
-GUIDE = ROOT / "docs/testing/async-error-diagnostics.md"
+GUIDE = ROOT / "docs/development/async-error-diagnostics.md"
 
 
 def test_async_error_contract_states_ring_and_cuda_requirements():

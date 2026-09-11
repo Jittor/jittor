@@ -199,7 +199,7 @@ class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
             "whose name says what it is for.")
 
     def test_the_layout_document_still_pins_the_compiler_resources(self):
-        doc = _text(REPO_ROOT / "docs" / "architecture" / "repository-layout.md")
+        doc = _text(REPO_ROOT / "docs" / "development" / "repository-layout.md")
         self.assertIn("python/jittor/build/{dlink_compiler.py,dumpdef.py}", doc)
         self.assertIn("python/jittor/tools/tracer.py", doc)
 
