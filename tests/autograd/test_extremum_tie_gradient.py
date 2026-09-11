@@ -36,11 +36,12 @@ import numpy as np
 import jittor as jt
 
 
-def _has_cuda():
-    return bool(_test_capability.check_accelerator('cuda', backend=jt).enabled)
-
-
-requires_cuda = unittest.skipUnless(_has_cuda(), "a CUDA device is required")
+#: Probed when the case runs, not when the file is imported.
+#:
+#: ``unittest.skipUnless(_has_cuda(), ...)`` evaluated the probe in a decorator
+#: argument, which runs at *collection* -- where this suite forbids backend
+#: work -- and froze one answer for the whole process.
+requires_cuda = _test_capability.accelerator_required('cuda', backend=jt)
 
 
 class _TieContract:
