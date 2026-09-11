@@ -1,8 +1,10 @@
 # Jittor Project Context
 
 - Status: Current index, not a history log
-- Last reviewed: 2026-09-11
-- Baseline reviewed: `integrate/cgq-transformers-2.0-refactor@5bf4d374` with the refactor structure baseline fixes; ancestry is `origin/2.0-refactor` plus `feature/cgq_transformers@9bac6853`
+- Last reviewed: 2026-09-12
+- Baseline reviewed: pending merge of `origin/2.0-refactor@9b58d4ef` into
+  `integrate/cgq-transformers-2.0-refactor`, retaining the validated
+  compatibility work from `origin/cgq_transformers@5bf4d374`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -69,24 +71,21 @@ limitations. See [native complex dtype](../../docs/notes/complex-dtype.md).
 
 The test architecture uses independent forward references, numerical gradients,
 and CPU-to-accelerator parity. See [test system](../../docs/development/test-system.md).
-The complete CPU repository gate is
-[`tools/run_test_suite.py`](../../tools/run_test_suite.py), which owns separate
-native and Torch-mode processes, JIT caches, temporary directories, and process
-mode variables. Current AArch64 verification passes native `768 passed, 738 skipped`, Torch `1591 passed, 536 skipped`, and clean structure `232 passed, 2 skipped`; see the [current CPU suite](../../refactor-wip/results/2026-09-01-current-cpu-suite.md) and the [ARM CPU stability report](../../refactor-wip/results/2026-08-30-arm-cpu-suite-stability.md).
-The maintained CUDA gate also passes on a real RTX 4090 and covers the complete CUDA backend
-directory, dtype coverage, CPU/CUDA device parity, TF32 controls, and strict
-OpInfo CUDA references. The maintained CPU gate also passes with a fail-closed
-independent binary PyTorch oracle, and compact ResNet18, ViT, GPT-2, and
-diffusion UNet forward/backward parity passes on CPU and CUDA. ROCm, most
-optional downstream dependencies, full training, and performance remain
-separate gates. On a real 910B3, the maintained Ascend gate passes `397 passed, 9 skipped`; float16/float32 `arg_reduce` backward and float32/integer `prod` execute without CPU fallback.
-The current refactor integration has now rerun the fixed Transformers 4.56.2 text matrix: 4 encoder, 10 decoder, and 3 encoder-decoder implementations are 17/17 PASS on fixed public checkpoints with real A800 CUDA. The evidence includes tokenizer, forward, cache, generation, state compatibility, and encoder Jittor-to-PyTorch round-trip; the GPT-NeoX top-p cutoff tie remains an explicit numerical boundary. The report records the committed compatibility baseline and its exact result paths. See the [current refactor 17-model L4 report](../../refactor-wip/results/transformers/2026-09-11-transformers-refactor-17-model-l4-cuda.md), the [historical strict L4 report](../../refactor-wip/results/transformers/2026-09-06-transformers-text-core-l4-cuda.md), and the [earlier matrix](../../refactor-wip/results/transformers/2026-09-03-transformers-text-core-matrix-cuda.md).
+The complete CPU repository gate is [`tools/run_test_suite.py`](../../tools/run_test_suite.py),
+which owns separate native/Torch processes, JIT caches, temporary directories, and process-mode
+variables. CUDA, ROCm, Ascend, optional downstream, full-training, and performance checks remain
+separate gates; see the dated reports linked from `refactor-wip/results/`.
+The current refactor integration retains the fixed Transformers 4.56.2 text matrix: 4 encoder,
+10 decoder, and 3 encoder-decoder implementations are 17/17 PASS on fixed public checkpoints
+with real A800 CUDA. The public artifacts were generated from the validated compatibility
+commit `5bf4d374`; after merging refactor `9b58d4ef`, the targeted real-device HF CUDA suite
+remains green and the refactor delta is confined to backend/structure changes. The evidence
+includes tokenizer, forward, cache, generation, state compatibility, and encoder
+Jittor-to-PyTorch round-trip; the GPT-NeoX top-p cutoff tie remains an explicit numerical
+boundary. See the [current refactor 17-model L4 report](../../refactor-wip/results/transformers/2026-09-11-transformers-refactor-17-model-l4-cuda.md), the [historical strict L4 report](../../refactor-wip/results/transformers/2026-09-06-transformers-text-core-l4-cuda.md), and the [earlier matrix](../../refactor-wip/results/transformers/2026-09-03-transformers-text-core-matrix-cuda.md).
 The same worktree retains the FSDP2 metadata-lifetime fix and the bounded six-A800 BF16 Llama 3.1 70B short-SFT evidence. The current 17-model report is FP32 correctness evidence, not a claim of L5 performance, low precision, long-context training, or broad downstream coverage. See the [FSDP2 memory-lifetime report](../../refactor-wip/results/transformers/2026-09-07-fsdp2-memory-lifetime-fix-cuda.md), [representative Llama 70B SFT report](../../refactor-wip/results/transformers/2026-09-07-transformers-llama31-70b-sft-cuda.md), and [formal No Robots resource report](../../refactor-wip/results/transformers/2026-09-07-transformers-llama31-no-robots-sft-cuda.md).
-Qwen3-8B float32 loads all 8,190,735,360 parameters; SDPA, greedy `arg_reduce`, and mask `all` run on ACL without CPU fallback. A native-shape `empty`
-fast path brings 0.6B decode to 15.90 token/s versus native `torch_npu` 16.19 token/s.
-Qwen3-0.6B BF16 SDPA passes zero-fallback generation at 14.92 token/s versus native 15.31 token/s.
-Qwen3-0.6B FP32 eager forward/loss/backward also passes zero-fallback at `1.07x-1.12x` native `torch_npu`. Transformers 5.5.3 BF16 completes forward, backward, and AdamW without CPU fallback; explicit fused AdamW matches CANN/PyTorch for two fixed-gradient steps. BF16 embedding/RMSNorm/RoPE training kernels pass independent real-NPU references. After correcting Python-scalar promotion, RMSNorm rounding order, and BF16 SiLU, all 29 hidden states and logits match native `torch_npu` elementwise for the maintained one-step input. Eliminating 57 no-op full-slice gradients and lowering 112 continuous last-axis gradients to cached-zero CANN Cat preserves the exact snapshot and brings the current same-device protocol from `1.195x` to about `1.063x`; direct CANN RoPE reaches `0.988x` but is rejected because its logits and gradient trajectory differ. Cross-framework long training parity and the exact-path performance gate remain open. See the [training report](../../refactor-wip/results/transformers/2026-08-30-qwen3-ascend-training.md).
-See the [Ascend guide](../../docs/guides/ascend-910b.md), [validation report](../../refactor-wip/results/2026-08-28-ascend-910b-validation.md), [arg-reduce](../../refactor-wip/results/2026-08-30-npu-arg-reduce-backward.md)/[product](../../refactor-wip/results/2026-08-30-npu-product-reduction.md) follow-ups, [Qwen3 inference report](../../refactor-wip/results/transformers/2026-08-28-qwen3-ascend-performance.md), complete [CPU](../../refactor-wip/results/2026-08-22-complete-cpu-test-suite.md)/[CUDA](../../refactor-wip/results/2026-08-22-cuda-test-suite.md) reports, and the [parallel follow-up](../../refactor-wip/results/2026-08-22-cuda-parallel-range-network-oracle.md).
+Current Ascend/Qwen3, CPU, CUDA, and optional ecosystem conclusions are maintained in their dated
+reports under `refactor-wip/results/`; they are not duplicated in this index.
 The current fail-closed optional CUDA base gate passes 16 TorchMetrics,
 MMCV/MMEngine, PEFT, TensorDict, and FlashAttention-adapter tests from one
 retained cache; TorchMetrics is split by domain so cold compilation does not

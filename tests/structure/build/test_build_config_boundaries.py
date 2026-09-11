@@ -206,9 +206,11 @@ def test_default_cache_config_stays_unchanged_and_explicit_backend_isolated(monk
                          "ASCEND_HOME_PATH", "tikcc_path", "ROCM_HOME", "ROCM_PATH", "HIP_PATH",
                          "hipcc_path", "COREX_HOME"):
         monkeypatch.delenv(name, raising=False)
-    assert namespace["get_build_config"]() == dict.fromkeys(names)
+    expected = dict.fromkeys(names)
+    expected["nvcc_path"] = ""
+    assert namespace["get_build_config"]() == expected
     monkeypatch.setenv("JT_BACKEND", "corex")
-    assert namespace["get_build_config"]() == dict(dict.fromkeys(names), JT_BACKEND="corex")
+    assert namespace["get_build_config"]() == dict(expected, JT_BACKEND="corex")
 
 
 def test_explicit_cpu_skips_every_cuda_discovery_and_installation_service():

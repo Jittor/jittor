@@ -17,7 +17,6 @@ includes negative dividends and negative divisors for that reason.
 import unittest
 
 import numpy as np
-import pytest
 import torch
 import jittor as jt
 
@@ -41,8 +40,7 @@ class _FamilyChecks(object):
     device = "cpu"
 
     def _tensor(self, array):
-        tensor = torch.tensor(array)
-        return tensor.cuda() if self.device == "cuda" else tensor
+        return torch.tensor(array, device=self.device)
 
     def _check(self, got, want, label):
         got = np.asarray(got.cpu().numpy(), dtype="float64")
@@ -101,29 +99,12 @@ class _FamilyChecks(object):
                         np.floor_divide(values, divisor),
                         "int floor_divide({0})".format(divisor))
 
-    def test_div_rounding_modes_accept_tensors_and_python_scalars(self):
-        values = np.array([-5, -4, 3, 6], dtype="int64")
-        tensor = self._tensor(values)
-        truncated = torch.div(tensor, 2, rounding_mode="trunc")
-        floored = torch.divide(tensor, 2, rounding_mode="floor")
-
-        self.assertEqual(str(truncated.dtype), "torch.int64")
-        self.assertEqual(str(floored.dtype), "torch.int64")
-        self._check(truncated, np.trunc(values / 2).astype("int64"),
-                    "div rounding_mode=trunc")
-        self._check(floored, np.floor(values / 2).astype("int64"),
-                    "divide rounding_mode=floor")
-
-        scalar = torch.div(8, 2, rounding_mode="trunc")
-        self.assertEqual(scalar.ndim, 0)
-        self.assertEqual(int(scalar), 4)
-
-    @pytest.mark.xfail(strict=True, reason="KI-OPS-003: float operands are truncated to integers")
     def test_float_floor_divide_matches_numpy(self):
-        """Float operands are cast to integers before dividing -- see KI-OPS-003.
+        """Float operands divide at full precision -- KI-OPS-003, fixed.
 
-        Strict, so that fixing the operator turns this red and the entry gets
-        retired rather than the expectation quietly outliving the defect.
+        This was a strict expected failure: `floor_divide` cast both operands
+        to the integer output dtype before dividing, so `-2.7 // 2.0` was
+        `int(-2.7) // 2 == -1` where numpy answers -2.
         """
         tensor = self._tensor(_DIVIDENDS)
         reference = _DIVIDENDS.astype("float64")

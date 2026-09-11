@@ -12,9 +12,46 @@ from typing import Union
 from collections.abc import Sequence, Iterable
 
 
-from ._code import acl_code as silu_cmd
+from ._code import acl_emit, acl_program
 from ._code import check_acl_float_dtype
 from ._attributes import attribute_program
+
+_SILU_ATTR_CODE = """
+        op.jt_name = "silu";
+        """
+
+_SILU_GRAD_SRC = '''
+// aclop
+SiLUBackwardOpRunner op;
+op.add(dout, true);
+op.add(in0, true);
+op.add(out0, false);
+op.jt_name = "silubackward";
+op.run();
+'''
+
+_SWISH_GRAD_SRC = '''
+// aclop
+SwishBackwardOpRunner op;
+op.add(dout, true);
+op.add(in0, true);
+op.add(out0, false);
+op.jt_name = "swishbackward";
+op.run();
+'''
+
+#: These three programs are fixed by their runner alone -- SwiGlu by its axis
+#: as well -- so they are assembled once instead of having `acl_code` rebuild
+#: the same cache key from the same strings on every activation.
+_PROGRAMS = {}
+
+
+def _program(name, key, **kwargs):
+    program = _PROGRAMS.get(key)
+    if program is None:
+        program = acl_program(name, 1, 1, **kwargs)
+        _PROGRAMS[key] = program
+    return program
 
 
 class SiLUACL:
@@ -24,24 +61,9 @@ class SiLUACL:
 
     def execute(self, x):
         check_acl_float_dtype(x, "silu")
-        attr_code = """
-        op.jt_name = "silu";
-        """
-        result = silu_cmd("SiLU",
-                          inputs=[x],
-                          output_dtypes=[x.dtype],
-                          output_shapes=[x.shape],
-                          attr_code=attr_code,
-                          cuda_grad_src=['''
-// aclop
-SiLUBackwardOpRunner op;
-op.add(dout, true);
-op.add(in0, true);
-op.add(out0, false);
-op.jt_name = "silubackward";
-op.run();
-'''])[0]
-        return result
+        program = _program("SiLU", "silu", attr_code=_SILU_ATTR_CODE,
+                           cuda_grad_src=[_SILU_GRAD_SRC])
+        return acl_emit(program, [x], [x.dtype], [x.shape])[0]
 
 
 class SwishACL:
@@ -50,23 +72,9 @@ class SwishACL:
         return self.execute(x)
 
     def execute(self, x):
-        result = silu_cmd(
-            "Swish",
-            inputs=[x],
-            output_dtypes=[x.dtype],
-            output_shapes=[x.shape],
-            attr_code='op.jt_name = "swish";',
-            cuda_grad_src=['''
-// aclop
-SwishBackwardOpRunner op;
-op.add(dout, true);
-op.add(in0, true);
-op.add(out0, false);
-op.jt_name = "swishbackward";
-op.run();
-'''],
-        )[0]
-        return result
+        program = _program("Swish", "swish", attr_code='op.jt_name = "swish";',
+                           cuda_grad_src=[_SWISH_GRAD_SRC])
+        return acl_emit(program, [x], [x.dtype], [x.shape])[0]
 
 
 class SwiGluACL:
@@ -78,10 +86,5 @@ class SwiGluACL:
         axis = int(dim) % int(x.ndim)
         output_shape = list(x.shape)
         output_shape[axis] //= 2
-        return silu_cmd(
-            "SwiGlu",
-            inputs=[x],
-            output_dtypes=[x.dtype],
-            output_shapes=[output_shape],
-            attributes={"dim": axis},
-        )[0]
+        program = _program("SwiGlu", ("swiglu", axis), attributes={"dim": axis})
+        return acl_emit(program, [x], [x.dtype], [output_shape])[0]

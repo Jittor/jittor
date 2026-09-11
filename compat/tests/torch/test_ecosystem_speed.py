@@ -65,7 +65,15 @@ class _Speed:
     # by the small cases, which compare every gradient at a tight tolerance.
     forward_tolerance = 2e-2
     backward_tolerance = 5e-2
-    repeats = _speed_repeats()
+
+    @property
+    def repeats(self):
+        # Read when a case runs, not when the class body executes. The class
+        # body is module-level code that happens to be indented, so this used
+        # to parse JITTOR_ECOSYSTEM_REPEATS during collection -- and a value
+        # below ten raised there, taking down the whole session instead of the
+        # cases that read it.
+        return _speed_repeats()
 
     def test_large_convnet(self):
         self._compare("large_convnet")

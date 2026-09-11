@@ -96,7 +96,7 @@ class TestOptimStructure(unittest.TestCase):
             "Optimizer": "(params, lr, param_sync_iter=10000)",
             "SGD": (
                 "(params, lr, momentum=0, weight_decay=0, dampening=0, "
-                "nesterov=False)"
+                "nesterov=False, fused=None)"
             ),
             "RMSprop": "(params, lr=0.01, eps=1e-08, alpha=0.99)",
             "Adam": "(params, lr, eps=1e-08, betas=(0.9, 0.999), weight_decay=0)",

@@ -27,6 +27,8 @@
 #include <aclops/relu_op_acl.h>
 #include <aclops/dropout_op_acl.h>
 #include <aclops/silu_op_acl.h>
+#include <aclops/gelu_op_acl.h>
+#include <aclops/cross_entropy_loss_op_acl.h>
 #include <aclops/sigmoid_op_acl.h>
 #include <aclops/softmax_op_acl.h>
 #include <aclops/stack_op_acl.h>
@@ -37,3 +39,4 @@
 #include <aclops/norms_op_acl.h>
 #include <aclops/upsample_op_acl.h>
 #include <aclops/adamw_op_acl.h>
+#include <aclops/fused_sgd_op_acl.h>

@@ -1,6 +1,8 @@
 """Advanced indexing tensor operations."""
 
+import numbers as _numbers
 from jittor_core import Var
+from .._core.dtypes import dtype_name as _dtype_name
 from .._runtime.dispatch import try_dispatch
 
 def index_add_(x, dim, index, tensor):
@@ -86,9 +88,71 @@ def index_fill(x, dim, index, val):
     return x * (1 - mask_f) + float(val) * mask_f
 
 
+def _indexing_dim(op, x, dim):
+    """The ``dim`` argument of gather/scatter, normalised against ``x``'s rank.
+
+    Without this the only thing standing between a bad ``dim`` and the user was
+    ``indexes[dim] = index`` -- a list assignment, which answered
+    ``IndexError: list assignment index out of range``: no operation, no rank,
+    no bound.
+    """
+    ndim = x.ndim
+    if not isinstance(dim, _numbers.Integral):
+        raise TypeError("%s: dim must be an integer, got %s"
+                        % (op, type(dim).__name__))
+    dim = int(dim)
+    if not -ndim <= dim < ndim:
+        raise IndexError(
+            "%s: dim %d is out of range for a %d-D input of shape %s "
+            "(expected a dim in [%d, %d])"
+            % (op, dim, ndim, list(x.shape), -ndim, ndim - 1))
+    return dim + ndim if dim < 0 else dim
+
+
+def _indexing_index(op, x, dim, index, bounded):
+    """The ``index`` argument of gather/scatter: a Var of ``x``'s rank.
+
+    ``gather``/``scatter`` build a reindex expression out of ``index.shape``
+    and one ``i{k}`` per remaining axis. When ``index`` has a different rank
+    from ``x`` that expression is still well formed -- it just indexes
+    something the caller did not ask for -- so ``jt.ones((3,4)).gather(0,
+    jt.array([0,1,2]))`` returned a [3,4] var with no complaint, and
+    ``.gather(0, jt.zeros((3,6)))`` read four columns into six. torch rejects
+    both; so does this.
+    """
+    if not isinstance(index, Var):
+        raise TypeError("%s: index must be a jt.Var, got %s"
+                        % (op, type(index).__name__))
+    # Torch compatibility exposes ``Var.dtype`` as a frontend dtype object,
+    # whose ``is_complex`` is a property, while native NanoString exposes
+    # callable flags.  Use the canonical name at this shared boundary so both
+    # process modes reject floating/complex indices without a shape-dependent
+    # ``bool object is not callable`` failure.
+    index_dtype = _dtype_name(index.dtype)
+    if index_dtype.startswith(("float", "bfloat", "complex")):
+        raise TypeError("%s: index must have an integer dtype, got %s"
+                        % (op, index.dtype))
+    if index.ndim != x.ndim:
+        raise RuntimeError(
+            "%s: index must have the same number of dims as the input, but "
+            "index is %d-D with shape %s and the input is %d-D with shape %s"
+            % (op, index.ndim, list(index.shape), x.ndim, list(x.shape)))
+    if not bounded:
+        return
+    for axis in range(x.ndim):
+        if axis != dim and index.shape[axis] > x.shape[axis]:
+            raise RuntimeError(
+                "%s: index shape %s is larger than the input shape %s at dim "
+                "%d; apart from dim %d every index dim must be no larger than "
+                "the input's"
+                % (op, list(index.shape), list(x.shape), axis, dim))
+
+
 def _scatter_into(x, dim, index, src, reduce='void'):
     '''The in-place core shared by ``scatter`` and ``scatter_``: writes into ``x``.'''
     import jittor as jt
+    dim = _indexing_dim("scatter", x, dim)
+    _indexing_index("scatter", x, dim, index, bounded=False)
     result = try_dispatch("tensor.scatter", x, dim, index, src, reduce)
     if result is not None:
         return result
@@ -259,6 +323,8 @@ Example::
     assert (data.data == [[ 1,  2], [ 3,  2]]).all()
 
     '''
+    dim = _indexing_dim("gather", x, dim)
+    _indexing_index("gather", x, dim, index, bounded=True)
     result = try_dispatch("tensor.gather", x, dim, index)
     if result is not None:
         return result

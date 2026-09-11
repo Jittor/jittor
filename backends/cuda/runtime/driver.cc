@@ -130,8 +130,31 @@ void* raw_allocate(int device, BackendMemoryKind kind, size_t size) {
             auto error = cudaMalloc(&ptr, size);
             if (error != cudaSuccess) {
                 cudaGetLastError();
-                if (!cuda_device_allocator_managed_fallback)
-                    throw std::runtime_error("cudaMalloc failed");
+                if (!cuda_device_allocator_managed_fallback) {
+                    // "cudaMalloc failed" on its own tells the reader nothing
+                    // they can act on: not how much was asked for, not how much
+                    // the device had, not which device. The commonest cause is
+                    // another process holding the card, and that is exactly the
+                    // case the bare message cannot distinguish from a model that
+                    // is too large. The caching allocators above have already
+                    // released their cached blocks and retried by the time this
+                    // is thrown, so these numbers are the real ones.
+                    size_t device_free = 0, device_total = 0;
+                    auto info = cudaMemGetInfo(&device_free, &device_total);
+                    if (info != cudaSuccess) cudaGetLastError();
+                    string where = info == cudaSuccess
+                        ? (", device " + S(device) + " has " + S(device_free >> 20) +
+                           " MiB free of " + S(device_total >> 20) + " MiB")
+                        : (", and device " + S(device) + "'s free memory could not be read");
+                    throw std::runtime_error(
+                        "out of memory on the accelerator: could not allocate " +
+                        S(size >> 20) + " MiB (" + S(size) + " bytes)" + where +
+                        ". CUDA said: " + cudaGetErrorString(error) +
+                        ". Another process may be holding the device; reduce the "
+                        "batch size, or set auto_flush_ops=0 to let the whole "
+                        "graph be scheduled at once, which frees intermediates "
+                        "earlier.");
+                }
                 LOGw << "Unable to alloc cuda device memory for size" << size
                      << ", falling back to cudaMallocManaged";
                 checkCudaErrors(cudaMallocManaged(&ptr, size));

@@ -414,5 +414,108 @@ class TestTestSideHelpersRefuseToSkipOnFailure(unittest.TestCase):
             self.assertTrue(helpers.machine_has_accelerator("cuda"))
 
 
+class TestAcceleratorRequiredDefersToExecution(unittest.TestCase):
+    """The probe runs when the case runs, and nothing runs when it is defined.
+
+    The shape this replaces -- ``unittest.skipUnless(_has_cuda(), ...)`` --
+    calls the probe inside a decorator argument, so it runs while the module is
+    being imported: during *collection*, where the suite forbids backend work,
+    and once for the whole process regardless of what later cases configure.
+    Counted rather than asserted by intent: "it is lazy now" is exactly the
+    kind of claim that keeps being true in the comment and false in the code.
+    """
+
+    @staticmethod
+    def _backend(state, reason, calls):
+        capability = Capability("cuda", "accelerator", state, reason)
+
+        class _Queries:
+            @staticmethod
+            def backend(name):
+                calls.append(name)
+                return capability
+
+        class _Introspection:
+            capabilities = _Queries()
+
+        class _Backend:
+            introspection = _Introspection()
+
+        return _Backend()
+
+    def test_defining_probes_nothing_and_calling_probes_once(self):
+        from _helpers import capability as helpers
+
+        calls = []
+        backend = self._backend(CapabilityState.AVAILABLE, "cuda 12.2", calls)
+
+        @helpers.accelerator_required("cuda", backend=backend)
+        def case():
+            return "ran"
+
+        self.assertEqual(calls, [])
+        self.assertEqual(case(), "ran")
+        self.assertEqual(calls, ["cuda"])
+
+    def test_a_disabled_build_skips_with_the_machine_level_reason(self):
+        from _helpers import capability as helpers
+
+        calls = []
+        backend = self._backend(
+            CapabilityState.DISABLED,
+            "the machine has 8 device nodes but this build has no nvcc_path",
+            calls)
+
+        @helpers.accelerator_required("cuda", backend=backend)
+        def case():
+            raise AssertionError("the body must not run")
+
+        with self.assertRaises(unittest.SkipTest) as caught:
+            case()
+        self.assertIn("8 device nodes", str(caught.exception))
+        self.assertIn("no nvcc_path", str(caught.exception))
+
+    def test_a_failed_build_refuses_instead_of_skipping(self):
+        from _helpers import capability as helpers
+
+        calls = []
+        backend = self._backend(
+            CapabilityState.FAILED,
+            "nvcc was handed a path and the build came out without CUDA",
+            calls)
+
+        @helpers.accelerator_required("cuda", backend=backend)
+        def case():
+            raise AssertionError("the body must not run")
+
+        with self.assertRaises(AssertionError) as caught:
+            case()
+        self.assertNotIsInstance(caught.exception, unittest.SkipTest)
+        self.assertIn("broken build", str(caught.exception))
+
+    def test_a_decorated_class_defers_through_setUpClass(self):
+        from _helpers import capability as helpers
+
+        calls = []
+        backend = self._backend(
+            CapabilityState.DISABLED, "this build has no nvcc_path", calls)
+
+        @helpers.accelerator_required("cuda", backend=backend)
+        class _Case(unittest.TestCase):
+            def test_body(self):
+                raise AssertionError("the body must not run")
+
+        self.assertEqual(calls, [])
+        result = unittest.TestResult()
+        # Through the loader, not the instance: ``setUpClass`` is a suite-level
+        # hook and a bare ``_Case("test_body").run()`` never reaches it.
+        unittest.TestLoader().loadTestsFromTestCase(_Case).run(result)
+        self.assertEqual(calls, ["cuda"])
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.failures, [])
+        self.assertEqual(len(result.skipped), 1)
+        self.assertIn("no nvcc_path", result.skipped[0][1])
+
+
 if __name__ == "__main__":
     unittest.main()

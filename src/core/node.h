@@ -132,6 +132,7 @@ struct OpFlags {
         // of the same name, which is why they are in different enums now.
         _requires_grad_disabled,
         _requires_grad_snapshot,
+        _no_input_storage,
         _end,
     };
     static constexpr int _op_type_nbits = NodeBits::_node_order_nbits;

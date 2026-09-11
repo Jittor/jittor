@@ -19,15 +19,31 @@ def _requires_grad_(value, requires_grad=True):
     return value
 
 
+#: A python ``complex`` and a numpy complex scalar are the only operands the
+#: wrapper below has to convert. Naming the pair once keeps a global lookup, an
+#: attribute lookup and a tuple build out of every ``+``, ``-``, ``*`` and
+#: ``/`` whose right operand is not a Var -- a float or an int scalar reaches
+#: the check too, and there is no cheaper way to keep the conversion: a python
+#: complex may meet a *float32* Var (``1j * x``), so nothing about the Vars in
+#: play says in advance that the wrapper is unnecessary.
+_COMPLEX_SCALAR_TYPES = (complex, np.complexfloating)
+
+
 def _install_complex_scalar_binary_bindings():
     if getattr(jt.Var, "_native_complex_scalar_binary", False):
         return
+
+    var_type = jt.Var
 
     def wrap(name):
         native = getattr(jt.Var, name)
 
         def binary(self, other):
-            if isinstance(other, (complex, np.complexfloating)):
+            # Var-with-Var is the overwhelmingly common case and it sits on the
+            # hot path of every model: this wrapper runs for each +, -, * and /
+            # in the graph, so settle it before the complex-scalar check.
+            if other.__class__ is not var_type and isinstance(
+                    other, _COMPLEX_SCALAR_TYPES):
                 other = jt.array(np.asarray([other], dtype=np.complex64))
             return native(self, other)
 

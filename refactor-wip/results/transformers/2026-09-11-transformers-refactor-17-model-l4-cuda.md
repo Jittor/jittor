@@ -2,8 +2,8 @@
 
 - 状态：PASS（17/17 public checkpoint comparison）
 - 验收日期：2026-09-11（Asia/Shanghai）
-- 代码基线：`integrate/cgq-transformers-2.0-refactor`，兼容实现提交 `5bf4d374b2f3eb842ede751e20a24265a048d941`；结构测试基线修复在后续提交完成，不改变本报告的模型实现语义
-- 对照分支：`origin/2.0-refactor` 的 refactor 架构与 `feature/cgq_transformers` 已验证功能合并结果
+- 代码基线：兼容实现提交 `5bf4d374b2f3eb842ede751e20a24265a048d941`；结构测试基线修复在后续提交完成；本轮集成将 `origin/2.0-refactor@9b58d4ef9c14f244fd62bfe65691f1cff8184f21` 合入同一工作树
+- 对照分支：`origin/2.0-refactor` 的 refactor 架构与 `feature/cgq_transformers` 已验证功能合并结果；公共模型产物沿用兼容提交生成的完整对拍，合入后的真实设备定向回归保持通过
 - 环境：Transformers `4.56.2`、真实 PyTorch `2.6.0+cu124`、Jittor `1.3.11.0`、NVIDIA A800、CUDA 12.4、FP32
 - 实验状态：`$JITTOR_LAB_ROOT/_state/transformers_l4_refactor_20260911`
 
@@ -65,15 +65,15 @@ header.
 
 ## GPT-NeoX CPU numerical boundary
 
-The tiny lifecycle comparison has one deterministic CPU AdamW boundary. For
-`gpt_neox.layers.0.attention.query_key_value.bias[167]`, Jittor's gradient is approximately
-`-7.2759576e-11` while PyTorch's is `1.5279511e-10`; the resulting first-step parameter delta
-difference is `2.2250933562e-05` against a `2e-05` tiny threshold. Three repeated CPU runs produce
-the same values. The corresponding CUDA difference is `1.1859491567e-05`, and the public
-GPT-NeoX CUDA comparison passes. The discrepancy is a float32 cancellation residual in a
-near-zero reduction gradient, amplified by AdamW's epsilon; no semantic clamp or relaxed gate was
-introduced. A future fix must start with a minimal CPU reduction/broadcast-backward reproduction
-and prove that ordinary non-zero gradients and performance are unchanged.
+The post-refactor tiny lifecycle comparison now passes its CPU gate. The worst values are a
+forward error of `3.3705807649918747e-07`, gradient error of `2.7272229862388354e-07`, optimizer
+state error of `2.2351741567254078e-08`, and first-step parameter delta error of
+`1.2497073633771488e-05` (the tiny threshold is `2e-05`). The same near-zero
+`gpt_neox.layers.0.attention.query_key_value.bias[167]` reduction remains the worst update
+element, but the current result is inside the contract; no gradient clamp or relaxed gate was
+introduced. The corresponding CUDA difference remains `1.1859491567e-05`, and the public
+GPT-NeoX CUDA comparison passes. If CPU reduction or broadcast-backward code changes in the
+future, re-run this probe together with ordinary non-zero gradients and performance checks.
 
 ## Regression evidence
 

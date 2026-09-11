@@ -276,6 +276,40 @@ def submit_pending(*vars, device_sync=False):
             var.sync()
     return vars[0] if len(vars) == 1 else tuple(vars)
 
+#: `ArrayOp` reads a python number as its own type: a float becomes float32,
+#: an int becomes int32, a bool becomes bool. Spelling the constant as that
+#: python type is what lets it be built in the requested dtype for free.
+_CONSTANT_PY_TYPES = {"float32": float, "int32": int, "bool": bool}
+
+
+def _constant_scalar(value, dtype):
+    """A rank-0 constant of `dtype`, with no cast node behind it.
+
+    `unary(value, dtype)` reads the python number as its *own* type and then
+    casts, so `jt.zeros(shape)` was three nodes: an int32 `array`, a
+    `unary.cast` to the requested dtype, and the broadcast. The cast is free on
+    CPU and CUDA, where the JIT emits the constant inside the consuming kernel,
+    but on an accelerator that dispatches one operator at a time it is a real
+    launch moving four bytes. `Optimizer.zero_grad` calls `zeros_like` once per
+    parameter, so a 35-parameter transformer step carried 18 of them.
+
+    Only the three dtypes a python literal maps to directly are handled, and
+    the conversion is the python builtin rather than numpy: a numpy round trip
+    reaches `ArrayOp` through its array branch, and that costs more host time
+    than the launch it saves -- measured, on this same benchmark. Every other
+    dtype keeps the cast.
+    """
+    builder = _CONSTANT_PY_TYPES.get(_jittor_dtype_name(dtype))
+    if builder is None:
+        return unary(value, dtype)
+    try:
+        native = builder(value)
+    except (ValueError, OverflowError):
+        #: e.g. int(float("nan")). Let the cast op answer for it, as before.
+        return unary(value, dtype)
+    return array(native)
+
+
 def ones(*shape, dtype="float32"):
     ''' Constructs a jittor Var with all elements set to 1.
 
@@ -294,7 +328,7 @@ def ones(*shape, dtype="float32"):
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    return unary(1, dtype).broadcast(shape)
+    return _constant_scalar(1, dtype).broadcast(shape)
 
 @_contextmanager
 def _factory_scope_like(x):
@@ -350,7 +384,7 @@ def zeros(*shape, dtype="float32"):
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    return unary(0, dtype).broadcast(shape)
+    return _constant_scalar(0, dtype).broadcast(shape)
 
 def new_zeros(x, size):
     with _factory_scope_like(x):
@@ -389,7 +423,7 @@ def full(shape,val,dtype="float32"):
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    return unary(val, dtype).broadcast(shape)
+    return _constant_scalar(val, dtype).broadcast(shape)
 
 def new_full(x, size, val):
     with _factory_scope_like(x):
@@ -593,16 +627,105 @@ def _with_accelerator_kernel_loaded(func):
 
 origin_transpose = transpose
 
+
+def _transpose_axis(value, ndim, position):
+    """One axis argument of ``transpose``/``permute``, normalised to ``[0, ndim)``.
+
+    Every rejection here used to be a raw container error raised a frame
+    deeper: ``axes[a]`` gave ``IndexError: list index out of range`` for an axis
+    past the end and ``TypeError: list indices must be integers or slices, not
+    str`` for a non-integer, neither of which names the operation, the axis, or
+    the rank it was measured against. The exception *types* are the ones torch
+    raises for the same mistakes, so an ``except IndexError`` around a dim
+    calculation keeps working; only the text changes.
+    """
+    if isinstance(value, Var):
+        if value.numel() != 1:
+            raise TypeError(
+                "transpose: dim (argument %d) must be a single integer, got a "
+                "Var of shape %s" % (position, list(value.shape)))
+        value = value.item()
+    if not isinstance(value, numbers.Integral):
+        raise TypeError(
+            "transpose: dim (argument %d) must be an integer, got %s"
+            % (position, type(value).__name__))
+    value = ori_int(value)
+    if ndim == 0:
+        # ``transpose_op.cc`` requires rank >= 1 (unlike torch, which returns a
+        # 0-D tensor unchanged). Say so instead of letting ``axes[0]`` on an
+        # empty list answer for it.
+        raise IndexError(
+            "transpose: dim %d (argument %d) is out of range: a 0-D var has "
+            "no dims to transpose" % (value, position))
+    if not -ndim <= value < ndim:
+        raise IndexError(
+            "transpose: dim %d (argument %d) is out of range for a %d-D var "
+            "(expected a dim in [%d, %d])"
+            % (value, position, ndim, -ndim, ndim - 1))
+    return value + ndim if value < 0 else value
+
+
+def _transpose_permutation(dim, ndim, shape):
+    """The axis *sequence* form: a permutation of ``range(ndim)``, validated.
+
+    ``transpose_op.cc`` checks the cardinality (``axes.size() == xdim``) but
+    its diagnostic carries no sentence of its own, and nothing checked for a
+    repeated axis at all -- ``jt.ones((3,4)).permute((0, 0))`` silently
+    produced a var whose contents are not a permutation of the input. Both are
+    caller mistakes, so they are reported here, where the argument still has a
+    name and the var still has a shape to print.
+    """
+    axes = []
+    for position, value in enumerate(dim):
+        if isinstance(value, Var):
+            if value.numel() != 1:
+                raise TypeError(
+                    "transpose: dims[%d] must be a single integer, got a Var "
+                    "of shape %s" % (position, list(value.shape)))
+            value = value.item()
+        if not isinstance(value, numbers.Integral):
+            raise TypeError(
+                "transpose: dims[%d] must be an integer, got %s"
+                % (position, type(value).__name__))
+        axes.append(ori_int(value))
+    if len(axes) != ndim:
+        raise RuntimeError(
+            "transpose: dims has %d entries %s but the var is %d-D with shape "
+            "%s; a permutation needs exactly one entry per dim"
+            % (len(axes), tuple(axes), ndim, list(shape)))
+    seen = {}
+    for position, value in enumerate(axes):
+        if not -ndim <= value < ndim:
+            raise IndexError(
+                "transpose: dims[%d] is %d, out of range for a %d-D var of "
+                "shape %s (expected a dim in [%d, %d])"
+                % (position, value, ndim, list(shape), -ndim, ndim - 1))
+        normalized = value + ndim if value < 0 else value
+        if normalized in seen:
+            raise RuntimeError(
+                "transpose: dims %s names dim %d twice (entries %d and %d); a "
+                "permutation of a %d-D var of shape %s uses each dim once"
+                % (tuple(axes), normalized, seen[normalized], position,
+                   ndim, list(shape)))
+        seen[normalized] = position
+        axes[position] = normalized
+    return tuple(axes)
+
+
 def transpose(x, *dim):
+    ndim = x.ndim
     if len(dim) == 1 and isinstance(dim[0], (Sequence, NanoVector)):
-        dim = dim[0]
+        dim = _transpose_permutation(dim[0], ndim, x.shape)
     elif len(dim) == 2:
-        axes = list(range(x.ndim))
-        a, b = dim
+        a = _transpose_axis(dim[0], ndim, 1)
+        b = _transpose_axis(dim[1], ndim, 2)
+        axes = list(range(ndim))
         axes[a], axes[b] = axes[b], axes[a]
         dim = axes
+    elif dim:
+        dim = _transpose_permutation(dim, ndim, x.shape)
     if not dim:
-        dim = tuple(reversed(range(x.ndim)))
+        dim = tuple(reversed(range(ndim)))
     # NumPy helpers such as np.argsort return numpy.integer axis values.  The
     # C++ transpose binding requires exact Python ints, while torch accepts any
     # integral sequence in Tensor.permute().
@@ -964,6 +1087,25 @@ def pow(x, y):
 
 Var.pow = Var.__pow__ = pow
 
+def _check_arg_reduce_is_answerable(op, x, dim):
+    """``argmax``/``argmin`` over zero elements: there is no index to return.
+
+    ``arg_reduce`` seeds the scan with element 0 and never writes to it when
+    the extent is empty, so ``jt.zeros(0).argmax(0)`` answered index 0 -- a
+    position that does not exist -- and a value of 0.0 that is not in the
+    input. sum/prod/mean are different and stay as they are: add and multiply
+    have identities (0 and 1), and a mean of nothing is nan in numpy and torch
+    too. ``max`` and ``argmax`` have no identity, so both raise, and torch
+    raises ``IndexError`` here for exactly this case.
+    """
+    shape = x.shape
+    if shape[dim] == 0:
+        raise IndexError(
+            "%s: dim %d of the input is empty (shape %s); %s over zero "
+            "elements has no index to return"
+            % (op, dim, list(shape), op))
+
+
 def argmax(x: Var, dim: int, keepdims:bool=False):
     ''' Returns the indices and values of the maximum elements along the specified dimension.
 
@@ -999,6 +1141,7 @@ def argmax(x: Var, dim: int, keepdims:bool=False):
         # axes for negative dims other than -1 -> cryptic cutt_transpose crash
         if dim < 0:
             dim += nd
+        _check_arg_reduce_is_answerable("argmax", x, dim)
     return jt.arg_reduce(x, "max", dim, keepdims)
 
 Var.argmax = argmax
@@ -1032,6 +1175,7 @@ def argmin(x, dim: int, keepdims:bool=False):
                              f"input (expected dim in [{-nd}, {nd-1}])")
         if dim < 0:
             dim += nd
+        _check_arg_reduce_is_answerable("argmin", x, dim)
     return jt.arg_reduce(x, "min", dim, keepdims)
 
 Var.argmin = argmin

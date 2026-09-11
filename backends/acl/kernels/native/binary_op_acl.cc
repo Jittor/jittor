@@ -30,6 +30,21 @@
 
 namespace jittor
 {
+    // ACL reads the alpha scalar as raw bytes in the tensor's dtype, so the
+    // float16 unit scalar needs a two-byte host value. `__fp16` is an ARM-only
+    // compiler extension and `_Float16` does not exist on x86-64 before
+    // GCC 12, so an x86-64 host build cannot name a 16-bit float type. Carry
+    // the IEEE binary16 encoding instead; 0x3c00 is 1.0.
+    struct Float16Unit
+    {
+        uint16_t bits;
+
+        explicit Float16Unit(int value) : bits(0x3c00)
+        {
+            ASSERT(value == 1) << "Float16Unit only encodes the unit scalar";
+        }
+    };
+
     template <typename T, aclDataType DType>
     struct UnitScalarHolder
     {
@@ -70,7 +85,7 @@ namespace jittor
             }
             else if (get_dtype(in_[0]->dtype()) == ACL_FLOAT16)
             {
-                alpha = getUnitScalar<__fp16, ACL_FLOAT16>();
+                alpha = getUnitScalar<Float16Unit, ACL_FLOAT16>();
             }
             else if (get_dtype(in_[0]->dtype()) == ACL_BF16)
             {

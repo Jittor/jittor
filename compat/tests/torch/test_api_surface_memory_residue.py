@@ -28,27 +28,32 @@ def _cuda_available():
         return False
 
 
-def requires_cuda(test):
-    """Probe CUDA when the test runs, after collection is complete."""
-    if isinstance(test, type):
-        original = getattr(test, "setUp", None)
+def requires_cuda(target):
+    """Probe when the case runs, not when the file is imported.
 
-        def setUp(self):
+    ``unittest.skipUnless(_cuda_available(), ...)`` evaluated the probe in a
+    decorator argument, which runs at *collection* -- where this suite forbids
+    backend work -- and froze one answer for the whole process.
+    """
+    if isinstance(target, type):
+        setup = target.setUpClass.__func__
+
+        @classmethod
+        def checked_setup(cls):
             if not _cuda_available():
-                self.skipTest("cuda is required for device memory residue contracts")
-            if original is not None:
-                original(self)
+                raise unittest.SkipTest('cuda is required for device memory residue contracts')
+            setup(cls)
 
-        test.setUp = setUp
-        return test
+        target.setUpClass = checked_setup
+        return target
 
-    @functools.wraps(test)
-    def wrapped(self, *args, **kwargs):
+    @functools.wraps(target)
+    def checked(*args, **kwargs):
         if not _cuda_available():
-            self.skipTest("cuda is required for device memory residue contracts")
-        return test(self, *args, **kwargs)
+            raise unittest.SkipTest('cuda is required for device memory residue contracts')
+        return target(*args, **kwargs)
 
-    return wrapped
+    return checked
 
 
 def _collect():

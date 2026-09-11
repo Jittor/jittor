@@ -55,7 +55,10 @@ cufftHandle cufft_get_plan(const CufftPlanKey& key) {
     ExecutorEntryScope entry;
     int device = -1;
     checkCudaErrors(cudaGetDevice(&device));
-    USER_CHECK(device == key.device) << "cuFFT plan key must name the current device";
+    // Same as the cuTT cache: cufft_fft_op fills key.device from
+    // cudaGetDevice() immediately before calling in, so this is an internal
+    // invariant and not a caller-supplied value.
+    ASSERT(device == key.device) << "cuFFT plan key must name the current device";
     auto& cache = cufft_cache(device);
     auto found = cache.plans.find(key);
     if (found != cache.plans.end()) {

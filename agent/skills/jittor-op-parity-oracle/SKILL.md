@@ -1,6 +1,6 @@
 ---
 name: jittor-op-parity-oracle
-description: 给 Jittor 的 Python 层算子做数值对拍（correctness oracle）。当你要证明某个算子「静默算错」或「已经修对」时用它——如何选对拍基准（numpy/scipy 优先，必要时用独立进程里的真 PyTorch）、为什么绝不能在 Jittor 环境里 import torch、容差怎么定、fail-before/pass-after 怎么做、以及 code-op 内核（jt.code）出错时的取证手法。**写任何依赖 NaN/Inf 行为的内核之前先读开头那条 -Ofast 警告。**
+description: 给 Jittor 的 Python 层算子做数值对拍（correctness oracle）。当你要证明某个算子「静默算错」或「已经修对」时用它——如何选对拍基准（numpy/scipy 优先，必要时用独立进程里的真 PyTorch）、为什么绝不能在 Jittor 环境里 import torch、容差怎么定、fail-before/pass-after 怎么做、以及 code-op 内核（jt.code）出错时的取证手法。**写任何依赖 NaN/Inf 行为的内核之前先读开头那条 fast-math 警告。**
 ---
 
 # Jittor 算子对拍口径
@@ -11,20 +11,28 @@ description: 给 Jittor 的 Python 层算子做数值对拍（correctness oracle
 
 ---
 
-> ## ⚠ 先读这条：`-Ofast` 会把 NaN/Inf 的判断折叠掉
+> ## ⚠ 先读这条：fast-math 会把 NaN/Inf 的判断折叠掉
 >
-> jittor 的**融合内核用 `-Ofast` 编译**（`compiler.py` 里 `kernel_opt_flags += " -Ofast "`，
-> CUDA 那边另有 `--use_fast_math`）。`-Ofast` 蕴含 `-ffast-math`、进而
-> `-ffinite-math-only`——**编译器被允许假设 NaN 和 Inf 不存在**，于是
-> `x != x`、`x >= 0 || x <= 0`、`|x| == inf` 这些写法可以被直接折叠成常量。
+> `-ffinite-math-only`（由 `-ffast-math` 蕴含，`-ffast-math` 又由 `-Ofast` 蕴含）
+> **允许编译器假设 NaN 和 Inf 不存在**，于是 `x != x`、`x >= 0 || x <= 0`、
+> `|x| == inf` 这些写法可以被直接折叠成常量。
 >
-> **任何依赖「NaN 不等于自己」或 inf 比较行为的东西，都不能写成普通 Var 运算进融合体。**
-> 它必须进一个显式压低优化级别的 `jt.code`——`misc/tensor_ops.py` 的 `_simple_for`
-> （`flag_scope(compile_options={"FLAGS: -O2 ":1})`）就是干这个的，isnan/isinf/isfinite
-> 全部走它。
+> **现状（2026-09-11）**：CPU 融合内核**已经不带** `-Ofast` 了——KI-BACKEND-005 把
+> `compiler.py` 的 `kernel_opt_flags` 换成了 `-O3`（提交 `1e50d76c5`），
+> `tests/structure/codegen/test_kernel_math_flags.py` 盯着这件事。**CUDA 仍然带
+> `--use_fast_math`**（`compiler.py` 的 `nvcc_flags`，可用
+> `jt.flags.cuda_kernel_math = "strict"` 按进程关掉）。
 >
-> 推论：**「用原始比较写一遍」不能当对拍基准**，它在 CPU/CUDA 上不可信。这类东西能对拍的
-> 只有 dtype 策略和普通值上的答案，NaN/±Inf 那几个元素要排除掉并写明理由。
+> 但这条纪律不因此作废：**编译旗标是在别处决定的**，用户的 `cc_flags`/`kernel_flags`
+> 仍然可以把 `-Ofast` 带回来，而失效方式是静默的。所以——
+> **任何依赖「NaN 不等于自己」或 inf 比较行为的东西，仍然不要写成普通 Var 运算进融合体。**
+> 它应该进一个显式压低优化级别的 `jt.code`——`python/jittor/ops/numerical.py` 的
+> `_simple_for`（`flag_scope(compile_options={"FLAGS: -O2 ":1})`，经
+> `jt.misc._simple_for` 调用）就是干这个的，isnan/isinf/isfinite 全部走它。
+>
+> 推论：**「用原始比较写一遍」不能当对拍基准**，它在 CUDA 上仍然不可信、在 CPU 上取决于
+> 这次构建用了什么旗标。这类东西能对拍的只有 dtype 策略和普通值上的答案，NaN/±Inf
+> 那几个元素要排除掉并写明理由。
 >
 > 展开与实测见 §16；ACL 上同样的表达式是安全的，因为那边由 aclnn 求值、不经过 jittor 编的内核。
 
@@ -474,18 +482,25 @@ for dtype in ("int8","int32","int64","float16","float32","float64"):
 
 ## 16. 依赖 NaN/Inf 语义的表达式不能写成普通 Var 运算（开头那条警告的展开）
 
-jittor 的融合内核用 `-Ofast` 编译（`compiler.py` 里 `kernel_opt_flags += " -Ofast "`），
-`-Ofast` 蕴含 `-ffast-math`、进而 `-ffinite-math-only`——**编译器可以假设不存在 NaN 和 Inf**，
-于是 `x >= 0 || x <= 0`、`|x| == inf` 这类写法允许被折叠成常量。
+`-ffinite-math-only`（`-ffast-math` 蕴含它，`-Ofast` 蕴含 `-ffast-math`）下
+**编译器可以假设不存在 NaN 和 Inf**，于是 `x >= 0 || x <= 0`、`|x| == inf` 这类写法
+允许被折叠成常量。
+
+旗标的现状分两边：
+
+| | 默认旗标 | 谁盯着 |
+| --- | --- | --- |
+| CPU 融合内核 | `-O3`（KI-BACKEND-005 之前是 `-Ofast`） | `tests/structure/codegen/test_kernel_math_flags.py` 读构建落定的 `cc_flags`；`tests/ops/test_ieee_arithmetic.py` 测行为 |
+| CUDA JIT | 仍带 `--use_fast_math`（`compiler.py` 的 `nvcc_flags`） | `jt.flags.cuda_kernel_math = "strict"` 可按进程去掉；`tests/backends/parity/test_subnormal_contract.py` 钉住默认档与 strict 的差别 |
 
 所以：
-- 任何 `isnan/isinf/isfinite/nan_to_num` 一类的语义**必须**进一个显式压低优化级别的
-  `jt.code`。`misc/tensor_ops.py` 的 `_simple_for` 就是干这个的
-  （`flag_scope(compile_options={"FLAGS: -O2 ":1})`）；
-- 拿「用原始比较写一遍」当对拍基准也不行——它在 CPU/CUDA 上不可信。
+- 任何 `isnan/isinf/isfinite/nan_to_num` 一类的语义**仍然应该**进一个显式压低优化级别的
+  `jt.code`。`python/jittor/ops/numerical.py` 的 `_simple_for` 就是干这个的
+  （`flag_scope(compile_options={"FLAGS: -O2 ":1})`，经 `jt.misc._simple_for` 调用）。
+  它在默认 CPU 构建上现在是冗余的，保留是因为旗标由别处决定、失效是静默的；
+- 拿「用原始比较写一遍」当对拍基准也不行——CUDA 上不可信，CPU 上取决于这次构建的旗标。
   能对拍的只有 **dtype 策略**和**普通值上的答案**，把 NaN/±Inf 那几个元素排除掉，
   并在测试里写明排除的理由（这本身就是「两种写法必须分开」的证据）。
-- CUDA JIT 还带 `--use_fast_math`（`compiler.py` 的 `nvcc_flags`），同样的道理。
 
 ## 17. 写 dtype 相关测试时的三个 jittor 陷阱
 

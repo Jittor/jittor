@@ -30,8 +30,7 @@ import numpy as np
 import jittor as jt
 
 from jittor.backends.acl.kernels.ops import _code as acl_code_mod
-from jittor.backends.acl.kernels.ops import (norms_op, relu_op, sigmoid_op, silu_op,
-                                           softmax_op)
+from jittor.backends.acl.kernels.ops import norms_op, relu_op, silu_op, softmax_op
 
 
 class _Recorder:
@@ -41,8 +40,13 @@ class _Recorder:
         self.seen_dtype = None
         self.seen_output_dtypes = None
 
-    def __call__(self, name, inputs, output_dtypes=None, output_shapes=None,
-                 attr_code="", attr_header="", outputs=None, **kwargs):
+    def __call__(self, name_or_program, inputs=None, output_dtypes=None,
+                 output_shapes=None, attr_code="", attr_header="", outputs=None,
+                 **kwargs):
+        # `acl_code` receives a string name and keyword arguments, while the
+        # refactor's `acl_emit` receives an assembled program object and lists.
+        # Record both through one provider-shaped test double.
+        name = getattr(name_or_program, "name", name_or_program)
         self.seen_dtype = str(inputs[0].dtype)
         if outputs is not None:
             self.seen_output_dtypes = [str(o.dtype) for o in outputs]
@@ -55,11 +59,10 @@ class TestAclDtypePreservation(unittest.TestCase):
 
     # (module, launcher attribute, callable building the op invocation)
     CASES = [
-        ("silu", silu_op, "silu_cmd", lambda m, x: m.SiLUACL()(x)),
+        ("silu", silu_op, "acl_emit", lambda m, x: m.SiLUACL()(x)),
         ("softmax", softmax_op, "acl_code", lambda m, x: m.SoftmaxACL().execute(x, -1)),
-        ("sigmoid", sigmoid_op, "sigmoid_cmd", lambda m, x: m.SigmoidACL().execute(x)),
-        ("relu", relu_op, "acl_code", lambda m, x: m.ReLUACL()(x)),
-        ("leaky_relu", relu_op, "acl_code", lambda m, x: m.LeakyReLUACL()(x, 0.01)),
+        ("relu", relu_op, "acl_emit", lambda m, x: m.ReLUACL()(x)),
+        ("leaky_relu", relu_op, "acl_emit", lambda m, x: m.LeakyReLUACL()(x, 0.01)),
     ]
 
     def _run(self, module, attr, invoke, x):
@@ -103,12 +106,12 @@ class TestAclDtypePreservation(unittest.TestCase):
                 w = jt.ones([4], dtype="float32").cast(dtype)
                 b = jt.zeros([4], dtype="float32").cast(dtype)
                 recorder = _Recorder()
-                original = norms_op.norms_cmd
-                norms_op.norms_cmd = recorder
+                original = norms_op.acl_emit
+                norms_op.acl_emit = recorder
                 try:
                     norms_op.LayerNormACL([4])(x, w, b)
                 finally:
-                    norms_op.norms_cmd = original
+                    norms_op.acl_emit = original
                 self.assertEqual(recorder.seen_dtype, dtype)
 
     def test_unsupported_dtype_is_rejected_not_widened(self):

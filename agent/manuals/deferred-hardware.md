@@ -21,8 +21,8 @@ HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md
 2. **行为形状的静态合同。** 断言「每个 family 都不自己发 execute 调用」这类**不变量**，而不是
    「共有 65 处调用 `checkRet`」这类**计数**。计数式合同挡不住合法重构：`test_acl_runner_failure_contract`
    曾断言 65 处，8.06 的第一个提交把样板收进共享 launcher 后它就作废，然后红了约 40 个提交没人看见。
-   不变量式合同还要**自证扫到了东西**：ACL 正处在 `python/jittor/extern/acl` 与 `backends/acl`
-   两处都有内容的半途搬迁状态，按「总数 > N」断言会在只扫到一侧时仍然发绿，所以要求**每个根各自非空**。
+   不变量式合同还要**自证扫到了东西**：ACL 已迁入顶层 `backends/acl`，按「总数 > N」断言会在
+   只扫到错误的目录时仍然发绿，所以要求实际 backend 根各自非空。
 2b. **去样板前后的静态等价性。** 把每个 owner 归约成 (workspace 查询, execute 入口, 同步策略)
    的有序 token 流，逐 owner 对比改前改后。`tools/build/acl_launch_program.py` 做这件事，两个树
    当参数、退出码非 0 即有差异。它把「样板删对了」和「顺手改了行为」分开：前者 token 流不动，
@@ -116,7 +116,7 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 | | |
 | --- | --- |
 | 命令 | `nox -s rocm` |
-| 覆盖 | `tests/backends/rocm/test_rocm.py` 与 `tests/distributed/` 的 MPI 组 |
+| 覆盖 | `tests/backends/rocm/test_rocm.py` 与 `tests/backends/comm/mpi/` 的 MPI 组 |
 | 静态侧 | `tests/structure/test_no_unexplained_binaries.py`、`tests/structure/backends/rocm/test_rocm_library_provider.py`、`tests/structure/backends/rocm/test_rocm_native_provider.py` |
 
 等它的看板项：**`4.12`** 的 ROCm 那半。**代码半已闭合并标已合并**，这里只剩真卡确认。
@@ -210,7 +210,7 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 
 | 符号 | 源码 | 现状 |
 | --- | --- | --- |
-| `HcclAllGatherOp` | `python/jittor/extern/acl/hccl/ops/hccl_all_gather_op.cc` | `grad()` 直接 `LOGf << "not implemented"`；要在 Ascend 910B3 多卡上补实现与 CPU 对照 |
+| `HcclAllGatherOp` | `backends/comm/hccl/ops/hccl_all_gather_op.cc` | `grad()` 直接 `LOGf << "not implemented"`；要在 Ascend 910B3 多卡上补实现与 CPU 对照 |
 | `RocprimCumsumOp` | `backends/rocm/libraries/rocprim/rocprim_cumsum_op.cc` | 全树**没有任何用例**碰过它，前向反向都没有；`tests/backends/rocm/test_rocm.py` 里要补一条照 `TestBMM` 形状的 CPU 对拍 |
 | `FloorIntACL` | `backends/acl/kernels/ops/floor_op.py` | 只有 `test_aclop.py::TestACL::test_floor_int` 前向 |
 | `IndexACL` | `backends/acl/kernels/ops/index_op.py` | 只有 `test_aclop.py::TestACL::test_index` 前向 |

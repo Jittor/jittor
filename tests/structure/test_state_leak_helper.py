@@ -130,7 +130,12 @@ def test_rss_bound_rejects_an_intentional_retained_allocation():
     retained = []
 
     def leak_one_mebibyte():
-        retained.append(bytearray(1 << 20))
+        # Touch every page so Linux accounts the allocation in RSS even when
+        # the allocator obtains zero-filled pages lazily.
+        block = bytearray(2 << 20)
+        for offset in range(0, len(block), 4096):
+            block[offset] = 1
+        retained.append(block)
 
     with pytest.raises(AssertionError, match="RSS grew"):
         assert_rss_growth_bounded(

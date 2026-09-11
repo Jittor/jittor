@@ -32,10 +32,14 @@ class TestErrorMsg(unittest.TestCase):
             print(b)
         except Exception as e:
             msg = str(e)
-        assert "[Reason]: ???" in msg
-        assert "[Input]: int32[3,]" in msg
-        assert "[OP TYPE]: code" in msg
-        assert "[Async Backtrace]:" in msg
+        # The labels moved when the report was reordered to put the reason
+        # first (2026-09-10); what each of them asserted still holds.
+        assert "???" in msg, msg
+        assert "in:  int32[3,]" in msg, msg
+        assert "op: code" in msg, msg
+        assert "[Async Backtrace]:" in msg, msg
+        # The reason now precedes the machinery rather than following it.
+        assert msg.index("???") < msg.index("op: code"), msg
 
     @jt.flag_scope(trace_py_var=3)
     def test_error_msg_trace_py_var(self):
@@ -59,11 +63,12 @@ class TestErrorMsg(unittest.TestCase):
         except Exception as e:
             msg = str(e)
         print(msg)
-        assert "[Reason]: ???" in msg
-        assert "[Input]: int32[3,]" in msg
-        assert "[OP TYPE]: code" in msg
-        assert "[Async Backtrace]:" in msg
-        assert "test_error_msg.py:" in msg
+        assert "???" in msg, msg
+        assert "in:  int32[3,]" in msg, msg
+        assert "op: code" in msg, msg
+        assert "[Async Backtrace]:" in msg, msg
+        assert "test_error_msg.py:" in msg, msg
+        assert msg.index("???") < msg.index("op: code"), msg
 
 
 

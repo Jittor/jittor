@@ -67,14 +67,20 @@ class TestConcatOp(unittest.TestCase):
             a = jt.random((n,n,n,n))
             a.sync()
             m = n // size
-            arr = []
-            for i in range(m):
-                arr.append(a[(slice(None),)*dim + (slice(i*size,i*size+size),)])
-            b = jt.concat(arr, dim)
-            if backward:
-                loss = b * a
-                b = jt.grad(loss, a)
+            # The graph is built *inside* the scope. Built outside, a
+            # graph large enough for `auto_flush_ops` to fire has already run
+            # by the time the scope opens, the profiler records nothing, and
+            # the bandwidth below divides by zero -- which is how KI-EXEC-002
+            # was found. `profile_scope` now warns when it records nothing,
+            # but the fix for a measurement is to measure the right window.
             with jt.profile_scope(1, 0) as rep:
+                arr = []
+                for i in range(m):
+                    arr.append(a[(slice(None),)*dim + (slice(i*size,i*size+size),)])
+                b = jt.concat(arr, dim)
+                if backward:
+                    loss = b * a
+                    b = jt.grad(loss, a)
                 b.sync()
             # print(rep)
             i = rep[0].index("TotalTime")
@@ -123,14 +129,20 @@ class TestConcatOp(unittest.TestCase):
             a = jt.random((n,n,n,n))
             a.sync()
             m = n // size
-            arr = []
-            for i in range(m):
-                arr.append(a.getitem((slice(None),)*dim + (slice(i*size,i*size+size),)))
-            b = concat2(arr, dim)
-            if backward:
-                loss = b * a
-                b = jt.grad(loss, a)
+            # The graph is built *inside* the scope. Built outside, a
+            # graph large enough for `auto_flush_ops` to fire has already run
+            # by the time the scope opens, the profiler records nothing, and
+            # the bandwidth below divides by zero -- which is how KI-EXEC-002
+            # was found. `profile_scope` now warns when it records nothing,
+            # but the fix for a measurement is to measure the right window.
             with jt.profile_scope(1, 0) as rep:
+                arr = []
+                for i in range(m):
+                    arr.append(a.getitem((slice(None),)*dim + (slice(i*size,i*size+size),)))
+                b = concat2(arr, dim)
+                if backward:
+                    loss = b * a
+                    b = jt.grad(loss, a)
                 b.sync()
             # print(rep)
             i = rep[0].index("TotalTime")

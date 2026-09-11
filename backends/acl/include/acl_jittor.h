@@ -43,6 +43,18 @@ namespace jittor
         float eps;
     };
 
+    struct FusedSgdAttr : AclOpAttr
+    {
+        int64_t tensorCount;
+        float lr;
+        float momentum;
+        float weightDecay;
+        float dampening;
+        bool nesterov;
+        bool maximize;
+        bool isFirstStep;
+    };
+
     struct ConvAttr : AclOpAttr
     {
         vector<int64_t> convStrides;

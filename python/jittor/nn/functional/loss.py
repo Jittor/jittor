@@ -1,6 +1,7 @@
 """Functional loss implementations exposed through :mod:`jittor.nn`."""
 
 import jittor as jt
+from jittor._runtime.dispatch import try_dispatch
 
 from .vector import cosine_similarity
 
@@ -53,6 +54,10 @@ def _legacy_reduction(reduction, size_average, reduce):
 
 
 def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='mean'):
+    fast = try_dispatch("nn.cross_entropy_loss", output, target, weight=weight,
+                        ignore_index=ignore_index, reduction=reduction)
+    if fast is not None:
+        return fast
     target_shape = target.shape
     if len(output.shape) == 4:
         c_dim = output.shape[1]

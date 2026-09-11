@@ -1,5 +1,7 @@
 """Schemas for production ACL runners using the CodeOp data channel."""
 
+from types import MappingProxyType
+
 from .acl_data import AclDataInternalError, SCHEMA_VERSION, encode_code_data
 
 
@@ -19,6 +21,7 @@ SCHEMAS = {
         "convDilations": {"type": "int64[]"},
         "group": {"type": "int64"},
         "convOutPads": {"type": "int64[]"},
+        "cube_math_type": {"type": "int64"},
     },
     "Conv2dBackward": {
         "convStrides": {"type": "int64[]"},
@@ -26,6 +29,7 @@ SCHEMAS = {
         "convDilations": {"type": "int64[]"},
         "group": {"type": "int64"},
         "convOutPads": {"type": "int64[]"},
+        "cube_math_type": {"type": "int64"},
     },
     "BatchNorm": {
         "is_train": {"type": "bool"},
@@ -191,7 +195,64 @@ SCHEMAS = {
 }
 
 
+def _cache_key(value):
+    """Hashable canonical form of an attribute value, or None when unhashable.
+
+    Values reaching here are ints, bools, floats, short strings and small
+    integer sequences, so the key is cheap next to re-encoding the payload.
+    """
+    if isinstance(value, float):
+        # 0.0 and -0.0 are equal and hash equal, yet they encode to different
+        # doubles. Sharing one entry between them would hand back a payload
+        # carrying the wrong sign, so a zero keeps its sign in the key.
+        return value if value else repr(value)
+    if isinstance(value, (bool, int, str)):
+        return value
+    item = getattr(value, "item", None)
+    if item is not None and getattr(value, "shape", None) == ():
+        return item()
+    if isinstance(value, (list, tuple)) or getattr(value, "shape", None) is not None:
+        parts = []
+        for element in value:
+            key = _cache_key(element)
+            if key is None:
+                return None
+            parts.append(key)
+        return (tuple, tuple(parts))
+    return None
+
+
+#: Encoded payloads keyed by (runner, prefix, attribute values). The encoding is
+#: a pure function of those, and it ran three times per matmul -- once for the
+#: forward program and once for each gradient program -- on every single call.
+#: The stored mappings are handed out read-only; every consumer copies entries
+#: out of them.
+_ENCODED_ATTRIBUTES = {}
+
+
 def attribute_data(name, attributes, *, prefix="acl_attr."):
+    key = None
+    if isinstance(attributes, dict):
+        fields = []
+        for field in sorted(attributes):
+            value = _cache_key(attributes[field])
+            if value is None:
+                fields = None
+                break
+            fields.append((field, value))
+        if fields is not None:
+            key = (name, prefix, tuple(fields))
+            cached = _ENCODED_ATTRIBUTES.get(key)
+            if cached is not None:
+                return cached
+    encoded = _attribute_data_uncached(name, attributes, prefix=prefix)
+    if key is not None:
+        encoded = MappingProxyType(encoded)
+        _ENCODED_ATTRIBUTES[key] = encoded
+    return encoded
+
+
+def _attribute_data_uncached(name, attributes, *, prefix="acl_attr."):
     try:
         schema = SCHEMAS[name]
     except KeyError:
@@ -233,14 +294,51 @@ def attribute_payloads(payloads):
 
 
 class AttributeCode:
-    """Structural source plus typed data; never converts values back to C++."""
+    """Structural source plus typed data; never converts values back to C++.
 
-    def __init__(self, source, data):
+    ``key`` identifies a fragment that was built from cached, immutable inputs,
+    which lets code_program memoise the programs assembled out of them.
+    """
+
+    def __init__(self, source, data, key=None):
         self.source = source
         self.data = data
+        self.key = key
+
+
+#: Assembled programs keyed by their fragments. A runner program is rebuilt on
+#: every op construction, and joining the sources plus merging ~20 data lanes
+#: was the largest remaining python cost per ACL operator.
+_ASSEMBLED_PROGRAMS = {}
+
+
+def _program_key(parts):
+    key = []
+    for part in parts:
+        if isinstance(part, AttributeCode):
+            if part.key is None:
+                return None
+            key.append(part.key)
+        else:
+            key.append(str(part))
+    return tuple(key)
 
 
 def code_program(parts):
+    parts = list(parts)
+    key = _program_key(parts)
+    if key is not None:
+        cached = _ASSEMBLED_PROGRAMS.get(key)
+        if cached is not None:
+            return cached
+    program = _code_program_uncached(parts)
+    if key is not None:
+        program.key = key
+        _ASSEMBLED_PROGRAMS[key] = program
+    return program
+
+
+def _code_program_uncached(parts):
     import struct
 
     source, data = [], {}
@@ -256,7 +354,32 @@ def code_program(parts):
     return AttributeCode("".join(source), data)
 
 
+_ATTRIBUTE_PROGRAMS = {}
+
+
 def attribute_program(name, attributes, *, variable="op", slot=None):
+    key = None
+    if isinstance(attributes, dict):
+        values = []
+        for field in sorted(attributes):
+            value = _cache_key(attributes[field])
+            if value is None:
+                values = None
+                break
+            values.append((field, value))
+        if values is not None:
+            key = ("program", name, variable, slot, tuple(values))
+            cached = _ATTRIBUTE_PROGRAMS.get(key)
+            if cached is not None:
+                return cached
+    program = _attribute_program_uncached(name, attributes, variable=variable, slot=slot)
+    if key is not None:
+        program.key = key
+        _ATTRIBUTE_PROGRAMS[key] = program
+    return program
+
+
+def _attribute_program_uncached(name, attributes, *, variable="op", slot=None):
     if not isinstance(variable, str) or not variable.isidentifier():
         raise AclDataInternalError("ACL runner variable must be an identifier")
     slot = slot or name + "_" + variable

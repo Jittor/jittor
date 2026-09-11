@@ -40,8 +40,8 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
     if (name == "Cumsum") return {{"dim", required(Type::int64)}};
     if (name == "Gather") return {{"dim", required(Type::int64)}};
     if (name == "Scatter") return {{"axis", required(Type::int64)}, {"reduction", required(Type::int64)}};
-    if (name == "Conv2d") return {{"convStrides", required(Type::int64_vector)}, {"convPads", required(Type::int64_vector)}, {"convDilations", required(Type::int64_vector)}, {"group", required(Type::int64)}, {"convOutPads", required(Type::int64_vector)}};
-    if (name == "Conv2dBackward") return {{"convStrides", required(Type::int64_vector)}, {"convPads", required(Type::int64_vector)}, {"convDilations", required(Type::int64_vector)}, {"group", required(Type::int64)}, {"convOutPads", required(Type::int64_vector)}};
+    if (name == "Conv2d") return {{"convStrides", required(Type::int64_vector)}, {"convPads", required(Type::int64_vector)}, {"convDilations", required(Type::int64_vector)}, {"group", required(Type::int64)}, {"convOutPads", required(Type::int64_vector)}, {"cube_math_type", required(Type::int64)}};
+    if (name == "Conv2dBackward") return {{"convStrides", required(Type::int64_vector)}, {"convPads", required(Type::int64_vector)}, {"convDilations", required(Type::int64_vector)}, {"group", required(Type::int64)}, {"convOutPads", required(Type::int64_vector)}, {"cube_math_type", required(Type::int64)}};
     if (name == "BatchNorm") return {{"is_train", required(Type::boolean)}, {"momentum", required(Type::float64)}, {"eps", required(Type::float64)}};
     if (name == "BatchNormBackward") return {{"is_train", required(Type::boolean)}, {"momentum", required(Type::float64)}, {"eps", required(Type::float64)}};
     if (name == "LayerNorm") return {{"eps", required(Type::float64)}, {"normalizedShape", required(Type::int64_vector)}};
@@ -155,6 +155,7 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         attr->convDilations = fields.at("convDilations").int_values;
         attr->group = fields.at("group").int_value;
         attr->convOutPads = fields.at("convOutPads").int_values;
+        acl_set_cube(op, fields.at("cube_math_type").int_value, 0);
         op.op_attr=std::move(attr);
         op.jt_name="conv2d";
         return;
@@ -166,6 +167,7 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         attr->convDilations = fields.at("convDilations").int_values;
         attr->group = fields.at("group").int_value;
         attr->convOutPads = fields.at("convOutPads").int_values;
+        acl_set_cube(op, fields.at("cube_math_type").int_value, 0);
         op.op_attr=std::move(attr);
         op.jt_name="conv2dbackward";
         return;
@@ -526,8 +528,12 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
 template<class Runner, class Map>
 void apply_acl_code_attributes(Runner& op, const Map& data,
                                const string& prefix="acl_attr.", const string& schema_name="") {
-    const string name=schema_name.empty() ? op.name : schema_name;
-    auto decoded=acl_data::decode_code_data(data, name, acl_code_attribute_schema(name), prefix);
+    // The payload map is rebuilt but never changed between executions of the
+    // same kernel, so decode once per distinct payload. The schema is built
+    // inside the lambda so a memo hit skips that map construction as well.
+    const string& name=schema_name.empty() ? op.name : schema_name;
+    const auto& decoded=acl_data::decode_code_data_memoized(
+        data, name, [&name] { return acl_code_attribute_schema(name); }, prefix);
     assign_acl_code_attributes(op, decoded);
 }
 } // namespace jittor

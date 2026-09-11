@@ -25,6 +25,11 @@ TEST_ROOT = REPO_ROOT / "tests"
 _ALLOWED_COLLECTION_GENERATORS = {
     ("backends/parity/test_device_parity.py", "_install"),
     ("codegen/test_jit_tests.py", "_install_jit_tests"),
+    # Reads the module graph the `try:` above just imported -- no device, no
+    # compile, no filesystem -- and its answer decides a base class
+    # (`class _Tiny(nn.Module if _HAS else object)`), which the interpreter
+    # needs before any test exists to defer it to.
+    ("../compat/tests/torch/test_peft.py", "_is_active_jittor_frontend"),
 }
 _PURE_COLLECTION_QUERIES = {
     "bool",
@@ -83,8 +88,57 @@ def _is_main_guard(node):
     )
 
 
+def _signature_defaults(arguments):
+    """Default values -- evaluated once, when the ``def`` itself runs."""
+    for default in arguments.defaults:
+        yield default
+    for default in arguments.kw_defaults:
+        if default is not None:
+            yield default
+
+
+def _definition_time_children(node):
+    """The parts of a ``def``/``class``/``lambda`` that importing already runs.
+
+    Returns ``None`` for anything else, which is how the caller tells "this is
+    a definition, descend only into these" from "this is an ordinary
+    statement".
+
+    The scanner used to stop dead at the ``def`` and ``class`` keywords, on the
+    theory that their bodies are deferred. The bodies are; three things bolted
+    to the definition are not, and all three can run Jittor during collection:
+
+    * **decorator expressions.** ``@pytest.mark.parametrize("x", [jt.array(1)])``
+      builds that list before pytest has seen the test at all, and
+      ``@pytest.mark.skipif(_probe(), ...)`` calls ``_probe()`` in the same
+      breath. Decorators on *methods* run too -- the class body executes.
+    * **the class body.** ``class T: cases = _build()`` is a collection-time
+      call that happens to be indented.
+    * **default argument values.** ``def t(x=jt.array(1))`` evaluates the
+      default at definition time, not per call.
+
+    A lambda is the single case where the body really is deferred; its
+    defaults still are not, so it is entered for those alone.
+    """
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return list(node.decorator_list) + list(_signature_defaults(node.args))
+    if isinstance(node, ast.Lambda):
+        return list(_signature_defaults(node.args))
+    if isinstance(node, ast.ClassDef):
+        return (
+            list(node.decorator_list)
+            + list(node.bases)
+            + [keyword.value for keyword in node.keywords]
+            + list(node.body)
+        )
+    return None
+
+
 def _runtime_nodes(node):
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+    definitions = _definition_time_children(node)
+    if definitions is not None:
+        for child in definitions:
+            yield from _runtime_nodes(child)
         return
     if isinstance(node, ast.If) and _is_main_guard(node.test):
         for child in node.orelse:
@@ -351,6 +405,29 @@ def test_complete_suite_runner_owns_cpu_and_process_mode_environment(monkeypatch
     assert native["TMPDIR"] != torch["TMPDIR"]
 
 
+def test_torch_structure_selection_does_not_report_native_only_files_as_empty(monkeypatch):
+    policy = _load_test_conftest()
+    from _helpers import gate_scope
+
+    selected = {
+        "tests/structure/test_pytest_contract.py",
+        "tests/structure/backends/acl/test_acl_dtype_preservation.py",
+    }
+    monkeypatch.setattr(gate_scope, "selected_files", lambda root, arguments: selected)
+    monkeypatch.setattr(policy, "_torch_mode_is_active", lambda: True)
+    policy._SELECTED_FILES.clear()
+    config = SimpleNamespace(
+        invocation_params=SimpleNamespace(dir=REPO_ROOT),
+        args=["tests/structure"],
+        option=SimpleNamespace(ignore=[]),
+    )
+
+    policy._snapshot_selected_files(config)
+
+    assert "tests/structure/test_pytest_contract.py" in policy._SELECTED_FILES
+    assert "tests/structure/backends/acl/test_acl_dtype_preservation.py" not in policy._SELECTED_FILES
+
+
 def test_complete_suite_runner_retries_a_zero_exit_cold_cache_refresh():
     module = _load_test_suite_runner()
     refreshed = SimpleNamespace(returncode=0, stdout="jit_utils updated, rerun\n")
@@ -473,12 +550,56 @@ def test_optional_dependency_probe_rejects_a_deployed_shim_as_real_torch(monkeyp
         assert not torch_runtime.modules_available("torch.autograd")
 
 
+#: Two shapes the mixin rule has to tell apart: a module-level private holder
+#: pytest *does* collect, and a function-local ``TestCase`` fixture it cannot
+#: reach. The second is why the scan is scoped rather than a plain
+#: ``ast.walk`` -- ``tests/runtime/test_capability_queries.py`` builds one to
+#: drive ``setUpClass`` by hand through a ``TestLoader``.
+_MIXIN_SHAPES = """\
+import unittest
+
+
+class _CollectedHolder(unittest.TestCase):
+    def test_body(self):
+        assert True
+
+
+def test_a_local_fixture_is_not_collectible():
+    class _LocalFixture(unittest.TestCase):
+        def test_body(self):
+            assert True
+
+    unittest.TestLoader().loadTestsFromTestCase(_LocalFixture)
+"""
+
+
+def test_the_mixin_rule_only_looks_where_pytest_collects():
+    names = [node.name for node in _collectible_classes(ast.parse(_MIXIN_SHAPES))]
+    assert names == ["_CollectedHolder"]
+
+
 def test_optimizer_roundtrip_helper_is_not_collected_as_a_test():
     path = TEST_ROOT / "optim" / "test_optimizer_save_load.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     module_tests = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
     assert "test_optim" not in module_tests
     assert "_run_optimizer_roundtrip" in module_tests
+
+
+def _collectible_classes(tree):
+    """Class definitions pytest could reach.
+
+    Module scope, plus classes nested inside those. A class defined in a
+    *function* body is built when that function runs and collection never sees
+    it -- so a test-local ``TestCase`` fixture, driven by hand through a
+    ``TestLoader``, is not the defect this rule is about. The rule used to walk
+    every node and report those too.
+    """
+    pending = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+    while pending:
+        node = pending.pop()
+        yield node
+        pending.extend(child for child in node.body if isinstance(child, ast.ClassDef))
 
 
 def test_private_test_method_holders_are_plain_mixins():
@@ -494,8 +615,8 @@ def test_private_test_method_holders_are_plain_mixins():
     offenders = []
     for path in _test_files():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.ClassDef) or not node.name.startswith("_"):
+        for node in _collectible_classes(tree):
+            if not node.name.startswith("_"):
                 continue
             has_tests = any(
                 isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -709,81 +830,158 @@ def test_test_modules_do_not_import_other_test_modules():
     )
 
 
+def _collection_side_effects(relative_text, tree):
+    """Backend side effects a bare ``import`` of this module would perform."""
+    violations = []
+    local_functions = {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    for statement in tree.body:
+        for node in _runtime_nodes(statement):
+            imported = []
+            if isinstance(node, ast.Import):
+                imported = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                imported = [node.module or ""]
+            for module in imported:
+                if module.startswith(_PROHIBITED_COLLECTION_IMPORT_PREFIXES):
+                    violations.append(
+                        "{}:{} imports {} during collection".format(
+                            relative_text, node.lineno, module
+                        )
+                    )
+            for target in _assignment_targets(node):
+                name = _dotted_name(target)
+                if name.startswith(("jt.flags.", "jittor.flags.")):
+                    violations.append(
+                        "{}:{} writes {} during collection".format(
+                            relative_text, node.lineno, name
+                        )
+                    )
+            value = _assignment_value(node)
+            if value is not None:
+                for call in ast.walk(value):
+                    if not isinstance(call, ast.Call):
+                        continue
+                    name = _dotted_name(call.func)
+                    allowed = (
+                        name in _PURE_COLLECTION_QUERIES
+                        or (
+                            relative_text,
+                            name,
+                        )
+                        in _ALLOWED_COLLECTION_GENERATORS
+                    )
+                    if name in local_functions and not allowed:
+                        violations.append(
+                            "{}:{} assigns result of local helper {} during collection".format(
+                                relative_text, call.lineno, name
+                            )
+                        )
+            if isinstance(node, ast.Call):
+                name = _dotted_name(node.func)
+                prohibited = (
+                    name in _PROHIBITED_COLLECTION_CALLS
+                    or name.startswith("subprocess.")
+                    or name.endswith(_PROHIBITED_COLLECTION_CALL_SUFFIXES)
+                )
+                if prohibited:
+                    violations.append(
+                        "{}:{} calls {} during collection".format(
+                            relative_text, node.lineno, name
+                        )
+                    )
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+                name = _dotted_name(node.value.func)
+                allowed = (relative_text, name) in _ALLOWED_COLLECTION_GENERATORS
+                if name in local_functions and not allowed:
+                    violations.append(
+                        "{}:{} invokes local helper {} during collection".format(
+                            relative_text, node.lineno, name
+                        )
+                    )
+    return violations
+
+
 def test_test_modules_avoid_collection_time_backend_side_effects():
     violations = []
     for path in _test_files():
-        relative = relative_test_path(path)
-        relative_text = relative.as_posix()
+        relative_text = relative_test_path(path).as_posix()
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        local_functions = {
-            node.name
-            for node in tree.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        }
-        for statement in tree.body:
-            for node in _runtime_nodes(statement):
-                imported = []
-                if isinstance(node, ast.Import):
-                    imported = [alias.name for alias in node.names]
-                elif isinstance(node, ast.ImportFrom):
-                    imported = [node.module or ""]
-                for module in imported:
-                    if module.startswith(_PROHIBITED_COLLECTION_IMPORT_PREFIXES):
-                        violations.append(
-                            "{}:{} imports {} during collection".format(
-                                relative_text, node.lineno, module
-                            )
-                        )
-                for target in _assignment_targets(node):
-                    name = _dotted_name(target)
-                    if name.startswith(("jt.flags.", "jittor.flags.")):
-                        violations.append(
-                            "{}:{} writes {} during collection".format(
-                                relative_text, node.lineno, name
-                            )
-                        )
-                value = _assignment_value(node)
-                if value is not None:
-                    for call in ast.walk(value):
-                        if not isinstance(call, ast.Call):
-                            continue
-                        name = _dotted_name(call.func)
-                        allowed = (
-                            name in _PURE_COLLECTION_QUERIES
-                            or (
-                                relative_text,
-                                name,
-                            )
-                            in _ALLOWED_COLLECTION_GENERATORS
-                        )
-                        if name in local_functions and not allowed:
-                            violations.append(
-                                "{}:{} assigns result of local helper {} during collection".format(
-                                    relative_text, call.lineno, name
-                                )
-                            )
-                if isinstance(node, ast.Call):
-                    name = _dotted_name(node.func)
-                    prohibited = (
-                        name in _PROHIBITED_COLLECTION_CALLS
-                        or name.startswith("subprocess.")
-                        or name.endswith(_PROHIBITED_COLLECTION_CALL_SUFFIXES)
-                    )
-                    if prohibited:
-                        violations.append(
-                            "{}:{} calls {} during collection".format(
-                                relative_text, node.lineno, name
-                            )
-                        )
-                if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
-                    name = _dotted_name(node.value.func)
-                    allowed = (relative_text, name) in _ALLOWED_COLLECTION_GENERATORS
-                    if name in local_functions and not allowed:
-                        violations.append(
-                            "{}:{} invokes local helper {} during collection".format(
-                                relative_text, node.lineno, name
-                            )
-                        )
+        violations.extend(_collection_side_effects(relative_text, tree))
     assert not violations, "collection must not execute tests or mutate backends:\n" + "\n".join(
         violations
     )
+
+
+#: A module written to break the rule in each of the three places a ``def`` or
+#: a ``class`` used to hide work that plain ``import`` already does. Carried as
+#: source rather than as a file under ``tests/``, so the suite-wide scan above
+#: stays clean while the scanner is still shown to have teeth. Line numbers are
+#: asserted below, so keep them in step when editing this.
+_COLLECTION_BLIND_SPOT_SOURCE = """\
+import pytest
+
+
+def _probe():
+    import jittor as jt
+    return jt.array([1.0]).sum().item() > 0
+
+
+@pytest.mark.parametrize("value", [jt.array([1.0])])
+def test_decorator_argument(value):
+    assert value is not None
+
+
+def test_default_argument(value=jt.array([2.0])):
+    assert value is not None
+
+
+class TestClassBody:
+
+    cases = _probe()
+
+    @pytest.mark.skipif(open("/proc/cpuinfo").read() == "", reason="probed early")
+    def test_method_decorator(self):
+        assert True
+
+
+class TestIndentedModuleLevelWork:
+
+    import triton
+
+    jt.flags.use_cuda = 1
+"""
+
+
+def test_the_collection_scanner_reaches_decorators_class_bodies_and_defaults():
+    """Three positions a ``def``/``class`` keyword used to hide from the scan.
+
+    Every statement named below runs on a bare ``import`` of that module, so
+    every one of them is what this rule exists to forbid. The scan used to
+    return *nothing* for any of them: it stopped at the ``def`` and ``class``
+    keywords, on the theory that their bodies are deferred -- true of the
+    bodies, false of the decorators, the class body and the default values
+    bolted to them.
+
+    The one deferred thing stays deferred: ``_probe`` calls ``jt.array`` in its
+    own body at line 6 and is not reported for it.
+    """
+    tree = ast.parse(_COLLECTION_BLIND_SPOT_SOURCE, filename="<blind-spot>")
+    found = _collection_side_effects("blind_spot.py", tree)
+
+    assert found == [
+        # a decorator argument, built before pytest has seen the test
+        "blind_spot.py:9 calls jt.array during collection",
+        # a default value, evaluated when the def executes
+        "blind_spot.py:14 calls jt.array during collection",
+        # a class body statement: module-level code that happens to be indented
+        "blind_spot.py:20 assigns result of local helper _probe during collection",
+        # a decorator on a method -- reached because the class body executes
+        "blind_spot.py:22 calls open during collection",
+        # an import and a flag write, indented into a class body and still live
+        "blind_spot.py:29 imports triton during collection",
+        "blind_spot.py:31 writes jt.flags.use_cuda during collection",
+    ], found

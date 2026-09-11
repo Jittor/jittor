@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct RandomOp : Op {
-    static constexpr uint32 backend_mask = OpBackendCpu;
+    // Accelerators reach this op either through their Random capability op
+    // (CUDA-family curand_random) or, when they run `random` themselves,
+    // through a native callback their composer installs on this entry.
+    static constexpr uint32 backend_mask = OpBackendAny;
     Var* output;
     NanoString type;
     RandomOp(NanoVector shape, NanoString dtype=ns_float32, NanoString type=ns_uniform);

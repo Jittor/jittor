@@ -382,11 +382,17 @@ def probe_device_agreement(jt, device):
 def probe_numerical_stability(jt, device):
     """Where the arithmetic is right but the *order* of it decides the answer.
 
-    `-Ofast` grants the compiler reassociation, so this is the neighbouring
-    category to KI-BACKEND-005: the same expression may be evaluated in a
-    different order than written, and for floating point that is not a
-    no-op. These check the cases where the difference is visible rather than
-    in the last bit.
+    Evaluation order is not fixed by the source: a reduction accumulates in
+    whatever shape the kernel emits, fusion hands the compiler a larger
+    expression than the one written, and CUDA contracts and reassociates under
+    `--use_fast_math`. For floating point none of that is a no-op. These check
+    the cases where the difference is visible rather than in the last bit.
+
+    The CPU half of this used to be the compiler's doing as well -- `-Ofast`
+    granted it reassociation outright -- which made this the neighbouring
+    category to KI-BACKEND-005. That flag is gone; CPU kernels build at `-O3`,
+    and the accuracy these cases ask about is now produced deliberately by
+    `BlockedReductionPass` instead of bought from a flag.
 
     Expectations come from float64 evaluated in NumPy -- the value the float32
     computation is trying to approximate -- with tolerances chosen so an honest
@@ -402,11 +408,17 @@ def probe_numerical_stability(jt, device):
 
     # Cancellation was checked here and withdrawn. `(big + small) - big` gave
     # 1.0 inside this probe and 0.0 when run on its own, on the same build:
-    # what the fusion pass does with the expression depends on what else is in
-    # the graph, so there is no stable expectation to assert. Reported as
-    # unverified rather than deleted -- the observation is real, the check is
+    # what the fusion pass did with the expression depended on what else was in
+    # the graph, so there was no stable expectation to assert. Reported as
+    # unverified rather than deleted -- the observation was real, the check is
     # not sound, and a probe that scores an unstable case is a probe that will
     # cry wolf.
+    #
+    # The cause was `-Ofast` reassociating the fused expression, and
+    # KI-BACKEND-005 removed it: `tools/fusion_consistency_sweep.py` went from
+    # 1 differing case to 12/12 identical on CPU with that change. So this is
+    # a candidate for reinstatement -- but as a fused-versus-unfused agreement
+    # check, which needs no expectation, rather than as a fixed expected value.
     RESULTS.append({
         "name": "cancellation order", "category": "stability",
         "status": "UNVERIFIED",

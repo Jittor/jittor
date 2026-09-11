@@ -100,28 +100,70 @@ def _mkl_batched_matmul(a, b, trans_a=False, trans_b=False):
     return get_library_ops("mkl").mkl_batched_matmul(a, b, trans_a, trans_b)
 
 
-def _check_matmul_shapes(a, b, trans_a=False, trans_b=False):
-    assert a.ndim > 0 and b.ndim > 0, "matmul operands must have at least one dimension"
-    inner_a = a.shape[0] if a.ndim == 1 else a.shape[-2 if trans_a else -1]
-    inner_b = b.shape[0] if b.ndim == 1 else b.shape[-1 if trans_b else -2]
-    assert inner_a == inner_b, f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
-    for left, right in zip(reversed(a.shape[:-2]), reversed(b.shape[:-2])):
-        assert left == right or left == 1 or right == 1, (
-            f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}")
+def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul"):
+    """Reject a product the two shapes cannot form, and say which dims disagree.
+
+    This is the operand boundary of every matrix product in the frontend, so it
+    is where the C++ standard applies: a caller mistake raises a catchable
+    ``RuntimeError`` -- the type torch raises for the same mistake and the type
+    ``USER_CHECK`` raises across the border in C++ -- and the message names the
+    operation, both operands with their dtype and shape, and *which* dim of
+    which operand is wrong.
+
+    It used to be three bare ``assert`` statements. ``AssertionError`` is the
+    wrong type twice over: ``python -O`` deletes the check altogether, and it is
+    the exception a broken invariant raises, not the one a caller catches. Two
+    of the three said only ``dimension not match, a.shape:[3,4,],
+    b.shape:[5,6,]`` -- the same sentence for a contracted dim and for a batch
+    dim, leaving the reader to work out which of the four numbers was the
+    complaint, and which of the several ops that share this helper had raised it.
+
+    Deliberately not a module-level helper: ``tests/nn/test_acl_registry_routing``
+    loads the routing functions of this file by name through the AST, so a
+    private function called from here would have to be named there too.
+    """
+    def describe(name, var):
+        return "%s:%s%s" % (name, var.dtype, list(var.shape))
+
+    if a.ndim == 0 or b.ndim == 0:
+        raise RuntimeError(
+            "%s: both operands need at least 1 dim, but got %s (%d-D) and "
+            "%s (%d-D)" % (op, describe("a", a), a.ndim,
+                           describe("b", b), b.ndim))
+    a_axis = 0 if a.ndim == 1 else (-2 if trans_a else -1)
+    b_axis = 0 if b.ndim == 1 else (-1 if trans_b else -2)
+    inner_a = a.shape[a_axis]
+    inner_b = b.shape[b_axis]
+    if inner_a != inner_b:
+        raise RuntimeError(
+            "%s: shapes cannot be multiplied, %s and %s: dim %d of a is %d but "
+            "dim %d of b is %d, and the two contracted dims must be equal"
+            % (op, describe("a", a), describe("b", b),
+               a_axis, inner_a, b_axis, inner_b))
+    for offset, (left, right) in enumerate(
+            zip(reversed(a.shape[:-2]), reversed(b.shape[:-2]))):
+        if left != right and left != 1 and right != 1:
+            raise RuntimeError(
+                "%s: batch dims do not broadcast, %s and %s: dim %d is %d in a "
+                "and %d in b, which must be equal or 1 in one of them"
+                % (op, describe("a", a), describe("b", b),
+                   -3 - offset, left, right))
 
 
 def matmul_transpose(a, b):
     """
     returns a * b^T
     """
-    _check_matmul_shapes(a, b, trans_b=True)
+    _check_matmul_shapes(a, b, trans_b=True, op="matmul_transpose")
     if len(a.shape) != 2:
         aa = a.reshape((-1, a.shape[-1]))
         cc = jt.nn.matmul_transpose(aa, b)
         return cc.reshape(a.shape[:-1] + (-1,))
-    assert len(a.shape) == 2 and len(b.shape) == 2, (
-        f"matmul_transpose expects two 2-D operands here, "
-        f"a.shape:{a.shape}, b.shape:{b.shape}")
+    if len(b.shape) != 2:
+        raise RuntimeError(
+            "matmul_transpose: b must be 2-D once a is, but got "
+            "a:%s%s and b:%s%s" % (a.dtype, list(a.shape),
+                                   b.dtype, list(b.shape)))
     fast = _matmul_2d_cublas(a, b, 0, 1)
     if fast is not None:
         return fast
@@ -138,10 +180,12 @@ def bmm_transpose(a, b):
     """
     returns a * b^T
     """
-    assert a.ndim > 2 and b.ndim > 2, (
-        f"bmm_transpose expects batched operands with more than 2 dimensions, "
-        f"a.shape:{a.shape}, b.shape:{b.shape}")
-    _check_matmul_shapes(a, b, trans_b=True)
+    if a.ndim <= 2 or b.ndim <= 2:
+        raise RuntimeError(
+            "bmm_transpose: both operands must have more than 2 dims (a batch "
+            "dim and a matrix), but got a:%s%s and b:%s%s"
+            % (a.dtype, list(a.shape), b.dtype, list(b.shape)))
+    _check_matmul_shapes(a, b, trans_b=True, op="bmm_transpose")
     # The amp_reg scope is matmul's and matmul_transpose's too. It is what tells
     # the reduce in the generic path below to keep its input dtype rather than
     # accumulate in float32, so leaving it off here made the same product depend
@@ -173,9 +217,11 @@ def bmm(a, b):
         b = jt.random((batch, m, k))
         c = nn.bmm(a, b)
     """
-    assert len(a.shape) > 2 and len(b.shape) > 2, (
-        f"bmm expects batched operands with more than 2 dimensions, "
-        f"a.shape:{a.shape}, b.shape:{b.shape}")
+    if len(a.shape) <= 2 or len(b.shape) <= 2:
+        raise RuntimeError(
+            "bmm: both operands must have more than 2 dims (a batch dim and a "
+            "matrix), but got a:%s%s and b:%s%s"
+            % (a.dtype, list(a.shape), b.dtype, list(b.shape)))
     return jt.nn.matmul(a, b)
 
 

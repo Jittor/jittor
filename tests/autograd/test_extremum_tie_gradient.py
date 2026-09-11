@@ -29,7 +29,6 @@ must not disturb either.
 
 from _helpers import capability as _test_capability
 
-import functools
 import unittest
 
 import numpy as np
@@ -37,31 +36,12 @@ import numpy as np
 import jittor as jt
 
 
-def _has_cuda():
-    return bool(_test_capability.check_accelerator('cuda', backend=jt).enabled)
-
-
-def requires_cuda(test):
-    """Check the accelerator at test time so collection stays side-effect free."""
-    if isinstance(test, type):
-        original = getattr(test, "setUp", None)
-
-        def setUp(self):
-            if not _has_cuda():
-                self.skipTest("a CUDA device is required")
-            if original is not None:
-                original(self)
-
-        test.setUp = setUp
-        return test
-
-    @functools.wraps(test)
-    def wrapped(self, *args, **kwargs):
-        if not _has_cuda():
-            self.skipTest("a CUDA device is required")
-        return test(self, *args, **kwargs)
-
-    return wrapped
+#: Probed when the case runs, not when the file is imported.
+#:
+#: ``unittest.skipUnless(_has_cuda(), ...)`` evaluated the probe in a decorator
+#: argument, which runs at *collection* -- where this suite forbids backend
+#: work -- and froze one answer for the whole process.
+requires_cuda = _test_capability.accelerator_required('cuda', backend=jt)
 
 
 class _TieContract:

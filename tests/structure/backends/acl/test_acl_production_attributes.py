@@ -217,8 +217,9 @@ def test_encoded_values_reach_real_cpp_attribute_types(pipeline, tmp_path):
                     "convDilations": [1, 2],
                     "group": 3,
                     "convOutPads": [0, 0],
+                    "cube_math_type": 1,
                 },
-                "dynamic_cast<ConvAttr*>(runner.op_attr.get())->group == 3 && dynamic_cast<ConvAttr*>(runner.op_attr.get())->convStrides[0] == 2",
+                "dynamic_cast<ConvAttr*>(runner.op_attr.get())->group == 3 && dynamic_cast<ConvAttr*>(runner.op_attr.get())->convStrides[0] == 2 && runner.cube_math_type == 1",
             ),
             (
                 "LayerNormBackward",
@@ -379,17 +380,31 @@ def test_complete_forward_backward_payloads_are_disjoint(pipeline):
     norms.GroupNormACL(3, 0.125)(x, weight, bias)
     first = calls[-1]
     assert "acl_attr.op" in " ".join(first["data"])
-    assert "apply_acl_code_attributes(op, data, \"acl_attr.\", \"GroupNormBackward\")" in first["cuda_grad_src"][0]
+    assert "apply_acl_code_attributes(op, data, \"acl_grad_attr.\", \"GroupNormBackward\")" in first["cuda_grad_src"][0]
+    # Disjoint means disjoint: the two records share one CodeOp data map, so a
+    # shared prefix would have the gradient encode overwrite the forward
+    # record's version/fields/field.N lanes and leave a stray op marker behind.
+    forward = {key[len("acl_attr."):] for key in first["data"]
+               if key.startswith("acl_attr.")}
+    gradient = {key[len("acl_grad_attr."):] for key in first["data"]
+                if key.startswith("acl_grad_attr.")}
+    assert forward and gradient
+    # The overlap is the point: version, fields and field.N.* carry the same
+    # names in both records, so one shared prefix would let the gradient
+    # encode overwrite the forward lanes and leave a second op marker that the
+    # forward decoder then rejects as an unknown key.
+    assert forward & gradient
+    assert len([key for key in first["data"] if ".op." in key]) == 2
     assert first["data"]["multi_grad"] == 1
     assert len(first["cuda_grad_src"]) == 1
     norms.LayerNormACL((6, 4), eps=0.125)(x, weight, bias)
-    assert "apply_acl_code_attributes(op, data, \"acl_attr.\", \"LayerNormBackward\")" in calls[-1]["cuda_grad_src"][0]
-    load("matmul_op").MatmulACL()(Tensor((2, 3)), Tensor((3, 4)))
-    assert len(calls[-1]["cuda_grad_src"]) == 2
-    assert "matmul_grad_x1" in " ".join(calls[-1]["data"])
-    assert "matmul_grad_x2" in " ".join(calls[-1]["data"])
-    load("transpose_op").TransPoseACL()(Tensor((2, 3, 4)), (1, 2, 0))
-    assert "transpose_backward" in " ".join(calls[-1]["data"])
+    assert "apply_acl_code_attributes(op, data, \"acl_grad_attr.\", \"LayerNormBackward\")" in calls[-1]["cuda_grad_src"][0]
+    # A product used to be the two-gradient CodeOp here, with its
+    # `matmul_grad_x1` / `matmul_grad_x2` payload slots, and a transpose used
+    # to follow it for the single-gradient shape. Both are core ops now --
+    # `mapped_matmul` and the `transpose` row of `acl_ops` -- and assemble no
+    # CodeOp payload at all, so the single-gradient case is carried by the
+    # upsample below.
     load("upsample_op").UpsampleNearest2dACL()(Tensor((1, 2, 3, 4)), (6, 8))
     assert "UpsampleNearest2dBackward_op" in " ".join(calls[-1]["data"])
     dropout = load("dropout_op").DropoutACL()

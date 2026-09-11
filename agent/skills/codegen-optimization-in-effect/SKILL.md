@@ -80,6 +80,12 @@ Ask the compiler directly whether the loop vectorized rather than inferring it:
 clang++ -Ofast -march=native -c x.cc -Rpass=loop-vectorize -o /dev/null
 ```
 
+Use **the flags the kernel actually ships with**, not the loudest ones. Jittor's
+CPU kernels build at `-O3 -march=native` since KI-BACKEND-005, not `-Ofast`;
+asking at `-Ofast` answers a question about a build nobody runs, and for
+reductions the two answers differ — `-ffast-math` licenses the reassociation
+that makes a reduction vectorizable at all.
+
 Give every variant the same `__restrict__`, the same alignment and the same
 buffers. A missing `__restrict__` on one variant silently makes the comparison
 about aliasing instead of about the store.

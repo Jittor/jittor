@@ -1,8 +1,10 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-09-09
-- Baseline: `7419412e2` plus KI-EXEC-001
+- Last reviewed: 2026-09-11 -- a documentation pass over id collisions and
+  statements the `-Ofast` removal made stale, not a re-verification of every
+  entry
+- Baseline: `2d716db31`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -128,30 +130,48 @@ framework defects.
 - Review/expiry condition: pass the same fixed-vector and OpInfo coverage on a
   real ROCm device, then remove this entry
 
-## KI-OPS-003: floor division truncates float operands to integers
+## KI-OPS-003: fixed -- floor division no longer truncates its float operands
 
-- Severity: Critical
-- Status: Reproduced, unfixed
-- Owner: binary operator maintainers
-- Evidence: `compat/tests/torch/test_division_remainder_family.py::
-  test_float_floor_divide_matches_numpy` (strict expected failure on CPU and CUDA)
-- Symptom: `floor_divide` casts float operands to integers before dividing, so
-  the fractional part is discarded and the result comes back as `int32` where
-  PyTorch returns a float. For `[-5.0, -2.7, -0.5, 2.7] // 2.0` the operator
-  returns `[-3, -1, 0, 1]` where `numpy.floor_divide` gives `[-3, -2, -1, 1]`.
-  The values match neither flooring nor truncation of the true quotient because
-  the truncation happens to the *operands*: `int(-2.7) // 2 == -1`, and
-  `int(-0.5) // 2 == 0`. Negative dividends whose magnitude is already an exact
-  multiple happen to come out right, which is why a positives-only or
-  whole-number check passes.
-- Distinct from [KI-OPS-002]: that entry covers the *integer* path, whose
-  flooring fix is verified on CPU, CUDA and a real 910B3. The integer path is
-  confirmed correct here; only float operands are affected.
-- Workaround: `(a / b).floor()` for float operands, which computes the quotient
-  first and keeps the floating result type
-- Review/expiry condition: float operands divide at full precision and return a
-  floating dtype, the strict expected failure above turns red, and this entry is
-  removed
+- Severity: was Critical (silently wrong answers from a published operator)
+- Status: Fixed and verified 2026-09-11
+- Owner: operator and dtype maintainers
+- What it was: `floor_divide` was listed in `int_ops` in
+  [`src/type/nano_string.cc`](../../src/type/nano_string.cc), which forces the
+  output dtype to int32. The kernel expansion casts *both operands* to the
+  output type before dividing, so the truncation landed on the inputs rather
+  than on the quotient. Measured on `17ae0a880`, identically on CPU and CUDA:
+
+  | | before | after | numpy |
+  | --- | --- | --- | --- |
+  | `-2.7 // 2.0` | **-1.0** | -2.0 | -2.0 |
+  | `-0.5 // 2.0` | **0.0** | -1.0 | -1.0 |
+  | output dtype | **int32** | float32 | float64 |
+
+  `-2.7 // 2.0` divided `int(-2.7) == -2` by 2. The other four float cases in
+  the probe and every integer case agreed before and after.
+- Why the dtype had to move too. `floor_divide`'s result is integer-*valued*
+  but carries the operands' dtype, the way `floor` does; numpy and torch both
+  answer a float for float operands. Leaving the output at int32 and only
+  fixing the expansion would have kept a second divergence.
+- The fix: remove `floor_divide` from `int_ops`, and give it a width-dispatched
+  expansion in the CPU, CUDA and fp16 tables that divides at full precision and
+  floors the quotient. Integers keep the existing truncate-and-correct helper.
+- Regression:
+  [`tests/ops/test_floor_divide.py`](../../tests/ops/test_floor_divide.py),
+  12 cases across both devices. Teeth: on the tree without the fix, 8 of the 12
+  fail (both `test_float_operands_divide_before_flooring` and
+  `test_float_tensor_divisor_and_mixed_dtypes`, on both devices, among others);
+  with it, 12 passed.
+- Attribution: `tests/ops` in native mode, before and after, separate caches --
+  39 failed before, 35 after, **no test went green to red**. The four that went
+  red to green (`test_concat2_perf`, `test_matmul::test_backward`,
+  `test_reshape`, `test_singular_input_raises_instead_of_reporting_through_info`)
+  are not plausibly this change and were most likely flaky under the parallel
+  load the two runs shared; they are not claimed as fixes.
+- Not done: the Torch-mode `tests/ops/test_ops.py` battery (1565 cases) was
+  running at 41% when the machine had to come down, so the before/after
+  comparison on that surface is missing. It is the one selection most likely to
+  notice the dtype change, since it compares dtypes against torch directly.
 
 ## KI-OPS-004: fixed -- reducing a rank-0 tensor returns its value
 
@@ -269,34 +289,43 @@ framework defects.
   10% of the `std::max` figures above on the same benchmark. Then this entry
   goes.
 
-## KI-OPS-007: the CUDA unary math table narrows float64 to float32
+## KI-OPS-007: fixed -- the CUDA unary math table dispatches on dtype
 
-- Severity: Critical
-- Status: Reproduced on CUDA, unfixed for every entry except `round`
-- Owner: unary operator maintainers
-- Evidence:
-  [`test_float64_unary_precision.py`](../../tests/ops/test_float64_unary_precision.py)
-  `::TestFloat64UnaryPrecisionCuda::test_unary_family_keeps_float64_precision`,
-  a strict expected failure; the CPU class of the same file passes, which is
-  what makes this a backend divergence rather than a shared limitation
-- Symptom: nearly every row of `common_op_type_cuda_map` in
-  [`common_op_type.cc`](../../src/type/common_op_type.cc) is the `f` -- that is,
-  single-precision -- spelling of its libm function: `::floorf`, `::ceilf`,
-  `::sqrtf`, `::expf`, `::logf`, `::sinf` and the rest. A float64 operand is
-  converted to float on the way in, so the result carries 24 mantissa bits
-  instead of 53. Above 2**24 the answer is not merely imprecise:
-  `jt.ceil(12345678901234.5)` is 12345678901235.0 on CPU and 12345679020032.0
-  on CUDA, and `jt.log(1.0000000000000002)` is 2.22e-16 on CPU and exactly 0.0
-  on CUDA.
-- Cause: the table was written for float32 and the width was never dispatched.
-  `round` now is -- `@if(@strcmp($1,float32)==0, ::rintf, ::rint)` -- and is the
-  shape the remaining rows need.
-- Workaround: run float64 unary math on CPU, or accept float32 accuracy and say
-  so. A float64 tensor whose values stay inside 2**24 is unaffected.
-- Review/expiry condition: the remaining rows dispatch on width the way `round`
-  does, keeping the `f` spelling for float32 so consumer GPUs -- where float64
-  throughput is a fraction of float32 -- do not pay for the fix; the strict
-  expected failure above turns red and this entry is removed.
+- Severity: was High (silent precision loss on CUDA for every float64 transcendental)
+- Status: Fixed 2026-09-11
+- Symptom it had: nineteen entries in the CUDA expression table spelled their
+  function with the float-only C variant -- `::logf`, `::expf`, `::sinf`,
+  `::tanhf`, `::erff` and so on -- whatever the operand's dtype. A float64
+  operand was narrowed to float32, evaluated at single precision and widened
+  back. Most inputs hide it; it shows where the answer lives below float32's
+  resolution:
+
+  ```
+  log(1 + 2**-51)   CPU 4.4408920985006252e-16   CUDA 0.0   NumPy 4.4408920985006252e-16
+  ```
+
+  `1 + 2**-51` is exactly `1.0` in float32, and `log(1.0)` is zero. Not
+  slightly off -- gone.
+- Cause: `round` had been given a dtype dispatch
+  (`@if(@strcmp($1,float32)==0, ::rintf(...), ::rint(...))`) at some point;
+  the other nineteen had not. `mod` had one too. The idiom existed in the file
+  and was applied to one row.
+- Fix: the same dispatch on the nineteen. For a float32 operand the template
+  emits exactly the `::xxxf` text it emitted before, so the single-precision
+  path is unchanged by construction; only float64 operands now reach the
+  double-precision function. `src/type/common_op_type.cc`.
+- Verified: `log`, `sqrt`, `sin`, `tanh`, `erf`, `exp` in float64 agree
+  **bit for bit** across CPU, CUDA and NumPy at inputs chosen to collapse in
+  float32. float32 `log`/`exp`/`sqrt`/`sin`/`tanh` over 1M elements unchanged
+  against NumPy (the ~1e-7 spread is `--use_fast_math`, present before and
+  after) and 23-25 us per call before and after.
+- Regression: `tests/ops/test_float64_unary_math.py`, both devices. Inputs
+  are chosen so the float32 answer is *qualitatively* wrong (zero, or equal to
+  the input) rather than merely less precise -- a tolerance test passes on the
+  old build for several of them. It also pins that the inputs really do
+  collapse in float32, and that float32 is unchanged. Reverting the table turns
+  it red: `log(1.0000000000000004) in float64 gave 0.0, NumPy gives
+  4.440892098500625e-16`.
 
 ## KI-OPS-008: the CPU max/min reduction starts from a finite identity
 
@@ -577,6 +606,66 @@ framework defects.
 - Review/expiry condition: the file reports 40 passed, or every remaining
   failure has an entry saying which side is wrong and why.
 
+## KI-EXEC-004: pipelined execution costs 43% more peak memory, and nobody measured it
+
+- Severity: Medium (a documented tradeoff is fine; an undocumented one decides
+  whether a batch size fits)
+- Status: Measured 2026-09-11, accepted and documented rather than changed
+- Owner: executor maintainers
+- Evidence: ResNet-50 one training step, batch 32, 224x224, fp32, TF32 off,
+  `jt.cudnn.set_benchmark(0)`, RTX 4090. Peak read by an external process
+  polling `cudaMemGetInfo` on the whole card, so both frameworks are on the
+  same yardstick:
+
+  | `auto_flush_ops` | peak | per step |
+  | --- | --- | --- |
+  | 0 (one submission) | 3.574 GiB | 0.0881 s |
+  | 128 (the default) | 5.104 GiB | 0.0600 s |
+  | 8 | 7.227 GiB | -- |
+  | 1 | 7.312 GiB | -- |
+
+  PyTorch 2.1.2 on the same step with `cudnn.benchmark=False` is 3.74 GiB. So
+  with the pipeline off the two are level, and the 1.5 GiB is the pipeline.
+- Where it goes, measured by stage rather than assumed. Cumulative device-wide
+  delta:
+
+  | stage | PyTorch | Jittor |
+  | --- | --- | --- |
+  | weights | 0.113 | 0.129 |
+  | + input batch | 0.133 | 0.148 |
+  | + forward | 2.816 | 3.025 |
+  | + backward | 3.262 | **5.104** |
+  | + optimizer state | 3.295 | 5.104 |
+
+  Weights and forward agree within 2%. The whole gap appears across the
+  backward. Eleven further steps move neither, so this is a steady-state peak
+  and not a leak. PyTorch's own `memory_allocated` falls from 2.676 to 0.230
+  across its backward, which is the mechanism: each activation is returned as
+  soon as its gradient has consumed it. A flush boundary keeps some activations
+  alive past their last consumer.
+- The direction is the opposite of the obvious guess, and the guess was made
+  and then refuted here. "Deferred execution holds more alive" predicts that
+  flushing sooner would help. It does the reverse: `N=1` is the most expensive
+  setting measured, and full laziness the cheapest. Handed the whole graph, the
+  scheduler can see every tensor's last consumer.
+- Why it was not caught when the pipeline landed (`780c19898`, 2026-09-02).
+  That commit measured wall-clock against PyTorch across five models and a vLLM
+  decode, recorded the semantics it preserves, and says how to reproduce the
+  timings. It does not mention peak memory. This is the third consequence of
+  that one change to be found afterwards, after KI-EXEC-001 (a control-only op
+  held to a compute op's rules) and KI-EXEC-003 (early submission changes
+  residency, cuDNN picks by measured residency, gradients move).
+- Workaround: `jt.flags.auto_flush_ops = 0` when memory is the binding
+  constraint. It is the first switch to try on an accelerator OOM, and the
+  accelerator's OOM message now says so.
+- Review/expiry condition: either the flush boundary stops extending
+  activation lifetimes -- the segment scheduler returns an input whose
+  consumers have all run within the segment -- or a test pins the ratio so a
+  regression past 43% is reported. Measured at one point (batch 32); the
+  absolute gap will grow with batch and resolution, the ratio need not.
+  Nothing here identifies *which* tensors outlive their segment; that needs
+  `use_stat_allocator` lifetimes and was not done.
+
 ## KI-EXEC-003: cuDNN autotuning is not isolated from execution scheduling
 
 - Severity: High (silent, deterministic change to training numerics)
@@ -624,216 +713,129 @@ framework defects.
   has the same property and **says so in its documentation**; here the coupling
   is undocumented and reached through a flag that reads as a scheduling knob.
 - Related, same flag: [KI-EXEC-001] and [KI-EXEC-002].
-- Review/expiry condition: either the algorithm chosen for a given shape does
-  not depend on what else is resident -- measure into a scratch buffer of a
-  fixed size, or key the cache on something stable -- or the coupling is stated
-  where users of `cudnn_benchmark` and `auto_flush_ops` will read it, with the
-  observed magnitude. A regression sweeps `auto_flush_ops` and compares
-  **gradients**, not the loss.
+- The "state it where users will read it" half of the exit condition is done
+  as of 2026-09-11: `docs/notes/numerics-contract.md` carries the measured
+  table, the `set_benchmark(0)` workaround and the discipline that a numeric
+  comparison across a residency-changing flag must hold the autotuner still.
+  What keeps this entry open is the coupling itself and the unexplained
+  residue above.
+- Review/expiry condition: the algorithm chosen for a given shape does not
+  depend on what else is resident -- measure into a scratch buffer of a fixed
+  size, or key the cache on something stable. A regression sweeps
+  `auto_flush_ops` and compares **gradients**, not the loss.
 
-## KI-EXEC-002: the profiler cannot see work that `auto_flush_ops` already launched
+## KI-EXEC-002: fixed -- the profiler no longer loses flushed work, and says when it measured nothing
 
-- Severity: High (measurements are silently partial; two gates are permanently red)
-- Status: Reproduced, unfixed
-- Owner: executor and profiling maintainers
-- Evidence: CUDA, a 64x64x64x64 float32 tensor sliced and concatenated, then
+- Severity: was High (measurements silently partial; two gates permanently red)
+- Status: Fixed 2026-09-10 for the half that is fixable; the other half is now
+  stated rather than silent.
+- Symptom it had: CUDA, a 64x64x64x64 tensor sliced and concatenated, then
   differentiated. Same expression at each row; only the number of slices moves.
 
-  | slices | rows `jt.profile_scope` reported | wall clock inside the scope |
-  | --- | --- | --- |
-  | 1, 2, 8 | 6-7 | 0.09-0.12s |
-  | **16, 32, 64** | **0** | **0.0003-0.025s** |
+  | slices | rows `jt.profile_scope` reported |
+  | --- | --- |
+  | 1, 2, 8 | 6-7 |
+  | **16, 32, 64** | **0** |
 
-  The result is correct at every row -- `b.numpy().sum()` is right -- so the
-  work happened. It happened *before the scope opened*.
-- Cause, established without a rebuild by moving one flag:
+  The result was correct at every row, so the work happened -- outside the
+  scope. `auto_flush_ops` (`src/core/executor.cc`, default 128, CUDA only)
+  launches everything pending once that many operators have been built, so a
+  graph constructed before `with jt.profile_scope()` may already have run by
+  the time the scope opens.
+- Fix, two parts, because the problem has two:
+  * **Work built inside the scope is no longer launched behind the profiler's
+    back.** `profile_scope` now sets `auto_flush_ops=0` for its duration unless
+    the caller overrides it. Profiling is a measurement; the pipelining it
+    would otherwise measure is not what is being asked about. With the graph
+    built inside the scope, 64 and 32 slices went from **0 rows to 9**.
+  * **A report with no operators is no longer silent.** Nothing can recover
+    work that ran before the scope opened, but the scope can say so: it now
+    raises a `RuntimeWarning` naming the cause and what to do about it. "It ran
+    fast" and "nothing was measured" used to be the same output.
+- The two gates it kept red: `tests/ops/test_concat_op.py::test_concat_perf`
+  and `::test_concat2_perf` divided the transferred bytes by the profiler's
+  total and failed with `ZeroDivisionError` on every run -- a message naming
+  neither the profiler nor the cause. Both now build their graph **inside** the
+  scope, which is the right window to measure anyway, and the file passes
+  3/3.
+- Residual, stated: a graph built before the scope still cannot be measured.
+  That is inherent -- the work is gone -- and the warning is the honest
+  answer rather than a fix.
+- Same flag, still open: [KI-EXEC-003] (cuDNN autotuning is not isolated from
+  scheduling). [KI-EXEC-001] is fixed.
+- Review/expiry condition: met -- a profile over a graph built inside the scope
+  accounts for its operators at any size, and one that measures nothing says so.
+
+## KI-EXEC-001: fixed -- a control-only op is no longer held to a compute op's rules
+
+- Severity: was Critical (segfault; ResNet50-class backbones did not run on CUDA)
+- Status: Fixed 2026-09-10
+- Symptom it had: five bottleneck blocks segfaulted at `auto_flush_ops` 1, 16,
+  32 and **128, the shipping default**, while 64 and 256 happened not to.
+  Deterministic per setting, five runs each. JSeg and JDet both crashed with a
+  ResNet50 backbone while JSeg's ResNet18 passed. That is what made it read as
+  "past a graph-size threshold": the threshold was not a size, it was the first
+  place the cut landed on a tape.
 
   ```
-  auto_flush_ops=128  slices=64  rows=0  total=0
-  auto_flush_ops=0    slices=64  rows=9  total=37740746
-  auto_flush_ops=128  slices=32  rows=0  total=0
-  auto_flush_ops=0    slices=32  rows=9  total=17530765
+  Allocator::is_cuda()          src/mem/allocator.h:35     <- segfault
+  run_exec_plan                 src/core/exec_runner.cc:331
+  Executor::run_sync            src/core/executor.cc
+  Executor::submit_pending      src/core/executor.cc
+  schedule_pending_from_python  src/core/var_holder.cc:62
+  to_py_object<VarHolder*>      src/bindings/pyjt/py_converter.h:626
   ```
 
-  `auto_flush_ops` (`src/core/executor.cc`, default 128, CUDA only) launches
-  everything pending once that many operators have been created since the
-  executor last ran, so the device computes while Python keeps building. It is
-  a deliberate pipelining feature and it does what it says. What it also does
-  is end the guarantee that a lazily built graph is still pending when the
-  caller comes to run it: build more than ~128 operators' worth of graph and
-  part of it has already executed, outside whatever scope the caller is about
-  to open.
-- Symptom: `jt.profile_scope` returns a report with no rows and no warning.
-  Anything dividing by the total gets a zero -- which is how this was found:
-  `tests/ops/test_concat_op.py::test_concat2_perf` and `::test_concat_perf`
-  fail with `ZeroDivisionError` at every run, and have been doing so long
-  enough that the failure reads as background noise.
-- Why it matters beyond those two tests: the graphs worth profiling are the
-  large ones, and those are exactly the ones that under-report. A profile that
-  came back empty is indistinguishable from one that came back fast, and the
-  report says nothing about the ops that were flushed before it started.
-- Introduced 2026-09-02 (`c9176652f`), so this is a refactor-era regression
-  rather than an old defect: the tests were written against fully lazy
-  execution and the flag changed what "pending" means underneath them.
-- Not the same as KI-EXEC-001, but the same shape and worth reading together:
-  behaviour that changes once a graph passes a size threshold, where nothing in
-  the API says a threshold exists.
-- Workaround: `jt.flag_scope(auto_flush_ops=0)` around graph construction *and*
-  execution. Setting it inside the profile scope alone does not help -- by then
-  the flush has already happened.
-- Review/expiry condition: a profile taken over a graph of any size either
-  accounts for every operator that ran, or says out loud that it did not; and
-  the two concat perf cases measure something again rather than dividing by
-  zero.
+  Not a GPU fault: `compute-sanitizer --tool memcheck` reported
+  `ERROR SUMMARY: 0 errors` on a run that segfaulted.
+- Cause: `Tapes` is a **control-only op**. It has no `run` and no `jit_run`; its
+  single output is a zero-sized Var wired as an edge into the producer of each
+  taped output, and it names the pre-tape Vars so the backward can reach them.
+  It reads none of their bytes, sets `_manual_set_vnbb`, and marks none of them
+  needed -- so the executor frees them once their real consumers finish, which
+  is correct. `run_exec_plan` then applied the rule for a *compute* op to it:
+  migrate every input to the device, and assert every input is backed. On a
+  freed Var the first of those is a null dereference. With the whole graph in
+  one batch the two never met; `auto_flush_ops` puts a `Tapes` in a batch whose
+  producers have already finished.
+- Fix: `OpFlags::_no_input_storage`, set by `Tapes` alone, and honoured by the
+  two places in `run_exec_plan` that walk `op->inputs()`. Three files, two
+  lines of behaviour.
+- Verified: no crash at `auto_flush_ops` 0, 1, 16, 32, 64, 128, 256 or 512 at
+  five blocks, nor at six, seven and eight blocks on the default. The loss is
+  **bit-identical** at every setting. With cuDNN autotuning disabled -- so the
+  comparison isolates this defect from [KI-EXEC-003] -- the gradient residue
+  across settings is at most `2e-6`, which is reassociation from different
+  batch boundaries.
 
-## KI-EXEC-001: CUDA segfaults when `auto_flush_ops` splits a pending graph
+### The first rejection of this fix was wrong, and how
 
-- Severity: Critical
-- Status: **Cause and crash site identified 2026-09-10; four candidate fixes
-  tried and rejected, each for a measured reason.** Workaround available.
-- Owner: executor and CUDA backend maintainers
+This exact fix was tried earlier the same day and rejected on the grounds that
+it "turns the crash into gradients wrong by 40-60% on individual elements".
+Both halves of that were the reviewer's error:
 
-### What is measured
+* the comparison ran with cuDNN autotuning **on**, and autotuning depends on
+  what is resident, which is what the flag under test changes -- worth `3.8e-4`
+  on the gradient norm all by itself ([KI-EXEC-003]);
+* "40-60%" came from dividing a maximum absolute difference by the gradient's
+  **RMS** rather than by the magnitude of the element it belonged to.
 
-`auto_flush_ops` is the cause. ResNet-shaped repro (five bottleneck blocks,
-512 -> 1024 channels), five runs per setting, `O` = pass and `X` = crash:
+Repeated with autotuning off, the residue is `2e-6`. The lesson is not
+"measure more" -- it is that a comparison across a flag that changes memory
+residency must first hold the autotuner still, and that a relative error needs
+the element it is relative to.
 
-| `auto_flush_ops` | 0 | 32 | 64 | 128 (default) | 256 |
-| --- | --- | --- | --- | --- | --- |
-| n=5 | OOOOO | XXXXX | OOOOO | XXXXX | OOOOO |
-
-Deterministic per value and **non-monotonic**: 64 passes while 32 and 128
-crash. So this is not "flushing is unsafe", it is *where the flush cuts*. That
-is why the defect read as "past a graph-size threshold" -- the threshold is not
-a size limit, it is the first place the cut lands badly.
-
-### Crash site
-
-Symbolised on a debug build:
-
-```
-Allocator::is_cuda()            src/mem/allocator.h:35     <- segfault
-run_exec_plan                   src/core/exec_runner.cc:331
-Executor::run_sync              src/core/executor.cc:317
-Executor::submit_pending        src/core/executor.cc:105
-schedule_pending_from_python    src/core/var_holder.cc:62
-to_py_object<VarHolder*>        src/bindings/pyjt/py_converter.h:626
-pyjt_def_jit_op_maker lambda    (an op maker returning its result to Python)
-```
-
-`exec_runner.cc:331` is the input-migration loop; `v->allocator` is null.
-Instrumented, the offending Var is always the same shape:
-
-```
-input var id=1821 shape=[1024] float32 finished=1 mem_ptr=0
-          inputop=contiguous  noutputs=1  consumer_op=tapes
-```
-
-A Var that has already run and been freed, whose one remaining consumer is a
-`Tapes` op. `Tapes` computes nothing: its only output is a zero-sized Var wired
-as a control edge into the producer of each taped output, and it names the
-pre-tape Vars so the backward can reach them. It sets `_manual_set_vnbb` and
-marks none of them needed, so freeing them is correct on its own terms -- and
-the runner requires every input of an executing op to be backed. With the whole
-graph in one batch the two never met.
-
-**Not a GPU fault.** `compute-sanitizer --tool memcheck` reports
-`ERROR SUMMARY: 0 errors` on a run that segfaults. This is host-side.
-
-### Four fixes tried and rejected
-
-1. **One target per `run_sync` instead of the whole selected set.** Still
-   crashes at n=5,6,7. The batch's *size* is not the trigger.
-2. **A flag saying the op reads no input bytes**, skipping the migration and
-   the `mem_ptr || size == 0` check for `Tapes`. Crash gone -- and the
-   gradients came back **wrong**. Against a no-flush baseline, 99.24% of
-   5,981,184 gradient elements differed, worst element by `1.5e-03`, and at
-   `auto_flush_ops=1`/`16`/`32` by `1.1e+01` and `6.9e+00` against a gradient
-   RMS of 18.7, i.e. 40-60% on individual elements. **The null allocator was
-   the executor correctly noticing that data it needed was gone.** Suppressing
-   the check converts a loud crash into silent training corruption, which is
-   worse. Reverted.
-3. **`_needed_by_backward` on the `Tapes` inputs**, so liveness keeps them.
-   Still segfaults. The flag does not keep the *memory* alive across a flush.
-4. **Stand the flush down while any `Tapes` is unresolved** (a counter,
-   incremented in the `Tapes` constructor, decremented when it runs).
-   Crashes gone at every setting and the loss is identical everywhere
-   (23080.078125), but the gradients still move:
-
-   | `auto_flush_ops` | 0 | 32 | 128 | 256 |
-   | --- | --- | --- | --- | --- |
-   | gradient norm | 45839.37890625 | **45822.23046875** | 45839.37109375 | 45839.37890625 |
-
-   0 and 256 agree bit for bit; 32 is off by 17 in 45839, `3.7e-4` relative.
-   So flushing still perturbs the backward by some other path. Not shipped: by
-   this repository's own standard a silent numeric divergence is worse than a
-   crash, and a fix that trades one for the other is not a fix. Reverted.
-
-### What is still true
-
-- Values that never crashed produce gradients matching the no-flush baseline to
-  `2.3e-05` on 5.98M elements (0.015% of elements differ). The **shipping
-  default of 128 is among the bad ones**; 64 and 256 are among the good ones,
-  and which is which depends on the model.
-- The minimal crashing shape is a pure elementwise chain --
-  `for _ in range(200): x = x * 1.0001 + 0.001` -- with no convolution,
-  BatchNorm or residual. It reproduces **intermittently**, unlike the ResNet
-  repro, which is deterministic per setting.
-- Ruled out by measurement: multiple targets per batch, BatchNorm's in-place
-  running-statistic updates (removing BatchNorm entirely still crashes), and
-  convolution.
-
-### Correction, 2026-09-10, after the cuDNN autotuning cause was found
-
-Two things above were wrong, and the record is more useful with them fixed.
-
-**The fourth attempt was judged on a confounded number.** "Stand the flush down
-while any `Tapes` is unresolved" was rejected because gradients still moved by
-`3.7e-4`. That spread was cuDNN autotuning ([KI-EXEC-003]), not the guard.
-Re-run with `set_benchmark(0)` -- which removes the algorithm-selection
-variable -- the guard's residue is `2e-6` at `auto_flush_ops` 16 and 32 and
-`9e-8` at 128, against gradient norms near 45822: reassociation from different
-batch boundaries, three hundred times smaller than the autotuning effect that
-is present whether or not this defect is fixed.
-
-**But the guard is still not a fix, for a different and better reason.**
-Instrumented, `pending_tapes` sat at 16 at every flush point and never came
-back down: the counter's decrement never fired, so after the first tapes were
-built the flush was off for the rest of the run. For a convolutional model --
-the only kind that reaches this defect -- the guard is `auto_flush_ops = 0`
-with extra steps. It disables the feature it is meant to preserve. Rejected on
-those grounds instead.
-
-**`auto_flush_ops=1` fails through a different path.** With the guard applied,
-16, 32, 64, 128 and 256 all pass and 1 still segfaults -- in the *forward*
-alone, and from a different stack:
-
-```
-run_exec_plan <- run_sync <- jittor::sync(vector<VarHolder*>) <- VarHolder::sync
-```
-
-That is the explicit `.sync()`, not `submit_pending`. So flushing after every
-single operator leaves the graph in a state the final synchronisation cannot
-execute, by some route other than the tape one. `1` is not a setting anyone
-uses, but it says the tape story is not the whole story.
-
-### Workaround
-
-`jt.flags.auto_flush_ops = 0`. It costs the pipelining the flag exists for and
-is correct: 0 is one of the settings whose gradients match.
-
-### Same flag, second defect
-
-[KI-EXEC-002] is `jt.profile_scope` reporting nothing for work this flush
-already launched. One flag introduced during the refactor (2026-09-02,
-`c9176652f`), two consequences.
-
-- Review/expiry condition: the repro passes for n in 4..8 **at the default
-  flag value**, gradients agree with the no-flush baseline at every setting on
-  a model containing tapes, both downstream ResNet50 backbones run a forward
-  and backward, and a regression covers a chain long enough to have crashed at
-  the default. A regression that sets the flag to 0 would pass on the unfixed
-  build and prove nothing.
+- Regression: `tests/backends/cuda/test_auto_flush_graph_split.py`. Each
+  setting runs in **its own process**, because the failure is a segfault: in
+  process it ends the suite rather than failing a case, and every later test
+  silently does not run. It asserts the loss is bit-identical **and** compares
+  gradients -- a fix that stops the crash while leaving the backward reading
+  the wrong bytes passes a "did it run" check and fails here, which is the
+  point. It disables cuDNN autotuning so a `3.8e-4` band does not hide
+  anything smaller. Reverting the fix turns it red with
+  `auto_flush_ops=1 produced no result`.
+- Still open on the same flag: [KI-EXEC-002] (the profiler cannot see flushed
+  work) and [KI-EXEC-003] (cuDNN autotuning is not isolated from scheduling).
 
 ## KI-OPS-010: fixed -- an index arriving in a Var is now checked against the dimension
 
@@ -889,43 +891,23 @@ already launched. One flag introduced during the refactor (2026-09-02,
   index still raises and `x[2:99]` still clamps. The CUDA out-of-range case
   runs in a subprocess because a device trap takes the context with it.
 
-## KI-BACKEND-007: CUDA `std`/`norm` return a small finite number instead of NaN
+## KI-BACKEND-007: fixed -- CUDA `std`/`norm` propagate NaN
 
-- Severity: Critical
-- Status: Reproduced, unfixed
-- Owner: CUDA backend and reduction maintainers
-- Evidence: no exotic input needed -- one NaN among ordinary numbers:
-
-  ```
-  jt.std([nan, 1.0, 2.0])      CPU nan      CUDA 0.0009999999310821295
-  ```
-
-  With `[nan, inf, -inf, 0.0, -0.0, 1.0, -1.0, 1e-45, 3.0, 3.0]`: `std` gives
-  `nan` on CPU and `0.001` on CUDA; `norm` gives `nan` on CPU and `1e-15` on
-  CUDA. NumPy agrees with CPU in both cases.
-- Symptom: a NaN anywhere in the tensor is absorbed and the result is a small
-  finite number. `0.001` and `1e-15` look like an epsilon the implementation
-  adds for numerical safety, which the NaN path collapses onto.
-- Why this is the dangerous shape: `std` is what normalisation layers compute.
-  When a NaN appears in activations, CPU propagates it and the run stops with an
-  obvious symptom; CUDA returns ~1e-3, the normalisation divides by it, and the
-  model produces enormous finite values instead. The training diverges for a
-  reason that no longer points at the NaN, on the device people actually train
-  on.
-- Same family as KI-BACKEND-004 (`maximum`/`minimum` swallowed NaN), which is
-  now fixed. This one is not: that was one expression-table row, while `std`
-  and `norm` are composed reductions whose NaN disappears somewhere along
-  `sum` -> `sqrt` rather than in a `max`, so the fix there does not reach it.
-  Re-check against the current tree before triaging further.
-- Found by: `tools/adversarial_device_sweep.py`, comparing every OpInfo operator
-  between CPU and CUDA on inputs built from NaN, both infinities, both signed
-  zeros and a subnormal. Seven operators disagreed; `std`, `norm` and
-  `lgamma` (which returns `inf` on CUDA for a subnormal where CPU gives the
-  correct 103.28) are the ones triaged so far.
-- Workaround: check for NaN explicitly before normalising on CUDA.
-- Review/expiry condition: `std` and `norm` return NaN on both devices whenever
-  the input contains one, a parity case covers a NaN-bearing reduction, and the
-  remaining four operators from that sweep are triaged.
+- Severity: was Critical
+- Status: Fixed 2026-09-10, as a consequence of [KI-BACKEND-004]
+- Symptom it had: `jt.std([nan, 1.0, 2.0])` gave `nan` on CPU and
+  `0.0009999999310821295` on CUDA; `norm` gave `nan` against `1e-15`. NumPy
+  agrees with CPU.
+- Cause: both are composed reductions that pass through the `maximum`/
+  `minimum` rows of the expression table, and CUDA's `::max` resolves to
+  `fmaxf`, whose IEEE `maxNum` semantics deliberately return the non-NaN
+  operand. The NaN was dropped inside the composition and the small finite
+  number is the epsilon the composition adds.
+- Fix: none of its own. With `maximum`/`minimum` propagating NaN the way NumPy
+  does, re-measured 2026-09-11: `std` and `norm` of `[nan, 1.0, 2.0]` are `nan`
+  on both devices.
+- Regression: covered by `tests/ops/test_minmax_nan_propagation.py` (the row
+  it passes through) and the semantic divergence probe's `std`/`norm` cases.
 
 ## KI-BACKEND-008: fixed -- the flush-to-zero decision is written down and asserted
 
@@ -948,7 +930,9 @@ already launched. One flag introduced during the refactor (2026-09-02,
   (`src/runtime/jit_policy.cc`) and **fully restores subnormals** -- measured,
   not assumed, and the `strict` column above is the measurement. The default
   is unchanged. What is new is that the behaviour is now stated in
-  `docs/notes/float32-precision-policy.md` and asserted by
+  `docs/notes/numerics-contract.md` (it was written into
+  `docs/notes/float32-precision-policy.md` first, and moved 2026-09-11 when the
+  numeric contracts were collected onto one page) and asserted by
   `tests/backends/parity/test_subnormal_contract.py`, so a change to it is
   visible instead of surfacing as a parity mismatch someone has to diagnose.
 - Cost of turning it off, RTX 4090, two interleaved rounds, minimum of five:
@@ -981,27 +965,151 @@ already launched. One flag introduced during the refactor (2026-09-02,
   flush for 1e-45`. A build where the policy switch did nothing cannot satisfy
   it, which is the failure mode a one-sided "CUDA flushes" assertion would miss.
 
-## KI-OPS-011: CPU `digamma` returns -inf where NaN and +inf are correct
+## KI-CLEANUP-001: the duplicate-implementation gate is red with 24 groups and no decision
+
+- Severity: Medium (a gate nobody can act on is a gate nobody reads)
+- Status: Reproduced and enumerated 2026-09-11, undecided
+- Owner: cleanup and packaging maintainers
+- Evidence:
+  `tests/structure/test_cleanup_structure.py::TestCleanupStructure::test_cross_file_duplicate_implementations_are_reviewed`
+  fingerprints every top-level function and class under `python/`, `backends/`
+  and `compat/` and requires each cross-file duplicate to be in one of three
+  allowlists. Three are; twenty-one are not, and the failure prints them as one
+  3300-character diff that truncates. Run on `57e243968`, the full list splits
+  into two kinds that want different answers:
+
+  **Shipped code, genuinely duplicated (13 groups)**
+
+  | duplicate | files |
+  | --- | --- |
+  | ten helpers, incl. `persistent_load`, `StorageType`, `jittor_rebuild_var`, `_check_seekable` | `python/jittor/serialization/load_pytorch.py` and `load_pytorch_old.py` |
+  | `BasicConv2d` | `python/jittor/models/googlenet.py` and `inception.py` |
+  | `can_broadcast_and_shape` | `backends/acl/kernels/ops/getitem_op.py` and `setitem_op.py` |
+  | `_ntuple` | already allowlisted |
+
+  The ten in `serialization/` are one decision, not ten: `load_pytorch_old.py`
+  is a kept older reader, so either it is still reachable and the shared
+  helpers should move to one module, or it is not and it should go.
+
+  **Test-local boilerplate under `compat/tests/` (8 groups)**
+
+  `_cuda_available` (3 files), `both_devices` (two groups covering ~10 files),
+  `Base` (five groups covering ~14 files), `_output_tensor` (2 files).
+
+- Symptom: the gate's own name says the duplicates should be *reviewed*, and
+  none of these has been. Because it asserts one list against another, a single
+  new duplicate anywhere produces the same undifferentiated failure, so the
+  gate currently reports "something is duplicated" and nothing more -- it
+  cannot tell a newly copied kernel from a test fixture that has been repeated
+  since before the ledger existed.
+- Note on scope. The gate scans `compat/`, which contains `compat/tests/`. A
+  test file repeating a four-line `Base` class is not the failure mode the gate
+  was built for, but excluding the tree outright would also stop it noticing a
+  real implementation copied into a test. Reporting the two kinds separately is
+  the shape that keeps both.
+- Workaround: none needed at runtime; this is a gate, not a defect in shipped
+  behaviour. Do not read its red as evidence of a new duplicate.
+- Review/expiry condition: every group above has an answer -- deduplicated, or
+  allowlisted with the reason written next to it -- and the gate distinguishes
+  a shipped-code duplicate from a test-tree one in its message, so the next
+  failure names what changed.
+
+## KI-BACKEND-009: CUDA cannot compile a logical or narrow-integer reduction
+
+- Severity: High (a whole family of reductions is unusable on CUDA, and the
+  message does not say which dtype or which operation is the problem)
+- Status: Reproduced 2026-09-11 on CUDA, unfixed. Pre-existing: the same twelve
+  cases fail identically on `cb0b5890d`, which predates today's dtype guards.
+- Owner: reduce operator and CUDA codegen maintainers
+- Evidence: every reduction in the published table crossed with six dtypes, on
+  both devices, one fresh process each, `location()` asserted so a silent fall
+  back to CPU could not be read as a pass. CPU answers all 66 combinations.
+  CUDA fails twelve, all with a compiler wall:
+
+  | operation | dtypes that fail on CUDA |
+  | --- | --- |
+  | `logical_and` | `uint8`, `float32`, `float64` |
+  | `logical_or` | `uint8`, `float32`, `float64` |
+  | `logical_xor` | `uint8`, `float32`, `float64` |
+  | `bitwise_and`, `bitwise_or`, `bitwise_xor` | `uint8` |
+
+  `bool`, `int32` and `int64` work for all of them on both devices, which is
+  why this was not noticed: those are the dtypes the tests use.
+- Symptom: `x.any_()`, `x.all_()` and the bitwise reductions are published API.
+  On CUDA, over a float or a `uint8`, they raise
+  `parallel_compiler.cc:339: Error happened during compilation` with an nvcc
+  transcript attached. The same call on CPU returns a value. So a program is
+  correct until it is moved to the accelerator, and what it then says is not
+  about dtypes.
+- Note on the two halves. The float cases are a *semantic* question as well:
+  CPU returns a float (`0.0`) for `logical_xor` over floats where a bool is the
+  defensible answer, so whichever way CUDA is fixed, the CPU dtype should be
+  decided at the same time. The `uint8` cases are not semantic at all -- the
+  operation is well defined there and CPU performs it.
+- Workaround: cast to `int32` or `bool` before reducing with a logical or
+  bitwise operation on CUDA.
+- Review/expiry condition: the 66-cell matrix above agrees between the two
+  devices, in value and in dtype, and a test holds it. The float rows may be
+  resolved by rejecting them on both devices with a sentence -- as
+  [`tests/ops/test_bitwise_dtype_guard.py`](../../tests/ops/test_bitwise_dtype_guard.py)
+  now does for the bitwise family -- provided CPU and CUDA answer the same way.
+
+## KI-OPS-011: fixed -- CPU `digamma` propagates NaN and signs its pole correctly
 
 - Severity: Medium
-- Status: Reproduced, unfixed
+- Status: Fixed by [`1e50d76c5`](#ki-backend-005), confirmed and pinned
+  2026-09-10. This entry was opened at 13:35 and the commit that fixed it
+  landed at 17:40 for a different reason; nobody connected them until the
+  values were measured again.
 - Owner: operator maintainers
-- Evidence: against `scipy.special.digamma` as the reference:
+- What it was: against `scipy.special.digamma` as the reference, on the
+  `-Ofast` tree (`cb0b5890d`, measured directly rather than recalled):
 
-  | input | CPU | CUDA | scipy |
-  | --- | --- | --- | --- |
-  | `nan` | **-inf** | `nan` | `nan` |
-  | `-0.0` | **-inf** | `inf` | `inf` |
+  | input | CPU before | CPU after | CUDA | scipy |
+  | --- | --- | --- | --- | --- |
+  | `nan` | **-inf** | `nan` | `nan` | `nan` |
+  | `-0.0` | **-inf** | `inf` | `inf` | `inf` |
 
-  CUDA is right in both rows and CPU is wrong; the other eight inputs agree.
-- Symptom: `digamma` of a NaN produces a finite-signed infinity rather than
-  propagating the NaN, so a NaN entering here is converted into a value that
-  looks like a legitimate pole. At `-0.0` the sign of the pole is inverted.
-- Notable for the direction: every other divergence this sweep found had CUDA
-  as the wrong side. Recorded because "CPU is the reference" is an assumption
-  the parity suite makes, and this is a counter-example to it.
-- Review/expiry condition: CPU `digamma` matches scipy for NaN and both signed
-  zeros, and the probe's device-agreement case covers it.
+  The other nine inputs in the probe agreed before and after. CUDA was right
+  throughout, on both trees.
+- Cause, and why it was not in `digamma`. The implementation writes all three
+  special answers out by hand:
+  [`python/jittor/contrib/math_util/gamma.py`](../../python/jittor/contrib/math_util/gamma.py)
+  returns `copysign(INFINITY, -x)` at a zero and `quiet_NaN()` at a negative
+  integer. Nothing in that source is wrong. It was compiled with `-Ofast`,
+  which implies `-ffinite-math-only`, a promise that no operand is ever
+  infinite or NaN -- so the compiler is free to decide the NaN comparisons
+  statically and to treat `-0.0` as `0.0`. Compiling the same function body
+  standalone with g++ 12.3 shows exactly this and nothing else:
+
+  | flags | `digamma(nan)` | `digamma(-0.0)` |
+  | --- | --- | --- |
+  | `-O3 -march=native` | `nan` | `inf` |
+  | `-Ofast -march=native` | **-inf** | **-inf** |
+  | `-O3 -march=native -ffinite-math-only` | **-inf** | `inf` |
+  | `-O3 -march=native -fno-signed-zeros` | `nan` | **-inf** |
+
+  The third and fourth rows separate the two halves: `-ffinite-math-only`
+  alone takes the NaN answer, `-fno-signed-zeros` alone takes the signed-zero
+  answer, and `-Ofast` grants both.
+- What this corrects in the original entry. It was recorded under "notable for
+  the direction: every other divergence this sweep found had CUDA as the wrong
+  side, and this is a counter-example to CPU-is-the-reference". That reading
+  was wrong. CPU was the wrong side for the same reason as KI-BACKEND-005 --
+  a build flag that licensed the compiler to assume away the values being
+  tested -- so this was never a second, independent counter-example. It was
+  the same one, seen through a different operator.
+- Regression:
+  [`tests/ops/test_digamma_special_values.py`](../../tests/ops/test_digamma_special_values.py),
+  seven special arguments and six ordinary ones on both devices. Teeth: the
+  same file on `cb0b5890d` fails with `digamma(nan) gave -inf, should be nan`
+  and passes on the current tree.
+- Why the expiry condition changed. It used to ask for the probe's
+  device-agreement case to cover this. That case compares CPU against CUDA,
+  which only answers "is it at least the same"; the regression file compares
+  both devices against SciPy, which answers "is it right", and would still
+  fail if both devices went wrong together. The stronger check is the one that
+  shipped.
 
 ## Where the device divergences are, and where they are not
 
@@ -1213,17 +1321,39 @@ about whether to take it.
   withdrawn for having no stable expectation. Stated as "fused and unfused must
   agree" it needs no expectation at all, which is why that invariant is the one
   worth gating on.
-- Fix direction: `-O3` rather than `-Ofast`, or `-Ofast -fno-finite-math-only`.
-  Both cost throughput and the amount is unmeasured -- vectorisation of
-  reductions is the exposed part, and KI-OPS-006 now carries one measurement of
-  it: the same float32 `max` reduction is 14 GB/s at `-O3` where the old
-  `-Ofast` figure was 28-31. So this needs measure-then-decide, not a straight
-  substitution.
-- Workaround: none within a kernel. Values that may be infinite have to be
-  masked before they reach a CPU kernel.
-- Review/expiry condition: the four expressions above agree with NumPy on CPU
-  at every length, a probe case covers infinities on both devices, and the
-  throughput change from the flag is measured and recorded.
+- Fix applied 2026-09-10 (`1e50d76c5`): `python/jittor/build/compiler.py`
+  appends `-O3` to `kernel_opt_flags`. The alternative considered was
+  `-Ofast -fno-finite-math-only`; `-O3` was taken because the reassociation
+  `-ffast-math` also grants was not being used -- g++ 12.3 does not vectorise
+  the real reduction kernels, the runtime `storage_stride(0)` blocks it -- so
+  the throughput it was thought to buy was not there to lose.
+- Cost, measured, in two parts. On the shapes measured with the change, none:
+  same machine, same warm cache, elementwise chain 4M 0.000320 -> 0.000324 s;
+  `exp`/`sqrt` chain 4M 0.000747 -> 0.000679; `sum` 4M 0.000737 -> 0.000719;
+  matmul 512 0.659172 -> 0.660539. Full `tests/ops` + `tests/opinfo` compared
+  nodeid by nodeid: 260 failures at `-O3` against 261 at `-Ofast`, and **the
+  set that fails only at `-O3` is empty**.
+
+  One shape did pay, and KI-OPS-006 carries the number: the float32 `std::max`
+  reduction ran at 28-31 GB/s under `-Ofast`, where the reassociation did
+  vectorise it, and runs at 14 GB/s at `-O3`. That is a 2x on that one kernel,
+  paid for IEEE arithmetic everywhere. It is recorded rather than netted out,
+  and it is the reason KI-OPS-006's ratio changed without either measurement
+  being wrong.
+- The fused-versus-unfused divergence went with it:
+  `tools/fusion_consistency_sweep.py` on CPU went from 1 differing case to
+  12/12 identical.
+- No workaround is needed any more. Before the fix there was none inside a
+  kernel: values that might be infinite had to be masked before they reached
+  one.
+- Regression: `tests/ops/test_ieee_arithmetic.py` (ten IEEE-defined
+  expressions, both devices, length 8 -- at length 1 they all pass even with
+  the flag wrong) and `tests/structure/codegen/test_kernel_math_flags.py`,
+  which names the flag so a reintroduction says what changed, and separately
+  asserts an optimisation level is still requested so "delete the flag and put
+  nothing back" cannot satisfy it.
+- Review/expiry condition: met. Delete this record once a maintainer has read
+  it.
 
 ## KI-FFT-001: withdrawn -- current CUDA sequence regression is clean
 
@@ -1493,10 +1623,14 @@ about whether to take it.
 - Lesson for the next probe: never use `.data` to force evaluation inside a
   `log_capture_scope`; call `jt.sync_all()` and keep a reference to the Var.
 
-## KI-TEST-001: fixed -- device tests now restore `use_cuda` instead of zeroing it
+## KI-TEST-005: fixed -- device tests now restore `use_cuda` instead of zeroing it
 
 - Severity: was Medium (test isolation)
 - Status: Fixed 2026-08-20
+- Renumbered 2026-09-11: this entry was filed as `KI-TEST-001`, an id already
+  held by the open "formerly silent test cases" entry at the top of this
+  ledger. Every `KI-TEST-001` citation under `tests/` means that one; a
+  citation about cross-file device-state leakage means this one.
 - Symptom it had: `tests/ops` reported 127 failed / 105 passed / 26 errors as a
   single process against 51 failed / 200 passed one file at a time. Later files
   failed with `Op array doesn't have cuda version`, the signature of a Var built

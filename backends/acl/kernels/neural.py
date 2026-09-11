@@ -7,14 +7,34 @@ import jittor as jt
 from .ops._code import ACL_FLOAT_DTYPES
 from .ops.conv_op import ConvACL
 from .ops.bmm_op import BmmACL
+from .ops.cross_entropy_loss_op import CrossEntropyLossACL
+from .ops.gelu_op import GeluACL
 from .ops.matmul_op import MatmulACL
-from .ops.transpose_op import TransPoseACL
 from .ops.upsample_op import UpsampleNearest2dACL
 from .ops.relu_op import ReLUACL, LeakyReLUACL
 from .ops.silu_op import SiLUACL, SwishACL, SwiGluACL
 from .ops.softmax_op import SoftmaxACL
 from .ops.pool_op import PoolACL
 from .ops.rope_op import RotaryPositionEmbeddingACL
+
+
+#: Dtype sets the decline guards below test membership in. A Var's dtype is a
+#: native NanoString that prints its canonical name, so the raw spelling
+#: answers first and only an unusual one reaches `dtype_name`; the guards ran
+#: two or three `dtype_name` calls each, on every activation, product and
+#: norm. Spelled out here rather than imported from `ops._code`: the ACL
+#: structure fixture replaces everything these modules import from `ops.` with
+#: a recorder, and a decline must not depend on one.
+_ACL_FLOATS = frozenset(ACL_FLOAT_DTYPES)
+_F32_BF16 = frozenset(("float32", "bfloat16"))
+_F16_F32_BF16 = frozenset(("float16", "float32", "bfloat16"))
+_INT32_INT64 = frozenset(("int32", "int64"))
+
+
+def _dtype_in(value, names):
+    """Whether ``value``'s dtype is one of ``names``, a set of canonical names."""
+    dtype = value.dtype
+    return str(dtype) in names or _jittor_dtype_name(dtype) in names
 
 
 def conv_acl(
@@ -46,16 +66,19 @@ def matmul_acl(x1, x2, trans_a=False, trans_b=False):
 
 
 def _transpose_last_two(x):
+    #: The core transpose op is a single aclnnPermute on this backend
+    #: (the `transpose` row of `acl_ops` in `backends/acl/src/acl_op_exec.cc`),
+    #: so there is nothing left for a CodeOp override to add here.
     axes = list(range(x.ndim))
     axes[-2], axes[-1] = axes[-1], axes[-2]
-    return TransPoseACL()(x, axes)
+    return x.transpose(axes)
 
 
 def resize_acl(input, size, mode="nearest", align_corners=False, tf_mode=False):
     if (
         mode == "nearest"
         and input.ndim == 4
-        and (_jittor_dtype_name(input.dtype) in ("float16", "float32", "bfloat16"))
+        and _dtype_in(input, _F16_F32_BF16)
         and (not align_corners)
         and (not tf_mode)
         and all((int(value) > 0 for value in input.shape))
@@ -74,8 +97,65 @@ def leaky_relu(x, scale=0.01, inplace=False):
     return LeakyReLUACL()(x, scale)
 
 
+def gelu_acl(x, approximate="none"):
+    """CANN's aclnnGelu covers the exact form only; tanh keeps the generic path."""
+    if approximate != "none":
+        return None
+    if isinstance(x, jt.Var) and _dtype_in(x, _F16_F32_BF16):
+        return GeluACL()(x)
+    return None
+
+
+def cross_entropy_loss_acl(output, target, weight=None, ignore_index=None,
+                           reduction="mean"):
+    """One aclnn launch for the loss and one for its gradient.
+
+    Everything this declines falls back to the portable definition: a class
+    weight vector (CANN applies it inside the reduction this function keeps in
+    Python), a non-float32 logit tensor, and any rank the portable code does
+    not itself flatten to ``[N, C]``.
+    """
+    if weight is not None or reduction not in ("none", "mean", "sum"):
+        return None
+    if not isinstance(output, jt.Var) or not isinstance(target, jt.Var):
+        return None
+    if str(output.dtype) != "float32" and _jittor_dtype_name(output.dtype) != "float32":
+        return None
+    if not _dtype_in(target, _INT32_INT64):
+        return None
+    target_shape = target.shape
+    if output.ndim == 4:
+        classes = int(output.shape[1])
+        output = output.transpose((0, 2, 3, 1)).reshape((-1, classes))
+    elif output.ndim != 2:
+        return None
+    classes = int(output.shape[1])
+    if classes <= 0 or int(output.shape[0]) <= 0:
+        return None
+    target = target.reshape((-1,))
+    if int(target.shape[0]) != int(output.shape[0]):
+        return None
+
+    # jittor gives an out-of-range label -- and one equal to ignore_index --
+    # weight zero and keeps it out of the mean's denominator. aclnnCrossEntropy
+    # Loss instead gathers with the raw label and faults the AI Core outside
+    # [0, C), ignoreIndex included, so the label reaching it is masked to 0 and
+    # the weighting is applied to the per-sample loss it returns.
+    valid = jt.logical_and(target >= 0, target < classes)
+    if ignore_index is not None:
+        valid = jt.logical_and(valid, target != ignore_index)
+    in_range = target * valid.cast(target.dtype)
+    target_weight = valid.float32()
+    loss = CrossEntropyLossACL()(output, in_range) * target_weight
+    if reduction == "sum":
+        return loss.sum()
+    if reduction == "mean":
+        return loss.sum() / target_weight.sum()
+    return loss.reshape(target_shape)
+
+
 def _silu_acl(x, inplace=False):
-    if isinstance(x, jt.Var) and _jittor_dtype_name(x.dtype) in ("float32", "bfloat16"):
+    if isinstance(x, jt.Var) and _dtype_in(x, _F32_BF16):
         if _jittor_dtype_name(x.dtype) == "bfloat16":
             return SwishACL()(x)
         return SiLUACL()(x)
@@ -86,7 +166,7 @@ def _silu_and_mul_acl(x):
     if (
         getattr(jt.flags, "no_grad", 0)
         and isinstance(x, jt.Var)
-        and (_jittor_dtype_name(x.dtype) in ("float16", "bfloat16", "float32"))
+        and _dtype_in(x, _F16_F32_BF16)
         and (x.ndim > 0)
         and (int(x.shape[-1]) > 0)
         and (int(x.shape[-1]) % 2 == 0)
@@ -135,7 +215,7 @@ def pool_acl(
     if (
         op not in ("maximum", "mean")
         or not isinstance(input, jt.Var)
-        or _jittor_dtype_name(input.dtype) not in ACL_FLOAT_DTYPES
+        or not _dtype_in(input, _ACL_FLOATS)
         or input.ndim != 4
         or any(int(size) <= 0 for size in input.shape)
         or (return_indices and op != "maximum")

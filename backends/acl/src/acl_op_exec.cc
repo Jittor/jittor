@@ -27,6 +27,8 @@
 #include "ops/composite/array_op.h"
 #include "ops/composite/code_op.h"
 #include "ops/composite/fused_adamw_op.h"
+#include "ops/composite/fused_sgd_op.h"
+#include "ops/composite/mapped_matmul_op.h"
 #include "core/fused_op.h"
 #include "ops/unary_op.h"
 #include "ops/ternary_op.h"
@@ -41,6 +43,7 @@
 #include "aclnn/aclnn.h"
 #include "aclops/aclops.h"
 #include "aclops/native_indexing_op_acl.h"
+#include "acl_fused_ascendc.h"
 namespace jittor
 {
     void free_var_mem(Var *v);
@@ -631,7 +634,12 @@ namespace jittor
 
     void exec_fused_acl(Op *op)
     {
-        exec_acl_sequence(op, static_cast<FusedOp *>(op)->ops);
+        auto *fused = static_cast<FusedOp *>(op);
+        // One generated AscendC kernel for the whole group when it is a
+        // float32 elementwise chain this backend can reproduce exactly;
+        // otherwise the per-node launcher sequence below, unchanged.
+        if (exec_fused_ascendc(fused)) return;
+        exec_acl_sequence(op, fused->ops);
     }
 
     static void exec_single_acl(Op *op)
@@ -642,9 +650,47 @@ namespace jittor
     extern int current_seed;
     extern int64 current_offset;
 
+    static void exec_acl_random(Op *op)
+    {
+        auto _op = (RandomOp *)op;
+        AclExecutionRunner<RandomOpRunner> runner(
+            _op->type == ns_uniform ? "RandomUniform" : "RandomNormal");
+        auto out = op->output(0);
+        RandomAttr *attr = new RandomAttr();
+        attr->seed = current_seed;
+        attr->offset = current_offset;
+        runner.jt_name = "random";
+        runner.op_attr.reset(attr);
+
+        runner.add(out, false);
+        runner.run();
+        current_offset += out->numel();
+    }
+
     static unordered_map<string, std::function<void(Op *)>> acl_ops = {
         {"getitem", exec_native_acl_getitem},
         {"setitem", exec_native_acl_setitem},
+        // jittor's own transpose op is one aclnnPermute -- exactly what the ACL
+        // CodeOp override used to build, but through jt.code: several us of
+        // python plus a 26-entry string->double attribute map per node, against
+        // ~1 us here. TransposeOpRunner reads both extra fields of ReduceAttr,
+        // so both are set even though a permute uses neither.
+        {"transpose", [](Op *op)
+         {
+             auto *_op = (TransposeOp *)op;
+             AclExecutionRunner<TransposeOpRunner> runner;
+             ReduceAttr *attr = new ReduceAttr();
+             attr->axes.reserve(_op->axes.size());
+             for (int i = 0; i < _op->axes.size(); ++i)
+                 attr->axes.push_back(_op->axes[i]);
+             attr->prod_dim = 0;
+             attr->keepdims = false;
+             runner.jt_name = "transpose";
+             runner.op_attr.reset(attr);
+             runner.add(_op->x, true);
+             runner.add(_op->y, false);
+             runner.run();
+         }},
         {"fused_adamw", [](Op *op)
          {
              auto _op = (FusedAdamwOp *)op;
@@ -668,6 +714,66 @@ namespace jittor
              for (auto value : _op->new_variances) runner.add(value, false);
              runner.run();
          }},
+        {"fused_sgd", [](Op *op)
+         {
+             auto _op = (FusedSgdOp *)op;
+             AclExecutionRunner<FusedSgdOpRunner, false> runner;
+             FusedSgdAttr *attr = new FusedSgdAttr();
+             attr->tensorCount = _op->parameters.size();
+             attr->lr = _op->lr;
+             attr->momentum = _op->momentum;
+             attr->weightDecay = _op->weight_decay;
+             attr->dampening = _op->dampening;
+             attr->nesterov = _op->nesterov;
+             attr->maximize = _op->maximize;
+             // The velocity buffers jittor hands over already hold the running
+             // momentum, so the kernel must never re-seed them from the grad.
+             attr->isFirstStep = false;
+             runner.jt_name = "fused_sgd";
+             runner.op_attr.reset(attr);
+             for (auto value : _op->parameters) runner.add(value, true);
+             for (auto value : _op->velocities) runner.add(value, true);
+             for (auto value : _op->gradients) runner.add(value, true);
+             for (auto value : _op->new_parameters) runner.add(value, false);
+             for (auto value : _op->new_velocities) runner.add(value, false);
+             runner.run();
+         }},
+        {"mapped_matmul", [](Op *op)
+         {
+             auto *_op = (MappedMatmulOp *)op;
+             // aclnn's cubeMathType: 0 = KEEP_DTYPE (true float32), 1 =
+             // ALLOW_FP32_DOWN_PRECISION (HF32), the arithmetic torch_npu uses
+             // by default and what `jt.acl_allow_hf32` selects.
+             const int cube_math_type = _op->allow_reduced_precision ? 1 : 0;
+             // aclnnMatmul takes the plain matrices; aclnnBatchMatMul takes a
+             // rank-3 stack, and BatchMatMulOpRunner folds any further leading
+             // axes into its descriptor, so attention's rank-4 operands arrive
+             // here as one node and leave as one launch. Both runners call
+             // their aclnn entry point directly and never read the registry
+             // iterator, hence UsesRegistry=false.
+             if (_op->a->shape.size() == 2)
+             {
+                 AclExecutionRunner<MatMulOpRunner, false> runner;
+                 runner.jt_name = _op->trans_b ? "matmul_trans_1"
+                     : _op->trans_a ? "matmul_trans_0" : "matmul";
+                 runner.cube_math_type = cube_math_type;
+                 runner.add(_op->a, true);
+                 runner.add(_op->b, true);
+                 runner.add(_op->c, false);
+                 runner.run();
+             }
+             else
+             {
+                 AclExecutionRunner<BatchMatMulOpRunner, false> runner;
+                 runner.jt_name = _op->trans_b ? "bmm_trans_1"
+                     : _op->trans_a ? "bmm_trans_0" : "bmm";
+                 runner.cube_math_type = cube_math_type;
+                 runner.add(_op->a, true);
+                 runner.add(_op->b, true);
+                 runner.add(_op->c, false);
+                 runner.run();
+             }
+         }},
         {"arg_reduce", [](Op *op)
          {
              auto _op = (ArgReduceOp *)op;
@@ -679,22 +785,17 @@ namespace jittor
              runner.add(_op->y_key, false);
              runner.run();
          }},
-        {"curand_random", [&current_seed, &current_offset](Op *op)
-         {
-             auto _op = (RandomOp *)op;
-             AclExecutionRunner<RandomOpRunner> runner(_op->type == ns_uniform ? "RandomUniform" : "RandomNormal");
-             auto out = op->output(0);
-             RandomAttr *attr = new RandomAttr();
-             attr->seed = current_seed;
-             attr->offset = current_offset;
-             runner.jt_name = "random";
-             runner.op_attr.reset(attr);
-
-             runner.add(out, false);
-             runner.run();
-             current_offset += out->numel();
-         }},
+        {"curand_random", exec_acl_random},
+        // `curand_random` is the accelerator capability op the CUDA-family
+        // backends publish. ACL has no separate capability op, so the core
+        // `random` op reaches the same launcher under its own name.
+        {"random", exec_acl_random},
     };
+
+    static bool is_acl_random(const string &name)
+    {
+        return name == string("random") || name == string("curand_random");
+    }
 
     static void exec_mapped_acl_ops(Op *op)
     {
@@ -721,7 +822,7 @@ namespace jittor
                 USER_CHECK(reduce->op == ns_maximum || reduce->op == ns_minimum)
                     << "arg_reduce requires min or max";
             }
-            if (op->name() == string("curand_random"))
+            if (is_acl_random(op->name()))
             {
                 auto *random = static_cast<RandomOp *>(op);
                 USER_CHECK(random->type == ns_uniform || random->type == ns_normal)
@@ -788,6 +889,10 @@ namespace jittor
     {
         const auto *code = static_cast<CodeOp *>(op);
         if (code->backend != "acl") return &exec_unmarked_acl_code;
+        // Diagnostic marker for an ACL CodeOp compile, as before the registered
+        // execution refactor. Tests capture acl_op_exec.cc at verbosity 100 and
+        // look for it; a source without it makes every such capture silent.
+        LOGv << "compile acl op";
         return compile_registered_source(op);
     }
 
