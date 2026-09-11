@@ -2,16 +2,25 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[3]
+# 2026-09-11: ``reduce_op.cc`` was recorded as 1 and had four user checks, so
+# this ledger had been red before anything below was touched. Its four are, in
+# source order: the reduction-kind check ``ns.is_binary()`` in each of the two
+# constructors (added after the count was written, and the reason it was
+# stale), the dim-range check this entry was created for, and the empty-extent
+# check for ``maximum``/``minimum`` added with this line. The last one is a
+# caller boundary for the same reason the dim check is: ``max`` of zero
+# elements has no identity to return, so a var the caller passed decides it,
+# and a caller should be able to catch it -- numpy raises ValueError and torch
+# RuntimeError for the same reduction.
 MIGRATED_DIMENSION_BOUNDARIES = {
     "src/ops/composite/arg_reduce_op.cc": 2,
     "src/ops/composite/argsort_op.cc": 2,
-    # 5, not 1. Two of the three that were already there predate this ledger
-    # entry and were never counted: `ns.is_binary()` appears in each of the two
-    # real constructors (the third delegates). The two added on 2026-09-11 are
-    # the integral-only dtype guard, one per constructor -- before it, a bitwise
-    # reduction over a float was accepted and the mistake surfaced as a g++ wall
-    # from the generated kernel. See tests/ops/test_bitwise_dtype_guard.py.
-    "src/ops/reduce_op.cc": 5,
+    # 6, not 1. Three groups, none of which this entry originally counted:
+    # `ns.is_binary()` in each of the two real constructors (the third
+    # delegates) predates it; the integral-only dtype guard added 2026-09-11
+    # adds one per constructor (tests/ops/test_bitwise_dtype_guard.py); and the
+    # empty-extent guard adds one more, pinned by name below.
+    "src/ops/reduce_op.cc": 6,
     "src/ops/broadcast_to_op.cc": 2,
 }
 
@@ -306,11 +315,24 @@ def test_public_dimension_boundary_migration_is_explicit_and_bounded():
             actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
         counts[relative] = actual
         assert actual == expected, (relative, actual, expected)
-    # 11 = 2 + 2 + 5 + 2, the four entries above. It read 7 while
-    # ``reduce_op.cc`` was recorded as 1 and actually held 3, so this total had
-    # been failing before the two guards of 2026-09-11 were added; both halves
-    # are corrected together here rather than leaving the sum stale.
-    assert sum(counts.values()) == 11
+    # 12 = 2 + 2 + 6 + 2, the four entries above. It read 7 while
+    # ``reduce_op.cc`` was recorded as 1 and actually held 3, so this total was
+    # already failing before any of 2026-09-11's guards; both halves are
+    # corrected together rather than leaving the sum stale.
+    assert sum(counts.values()) == 12
+
+
+def test_empty_reduction_boundary_is_a_user_error():
+    """``max``/``min`` over an empty extent is the caller's error, not a value.
+
+    Pinned separately from the count above because the count alone cannot tell
+    this check from the three others in the file, and because a reduction that
+    silently answers with the dtype's lowest finite value is the failure this
+    exists to prevent.
+    """
+    source = (ROOT / "src/ops/reduce_op.cc").read_text()
+    assert "USER_CHECK(!((reduce_mask>>i&1) && x->shape[i]==0))" in source
+    assert "has no identity to return over zero elements." in source
 
 
 def test_public_shape_cardinality_migration_is_explicit_and_bounded():

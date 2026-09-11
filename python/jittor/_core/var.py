@@ -1026,6 +1026,25 @@ def pow(x, y):
 
 Var.pow = Var.__pow__ = pow
 
+def _check_arg_reduce_is_answerable(op, x, dim):
+    """``argmax``/``argmin`` over zero elements: there is no index to return.
+
+    ``arg_reduce`` seeds the scan with element 0 and never writes to it when
+    the extent is empty, so ``jt.zeros(0).argmax(0)`` answered index 0 -- a
+    position that does not exist -- and a value of 0.0 that is not in the
+    input. sum/prod/mean are different and stay as they are: add and multiply
+    have identities (0 and 1), and a mean of nothing is nan in numpy and torch
+    too. ``max`` and ``argmax`` have no identity, so both raise, and torch
+    raises ``IndexError`` here for exactly this case.
+    """
+    shape = x.shape
+    if shape[dim] == 0:
+        raise IndexError(
+            "%s: dim %d of the input is empty (shape %s); %s over zero "
+            "elements has no index to return"
+            % (op, dim, list(shape), op))
+
+
 def argmax(x: Var, dim: int, keepdims:bool=False):
     ''' Returns the indices and values of the maximum elements along the specified dimension.
 
@@ -1061,6 +1080,7 @@ def argmax(x: Var, dim: int, keepdims:bool=False):
         # axes for negative dims other than -1 -> cryptic cutt_transpose crash
         if dim < 0:
             dim += nd
+        _check_arg_reduce_is_answerable("argmax", x, dim)
     return jt.arg_reduce(x, "max", dim, keepdims)
 
 Var.argmax = argmax
@@ -1094,6 +1114,7 @@ def argmin(x, dim: int, keepdims:bool=False):
                              f"input (expected dim in [{-nd}, {nd-1}])")
         if dim < 0:
             dim += nd
+        _check_arg_reduce_is_answerable("argmin", x, dim)
     return jt.arg_reduce(x, "min", dim, keepdims)
 
 Var.argmin = argmin

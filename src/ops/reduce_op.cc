@@ -342,6 +342,20 @@ ReduceOp::ReduceOp(Var* x, NanoString op, int dim, bool keepdims)
 
 void ReduceOp::infer_shape() {
     auto xdim = x->shape.size();
+    // A max or min over zero elements has no answer. add and multiply have
+    // identities (0 and 1) and mean of nothing is nan, so those reductions of
+    // an empty var are well defined and stay legal; maximum and minimum have
+    // none, and the kernel's seed -- the dtype's lowest/highest finite value --
+    // was being returned as if it were data, so `jt.zeros((0,3)).max(0)`
+    // answered [-3.4e38, -3.4e38, -3.4e38]. numpy raises ValueError for this
+    // reduction and torch raises RuntimeError; USER_CHECK makes it the same
+    // kind of catchable caller error here.
+    if (ns == ns_maximum || ns == ns_minimum)
+        for (uint i=0; i<xdim; i++)
+            USER_CHECK(!((reduce_mask>>i&1) && x->shape[i]==0))
+                << "Reduce" << ns >> ": dim" << i << "of x" << x->shape
+                << "is empty, and" << ns
+                << "has no identity to return over zero elements.";
     NanoVector yshape; 
     yshape.clear();
     for (int i=0; i<xdim; i++) {
