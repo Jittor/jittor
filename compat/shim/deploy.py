@@ -12,7 +12,7 @@ in README.md with a single command:
 It copies:
   - resources/torch/__init__.py             -> <site-packages>/torch/__init__.py
   - resources/stubs/<pkg>/**/*.py           -> <site-packages>/<pkg>/**/*.py
-  - resources/torch_dist_info/METADATA      -> <site-packages>/torch-<ver>.dist-info/METADATA
+  - resources/torch_dist_info/*             -> <site-packages>/torch-<ver>.dist-info/*
   - resources/flash_attn_dist_info/*         -> <site-packages>/flash_attn-<ver>.dist-info/*
 
 Idempotent and safe to re-run after editing the packaged resources.
@@ -164,6 +164,19 @@ def _plan(target, resource_root=None):
         _version(root), "version"
     )
     ops.append((meta, _destination(target, version_dir, "METADATA")))
+    # `importlib.metadata.packages_distributions()` reads `top_level.txt` (or a
+    # RECORD) to map an import name back to its distribution. Without it the
+    # deployed `torch` distribution is invisible and the mapping falls to
+    # `jittor-torch`, whose own version is Jittor's: Transformers then reads
+    # `torch` as 1.3.x, decides PyTorch < 2.5, and disables its model code.
+    top_level = _required_source_file(
+        os.path.join(root, "torch_dist_info", "top_level.txt"),
+        "torch top-level metadata",
+    )
+    ops.append((
+        top_level,
+        _destination(target, version_dir, "top_level.txt"),
+    ))
     flash_root = os.path.join(root, "flash_attn_dist_info")
     flash_meta = _required_source_file(
         os.path.join(flash_root, "METADATA"), "flash-attn metadata")

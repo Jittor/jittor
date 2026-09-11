@@ -13,16 +13,18 @@
 #include <memory>
 #include <map>
 
-#include "common.h"
-#include "var.h"
-#include "var_holder.h"
-#include "executor.h"
+// Core headers are spelled with the directory they live in: the extension
+// build puts `<jittor>/src` on the include path, not each of its children, and
+// `ops/array_op.h` / `ops/getitem_op.h` no longer exist -- nothing here used
+// them. `pyjt` moved under `src/bindings`.
+#include "core/common.h"
+#include "core/var.h"
+#include "core/var_holder.h"
+#include "core/executor.h"
 #include "ops/op_register.h"
-#include "ops/array_op.h"
-#include "ops/getitem_op.h"
 #include "mem/allocator.h"
-#include "pyjt/py_obj_holder.h"
-#include "pyjt/py_converter.h"
+#include "bindings/pyjt/py_obj_holder.h"
+#include "bindings/pyjt/py_converter.h"
 
 #include <torch/extension.h>   // interface (forward-declares jittor::VarHolder)
 
@@ -509,12 +511,19 @@ Tensor adopt(jittor::VarHolder* vh, bool owns) {
 }
 jittor::VarHolder* clone_holder(jittor::VarHolder* vh) { return new jittor::VarHolder(vh->var); }
 
+// `torch.Tensor` under the shim is a *subclass* of the native Var type, so the
+// extension boundary has to accept subclasses. An exact-type test rejected
+// every tensor a user builds through the torch API -- which is all of them --
+// with "q must be a Jittor Var".
+static inline bool is_var_object(PyObject* pyobj) {
+    return pyobj && PyObject_TypeCheck(pyobj, &jittor::PyjtVarHolder.ht_type);
+}
 bool is_jittor_var(void* obj) {
-    return Py_TYPE((PyObject*)obj) == &jittor::PyjtVarHolder.ht_type;
+    return is_var_object((PyObject*)obj);
 }
 bool pyvar_is_ext_mutable(void* obj) {
     PyObject* pyobj = (PyObject*)obj;
-    if (!pyobj || Py_TYPE(pyobj) != &jittor::PyjtVarHolder.ht_type)
+    if (!is_var_object(pyobj))
         return false;
     PyObject* attr = PyObject_GetAttrString(pyobj, "_jittor_torch_ext_mutable");
     if (!attr) {
@@ -527,7 +536,7 @@ bool pyvar_is_ext_mutable(void* obj) {
 }
 static bool pyvar_flag(void* obj, const char* name) {
     PyObject* pyobj = (PyObject*)obj;
-    if (!pyobj || Py_TYPE(pyobj) != &jittor::PyjtVarHolder.ht_type)
+    if (!is_var_object(pyobj))
         return false;
     PyObject* attr = PyObject_GetAttrString(pyobj, name);
     if (!attr) {
@@ -552,7 +561,7 @@ void commit_tensor_to_pyvar(void* obj, const Tensor& t) {
         cudaDeviceSynchronize();
 #endif
     PyObject* pyobj = (PyObject*)obj;
-    if (Py_TYPE(pyobj) != &jittor::PyjtVarHolder.ht_type)
+    if (!is_var_object(pyobj))
         return;
     bool collect_stats = torch_ext_stats_enabled();
     stat_add_if(collect_stats, torch_ext_stats().mutable_commit_count);
@@ -575,8 +584,11 @@ void commit_tensor_to_pyvar(void* obj, const Tensor& t) {
     new_var->name = std::move(old_var->name);
     if (old_var->is_stop_grad())
         new_var->set_stop_grad();
-    if (old_var->flags.get(jittor::NodeFlags::_stop_fuse))
-        new_var->flags.set(jittor::NodeFlags::_stop_fuse);
+    // `_stop_fuse` is a Var-private flag, so it goes through Var::flag /
+    // Var::set_flag like `_explicit_requires_grad` below: the shared flag word
+    // cannot say which kind of node owns a kind-private bit.
+    if (old_var->flag(jittor::VarFlags::_stop_fuse))
+        new_var->set_flag(jittor::VarFlags::_stop_fuse);
     if (old_var->flag(jittor::VarFlags::_explicit_requires_grad))
         new_var->set_flag(jittor::VarFlags::_explicit_requires_grad);
 

@@ -151,6 +151,16 @@ namespace jittor {
 struct float16 {
     uint16 x;
 
+    // Every other scalar the code generator emits code for -- float, double,
+    // the integer types -- is default-constructible, and the generated kernels
+    // rely on it: the blocked-reduction pass declares `decltype(acc) stack[N]`
+    // for its partial sums. Without this, every fp16 reduction that pass
+    // applies to fails to compile with "no matching function for call to
+    // 'jittor::float16::float16()'". Zero is the value the pass asks for
+    // anyway -- it seeds its partials from `decltype(acc)(0)` -- and every slot
+    // is written before it is read.
+    inline float16() : x(0) {}
+
     inline float16(float32 f) {
         unsigned x = *((int*)(void*)(&f));
         unsigned u = (x & 0x7fffffff), remainder, shift, lsb, lsb_s1, lsb_m1;
@@ -244,6 +254,11 @@ bool operator!=(float16 x, float16 y) { return float32(x)!=float32(y); }
 
 struct bfloat16 {
     uint16 x;
+
+    // See `float16` above: the generated kernels declare arrays of the
+    // accumulator type, which needs a default constructor, and zero is what
+    // the blocked-reduction pass initializes its partial sums to anyway.
+    inline bfloat16() : x(0) {}
 
     inline bfloat16(float32 f) {
         unsigned x = *((int*)(void*)(&f));

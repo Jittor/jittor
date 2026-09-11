@@ -220,6 +220,8 @@ from .tensor_protocol import to
 Var.to = to
 from .numerical import rsqrt
 Var.rsqrt = rsqrt
+from .numerical import sinc
+Var.sinc = sinc
 from .tensor_protocol import from_torch
 from .shape_ops import triu
 Var.triu = triu
@@ -339,6 +341,7 @@ __all__ = [
     "scatter_reduce",
     "searchsorted",
     "set_global_seed",
+    "sinc",
     "sort",
     "split",
     "stack",

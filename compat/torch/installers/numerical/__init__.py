@@ -1039,6 +1039,16 @@ register_fidelity(
     "layout, and requires_grad semantics are not implemented",
 )
 
+from .signal import kaiser_window
+
+register_fidelity(
+    "torch.kaiser_window",
+    kaiser_window,
+    Fidelity.APPROXIMATE,
+    "matches Torch periodic and symmetric CPU window values; device, dtype, "
+    "layout, and requires_grad semantics are not implemented",
+)
+
 from .signal import stft
 
 register_fidelity(
@@ -1298,5 +1308,7 @@ def install_signal(ctx):
     g = ctx.jittor_module
     if not hasattr(g, "hann_window"):
         g.hann_window = hann_window
+    if not hasattr(g, "kaiser_window"):
+        g.kaiser_window = kaiser_window
     if not hasattr(g, "stft"):
         g.stft = stft

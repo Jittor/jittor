@@ -105,11 +105,23 @@ class _TensorMeta(type):
         backend = vars(cls).get("_frontend_backend")
         if backend is None:
             return super().__call__(*args, **kwargs)
+        # torch's Tensor constructor spells dtype/device/requires_grad/pin_memory
+        # as keywords, and downstream code builds tensors that way -- `accelerate`
+        # moves a parameter with `param_cls(value, requires_grad=...)`. Rejecting
+        # every keyword made those calls fail; anything outside the documented
+        # four still raises.
+        requested_dtype = kwargs.pop("dtype", None)
+        device = kwargs.pop("device", None)
+        requires_grad = bool(kwargs.pop("requires_grad", False))
+        kwargs.pop("pin_memory", None)
         if kwargs:
-            raise TypeError("Tensor constructor does not accept keyword arguments")
+            raise TypeError(
+                "Tensor constructor does not accept keyword arguments: %s"
+                % ", ".join(sorted(kwargs))
+            )
         from .nested import _TorchSize
-        dtype = _default_tensor_dtype(backend)
-        with tensor_frontend(cls, like=args[0] if len(args) == 1 else None):
+        dtype = requested_dtype if requested_dtype is not None else _default_tensor_dtype(backend)
+        with tensor_frontend(cls, like=args[0] if len(args) == 1 else None, device=device):
             if not args:
                 result = backend.empty((0,), dtype=dtype)
             elif all(isinstance(arg, int) for arg in args):
@@ -121,10 +133,11 @@ class _TensorMeta(type):
             elif isinstance(args[0], backend.Var):
                 result = backend.Var.clone(args[0])
                 result._set_view_of(args[0], Ellipsis)
+                result.requires_grad = requires_grad
                 return result
             else:
                 result = backend.array(args[0], dtype=dtype)
-            result.requires_grad = False
+            result.requires_grad = requires_grad
             return result
 
 

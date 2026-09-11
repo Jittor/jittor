@@ -2,6 +2,7 @@
 from importlib import import_module
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
+from ...types import _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
 from ..core import _promote_pair
 
 _owner = import_module(__package__)
@@ -165,6 +166,18 @@ def _torch_setitem(self, slices, value):
     _orig_setitem = _native['_orig_setitem']
     if _set_data_owner(self, slices, value):
         return self
+    if isinstance(value, _NativeVar):
+        # torch copies a value into the destination's placement, so
+        # `cuda_t[...] = cpu_value` and `cpu_t[...] = cuda_value` both work.
+        # Jittor dispatches the assignment on placement and rejects the mix
+        # ("Expected all tensor inputs on the same backend and device"), which
+        # is what a layout block hits when it writes a host grid into a device
+        # position tensor. Move the value onto the destination's placement
+        # first; the same-placement path is untouched.
+        if _var_is_cpu_resident(value) and not _var_is_cpu_resident(self):
+            value = _make_cuda_resident(value)
+        elif not _var_is_cpu_resident(value) and _var_is_cpu_resident(self):
+            value = _make_cpu_resident(value)
     try:
         mask = slices
         if isinstance(mask, _NativeVar) and _jittor_dtype_name(mask.dtype) in ("bool", "uint8") \
@@ -1002,8 +1015,20 @@ def _api_tolist(self):
     return self.item() if getattr(self, '_torch_0d', False) else self.numpy().tolist()
 
 
-def _api_contiguous(self):
-    return self
+def _api_contiguous(self, memory_format=None):
+    """Torch's ``contiguous``: the same tensor when already contiguous, else a copy.
+
+    A Jittor Var can carry storage smaller than its logical shape -- ``broadcast``
+    and the strided slicing views do -- and torch code relies on ``contiguous()``
+    to materialize exactly that. Returning ``self`` unconditionally made it a
+    silent no-op: the following ``reshape``/``view`` failed with "call
+    contiguous() first" while the call meant to fix the layout did nothing.
+    A Var whose storage already matches its shape is still returned unchanged,
+    so the hot ``transpose(...).contiguous()`` path keeps its zero-copy behavior.
+    """
+    if self._storage_is_contiguous():
+        return self
+    return _owner.jt.contiguous(self)
 
 
 def _api_argwhere(input):

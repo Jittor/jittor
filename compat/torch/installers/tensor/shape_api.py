@@ -68,7 +68,16 @@ def _torch_reshape(self, *shape, **_kw):
         return _bitcast(self, shape[0])
     if len(shape) == 1 and isinstance(shape[0], tuple) and type(shape[0]) is not tuple:
         shape = (tuple(int(s) for s in shape[0]),)
-    return _orig_reshape(self, *shape)
+    try:
+        return _orig_reshape(self, *shape)
+    except RuntimeError as error:
+        # torch's `reshape` is "a view when possible, otherwise a copy"; the
+        # native reshape implements only the view half, so a non-contiguous
+        # input -- a permuted tensor, or the transposed layout `repeat` builds
+        # -- has to be materialized before the view can be taken.
+        if "call contiguous() first" not in str(error):
+            raise
+    return _orig_reshape(self.contiguous(), *shape)
 
 
 def _norm_reduce_kw(a, k):

@@ -24,6 +24,31 @@ def hann_window(window_length, periodic=True, *, dtype=None, device=None,
                         requires_grad=requires_grad)
 
 
+def kaiser_window(window_length, periodic=True, beta=12.0, *, dtype=None,
+                  device=None, requires_grad=False, **kwargs):
+    """Create a Kaiser window through the CPU NumPy signal owner."""
+    from . import (
+        jt,
+        np,
+    )
+    from ...tensor_state import compatibility_owner
+    from ...types import _dtype_to_str
+    owner = compatibility_owner(jt)
+    selected = _dtype_to_str(dtype if dtype is not None else owner.get_default_dtype())
+    if selected not in ("float16", "bfloat16", "float32", "float64"):
+        raise RuntimeError("kaiser_window requires a floating point dtype")
+    length = int(window_length)
+    if length <= 1:
+        window = np.ones(max(length, 0), np.float64)
+    else:
+        # Torch's periodic window is the symmetric window of `length + 1` points
+        # with the duplicated last sample trimmed, the same convention
+        # `hann_window` above follows.
+        window = np.kaiser(length + 1 if periodic else length, float(beta))[:length]
+    return owner.tensor(window, dtype=selected, device=device,
+                        requires_grad=requires_grad)
+
+
 def stft(input, n_fft, hop_length=None, win_length=None, window=None,
          center=True, pad_mode="reflect", normalized=False, onesided=True,
          return_complex=True, **kwargs):
