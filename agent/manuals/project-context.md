@@ -2,8 +2,8 @@
 
 - Status: Current index, not a history log
 - Last reviewed: 2026-09-12
-- Baseline reviewed: `integrate/cgq-transformers-2.0-refactor@c2bdd467`, with
-  `origin/2.0-refactor@cb823778` merged and retaining the validated
+- Baseline reviewed: `integrate/cgq-transformers-2.0-refactor@54cd55cc`, with
+  `origin/2.0-refactor@cb823778` merged in `c2bdd467` and retaining the validated
   compatibility work from `origin/cgq_transformers@5bf4d374`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
