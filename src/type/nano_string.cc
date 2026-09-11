@@ -112,11 +112,17 @@ static unordered_set<string> float_ops = {
     "erf",
     "erfinv"
 };
+// Ops whose result is an integer *whatever the operand dtype is*.
+// `floor_divide` is deliberately not one of them. Its result is integer-valued
+// but it carries the operands' dtype, the way `floor` does -- numpy and torch
+// both answer a float for float operands. Listing it here forced the output to
+// int32, and the expansion casts both operands to the *output* type before
+// dividing, so `-2.7 // 2.0` divided `int(-2.7) == -2` by 2 and answered -1
+// where numpy answers -2: the truncation landed on the operands. KI-OPS-003.
 static unordered_set<string> int_ops = {
     "round_int",
     "floor_int",
     "ceil_int",
-    "floor_divide",
 };
 
 static unordered_set<string> binary_ops = {
