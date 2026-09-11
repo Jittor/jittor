@@ -267,6 +267,19 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
         set_flag(OpFlags::_manual_set_vnbb);
     ns = op;
     USER_CHECK(ns.is_binary()) << "reduce requires a binary reduction operation, got" << ns;
+    // The same integral-only rule BinaryOp applies elementwise. Reducing with a
+    // bitwise operation over a float reaches a raw `float & float` in the
+    // generated kernel, and g++ answers with "invalid operands of types 'float'
+    // and 'float'" pointed at `Ty rcount = y->num*1.0 / x->num;` -- a line that
+    // has nothing to do with the mistake, because the generated kernel's line
+    // numbers do not map back to the template. `ns_is_integral_only` is the
+    // predicate BinaryOp uses, so the two paths cannot drift apart.
+    if (ns_is_integral_only(ns))
+        USER_CHECK(x->dtype().is_int() || x->dtype().is_bool())
+            << "Reduce op '" >> ns.to_cstring() >>
+            "' requires an integer or boolean dtype, but got x:" >>
+            x->dtype().to_cstring() <<
+            "(bitwise and shift reductions are not defined for floating-point or complex types).";
     auto xdim = x->shape.size();
     keepdims_mask = keepdims ? (int)-1 : (int)0;
     if (!dims.size()) {
@@ -306,6 +319,19 @@ ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, uint keepdims_mask)
         set_flag(OpFlags::_manual_set_vnbb);
     ns = op;
     USER_CHECK(ns.is_binary()) << "reduce requires a binary reduction operation, got" << ns;
+    // The same integral-only rule BinaryOp applies elementwise. Reducing with a
+    // bitwise operation over a float reaches a raw `float & float` in the
+    // generated kernel, and g++ answers with "invalid operands of types 'float'
+    // and 'float'" pointed at `Ty rcount = y->num*1.0 / x->num;` -- a line that
+    // has nothing to do with the mistake, because the generated kernel's line
+    // numbers do not map back to the template. `ns_is_integral_only` is the
+    // predicate BinaryOp uses, so the two paths cannot drift apart.
+    if (ns_is_integral_only(ns))
+        USER_CHECK(x->dtype().is_int() || x->dtype().is_bool())
+            << "Reduce op '" >> ns.to_cstring() >>
+            "' requires an integer or boolean dtype, but got x:" >>
+            x->dtype().to_cstring() <<
+            "(bitwise and shift reductions are not defined for floating-point or complex types).";
     reduce_mask = dims_mask;
     this->keepdims_mask = keepdims_mask;
     y = create_output(nullptr, reduce_dtype_infer(ns, x->ns, policy.preserve_reduction_dtype));

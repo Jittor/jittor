@@ -879,6 +879,46 @@ the element it is relative to.
   flush for 1e-45`. A build where the policy switch did nothing cannot satisfy
   it, which is the failure mode a one-sided "CUDA flushes" assertion would miss.
 
+## KI-BACKEND-009: CUDA cannot compile a logical or narrow-integer reduction
+
+- Severity: High (a whole family of reductions is unusable on CUDA, and the
+  message does not say which dtype or which operation is the problem)
+- Status: Reproduced 2026-09-11 on CUDA, unfixed. Pre-existing: the same twelve
+  cases fail identically on `cb0b5890d`, which predates today's dtype guards.
+- Owner: reduce operator and CUDA codegen maintainers
+- Evidence: every reduction in the published table crossed with six dtypes, on
+  both devices, one fresh process each, `location()` asserted so a silent fall
+  back to CPU could not be read as a pass. CPU answers all 66 combinations.
+  CUDA fails twelve, all with a compiler wall:
+
+  | operation | dtypes that fail on CUDA |
+  | --- | --- |
+  | `logical_and` | `uint8`, `float32`, `float64` |
+  | `logical_or` | `uint8`, `float32`, `float64` |
+  | `logical_xor` | `uint8`, `float32`, `float64` |
+  | `bitwise_and`, `bitwise_or`, `bitwise_xor` | `uint8` |
+
+  `bool`, `int32` and `int64` work for all of them on both devices, which is
+  why this was not noticed: those are the dtypes the tests use.
+- Symptom: `x.any_()`, `x.all_()` and the bitwise reductions are published API.
+  On CUDA, over a float or a `uint8`, they raise
+  `parallel_compiler.cc:339: Error happened during compilation` with an nvcc
+  transcript attached. The same call on CPU returns a value. So a program is
+  correct until it is moved to the accelerator, and what it then says is not
+  about dtypes.
+- Note on the two halves. The float cases are a *semantic* question as well:
+  CPU returns a float (`0.0`) for `logical_xor` over floats where a bool is the
+  defensible answer, so whichever way CUDA is fixed, the CPU dtype should be
+  decided at the same time. The `uint8` cases are not semantic at all -- the
+  operation is well defined there and CPU performs it.
+- Workaround: cast to `int32` or `bool` before reducing with a logical or
+  bitwise operation on CUDA.
+- Review/expiry condition: the 66-cell matrix above agrees between the two
+  devices, in value and in dtype, and a test holds it. The float rows may be
+  resolved by rejecting them on both devices with a sentence -- as
+  [`tests/ops/test_bitwise_dtype_guard.py`](../../tests/ops/test_bitwise_dtype_guard.py)
+  now does for the bitwise family -- provided CPU and CUDA answer the same way.
+
 ## KI-OPS-011: fixed -- CPU `digamma` propagates NaN and signs its pole correctly
 
 - Severity: Medium
