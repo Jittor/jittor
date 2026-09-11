@@ -879,27 +879,62 @@ the element it is relative to.
   flush for 1e-45`. A build where the policy switch did nothing cannot satisfy
   it, which is the failure mode a one-sided "CUDA flushes" assertion would miss.
 
-## KI-OPS-011: CPU `digamma` returns -inf where NaN and +inf are correct
+## KI-OPS-011: fixed -- CPU `digamma` propagates NaN and signs its pole correctly
 
 - Severity: Medium
-- Status: Reproduced, unfixed
+- Status: Fixed by [`1e50d76c5`](#ki-backend-005), confirmed and pinned
+  2026-09-10. This entry was opened at 13:35 and the commit that fixed it
+  landed at 17:40 for a different reason; nobody connected them until the
+  values were measured again.
 - Owner: operator maintainers
-- Evidence: against `scipy.special.digamma` as the reference:
+- What it was: against `scipy.special.digamma` as the reference, on the
+  `-Ofast` tree (`cb0b5890d`, measured directly rather than recalled):
 
-  | input | CPU | CUDA | scipy |
-  | --- | --- | --- | --- |
-  | `nan` | **-inf** | `nan` | `nan` |
-  | `-0.0` | **-inf** | `inf` | `inf` |
+  | input | CPU before | CPU after | CUDA | scipy |
+  | --- | --- | --- | --- | --- |
+  | `nan` | **-inf** | `nan` | `nan` | `nan` |
+  | `-0.0` | **-inf** | `inf` | `inf` | `inf` |
 
-  CUDA is right in both rows and CPU is wrong; the other eight inputs agree.
-- Symptom: `digamma` of a NaN produces a finite-signed infinity rather than
-  propagating the NaN, so a NaN entering here is converted into a value that
-  looks like a legitimate pole. At `-0.0` the sign of the pole is inverted.
-- Notable for the direction: every other divergence this sweep found had CUDA
-  as the wrong side. Recorded because "CPU is the reference" is an assumption
-  the parity suite makes, and this is a counter-example to it.
-- Review/expiry condition: CPU `digamma` matches scipy for NaN and both signed
-  zeros, and the probe's device-agreement case covers it.
+  The other nine inputs in the probe agreed before and after. CUDA was right
+  throughout, on both trees.
+- Cause, and why it was not in `digamma`. The implementation writes all three
+  special answers out by hand:
+  [`python/jittor/contrib/math_util/gamma.py`](../../python/jittor/contrib/math_util/gamma.py)
+  returns `copysign(INFINITY, -x)` at a zero and `quiet_NaN()` at a negative
+  integer. Nothing in that source is wrong. It was compiled with `-Ofast`,
+  which implies `-ffinite-math-only`, a promise that no operand is ever
+  infinite or NaN -- so the compiler is free to decide the NaN comparisons
+  statically and to treat `-0.0` as `0.0`. Compiling the same function body
+  standalone with g++ 12.3 shows exactly this and nothing else:
+
+  | flags | `digamma(nan)` | `digamma(-0.0)` |
+  | --- | --- | --- |
+  | `-O3 -march=native` | `nan` | `inf` |
+  | `-Ofast -march=native` | **-inf** | **-inf** |
+  | `-O3 -march=native -ffinite-math-only` | **-inf** | `inf` |
+  | `-O3 -march=native -fno-signed-zeros` | `nan` | **-inf** |
+
+  The third and fourth rows separate the two halves: `-ffinite-math-only`
+  alone takes the NaN answer, `-fno-signed-zeros` alone takes the signed-zero
+  answer, and `-Ofast` grants both.
+- What this corrects in the original entry. It was recorded under "notable for
+  the direction: every other divergence this sweep found had CUDA as the wrong
+  side, and this is a counter-example to CPU-is-the-reference". That reading
+  was wrong. CPU was the wrong side for the same reason as KI-BACKEND-005 --
+  a build flag that licensed the compiler to assume away the values being
+  tested -- so this was never a second, independent counter-example. It was
+  the same one, seen through a different operator.
+- Regression:
+  [`tests/ops/test_digamma_special_values.py`](../../tests/ops/test_digamma_special_values.py),
+  seven special arguments and six ordinary ones on both devices. Teeth: the
+  same file on `cb0b5890d` fails with `digamma(nan) gave -inf, should be nan`
+  and passes on the current tree.
+- Why the expiry condition changed. It used to ask for the probe's
+  device-agreement case to cover this. That case compares CPU against CUDA,
+  which only answers "is it at least the same"; the regression file compares
+  both devices against SciPy, which answers "is it right", and would still
+  fail if both devices went wrong together. The stronger check is the one that
+  shipped.
 
 ## Where the device divergences are, and where they are not
 
