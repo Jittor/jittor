@@ -111,6 +111,18 @@ CUDA 参数抛出显式的 ASV skip。真实 PyTorch 是**可选的 oracle**，�
 安装；缺失或解析到 shim 的 `torch` 会被报告为 skip，**绝不报告为零耗时结果**。CI 中
 至少要有一个强制的 Jittor CPU 用例真正执行——**全部参数都 skip 的运行不可接受。**
 
+## 昇腾 NPU 的手工对照
+
+ASV 套件不覆盖昇腾。ACL 后端与同机 `torch + torch_npu` 的速度和数值对照放在
+[`bench/`](../../bench/README.md)：`bench_jittor.py` / `bench_torch.py` 跑同一组网络
+（规格见 [`bench/models.md`](../../bench/models.md)），`bench/xval/` 把 Jittor 的权重和
+输入灌进 torch 逐步比对 loss 与梯度，`bench/aclprobe/` 是绕开 Jittor 直接调 aclnn 的
+探针。这些都需要真实设备，**手工运行**，不进 CI，并且要与 ASV 用不同的编译缓存。
+
+那份 README 记录了在这台机器上量出来的三条陷阱：逐次 `sync()` 会把发射和执行串起来、
+A/B 之间重新编译会让先跑的一方系统性占优、`jt.profiler` 的 `TotalTime` 对小算子不可
+相加。长轨迹的数值偏离要先跑 `bench/xval/control_th.py` 的对照再下结论。
+
 ## CPU 线程绑核
 
 任何 CPU 对比都要绑核。Jittor 与 PyTorch 默认都不设置 OpenMP affinity，在多核主机上
