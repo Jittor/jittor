@@ -17,7 +17,6 @@ includes negative dividends and negative divisors for that reason.
 import unittest
 
 import numpy as np
-import pytest
 import torch
 
 
@@ -100,12 +99,12 @@ class _FamilyChecks(object):
                         np.floor_divide(values, divisor),
                         "int floor_divide({0})".format(divisor))
 
-    @pytest.mark.xfail(strict=True, reason="KI-OPS-003: float operands are truncated to integers")
     def test_float_floor_divide_matches_numpy(self):
-        """Float operands are cast to integers before dividing -- see KI-OPS-003.
+        """Float operands divide at full precision -- KI-OPS-003, fixed.
 
-        Strict, so that fixing the operator turns this red and the entry gets
-        retired rather than the expectation quietly outliving the defect.
+        This was a strict expected failure: `floor_divide` cast both operands
+        to the integer output dtype before dividing, so `-2.7 // 2.0` was
+        `int(-2.7) // 2 == -1` where numpy answers -2.
         """
         tensor = self._tensor(_DIVIDENDS)
         reference = _DIVIDENDS.astype("float64")
