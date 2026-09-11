@@ -275,6 +275,40 @@ def submit_pending(*vars, device_sync=False):
             var.sync()
     return vars[0] if len(vars) == 1 else tuple(vars)
 
+#: `ArrayOp` reads a python number as its own type: a float becomes float32,
+#: an int becomes int32, a bool becomes bool. Spelling the constant as that
+#: python type is what lets it be built in the requested dtype for free.
+_CONSTANT_PY_TYPES = {"float32": float, "int32": int, "bool": bool}
+
+
+def _constant_scalar(value, dtype):
+    """A rank-0 constant of `dtype`, with no cast node behind it.
+
+    `unary(value, dtype)` reads the python number as its *own* type and then
+    casts, so `jt.zeros(shape)` was three nodes: an int32 `array`, a
+    `unary.cast` to the requested dtype, and the broadcast. The cast is free on
+    CPU and CUDA, where the JIT emits the constant inside the consuming kernel,
+    but on an accelerator that dispatches one operator at a time it is a real
+    launch moving four bytes. `Optimizer.zero_grad` calls `zeros_like` once per
+    parameter, so a 35-parameter transformer step carried 18 of them.
+
+    Only the three dtypes a python literal maps to directly are handled, and
+    the conversion is the python builtin rather than numpy: a numpy round trip
+    reaches `ArrayOp` through its array branch, and that costs more host time
+    than the launch it saves -- measured, on this same benchmark. Every other
+    dtype keeps the cast.
+    """
+    builder = _CONSTANT_PY_TYPES.get(_jittor_dtype_name(dtype))
+    if builder is None:
+        return unary(value, dtype)
+    try:
+        native = builder(value)
+    except (ValueError, OverflowError):
+        #: e.g. int(float("nan")). Let the cast op answer for it, as before.
+        return unary(value, dtype)
+    return array(native)
+
+
 def ones(*shape, dtype="float32"):
     ''' Constructs a jittor Var with all elements set to 1.
 
@@ -293,7 +327,7 @@ def ones(*shape, dtype="float32"):
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    return unary(1, dtype).broadcast(shape)
+    return _constant_scalar(1, dtype).broadcast(shape)
 
 def new_ones(x, size):
     return ones(size, x.dtype)
@@ -328,7 +362,7 @@ def zeros(*shape, dtype="float32"):
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    return unary(0, dtype).broadcast(shape)
+    return _constant_scalar(0, dtype).broadcast(shape)
 
 def new_zeros(x, size):
     return zeros(size, x.dtype)
@@ -365,7 +399,7 @@ def full(shape,val,dtype="float32"):
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    return unary(val, dtype).broadcast(shape)
+    return _constant_scalar(val, dtype).broadcast(shape)
 
 def new_full(x, size, val):
     return full(size, val, x.dtype)
