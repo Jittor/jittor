@@ -116,7 +116,10 @@ cuttHandle cutt_get_plan(const CuttPlanKey& key) {
     ExecutorEntryScope entry;
     int device = -1;
     checkCudaErrors(cudaGetDevice(&device));
-    USER_CHECK(device == key.device) << "cuTT plan key must name the current device";
+    // The key is filled in by cutt_transpose_op from cudaGetDevice() on the
+    // line before this call, so a mismatch is the framework contradicting
+    // itself rather than anything the caller passed in.
+    ASSERT(device == key.device) << "cuTT plan key must name the current device";
     auto& cache = cutt_cache(device);
     auto found = cache.plans.find(key);
     if (found != cache.plans.end()) return found->second->value;
