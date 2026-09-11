@@ -3,7 +3,7 @@
 - 状态：PASS（17/17 public checkpoint comparison）
 - 验收日期：2026-09-11（Asia/Shanghai）
 - 代码基线：兼容实现提交 `5bf4d374b2f3eb842ede751e20a24265a048d941`；结构测试基线修复在后续提交完成；本轮集成已将 `origin/2.0-refactor@cb823778bd1b59b0c8955d0e05a831190676e9ed` 合入为 `c2bdd467f90d76673d633eb6e6619a2cbebc4763`
-- 对照分支：`origin/2.0-refactor` 的 refactor 架构与 `feature/cgq_transformers` 已验证功能合并结果；公共模型产物沿用兼容提交生成的完整对拍，合入后的真实设备定向回归保持通过
+- 对照分支：`origin/2.0-refactor` 的 refactor 架构与 `feature/cgq_transformers` 已验证功能合并结果；公共模型产物沿用兼容提交生成的完整对拍，后续 refactor 提交未触及兼容模型路径
 - 环境：Transformers `4.56.2`、真实 PyTorch `2.6.0+cu124`、Jittor `1.3.11.0`、NVIDIA A800、CUDA 12.4、FP32
 - 实验状态：`$JITTOR_LAB_ROOT/_state/transformers_l4_refactor_20260911`
 

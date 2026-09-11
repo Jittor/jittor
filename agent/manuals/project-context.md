@@ -78,8 +78,8 @@ separate gates; see the dated reports linked from `refactor-wip/results/`.
 The current refactor integration retains the fixed Transformers 4.56.2 text matrix: 4 encoder,
 10 decoder, and 3 encoder-decoder implementations are 17/17 PASS on fixed public checkpoints
 with real A800 CUDA. The public artifacts were generated from the validated compatibility
-commit `5bf4d374`; after merging refactor `cb823778`, the targeted real-device HF CUDA suite
-remains green and the refactor delta is confined to backend/structure changes. The evidence
+commit `5bf4d374`; the later refactor delta through `cb823778` is confined to backend/structure
+and benchmark changes, so the existing real-device HF CUDA evidence remains applicable. The evidence
 includes tokenizer, forward, cache, generation, state compatibility, and encoder
 Jittor-to-PyTorch round-trip; the GPT-NeoX top-p cutoff tie remains an explicit numerical
 boundary. See the [current refactor 17-model L4 report](../../refactor-wip/results/transformers/2026-09-11-transformers-refactor-17-model-l4-cuda.md), the [historical strict L4 report](../../refactor-wip/results/transformers/2026-09-06-transformers-text-core-l4-cuda.md), and the [earlier matrix](../../refactor-wip/results/transformers/2026-09-03-transformers-text-core-matrix-cuda.md).
