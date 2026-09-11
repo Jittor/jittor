@@ -2,8 +2,8 @@
 
 - Status: Current index, not a history log
 - Last reviewed: 2026-09-12
-- Baseline reviewed: pending merge of `origin/2.0-refactor@9b58d4ef` into
-  `integrate/cgq-transformers-2.0-refactor`, retaining the validated
+- Baseline reviewed: `integrate/cgq-transformers-2.0-refactor@c2bdd467`, with
+  `origin/2.0-refactor@cb823778` merged and retaining the validated
   compatibility work from `origin/cgq_transformers@5bf4d374`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
@@ -78,7 +78,7 @@ separate gates; see the dated reports linked from `refactor-wip/results/`.
 The current refactor integration retains the fixed Transformers 4.56.2 text matrix: 4 encoder,
 10 decoder, and 3 encoder-decoder implementations are 17/17 PASS on fixed public checkpoints
 with real A800 CUDA. The public artifacts were generated from the validated compatibility
-commit `5bf4d374`; after merging refactor `9b58d4ef`, the targeted real-device HF CUDA suite
+commit `5bf4d374`; after merging refactor `cb823778`, the targeted real-device HF CUDA suite
 remains green and the refactor delta is confined to backend/structure changes. The evidence
 includes tokenizer, forward, cache, generation, state compatibility, and encoder
 Jittor-to-PyTorch round-trip; the GPT-NeoX top-p cutoff tie remains an explicit numerical
