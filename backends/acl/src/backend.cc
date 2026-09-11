@@ -1,3 +1,4 @@
+#include "acl_foreach_coefficients.h"
 #include "acl_runtime.h"
 #include "acl_workspace.h"
 #include "runtime/backend.h"
@@ -610,6 +611,7 @@ void shutdown_acl_backend() noexcept {
     // those frees run, but defer finalization until all stream resources close.
     owner->drained = true;
     release_all_acl_workspaces();
+    release_all_acl_foreach_coefficients();
     for (const auto& stream : owner->streams) {
         report_acl(aclrtSetDevice(stream.second.device), "select ACL unsubscribe device");
         if (stream.second.subscribed)

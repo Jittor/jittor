@@ -201,7 +201,12 @@ def _cache_key(value):
     Values reaching here are ints, bools, floats, short strings and small
     integer sequences, so the key is cheap next to re-encoding the payload.
     """
-    if isinstance(value, (bool, int, float, str)):
+    if isinstance(value, float):
+        # 0.0 and -0.0 are equal and hash equal, yet they encode to different
+        # doubles. Sharing one entry between them would hand back a payload
+        # carrying the wrong sign, so a zero keeps its sign in the key.
+        return value if value else repr(value)
+    if isinstance(value, (bool, int, str)):
         return value
     item = getattr(value, "item", None)
     if item is not None and getattr(value, "shape", None) == ():

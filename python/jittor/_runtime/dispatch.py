@@ -33,6 +33,65 @@ class KernelRegistration:
 _lock = threading.RLock()
 _kernels: Dict[Tuple[str, str], Tuple[KernelRegistration, ...]] = {}
 
+#: Candidate lists per (op, backend), already merged with the "*" backend and
+#: ordered by priority. `select_kernel` redid that merge and a `sorted` call on
+#: every dispatched operator even though registration barely ever changes, and
+#: a training step dispatches thousands of times. Every mutation of `_kernels`
+#: replaces this map, so an entry can only be as old as the last registration.
+_resolved: Dict[Tuple[str, str], Tuple[KernelRegistration, ...]] = {}
+
+
+def _entry_priority(entry):
+    return entry.priority
+
+
+def _invalidate():
+    """Drop the resolved candidate lists; callers must hold `_lock`."""
+    global _resolved
+    _resolved = {}
+
+
+def _candidates(op, backend):
+    key = (op, backend)
+    entries = _resolved.get(key)
+    if entries is not None:
+        return entries
+    with _lock:
+        entries = _resolved.get(key)
+        if entries is None:
+            entries = _kernels.get(key, ()) + _kernels.get((op, "*"), ())
+            if len(entries) > 1:
+                # `sorted` is stable, so equal priorities keep the backend's
+                # own entries ahead of the "*" ones, exactly as the merge did.
+                entries = tuple(sorted(entries, key=_entry_priority, reverse=True))
+            _resolved[key] = entries
+    return entries
+
+
+#: Canonical dtype names by the raw name `dtype_name` reads. That function is
+#: a pure function of that one string, and it rebuilds its alias table from a
+#: literal on every call; this runs once per tensor of every dispatched
+#: operator, and a native NanoString reaches the `str()` arm every time.
+_DTYPE_NAMES: Dict[str, str] = {}
+
+
+def canonical_dtype_name(dtype):
+    """`dtype_name(dtype)`, memoised on the raw name it would have read."""
+    raw = getattr(dtype, "name", None)
+    if raw.__class__ is not str:
+        raw = getattr(dtype, "__name__", None)
+        if raw.__class__ is not str:
+            raw = str(dtype)
+    name = _DTYPE_NAMES.get(raw)
+    if name is None:
+        name = _jittor_dtype_name(dtype)
+        _DTYPE_NAMES[raw] = name
+    return name
+
+
+def _dtype_names(tensors):
+    return tuple([canonical_dtype_name(value.dtype) for value in tensors])
+
 
 def _canonical_backend(backend):
     return "acl" if backend == "acl_legacy" else backend
@@ -72,7 +131,8 @@ def _collect_tensors(values, var_type, tensors, active_containers):
                 active_containers.remove(identity)
 
 
-def dispatch_context(*args, **kwargs):
+def _dispatch_backend(args, kwargs):
+    """The (backend, device_id, dtypes) triple without the named-tuple box."""
     native = sys.modules.get("jittor")
     if native is None or not hasattr(native, "core"):
         raise RuntimeError("Jittor must be initialized before selecting a kernel")
@@ -81,9 +141,14 @@ def dispatch_context(*args, **kwargs):
     # `args` and `kwargs` are freshly built by this call, so neither can be
     # reachable from itself and neither needs an entry in the cycle set.
     _collect_tensors(args, var_type, tensors, None)
-    _collect_tensors(kwargs.values(), var_type, tensors, None)
+    if kwargs:
+        _collect_tensors(kwargs.values(), var_type, tensors, None)
     backend, device_id = native.core.dispatch_context(tensors)
-    return DispatchContext(_canonical_backend(backend), device_id, tuple(_jittor_dtype_name(value.dtype) for value in tensors))
+    return _canonical_backend(backend), device_id, _dtype_names(tensors)
+
+
+def dispatch_context(*args, **kwargs):
+    return DispatchContext(*_dispatch_backend(args, kwargs))
 
 
 def register_kernel(op, backend, implementation, *, dtypes=None,
@@ -116,7 +181,8 @@ def register_kernel(op, backend, implementation, *, dtypes=None,
                     return implementation
                 raise ValueError("kernel already registered with different options: %s/%s" % key)
         _kernels[key] = tuple(sorted(current + (registration,),
-                                     key=lambda entry: entry.priority, reverse=True))
+                                     key=_entry_priority, reverse=True))
+        _invalidate()
     return implementation
 
 
@@ -132,6 +198,7 @@ def unregister_kernel(op, backend, implementation):
             _kernels[key] = remaining
         else:
             _kernels.pop(key)
+        _invalidate()
     return implementation
 
 
@@ -144,19 +211,23 @@ def registered_kernel(op, backend):
 
 
 def select_kernel(op, *args, **kwargs):
+    # Through the module-level name, not `_dispatch_backend`: replacing
+    # `dispatch_context` is how a caller states which device the arguments are
+    # on, and the ACL clamp facade's CPU contract is tested that way.
     context = dispatch_context(*args, **kwargs)
-    with _lock:
-        entries = _kernels.get((op, context.backend), ()) + _kernels.get((op, "*"), ())
-    for entry in sorted(entries, key=lambda item: item.priority, reverse=True):
+    backend, dtypes = context.backend, context.dtypes
+    for entry in _candidates(op, backend):
         if entry.runtime_modes is not None:
             runtime_mode = sys.modules["jittor"].runtime.use_cuda
             # Explicit CPU/CUDA tensor placement can differ from the Runtime
             # default; mode eligibility follows the selected graph backend.
-            selected_mode = 0 if context.backend == "cpu" else (runtime_mode or 1)
+            selected_mode = 0 if backend == "cpu" else (runtime_mode or 1)
             if selected_mode not in entry.runtime_modes:
                 continue
-        if entry.dtypes is not None and any(dtype not in entry.dtypes for dtype in context.dtypes):
-            continue
+        if entry.dtypes is not None:
+            entry_dtypes = entry.dtypes
+            if any(dtype not in entry_dtypes for dtype in dtypes):
+                continue
         if entry.supports is not None and not entry.supports(*args, **kwargs):
             continue
         return entry.implementation
@@ -194,6 +265,7 @@ def override_kernel(op, backend, implementation, *, dtypes=None,
     backend = _canonical_backend(backend)
     with _lock:
         previous = _kernels.pop((op, backend), ())
+        _invalidate()
         try:
             if implementation is not None:
                 register_kernel(op, backend, implementation, dtypes=dtypes,
@@ -201,6 +273,7 @@ def override_kernel(op, backend, implementation, *, dtypes=None,
         except BaseException:
             if previous:
                 _kernels[(op, backend)] = previous
+            _invalidate()
             raise
     try:
         yield implementation
@@ -210,3 +283,4 @@ def override_kernel(op, backend, implementation, *, dtypes=None,
                 _kernels[(op, backend)] = previous
             else:
                 _kernels.pop((op, backend), None)
+            _invalidate()

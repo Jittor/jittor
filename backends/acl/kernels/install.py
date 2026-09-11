@@ -35,6 +35,7 @@ KERNELS = (
     ("nn.leaky_relu", neural.leaky_relu),
     ("nn.silu", neural._silu_acl),
     ("nn.gelu", neural.gelu_acl),
+    ("nn.cross_entropy_loss", neural.cross_entropy_loss_acl),
     ("nn.softmax", neural.softmax_acl),
     ("nn.rotary_emb", neural.rope_acl),
     ("nn.layer_norm.training", normalization.layer_norm_acl),

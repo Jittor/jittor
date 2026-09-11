@@ -1,4 +1,4 @@
-from ._code import code_with_attributes
+from ._code import acl_emit, acl_program, code_with_attributes
 from ._attributes import attribute_program, code_program, runner_for_alias
 import os
 from jittor_utils import env_or_try_find
@@ -35,33 +35,45 @@ class TransPoseACL:
             dim = axes
         dim = list(dim)
 
-        inverse_dim = list(range(x.ndim))
-        for index, axis in enumerate(dim):
-            inverse_dim[axis] = index
+        # calculate output shape
+        output_shape = [x.shape[i] for i in dim]
+        program = _transpose_program(x.ndim, tuple(dim))
+        return acl_emit(program, [x], [x.dtype], [output_shape])[0]
 
-        attr_code = code_program(
+
+#: One assembled program per permutation. The permutation also fixes the
+#: gradient program, whose axes are its inverse.
+_TRANSPOSE_PROGRAMS = {}
+
+
+def _transpose_program(ndim, dim):
+    key = (ndim, dim)
+    program = _TRANSPOSE_PROGRAMS.get(key)
+    if program is not None:
+        return program
+    inverse_dim = list(range(ndim))
+    for index, axis in enumerate(dim):
+        inverse_dim[axis] = index
+    program = acl_program(
+        "Transpose",
+        1,
+        1,
+        attr_code=code_program(
             [
                 '\n        op.jt_name = "transpose";\n        ',
                 attribute_program("Transpose", {"axes": list(dim)}, variable="op"),
                 "\n        ",
             ]
-        )
-        # calculate output shape
-        output_shape = [x.shape[i] for i in dim]
-        output = transpose_cmd(
-            "Transpose",
-            [x],
-            output_dtypes=[x.dtype],
-            output_shapes=[output_shape],
-            attr_code=attr_code,
-            cuda_grad_src=[
-                code_program(
-                    [
-                        '\n// aclop\nTransposeOpRunner op;\nop.add(dout, true);\nop.add(out0, false);\nop.jt_name = "transpose";\n',
-                        attribute_program("Transpose", {"axes": list(inverse_dim)}, variable="op", slot="transpose_backward"),
-                        "\nop.run();\n",
-                    ]
-                )
-            ],
-        )[0]
-        return output
+        ),
+        cuda_grad_src=[
+            code_program(
+                [
+                    '\n// aclop\nTransposeOpRunner op;\nop.add(dout, true);\nop.add(out0, false);\nop.jt_name = "transpose";\n',
+                    attribute_program("Transpose", {"axes": list(inverse_dim)}, variable="op", slot="transpose_backward"),
+                    "\nop.run();\n",
+                ]
+            )
+        ],
+    )
+    _TRANSPOSE_PROGRAMS[key] = program
+    return program

@@ -119,10 +119,12 @@ const AclOpRegistry& acl_op_registry() {
         // kernels/native, so the table was simply missing their names.
         {"Gelu", AclOpFunctions::direct(aclnnGeluV2)},
         {"GeluBackward", AclOpFunctions::direct(aclnnGeluBackwardV2)},
+        {"CrossEntropyLoss", AclOpFunctions::direct(aclnnCrossEntropyLoss)},
+        {"CrossEntropyLossGrad", AclOpFunctions::direct(aclnnCrossEntropyLossGrad)},
         {"All", AclOpFunctions::direct(aclnnAll)},
         {"Any", AclOpFunctions::direct(aclnnAny)},
         {"AdamWList", AclOpFunctions::direct(aclnnApplyAdamWV2)},
-        {"FusedSgd", AclOpFunctions::direct(aclnnFusedSgd)},
+        {"FusedSgd", AclOpFunctions::direct(aclnnForeachAddList)},
         {"ClampTensor", AclOpFunctions::direct(aclnnClampTensor)},
         {"GroupNorm", AclOpFunctions::direct(aclnnGroupNorm)},
         {"GroupNormBackward", AclOpFunctions::direct(aclnnGroupNormBackward)},

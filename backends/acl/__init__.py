@@ -41,6 +41,7 @@ REGISTRATION_SOURCES = (
 )
 PROVIDER_RUNTIME_SOURCES = (
     "src/backend.cc",
+    "src/foreach_coefficients.cc",
     "src/workspace.cc",
 )
 CORE_SOURCES = (
@@ -53,6 +54,7 @@ CORE_SOURCES = (
     "kernels/native/clamp_op_acl.cc",
     "kernels/native/concat_op_acl.cc",
     "kernels/native/conv_op_acl.cc",
+    "kernels/native/cross_entropy_loss_op_acl.cc",
     "kernels/native/cumsum_op_acl.cc",
     "kernels/native/dropout_op_acl.cc",
     "kernels/native/embedding_op_acl.cc",
@@ -61,6 +63,7 @@ CORE_SOURCES = (
     "kernels/native/flip_op_acl.cc",
     "kernels/native/floor_op_acl.cc",
     "kernels/native/gather_scatter_op_acl.cc",
+    "kernels/native/foreach_op_acl.cc",
     "kernels/native/fused_sgd_op_acl.cc",
     "kernels/native/gelu_op_acl.cc",
     "kernels/native/getitem_op_acl.cc",

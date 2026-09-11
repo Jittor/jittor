@@ -131,7 +131,7 @@ def test_acl_install_publishes_real_owners_idempotently_without_facade_writes(pr
     assert providers.dispatch._kernels == first
     assert vars(providers.native) == before
     assert providers.calls == []
-    assert len(providers.install.KERNELS) == 45
+    assert len(providers.install.KERNELS) == 46
     for operation, implementation in providers.install.KERNELS:
         assert providers.dispatch.registered_kernel(operation, "acl") is implementation
         assert implementation.__module__.startswith("jittor.backends.acl.kernels.") or (

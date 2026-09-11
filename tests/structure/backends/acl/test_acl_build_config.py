@@ -81,7 +81,7 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
     # The provider runtime is compiled by BuildConfig, not folded into the
     # registration module.
     assert [os.path.basename(source.path) for source in config.backend_sources] == [
-        "backend.cc", "workspace.cc"]
+        "backend.cc", "workspace.cc", "foreach_coefficients.cc"]
     assert all(isinstance(source, setup.api.BuildSource)
                for source in config.backend_sources)
     # A generated ACL operator is host C++ calling aclnn, not ccec device source.
@@ -103,7 +103,7 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
         (SOURCE.parent / "kernels/native").glob("*.cc")))
     converter_sources = [str(SOURCE.parent / "src" / name) for name in (
         "acl_error_code.cc", "acl_jittor.cc", "aclnn.cc")]
-    assert len(expected_extra) == 43
+    assert len(expected_extra) == 46
     assert len(converter_sources) == 3
     assert config.extra_core_files == ("existing.cc", *expected_extra)
     assert [call[0] for call in setup.calls] == ["load", "compile"]
@@ -209,9 +209,10 @@ def test_backend_has_no_mutable_configuration_or_compiler_imports(acl):
 
 def test_provider_source_inventory_is_explicit_and_complete(acl):
     sources = acl.REGISTRATION_SOURCES + acl.CORE_SOURCES
-    assert len(sources) == len(set(sources)) == 46
+    assert len(sources) == len(set(sources)) == 49
     assert all((SOURCE.parent / name).is_file() for name in sources)
     actual = {str(path.relative_to(SOURCE.parent))
               for path in SOURCE.parent.rglob("*.cc")}
-    assert actual == set(sources) | {"src/backend.cc", "src/workspace.cc"}
+    assert actual == set(sources) | {"src/backend.cc", "src/foreach_coefficients.cc",
+                                     "src/workspace.cc"}
     assert "glob" not in vars(acl)

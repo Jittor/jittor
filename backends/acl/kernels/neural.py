@@ -7,6 +7,7 @@ import jittor as jt
 from .ops._code import ACL_FLOAT_DTYPES
 from .ops.conv_op import ConvACL
 from .ops.bmm_op import BmmACL
+from .ops.cross_entropy_loss_op import CrossEntropyLossACL
 from .ops.gelu_op import GeluACL
 from .ops.matmul_op import MatmulACL
 from .ops.transpose_op import TransPoseACL
@@ -82,6 +83,54 @@ def gelu_acl(x, approximate="none"):
     if isinstance(x, jt.Var) and _jittor_dtype_name(x.dtype) in ("float16", "float32", "bfloat16"):
         return GeluACL()(x)
     return None
+
+
+def cross_entropy_loss_acl(output, target, weight=None, ignore_index=None,
+                           reduction="mean"):
+    """One aclnn launch for the loss and one for its gradient.
+
+    Everything this declines falls back to the portable definition: a class
+    weight vector (CANN applies it inside the reduction this function keeps in
+    Python), a non-float32 logit tensor, and any rank the portable code does
+    not itself flatten to ``[N, C]``.
+    """
+    if weight is not None or reduction not in ("none", "mean", "sum"):
+        return None
+    if not isinstance(output, jt.Var) or not isinstance(target, jt.Var):
+        return None
+    if _jittor_dtype_name(output.dtype) != "float32":
+        return None
+    if _jittor_dtype_name(target.dtype) not in ("int32", "int64"):
+        return None
+    target_shape = target.shape
+    if output.ndim == 4:
+        classes = int(output.shape[1])
+        output = output.transpose((0, 2, 3, 1)).reshape((-1, classes))
+    elif output.ndim != 2:
+        return None
+    classes = int(output.shape[1])
+    if classes <= 0 or int(output.shape[0]) <= 0:
+        return None
+    target = target.reshape((-1,))
+    if int(target.shape[0]) != int(output.shape[0]):
+        return None
+
+    # jittor gives an out-of-range label -- and one equal to ignore_index --
+    # weight zero and keeps it out of the mean's denominator. aclnnCrossEntropy
+    # Loss instead gathers with the raw label and faults the AI Core outside
+    # [0, C), ignoreIndex included, so the label reaching it is masked to 0 and
+    # the weighting is applied to the per-sample loss it returns.
+    valid = jt.logical_and(target >= 0, target < classes)
+    if ignore_index is not None:
+        valid = jt.logical_and(valid, target != ignore_index)
+    in_range = target * valid.cast(target.dtype)
+    target_weight = valid.float32()
+    loss = CrossEntropyLossACL()(output, in_range) * target_weight
+    if reduction == "sum":
+        return loss.sum()
+    if reduction == "mean":
+        return loss.sum() / target_weight.sum()
+    return loss.reshape(target_shape)
 
 
 def _silu_acl(x, inplace=False):

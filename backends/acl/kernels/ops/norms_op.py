@@ -1,4 +1,4 @@
-from ._code import code_with_attributes
+from ._code import acl_emit, acl_program, code_with_attributes, scalar_key
 from ._attributes import attribute_program, code_program, runner_for_alias
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import os
@@ -24,27 +24,15 @@ class BatchNormACL:
         self.momentum = float(momentum)
         self.is_train = bool(is_train)
 
-    def _attributes(self):
-        return {"is_train": bool(self.is_train), "momentum": self.momentum, "eps": self.eps}
-
     def __call__(self, x, weight, bias, running_mean, running_var):
         channels = int(x.shape[1])
-        result = norms_cmd(
-            "BatchNorm",
-            inputs=[x, weight, bias, running_mean, running_var],
-            output_dtypes=[x.dtype] * 3,
-            output_shapes=[x.shape, (channels,), (channels,)],
-            attributes=self._attributes(),
-            multi_grad_input_count=3,
-            multi_grad_src=code_program(
-                [
-                    "\n            // aclop\n            BatchNormBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(in1, true);\n            op.add(in3, true);\n            op.add(in4, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
-                    "\n            op.run();\n            ",
-                ]
-            ),
-            multi_grad_attributes=self._attributes(),
-        )
-        return result[0]
+        program = _batchnorm_program(self.is_train, self.momentum, self.eps)
+        return acl_emit(
+            program,
+            [x, weight, bias, running_mean, running_var],
+            [x.dtype] * 3,
+            [x.shape, (channels,), (channels,)],
+        )[0]
 
 
 class LayerNormACL:
@@ -55,33 +43,19 @@ class LayerNormACL:
         self.eps = eps
         self.elementwise_affine = elementwise_affine
 
-    def _attributes(self):
-        return {
-                "eps": self.eps,
-                "normalizedShape": list(self.normalized_shape),
-            }
-
     def __call__(self, x, weight, bias):
         input_value = check_acl_float_dtype(x, "layernorm")
         # aclnnLayerNorm outputs: out (x.shape), mean & rstd (reduced over the
         # normalized dims -> same leading shape with the normalized dims = 1).
         nd = len(self.normalized_shape)
         reduced_shape = list(x.shape[: len(x.shape) - nd]) + [1] * nd
-        result = norms_cmd(
-            "LayerNorm",
-            inputs=[input_value, weight, bias],
-            output_dtypes=[input_value.dtype] * 3,
-            output_shapes=[input_value.shape, reduced_shape, reduced_shape],
-            attributes=self._attributes(),
-            multi_grad_src=code_program(
-                [
-                    "\n            // aclop\n            LayerNormBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(in1, true);\n            op.add(in2, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
-                    "\n            op.run();\n            ",
-                ]
-            ),
-            multi_grad_attributes=self._attributes(),
-        )
-        return result[0]
+        program = _layernorm_program(self.normalized_shape, self.eps)
+        return acl_emit(
+            program,
+            [input_value, weight, bias],
+            [input_value.dtype] * 3,
+            [input_value.shape, reduced_shape, reduced_shape],
+        )[0]
 
 
 class GroupNormACL:
@@ -89,40 +63,25 @@ class GroupNormACL:
         self.num_groups = int(num_groups)
         self.eps = float(eps)
 
-    def _attributes(self):
-        return {
-                "batch": self.batch,
-                "channels": self.channels,
-                "spatialSize": self.spatial_size,
-                "groups": self.num_groups,
-                "eps": self.eps,
-            }
-
     def __call__(self, x, weight, bias):
         self.batch = int(x.shape[0])
         self.channels = int(x.shape[1])
         self.spatial_size = 1
         for size in x.shape[2:]:
             self.spatial_size *= int(size)
-        result = norms_cmd(
-            "GroupNorm",
-            inputs=[x, weight, bias],
-            output_dtypes=[x.dtype, x.dtype, x.dtype],
-            output_shapes=[
+        program = _groupnorm_program(
+            self.batch, self.channels, self.spatial_size, self.num_groups, self.eps
+        )
+        return acl_emit(
+            program,
+            [x, weight, bias],
+            [x.dtype, x.dtype, x.dtype],
+            [
                 x.shape,
                 (self.batch, self.num_groups),
                 (self.batch, self.num_groups),
             ],
-            attributes=self._attributes(),
-            multi_grad_src=code_program(
-                [
-                    "\n            // aclop\n            GroupNormBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(in1, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
-                    "\n            op.run();\n            ",
-                ]
-            ),
-            multi_grad_attributes=self._attributes(),
-        )
-        return result[0]
+        )[0]
 
 
 class RmsNormACL(jt.Function):
@@ -251,3 +210,72 @@ namespace jittor {}
             attribute_sets={"first_norm": ("RmsNorm", {"eps": eps}), "second_norm": ("RmsNorm", {"eps": eps})},
         )
         return result[0], result[1]
+
+
+_BATCHNORM_GRAD_SRC = "\n            // aclop\n            BatchNormBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(in1, true);\n            op.add(in3, true);\n            op.add(in4, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            \n            op.run();\n            "
+
+_LAYERNORM_GRAD_SRC = "\n            // aclop\n            LayerNormBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(in1, true);\n            op.add(in2, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            \n            op.run();\n            "
+
+_GROUPNORM_GRAD_SRC = "\n            // aclop\n            GroupNormBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(in1, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            \n            op.run();\n            "
+
+#: A normalisation's whole program follows from its hyper-parameters, and a
+#: layer keeps those for its lifetime: one entry serves every step.
+_NORM_PROGRAMS = {}
+
+
+def _batchnorm_program(is_train, momentum, eps):
+    key = ("BatchNorm", bool(is_train), scalar_key(momentum), scalar_key(eps))
+    program = _NORM_PROGRAMS.get(key)
+    if program is None:
+        attributes = {"is_train": bool(is_train), "momentum": momentum, "eps": eps}
+        program = acl_program(
+            "BatchNorm",
+            5,
+            3,
+            attributes=attributes,
+            multi_grad_input_count=3,
+            multi_grad_src=_BATCHNORM_GRAD_SRC,
+            multi_grad_attributes=attributes,
+        )
+        _NORM_PROGRAMS[key] = program
+    return program
+
+
+def _layernorm_program(normalized_shape, eps):
+    key = ("LayerNorm", tuple(normalized_shape), scalar_key(eps))
+    program = _NORM_PROGRAMS.get(key)
+    if program is None:
+        attributes = {"eps": eps, "normalizedShape": list(normalized_shape)}
+        program = acl_program(
+            "LayerNorm",
+            3,
+            3,
+            attributes=attributes,
+            multi_grad_src=_LAYERNORM_GRAD_SRC,
+            multi_grad_attributes=attributes,
+        )
+        _NORM_PROGRAMS[key] = program
+    return program
+
+
+def _groupnorm_program(batch, channels, spatial_size, groups, eps):
+    key = ("GroupNorm", batch, channels, spatial_size, groups, scalar_key(eps))
+    program = _NORM_PROGRAMS.get(key)
+    if program is None:
+        attributes = {
+            "batch": batch,
+            "channels": channels,
+            "spatialSize": spatial_size,
+            "groups": groups,
+            "eps": eps,
+        }
+        program = acl_program(
+            "GroupNorm",
+            3,
+            3,
+            attributes=attributes,
+            multi_grad_src=_GROUPNORM_GRAD_SRC,
+            multi_grad_attributes=attributes,
+        )
+        _NORM_PROGRAMS[key] = program
+    return program

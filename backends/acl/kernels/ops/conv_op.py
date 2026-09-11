@@ -1,4 +1,4 @@
-from ._code import code_with_attributes
+from ._code import acl_emit, acl_program, code_with_attributes
 from ._attributes import attribute_program, code_program, runner_for_alias
 import os
 import jittor_utils
@@ -64,6 +64,41 @@ def _conv_output_shape(x, weight, stride, padding, dilation):
     return (x.shape[0], weight.shape[0], output_height, output_width)
 
 
+_BIASED_GRAD_SRC = "\n            // aclop\n            Conv2dBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(in1, true);\n            op.add(in2, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            \n            op.run();\n            "
+
+_UNBIASED_GRAD_SRC = "\n            // aclop\n            Conv2dBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(in1, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            \n            op.run();\n            "
+
+#: One assembled program per convolution geometry. `cube_math_type` follows
+#: `jt.acl_allow_hf32`, which a caller may flip between two convolutions, so
+#: it is a key component: a program cached under the previous value would keep
+#: launching the previous arithmetic.
+_CONV_PROGRAMS = {}
+
+
+def _conv_program(biased, stride, padding, dilation, groups, cube_math_type):
+    key = (biased, stride, padding, dilation, groups, cube_math_type)
+    program = _CONV_PROGRAMS.get(key)
+    if program is None:
+        attributes = {
+            "convStrides": list(stride),
+            "convPads": list(padding),
+            "convDilations": list(dilation),
+            "group": groups,
+            "convOutPads": [0, 0],
+            "cube_math_type": cube_math_type,
+        }
+        program = acl_program(
+            "Conv2d",
+            3 if biased else 2,
+            1,
+            attributes=attributes,
+            multi_grad_src=_BIASED_GRAD_SRC if biased else _UNBIASED_GRAD_SRC,
+            multi_grad_attributes=attributes,
+        )
+        _CONV_PROGRAMS[key] = program
+    return program
+
+
 class _ConvACLNoBias:
     def __call__(self, x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
         if bias is not None:
@@ -73,23 +108,16 @@ class _ConvACLNoBias:
         dilation = _pair(dilation)
         if groups <= 0:
             raise ValueError("groups must be a positive integer")
-        attributes = {"convStrides": list(stride), "convPads": list(padding), "convDilations": list(dilation), "group": groups, "convOutPads": [0, 0], "cube_math_type": 1 if getattr(jt, "acl_allow_hf32", False) else 0}
+        program = _conv_program(
+            False,
+            tuple(stride),
+            tuple(padding),
+            tuple(dilation),
+            groups,
+            1 if getattr(jt, "acl_allow_hf32", False) else 0,
+        )
         output_shape = _conv_output_shape(x, weight, stride, padding, dilation)
-        result = conv_cmd(
-            "Conv2d",
-            [x, weight],
-            output_dtypes=[x.dtype],
-            output_shapes=[output_shape],
-            attributes=attributes,
-            multi_grad_src=code_program(
-                [
-                    "\n            // aclop\n            Conv2dBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(in1, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            ",
-                    "\n            op.run();\n            ",
-                ]
-            ),
-            multi_grad_attributes=attributes,
-        )[0]
-        return result
+        return acl_emit(program, [x, weight], [x.dtype], [output_shape])[0]
 
 
 class ConvACL:
@@ -103,19 +131,12 @@ class ConvACL:
         stride = _pair(stride)
         dilation = _pair(dilation)
         output_shape = _conv_output_shape(x, weight, stride, padding, dilation)
-        attributes = {"convStrides": list(stride), "convPads": list(padding), "convDilations": list(dilation), "group": groups, "convOutPads": [0, 0], "cube_math_type": 1 if getattr(jt, "acl_allow_hf32", False) else 0}
-
-        return conv_cmd(
-            "Conv2d",
-            [x, weight, bias],
-            output_dtypes=[x.dtype],
-            output_shapes=[output_shape],
-            attributes=attributes,
-            multi_grad_src=code_program(
-                [
-                    "\n            // aclop\n            Conv2dBackwardOpRunner op;\n            op.add(dout, true);\n            op.add(in0, true);\n            op.add(in1, true);\n            op.add(in2, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
-                    "\n            op.run();\n            ",
-                ]
-            ),
-            multi_grad_attributes=attributes,
-        )[0]
+        program = _conv_program(
+            True,
+            tuple(stride),
+            tuple(padding),
+            tuple(dilation),
+            groups,
+            1 if getattr(jt, "acl_allow_hf32", False) else 0,
+        )
+        return acl_emit(program, [x, weight, bias], [x.dtype], [output_shape])[0]

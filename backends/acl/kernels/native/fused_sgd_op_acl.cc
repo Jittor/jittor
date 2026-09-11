@@ -1,14 +1,13 @@
-#include <aclnnop/aclnn_fused_sgd.h>
-
+#include <algorithm>
 #include <vector>
 
 #include "acl_jittor.h"
-#include "fused_sgd_op_acl.h"
 #include "core/var.h"
+#include "fused_sgd_op_acl.h"
 
 namespace jittor
 {
-    FusedSgdOpRunner::FusedSgdOpRunner() : BaseOpRunner("FusedSgd")
+    FusedSgdOpRunner::FusedSgdOpRunner() : ForeachOpRunner("FusedSgd")
     {
     }
 
@@ -36,30 +35,64 @@ namespace jittor
                 throw std::runtime_error("fused SGD D2D copy failed: " + acl_error_to_string(ret));
         }
 
-        std::vector<aclTensor *> params(outputTensors.begin(), outputTensors.begin() + count);
-        std::vector<aclTensor *> velocities(outputTensors.begin() + count, outputTensors.end());
-        std::vector<aclTensor *> grads(inputTensors.begin() + count * 2, inputTensors.end());
+        // The portable update is
+        //     dp = sign * grad + weight_decay * param
+        //     v  = momentum * v + (1 - dampening) * dp
+        //     p  = p - lr * (nesterov ? dp + momentum * v : v)
+        // and every coefficient below is one term of it folded so that no
+        // temporary the size of the parameter list is needed: `dp` never
+        // materialises, its two halves are accumulated into `v` (and, for
+        // Nesterov, into `p`) separately.
+        const float sign = attr->maximize ? -1.0f : 1.0f;
+        const float retained = float(1.0 - attr->dampening);
+        const float lr = float(attr->lr);
+        const float momentum = float(attr->momentum);
+        const bool decays = attr->weightDecay != 0;
 
-        aclTensorList *paramList = aclCreateTensorList(params.data(), params.size());
-        aclTensorList *velocityList = aclCreateTensorList(velocities.data(), velocities.size());
-        aclTensorList *gradList = aclCreateTensorList(grads.data(), grads.size());
-        if (!paramList || !velocityList || !gradList)
+        std::vector<float> coefficients;
+        coefficients.push_back(momentum);                              // v <- momentum * v
+        coefficients.push_back(retained * sign);                       // v += . * grad
+        if (decays)
+            coefficients.push_back(retained * float(attr->weightDecay)); // v += . * param
+        if (!attr->nesterov)
         {
-            if (paramList) aclDestroyTensorList(paramList);
-            if (velocityList) aclDestroyTensorList(velocityList);
-            if (gradList) aclDestroyTensorList(gradList);
-            LOGf << name << ": fused SGD tensor list creation failed";
+            coefficients.push_back(-lr);                               // p += . * v
         }
+        else
+        {
+            if (decays)
+                coefficients.push_back(1.0f - lr * float(attr->weightDecay)); // p *= .
+            coefficients.push_back(-lr * sign);                        // p += . * grad
+            coefficients.push_back(-lr * momentum);                    // p += . * v
+        }
+        stageCoefficients(coefficients);
 
-        ret = aclnnFusedSgdGetWorkspaceSize(
-            paramList, gradList, velocityList, nullptr,
-            attr->weightDecay, attr->momentum, attr->lr, attr->dampening,
-            attr->nesterov, attr->maximize, attr->isFirstStep,
-            &workspaceSize, &executor);
-        launch(ret, aclnnFusedSgd, true);
+        // The coefficients are the same for every slice of the parameter list,
+        // so they are staged once and read again per slice.
+        for (int64_t base = 0; base < count; base += list_limit)
+        {
+            const int64_t span = std::min(list_limit, count - base);
+            const bool last = base + span >= count;
+            const aclTensorList *parameters = outputList(base, span);
+            const aclTensorList *velocities = outputList(count + base, span);
+            const aclTensorList *gradients = inputList(count * 2 + base, span);
 
-        aclDestroyTensorList(paramList);
-        aclDestroyTensorList(velocityList);
-        aclDestroyTensorList(gradList);
+            size_t next = 0;
+            foreachMulScalar(velocities, coefficient(next++), velocities, false);
+            foreachAddList(velocities, gradients, coefficient(next++), velocities, false);
+            if (decays)
+                foreachAddList(velocities, parameters, coefficient(next++), velocities, false);
+            if (!attr->nesterov)
+            {
+                foreachAddList(parameters, velocities, coefficient(next++), parameters, last);
+            }
+            else
+            {
+                if (decays)
+                    foreachMulScalar(parameters, coefficient(next++), parameters, false);
+                foreachAddList(parameters, gradients, coefficient(next++), parameters, false);
+                foreachAddList(parameters, velocities, coefficient(next++), parameters, last);
+            }
+        }
     }
 }

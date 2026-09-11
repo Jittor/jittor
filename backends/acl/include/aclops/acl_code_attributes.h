@@ -528,8 +528,12 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
 template<class Runner, class Map>
 void apply_acl_code_attributes(Runner& op, const Map& data,
                                const string& prefix="acl_attr.", const string& schema_name="") {
-    const string name=schema_name.empty() ? op.name : schema_name;
-    auto decoded=acl_data::decode_code_data(data, name, acl_code_attribute_schema(name), prefix);
+    // The payload map is rebuilt but never changed between executions of the
+    // same kernel, so decode once per distinct payload. The schema is built
+    // inside the lambda so a memo hit skips that map construction as well.
+    const string& name=schema_name.empty() ? op.name : schema_name;
+    const auto& decoded=acl_data::decode_code_data_memoized(
+        data, name, [&name] { return acl_code_attribute_schema(name); }, prefix);
     assign_acl_code_attributes(op, decoded);
 }
 } // namespace jittor

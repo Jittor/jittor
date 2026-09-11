@@ -31,11 +31,11 @@ def _momentum_buffer(param):
 
 
 def _acl_fused_sgd_updates(entries, lr, momentum, weight_decay, dampening, nesterov):
-    """One kernel for the whole parameter list.
+    """One op for the whole parameter list.
 
     The portable update is five elementwise passes per parameter, and on ACL
-    every pass is its own launch, so the optimizer -- not the model -- was the
-    bulk of a training step.
+    every pass is its own graph node and its own launch, so the optimizer --
+    not the model -- was the bulk of a training step.
     """
     from jittor.backends.acl.kernels.ops.fused_sgd_op import fused_sgd_acl
 
@@ -48,7 +48,14 @@ def _acl_fused_sgd_updates(entries, lr, momentum, weight_decay, dampening, neste
     return list(zip(new_parameters, new_velocities))
 
 
-register_kernel("optim.sgd_fused", "acl", _acl_fused_sgd_updates)
+# float32 only: the ACL runner hands the CANN foreach operators their
+# coefficients as float32 device scalars, which is the pairing those kernels
+# accept for float32 and bfloat16 parameters but not for float16. Restricting
+# the registration is what makes an unsupported dtype fall back to the portable
+# update instead of failing, and bfloat16 stays out until its parity with the
+# portable update is measured rather than assumed.
+register_kernel("optim.sgd_fused", "acl", _acl_fused_sgd_updates,
+                dtypes=("float32",))
 
 
 class SGD(Optimizer):
@@ -60,11 +67,11 @@ class SGD(Optimizer):
         optimizer.step(loss)
     """
     def __init__(self, params, lr, momentum=0, weight_decay=0, dampening=0, nesterov=False,
-                 fused=False):
+                 fused=None):
         super().__init__(params, lr)
-        # Opt-in like AdamW's: the CANN fused kernel is not available on every
-        # SoC, so the portable update stays the default until it is proven on
-        # the target device.
+        # None means "wherever a backend publishes a fused update"; only ACL
+        # does, and only for the dtypes its kernels cover, so everything else
+        # keeps the portable path without asking for it. False turns it off.
         self.fused = fused
         self.momentum = momentum
         self.weight_decay = weight_decay
@@ -111,7 +118,7 @@ class SGD(Optimizer):
             if not active:
                 continue
             fused = None
-            if momentum != 0 and pg.get("fused", getattr(self, "fused", False)) is True:
+            if momentum != 0 and pg.get("fused", getattr(self, "fused", None)) is not False:
                 # The fused kernel keeps a velocity buffer; the momentum-free
                 # shortcut below is already a single pass and stays generic.
                 fused = select_kernel("optim.sgd_fused", [item[0] for item in active])
