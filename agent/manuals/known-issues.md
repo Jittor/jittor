@@ -588,6 +588,66 @@ framework defects.
 - Review/expiry condition: the file reports 40 passed, or every remaining
   failure has an entry saying which side is wrong and why.
 
+## KI-EXEC-004: pipelined execution costs 43% more peak memory, and nobody measured it
+
+- Severity: Medium (a documented tradeoff is fine; an undocumented one decides
+  whether a batch size fits)
+- Status: Measured 2026-09-11, accepted and documented rather than changed
+- Owner: executor maintainers
+- Evidence: ResNet-50 one training step, batch 32, 224x224, fp32, TF32 off,
+  `jt.cudnn.set_benchmark(0)`, RTX 4090. Peak read by an external process
+  polling `cudaMemGetInfo` on the whole card, so both frameworks are on the
+  same yardstick:
+
+  | `auto_flush_ops` | peak | per step |
+  | --- | --- | --- |
+  | 0 (one submission) | 3.574 GiB | 0.0881 s |
+  | 128 (the default) | 5.104 GiB | 0.0600 s |
+  | 8 | 7.227 GiB | -- |
+  | 1 | 7.312 GiB | -- |
+
+  PyTorch 2.1.2 on the same step with `cudnn.benchmark=False` is 3.74 GiB. So
+  with the pipeline off the two are level, and the 1.5 GiB is the pipeline.
+- Where it goes, measured by stage rather than assumed. Cumulative device-wide
+  delta:
+
+  | stage | PyTorch | Jittor |
+  | --- | --- | --- |
+  | weights | 0.113 | 0.129 |
+  | + input batch | 0.133 | 0.148 |
+  | + forward | 2.816 | 3.025 |
+  | + backward | 3.262 | **5.104** |
+  | + optimizer state | 3.295 | 5.104 |
+
+  Weights and forward agree within 2%. The whole gap appears across the
+  backward. Eleven further steps move neither, so this is a steady-state peak
+  and not a leak. PyTorch's own `memory_allocated` falls from 2.676 to 0.230
+  across its backward, which is the mechanism: each activation is returned as
+  soon as its gradient has consumed it. A flush boundary keeps some activations
+  alive past their last consumer.
+- The direction is the opposite of the obvious guess, and the guess was made
+  and then refuted here. "Deferred execution holds more alive" predicts that
+  flushing sooner would help. It does the reverse: `N=1` is the most expensive
+  setting measured, and full laziness the cheapest. Handed the whole graph, the
+  scheduler can see every tensor's last consumer.
+- Why it was not caught when the pipeline landed (`780c19898`, 2026-09-02).
+  That commit measured wall-clock against PyTorch across five models and a vLLM
+  decode, recorded the semantics it preserves, and says how to reproduce the
+  timings. It does not mention peak memory. This is the third consequence of
+  that one change to be found afterwards, after KI-EXEC-001 (a control-only op
+  held to a compute op's rules) and KI-EXEC-003 (early submission changes
+  residency, cuDNN picks by measured residency, gradients move).
+- Workaround: `jt.flags.auto_flush_ops = 0` when memory is the binding
+  constraint. It is the first switch to try on an accelerator OOM, and the
+  accelerator's OOM message now says so.
+- Review/expiry condition: either the flush boundary stops extending
+  activation lifetimes -- the segment scheduler returns an input whose
+  consumers have all run within the segment -- or a test pins the ratio so a
+  regression past 43% is reported. Measured at one point (batch 32); the
+  absolute gap will grow with batch and resolution, the ratio need not.
+  Nothing here identifies *which* tensors outlive their segment; that needs
+  `use_stat_allocator` lifetimes and was not done.
+
 ## KI-EXEC-003: cuDNN autotuning is not isolated from execution scheduling
 
 - Severity: High (silent, deterministic change to training numerics)
