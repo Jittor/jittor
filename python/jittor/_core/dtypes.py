@@ -32,18 +32,36 @@ _CANONICAL_ALIASES = {
 }
 
 
+#: Canonical name by the spelling that was read off the value. Both steps that
+#: follow the read -- the ``torch.`` prefix and the alias table -- are a pure
+#: function of that one string, and this runs a few hundred times per training
+#: step. Bounded, because a caller can reach the ``str(value)`` arm with an
+#: arbitrary object whose text is not a dtype name at all.
+_CANONICAL_NAMES = {}
+_CANONICAL_NAMES_LIMIT = 256
+
+
 def dtype_name(value):
     """Return a canonical name for metadata; this does not enable computation."""
-    if value is None:
+    if value.__class__ is str:
+        # The overwhelmingly common non-native spelling, and the one the two
+        # attribute probes below can never answer for.
+        name = value
+    elif value is None:
         return None
-    name = getattr(value, "name", None)
-    if not isinstance(name, str):
-        name = getattr(value, "__name__", None)
-    if not isinstance(name, str):
-        name = str(value)
-    if name.startswith("torch."):
-        name = name[6:]
-    return _CANONICAL_ALIASES.get(name, name)
+    else:
+        name = getattr(value, "name", None)
+        if not isinstance(name, str):
+            name = getattr(value, "__name__", None)
+            if not isinstance(name, str):
+                name = str(value)
+    canonical = _CANONICAL_NAMES.get(name)
+    if canonical is None:
+        canonical = name[6:] if name.startswith("torch.") else name
+        canonical = _CANONICAL_ALIASES.get(canonical, canonical)
+        if len(_CANONICAL_NAMES) < _CANONICAL_NAMES_LIMIT:
+            _CANONICAL_NAMES[name] = canonical
+    return canonical
 
 
 def dtype_for_compute(value):

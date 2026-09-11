@@ -28,6 +28,7 @@
 #include "ops/composite/code_op.h"
 #include "ops/composite/fused_adamw_op.h"
 #include "ops/composite/fused_sgd_op.h"
+#include "ops/composite/mapped_matmul_op.h"
 #include "core/fused_op.h"
 #include "ops/unary_op.h"
 #include "ops/ternary_op.h"
@@ -42,6 +43,7 @@
 #include "aclnn/aclnn.h"
 #include "aclops/aclops.h"
 #include "aclops/native_indexing_op_acl.h"
+#include "acl_fused_ascendc.h"
 namespace jittor
 {
     void free_var_mem(Var *v);
@@ -632,7 +634,12 @@ namespace jittor
 
     void exec_fused_acl(Op *op)
     {
-        exec_acl_sequence(op, static_cast<FusedOp *>(op)->ops);
+        auto *fused = static_cast<FusedOp *>(op);
+        // One generated AscendC kernel for the whole group when it is a
+        // float32 elementwise chain this backend can reproduce exactly;
+        // otherwise the per-node launcher sequence below, unchanged.
+        if (exec_fused_ascendc(fused)) return;
+        exec_acl_sequence(op, fused->ops);
     }
 
     static void exec_single_acl(Op *op)
@@ -663,6 +670,27 @@ namespace jittor
     static unordered_map<string, std::function<void(Op *)>> acl_ops = {
         {"getitem", exec_native_acl_getitem},
         {"setitem", exec_native_acl_setitem},
+        // jittor's own transpose op is one aclnnPermute -- exactly what the ACL
+        // CodeOp override used to build, but through jt.code: several us of
+        // python plus a 26-entry string->double attribute map per node, against
+        // ~1 us here. TransposeOpRunner reads both extra fields of ReduceAttr,
+        // so both are set even though a permute uses neither.
+        {"transpose", [](Op *op)
+         {
+             auto *_op = (TransposeOp *)op;
+             AclExecutionRunner<TransposeOpRunner> runner;
+             ReduceAttr *attr = new ReduceAttr();
+             attr->axes.reserve(_op->axes.size());
+             for (int i = 0; i < _op->axes.size(); ++i)
+                 attr->axes.push_back(_op->axes[i]);
+             attr->prod_dim = 0;
+             attr->keepdims = false;
+             runner.jt_name = "transpose";
+             runner.op_attr.reset(attr);
+             runner.add(_op->x, true);
+             runner.add(_op->y, false);
+             runner.run();
+         }},
         {"fused_adamw", [](Op *op)
          {
              auto _op = (FusedAdamwOp *)op;
@@ -709,6 +737,42 @@ namespace jittor
              for (auto value : _op->new_parameters) runner.add(value, false);
              for (auto value : _op->new_velocities) runner.add(value, false);
              runner.run();
+         }},
+        {"mapped_matmul", [](Op *op)
+         {
+             auto *_op = (MappedMatmulOp *)op;
+             // aclnn's cubeMathType: 0 = KEEP_DTYPE (true float32), 1 =
+             // ALLOW_FP32_DOWN_PRECISION (HF32), the arithmetic torch_npu uses
+             // by default and what `jt.acl_allow_hf32` selects.
+             const int cube_math_type = _op->allow_reduced_precision ? 1 : 0;
+             // aclnnMatmul takes the plain matrices; aclnnBatchMatMul takes a
+             // rank-3 stack, and BatchMatMulOpRunner folds any further leading
+             // axes into its descriptor, so attention's rank-4 operands arrive
+             // here as one node and leave as one launch. Both runners call
+             // their aclnn entry point directly and never read the registry
+             // iterator, hence UsesRegistry=false.
+             if (_op->a->shape.size() == 2)
+             {
+                 AclExecutionRunner<MatMulOpRunner, false> runner;
+                 runner.jt_name = _op->trans_b ? "matmul_trans_1"
+                     : _op->trans_a ? "matmul_trans_0" : "matmul";
+                 runner.cube_math_type = cube_math_type;
+                 runner.add(_op->a, true);
+                 runner.add(_op->b, true);
+                 runner.add(_op->c, false);
+                 runner.run();
+             }
+             else
+             {
+                 AclExecutionRunner<BatchMatMulOpRunner, false> runner;
+                 runner.jt_name = _op->trans_b ? "bmm_trans_1"
+                     : _op->trans_a ? "bmm_trans_0" : "bmm";
+                 runner.cube_math_type = cube_math_type;
+                 runner.add(_op->a, true);
+                 runner.add(_op->b, true);
+                 runner.add(_op->c, false);
+                 runner.run();
+             }
          }},
         {"arg_reduce", [](Op *op)
          {

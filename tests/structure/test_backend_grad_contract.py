@@ -159,9 +159,12 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/acl/kernels/ops/arg_reduce_op.py", "ArgReduceACL",
      "tests/backends/acl/test_acl.py::TestACL::test_float_arg_reduce_backward_runs_on_acl",
      "npu_hardware"),
-    ("backends/acl/kernels/ops/bmm_op.py", "BmmACL",
-     "tests/backends/acl/test_aclop.py::TestACL::test_bmm_grad_a",
-     "npu_hardware"),
+    # `BmmACL` used to carry the ACL batched product's gradient as a
+    # `jt.Function`. Both products are the core `MappedMatmulOp` now
+    # (`src/ops/composite/mapped_matmul_op.cc`), whose gradient is C++ in the
+    # core tree and so not a backend gradient by this file's definition; the
+    # device route for it is
+    # tests/backends/acl/test_acl.py::TestACL::test_mapped_matmul_forward_and_gradients.
     ("backends/acl/kernels/ops/clamp_op.py", "ClampACL",
      "tests/backends/acl/test_acl.py::TestACL::test_clamp_scalar_forward_backward_uses_cann",
      "npu_hardware"),
@@ -206,9 +209,6 @@ BACKEND_GRAD_COVERAGE = (
      "npu_hardware"),
     ("backends/acl/kernels/ops/setitem_op.py", "SetItemACL",
      "tests/backends/acl/test_aclop.py::TestACL::test_setitem_grad",
-     "npu_hardware"),
-    ("backends/acl/kernels/ops/sigmoid_op.py", "SigmoidACL",
-     "tests/backends/acl/test_aclop.py::TestACL::test_sigmoid_grad",
      "npu_hardware"),
     ("backends/acl/kernels/ops/softmax_op.py", "SoftmaxACL",
      "tests/backends/acl/test_aclop.py::TestACL::test_softmax_grad",

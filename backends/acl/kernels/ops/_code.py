@@ -32,6 +32,12 @@ from ._attributes import (
 # unconverted from several other ops here.
 ACL_FLOAT_DTYPES = ("float16", "bfloat16", "float32")
 
+#: The same set, keyed for a membership test on the *raw* spelling. A Var's
+#: dtype is a native NanoString that prints its canonical name, so a guard is
+#: one ``str`` plus one set lookup and only an unusual spelling has to reach
+#: ``dtype_name``.
+ACL_FLOAT_DTYPE_SET = frozenset(ACL_FLOAT_DTYPES)
+
 _ATTRIBUTE_INCLUDE = '\n#include "aclops/acl_code_attributes.h"\n'
 _ACLOPS_INCLUDE = """
     #include "aclops/aclops.h"
@@ -112,8 +118,10 @@ def check_acl_float_dtype(x, op_name):
     nowhere. Declaring what is supported and failing on the rest is the
     behaviour the other 28 op files in this directory already have.
     """
+    if str(x.dtype) in ACL_FLOAT_DTYPE_SET:
+        return x
     dtype = canonical_dtype_name(x.dtype)
-    if dtype not in ACL_FLOAT_DTYPES:
+    if dtype not in ACL_FLOAT_DTYPE_SET:
         raise TypeError(
             "{} on ACL supports {}, got {}".format(
                 op_name, "/".join(ACL_FLOAT_DTYPES), dtype

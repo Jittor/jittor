@@ -90,7 +90,24 @@ def canonical_dtype_name(dtype):
 
 
 def _dtype_names(tensors):
-    return tuple([canonical_dtype_name(value.dtype) for value in tensors])
+    """Canonical dtype names of Vars, without a call per tensor.
+
+    A Var's dtype is always a native ``NanoString``, which carries neither
+    ``name`` nor ``__name__``; ``canonical_dtype_name`` therefore reaches
+    ``str()`` for every one of them after two failed attribute lookups. The
+    memo is the same one, so an unusual spelling still resolves through
+    ``dtype_name`` exactly once.
+    """
+    names = []
+    for value in tensors:
+        dtype = value.dtype
+        raw = str(dtype)
+        name = _DTYPE_NAMES.get(raw)
+        if name is None:
+            name = _jittor_dtype_name(dtype)
+            _DTYPE_NAMES[raw] = name
+        names.append(name)
+    return tuple(names)
 
 
 def _canonical_backend(backend):
@@ -131,24 +148,49 @@ def _collect_tensors(values, var_type, tensors, active_containers):
                 active_containers.remove(identity)
 
 
-def _dispatch_backend(args, kwargs):
-    """The (backend, device_id, dtypes) triple without the named-tuple box."""
+def _dispatch_placement(args, kwargs):
+    """The argument Vars and the (backend, device_id) the runtime puts them on."""
     native = sys.modules.get("jittor")
     if native is None or not hasattr(native, "core"):
         raise RuntimeError("Jittor must be initialized before selecting a kernel")
-    var_type = native.core.Var
+    core = native.core
+    var_type = core.Var
     tensors: List[Any] = []
     # `args` and `kwargs` are freshly built by this call, so neither can be
-    # reachable from itself and neither needs an entry in the cycle set.
-    _collect_tensors(args, var_type, tensors, None)
+    # reachable from itself and neither needs an entry in the cycle set. A
+    # kernel's arguments are almost always flat, so that case is walked here
+    # and `_collect_tensors` is entered only for a container that really has
+    # to be descended into.
+    for value in args:
+        if isinstance(value, var_type):
+            tensors.append(value)
+        elif isinstance(value, (tuple, list, dict)):
+            _collect_tensors((value,), var_type, tensors, None)
     if kwargs:
-        _collect_tensors(kwargs.values(), var_type, tensors, None)
-    backend, device_id = native.core.dispatch_context(tensors)
-    return _canonical_backend(backend), device_id, _dtype_names(tensors)
+        for value in kwargs.values():
+            if isinstance(value, var_type):
+                tensors.append(value)
+            elif isinstance(value, (tuple, list, dict)):
+                _collect_tensors((value,), var_type, tensors, None)
+    backend, device_id = core.dispatch_context(tensors)
+    return tensors, _canonical_backend(backend), device_id
+
+
+def _dispatch_backend(args, kwargs):
+    """The (backend, device_id, dtypes) triple without the named-tuple box."""
+    tensors, backend, device_id = _dispatch_placement(args, kwargs)
+    return backend, device_id, _dtype_names(tensors)
 
 
 def dispatch_context(*args, **kwargs):
     return DispatchContext(*_dispatch_backend(args, kwargs))
+
+
+#: The function `select_kernel` reads placement through unless a caller has
+#: replaced the module attribute. Kept so the fast path can tell "nobody
+#: overrode this" from "a test states the device itself"; the override is a
+#: published contract, so it cannot simply be bypassed.
+_NATIVE_DISPATCH_CONTEXT = dispatch_context
 
 
 def register_kernel(op, backend, implementation, *, dtypes=None,
@@ -213,9 +255,18 @@ def registered_kernel(op, backend):
 def select_kernel(op, *args, **kwargs):
     # Through the module-level name, not `_dispatch_backend`: replacing
     # `dispatch_context` is how a caller states which device the arguments are
-    # on, and the ACL clamp facade's CPU contract is tested that way.
-    context = dispatch_context(*args, **kwargs)
-    backend, dtypes = context.backend, context.dtypes
+    # on, and the ACL clamp facade's CPU contract is tested that way. Only when
+    # nobody has replaced it does this read placement directly, which lets the
+    # dtype names wait until a candidate actually filters on them. Not one ACL
+    # registration declares `dtypes`, and the CUDA softmax entry that does is
+    # only a candidate on a CUDA backend, so on ACL the names were built --
+    # a `str` and a memo lookup per argument -- and then never read.
+    if dispatch_context is _NATIVE_DISPATCH_CONTEXT:
+        tensors, backend, _device_id = _dispatch_placement(args, kwargs)
+        dtypes = None
+    else:
+        context = dispatch_context(*args, **kwargs)
+        tensors, backend, dtypes = None, context.backend, context.dtypes
     for entry in _candidates(op, backend):
         if entry.runtime_modes is not None:
             runtime_mode = sys.modules["jittor"].runtime.use_cuda
@@ -225,6 +276,8 @@ def select_kernel(op, *args, **kwargs):
             if selected_mode not in entry.runtime_modes:
                 continue
         if entry.dtypes is not None:
+            if dtypes is None and tensors is not None:
+                dtypes = _dtype_names(tensors)
             entry_dtypes = entry.dtypes
             if any(dtype not in entry_dtypes for dtype in dtypes):
                 continue

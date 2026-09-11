@@ -77,6 +77,51 @@ AclState& state() {
     return *value;
 }
 
+// One ACL operator resolves the current device around a dozen times (the
+// allocator, the executor, mallocWorkSpace, acl_workspace_address and
+// acl_current_stream all ask), and every one of those used to take
+// AclState::mutex just to learn that the backend was already up. The answers
+// that never change once initialization completes are published here as
+// lock-free atomics; the locked state stays the owner of record and the fast
+// values are only ever written while it is held.
+constexpr int kFastDeviceSlots = 64;
+std::atomic<bool> backend_ready{false};
+std::atomic<int> ready_device_count{0};
+std::atomic<void*> fast_compute_stream[kFastDeviceSlots];
+
+// With exactly one visible ACL device the current device cannot move.
+// aclrtSetDevice rejects any index at or above the visible count, so every
+// setter in the process -- this file, the workspace and foreach-coefficient
+// shutdown loops, HCCL init -- can only ever select device 0; aclrtResetDevice
+// runs only from finalize_if_unused(), which requires a completed shutdown,
+// and shutdown bumps the epoch below first. The first call on a thread still
+// asks ACL, so a thread without an ACL context still fails where it did
+// before. With two or more visible devices nothing is cached and every call
+// asks aclrtGetDevice, exactly as before.
+struct DeviceCache { uint32_t epoch = 0; int device = -1; };
+thread_local DeviceCache device_cache;
+std::atomic<uint32_t> device_epoch{1};
+
+// Called with AclState::mutex held, from initialize() and from shutdown.
+void publish_fast_state(bool ready, int count) {
+    ready_device_count.store(count, std::memory_order_relaxed);
+    backend_ready.store(ready, std::memory_order_release);
+}
+
+void forget_fast_compute_streams() {
+    for (auto& slot : fast_compute_stream) slot.store(nullptr, std::memory_order_release);
+}
+
+void initialize_locked();
+
+// Fast path: a single acquire load once the backend is up. Shutdown clears
+// backend_ready under the mutex before it marks the state shut down, so a call
+// that races with shutdown still reaches initialize_locked() and raises there.
+inline void initialize() {
+    if (backend_ready.load(std::memory_order_acquire)) return;
+    initialize_locked();
+}
+
 int initial_device(uint32_t count) {
     const char* rank = std::getenv("JT_HCCL_LOCAL_RANK");
     if (!rank) rank = std::getenv("OMPI_COMM_WORLD_LOCAL_RANK");
@@ -88,11 +133,11 @@ int initial_device(uint32_t count) {
     return static_cast<int>(static_cast<unsigned long>(value) % count);
 }
 
-void initialize() {
+void initialize_locked() {
     auto& owner = state();
     std::lock_guard<std::recursive_mutex> guard(owner.mutex);
     USER_CHECK(!owner.shutdown) << "ACL backend has been shut down";
-    if (owner.initialized) return;
+    if (owner.initialized) { publish_fast_state(true, owner.count); return; }
     check_acl(aclInit(nullptr), "aclInit");
     try {
         uint32_t count = 0;
@@ -106,6 +151,7 @@ void initialize() {
             runtime_device_state().current_device = runtime_device_state().device_id = device;
         }
         owner.initialized = true;
+        publish_fast_state(true, owner.count);
     } catch (...) {
         report_acl(aclFinalize(), "aclFinalize after failed initialization");
         throw;
@@ -114,8 +160,9 @@ void initialize() {
 
 void validate_device(int device) {
     initialize();
-    USER_CHECK(device >= 0 && device < state().count)
-        << "Invalid ACL device index" << device << "visible device count" << state().count;
+    const int count = ready_device_count.load(std::memory_order_relaxed);
+    USER_CHECK(device >= 0 && device < count)
+        << "Invalid ACL device index" << device << "visible device count" << count;
 }
 
 template<class Function>
@@ -162,7 +209,7 @@ void check_callback_failure() {
     if (failure) std::rethrow_exception(failure);
 }
 
-int device_count() { initialize(); return state().count; }
+int device_count() { initialize(); return ready_device_count.load(std::memory_order_relaxed); }
 
 void set_device(int device) {
     validate_device(device);
@@ -222,13 +269,22 @@ void* create_stream(int device, bool) {
 }
 
 void* compute_stream(int device) {
+    // A cached slot is only ever filled for a device that already passed
+    // validate_device() and whose stream is live, and shutdown empties the
+    // cache before it destroys any stream, so a hit needs no further checks.
+    if (unsigned(device) < unsigned(kFastDeviceSlots))
+        if (auto* cached = fast_compute_stream[device].load(std::memory_order_acquire))
+            return cached;
     validate_device(device);
     std::lock_guard<std::recursive_mutex> guard(state().mutex);
     auto found = state().compute.find(device);
-    if (found != state().compute.end()) return found->second;
-    auto stream = static_cast<aclrtStream>(create_stream(device, false));
-    state().compute.emplace(device, stream);
-    return stream;
+    if (found == state().compute.end()) {
+        auto stream = static_cast<aclrtStream>(create_stream(device, false));
+        found = state().compute.emplace(device, stream).first;
+    }
+    if (unsigned(device) < unsigned(kFastDeviceSlots))
+        fast_compute_stream[device].store(found->second, std::memory_order_release);
+    return found->second;
 }
 
 void synchronize_stream(BackendStream stream) {
@@ -575,10 +631,22 @@ struct Finalizer { ~Finalizer() { shutdown_acl_backend(); } } finalizer;
 } // namespace
 
 int acl_runtime_current_device() {
+    // Hot path: one thread-local read on a single-device process, otherwise a
+    // lock-free initialize() plus the authoritative aclrtGetDevice. Around a
+    // dozen callers ask this per ACL operator (the allocator, the executor,
+    // mallocWorkSpace, acl_workspace_address and acl_current_stream).
+    const uint32_t epoch = device_epoch.load(std::memory_order_relaxed);
+    auto& cache = device_cache;
+    if (cache.epoch == epoch) return cache.device;
     initialize();
-    if (!state().count) return -1;
+    const int count = ready_device_count.load(std::memory_order_relaxed);
+    if (!count) return -1;
     int32_t device = -1;
     check_acl(aclrtGetDevice(&device), "aclrtGetDevice");
+    if (count == 1) {
+        cache.device = device;
+        cache.epoch = epoch;
+    }
     return device;
 }
 
@@ -594,6 +662,13 @@ void shutdown_acl_backend() noexcept {
         std::lock_guard<std::recursive_mutex> guard(owner->mutex);
         if (!owner->initialized || owner->shutdown) return;
         owner->shutdown = true;
+        // Retire the lock-free answers first: from here every hot-path caller
+        // takes the locked path again and raises on the shut-down check.
+        publish_fast_state(false, 0);
+        forget_fast_compute_streams();
+        // Retires every thread's cached device, so a post-shutdown query goes
+        // back through initialize() and raises there.
+        device_epoch.fetch_add(1, std::memory_order_relaxed);
     }
     bool drained = true;
     for (const auto& stream : owner->streams) {

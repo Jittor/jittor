@@ -14,7 +14,50 @@ from typing import Union
 from collections.abc import Sequence, Iterable
 
 
-from ._code import acl_code as pool_cmd
+from ._code import acl_emit, acl_program
+
+#: `jittor.nn.functional.pooling.average` imports jittor.nn, so this cannot be
+#: imported at module scope; resolving it once keeps the statement out of every
+#: pooling call, where it walked five package objects to return a module that
+#: was already in sys.modules.
+_pool_output_size = None
+
+
+def _output_size_fn():
+    global _pool_output_size
+    if _pool_output_size is None:
+        from jittor.nn.functional.pooling.average import _pool_output_size as fn
+        _pool_output_size = fn
+    return _pool_output_size
+
+
+#: Assembled programs per (runner, geometry). `acl_code` re-derives its program
+#: key from a freshly built attribute mapping on every call; a pooling geometry
+#: is fixed by the module that owns it, so a keyed lookup answers instead.
+_POOL_PROGRAMS = {}
+
+
+def _pool_program(name, input_count, output_count, kernel, stride, padding,
+                  dilation, ceil_mode, count_include_pad):
+    key = (name, input_count, output_count, kernel, stride, padding, dilation,
+           ceil_mode, count_include_pad)
+    program = _POOL_PROGRAMS.get(key)
+    if program is None:
+        program = acl_program(
+            name,
+            input_count,
+            output_count,
+            attributes={
+                "kernel_size": [kernel[0], kernel[1]],
+                "poolStrides": [stride[0], stride[1]],
+                "poolPads": [padding[0], padding[1]],
+                "poolDilations": [dilation[0], dilation[1]],
+                "poolCeil": ceil_mode,
+                "countIncludePad": count_include_pad,
+            },
+        )
+        _POOL_PROGRAMS[key] = program
+    return program
 
 
 class PoolACL(jt.Function):
@@ -53,20 +96,16 @@ class PoolACL(jt.Function):
         self.ceil_mode = ceil_mode
         self.count_include_pad = count_include_pad
 
+    def _geometry(self):
+        return (self.kernel_size, self.stride, self.padding, self.dilation,
+                bool(self.ceil_mode), bool(self.count_include_pad))
+
     def execute(self, input):
-        from jittor.nn.functional.pooling.average import _pool_output_size
+        output_size = _output_size_fn()
 
         self.input = input
-        attributes = {
-                        "kernel_size": [self.kernel_size[0], self.kernel_size[1]],
-                        "poolStrides": [self.stride[0], self.stride[1]],
-                        "poolPads": [self.padding[0], self.padding[1]],
-                        "poolDilations": [self.dilation[0], self.dilation[1]],
-                        "poolCeil": bool(self.ceil_mode),
-                        "countIncludePad": bool(self.count_include_pad),
-                    }
         output_height, output_width = (
-            _pool_output_size(size, kernel, stride, padding, self.ceil_mode)
+            output_size(size, kernel, stride, padding, self.ceil_mode)
             for size, kernel, stride, padding in zip(
                 input.shape[-2:], self.kernel_size, self.stride, self.padding
             )
@@ -77,20 +116,18 @@ class PoolACL(jt.Function):
         inputs = [input]
 
         if self.op == "maximum":
-            result = pool_cmd(
-                "Maxpool",
+            result = acl_emit(
+                _pool_program("Maxpool", 1, 2, *self._geometry()),
                 inputs,
-                output_dtypes=[input.dtype, "int32"],
-                output_shapes=[output_shape, output_shape],
-                attributes=attributes,
+                [input.dtype, "int32"],
+                [output_shape, output_shape],
             )
         elif self.op == "mean":
-            result = pool_cmd(
-                "Avgpool",
+            result = acl_emit(
+                _pool_program("Avgpool", 1, 1, *self._geometry()),
                 inputs,
-                output_dtypes=[input.dtype],
-                output_shapes=[output_shape],
-                attributes=attributes,
+                [input.dtype],
+                [output_shape],
             )
         else:
             raise ValueError("no this type pool")
@@ -105,31 +142,21 @@ class PoolACL(jt.Function):
 
     def grad(self, grad_output):
         input = self.input
-        attributes = {
-                        "kernel_size": [self.kernel_size[0], self.kernel_size[1]],
-                        "poolStrides": [self.stride[0], self.stride[1]],
-                        "poolPads": [self.padding[0], self.padding[1]],
-                        "poolDilations": [self.dilation[0], self.dilation[1]],
-                        "poolCeil": bool(self.ceil_mode),
-                        "countIncludePad": bool(self.count_include_pad),
-                    }
         output_shapes = [input.shape]
         output_dtypes = [input.dtype]
         if self.op == "maximum":
-            result = pool_cmd(
-                "MaxpoolBackward",
-                inputs=[grad_output, input, self.index],
-                output_dtypes=output_dtypes,
-                output_shapes=output_shapes,
-                attributes=attributes,
+            result = acl_emit(
+                _pool_program("MaxpoolBackward", 3, 1, *self._geometry()),
+                [grad_output, input, self.index],
+                output_dtypes,
+                output_shapes,
             )[0]
         elif self.op == "mean":
-            result = pool_cmd(
-                "AvgpoolBackward",
-                inputs=[grad_output, input],
-                output_dtypes=output_dtypes,
-                output_shapes=output_shapes,
-                attributes=attributes,
+            result = acl_emit(
+                _pool_program("AvgpoolBackward", 2, 1, *self._geometry()),
+                [grad_output, input],
+                output_dtypes,
+                output_shapes,
             )[0]
         else:
             raise ValueError("no this type pool")

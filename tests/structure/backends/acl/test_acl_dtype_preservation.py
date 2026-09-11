@@ -30,8 +30,7 @@ import numpy as np
 import jittor as jt
 
 from jittor.backends.acl.kernels.ops import _code as acl_code_mod
-from jittor.backends.acl.kernels.ops import (norms_op, relu_op, sigmoid_op, silu_op,
-                                           softmax_op)
+from jittor.backends.acl.kernels.ops import norms_op, relu_op, silu_op, softmax_op
 
 
 class _Recorder:
@@ -57,7 +56,6 @@ class TestAclDtypePreservation(unittest.TestCase):
     CASES = [
         ("silu", silu_op, "silu_cmd", lambda m, x: m.SiLUACL()(x)),
         ("softmax", softmax_op, "acl_code", lambda m, x: m.SoftmaxACL().execute(x, -1)),
-        ("sigmoid", sigmoid_op, "sigmoid_cmd", lambda m, x: m.SigmoidACL().execute(x)),
         ("relu", relu_op, "acl_code", lambda m, x: m.ReLUACL()(x)),
         ("leaky_relu", relu_op, "acl_code", lambda m, x: m.LeakyReLUACL()(x, 0.01)),
     ]

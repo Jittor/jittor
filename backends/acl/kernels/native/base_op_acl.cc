@@ -31,6 +31,53 @@
 
 namespace jittor
 {
+    namespace
+    {
+        // Scratch blocks are leased, never shared: acquire pops one and the
+        // runner's destructor pushes the same one back. A runner built inside
+        // another runner's executeOp therefore holds a different block.
+        constexpr size_t kMaxPooledScratch = 32;
+
+        std::vector<AclRunnerScratch *> &scratch_pool()
+        {
+            static thread_local std::vector<AclRunnerScratch *> pool;
+            return pool;
+        }
+    }
+
+    AclRunnerScratch *acl_scratch_acquire()
+    {
+        auto &pool = scratch_pool();
+        if (pool.empty())
+            return new AclRunnerScratch();
+        auto *scratch = pool.back();
+        pool.pop_back();
+        return scratch;
+    }
+
+    void acl_scratch_release(AclRunnerScratch *scratch) noexcept
+    {
+        if (!scratch)
+            return;
+        // reset() keeps the vector buffers and drops their contents, which is
+        // the whole point of the lease.
+        scratch->reset();
+        try
+        {
+            auto &pool = scratch_pool();
+            if (pool.size() >= kMaxPooledScratch)
+            {
+                delete scratch;
+                return;
+            }
+            pool.push_back(scratch);
+        }
+        catch (...)
+        {
+            delete scratch;
+        }
+    }
+
     // Common functionality for adding input/output variables
     void BaseOpRunner::add(Var *v, bool is_input)
     {
@@ -48,20 +95,26 @@ namespace jittor
     void BaseOpRunner::setupInputDesc()
     {
         auto input_num = in_.size();
-        for (int input_idx = 0; input_idx < input_num; input_idx++)
+        inputShapes.resize(input_num);
+        for (size_t input_idx = 0; input_idx < input_num; input_idx++)
         {
-            std::vector<int64_t> shape;
-            for (int j = 0; j < in_[input_idx]->shape.size(); j++)
+            // Built in place: the shape used to be assembled in a temporary
+            // vector and then copied into inputShapes, two allocations per
+            // input per launch.
+            auto &shape = inputShapes[input_idx];
+            const auto &var_shape = in_[input_idx]->shape;
+            shape.resize(var_shape.size());
+            for (int j = 0; j < var_shape.size(); j++)
             {
-                shape.push_back(in_[input_idx]->shape[j]);
+                shape[j] = var_shape[j];
             }
-            inputShapes.push_back(shape);
         }
 
-        for (int idx = 0; idx < input_num; idx++)
+        inputTensors.resize(input_num, nullptr);
+        for (size_t idx = 0; idx < input_num; idx++)
         {
-            inputTensors.push_back(nullptr);
-            auto ret = CreateAclTensor(inputShapes[idx], in_[idx]->mem_ptr, in_[idx]->size, get_dtype(in_[idx]->dtype()), &inputTensors[idx], use_nchw, in_[idx]);
+            inputTensors[idx] = nullptr;
+            auto ret = AcquireAclTensor(scratch->descriptors, inputShapes[idx], in_[idx]->mem_ptr, in_[idx]->size, get_dtype(in_[idx]->dtype()), &inputTensors[idx], use_nchw, in_[idx]);
             if (ret != ACL_SUCCESS) LOGf << name << ": input tensor creation failed. ERROR:" << ret;
         }
     }
@@ -70,13 +123,18 @@ namespace jittor
     {
         auto input_num = in_.size();
         auto output_num = out_.size();
+        // Clearing the slot as it goes keeps the failure path in
+        // AclExecutionRunner::run from destroying a descriptor that is already
+        // back in the pool.
         for (int idx = 0; idx < input_num; idx++)
         {
-            aclDestroyTensor(inputTensors[idx]);
+            RecycleAclTensor(scratch->descriptors, inputTensors[idx]);
+            inputTensors[idx] = nullptr;
         }
         for (int idx = 0; idx < output_num; idx++)
         {
-            aclDestroyTensor(outputTensors[idx]);
+            RecycleAclTensor(scratch->descriptors, outputTensors[idx]);
+            outputTensors[idx] = nullptr;
         }
     }
 
@@ -84,20 +142,23 @@ namespace jittor
     {
         auto output_num = out_.size();
 
-        for (int output_idx = 0; output_idx < output_num; output_idx++)
+        outputShapes.resize(output_num);
+        for (size_t output_idx = 0; output_idx < output_num; output_idx++)
         {
-            std::vector<int64_t> shape;
-            for (int j = 0; j < out_[output_idx]->shape.size(); j++)
+            auto &shape = outputShapes[output_idx];
+            const auto &var_shape = out_[output_idx]->shape;
+            shape.resize(var_shape.size());
+            for (int j = 0; j < var_shape.size(); j++)
             {
-                shape.push_back(out_[output_idx]->shape[j]);
+                shape[j] = var_shape[j];
             }
-            outputShapes.push_back(shape);
         }
 
-        for (int idx = 0; idx < output_num; idx++)
+        outputTensors.resize(output_num, nullptr);
+        for (size_t idx = 0; idx < output_num; idx++)
         {
-            outputTensors.push_back(nullptr);
-            auto ret = CreateAclTensor(outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw, out_[idx]);
+            outputTensors[idx] = nullptr;
+            auto ret = AcquireAclTensor(scratch->descriptors, outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw, out_[idx]);
             if (ret != ACL_SUCCESS) LOGf << name << ": output tensor creation failed. ERROR:" << ret;
         }
     }

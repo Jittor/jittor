@@ -46,6 +46,7 @@ PROVIDER_RUNTIME_SOURCES = (
 )
 CORE_SOURCES = (
     "src/acl_op_exec.cc",
+    "src/acl_fused_ascendc.cc",
     "kernels/native/adamw_op_acl.cc",
     "kernels/native/arg_reduce_op_acl.cc",
     "kernels/native/base_op_acl.cc",

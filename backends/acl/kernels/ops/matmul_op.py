@@ -1,109 +1,78 @@
-from ._code import acl_emit, acl_program, code_with_attributes
-from ._attributes import attribute_program, code_program, runner_for_alias
-import os
-from jittor_utils import env_or_try_find
-import jittor_utils
-import ctypes
-import glob
-import jittor.compiler as compiler
+"""Matrix product as one mapped graph node, not a generated CodeOp.
+
+A `jt.code(backend="acl")` product costs about 10 us per launch more than a
+mapped op does -- the Python assembly of the source and its data map, the
+string/double data channel, the JIT key and the dlopen'd call -- for the
+identical single aclnn launch at the end of it. `mapped_matmul` is that launch
+reached the way the CUDA backend reaches cuBLAS: a core op class the backend
+maps in `acl_ops`, whose gradient is C++ and so builds no Python program at
+all.
+
+The three branches the CodeOp path carried are all still here:
+
+* `trans_x2` -- now `trans_b`, one descriptor flag on the node.
+* the rank>3 fold -- `BatchMatMulOpRunner` folds the leading batch axes into
+  its descriptor, so `[batch, heads, tokens, width]` stays one node.
+* `reshape_grad_x2` -- the gradient of a stack of matrices times one matrix
+  needs both operands flattened to 2-D. That fold now happens once, in the
+  forward, where it is a view and where the gradient of a view is automatic.
+  The CodeOp path decided it from `len(x1) != len(x2)`, which compares the two
+  leading dimensions and not the two ranks: true for every product these
+  models run, and wrong for a rank-3 `x1` whose leading dim equalled `x2`'s,
+  where it would have left a rank-3 gradient for a rank-2 parameter.
+"""
+
 import jittor as jt
-import math
-import numpy as np
-
-from typing import Union
-from collections.abc import Sequence, Iterable
 
 
-from ._code import acl_code as matmul_forward
+def _allow_reduced_precision():
+    """`jt.acl_allow_hf32`, read per call.
+
+    A caller may flip it between two products, so it is never captured: the
+    answer rides on the node, which is also what makes a gradient use the
+    arithmetic of the forward it differentiates.
+    """
+    return bool(getattr(jt, "acl_allow_hf32", False))
 
 
-def _matmul_attributes(mode):
-    return {"mode": mode, "cube_math_type": 1 if getattr(jt, "acl_allow_hf32", False) else 0}
+def mapped_matmul(x1, x2, trans_a=False, trans_b=False):
+    return jt.core.ops.mapped_matmul(x1, x2, trans_a, trans_b,
+                                     _allow_reduced_precision())
 
 
-_RESHAPE_GRAD_X2 = """
-auto in0_shape = in0->shape;
-auto dout_shape = dout->shape;
-NanoVector in0_flat_shape;
-auto in0_last = in0->shape[in0->shape.size() - 1];
-in0_flat_shape.push_back(in0->numel() / in0_last);
-in0_flat_shape.push_back(in0_last);
-in0->shape = in0_flat_shape;
-NanoVector dout_flat_shape;
-auto dout_last = dout->shape[dout->shape.size() - 1];
-dout_flat_shape.push_back(dout->numel() / dout_last);
-dout_flat_shape.push_back(dout_last);
-dout->shape = dout_flat_shape;
-"""
+def align_operands(x1, x2):
+    """Equal rank and equal batch dims, which is all `mapped_matmul` accepts.
 
-_RESTORE_GRAD_X2 = """
-in0->shape = in0_shape;
-dout->shape = dout_shape;
-"""
+    Torch's broadcasting rules, and the same materialisation the frontend's
+    cuBLAS and oneDNN relays already do (`_broadcast_batch_dims` in
+    `nn.functional.matrix`): one batch stride per operand, and a descriptor
+    that multiplies the leading axes together, cannot express a batch dim of 1
+    against one of n. The ACL path had no such step and a product like that
+    simply failed inside the descriptor.
 
-#: One assembled program per (transpose, flattened-grad, HF32) combination.
-#: `jt.acl_allow_hf32` decides `cube_math_type` and a caller may flip it
-#: between two matmuls, so it is a key component and never read in the
-#: builder: a program cached under the old flag would keep launching the old
-#: arithmetic.
-_MATMUL_PROGRAMS = {}
-
-
-def _matmul_program(trans_x2, reshape_grad_x2, cube_math_type):
-    key = (trans_x2, reshape_grad_x2, cube_math_type)
-    program = _MATMUL_PROGRAMS.get(key)
-    if program is None:
-        program = _build_matmul_program(trans_x2, reshape_grad_x2, cube_math_type)
-        _MATMUL_PROGRAMS[key] = program
-    return program
-
-
-def _build_matmul_program(trans_x2, reshape_grad_x2, cube_math_type):
-    if trans_x2:
-        grad_x2_lhs = "dout"
-        grad_x2_rhs = "in0"
-    else:
-        grad_x2_lhs = "in0"
-        grad_x2_rhs = "dout"
-    reshape_code = _RESHAPE_GRAD_X2 if reshape_grad_x2 else ""
-    restore_code = _RESTORE_GRAD_X2 if reshape_grad_x2 else ""
-    return acl_program(
-        "MatMul",
-        2,
-        1,
-        attributes={"mode": 1 if trans_x2 else 0, "cube_math_type": cube_math_type},
-        cuda_grad_src=[
-            code_program(
-                [
-                    "\n// aclop\nMatMulOpRunner op;\nop.add(dout, true);\nop.add(in1, true);\nop.add(out0, false);\n",
-                    attribute_program(
-                        "MatMul",
-                        {"mode": 0 if trans_x2 else 1, "cube_math_type": cube_math_type},
-                        slot="matmul_grad_x1",
-                    ),
-                    "\nop.run();\n",
-                ]
-            ),
-            code_program(
-                [
-                    "\n// aclop\n",
-                    reshape_code,
-                    "\nMatMulOpRunner op;\nop.add(",
-                    grad_x2_lhs,
-                    ", true);\nop.add(",
-                    grad_x2_rhs,
-                    ", true);\nop.add(out0, false);\n",
-                    attribute_program(
-                        "MatMul",
-                        {"mode": 2, "cube_math_type": cube_math_type},
-                        slot="matmul_grad_x2",
-                    ),
-                    "\nop.run();\n",
-                    restore_code,
-                ]
-            ),
-        ],
-    )
+    A no-op for every shape these models run, and written so that case costs
+    one integer compare.
+    """
+    rank = x1.ndim if x1.ndim > x2.ndim else x2.ndim
+    if rank == 2 or (x1.ndim == rank and x2.ndim == rank
+                     and x1.shape[:-2] == x2.shape[:-2]):
+        return x1, x2
+    if x1.ndim < rank:
+        x1 = x1.reshape([1] * (rank - x1.ndim) + list(x1.shape))
+    if x2.ndim < rank:
+        x2 = x2.reshape([1] * (rank - x2.ndim) + list(x2.shape))
+    batch = []
+    for left, right in zip(x1.shape[:-2], x2.shape[:-2]):
+        if left != right and left != 1 and right != 1:
+            raise RuntimeError(
+                "matmul: batch dims do not broadcast, a:%s%s and b:%s%s"
+                % (x1.dtype, list(x1.shape), x2.dtype, list(x2.shape)))
+        batch.append(max(left, right))
+    if list(x1.shape[:-2]) != batch:
+        x1 = x1.expand(batch + list(x1.shape[-2:])).contiguous()
+    if list(x2.shape[:-2]) != batch:
+        x2 = x2.expand(batch + list(x2.shape[-2:])).contiguous()
+    return x1, x2
 
 
 class MatmulACL:
@@ -114,15 +83,15 @@ class MatmulACL:
         return self.execute(x1, x2)
 
     def execute(self, x1, x2):
-        trans_x2 = self.trans_x2
-        program = _matmul_program(
-            trans_x2,
-            len(x1) != len(x2),
-            1 if getattr(jt, "acl_allow_hf32", False) else 0,
-        )
-        return acl_emit(
-            program,
-            [x1, x2],
-            [x1.dtype],
-            [x1.shape[:-1] + x2.shape[-2:-1] if trans_x2 else x1.shape[:-1] + x2.shape[-1:]],
-        )[0]
+        if x1.ndim > 2 and x2.ndim == 2:
+            # A stack of matrices times one matrix is a single 2-D product
+            # over the flattened stack: one GEMM rather than a batch of them,
+            # and both reshapes are views.
+            flat = x1.reshape((-1, x1.shape[-1]))
+            out = mapped_matmul(flat, x2, False, self.trans_x2)
+            return out.reshape(list(x1.shape[:-1]) + [out.shape[-1]])
+        x1, x2 = align_operands(x1, x2)
+        return mapped_matmul(x1, x2, False, self.trans_x2)
+
+
+__all__ = ["MatmulACL", "align_operands", "mapped_matmul"]

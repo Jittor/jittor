@@ -244,7 +244,70 @@ class TestACL(unittest.TestCase):
 
         np.testing.assert_allclose(actual, a_np @ b_np, rtol=1e-5, atol=1e-5)
         messages = [log["msg"].lower() for log in logs]
-        self.assertTrue(any("compile acl op" in message for message in messages))
+        # A product is a mapped op now (`mapped_matmul` in the backend's
+        # `acl_ops` table), not a generated CodeOp, so the marker it leaves is
+        # the mapped launcher's rather than "compile acl op".
+        self.assertTrue(any("exec acl op" in message and "mapped_matmul" in message
+                            for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_mapped_matmul_forward_and_gradients(self):
+        """The device route for `MappedMatmulOp` and both of its gradients.
+
+        Every shape family the frontend sends to the ACL matrix kernels: a
+        plain 2-D product, the transposed one every `nn.Linear` builds, a
+        rank-3 batch, the rank-4 attention shape whose leading axes the
+        descriptor folds, and a stack of matrices times one matrix -- whose
+        second gradient is the flattened product that used to be
+        `reshape_grad_x2`. Compared against a float64 NumPy reference, forward
+        and both gradients, with the device asserted for every result.
+        """
+        rng = np.random.RandomState(11)
+        cases = (
+            ("2-D", (3, 4), (4, 5), False),
+            ("2-D transposed", (3, 4), (5, 4), True),
+            ("3-D batch", (2, 3, 4), (2, 4, 5), False),
+            ("3-D batch transposed", (2, 3, 4), (2, 5, 4), True),
+            ("4-D attention", (2, 3, 4, 6), (2, 3, 6, 5), False),
+            ("4-D attention transposed", (2, 3, 4, 6), (2, 3, 5, 6), True),
+            ("stack times matrix", (2, 3, 4), (4, 5), False),
+            ("stack times matrix transposed", (2, 3, 4), (5, 4), True),
+        )
+        for label, a_shape, b_shape, transposed in cases:
+            a_np = rng.randn(*a_shape).astype(np.float32)
+            b_np = rng.randn(*b_shape).astype(np.float32)
+            a, b = jt.array(a_np), jt.array(b_np)
+            if not transposed:
+                product = jt.matmul(a, b)
+            elif a.ndim > 2 and b.ndim > 2:
+                product = jt.nn.bmm_transpose(a, b)
+            else:
+                product = jt.nn.matmul_transpose(a, b)
+            seed_np = rng.randn(*product.shape).astype(np.float32)
+            grad_a, grad_b = jt.grad((product * jt.array(seed_np)).sum(), [a, b])
+            product.sync()
+            grad_a.sync()
+            grad_b.sync()
+            self.assertEqual(
+                (product.location(), grad_a.location(), grad_b.location()),
+                ("device", "device", "device"), label)
+
+            a64, b64 = a_np.astype(np.float64), b_np.astype(np.float64)
+            seed64 = seed_np.astype(np.float64)
+            right = np.swapaxes(b64, -1, -2) if transposed else b64
+            expected = np.matmul(a64, right)
+            expected_a = np.matmul(seed64, np.swapaxes(right, -1, -2))
+            expected_b = np.matmul(np.swapaxes(a64, -1, -2), seed64)
+            if transposed:
+                expected_b = np.swapaxes(expected_b, -1, -2)
+            while expected_b.ndim > b64.ndim:
+                expected_b = expected_b.sum(0)
+            np.testing.assert_allclose(product.numpy(), expected,
+                                       rtol=2e-5, atol=2e-5, err_msg=label)
+            np.testing.assert_allclose(grad_a.numpy(), expected_a,
+                                       rtol=2e-5, atol=2e-5, err_msg=label)
+            np.testing.assert_allclose(grad_b.numpy(), expected_b,
+                                       rtol=2e-5, atol=2e-5, err_msg=label)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_float_arg_reduce_runs_on_acl(self):
