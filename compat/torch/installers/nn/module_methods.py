@@ -281,7 +281,24 @@ def _named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
     """Torch's ``named_parameters``: an iterator, with prefix/dedup."""
     reg = get_tensor_state(jt).leaf_params
     seen = set()
-    for name, v in _ORIG_MODULE_NAMED_PARAMETERS(self, recurse=recurse):
+    if remove_duplicate:
+        parameters = _ORIG_MODULE_NAMED_PARAMETERS(self, recurse=recurse)
+    else:
+        # Jittor's recursive traversal always de-duplicates shared Vars. Walk
+        # each module's direct parameters so callers such as Accelerate can
+        # observe every public path and discover tied-parameter groups.
+        modules = _ORIG_MODULE_NAMED_MODULES(self) if recurse else (("", self),)
+        parameters = (
+            (
+                module_name + ("." if module_name else "") + parameter_name,
+                parameter,
+            )
+            for module_name, module in modules
+            for parameter_name, parameter in _ORIG_MODULE_NAMED_PARAMETERS(
+                module, recurse=False
+            )
+        )
+    for name, v in parameters:
         if remove_duplicate and id(v) in seen:
             continue
         seen.add(id(v))

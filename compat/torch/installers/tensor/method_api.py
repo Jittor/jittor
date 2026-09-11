@@ -565,6 +565,16 @@ def _to(self, *args, **kwargs):
     return out
 
 
+def _type_as(self, other):
+    """Match ``Tensor.type_as`` by inheriting dtype and device from ``other``."""
+    if not isinstance(other, _NativeVar):
+        raise TypeError("type_as expects a Tensor argument")
+    # Passing the tensor itself through ``_to`` applies both its dtype and
+    # device.  Jittor's native ``type_as`` only changes dtype, which leaves
+    # CUDA constants created by Transformers on the host.
+    return _to(self, other)
+
+
 def _var_detach(self):
     _context = get_install_context(_owner.jt)
     Var = _context.state["Var"]
@@ -841,6 +851,20 @@ def _promoting_binary(self, other, opname, reflected):
     # `_extend_tokens` list concatenation). Match torch: defer to the sequence.
     if isinstance(other, (list, tuple)):
         return NotImplemented
+    if reflected and isinstance(other, (bool, int, float)):
+        # Jittor may materialize a Python scalar on CPU for reflected ops
+        # (notably ``base ** cuda_tensor``). Keep the scalar on the Var's
+        # backend so the native operation cannot create a mixed-device graph.
+        scalar = _owner.jt.array(other, dtype=_jittor_dtype_name(self.dtype))
+        if bool(getattr(self, "is_cuda", False)):
+            scalar = scalar.cuda()
+        elif bool(getattr(self, "is_cpu", False)):
+            # A frontend CPU tensor remains explicitly host-resident even
+            # when the process-wide Jittor default is CUDA.  Without this
+            # branch ``0 + cpu_tensor`` can combine a CUDA-default scalar
+            # with an explicit CPU Var inside a module frontend scope.
+            scalar = scalar.cpu()
+        other = scalar
     out = _binary_native(opname, self, other)
     if isinstance(other, (bool, int, float)) and isinstance(out, _NativeVar):
         expected = _owner._dtype_to_str(g.result_type(self, other))
@@ -878,7 +902,18 @@ def _true_division(self, other, opname):
         use_wide = sd.startswith("float") and src_dt != "float64" and not acl_active
         calc_dt = "float64" if use_wide else tgt
         a = self if src_dt == calc_dt else self.cast(calc_dt)
-        b = _owner.jt.array(other, dtype=calc_dt) if use_wide else other
+        # Reflected scalar division (``1 / cuda_tensor``) otherwise hands a
+        # Python scalar to Jittor's native op, which may materialize it on the
+        # host even though the tensor operand is CUDA-resident.
+        reflected = opname.startswith("__r")
+        if reflected or use_wide:
+            b = _owner.jt.array(other, dtype=calc_dt)
+            if bool(getattr(self, "is_cuda", False)):
+                b = b.cuda()
+            elif bool(getattr(self, "is_cpu", False)):
+                b = b.cpu()
+        else:
+            b = other
         out = _binary_native(opname, a, b)
         if isinstance(out, _NativeVar) and _jittor_dtype_name(out.dtype) != tgt:
             out = out.cast(tgt)

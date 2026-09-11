@@ -178,6 +178,14 @@ class TestTorchHFCudaDevice(unittest.TestCase):
                        dtype=np.float32),
         )
 
+        # Sampling helpers receive tensor inputs but are not named ``*_like``;
+        # their internal random tensors must inherit the input's CUDA device.
+        sampled = torch.multinomial(
+            torch.tensor([[0.2, 0.3, 0.5]], dtype=torch.float32, device="cuda"),
+            num_samples=1,
+        )
+        self.assertTrue(sampled.is_cuda)
+
     def test_implicit_data_constructors_default_to_cpu(self):
         source = np.array([1, 2, 3], dtype=np.int64)
         values = {
@@ -185,13 +193,34 @@ class TestTorchHFCudaDevice(unittest.TestCase):
             "tensor_numpy": torch.tensor(source),
             "as_tensor": torch.as_tensor(source),
             "from_numpy": torch.from_numpy(source),
+            # Data factories must keep Torch's CPU default even when Jittor's
+            # process-wide CUDA backend is enabled.
+            "arange": torch.arange(3),
+            "arange_none": torch.arange(3, device=None),
+            "zeros": torch.zeros(3, dtype=torch.int64),
+            "zeros_none": torch.zeros(3, dtype=torch.int64, device=None),
         }
         for name, value in values.items():
             with self.subTest(constructor=name):
                 self.assertFalse(value.is_cuda)
                 self.assertEqual(value.device.type, "cpu")
                 self.assertEqual(value.dtype, torch.int64)
-                self.assertTrue(np.array_equal(value.numpy(), source))
+                expected = (
+                    np.arange(3, dtype=np.int64)
+                    if name.startswith("arange")
+                    else np.zeros(3, dtype=np.int64)
+                    if name.startswith("zeros")
+                    else source
+                )
+                self.assertTrue(np.array_equal(value.numpy(), expected))
+
+        float_range = torch.arange(torch.tensor(0.0), torch.tensor(3.0))
+        self.assertEqual(float_range.dtype, torch.float32)
+        self.assertTrue(
+            np.array_equal(
+                float_range.numpy(), np.array([0.0, 1.0, 2.0], dtype=np.float32)
+            )
+        )
 
         cuda = torch.tensor(source, device="cuda")
         self.assertTrue(torch.as_tensor(cuda).is_cuda)

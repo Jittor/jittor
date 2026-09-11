@@ -188,6 +188,18 @@ class TestShapeOps(Base):
                 self.assertEqual(roundtrip.tolist(), 1.0)
         both_devices(body)
 
+    def test_type_as_inherits_dtype_and_device(self):
+        def body(dev):
+            source = torch.tensor([1, 2], dtype=torch.int32)
+            target = torch.tensor([0, 0], dtype=torch.float32, device=dev)
+            converted = source.type_as(target)
+            self.assertEqual(converted.dtype, target.dtype)
+            self.assertEqual(converted.is_cuda, target.is_cuda)
+            self.ae(converted.detach().cpu().numpy(), np.array([1, 2], dtype=np.float32),
+                    msg=f"type_as values {dev}")
+
+        both_devices(body)
+
     def test_squeeze_unsqueeze(self):
         x = np.random.RandomState(3).randn(2, 1, 3).astype("float32")
         def body(dev):
@@ -223,6 +235,21 @@ class TestShapeOps(Base):
                     msg=f"stack0 {dev}")
             self.ac(torch.stack([ta, tb], dim=-1).numpy(), np.stack([a, b], -1),
                     msg=f"stack-1 {dev}")
+        both_devices(body)
+
+
+class TestBinaryOps(Base):
+    def test_reflected_scalar_pow_keeps_tensor_device(self):
+        def body(dev):
+            exponent = torch.arange(0, 8, 2, dtype=torch.float32, device=dev) / 8
+            result = 2.0 ** exponent
+            self.assertEqual(result.is_cuda, dev == "cuda")
+            self.ac(
+                result.detach().cpu().numpy(),
+                np.power(2.0, exponent.detach().cpu().numpy()),
+                msg=f"reflected pow device {dev}",
+            )
+
         both_devices(body)
 
 

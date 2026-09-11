@@ -15,6 +15,7 @@
 - [2026-09-09 device→host 拷贝在设备侧分配目标缓冲](2026-09-09-device-copy-host-destination.md)
 - [2026-09-04 整改分区的 CUDA 可用性实机核实](2026-09-04-cuda-availability-verification.md)
 - [2026-09-07 Llama 3.1 70B No Robots 正式 60-step SFT 曲线与资源](transformers/2026-09-07-transformers-llama31-no-robots-sft-cuda.md)
+- [2026-09-11 refactor 分支 Transformers 4.56.2 17 模型严格 L4 复验](transformers/2026-09-11-transformers-refactor-17-model-l4-cuda.md)
 - [2026-09-07 FSDP2 Var 元数据显存生命周期修复](transformers/2026-09-07-fsdp2-memory-lifetime-fix-cuda.md)
 - [2026-09-07 Llama 3.1 70B 真实 BF16 六卡短 SFT 对拍](transformers/2026-09-07-transformers-llama31-70b-sft-cuda.md)
 - [2026-09-06 Transformers 4.56.2 文本核心 17 模型严格累计 L4 验证](transformers/2026-09-06-transformers-text-core-l4-cuda.md)

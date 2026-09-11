@@ -263,6 +263,16 @@ class TestStateDict(Base):
                 ["encoder.weight"],
                 f"tied parameter is enumerated once {dev}",
             )
+            aliases = list(model.named_parameters(remove_duplicate=False))
+            self.assertEqual(
+                [name for name, _ in aliases],
+                ["encoder.weight", "decoder.weight"],
+                f"all tied parameter paths are enumerated {dev}",
+            )
+            self.assertIs(
+                aliases[0][1], aliases[1][1],
+                f"tied parameter paths preserve identity {dev}",
+            )
             state = model.state_dict()
             self.assertEqual(
                 set(state), {"encoder.weight", "decoder.weight"},

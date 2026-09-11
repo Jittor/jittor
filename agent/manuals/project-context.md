@@ -1,8 +1,8 @@
 # Jittor Project Context
 
 - Status: Current index, not a history log
-- Last reviewed: 2026-09-10
-- Baseline reviewed: `origin/2.0-refactor@fe2bf3e9` plus the `feature/cgq_transformers@9bac6853` integration
+- Last reviewed: 2026-09-11
+- Baseline reviewed: `integrate/cgq-transformers-2.0-refactor@e12d2d90` with the current worktree fixes; ancestry is `origin/2.0-refactor` plus `feature/cgq_transformers@9bac6853`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -80,8 +80,8 @@ independent binary PyTorch oracle, and compact ResNet18, ViT, GPT-2, and
 diffusion UNet forward/backward parity passes on CPU and CUDA. ROCm, most
 optional downstream dependencies, full training, and performance remain
 separate gates. On a real 910B3, the maintained Ascend gate passes `397 passed, 9 skipped`; float16/float32 `arg_reduce` backward and float32/integer `prod` execute without CPU fallback.
-The pre-refactor Transformers 4.56.2 feature branch reached strict cumulative L4 for 17/17 FP32 text implementations on CPU and real A800 CUDA. Those reports remain historical evidence for their recorded commits, not proof that the current refactor integration has rerun the full matrix. See the [strict L4 report](../../refactor-wip/results/transformers/2026-09-06-transformers-text-core-l4-cuda.md) and [earlier matrix](../../refactor-wip/results/transformers/2026-09-03-transformers-text-core-matrix-cuda.md).
-The same feature history includes a bounded six-A800 BF16 Llama 3.1 70B short-SFT result and a later FSDP2 metadata-lifetime fix. The formal run's growing Jittor high-water mark is pre-fix evidence, while the fix was checked with CPU regressions, a real CUDA 20-cycle probe, and short Llama-3.2-1B training. A six-card 70B post-fix rerun and full current-refactor L4 rerun remain open. See the [FSDP2 memory-lifetime report](../../refactor-wip/results/transformers/2026-09-07-fsdp2-memory-lifetime-fix-cuda.md), [representative Llama 70B SFT report](../../refactor-wip/results/transformers/2026-09-07-transformers-llama31-70b-sft-cuda.md), and [formal No Robots resource report](../../refactor-wip/results/transformers/2026-09-07-transformers-llama31-no-robots-sft-cuda.md).
+The current refactor integration has now rerun the fixed Transformers 4.56.2 text matrix: 4 encoder, 10 decoder, and 3 encoder-decoder implementations are 17/17 PASS on fixed public checkpoints with real A800 CUDA. The evidence includes tokenizer, forward, cache, generation, state compatibility, and encoder Jittor-to-PyTorch round-trip; the GPT-NeoX top-p cutoff tie remains an explicit numerical boundary. The report records the dirty-worktree validation baseline and its exact result paths. See the [current refactor 17-model L4 report](../../refactor-wip/results/transformers/2026-09-11-transformers-refactor-17-model-l4-cuda.md), the [historical strict L4 report](../../refactor-wip/results/transformers/2026-09-06-transformers-text-core-l4-cuda.md), and the [earlier matrix](../../refactor-wip/results/transformers/2026-09-03-transformers-text-core-matrix-cuda.md).
+The same worktree retains the FSDP2 metadata-lifetime fix and the bounded six-A800 BF16 Llama 3.1 70B short-SFT evidence. The current 17-model report is FP32 correctness evidence, not a claim of L5 performance, low precision, long-context training, or broad downstream coverage. See the [FSDP2 memory-lifetime report](../../refactor-wip/results/transformers/2026-09-07-fsdp2-memory-lifetime-fix-cuda.md), [representative Llama 70B SFT report](../../refactor-wip/results/transformers/2026-09-07-transformers-llama31-70b-sft-cuda.md), and [formal No Robots resource report](../../refactor-wip/results/transformers/2026-09-07-transformers-llama31-no-robots-sft-cuda.md).
 Qwen3-8B float32 loads all 8,190,735,360 parameters; SDPA, greedy `arg_reduce`, and mask `all` run on ACL without CPU fallback. A native-shape `empty`
 fast path brings 0.6B decode to 15.90 token/s versus native `torch_npu` 16.19 token/s.
 Qwen3-0.6B BF16 SDPA passes zero-fallback generation at 14.92 token/s versus native 15.31 token/s.

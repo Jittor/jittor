@@ -56,8 +56,18 @@ def _invoke_factory(name, args, kwargs):
     if implementation is None:
         raise RuntimeError("torch.%s is not installed" % name)
     from ..frontend import tensor_frontend
-    like = args[0] if args and (name.endswith("_like") or name in _TENSOR_ARGUMENT) else None
-    with tensor_frontend(context.target_namespace.Var, device=kwargs.get("device"), like=like):
+    like = args[0] if args and (
+        name.endswith("_like") or name in _TENSOR_ARGUMENT
+        or name in _INPUT_TENSOR_FACTORIES) else None
+    # Torch treats an omitted (or explicit ``None``) device as CPU for data
+    # constructors.  Jittor otherwise follows its process-wide ``use_cuda``
+    # flag, which would incorrectly build CPU-only initialization constants on
+    # CUDA.  Like/tensor-transform factories still inherit their input, and a
+    # meta device context remains authoritative.
+    placement = kwargs.get("device")
+    if placement is None and like is None and not _DEVICE_CTX_STACK:
+        placement = "cpu"
+    with tensor_frontend(context.target_namespace.Var, device=placement, like=like):
         return implementation(*args, **kwargs)
 
 
@@ -187,6 +197,9 @@ def _install_empty_like(root):
 _DROP = ("device", "requires_grad", "layout", "pin_memory", "memory_format", "out", "non_blocking")
 _DEFAULT_FLOAT_FACTORIES = {"zeros", "ones", "empty", "rand", "randn", "eye", "linspace"}
 _TENSOR_ARGUMENT = ("tril", "triu")
+# These APIs are not named ``*_like`` but take a tensor as their first
+# argument and must create their random/intermediate values beside it.
+_INPUT_TENSOR_FACTORIES = ("bernoulli", "multinomial", "normal")
 
 
 def _shape_dim(v):
@@ -212,7 +225,8 @@ def _shape_arg(v):
 def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     g = get_install_context(jt).target_namespace
     requested_device = kwargs.get("device")
-    inherits_device = name.endswith("_like") or name in _TENSOR_ARGUMENT
+    inherits_device = (name.endswith("_like") or name in _TENSOR_ARGUMENT
+                       or name in _INPUT_TENSOR_FACTORIES)
     device_input = args[0] if inherits_device and args and isinstance(args[0], jt.Var) else None
     want_meta = (
         _device_is_meta(requested_device)
@@ -235,6 +249,21 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
             return out
     # _invoke_factory already established native construction placement.
     _requires_grad = bool(kwargs.get("requires_grad", False))
+    # Capture tensor scalar bounds before `_shape_arg` turns one-element Vars
+    # into Python integers; their dtype still determines arange's default.
+    arange_float_bound = (
+        name == "arange"
+        and any(
+            isinstance(value, (float, np.floating))
+            or (
+                isinstance(value, jt.Var)
+                and _jittor_dtype_name(value.dtype).startswith(
+                    ("float", "bfloat", "complex")
+                )
+            )
+            for value in args[:3]
+        )
+    )
     for k in _DROP:
         kwargs.pop(k, None)
     # Jittor shape conversion rejects numpy scalars; normalize them.
@@ -259,6 +288,29 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     if "fill_value" in kwargs:
         args = tuple(args) + (kwargs.pop("fill_value"),)
     _cast_to = None  # cast after construction when needed for torch dtype semantics
+    if ("dtype" not in kwargs or kwargs["dtype"] is None) and name == "arange":
+        # PyTorch chooses the integral default (int64) from integral bounds,
+        # while Jittor's native arange defaults to int32.  Float bounds keep
+        # the regular torch default floating dtype below.
+        has_float_bound = any(
+            isinstance(value, (float, np.floating))
+            or (
+                isinstance(value, jt.Var)
+                and _jittor_dtype_name(value.dtype).startswith(
+                    ("float", "bfloat", "complex")
+                )
+            )
+            for value in args[:3]
+        ) or arange_float_bound
+        if not has_float_bound:
+            if _accepts_dtype:
+                kwargs["dtype"] = "int64"
+            else:
+                _cast_to = "int64"
+        elif _accepts_dtype:
+            kwargs["dtype"] = _dtype_to_str(g.get_default_dtype())
+        else:
+            _cast_to = _dtype_to_str(g.get_default_dtype())
     if "dtype" not in kwargs and name in _DEFAULT_FLOAT_FACTORIES:
         default_dtype = _dtype_to_str(g.get_default_dtype())
         if _jittor_dtype_name(default_dtype) != "float32":
