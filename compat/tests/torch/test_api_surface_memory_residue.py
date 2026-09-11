@@ -14,6 +14,7 @@ comparison is baseline-after-collection against baseline-after-collection --
 comparing raw `nvidia-smi` numbers would only re-measure the caching allocator.
 """
 
+import functools
 import unittest
 
 import numpy as np
@@ -27,8 +28,27 @@ def _cuda_available():
         return False
 
 
-requires_cuda = unittest.skipUnless(
-    _cuda_available(), "cuda is required for device memory residue contracts")
+def requires_cuda(test):
+    """Probe CUDA when the test runs, after collection is complete."""
+    if isinstance(test, type):
+        original = getattr(test, "setUp", None)
+
+        def setUp(self):
+            if not _cuda_available():
+                self.skipTest("cuda is required for device memory residue contracts")
+            if original is not None:
+                original(self)
+
+        test.setUp = setUp
+        return test
+
+    @functools.wraps(test)
+    def wrapped(self, *args, **kwargs):
+        if not _cuda_available():
+            self.skipTest("cuda is required for device memory residue contracts")
+        return test(self, *args, **kwargs)
+
+    return wrapped
 
 
 def _collect():

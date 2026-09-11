@@ -26,6 +26,8 @@ import subprocess
 import sys
 import time
 
+from jittor_utils.env_config import child_env
+
 
 def _visible_devices_for_rank(rank):
     visible = os.environ.get("CUDA_VISIBLE_DEVICES")
@@ -105,8 +107,10 @@ def main():
         # Torch-shim preflight keeps optional distributed externs disabled for
         # ordinary single-process imports. An explicit NCCL launch must override
         # that default before importing Jittor here and in every child rank.
-        os.environ["use_nccl"] = "1"
-        os.environ["use_mpi"] = "0"
+        os.environ.update(child_env(
+            use_nccl=(1, "build"),
+            use_mpi=(0, "build"),
+        ))
     os.makedirs(a.logdir, exist_ok=True)
     rootinfo = os.path.abspath(os.path.join(a.logdir, f"{backend}_rootinfo_{os.getpid()}.bin"))
     if os.path.exists(rootinfo):

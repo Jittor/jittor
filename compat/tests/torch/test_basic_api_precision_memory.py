@@ -16,6 +16,7 @@ visible in the numbers, only in the accounting, which is why it needs its own
 contract here.
 """
 
+import functools
 import unittest
 
 import numpy as np
@@ -29,8 +30,27 @@ def _cuda_available():
         return False
 
 
-requires_cuda = unittest.skipUnless(
-    _cuda_available(), "cuda is required for device memory contracts")
+def requires_cuda(test):
+    """Probe CUDA when the test runs, after collection is complete."""
+    if isinstance(test, type):
+        original = getattr(test, "setUp", None)
+
+        def setUp(self):
+            if not _cuda_available():
+                self.skipTest("cuda is required for device memory contracts")
+            if original is not None:
+                original(self)
+
+        test.setUp = setUp
+        return test
+
+    @functools.wraps(test)
+    def wrapped(self, *args, **kwargs):
+        if not _cuda_available():
+            self.skipTest("cuda is required for device memory contracts")
+        return test(self, *args, **kwargs)
+
+    return wrapped
 
 
 class TestBasicPrecision(unittest.TestCase):

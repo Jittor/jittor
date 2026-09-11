@@ -2,7 +2,7 @@
 
 - 状态：PASS（17/17 public checkpoint comparison）
 - 验收日期：2026-09-11（Asia/Shanghai）
-- 代码基线：`integrate/cgq-transformers-2.0-refactor`，HEAD `e12d2d9094a52fcb69b999983d79ce90e07e14a4`；验证时包含当前工作树未提交的兼容修复
+- 代码基线：`integrate/cgq-transformers-2.0-refactor`，兼容实现提交 `5bf4d374b2f3eb842ede751e20a24265a048d941`；结构测试基线修复在后续提交完成，不改变本报告的模型实现语义
 - 对照分支：`origin/2.0-refactor` 的 refactor 架构与 `feature/cgq_transformers` 已验证功能合并结果
 - 环境：Transformers `4.56.2`、真实 PyTorch `2.6.0+cu124`、Jittor `1.3.11.0`、NVIDIA A800、CUDA 12.4、FP32
 - 实验状态：`$JITTOR_LAB_ROOT/_state/transformers_l4_refactor_20260911`

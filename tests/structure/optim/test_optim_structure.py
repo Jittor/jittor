@@ -50,8 +50,7 @@ class TestOptimStructure(unittest.TestCase):
             "RMSprop", "Adam", "AdamW", "Adan", "LRScheduler", "LambdaLR",
         }
         runtime = native | {
-            "LBFGS", "adam", "adamw", "lr_scheduler", "optimizer", "rmsprop",
-            "sgd", "swa_utils",
+            "lr_scheduler",
         }
         self.assertEqual(set(optim._NATIVE_EXPORTS), native)
         self.assertEqual(set(optim.__all__), runtime)
@@ -94,15 +93,15 @@ class TestOptimStructure(unittest.TestCase):
 
     def test_core_signatures_are_unchanged(self):
         signatures = {
-            "Optimizer": "(*a, **k)",
+            "Optimizer": "(params, lr, param_sync_iter=10000)",
             "SGD": (
                 "(params, lr, momentum=0, weight_decay=0, dampening=0, "
                 "nesterov=False)"
             ),
-            "RMSprop": "(params, lr=0.001, *a, **k)",
-            "Adam": "(params, lr=0.001, *a, **k)",
-            "AdamW": "(params, lr=0.001, *a, **k)",
-            "Adan": "(params, lr=0.001, *a, **k)",
+            "RMSprop": "(params, lr=0.01, eps=1e-08, alpha=0.99)",
+            "Adam": "(params, lr, eps=1e-08, betas=(0.9, 0.999), weight_decay=0)",
+            "AdamW": "(params, lr, eps=1e-08, betas=(0.9, 0.999), weight_decay=0, fused=None)",
+            "Adan": "(params, lr=0.001, betas=(0.98, 0.92, 0.99), eps=1e-08, weight_decay=0.0, max_grad_norm=0.0)",
         }
         for name, signature in signatures.items():
             with self.subTest(name=name):

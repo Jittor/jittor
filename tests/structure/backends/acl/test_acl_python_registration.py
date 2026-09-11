@@ -249,8 +249,8 @@ def test_acl_pool_uses_canonical_output_geometry(
     providers.native.Function = Function
     launches = []
 
-    def record_pool(name, inputs, output_dtypes, output_shapes, attr_code):
-        launches.append((name, output_shapes, attr_code))
+    def record_pool(name, inputs, output_dtypes, output_shapes, attributes=None, **kwargs):
+        launches.append((name, output_shapes, attributes))
         return [_Tensor(shape, dtype) for shape, dtype in zip(output_shapes, output_dtypes)]
 
     pool_source = (KERNELS / "ops/pool_op.py").read_text(encoding="utf-8")
@@ -272,7 +272,7 @@ def test_acl_pool_uses_canonical_output_geometry(
     assert result.shape == (1, 2, expected, expected)
     assert geometry_calls == [(size, kernel, stride, padding, ceil_mode)] * 2
     assert launches[0][0] == ("Maxpool" if op == "maximum" else "Avgpool")
-    assert "attr->countIncludePad = false" in launches[0][2]
+    assert launches[0][2]["countIncludePad"] is False
 
 
 @pytest.mark.parametrize("entry", ["provider", "public"])
@@ -309,7 +309,18 @@ def test_acl_transpose_preserves_argument_forms_with_real_shape_builder(
         for node in ast.parse(source).body
         if isinstance(node, ast.ClassDef) and node.name == "TransPoseACL"
     )
-    namespace = {"Sequence": Sequence, "transpose_cmd": record_transpose}
+    def code_program(parts):
+        return "".join(str(part) for part in parts)
+
+    def attribute_program(name, attributes, variable="op", slot=None):
+        return "attr->axes = { " + ", ".join(map(str, attributes["axes"])) + " };"
+
+    namespace = {
+        "Sequence": Sequence,
+        "transpose_cmd": record_transpose,
+        "code_program": code_program,
+        "attribute_program": attribute_program,
+    }
     exec(
         compile(ast.get_source_segment(source, implementation), "<actual_transpose_acl>", "exec"),
         namespace,

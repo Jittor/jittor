@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[4]
-GUIDE = ROOT / "docs/guides/acl-structure-boundary.md"
+GUIDE = ROOT / "refactor-wip/architecture/acl-structure-boundary.md"
 
 
 def test_acl_structure_boundary_names_atomic_migrations_and_hardware_gate():
@@ -37,6 +37,7 @@ def test_acl_structure_boundary_names_atomic_migrations_and_hardware_gate():
         "InternalInvariantError",
         "canonical_cache_key",
         "non-canonical vector",
+        "host-only C++ decoder boundary",
     ):
         assert required in text
 
@@ -58,8 +59,8 @@ def test_acl_guides_use_runtime_fallback_evidence_not_log_matching():
         assert "with forbid_backend_fallbacks():" in text
         assert "jt.sync_all(True)" in text
         assert "jt.runtime.backend_fallback" in text
-        assert "rejected" in text
-        assert "preflight unsupported" in text
-        assert "debugging policies" in text
+        assert "rejected" in text or "拒绝" in text
+        assert "preflight unsupported" in text or "预检阶段判定不支持" in text
+        assert "debugging policies" in text or "调试策略" in text
         assert 'if rg -i "fallback cpu|cpu fallback"' not in text
         assert '"compile cpu"' not in text

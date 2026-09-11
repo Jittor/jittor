@@ -27,6 +27,7 @@ The contracts pinned here are the ones that surprised a reader at the REPL:
 
 from _helpers import capability as _test_capability
 
+import functools
 import unittest
 
 import numpy as np
@@ -38,7 +39,27 @@ def _has_cuda():
     return bool(_test_capability.check_accelerator('cuda', backend=jt).enabled)
 
 
-requires_cuda = unittest.skipUnless(_has_cuda(), "a CUDA device is required")
+def requires_cuda(test):
+    """Check the accelerator at test time so collection stays side-effect free."""
+    if isinstance(test, type):
+        original = getattr(test, "setUp", None)
+
+        def setUp(self):
+            if not _has_cuda():
+                self.skipTest("a CUDA device is required")
+            if original is not None:
+                original(self)
+
+        test.setUp = setUp
+        return test
+
+    @functools.wraps(test)
+    def wrapped(self, *args, **kwargs):
+        if not _has_cuda():
+            self.skipTest("a CUDA device is required")
+        return test(self, *args, **kwargs)
+
+    return wrapped
 
 
 class TestLazyResidency(unittest.TestCase):

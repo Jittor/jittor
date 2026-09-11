@@ -40,7 +40,6 @@ def test_acl_sync_run_checks_the_stream_and_documents_the_910b3_probe():
 
     guide = GUIDE.read_text(encoding="utf-8")
     for required in (
-        "Ascend 910B3",
         "npu-smi info",
         "sync_run=1",
         "sync_run=0",
@@ -48,7 +47,8 @@ def test_acl_sync_run_checks_the_stream_and_documents_the_910b3_probe():
         "forbid_backend_fallbacks()",
         "backend_fallback_count()",
         "backend_fallback=error",
-        "return code",
-        "operator name",
     ):
         assert required in guide
+    assert "Ascend 910B3" in guide or "昇腾 910B3" in guide
+    assert "return code" in guide or "返回码" in guide
+    assert "operator name" in guide or "算子名" in guide

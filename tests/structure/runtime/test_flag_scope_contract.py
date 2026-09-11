@@ -57,12 +57,29 @@ def _candidate_files():
 def _flag_assignments(node, skip_nested_classes=True):
     """``jt.flags.X = ...`` written directly in ``node``, not in a nested class."""
     found = []
-    stack = list(ast.iter_child_nodes(node))
-    while stack:
-        current = stack.pop()
+
+    def dotted(value):
+        if isinstance(value, ast.Name):
+            return value.id
+        if isinstance(value, ast.Attribute):
+            prefix = dotted(value.value)
+            return (prefix + "." if prefix else "") + value.attr
+        return ""
+
+    def visit(current, scoped=False):
         if skip_nested_classes and isinstance(current, ast.ClassDef):
-            continue
-        if isinstance(current, (ast.Assign, ast.AugAssign)):
+            return
+        if isinstance(current, ast.With):
+            scoped = scoped or any(
+                (
+                    dotted(item.context_expr.func)
+                    if isinstance(item.context_expr, ast.Call)
+                    else dotted(item.context_expr)
+                ) in ("jt.flag_scope", "jittor.flag_scope",
+                      "jt.runtime.scope", "jittor.runtime.scope")
+                for item in current.items
+            )
+        if not scoped and isinstance(current, (ast.Assign, ast.AugAssign)):
             targets = (current.targets if isinstance(current, ast.Assign)
                        else [current.target])
             pending = list(targets)
@@ -74,7 +91,11 @@ def _flag_assignments(node, skip_nested_classes=True):
                       and isinstance(target.value, ast.Attribute)
                       and target.value.attr == "flags"):
                     found.append((target.attr, current.lineno))
-        stack.extend(ast.iter_child_nodes(current))
+        for child in ast.iter_child_nodes(current):
+            visit(child, scoped)
+
+    for child in ast.iter_child_nodes(node):
+        visit(child)
     return found
 
 

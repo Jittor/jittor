@@ -7,7 +7,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_ROOT = REPO_ROOT / ".github" / "workflows"
-TEST_SYSTEM = REPO_ROOT / "docs" / "testing" / "test-system.md"
+TEST_SYSTEM = REPO_ROOT / "docs" / "development" / "test-system.md"
 MANUAL_SESSIONS = ("optional", "rocm", "mpi", "nccl")
 
 
@@ -23,7 +23,7 @@ def test_manual_hardware_sessions_are_documented_and_not_scheduled():
     workflows = _workflow_text()
 
     for session in MANUAL_SESSIONS:
-        assert "| `%s` | Manual |" % session in documentation
+        assert "| `%s` | 手动 |" % session in documentation
         assert "nox -s %s" % session not in workflows
 
 
@@ -34,7 +34,7 @@ def test_cuda_labeled_pull_requests_run_the_real_cuda_session():
     assert "types: [labeled, reopened, synchronize]" in workflow
     assert "contains(github.event.pull_request.labels.*.name, 'ci:cuda')" in workflow
     assert '"${JITTOR_CI_PYTHON}" -m nox -s cuda' in workflow
-    assert "| `cuda` | Automated |" in TEST_SYSTEM.read_text(encoding="utf-8")
+    assert "| `cuda` | 自动 |" in TEST_SYSTEM.read_text(encoding="utf-8")
 
 
 def test_cuda_session_requires_real_device_and_an_executed_accelerator_case():

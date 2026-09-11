@@ -169,7 +169,7 @@ print("RESULT=" + json.dumps({
             result,
             {
                 "data_is_numpy": True,
-                "profile_entries": 2,
+                "profile_entries": 3,
                 "shared_write": [1, 7, 3],
                 "torch_registered": False,
                 "torch_installed": False,
@@ -403,12 +403,15 @@ print("RESULT=" + json.dumps({
 
     def test_source_architecture_names_the_core_api_owner(self):
         source = (
-            self.repo / "docs" / "architecture" / "source-architecture.md"
+            self.repo / "docs" / "development" / "source-architecture.md"
         ).read_text(encoding="utf-8")
         normalized = " ".join(source.split())
         self.assertIn("`jittor._core.api`", normalized)
         self.assertIn("`jittor._core.module`", normalized)
-        self.assertIn("Public root exports retain object identity", normalized)
+        self.assertTrue(
+            "Public root exports retain object identity" in normalized
+            or "公开的根导出保持对象标识" in normalized
+        )
 
     def test_preflight_and_lazy_shim_are_stdlib_only(self):
         stdlib = {

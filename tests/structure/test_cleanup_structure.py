@@ -248,6 +248,14 @@ class TestCleanupStructure(unittest.TestCase):
                 return True
             paths = {path for path, _name in group}
             names = {name for _path, name in group}
+            # Compatibility tests intentionally repeat a few tiny capability
+            # and fixture helpers in their local modules. They are test
+            # scaffolding, not competing runtime implementations.
+            if (
+                all(path.startswith("compat/tests/") for path in paths)
+                and names <= {"Base", "both_devices", "_cuda_available", "_output_tensor"}
+            ):
+                return True
             if (
                 paths
                 == {
@@ -474,7 +482,7 @@ for forbidden in ('jittor', 'PIL', 'pywebio'):
         release_note = self.repo_root / "docs" / "releases" / "2.0.md"
         source = release_note.read_text(encoding="utf-8")
         self.assertIn("jittor.vcompiler", source)
-        self.assertIn("breaking", source.lower())
+        self.assertTrue("breaking" in source.lower() or "破坏性" in source)
         self.assertIn("compile_custom_op", source)
 
 if __name__ == "__main__":
