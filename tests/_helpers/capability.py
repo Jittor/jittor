@@ -135,6 +135,40 @@ def library_required(name, *, backend=None):
     return decorate
 
 
+def accelerator_required(name, *, backend=None):
+    """Defer an accelerator prerequisite to execution, not to collection.
+
+    ``requires_cuda = unittest.skipUnless(_has_cuda(), ...)`` reads the build
+    the moment the module is imported -- during collection, where this suite
+    forbids backend work, and before anything has decided the file will even
+    run. Worse, it fixes the answer once per *process*: a later case that
+    changes the backend configuration cannot be seen by a decision already
+    made at import.
+
+    The sibling of ``library_required`` above: same shape, same reason, and the
+    skip still carries the machine-level message ``_skip`` builds.
+    """
+    def decorate(target):
+        if inspect.isclass(target):
+            setup = target.setUpClass.__func__
+            @classmethod
+            def checked_setup(cls):
+                capability = check_accelerator(name, backend=backend)
+                if not capability.enabled:
+                    _skip(capability)
+                setup(cls)
+            target.setUpClass = checked_setup
+            return target
+        @functools.wraps(target)
+        def checked(*args, **kwargs):
+            capability = check_accelerator(name, backend=backend)
+            if not capability.enabled:
+                _skip(capability)
+            return target(*args, **kwargs)
+        return checked
+    return decorate
+
+
 def device_count(backend_name, *, backend=None):
     backend = _native_backend(backend)
     inventory = backend.introspection.capabilities.devices(backend_name)
@@ -173,5 +207,6 @@ def machine_has_accelerator(name):
     return _native_backend().capability.accelerator(name).present
 
 
-__all__ = ["check_accelerator", "require_accelerator", "check_library",
-           "require_library", "machine_has_accelerator"]
+__all__ = ["check_accelerator", "require_accelerator", "accelerator_required",
+           "check_library", "require_library", "library_required",
+           "machine_has_accelerator"]
