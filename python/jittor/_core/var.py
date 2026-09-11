@@ -566,16 +566,105 @@ def _with_accelerator_kernel_loaded(func):
 
 origin_transpose = transpose
 
+
+def _transpose_axis(value, ndim, position):
+    """One axis argument of ``transpose``/``permute``, normalised to ``[0, ndim)``.
+
+    Every rejection here used to be a raw container error raised a frame
+    deeper: ``axes[a]`` gave ``IndexError: list index out of range`` for an axis
+    past the end and ``TypeError: list indices must be integers or slices, not
+    str`` for a non-integer, neither of which names the operation, the axis, or
+    the rank it was measured against. The exception *types* are the ones torch
+    raises for the same mistakes, so an ``except IndexError`` around a dim
+    calculation keeps working; only the text changes.
+    """
+    if isinstance(value, Var):
+        if value.numel() != 1:
+            raise TypeError(
+                "transpose: dim (argument %d) must be a single integer, got a "
+                "Var of shape %s" % (position, list(value.shape)))
+        value = value.item()
+    if not isinstance(value, numbers.Integral):
+        raise TypeError(
+            "transpose: dim (argument %d) must be an integer, got %s"
+            % (position, type(value).__name__))
+    value = ori_int(value)
+    if ndim == 0:
+        # ``transpose_op.cc`` requires rank >= 1 (unlike torch, which returns a
+        # 0-D tensor unchanged). Say so instead of letting ``axes[0]`` on an
+        # empty list answer for it.
+        raise IndexError(
+            "transpose: dim %d (argument %d) is out of range: a 0-D var has "
+            "no dims to transpose" % (value, position))
+    if not -ndim <= value < ndim:
+        raise IndexError(
+            "transpose: dim %d (argument %d) is out of range for a %d-D var "
+            "(expected a dim in [%d, %d])"
+            % (value, position, ndim, -ndim, ndim - 1))
+    return value + ndim if value < 0 else value
+
+
+def _transpose_permutation(dim, ndim, shape):
+    """The axis *sequence* form: a permutation of ``range(ndim)``, validated.
+
+    ``transpose_op.cc`` checks the cardinality (``axes.size() == xdim``) but
+    its diagnostic carries no sentence of its own, and nothing checked for a
+    repeated axis at all -- ``jt.ones((3,4)).permute((0, 0))`` silently
+    produced a var whose contents are not a permutation of the input. Both are
+    caller mistakes, so they are reported here, where the argument still has a
+    name and the var still has a shape to print.
+    """
+    axes = []
+    for position, value in enumerate(dim):
+        if isinstance(value, Var):
+            if value.numel() != 1:
+                raise TypeError(
+                    "transpose: dims[%d] must be a single integer, got a Var "
+                    "of shape %s" % (position, list(value.shape)))
+            value = value.item()
+        if not isinstance(value, numbers.Integral):
+            raise TypeError(
+                "transpose: dims[%d] must be an integer, got %s"
+                % (position, type(value).__name__))
+        axes.append(ori_int(value))
+    if len(axes) != ndim:
+        raise RuntimeError(
+            "transpose: dims has %d entries %s but the var is %d-D with shape "
+            "%s; a permutation needs exactly one entry per dim"
+            % (len(axes), tuple(axes), ndim, list(shape)))
+    seen = {}
+    for position, value in enumerate(axes):
+        if not -ndim <= value < ndim:
+            raise IndexError(
+                "transpose: dims[%d] is %d, out of range for a %d-D var of "
+                "shape %s (expected a dim in [%d, %d])"
+                % (position, value, ndim, list(shape), -ndim, ndim - 1))
+        normalized = value + ndim if value < 0 else value
+        if normalized in seen:
+            raise RuntimeError(
+                "transpose: dims %s names dim %d twice (entries %d and %d); a "
+                "permutation of a %d-D var of shape %s uses each dim once"
+                % (tuple(axes), normalized, seen[normalized], position,
+                   ndim, list(shape)))
+        seen[normalized] = position
+        axes[position] = normalized
+    return tuple(axes)
+
+
 def transpose(x, *dim):
+    ndim = x.ndim
     if len(dim) == 1 and isinstance(dim[0], (Sequence, NanoVector)):
-        dim = dim[0]
+        dim = _transpose_permutation(dim[0], ndim, x.shape)
     elif len(dim) == 2:
-        axes = list(range(x.ndim))
-        a, b = dim
+        a = _transpose_axis(dim[0], ndim, 1)
+        b = _transpose_axis(dim[1], ndim, 2)
+        axes = list(range(ndim))
         axes[a], axes[b] = axes[b], axes[a]
         dim = axes
+    elif dim:
+        dim = _transpose_permutation(dim, ndim, x.shape)
     if not dim:
-        dim = tuple(reversed(range(x.ndim)))
+        dim = tuple(reversed(range(ndim)))
     # NumPy helpers such as np.argsort return numpy.integer axis values.  The
     # C++ transpose binding requires exact Python ints, while torch accepts any
     # integral sequence in Tensor.permute().
