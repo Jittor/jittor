@@ -1,0 +1,23 @@
+diff --git a/agent/manuals/README.md b/agent/manuals/README.md
+index 866dd027b..59e345454 100644
+--- a/agent/manuals/README.md
++++ b/agent/manuals/README.md
+@@ -6,6 +6,7 @@
+ - [并行编译段错误分析](../../docs/development/known-issues/parallel-compiler-segfault.md)
+ - [测试系统设计](../../docs/testing/test-system.md)
+ - [源码架构与渐进式拆分规范](../../docs/architecture/source-architecture.md)
++- [Agent 可操作的框架内部优化（研究提案，未开工）](../../docs/research/agentic-optimization.md)
+ 
+ 新增持久设计说明放入 `../../docs/` 下的语义目录；阶段性执行结果应写入
+ `../results/`，不要继续把报告混入 skill 目录。
+diff --git a/tests/core/test_setitem.py b/tests/core/test_setitem.py
+index c2a5453b8..5cef38c96 100644
+--- a/tests/core/test_setitem.py
++++ b/tests/core/test_setitem.py
+@@ -446,4 +446,4 @@ class TestSetitem(unittest.TestCase):
+         assert a[1,2,0,0] == 2
+ 
+ if __name__ == "__main__":
+-    unittest.main()
+\ No newline at end of file
++    unittest.main()

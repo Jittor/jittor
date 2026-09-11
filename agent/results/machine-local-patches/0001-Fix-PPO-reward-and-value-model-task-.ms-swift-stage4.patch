@@ -1,0 +1,61 @@
+From 6b1f0b29538bd8d4a53386c5d207b8ed07fb4e0e Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E5=BC=A0=E4=BB=AA?= <zhangyi@cscg-hw00>
+Date: Tue, 11 Aug 2026 17:27:29 +0800
+Subject: [PATCH] Fix PPO reward and value model task types
+
+---
+ swift/pipelines/train/rlhf.py       | 10 ++++++++++
+ tests/train/test_ppo_model_roles.py | 13 +++++++++++++
+ 2 files changed, 23 insertions(+)
+ create mode 100644 tests/train/test_ppo_model_roles.py
+
+diff --git a/swift/pipelines/train/rlhf.py b/swift/pipelines/train/rlhf.py
+index edc5825..1c1ad3f 100644
+--- a/swift/pipelines/train/rlhf.py
++++ b/swift/pipelines/train/rlhf.py
+@@ -58,6 +58,15 @@ class SwiftRLHF(SwiftSft):
+                         task_type = 'seq_cls'
+         return task_type, num_labels
+ 
++    @staticmethod
++    def _resolve_model_task_type(rlhf_type, origin_key, task_type, num_labels):
++        if rlhf_type == 'ppo' and origin_key in {'reward', 'value'}:
++            if task_type != 'seq_cls':
++                return 'seq_cls', 1
++            if num_labels is None:
++                return task_type, 1
++        return task_type, num_labels
++
+     def _prepare_single_model(self, key, origin_key, model_type, model_revision):
+         args = self.args
+         origin_key = origin_key or key
+@@ -85,6 +94,7 @@ class SwiftRLHF(SwiftSft):
+             hub_token=args.hub_token,
+         )
+         task_type, num_labels = self._get_model_task_type(model_dir)
++        task_type, num_labels = self._resolve_model_task_type(args.rlhf_type, origin_key, task_type, num_labels)
+         context = nullcontext()
+         if key == 'teacher' and args.teacher_deepspeed:
+             if args.teacher_deepspeed.get('zero_optimization', {}).get('stage') != 3:
+diff --git a/tests/train/test_ppo_model_roles.py b/tests/train/test_ppo_model_roles.py
+new file mode 100644
+index 0000000..f5881d9
+--- /dev/null
++++ b/tests/train/test_ppo_model_roles.py
+@@ -0,0 +1,13 @@
++from swift.pipelines.train.rlhf import SwiftRLHF
++
++
++def test_ppo_reward_and_value_models_get_regression_heads():
++    for role in ('reward', 'value'):
++        assert SwiftRLHF._resolve_model_task_type('ppo', role, None, None) == ('seq_cls', 1)
++        assert SwiftRLHF._resolve_model_task_type('ppo', role, 'seq_cls', None) == ('seq_cls', 1)
++
++
++def test_existing_task_types_are_preserved():
++    assert SwiftRLHF._resolve_model_task_type('ppo', 'reward', 'seq_cls', 2) == ('seq_cls', 2)
++    assert SwiftRLHF._resolve_model_task_type('grpo', 'reward', None, None) == (None, None)
++    assert SwiftRLHF._resolve_model_task_type('ppo', 'ref', None, None) == (None, None)
+-- 
+2.34.1
+

@@ -1,0 +1,102 @@
+From 7e254520bfd02a329480a6b061217b7b836c7995 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E5=BC=A0=E4=BB=AA?= <zhangyi@cscg-hw00>
+Date: Tue, 11 Aug 2026 17:27:29 +0800
+Subject: [PATCH] Initialize native rollout engine for GKD
+
+---
+ swift/rlhf_trainers/gkd_trainer.py     | 15 ++++++++++-
+ tests/train/test_gkd_native_rollout.py | 36 ++++++++++++++++++++++++++
+ 2 files changed, 50 insertions(+), 1 deletion(-)
+ create mode 100644 tests/train/test_gkd_native_rollout.py
+
+diff --git a/swift/rlhf_trainers/gkd_trainer.py b/swift/rlhf_trainers/gkd_trainer.py
+index f20b24c..bac8339 100644
+--- a/swift/rlhf_trainers/gkd_trainer.py
++++ b/swift/rlhf_trainers/gkd_trainer.py
+@@ -8,13 +8,14 @@ import trl
+ from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
+ from collections import defaultdict, deque
+ from contextlib import contextmanager, nullcontext
+-from copy import deepcopy
++from copy import copy, deepcopy
+ from packaging import version
+ from transformers import PreTrainedModel, Trainer
+ from trl import SFTTrainer as HFSFTTrainer
+ from trl.trainer.utils import RepeatSampler
+ from typing import Any, Dict, List, Optional, Union
+ 
++from swift.infer_engine import TransformersEngine
+ from swift.infer_engine.protocol import RequestConfig
+ from swift.rl_core.data import GKDBatch, GKDSample
+ from swift.rlhf_trainers.gkd_helpers import assemble_teacher_output, build_teacher_requests, encode_gkd_samples
+@@ -110,6 +111,7 @@ class GKDTrainer(RolloutTrainerMixin, SwiftMixin, HFGKDTrainer):
+ 
+         # Initialize rollout infrastructure for vLLM support
+         self.prepare_rollout()
++        self._prepare_native_rollout_engine()
+ 
+         # Initialize resample data iterator for truncation_strategy 'raise'('delete')
+         if self.template.truncation_strategy == 'raise':
+@@ -118,6 +120,17 @@ class GKDTrainer(RolloutTrainerMixin, SwiftMixin, HFGKDTrainer):
+         self._step = 0
+         self._buffered_inputs = None
+ 
++    def _prepare_native_rollout_engine(self):
++        if self.args.use_vllm:
++            return
++        infer_template = copy(self.template)
++        infer_template.padding_free = False
++        infer_template.sequence_parallel_size = 1
++        infer_template.remove_unused_columns = True
++        self.engine = TransformersEngine(self.model, template=infer_template, max_batch_size=0)
++        self.dynamic_num_samples = False
++        self.rollout_pad_count = 0
++
+     def _get_data_collator(self, args, template):
+         return identity_data_collator
+ 
+diff --git a/tests/train/test_gkd_native_rollout.py b/tests/train/test_gkd_native_rollout.py
+new file mode 100644
+index 0000000..30c1445
+--- /dev/null
++++ b/tests/train/test_gkd_native_rollout.py
+@@ -0,0 +1,36 @@
++from types import SimpleNamespace
++from unittest.mock import patch
++
++from swift.rlhf_trainers.gkd_trainer import GKDTrainer
++
++
++def test_gkd_builds_transformers_engine_without_vllm():
++    trainer = GKDTrainer.__new__(GKDTrainer)
++    trainer.args = SimpleNamespace(use_vllm=False)
++    trainer.model = object()
++    trainer.template = SimpleNamespace(
++        padding_free=True,
++        sequence_parallel_size=4,
++        remove_unused_columns=False,
++    )
++    engine = object()
++    with patch('swift.rlhf_trainers.gkd_trainer.TransformersEngine', return_value=engine) as constructor:
++        trainer._prepare_native_rollout_engine()
++
++    assert trainer.engine is engine
++    template = constructor.call_args.kwargs['template']
++    assert template is not trainer.template
++    assert template.padding_free is False
++    assert template.sequence_parallel_size == 1
++    assert template.remove_unused_columns is True
++    assert trainer.dynamic_num_samples is False
++    assert trainer.rollout_pad_count == 0
++
++
++def test_gkd_keeps_vllm_engine():
++    trainer = GKDTrainer.__new__(GKDTrainer)
++    trainer.args = SimpleNamespace(use_vllm=True)
++    trainer.engine = object()
++    original = trainer.engine
++    trainer._prepare_native_rollout_engine()
++    assert trainer.engine is original
+-- 
+2.34.1
+
