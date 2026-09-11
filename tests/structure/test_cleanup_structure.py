@@ -474,7 +474,11 @@ for forbidden in ('jittor', 'PIL', 'pywebio'):
         release_note = self.repo_root / "docs" / "releases" / "2.0.md"
         source = release_note.read_text(encoding="utf-8")
         self.assertIn("jittor.vcompiler", source)
-        self.assertIn("breaking", source.lower())
+        # The release note is written in Chinese; "破坏性变更" is the heading it
+        # files this under. The point of the check is that the removal is
+        # announced as breaking rather than buried in a change list, and that
+        # is what the heading says -- the English word never was.
+        self.assertIn("破坏性变更", source)
         self.assertIn("compile_custom_op", source)
 
 if __name__ == "__main__":
