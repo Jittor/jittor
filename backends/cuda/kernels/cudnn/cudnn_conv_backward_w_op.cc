@@ -238,7 +238,7 @@ void CudnnConvBackwardWOp::jit_run() {
     bool benchmark=true;
 
     // The key is a POD struct hashed as its bytes; see cudnn_conv_algo_key.h,
-    // and tests/compiler/test_cudnn_conv_algo_key.py for what keeps two
+    // and tests/backends/cuda/test_cudnn_conv_algo_key.py for what keeps two
     // configurations that need different algorithms from sharing an entry.
     //
     // The text this replaced was written into the shared jit key buffer, which

@@ -15,7 +15,7 @@
 // `build_exec_plan` now returns `ExecPlan`, a value made almost entirely of
 // indices. So the questions below can be asked *of the plan*, on a synthetic
 // graph, with no allocation, no kernel and no device -- which is also why they
-// are cheap enough to sit in the CPU gate (`tests/compiler/test_jit_tests.py`
+// are cheap enough to sit in the CPU gate (`tests/codegen/test_jit_tests.py`
 // bridges every JIT_TEST into pytest).
 //
 // These are properties, not expected values: each one is re-checked on every

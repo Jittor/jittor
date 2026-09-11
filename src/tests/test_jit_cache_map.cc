@@ -21,7 +21,7 @@ static string short_key(int i) { return string("k") + S(i); }
 // every key already in the table went stale. Measured on this box before the
 // fix: 2017 of these 4096 keys could no longer be found, and the same program
 // under `-fsanitize=address` reports heap-use-after-free inside `find` (see
-// tests/compiler/test_jit_cache_map_asan.py, which keeps that check running).
+// tests/codegen/test_jit_cache_map_asan.py, which keeps that check running).
 //
 // Real jit keys are longer than 15 bytes, which is the only reason this never
 // showed up in production -- an invariant no code stated and nothing checked.

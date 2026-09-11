@@ -8,6 +8,11 @@
 - 退出条件：在开启并行编译的情况下，一个最小化压力测试可重复通过，且无死锁、无缓存
   损坏、无明显性能回退
 
+这一页是**单个问题的调查记录**，不是已知问题的清单。问题总账在
+[`agent/manuals/known-issues.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)，
+本页对应其中的 `KI-COMPILER-001`；两边的状态、workaround 与退出条件必须一致，
+改一边就改另一边。总账里其余条目只有条目本身，没有对应的长文页面。
+
 ## 症状
 
 某些大模型与设备一致性负载在**多个融合运算并发编译**时，可能以分配器错误或段错误终止。

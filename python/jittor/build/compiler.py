@@ -87,6 +87,13 @@ def compile_backend_sources(config, common_flags):
             if config.convert_nvcc_flags is not None:
                 flags = config.convert_nvcc_flags(flags)
         if "nan_checker" in path:
+            # A NaN check compiled under a promise that NaN does not occur
+            # cannot work. `--use_fast_math` is still on every CUDA compile
+            # line by default (see `nvcc_flags` below), so this exemption is
+            # live for `nan_checker.cu`. `-Ofast` is no longer added to kernel
+            # flags -- KI-BACKEND-005 replaced it with `-O3` -- and is stripped
+            # here only because a user-supplied `cc_flags`/`nvcc_flags` can
+            # still carry it in.
             flags = remove_flags(flags, ["--use_fast_math", "-Ofast"]) + " -O2 "
         command = '"%s" "%s" %s -c -o "%s"' % (driver, path, flags, output)
         commands.append(fix_cl_flags(command))
