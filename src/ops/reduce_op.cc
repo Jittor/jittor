@@ -318,7 +318,12 @@ ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, uint keepdims_mask)
     if (op.get(NanoString::_no_need_back_in))
         set_flag(OpFlags::_manual_set_vnbb);
     ns = op;
-    USER_CHECK(ns.is_binary()) << "reduce requires a binary reduction operation, got" << ns;
+    // This constructor is `@pybind(None)`: the generic `reduce(x, op, ...)`
+    // overload is not generated for it, and the per-op aliases that are
+    // (`reduce_add(x, dims_mask, keepdims_mask)` and friends) bind `op` to a
+    // compile-time constant. `op` is therefore never caller data here -- unlike
+    // the `reduce(x, op, dims, keepdims)` constructor above, where it is.
+    ASSERT(ns.is_binary()) << "reduce requires a binary reduction operation, got" << ns;
     // The same integral-only rule BinaryOp applies elementwise. Reducing with a
     // bitwise operation over a float reaches a raw `float & float` in the
     // generated kernel, and g++ answers with "invalid operands of types 'float'

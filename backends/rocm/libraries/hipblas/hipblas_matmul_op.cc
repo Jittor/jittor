@@ -36,7 +36,8 @@ void HipblasMatmulOp::run() {
     if (!layout.inner) {
         auto stream = static_cast<hipStream_t>(backend_ops(BackendId::Rocm).compute_stream(device));
         const auto status = hipMemsetAsync(c->mem_ptr, 0, c->size, stream);
-        USER_CHECK(status == hipSuccess) << "hipBLAS empty matmul: " << hipGetErrorString(status);
+        // hipMemsetAsync failing is a runtime fault, not caller input.
+        CHECK(status == hipSuccess) << "hipBLAS empty matmul: " << hipGetErrorString(status);
         return;
     }
     auto handle = hipblas_bind_stream(device);

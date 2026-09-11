@@ -18,7 +18,8 @@ Handles& handles() {
 
 hipblasHandle_t hipblas_bind_stream(int device) {
     const auto& backend = backend_ops(BackendId::Rocm);
-    USER_CHECKop(backend.current_device(), ==, device)
+    // `device` comes from the op's own placement, not from the caller.
+    ASSERTop(backend.current_device(), ==, device)
         << "hipBLAS must run on its input device";
     auto& handle = handles().devices[device];
     if (!handle) {
