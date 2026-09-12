@@ -163,28 +163,57 @@ void BroadcastToOp::infer_shape() {
     NanoVector zshape;
     for (int i=0; i<zdim; i++) zshape.push_back(zz[i]);
     z->set_shape(zshape);
-    vector<int64> strides(zdim);
-    for (int i=int(zdim)-1, xi=int(xdim)-1; i>=0; --i) {
-        if (bcast_mask>>i&1) {
-            strides[i] = 0;
-            if (keepdims_mask>>i&1) --xi;
-        } else {
-            strides[i] = x->storage_stride(xi--);
+    // A one-element source is the one case the storage descriptor loses on.
+    //
+    // Describing an expand as strides over shared storage is what keeps a real
+    // broadcast from materializing, and it is worth the op becoming
+    // `OpType::other`. But `count_fuse` refuses every edge touching an
+    // `OpType::other` op before it ever looks at `_force_fuse`, and a scalar
+    // constant reaches its consumer as array -> expand -> op. So describing
+    // *that* expand as a view cuts the fusion `ArrayOp` sets `_force_fuse` to
+    // ask for: the constant stops being a kernel argument, gets a
+    // `kernel<<<1,1>>>` of its own to store four bytes, and is then read back
+    // once per element. Measured on a transformer training step: 130 of 370
+    // kernel launches were one-element constants.
+    //
+    // There is nothing to save by sharing four bytes, so a one-element source
+    // keeps the computed form, whose output the fuser folds into the consumer
+    // (`var_fused = 3` for a broadcast producer) instead of materializing.
+    expand_is_view = x->num != 1;
+    if (expand_is_view) {
+        vector<int64> strides(zdim);
+        for (int i=int(zdim)-1, xi=int(xdim)-1; i>=0; --i) {
+            if (bcast_mask>>i&1) {
+                strides[i] = 0;
+                if (keepdims_mask>>i&1) --xi;
+            } else {
+                strides[i] = x->storage_stride(xi--);
+            }
         }
+        z->set_storage_strides(NanoVector::make(strides.data(), strides.size()));
+        z->share_with(x);
+        set_type(OpType::other);
+    } else {
+        set_type(OpType::broadcast);
     }
-    z->set_storage_strides(NanoVector::make(strides.data(), strides.size()));
-    z->share_with(x);
-    set_type(OpType::other);
     z->set_flag(VarFlags::_is_scalar, x->flag(VarFlags::_is_scalar));
     LOGvvv << "Broadcast x(" >> x >> ") shape" << yshapes << "-> z(" >> z >> ")"; 
 }
 
 void BroadcastToOp::jit_prepare(JK& jk) {
-    // An expand is a storage descriptor. alloc() attaches the shared storage;
-    // there is no elementwise kernel and no logical-footprint allocation.
+    // A view is a storage descriptor: alloc() attaches the shared storage, and
+    // there is no elementwise kernel and no logical-footprint allocation. The
+    // one-element form does generate code, and needs its key.
+    if (!expand_is_view)
+        jk << "«Tx:" << x->dtype()
+            << "«DIM=" << JK::hex1(z->shape.size())
+            << "«BCAST=" << JK::hex(bcast_mask);
 }
 
 void BroadcastToOp::run() {
+    // Only the view form reaches here without a kernel; the computed form has
+    // a jit key and runs jit_run.
+    CHECK(expand_is_view) << "Computed expand reached the storage-view path";
     CHECK(z->mem_ptr == x->mem_ptr) << "Expanded storage was not shared";
 }
 
