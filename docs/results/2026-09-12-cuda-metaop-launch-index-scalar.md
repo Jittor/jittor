@@ -206,9 +206,15 @@ H20 的带宽约是它的 4 倍，同样的 kernel 形状只跑到 1300–1800 G
   计算得到的一元素来源（reduction 回灌、softmax 形态）、消费者不是逐元素算子
   （reduce/matmul/getitem/transpose/直接读取）、多元素 expand 仍是视图、
   四种 dtype、秩 1–5、以及三类梯度。
-- **未完成**：`tests/backends/parity/test_device_parity.py` 与 `tests/ops/test_ops.py`
-  （约 227 个生成用例的 CPU/CUDA 逐算子对拍）在基线树与补丁树上并行运行中，本报告
-  写作时约 9%，两边失败模式逐字符一致。完整 CPU 门禁、ROCm 与 NPU 未跑。
+- **逐算子 CPU/CUDA 对拍**（`tests/backends/parity/test_device_parity.py` 与
+  `tests/ops/test_ops.py`，约 227 个生成用例，Torch 兼容模式）：改动 1 与 2 的补丁树
+  与基线树各自独立运行、各用各的编译缓存，结果 **`121 failed, 654 passed, 9 skipped`
+  完全一致，121 条失败逐 nodeid 零差异**（补丁 7629 s、基线 7504 s）。
+  两边都在会话退出时崩在同一处（`corrupted double-linked list`），补丁前后相同，
+  属于既有问题，不在本轮范围。改动 3 的同一门禁在跑，结论另附。
+- **未跑**：完整 CPU 门禁、ROCm、NPU。本轮所有结论都只在 H20（sm_90）上取得；
+  发射配置的默认值对 sm_89 及更早的卡**未验证**（见「为什么之前没发现」一节：
+  在 4090 上这一类 kernel 已经贴着访存上限，预期近似无变化，但没有实测）。
 
 ### 一次自己造成的假失败，记下来避免重复
 
@@ -232,13 +238,94 @@ H20 的带宽约是它的 4 倍，同样的 kernel 形状只跑到 1300–1800 G
 | ternary（含比较） | 7.35 | 9.55 | 0.77x |
 
 1. **`Var × 标量` 要建三个图节点**（array + broadcast_to + binary），torch 只分派一次。
-   本报告第 3 项去掉了多余的 *kernel*，但节点还在，每个标量运算多约 5 µs 主机时间。
-   要去掉需要给 BinaryOp 一个立即数操作数，牵涉 JIT key、反向和所有后端，
-   是一次独立的大改，本轮没有做。
-2. 发射受限形态（b1 s1 d512 8 层）下 jittor 一步 5.05 ms、其中 **96.9% 是建图**，
-   同结构的 eager torch 一步 1.43 ms。**主机路径慢约 3.5x** 是这一类负载的主要差距，
-   与 kernel 无关。
-3. `reduce sum` 与 `reshape` 的建图成本同样明显偏高，未定位。
+   本报告第 3 项去掉了多余的 *kernel*，但节点还在。逐段实测：binary 本身 5.32 µs、
+   expand 节点 +1.99 µs、新建 array 节点 +2.91 µs。
+   要去掉需要给 BinaryOp 一个立即数操作数，牵涉 JIT key、反向（标量的梯度是一次全量
+   归约，现在由 expand 的反向负责）和所有后端，是一次独立的大改，本轮没有做。
+   **顺带记一条否决**：想过缓存一元素常量 Var 来省掉 array 节点，但那会让它成为
+   「批次输入」，而 `count_fuse` 的第一条规则就是批次输入永不融合——正好抵消第 3 项。
+2. **发射受限形态的主机路径慢约 2.9x，原因是节点数而不是单节点成本。**
+   b1 s1 d512 8 层，jittor `jt.no_grad()` 一步 **4.13 ms**（不加是 4.934 ms），
+   同结构 eager torch 在 `torch.no_grad()` 下 **1.43 ms**。
+   （先前写的 3.5x 是拿开着自动微分的 jittor 对 no_grad 的 torch，口径不对，已更正。）
+   一步的建图占 **96.9%**。逐项拆开：
+
+   | | jittor | eager torch |
+   | --- | ---: | ---: |
+   | 一步的节点/分派数 | **408** | 约 318 |
+   | 上下文中每个的成本 | 约 12 µs | 约 4.5 µs |
+   | 孤立测的单算子成本 | 5.31 µs（binary） | 4.33 µs |
+
+   一步 408 个节点的构成（`jt.dump_all_graphs()`，含自动微分）：
+
+   | 类型 | 个数 | 占比 | | 类型 | 个数 | 占比 |
+   | --- | ---: | ---: | --- | --- | ---: | ---: |
+   | binary | 88 | 21.6% | | array | 32 | 7.8% |
+   | **reshape** | **80** | **19.6%** | | tape/tapes | 48 | 11.8% |
+   | broadcast_to | 64 | 15.7% | | getitem | 24 | 5.9% |
+   | cublas_matmul | 32 | 7.8% | | fuse_transpose | 16 | 3.9% |
+
+   两条可操作的结论：
+
+   - **纯视图也要付一个完整图节点。** `reshape` 占 19.6%，而它 `is_storage_view()`、
+     没有 kernel、`infer_shape` 之外几乎不做事；建图仍要 3.38 µs（torch 0.72 µs），
+     代价全在通用的节点创建机制（Op 节点、Var 节点、边、VarHolder）。
+     要整体抹掉需要让视图成为 Var 的属性而不是一个 Op —— 对图模型的根本改动。
+
+     但**这 80 个里有 64 个来自一处**，可以单独处理：`nn/functional/matrix.py` 的
+     `matmul` 在 `len_b == 2 and len_a > 2`（也就是每一个 3-D 输入的 `nn.Linear`）
+     走 `aa = a.reshape((-1, m))` → matmul → `cc.reshape(a.shape[:-1] + [k])`，
+     每个 Linear **两个 reshape 节点**。本测例 4 个 Linear × 8 层 = 64，
+     加上模型里显式写的 2 × 8 = 16，正好是 80。该分支自带注释
+     `TODO:ugly implementation for tuner`。
+     由于输入本就连续，这个展平是纯视图；让 `cublas_matmul` 自己按
+     `prod(shape[:-1])` 当行数，两个 reshape 都不需要——约占一步节点的 15.7%
+     （按 3.38 µs 计约 218 µs / 4130 µs = 5.3%）。没有做：matmul 是最热且最不能出错的
+     路径之一，改它要配一整套形状与反向的对拍，超出本轮能验证的范围。
+   - 上下文里 12 µs 对孤立 5.31 µs 的差额来自 Python 分派层：cProfile 显示
+     `_runtime/dispatch.py` 的 `select_kernel` 每步被调约 104 次、累计约占建图的 14%。
+     该文件已在任务 3.21 里优化过并记录了实测，本轮没有再动。
+3. `reduce sum` 的建图成本 11.86 µs 对 torch 5.06 µs：**已定位，并否决了修法。**
+   `a.sum()` 只建一个节点（与 `a+a` 相同），多出的约 6.5 µs 全在 Python 分派层——
+   cProfile 显示 `select_kernel` 加 `supports` 回调约 9.7 µs，而
+   `_supports_full_reduce` 的判据只看 `x`（元素数低于一个 block 的量就不该走快路径），
+   却排在 `_dispatch_placement` 和 dtype 名构造**之后**。
+
+   把判据前置并顺手写便宜（原实现建一个 tuple、跑一次 `any()` 生成器、再循环求积；
+   一次遍历即可，负的动态维仍需单独拒绝）实测：
+
+   | | 如期 | 判据前置 |
+   | --- | ---: | ---: |
+   | 小张量（512，判据拒绝） | 12.20 µs | 8.36 µs（**1.46x**） |
+   | 大张量（131072，判据接受） | 35.64 µs | 37.70 µs（**0.95x**） |
+
+   **不采纳**，两个理由：大张量那一侧判据被算两次而变慢，不能为一处收益引入一处回归；
+   更重要的是 `reduce_entry` 对任何带轴的归约（`_is_full_reduction` 为假）直接走原生
+   路径、根本不进分派，所以真正会付这笔钱的只有**整体归约**——softmax 与 LayerNorm 用的
+   都是按轴归约，transformer 一步里几乎不出现。收益针对的是罕见调用。
+
+4. **warp 折叠在 transformer 唯一的那类归约上从不触发。** 生成的折叠只在一个 warp
+   的每条 lane 持有同一输出下标时才走；`ParallelPass` 把线程预算从最内层向外分配，
+   当输出轴拿到低位时 32 条 lane 落在 32 个不同输出上，判断恒假，kernel 退回
+   **每线程一次全局原子**，不报任何异常。判别方法是打开 `no_warp_reduce` 看比值：
+
+   | 形状 | 归约维 | warp 开 | warp 关 | 关/开 |
+   | --- | --- | ---: | ---: | ---: |
+   | `[8,256,512]`（Linear 偏置梯度） | 0,1 | 10.94 µs | 10.64 | **0.97** |
+   | `[8,256,2048]` | 0,1 | 19.78 | 19.77 | **1.00** |
+   | `[1024,4096]` | 1 | 11.98 | 25.59 | 2.14 |
+
+   用 `profiler_record_shape=1` 读一步 transformer 训练，代码生成器**只发出一种**
+   归约 kernel：`DIM=3 REDUCE=3 add`，即 Linear 的偏置梯度（LayerNorm 与 softmax
+   走手写 CUDA）。它只到 **383 GB/s**，而同卡逐元素 2800 GB/s。一步 16 次发射，
+   按 7x 上限算可回收约 150 µs（一步约 1.4%），归约更密的网络上更多。
+   要修得动 `ParallelPass` 的线程分配，那是所有生成 kernel 共用的路径。
+   判别方法与实测已写进 `cuda-reduction-strategy-comparison` skill。
+5. **`para_opt_level=4`（块内共享内存归约）在 H20 上同样更差**，与该 skill 在 4090 上的
+   结论一致——这一条**可以**跨架构：transformer 形状 29.78 → 49.42 µs（1.66x 慢），
+   最后一维形状 44.34 → 193.18 µs（4.36x 慢）；精度确实更好（1.4e-7 对 6.8e-7）。
+   默认值不用改。（注意该 skill 的 `reduce_ab.py` 读的是 profiler 的 MinTime，
+   在占卡的机器上每行都会报成那 2.3 ms 停顿；本轮用斜率法重测。）
 
 另外，向量化访存（float4）在独立微基准里对标量访存有 1.31–1.52x，但改动后
 Jittor 的逐元素已到 2800 GB/s（eager torch 2911、torch.compile 2938），
