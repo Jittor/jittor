@@ -99,3 +99,19 @@ def test_positive_step_slice_has_storage_offset_and_strides():
     assert v._storage_address == a._storage_address + 4
     np.testing.assert_array_equal(v.numpy(), [1, 3, 5, 7])
     np.testing.assert_array_equal((v*2).numpy(), [2, 6, 10, 14])
+
+def test_split_last_axis_preserves_multidimensional_prefix():
+    values = np.arange(2 * 8 * 192, dtype=np.float32).reshape(2, 8, 192)
+    dense = jt.array(values) * 0.5 + 3
+    strided = jt.array(values.transpose(0, 2, 1)).transpose(1, 2)
+    assert list(strided._storage_strides()) == [1536, 1, 8]
+
+    for source, expected_source in (
+        (dense, values * 0.5 + 3),
+        (strided, values),
+    ):
+        parts = source.split(64, dim=2)
+        expected_parts = np.split(expected_source, [64, 128], axis=2)
+        assert [tuple(part.shape) for part in parts] == [(2, 8, 64)] * 3
+        for part, expected in zip(parts, expected_parts):
+            np.testing.assert_array_equal(part.numpy(), expected)

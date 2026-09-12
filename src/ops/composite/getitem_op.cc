@@ -222,8 +222,10 @@ void GetitemOp::infer_shape() {
         auto& oid = i_to_o[i];
         auto os = out_shape[oid];
         if (oid>=0) {
-            if (vid==-1 && i && i_to_vs[i-1]<0) {
-                vid = -2;
+            if (vid==-1 && i && i_to_vs[i-1]<0 &&
+                in->storage_stride(i-1) == in_shape[i] * in->storage_stride(i)) {
+                i_to_vs[i-1] = -2;
+                vid = -1;
                 o_shape.back() *= os;
             } else
                 o_shape.push_back(os);
