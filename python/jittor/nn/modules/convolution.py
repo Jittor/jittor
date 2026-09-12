@@ -209,6 +209,10 @@ class Conv1d(jt.Module):
         N,C,D = x.shape
         assert C==self.in_channels
         self._conv[0].weight = self.weight.unsqueeze(-1)
+        # ``from_pretrained(assign=True)`` may replace the public bias Var;
+        # keep the implementation layer pointed at that replacement just as
+        # the weight assignment above does.
+        self._conv[0].bias = self.bias
         x = x.unsqueeze(-1)
         x = self._conv[0](x)
         y = x.squeeze(-1)

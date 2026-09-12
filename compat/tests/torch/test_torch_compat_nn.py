@@ -402,6 +402,18 @@ class TestModules(Base):
 
         both_devices(body)
 
+    def test_conv1d_uses_replaced_bias_parameter(self):
+        def body(dev):
+            target = "cuda" if dev == "cuda" else "cpu"
+            conv = nn.Conv1d(1, 1, kernel_size=1, bias=True).to(target)
+            conv.weight = nn.Parameter(torch.ones((1, 1, 1), device=target))
+            conv.bias = nn.Parameter(torch.tensor([2.0], device=target))
+            output = conv(torch.ones((1, 1, 3), device=target))
+            self.ac(output.numpy(), np.full((1, 1, 3), 3.0), atol=0, rtol=0,
+                    msg=f"Conv1d replaced bias {dev}")
+
+        both_devices(body)
+
     def test_init_fan_helpers_return_python_ints(self):
         def body(dev):
             fan_in, fan_out = nn.init._calculate_fan_in_and_fan_out(

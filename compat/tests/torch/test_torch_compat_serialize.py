@@ -383,6 +383,24 @@ class TestStateDict(Base):
 
         both_devices(body)
 
+    def test_load_state_dict_assign_promotes_frontend_tensor_parameter(self):
+        # Transformers' low-memory loader can leave a plain frontend Tensor in
+        # a parameter slot before assign=True installs the checkpoint value.
+        # The replacement must use nn.Parameter rather than calling Tensor with
+        # a requires_grad keyword.
+        def body(dev):
+            model = nn.Linear(2, 1).to(dev)
+            frontend_weight = torch.tensor([[0.0, 0.0]], device=dev)
+            frontend_weight.requires_grad_(True)
+            model.weight = frontend_weight
+            source = torch.tensor([[2.0, 3.0]], device=dev)
+            model.load_state_dict({"weight": source}, strict=False, assign=True)
+            self.assertIsInstance(model.weight, nn.Parameter)
+            self.assertTrue(model.weight.requires_grad)
+            self.ac(model.weight.numpy(), [[2.0, 3.0]], atol=0, rtol=0, msg=dev)
+
+        both_devices(body)
+
     def test_load_state_dict_assign_does_not_mutate_shared_source(self):
         class Roles(nn.Module):
             def __init__(self, device):

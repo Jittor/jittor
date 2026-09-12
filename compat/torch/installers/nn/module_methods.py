@@ -9,7 +9,7 @@ from jittor import nn
 from jittor.nn.backends import hooks as _backend_hooks
 from jittor.backends.cuda.kernels.nn.rms_norm_training_cuda import _rms_norm_training_cuda
 from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _rms_norm_cuda
-from ...context import registry_for
+from ...context import get_install_context, registry_for
 from ...fidelity import Fidelity, register_fidelity
 from ...nested import _torch_register_leaf
 from ...tensor_state import get_tensor_state
@@ -441,7 +441,12 @@ def _assign_state_value(root, key, value):
     role = next((item_role for item_name, item, item_role in owner._var_roles()
                  if str(item_name) == str(leaf) and item is target), None)
     if role == "parameter":
-        replacement = type(target)(source, requires_grad=bool(target.requires_grad))
+        # ``target`` may be the plain Torch frontend Tensor produced by
+        # Transformers' meta/low-memory loader.  Calling ``type(target)``
+        # rejects ``requires_grad=``; parameter replacement must go through
+        # the installed Parameter factory so assign=True preserves the role.
+        parameter_type = get_install_context(jt).target_namespace.nn.Parameter
+        replacement = parameter_type(source, requires_grad=bool(target.requires_grad))
     else:
         replacement = source.clone().detach()
         replacement.requires_grad = False
