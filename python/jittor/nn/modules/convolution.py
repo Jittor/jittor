@@ -43,6 +43,17 @@ class Conv(jt.Module):
     >>> output = conv(input)
     '''
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros', device=None, dtype=None):
+        # Torch accepts lists as well as tuples for spatial convolution
+        # arguments. Normalize them before validation so a model config such as
+        # InternVL's ``patch_size=[14, 14]`` does not enter scalar comparisons.
+        if isinstance(kernel_size, list):
+            kernel_size = tuple(kernel_size)
+        if isinstance(stride, list):
+            stride = tuple(stride)
+        if isinstance(padding, list):
+            padding = tuple(padding)
+        if isinstance(dilation, list):
+            dilation = tuple(dilation)
         # padding_mode/device/dtype accepted for torch.nn.Conv2d compatibility.
         # jittor pads with zeros; non-'zeros' padding_mode is not yet implemented
         # (warn rather than silently differ).
@@ -183,7 +194,37 @@ class Conv1d(jt.Module):
     >>> input = jt.randn(4, 24, 100)
     >>> output = conv(input)
     '''
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0,
+                 dilation=1, groups=1, bias=True, padding_mode='zeros',
+                 device=None, dtype=None):
+        # Torch Conv1d accepts a one-element list/tuple and the same optional
+        # construction keywords as Conv2d. Jittor stores this layer as a
+        # height-wise Conv2d, so reduce those values to scalars first.
+        for name, value in (("kernel_size", kernel_size), ("stride", stride),
+                            ("padding", padding), ("dilation", dilation)):
+            if isinstance(value, (list, tuple)):
+                if len(value) != 1:
+                    raise ValueError(f"Conv1d {name} must be an int or one-element sequence")
+                value = value[0]
+            if name == "kernel_size":
+                kernel_size = value
+            elif name == "stride":
+                stride = value
+            elif name == "padding":
+                padding = value
+            else:
+                dilation = value
+        if isinstance(padding, str):
+            padding_name = padding.lower()
+            if padding_name == 'valid':
+                padding = 0
+            elif padding_name == 'same':
+                if stride != 1:
+                    raise ValueError("padding='same' is not supported for strided convolutions")
+                effective_kernel = dilation * (kernel_size - 1) + 1
+                padding = (effective_kernel - 1) // 2
+            else:
+                raise ValueError("padding must be an integer, one-element sequence, 'same', or 'valid'")
         assert in_channels > 0, 'in_channels must be positive'
         assert out_channels > 0, 'out_channels must be positive'
         self.in_channels = in_channels
@@ -199,7 +240,11 @@ class Conv1d(jt.Module):
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
         # using list to escape module dfs
-        self._conv = [jt.nn.Conv(self.in_channels, self.out_channels, self.kernel_size, self.stride, self.padding, self.dilation, self.groups, self.bias)]
+        self._conv = [jt.nn.Conv(self.in_channels, self.out_channels,
+                                 self.kernel_size, self.stride, self.padding,
+                                 self.dilation, self.groups, self.bias,
+                                 padding_mode=padding_mode, device=device,
+                                 dtype=dtype)]
         self.weight = self._conv[0].weight.squeeze(-1)
         self.bias = self._conv[0].bias
 

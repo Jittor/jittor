@@ -20,6 +20,13 @@ def arange(start=0, end=None, step=1,dtype=None):
     if (l-1)*step+start>=end:
         l-=1
     x = jt.index((l,),0)
+    # The Torch frontend preserves integer index construction, but a float
+    # step/start/end must perform floating-point arithmetic before any
+    # requested output cast; otherwise the frontend scalar promotion can
+    # truncate every fractional position to zero.
+    if any(isinstance(value, (float, np.floating))
+           for value in (start, end, step)):
+        x = x.float32()
     x = x*step+start
     if dtype is not None:
         x= x.cast(dtype)

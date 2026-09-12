@@ -576,6 +576,9 @@ def install(ctx):
     _jit.is_scripting = _api_jit_is_scripting
     _jit.is_tracing = _api_jit_is_tracing
     _jit.ScriptModule = g.nn.Module
+    # TorchScript's type-only attribute wrapper is a value-preserving helper
+    # in eager execution; Jittor has no separate scripting compiler.
+    _jit.Attribute = lambda value, _type: value
     _jit.interface = _api_jit_interface
     try:
         from typing import Final as _Final
@@ -585,6 +588,36 @@ def install(ctx):
     _bind_missing(g, "jit", _jit)
     _bind_missing(g, "ScriptModule", _jit.ScriptModule)
     _modules.setdefault("torch.jit", _jit)
+
+    # Eager-only remote models occasionally construct quantization stubs even
+    # when no quantized execution is requested.  Keep those modules as explicit
+    # identity layers; Jittor does not ship Torch AO observers or fake-quant
+    # kernels, so silently pretending to quantize would be misleading.
+    _ao = _types2.ModuleType("torch.ao")
+    _ao_quantization = _types2.ModuleType("torch.ao.quantization")
+    class _QuantIdentity(g.nn.Module):
+        def execute(self, input):
+            return input
+    _ao_quantization.QuantStub = _QuantIdentity
+    _ao_quantization.DeQuantStub = _QuantIdentity
+    _ao_nn = _types2.ModuleType("torch.ao.nn")
+    _ao_quantized = _types2.ModuleType("torch.ao.nn.quantized")
+    class _FloatFunctional:
+        def add(self, input, other):
+            return input + other
+        def add_relu(self, input, other):
+            return g.nn.relu(input + other)
+        def mul(self, input, other):
+            return input * other
+    _ao_quantized.FloatFunctional = _FloatFunctional
+    _ao_nn.quantized = _ao_quantized
+    _ao.quantization = _ao_quantization
+    _ao.nn = _ao_nn
+    _modules["torch.ao"] = _ao
+    _modules["torch.ao.quantization"] = _ao_quantization
+    _modules["torch.ao.nn"] = _ao_nn
+    _modules["torch.ao.nn.quantized"] = _ao_quantized
+    g.ao = _ao
     _fx = _types2.ModuleType("torch.fx")
     # A package, so its submodules can be imported and answered below.
     _fx.__path__ = []

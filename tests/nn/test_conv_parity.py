@@ -142,6 +142,21 @@ class _ConvParity:
 class TestConvParityCPU(_ConvParity, unittest.TestCase):
     use_cuda = 0
 
+    def test_list_spatial_arguments_are_normalized(self):
+        """Torch model configs may spell 2-D convolution sizes as lists."""
+        with jt.flag_scope(use_cuda=0):
+            layer = jt.nn.Conv2d(
+                3, 4, kernel_size=[3, 3], stride=[1, 1],
+                padding=[1, 1], dilation=[1, 1])
+            output = layer(jt.ones((1, 3, 5, 5)))
+        self.assertEqual(tuple(output.shape), (1, 4, 5, 5))
+
+    def test_conv1d_torch_optional_arguments_are_accepted(self):
+        with jt.flag_scope(use_cuda=0):
+            layer = jt.nn.Conv1d(3, 4, [3], padding=1, padding_mode='zeros')
+            output = layer(jt.ones((1, 3, 7)))
+        self.assertEqual(tuple(output.shape), (1, 4, 7))
+
 
 @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "no CUDA")
 class TestConvParityCUDA(_ConvParity, unittest.TestCase):

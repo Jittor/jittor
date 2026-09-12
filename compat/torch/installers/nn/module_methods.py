@@ -559,6 +559,16 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
     return _IncompatibleKeys(missing, unexpected)
 
 
+def _register_load_state_dict_pre_hook(self, hook, with_module=False):
+    """Accept Torch's private load hook used by legacy remote checkpoints.
+
+    Jittor's loader has no per-module pre-hook dispatch.  The hook is therefore
+    intentionally recorded as an import-compatible no-op; current callers use
+    it only to discard obsolete checkpoint keys before loading.
+    """
+    return None
+
+
 # torch's Module.parameters() returns an *iterator*; peft does
 # `next(model.parameters())`. jittor returns a list (needed for len()/
 # indexing by optimizers). Return a list subclass that is also an iterator
@@ -1138,6 +1148,7 @@ def _install_module_methods(nn, registry=None):
     M.named_buffers = _named_buffers
     M.named_modules = _named_modules
     M.load_state_dict = _load_state_dict
+    M._register_load_state_dict_pre_hook = _register_load_state_dict_pre_hook
     M.parameters = _parameters
     M.train = _train
     M.eval = _eval
@@ -1171,5 +1182,5 @@ def _install_module_methods(nn, registry=None):
         M._non_persistent_buffers_set = property(_nonpersist_set)
 
     register_api_bindings(M, 'torch.nn.Module',
-        ('__setattr__', 'buffers', 'cpu', 'cuda', 'double', 'eval', 'execute', 'float', 'forward', 'get_buffer', 'get_execution_pipelining', 'get_parameter', 'get_submodule', 'half', 'load_state_dict', 'named_buffers', 'named_modules', 'named_parameters', 'npu', 'parameters', 'register_parameter', 'set_execution_pipelining', 'to', 'to_empty', 'train', 'type', 'zero_grad') + tuple(()),
+        ('__setattr__', '_register_load_state_dict_pre_hook', 'buffers', 'cpu', 'cuda', 'double', 'eval', 'execute', 'float', 'forward', 'get_buffer', 'get_execution_pipelining', 'get_parameter', 'get_submodule', 'half', 'load_state_dict', 'named_buffers', 'named_modules', 'named_parameters', 'npu', 'parameters', 'register_parameter', 'set_execution_pipelining', 'to', 'to_empty', 'train', 'type', 'zero_grad') + tuple(()),
         Fidelity.APPROXIMATE, 'Module state and parameter management over native holders; Torch lazy iterator, meta, and layout semantics are approximate')

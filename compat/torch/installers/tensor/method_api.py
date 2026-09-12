@@ -444,10 +444,26 @@ def _is_basic_index(index):
     return isinstance(index, _owner.numbers.Integral) and not isinstance(index, (bool, _owner.np.bool_))
 
 
+def _align_advanced_index(data, index):
+    """Move tensor indices beside the indexed tensor before native dispatch."""
+    if isinstance(index, _NativeVar):
+        data_cuda = bool(getattr(data, "is_cuda", False))
+        index_cuda = bool(getattr(index, "is_cuda", False))
+        if data_cuda != index_cuda:
+            return index.cuda() if data_cuda else index.cpu()
+        return index
+    if isinstance(index, tuple):
+        return tuple(_align_advanced_index(data, item) for item in index)
+    if isinstance(index, list):
+        return [_align_advanced_index(data, item) for item in index]
+    return index
+
+
 def _torch_getitem(self, slices):
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _orig_getitem = _native['_orig_getitem']
+    slices = _align_advanced_index(self, slices)
     out = _orig_getitem(self, slices)
     if isinstance(out, _NativeVar) and _owner._var_has_cpu_residency_hint(self):
         out = _owner._mark_cpu_like(out, self)
@@ -665,6 +681,12 @@ def _var_type(self, dst_type=None, non_blocking=False, **kw):
         return _DTYPE_TO_TYPENAME.get(_jittor_dtype_name(self.dtype), "torch.FloatTensor")
     if isinstance(dst_type, str) and dst_type in _jittor_dtype_name(_TYPENAME_TO_DTYPE):
         return _cast_if_needed(self, _TYPENAME_TO_DTYPE[dst_type])
+    # Typed tensor classes (torch.BoolTensor, torch.FloatTensor, ...) expose
+    # their native Jittor dtype through the adapter's `_jdtype` marker.  The
+    # class name itself is not a valid Jittor cast target.
+    typed_dtype = getattr(dst_type, "_jdtype", None)
+    if typed_dtype is not None:
+        return _cast_if_needed(self, typed_dtype)
     ds = _owner._dtype_to_str(dst_type)
     return _cast_if_needed(self, ds) if ds is not None else self
 
@@ -850,6 +872,20 @@ def _promoting_binary(self, other, opname, reflected):
     if isinstance(other, (complex, _owner.np.complexfloating)):
         other = _complex_scalar_var(other)
     if isinstance(other, _NativeVar):
+        # PyTorch permits a CPU zero-dimensional scalar to participate in a
+        # CUDA tensor operation (for example ``cuda.arange(3) + x.max()``),
+        # while still rejecting mixed-device non-scalar tensors.  Jittor's
+        # native binary operators require matching placements, so migrate
+        # only the scalar operand before dispatching.
+        self_scalar = getattr(self, "ndim", None) == 0
+        other_scalar = getattr(other, "ndim", None) == 0
+        self_cuda = bool(getattr(self, "is_cuda", False))
+        other_cuda = bool(getattr(other, "is_cuda", False))
+        if self_cuda != other_cuda and (self_scalar or other_scalar):
+            if self_scalar and not other_scalar:
+                self = self.cuda() if other_cuda else self.cpu()
+            elif other_scalar and not self_scalar:
+                other = other.cuda() if self_cuda else other.cpu()
         da, db = _jittor_dtype_name(self.dtype), _jittor_dtype_name(other.dtype)
         if da == db and not da.startswith("uint"):
             return _binary_native(opname, self, other)
@@ -869,10 +905,13 @@ def _promoting_binary(self, other, opname, reflected):
     # `_extend_tokens` list concatenation). Match torch: defer to the sequence.
     if isinstance(other, (list, tuple)):
         return NotImplemented
-    if reflected and isinstance(other, (bool, int, float)):
-        # Jittor may materialize a Python scalar on CPU for reflected ops
-        # (notably ``base ** cuda_tensor``). Keep the scalar on the Var's
-        # backend so the native operation cannot create a mixed-device graph.
+    if isinstance(other, (bool, int, float)) and (
+            reflected or bool(getattr(self, "is_cuda", False)) or
+            bool(getattr(self, "is_cpu", False))):
+        # Jittor may materialize a Python scalar on CPU even for a regular
+        # CUDA operation (``cuda_tensor + 1``), while PyTorch keeps scalar
+        # promotion on the tensor's backend.  Materialize it explicitly so
+        # native operators never receive a mixed-device graph.
         scalar = _owner.jt.array(other, dtype=_jittor_dtype_name(self.dtype))
         if bool(getattr(self, "is_cuda", False)):
             scalar = scalar.cuda()

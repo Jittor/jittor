@@ -71,7 +71,21 @@ def _to_tensor(pic):
     return _jt.array(arr.copy())
 
 def _resize(img, size, interpolation="bilinear", antialias=True, **k):
-    # img: CHW (or NCHW) Var. size: int or (h,w). Route through jittor interpolate.
+    # PIL images stay PIL images through torchvision's functional API.  This is
+    # required by remote multimodal processors that perform dynamic tiling
+    # before converting each tile to a tensor.
+    from PIL import Image as _Im
+    if isinstance(img, _Im.Image):
+        if isinstance(size, int):
+            width, height = img.size
+            if height <= width:
+                nh, nw = size, int(round(size * width / height))
+            else:
+                nh, nw = int(round(size * height / width)), size
+        else:
+            nh, nw = int(size[0]), int(size[1])
+        return img.resize((nw, nh), _pil_resample(interpolation))
+    # Tensor path: CHW (or NCHW) Var. Route through jittor interpolate.
     interp = getattr(interpolation, "value", interpolation)
     interp = str(interp).lower()
     mode = {"bilinear": "bilinear", "bicubic": "bicubic", "nearest": "nearest",
@@ -103,7 +117,18 @@ def _normalize(img, mean, std, inplace=False, **k):
     return (img.float32() - m) / s
 
 def _pad(img, padding, fill=0, padding_mode="constant", **k):
-    # padding: int or [l,t,r,b] (torchvision) ; jittor F.pad wants (l,r,t,b)
+    from PIL import Image as _Im, ImageOps as _ImageOps
+    if isinstance(img, _Im.Image):
+        if isinstance(padding, int):
+            l = r = t = b = padding
+        elif len(padding) == 2:
+            l = r = int(padding[0]); t = b = int(padding[1])
+        else:
+            l, t, r, b = (int(value) for value in padding)
+        if isinstance(fill, list):
+            fill = tuple(fill)
+        return _ImageOps.expand(img, border=(l, t, r, b), fill=fill)
+    # Tensor path: padding is [l,t,r,b] (torchvision); jittor F.pad wants [l,r,t,b].
     if isinstance(padding, int):
         l = r = t = b = padding
     elif len(padding) == 2:

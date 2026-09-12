@@ -70,7 +70,10 @@ def _invoke_factory(name, args, kwargs):
     # used by multimodal position-grid construction.  Keep the general
     # factory default (CPU) unchanged for ordinary Python bounds.
     if placement is None and name == "arange":
-        for value in args[:3]:
+        # A tensor start/end selects the output placement.  A tensor `step`
+        # is only a scalar value; treating it as a device anchor breaks
+        # position-grid code that intentionally builds CPU indices first.
+        for value in args[:2]:
             if isinstance(value, jt.Var):
                 placement = "cuda" if value.is_cuda else "cpu"
                 break
@@ -280,7 +283,10 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     # the matrix to transform, and a 1x1 matrix holds a single element,
     # so shape conversion would collapse it into an integer dimension.
     _takes_shape = not (name.endswith("_like") or name in _TENSOR_ARGUMENT)
-    if args and _takes_shape:
+    # arange arguments are scalar bounds/steps, not shape dimensions.  In
+    # particular, a 0-D floating tensor step must remain fractional; routing
+    # it through `_shape_arg` would coerce `0.03125` to integer zero.
+    if args and _takes_shape and name != "arange":
         args = tuple(_shape_arg(a) for a in args)
     # Jittor factories reject Size/NanoVector tuple subclasses.
     if _takes_shape and args and (isinstance(args[0], jt.NanoVector) or
