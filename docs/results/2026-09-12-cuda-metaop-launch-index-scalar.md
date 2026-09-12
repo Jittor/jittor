@@ -212,7 +212,41 @@ H20 的带宽约是它的 4 倍，同样的 kernel 形状只跑到 1300–1800 G
   完全一致，121 条失败逐 nodeid 零差异**（补丁 7629 s、基线 7504 s）。
   两边都在会话退出时崩在同一处（`corrupted double-linked list`），补丁前后相同，
   属于既有问题，不在本轮范围。改动 3 的同一门禁在跑，结论另附。
-- **未跑**：完整 CPU 门禁、ROCm、NPU。本轮所有结论都只在 H20（sm_90）上取得；
+- **逐算子对拍，改动 3**：同样 `121 failed, 654 passed, 9 skipped`，与基线**逐 nodeid
+  零差异**。三处改动各自独立跑过这道门禁，结果都与基线相同。
+- **原生 CPU 套件**（`tests/core` `ops` `nn` `autograd` `mem` `type` `linalg`，
+  排除三个 torch-mode 文件）：补丁树 `1499 failed / 978 passed / 45 errors`，
+  基线 `1506 failed / 968 passed / 47 errors`。**绝对数不是门禁结论**——这是我手挑的
+  目录组合，不是 `tools/run_test_suite.py` 的维护口径，两边都有大量失败；有意义的只有
+  逐 nodeid 的差集（两边同机同负载并行运行）：
+
+  - **新增失败 1 条**：`tests/ops/test_broadcast_index.py::test_a_pure_broadcast_is_a_strided_view`。
+    应得的——见下。
+  - **由失败转通过 6 条**：`test_scalar_fuse_unary`（含 cuda）、`test_fuse_reduce2`、
+    `test_setitem_`、`test_fuse_transpose1`/`2`。单独复跑确认：基线 5 failed、本树 5 passed。
+    **这五条是重构打断标量融合时留下的既有红灯**，本轮把它们修回来了。
+
+  连同 CUDA 侧的 11 条 cusparse，合计 **16 条既有失败转通过，1 条新增失败**。
+
+### 那一条新增失败是应得的，以及怎么处理的
+
+`tests/ops/test_broadcast_index.py` 守的是 KI-OPS-009（strided 索引 Var 必须按步长读，
+否则越界读到邻居）。它用 `jt.zeros(shape)` 构造那个 strided 索引——也就是**建立在被本轮
+修掉的那个缺陷之上**：缓冲区不是它的形状。改动之后这个构造不再产生视图，文件里每个用例
+都会在不触发任何东西的情况下通过。它自己的 docstring 写着「这是前提。如果它不再成立，
+这个文件就不再测任何东西」——这条守卫起作用了。
+
+处理方式是把前提换成一个**有理由**描述成视图的 expand：展开一行零而不是一个零。
+步长由 `[0,0]` 变成 `[0,1]`，稠密走法的越界量由二十分之十九变成四分之三，仍然越界，
+各条断言的逻辑不变；`test_a_broadcast_index_reads_its_own_element` 改成展开 `base[0:5]`，
+稠密走法会给每行不同的图案而正确读法每行相同，仍然与堆状态无关。另加一条
+`test_a_one_element_expand_is_not_a_view` 钉住新行为。
+
+**重建后的文件在基线树上 12 passed / 2 failed**，失败的正是新加的那条守卫，其余
+KI-OPS-009 用例照常通过——说明它们不依赖本轮改动，文件的用途保住了。
+
+- **未跑**：`tools/run_test_suite.py` 的完整 CPU 维护口径、ROCm、NPU。
+  本轮所有性能结论都只在 H20（sm_90）上取得；
   发射配置的默认值对 sm_89 及更早的卡**未验证**（见「为什么之前没发现」一节：
   在 4090 上这一类 kernel 已经贴着访存上限，预期近似无变化，但没有实测）。
 
