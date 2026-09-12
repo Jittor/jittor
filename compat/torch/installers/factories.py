@@ -295,7 +295,11 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     # Torch also allows shape via size=.
     if "size" in kwargs and not args:
         sz = kwargs.pop("size")
-        args = (tuple(sz),) if hasattr(sz, "__len__") else (sz,)
+        # Route the keyword spelling through the same scalar-dimension
+        # normalization as the positional spelling. Multimodal audio
+        # encoders commonly compute a padded length as a CUDA 0-D tensor and
+        # pass it through ``torch.full(size=(..., length))``.
+        args = (_shape_arg(sz),)
     # torch.full(size, fill_value=...) / full_like(input, fill_value=...):
     # jittor's full(shape, val) / full_like(x, val) take the value as the 2nd
     # positional. transformers' beam scorer passes fill_value= as a keyword, so

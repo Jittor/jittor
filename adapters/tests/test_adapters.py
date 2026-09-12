@@ -47,12 +47,18 @@ class AdapterContracts(unittest.TestCase):
         package = Path(root) / "transformers"
         (package / "utils").mkdir(parents=True)
         (package / "__init__.py").write_text(
-            "__version__ = %r\nfrom .utils.import_utils import is_torch_npu_available\n"
+            "__version__ = %r\nfrom .utils.import_utils import (is_torch_npu_available, "
+            "is_torchvision_available, is_torchvision_v2_available)\n"
             "probe_result = is_torch_npu_available(check_device=True)\n" % version)
         (package / "utils/__init__.py").write_text("")
         (package / "utils/import_utils.py").write_text(
             "def is_torch_npu_available(check_device=False):\n"
-            "    raise RuntimeError('native torch_npu probe must not execute')\n")
+            "    raise RuntimeError('native torch_npu probe must not execute')\n"
+            "def is_torchvision_available():\n"
+            "    return False\n"
+            "def is_torchvision_v2_available():\n"
+            "    raise RuntimeError('unavailable torchvision version must not be parsed')\n"
+            "BACKENDS_MAPPING = {'torchvision': (is_torchvision_available, 'torchvision unavailable')}\n")
 
     def test_transformers_npu_probe_rejects_real_pytorch_extension(self):
         transformers.register(patcher.register_module_patch)
@@ -67,6 +73,30 @@ class AdapterContracts(unittest.TestCase):
                 self.assertFalse(guard())
                 self.assertIs(module.is_torch_npu_available, guard)
                 self.assertTrue(callable(guard.cache_clear))
+            finally:
+                sys.path.remove(root)
+
+    def test_transformers_recognizes_the_deployed_torchvision_facade(self):
+        transformers.register(patcher.register_module_patch)
+        patcher.install_module_patches(load_entry_points=False)
+        with tempfile.TemporaryDirectory() as root:
+            self.fake_transformers(root, "4.56.2")
+            facade = Path(root) / "torchvision"
+            facade.mkdir()
+            (facade / "__init__.py").write_text("__version__ = '2.11.0'\n")
+            sys.path.insert(0, root)
+            try:
+                module = importlib.import_module("transformers")
+                import_utils = sys.modules["transformers.utils.import_utils"]
+                self.assertTrue(module.is_torchvision_available())
+                self.assertTrue(module.is_torchvision_v2_available())
+                self.assertIs(module.is_torchvision_available, import_utils.is_torchvision_available)
+                self.assertIs(module.is_torchvision_v2_available, import_utils.is_torchvision_v2_available)
+                self.assertIs(
+                    import_utils.BACKENDS_MAPPING["torchvision"][0],
+                    import_utils.is_torchvision_available,
+                )
+                self.assertTrue(import_utils.BACKENDS_MAPPING["torchvision"][0]())
             finally:
                 sys.path.remove(root)
 

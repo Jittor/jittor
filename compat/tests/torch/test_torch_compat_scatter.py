@@ -376,18 +376,23 @@ class TestIndexAdd(Base):
 
     def test_index_add__in_place_preserves_source_gradient(self):
         def body(dev):
-            parameter = torch.nn.Parameter(torch.ones((3, 2), device=dev))
-            source = torch.ones((2, 3), device=dev) @ parameter
+            first_parameter = torch.nn.Parameter(torch.ones((3, 2), device=dev))
+            second_parameter = torch.nn.Parameter(torch.full((3, 2), 2.0, device=dev))
+            first_source = torch.ones((2, 3), device=dev) @ first_parameter
+            second_source = torch.ones((2, 3), device=dev) @ second_parameter
             output = torch.zeros((3, 2), device=dev)
             index = torch.tensor([0, 2], device=dev)
 
-            output.index_add_(0, index, source)
+            output.index_add_(0, index, first_source)
+            output.index_add_(0, index, second_source)
             self.assertTrue(output.requires_grad, f"index_add_ graph missing {dev}")
             output.sum().backward()
 
-            self.assertIsNotNone(parameter.grad, f"index_add_ grad missing {dev}")
-            self.ac(parameter.grad.numpy(), np.full((3, 2), 2.0),
-                    msg=f"index_add_ source grad {dev}")
+            for name, parameter in (
+                    ("first", first_parameter), ("second", second_parameter)):
+                self.assertIsNotNone(parameter.grad, f"index_add_ {name} grad missing {dev}")
+                self.ac(parameter.grad.numpy(), np.full((3, 2), 2.0),
+                        msg=f"index_add_ {name} source grad {dev}")
 
         both_devices(body)
 

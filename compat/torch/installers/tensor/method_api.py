@@ -212,8 +212,12 @@ def _ip(self, value):
     if _assign_data_owner(self, value):
         return self
     target = self
-    was_trainable = not target.is_stop_grad()
-    value_is_trainable = isinstance(value, _NativeVar) and not value.is_stop_grad()
+    # The refactored core can expose a non-stopped factory result while its
+    # Torch-facing requires_grad bit is still false.  Use the public autograd
+    # contract here; is_stop_grad() would misclassify zeros_like destinations
+    # used by MoE index_add_ and assign away the expert graph.
+    was_trainable = bool(target.requires_grad)
+    value_is_trainable = isinstance(value, _NativeVar) and bool(value.requires_grad)
     if not was_trainable and value_is_trainable:
         # assign() deliberately copies the old holder's stop-grad state onto
         # the new graph. Torch instead lets a constant destination become
@@ -869,6 +873,13 @@ def _binary_native(opname, left, right):
 
 def _promoting_binary(self, other, opname, reflected):
     g = get_install_context(_owner.jt).target_namespace
+    if isinstance(other, (str, bytes)):
+        if reflected and opname == '__rmul__':
+            if self.numel() != 1 or _jittor_dtype_name(self.dtype) not in (
+                    "bool", "uint8", "int8", "int16", "int32", "int64"):
+                raise TypeError("only integer tensors of a single element can be converted to an index")
+            return other * int(self.item())
+        return NotImplemented
     if isinstance(other, (complex, _owner.np.complexfloating)):
         other = _complex_scalar_var(other)
     if isinstance(other, _NativeVar):
@@ -912,7 +923,8 @@ def _promoting_binary(self, other, opname, reflected):
         # CUDA operation (``cuda_tensor + 1``), while PyTorch keeps scalar
         # promotion on the tensor's backend.  Materialize it explicitly so
         # native operators never receive a mixed-device graph.
-        scalar = _owner.jt.array(other, dtype=_jittor_dtype_name(self.dtype))
+        scalar_dtype = _owner._dtype_to_str(g.result_type(self, other))
+        scalar = _owner.jt.array(other, dtype=scalar_dtype)
         if bool(getattr(self, "is_cuda", False)):
             scalar = scalar.cuda()
         elif bool(getattr(self, "is_cpu", False)):
@@ -921,7 +933,7 @@ def _promoting_binary(self, other, opname, reflected):
             # branch ``0 + cpu_tensor`` can combine a CUDA-default scalar
             # with an explicit CPU Var inside a module frontend scope.
             scalar = scalar.cpu()
-        other = scalar
+        return _promoting_binary(self, scalar, opname, reflected)
     out = _binary_native(opname, self, other)
     if isinstance(other, (bool, int, float)) and isinstance(out, _NativeVar):
         expected = _owner._dtype_to_str(g.result_type(self, other))

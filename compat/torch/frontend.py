@@ -117,7 +117,11 @@ class _TensorMeta(type):
             raise TypeError("Tensor constructor does not accept keyword arguments")
         from .nested import _TorchSize
         dtype = _default_tensor_dtype(backend)
-        with tensor_frontend(cls, like=args[0] if len(args) == 1 else None):
+        like = args[0] if len(args) == 1 and isinstance(args[0], backend.Var) else None
+        # Like torch.Tensor, data and shape construction defaults to CPU even
+        # when Jittor's process-wide backend is CUDA. Tensor copy construction
+        # is the exception and inherits the source tensor's explicit placement.
+        with tensor_frontend(cls, device=None if like is not None else "cpu", like=like):
             if not args:
                 result = backend.empty((0,), dtype=dtype)
             elif all(isinstance(arg, int) for arg in args):

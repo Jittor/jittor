@@ -93,6 +93,31 @@ GEOMETRIES_3D = ((2, 2, 0), (2, 2, 1), (3, 1, 1), (3, 2, 1), (2, 3, 1))
 DEVICES = [0] + ([1] if _test_capability.check_accelerator('cuda', backend=jt).enabled else [])
 
 
+class TestUnbatchedPool1d(unittest.TestCase):
+    def test_two_dimensional_input_matches_batched_result(self):
+        values = np.arange(24, dtype=np.float32).reshape(3, 8)
+        for use_cuda in DEVICES:
+            with self.subTest(use_cuda=use_cuda), jt.flag_scope(use_cuda=use_cuda):
+                unbatched = jt.array(values)
+                batched = jt.array(values[None])
+                for layer in (
+                        jt.nn.AdaptiveAvgPool1d(4),
+                        jt.nn.AvgPool1d(2),
+                        jt.nn.MaxPool1d(2)):
+                    actual = layer(unbatched)
+                    expected = layer(batched).squeeze(0)
+                    self.assertEqual(tuple(actual.shape), (3, 4))
+                    if use_cuda:
+                        self.assertTrue(actual.device.startswith("cuda:"))
+                    np.testing.assert_allclose(
+                        actual.numpy(), expected.numpy(), rtol=0, atol=0)
+
+    def test_invalid_rank_is_rejected(self):
+        with jt.flag_scope(use_cuda=0):
+            with self.assertRaisesRegex(ValueError, "2-D or 3-D"):
+                jt.nn.AvgPool1d(2)(jt.ones((8,)))
+
+
 def _spellings_2d(kernel, stride, padding, ceil_mode, count_include_pad):
     """Every public way to ask for 2-D average pooling."""
     return {

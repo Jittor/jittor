@@ -86,6 +86,9 @@ def _dtype_spec(value):
     import jittor as jt
     if isinstance(value, jt.NanoString) or callable(value):
         return value
+    compute_name = getattr(value, "_jittor_compute_name", None)
+    if isinstance(compute_name, str):
+        return compute_name
     if isinstance(value, str) and _device_spec(value) is None:
         return value.replace("torch.", "")
     return None

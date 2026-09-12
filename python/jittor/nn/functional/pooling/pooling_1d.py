@@ -4,8 +4,25 @@ import math
 import jittor as jt
 
 
+def _with_batch_dim(x, operation):
+    """Run a 1-D pooling kernel for batched or unbatched Torch inputs."""
+    if x.ndim == 3:
+        return operation(x)
+    if x.ndim == 2:
+        return operation(x.unsqueeze(0)).squeeze(0)
+    raise ValueError(
+        "pool1d expected a 2-D or 3-D input, got %d-D input" % x.ndim
+    )
+
+
 def _adaptive_avg_pool1d(x, *, output_size):
     # x: (N, C, L) -> (N, C, output_size); mirrors AdaptiveAvgPool2d for 1d.
+    return _with_batch_dim(
+        x, lambda batched: _adaptive_avg_pool1d_batched(
+            batched, output_size=output_size))
+
+
+def _adaptive_avg_pool1d_batched(x, *, output_size):
     ol = output_size[0] if isinstance(output_size, (tuple, list)) else output_size
     if ol is None:
         ol = x.shape[2]
@@ -40,6 +57,13 @@ def _max_pool1d_parameters(kernel_size, stride=None, padding=0, dilation=1, retu
 
 
 def _max_pool1d(x, *, ceil_mode, kernel_size, padding, return_indices, stride):
+    return _with_batch_dim(
+        x, lambda batched: _max_pool1d_batched(
+            batched, ceil_mode=ceil_mode, kernel_size=kernel_size,
+            padding=padding, return_indices=return_indices, stride=stride))
+
+
+def _max_pool1d_batched(x, *, ceil_mode, kernel_size, padding, return_indices, stride):
     N, C, L = x.shape
     k, s, p = kernel_size, stride, padding
     if ceil_mode:
@@ -67,6 +91,14 @@ def _avg_pool1d_parameters(kernel_size, stride=None, padding=0, ceil_mode=False,
 
 
 def _avg_pool1d(x, *, ceil_mode, count_include_pad, kernel_size, padding, stride):
+    return _with_batch_dim(
+        x, lambda batched: _avg_pool1d_batched(
+            batched, ceil_mode=ceil_mode,
+            count_include_pad=count_include_pad, kernel_size=kernel_size,
+            padding=padding, stride=stride))
+
+
+def _avg_pool1d_batched(x, *, ceil_mode, count_include_pad, kernel_size, padding, stride):
     N, C, L = x.shape
     k, s, p = kernel_size, stride, padding
     if ceil_mode:

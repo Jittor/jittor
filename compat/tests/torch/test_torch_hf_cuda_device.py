@@ -252,6 +252,25 @@ class TestTorchHFCudaDevice(unittest.TestCase):
         self.assertIsNot(meta, cpu)
         self.assertFalse(cpu.is_meta)
 
+    def test_legacy_tensor_data_constructor_defaults_to_cpu(self):
+        for data in ([1.0, 2.0, 3.0], np.array([1.0, 2.0, 3.0], dtype=np.float64)):
+            with self.subTest(data_type=type(data).__name__):
+                value = torch.Tensor(data)
+                self.assertFalse(value.is_cuda)
+                self.assertEqual(value.device.type, "cpu")
+                self.assertEqual(value.dtype, torch.float32)
+                np.testing.assert_array_equal(
+                    value.numpy(), np.array([1.0, 2.0, 3.0], dtype=np.float32))
+
+    def test_cpu_boolean_scalar_assignment_ignores_the_global_cuda_default(self):
+        value = torch.tensor([-2, 1, -3], dtype=torch.int64)
+        value[value < 0] = 0
+        value.sync()
+
+        self.assertFalse(value.is_cuda)
+        self.assertEqual(value.device.type, "cpu")
+        np.testing.assert_array_equal(value.numpy(), np.array([0, 1, 0], dtype=np.int64))
+
     def test_input_factories_inherit_device_inside_meta_context(self):
         cpu = torch.tensor([[1, 2], [3, 4]], dtype=torch.int64)
         cuda = cpu.to("cuda")

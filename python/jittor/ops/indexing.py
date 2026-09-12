@@ -296,6 +296,7 @@ def _getitem_result(x, slices):
 def setitem(x, slices, value):
     """Apply Jittor assignment with the established mask and complex rules."""
     import jittor as jt
+    from .._core.var import _factory_scope_like
 
     if _jittor_dtype_name(x.dtype) == "complex64" and isinstance(value, (complex, np.complexfloating)):
         value = jt.array(np.asarray([value], dtype=np.complex64))
@@ -311,7 +312,8 @@ def setitem(x, slices, value):
     if isinstance(slices, jt.Var) and _jittor_dtype_name(slices.dtype) == "bool":
         if slices.shape == x.shape:
             if isinstance(value, (int, float)):
-                value = jt.array(value).broadcast(x.shape)
+                with _factory_scope_like(x):
+                    value = jt.array(value, dtype=x.dtype).broadcast(x.shape)
                 return x.assign(slices.ternary(value, x))
             if isinstance(value, jt.Var) and value.shape == [1]:
                 value = jt.broadcast(value, x.shape)

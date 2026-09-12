@@ -54,12 +54,14 @@ class Conv(jt.Module):
             padding = tuple(padding)
         if isinstance(dilation, list):
             dilation = tuple(dilation)
-        # padding_mode/device/dtype accepted for torch.nn.Conv2d compatibility.
-        # jittor pads with zeros; non-'zeros' padding_mode is not yet implemented
-        # (warn rather than silently differ).
+        # Keep PyTorch's padding modes at the module boundary.  The convolution
+        # kernel itself implements zero padding; the other modes are applied
+        # explicitly in _conv_forward.
         self.padding_mode = padding_mode
-        if padding_mode not in ('zeros',):
-            jt.LOG.w(f"Conv: padding_mode={padding_mode!r} not implemented, using 'zeros'")
+        if padding_mode not in ('zeros', 'reflect', 'replicate', 'circular'):
+            raise ValueError(
+                "padding_mode must be one of 'zeros', 'reflect', "
+                f"'replicate', or 'circular', got {padding_mode!r}")
         if isinstance(padding, str):
             # Transformers' SigLIP patch embed uses the case-insensitive Torch
             # spelling ``padding='SAME'``.  Jittor's convolution kernel takes
@@ -154,7 +156,13 @@ class Conv(jt.Module):
         # already drifted apart in compile options, validation and the CUDA
         # depthwise path -- and _conv_forward called the functional one, so the
         # same layer computed different things depending on the entry point.
-        return jt.nn.conv2d(input, weight, bias, self.stride, self.padding,
+        padding = self.padding
+        if self.padding_mode != 'zeros':
+            ph, pw = padding
+            input = jt.nn.pad(
+                input, (pw, pw, ph, ph), mode=self.padding_mode)
+            padding = (0, 0)
+        return jt.nn.conv2d(input, weight, bias, self.stride, padding,
                             self.dilation, self.groups)
 
 
