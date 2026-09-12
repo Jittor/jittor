@@ -180,6 +180,13 @@ bool Var::is_contiguous() const {
     return true;
 }
 
+int Var::stride_pattern() const {
+    int mask = 0;
+    for (uint i=0; i<shape.size(); ++i)
+        if (storage_stride(i) != 0) mask |= 1 << i;
+    return mask;
+}
+
 void Var::set_storage_strides(NanoVector strides) {
     USER_CHECK(strides.size() == shape.size()) << "Storage stride rank must match shape";
     for (auto stride : strides)

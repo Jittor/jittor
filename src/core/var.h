@@ -25,6 +25,12 @@ struct Var : Node {
     int64 storage_stride(uint axis) const;
     int64 storage_span_bytes() const;
     bool is_contiguous() const;
+    // Bit `d` is set when axis `d` advances the physical index, i.e. its stride
+    // is not zero. A kernel that walks this var by unflattening a linear index
+    // needs neither the modulo nor the division belonging to a cleared bit, so
+    // this belongs in the JIT key: it is the shape of the index arithmetic, and
+    // unlike the stride values themselves it takes only a handful of values.
+    int stride_pattern() const;
     void set_storage_strides(NanoVector strides);
     cstr name;
     fast_shared_ptr<loop_options_t> loop_options;
