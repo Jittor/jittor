@@ -529,23 +529,36 @@ Var.norm = norm
 
 origin_reshape = reshape
 
+#: The genuine builtin `int`, and the two concrete sequence types a shape
+#: arrives as. In this namespace `int`/`all`/`any` are shadowed by jittor's
+#: dtype and reductions, so the builtin has to be reached through an instance;
+#: hoisting it out of `view` keeps that lookup off a path every reshape takes.
+_pyint = (0).__class__
+
+
 def view(x, *shape):
-    if len(shape) == 1 and isinstance(shape[0], (Sequence, NanoVector)):
-        shape = shape[0]
+    # `type(...) is tuple or list` before the abstract check: `Sequence` is an
+    # ABC, and an `isinstance` against an ABC goes through `_abc_instancecheck`
+    # -- an order of magnitude dearer than an identity test, on a path every
+    # `reshape`, `view` and internal flatten takes. Measured at ~5 us per pure
+    # view, which a `matmul_transpose` pays twice. The ABC branch is kept for
+    # the shapes that really are some other sequence.
+    if len(shape) == 1:
+        first = shape[0]
+        tf = type(first)
+        if tf is tuple or tf is list or isinstance(first, (Sequence, NanoVector)):
+            shape = first
     # torch accepts 0-d int tensors / numpy ints as shape elements (e.g. longformer's
     # `_chunk` passes torch.div(size, n) into .view); jittor's core reshape needs plain
     # int64. Coerce only when a non-int element is present — plain-int shapes (the hot
     # path) are untouched, so this can't change existing behavior, only un-break it.
-    # (NB: in this namespace `int`/`all`/`any` are shadowed by jittor's dtype/reductions,
-    # so use an explicit loop and grab the genuine builtin int via `(0).__class__`.)
-    pyint = (0).__class__
     coerce = False
     for s in shape:
-        if type(s) is not pyint:
+        if type(s) is not _pyint:
             coerce = True
             break
     if coerce:
-        shape = tuple(pyint(s.item()) if isinstance(s, Var) else pyint(s) for s in shape)
+        shape = tuple(_pyint(s.item()) if isinstance(s, Var) else _pyint(s) for s in shape)
     result = origin_reshape(x, shape)
     result._set_storage_view_of(x, False)
     return result

@@ -122,31 +122,31 @@ def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul"):
     loads the routing functions of this file by name through the AST, so a
     private function called from here would have to be named there too.
     """
-    def describe(name, var):
-        return "%s:%s%s" % (name, var.dtype, list(var.shape))
-
+    # The message formatter used to be a nested `describe`, i.e. a closure built
+    # on every call -- including the successful ones, which are all of them in a
+    # model. It is now inlined into the two error paths; the text is unchanged.
     if a.ndim == 0 or b.ndim == 0:
         raise RuntimeError(
-            "%s: both operands need at least 1 dim, but got %s (%d-D) and "
-            "%s (%d-D)" % (op, describe("a", a), a.ndim,
-                           describe("b", b), b.ndim))
+            "%s: both operands need at least 1 dim, but got a:%s%s (%d-D) and "
+            "b:%s%s (%d-D)" % (op, a.dtype, list(a.shape), a.ndim,
+                               b.dtype, list(b.shape), b.ndim))
     a_axis = 0 if a.ndim == 1 else (-2 if trans_a else -1)
     b_axis = 0 if b.ndim == 1 else (-1 if trans_b else -2)
     inner_a = a.shape[a_axis]
     inner_b = b.shape[b_axis]
     if inner_a != inner_b:
         raise RuntimeError(
-            "%s: shapes cannot be multiplied, %s and %s: dim %d of a is %d but "
-            "dim %d of b is %d, and the two contracted dims must be equal"
-            % (op, describe("a", a), describe("b", b),
+            "%s: shapes cannot be multiplied, a:%s%s and b:%s%s: dim %d of a is "
+            "%d but dim %d of b is %d, and the two contracted dims must be equal"
+            % (op, a.dtype, list(a.shape), b.dtype, list(b.shape),
                a_axis, inner_a, b_axis, inner_b))
     for offset, (left, right) in enumerate(
             zip(reversed(a.shape[:-2]), reversed(b.shape[:-2]))):
         if left != right and left != 1 and right != 1:
             raise RuntimeError(
-                "%s: batch dims do not broadcast, %s and %s: dim %d is %d in a "
-                "and %d in b, which must be equal or 1 in one of them"
-                % (op, describe("a", a), describe("b", b),
+                "%s: batch dims do not broadcast, a:%s%s and b:%s%s: dim %d is "
+                "%d in a and %d in b, which must be equal or 1 in one of them"
+                % (op, a.dtype, list(a.shape), b.dtype, list(b.shape),
                    -3 - offset, left, right))
 
 
@@ -155,25 +155,31 @@ def matmul_transpose(a, b):
     returns a * b^T
     """
     _check_matmul_shapes(a, b, trans_b=True, op="matmul_transpose")
-    if len(a.shape) != 2:
-        aa = a.reshape((-1, a.shape[-1]))
-        cc = jt.nn.matmul_transpose(aa, b)
-        return cc.reshape(a.shape[:-1] + (-1,))
     if len(b.shape) != 2:
         raise RuntimeError(
             "matmul_transpose: b must be 2-D once a is, but got "
             "a:%s%s and b:%s%s" % (a.dtype, list(a.shape),
                                    b.dtype, list(b.shape)))
+    # A batched `a` is flattened and the result un-flattened, but by falling
+    # through rather than recursing into this function: the recursion paid
+    # `_check_matmul_shapes` a second time on operands derived from ones it had
+    # just checked, and this is the shape every `nn.Linear` on a batched input
+    # arrives with. The flattening is the same reshape as before.
+    restore = None
+    if len(a.shape) != 2:
+        restore = a.shape[:-1] + (-1,)
+        a = a.reshape((-1, a.shape[-1]))
     fast = _matmul_2d_cublas(a, b, 0, 1)
     if fast is not None:
-        return fast
+        return fast if restore is None else fast.reshape(restore)
 
     shape = list(a.shape)[:-1] + list(b.shape)
     with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce
                       | jt.amp_flags.reduce16_no_fp32_acc):
         a = a.broadcast(shape, [len(shape) - 2])
         b = b.broadcast(shape)
-        return (a * b).sum(len(shape) - 1)
+        out = (a * b).sum(len(shape) - 1)
+    return out if restore is None else out.reshape(restore)
 
 
 def bmm_transpose(a, b):
