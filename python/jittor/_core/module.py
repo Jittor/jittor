@@ -67,6 +67,12 @@ _ROLE_PLAIN = "plain"
 _VIEW_ROLES = {
     "parameters": frozenset((_ROLE_PARAMETER,)),
     "buffers": frozenset((_ROLE_BUFFER, _ROLE_NON_PERSISTENT_BUFFER)),
+    # Vars a module owns that are neither: a `Conv` bias is one (assigned as a
+    # bare attribute), and so is the `weight` a weight_norm hook rewrites. They
+    # travel with the module on a device move; torch has no separate category
+    # because it never leaves a tensor unregistered.
+    "owned": frozenset((_ROLE_PARAMETER, _ROLE_BUFFER, _ROLE_NON_PERSISTENT_BUFFER,
+                        _ROLE_PLAIN)),
     "state": frozenset((_ROLE_PARAMETER, _ROLE_BUFFER)),
 }
 
@@ -377,7 +383,7 @@ class Module:
         import jittor as jt
         if method == "npu" and not getattr(jt.compiler, "has_acl", False):
             raise RuntimeError("NPU backend is unavailable")
-        values = self._named_vars("parameters") + self._named_vars("buffers")
+        values = self._named_vars("owned")
         seen = set()
         for _, value in values:
             if id(value) in seen:
