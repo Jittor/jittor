@@ -200,9 +200,9 @@ class TestConstructorDtype(Base):
 
     def test_arange_dtype(self):
         def body(dev):
-            self.assertEqual(dts(torch.arange(5)), "int32", dev)          # int range -> int32
+            self.assertEqual(dts(torch.arange(5)), "int64", dev)
             self.assertEqual(dts(torch.arange(0.0, 5.0)), "float32", dev)  # float range -> float32
-            self.ae(torch.arange(5).numpy(), np.arange(5, dtype="int32"), dev)
+            self.ae(torch.arange(5).numpy(), np.arange(5, dtype="int64"), dev)
         both_devices(body)
 
     def test_like_constructors_keep_dtype(self):
@@ -239,6 +239,15 @@ class TestCastMethods(Base):
             x = torch.tensor(self.x)
             self.assertEqual(dts(x.to("cuda")), "float32", dev)
             self.assertEqual(dts(x.to(torch.float64)), "float64", dev)
+        both_devices(body)
+
+    def test_native_var_accepts_the_torch_dtype_protocol(self):
+        def body(dev):
+            native = jt.array(self.x)
+            converted = native.to(dtype=torch.float64)
+            self.assertEqual(str(converted.dtype), "float64", dev)
+            self.ae(converted.numpy(), self.x.astype("float64"), dev)
+
         both_devices(body)
 
     def test_astype(self):

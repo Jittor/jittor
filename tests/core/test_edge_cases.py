@@ -303,6 +303,23 @@ class TestExtremeValues(_EdgeBase):
             self.assertEqual(got, ref, msg=f"clamp extremes [{dev}]")
         self._for_devices(body)
 
+    def test_clamp_zero_dim_scalar(self):
+        def body(dev):
+            integer = jt.array(np.asarray(-4095, dtype=np.int32))
+            floating = jt.array(np.asarray(2.5, dtype=np.float32))
+
+            clamped_integer = jt.clamp(integer, min_v=0)
+            clamped_floating = jt.clamp(floating, max_v=1.25)
+
+            self.assertEqual(tuple(clamped_integer.shape), ())
+            self.assertEqual(tuple(clamped_floating.shape), ())
+            self.assertEqual(clamped_integer, np.asarray(0, dtype=np.int32),
+                             msg=f"integer scalar clamp [{dev}]")
+            self.assertEqual(clamped_floating, np.asarray(1.25, dtype=np.float32),
+                             msg=f"floating scalar clamp [{dev}]")
+
+        self._for_devices(body)
+
     def test_large_magnitude_add_precision(self):
         # Each scalar float32 add/subtract step follows strict IEEE float32 semantics.
         big = np.float32(1e8)

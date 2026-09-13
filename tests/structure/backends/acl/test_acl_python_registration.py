@@ -250,9 +250,24 @@ def test_acl_pool_uses_canonical_output_geometry(
     providers.native.Function = Function
     launches = []
 
-    def record_pool(name, inputs, output_dtypes, output_shapes, attr_code):
-        launches.append((name, output_shapes, attr_code))
+    def record_pool(name, inputs, output_dtypes, output_shapes, attributes=None, **kwargs):
+        launches.append((name, output_shapes, attributes))
         return [_Tensor(shape, dtype) for shape, dtype in zip(output_shapes, output_dtypes)]
+
+    def _output_size_fn():
+        return record_geometry
+
+    def _pool_program(name, input_count, output_count, kernel, stride, padding,
+                      dilation, ceil_mode, count_include_pad):
+        return SimpleNamespace(
+            name=name,
+            attributes={"countIncludePad": count_include_pad},
+        )
+
+    def acl_emit(program, inputs, output_dtypes, output_shapes):
+        return record_pool(
+            program.name, inputs, output_dtypes, output_shapes, program.attributes
+        )
 
     pool_source = (KERNELS / "ops/pool_op.py").read_text(encoding="utf-8")
     pool_class = next(
@@ -260,7 +275,13 @@ def test_acl_pool_uses_canonical_output_geometry(
         for node in ast.parse(pool_source).body
         if isinstance(node, ast.ClassDef) and node.name == "PoolACL"
     )
-    namespace = {"jt": providers.native, "pool_cmd": record_pool}
+    namespace = {
+        "jt": providers.native,
+        "pool_cmd": record_pool,
+        "_output_size_fn": _output_size_fn,
+        "_pool_program": _pool_program,
+        "acl_emit": acl_emit,
+    }
     exec(
         compile(ast.get_source_segment(pool_source, pool_class), "<actual_pool_acl>", "exec"),
         namespace,
@@ -273,7 +294,7 @@ def test_acl_pool_uses_canonical_output_geometry(
     assert result.shape == (1, 2, expected, expected)
     assert geometry_calls == [(size, kernel, stride, padding, ceil_mode)] * 2
     assert launches[0][0] == ("Maxpool" if op == "maximum" else "Avgpool")
-    assert "attr->countIncludePad = false" in launches[0][2]
+    assert launches[0][2]["countIncludePad"] is False
 
 
 @pytest.mark.parametrize(

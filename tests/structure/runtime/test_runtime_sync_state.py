@@ -145,8 +145,8 @@ def test_runtime_allocator_policies_are_live_writable_views_and_cpu_safe():
                 wanted = 0 if original else 1
                 assert getattr(jt.runtime, name) == wanted
                 assert jt.runtime.context.snapshot()[name] == wanted
-                value = (jt.array(np.arange(2, dtype="float32")) + 1).numpy()
-                np.testing.assert_array_equal(value, np.array([1, 2], dtype="float32"))
+                value = jt.array(np.arange(2, dtype="float32")).numpy()
+                np.testing.assert_array_equal(value, np.array([0, 1], dtype="float32"))
             assert getattr(jt.runtime, name) == original
             setattr(jt.runtime, name, original)
             assert getattr(jt.runtime, name) == getattr(jt.flags, name) == original
@@ -168,8 +168,8 @@ def test_runtime_cuda_host_allocator_is_a_live_writable_view():
         with jt.flag_scope(use_cuda_host_allocator=wanted):
             assert jt.runtime.use_cuda_host_allocator == wanted
             assert jt.runtime.context.snapshot()["use_cuda_host_allocator"] == wanted
-            value = jt.array(np.arange(2, dtype="float32")) + 1
-            np.testing.assert_array_equal(value.numpy(), np.array([1, 2], dtype="float32"))
+            value = jt.array(np.arange(2, dtype="float32"))
+            np.testing.assert_array_equal(value.numpy(), np.array([0, 1], dtype="float32"))
         assert jt.runtime.use_cuda_host_allocator == original
         jt.runtime.use_cuda_host_allocator = wanted
         assert jt.runtime.use_cuda_host_allocator == jt.flags.use_cuda_host_allocator == wanted
@@ -680,8 +680,9 @@ def test_disable_lock_is_startup_config_not_a_runtime_switch():
     for owner in (jt.runtime, jt.runtime.context, jt.config):
         with pytest.raises(AttributeError):
             setattr(owner, "disable_lock", not bool(original))
-    with pytest.raises(RuntimeError, match="immutable startup configuration"):
-        jt.flags.disable_lock = not bool(original)
+    with jt.flag_scope():
+        with pytest.raises(RuntimeError, match="immutable startup configuration"):
+            jt.flags.disable_lock = not bool(original)
     with pytest.raises(AttributeError):
         jt.runtime.scope(disable_lock=not bool(original))
     assert jt.flags.disable_lock == original

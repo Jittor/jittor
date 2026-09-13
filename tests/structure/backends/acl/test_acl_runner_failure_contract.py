@@ -10,6 +10,7 @@ BASE_OP = ACL_ROOT / "kernels" / "native" / "base_op_acl.cc"
 ACLOPS = ACL_ROOT / "kernels" / "native"
 EXEC = ACL_ROOT / "src" / "acl_op_exec.cc"
 GUIDE = REPO_ROOT / "docs" / "guides" / "ascend-910b.md"
+MIGRATION = REPO_ROOT / "refactor-wip" / "architecture" / "ascend-migration-notes.md"
 
 # The aclnn execute call takes exactly these four arguments, so its presence is
 # a reliable marker of a runner that drives the launch itself instead of going
@@ -105,13 +106,13 @@ def test_ascend_guide_records_runner_failure_attribution():
         "aclnn workspace-size query failed",
         "ACL operator has no registered launcher",
         "current fused operator input",
-        "return code",
-        "operator name",
         "forbid_backend_fallbacks()",
         "backend_fallback_count()",
         "backend_fallback=error",
     ):
         assert required in guide
+    assert "return code" in guide or "返回码" in guide
+    assert "operator name" in guide or "算子名" in guide
 
 
 def test_ascend_guide_states_the_launcher_migration_is_closed():
@@ -121,7 +122,7 @@ def test_ascend_guide_states_the_launcher_migration_is_closed():
     standard owners still drove the execute call, so what is and is not covered
     is pinned here rather than left to prose.
     """
-    guide = GUIDE.read_text(encoding="utf-8")
+    guide = MIGRATION.read_text(encoding="utf-8")
     for required in (
         "Shared launcher migration is closed for the standard owners",
         "SWhere, Sigmoid backward, BatchNorm",

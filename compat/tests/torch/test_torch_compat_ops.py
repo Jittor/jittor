@@ -177,11 +177,27 @@ class TestShapeOps(Base):
 
     def test_squeeze_scalar_numpy_export(self):
         def body(dev):
-            scalar = torch.ones((1, 1)).squeeze()
+            scalar = torch.ones((1, 1), device=dev).squeeze()
             exported = scalar.detach().cpu().numpy()
             self.assertEqual(exported.shape, (), f"squeezed scalar numpy shape {dev}")
             self.assertEqual(exported.tolist(), 1.0, f"squeezed scalar value {dev}")
             self.assertEqual(scalar.tolist(), 1.0, f"squeezed Tensor.tolist {dev}")
+            if dev == "cuda":
+                roundtrip = torch.ones((1, 1), device="cpu").squeeze().cuda().cpu()
+                self.assertEqual(roundtrip.numpy().shape, ())
+                self.assertEqual(roundtrip.tolist(), 1.0)
+        both_devices(body)
+
+    def test_type_as_inherits_dtype_and_device(self):
+        def body(dev):
+            source = torch.tensor([1, 2], dtype=torch.int32)
+            target = torch.tensor([0, 0], dtype=torch.float32, device=dev)
+            converted = source.type_as(target)
+            self.assertEqual(converted.dtype, target.dtype)
+            self.assertEqual(converted.is_cuda, target.is_cuda)
+            self.ae(converted.detach().cpu().numpy(), np.array([1, 2], dtype=np.float32),
+                    msg=f"type_as values {dev}")
+
         both_devices(body)
 
     def test_squeeze_unsqueeze(self):
@@ -191,6 +207,19 @@ class TestShapeOps(Base):
                     msg=f"squeeze {dev}")
             self.ac(torch.unsqueeze(torch.tensor(x), 0).numpy(), x[None],
                     msg=f"unsqueeze {dev}")
+        both_devices(body)
+
+    def test_contiguous_materializes_strided_slice_for_view(self):
+        def body(dev):
+            source = torch.tensor(
+                [[1, 2, 3, 4], [5, 6, 7, 8]], device=dev)
+            sliced = source[:, 1:]
+            self.assertFalse(sliced.is_contiguous(), f"slice unexpectedly dense {dev}")
+            dense = sliced.contiguous()
+            self.assertTrue(dense.is_contiguous(), f"contiguous stayed strided {dev}")
+            self.ae(dense.view(-1).numpy(), np.array([2, 3, 4, 6, 7, 8]),
+                    msg=f"contiguous view {dev}")
+
         both_devices(body)
 
     def test_cat_stack(self):
@@ -209,7 +238,45 @@ class TestShapeOps(Base):
         both_devices(body)
 
 
+class TestBinaryOps(Base):
+    def test_reflected_scalar_pow_keeps_tensor_device(self):
+        def body(dev):
+            exponent = torch.arange(0, 8, 2, dtype=torch.float32, device=dev) / 8
+            result = 2.0 ** exponent
+            self.assertEqual(result.is_cuda, dev == "cuda")
+            self.ac(
+                result.detach().cpu().numpy(),
+                np.power(2.0, exponent.detach().cpu().numpy()),
+                msg=f"reflected pow device {dev}",
+            )
+
+        both_devices(body)
+
+
 class TestComparisonWhere(Base):
+    def test_inplace_mul_with_graph_boolean_mask_stays_finite(self):
+        def body(dev):
+            value = torch.full(
+                (1, 4), torch.finfo(torch.float32).min,
+                dtype=torch.float32, device=dev,
+            )
+            condition = (
+                torch.arange(4, device=dev)
+                > torch.tensor([3], device=dev).reshape(-1, 1)
+            )
+            identity = id(value)
+            value *= condition
+
+            self.assertEqual(id(value), identity, f"in-place multiply identity {dev}")
+            self.assertEqual(tuple(value.shape), (1, 4), f"in-place multiply shape {dev}")
+            self.assertEqual(value.dtype, torch.float32, f"in-place multiply dtype {dev}")
+            self.assertTrue(np.isfinite(value.numpy()).all(),
+                            f"in-place multiply produced non-finite values {dev}")
+            self.ae(value.numpy(), np.zeros((1, 4), dtype=np.float32),
+                    msg=f"in-place multiply values {dev}")
+
+        both_devices(body)
+
     def test_clamp_boundary_gradient_matches_torch(self):
         values = np.array(
             [-1.10, -1.00, -0.50, 0.50, 1.00, 1.10], dtype="float32"
@@ -309,8 +376,8 @@ class TestCumulative(Base):
 
     def test_cumsum_out_slice(self):
         def body(dev):
-            lengths = torch.tensor([2, 5], dtype=torch.long)
-            offsets = torch.zeros(3, dtype=torch.long)
+            lengths = torch.tensor([2, 5], dtype=torch.long, device=dev)
+            offsets = torch.zeros(3, dtype=torch.long, device=dev)
             ret = torch.cumsum(lengths, dim=0, out=offsets[1:])
             self.ae(ret.numpy(), np.array([2, 7]), msg=f"cumsum ret {dev}")
             self.ae(offsets.numpy(), np.array([0, 2, 7]), msg=f"cumsum slice out {dev}")
@@ -319,9 +386,9 @@ class TestCumulative(Base):
 
     def test_cumsum_out_advanced_index_does_not_write_parent(self):
         def body(dev):
-            lengths = torch.tensor([2, 5], dtype=torch.long)
-            offsets = torch.zeros(3, dtype=torch.long)
-            out = offsets[torch.tensor([1, 2], dtype=torch.long)]
+            lengths = torch.tensor([2, 5], dtype=torch.long, device=dev)
+            offsets = torch.zeros(3, dtype=torch.long, device=dev)
+            out = offsets[torch.tensor([1, 2], dtype=torch.long, device=dev)]
             ret = torch.cumsum(lengths, dim=0, out=out)
             self.ae(ret.numpy(), np.array([2, 7]), msg=f"cumsum advanced ret {dev}")
             self.ae(offsets.numpy(), np.array([0, 0, 0]), msg=f"cumsum advanced parent {dev}")
@@ -355,10 +422,33 @@ class TestGather(Base):
         both_devices(body)
 
 
+class TestShapeMetadata(Base):
+    def test_expand_accepts_scalar_tensor_dimensions(self):
+        """Scalar tensor dimensions are valid metadata in ``Tensor.expand``."""
+        def body(dev):
+            source = torch.tensor([[1, 2, 3]], dtype=torch.int64, device=dev)
+            width = torch.tensor([3], dtype=torch.int64, device=dev)[0]
+            expanded = source.expand(-1, width)
+            self.assertEqual(tuple(expanded.shape), (1, 3))
+            self.ae(expanded.numpy(), np.array([[1, 2, 3]], dtype=np.int64), msg=f"expand {dev}")
+            grid = torch.arange(width)
+            self.assertEqual(grid.device.type, dev, f"arange scalar placement {dev}")
+            self.ae(grid.numpy(), np.arange(3, dtype=np.int64), msg=f"arange scalar {dev}")
+            rounded = torch.tensor([-1.2, 0.1, 2.9], device=dev)
+            self.assertIs(rounded.floor_(), rounded)
+            self.ac(rounded.numpy(), np.floor([-1.2, 0.1, 2.9]), msg=f"floor_ {dev}")
+
+        both_devices(body)
+
+
 class TestNestedTensor(Base):
     def test_nested_jagged_basic(self):
         def body(dev):
-            items = [torch.arange(2), torch.arange(3) + 10, torch.arange(4) + 20]
+            items = [
+                torch.arange(2, device=dev),
+                torch.arange(3, device=dev) + 10,
+                torch.arange(4, device=dev) + 20,
+            ]
             nested = torch.nested.as_nested_tensor(items, layout=torch.jagged)
 
             self.assertIsInstance(nested, torch.Tensor)
@@ -369,7 +459,7 @@ class TestNestedTensor(Base):
             self.ae(nested.offsets().numpy(), np.array([0, 2, 5, 9]), msg=f"offsets {dev}")
             self.ae(nested[1].numpy(), np.array([10, 11, 12]), msg=f"scalar index {dev}")
 
-            selected = nested[torch.tensor([2, 0])]
+            selected = nested[torch.tensor([2, 0], device=dev)]
             self.ae(selected.values().numpy(), np.array([20, 21, 22, 23, 0, 1]), msg=f"selected values {dev}")
             self.ae(selected.offsets().numpy(), np.array([0, 4, 6]), msg=f"selected offsets {dev}")
             self.ae(nested.to_padded_tensor(-1, output_size=(3, 5)).numpy(),

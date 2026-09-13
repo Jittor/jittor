@@ -101,6 +101,7 @@ from .method_api import (
     _stride,
     _tile,
     _to,
+    _type_as,
     _torch_getitem,
     _torch_ne,
     _torch_setitem,
@@ -119,6 +120,29 @@ from .method_api import (
 from ...context import get_install_context
 from types import MappingProxyType
 
+
+def _install_expand_shape_adapter(Var):
+    """Accept scalar tensor dimensions in ``Tensor.expand`` shape arguments.
+
+    PyTorch permits a 0-D tensor (and SymInt-like scalar) as a dimension.  A
+    Jittor ``broadcast`` call receives a Python shape vector and therefore
+    needs those values materialized as integers.  Shape conversion is metadata
+    handling; the expanded tensor remains a native view on its original
+    device.
+    """
+    native = getattr(Var, "expand", None)
+    if native is None or getattr(native, "_torch_shape_adapter", False):
+        return
+
+    def expand(self, *shape):
+        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+            shape = tuple(shape[0])
+        normalized = tuple(int(value) for value in shape)
+        return native(self, *normalized)
+
+    expand._torch_shape_adapter = True
+    Var.expand = expand
+
 def _type_attribute(Var, name):
     # A frontend subclass inherits C descriptors and numeric slots; reading
     # only its own __dict__ silently misses the native implementation.
@@ -135,6 +159,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     from importlib import import_module as _import_module
     _owner = _import_module(__package__)
     _NativeVar = _owner.jt.Var
+    _install_expand_shape_adapter(Var)
     _native_operators = {name: getattr(Var, name, None) for name in _BINARY_APIS}
 
     if _jittor_dtype_name(_DTYPE_OBJS) is not None and not getattr(Var, "_dtype_wrapped", False):
@@ -375,6 +400,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.retains_grad = property(_api_retains_grad)
 
     Var.to = _to
+    Var.type_as = _type_as
 
     # Jittor stores torch 0-D scalars as one-element Vars. Preserve a lightweight
     # provenance marker through the copy-like methods used before host export,
@@ -444,11 +470,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # (int64/int32 -> float64, int8/int8 -> float16, float16/int64 -> float64),
     # which loses torch parity. Cast operands to the torch target float, then div.
 
-    # Jittor Vars do not expose PyTorch-style strided non-contiguous storage;
-    # materialized op outputs are already laid out for their logical shape. The
-    # The old jittor.misc.tensor_ops.contiguous hook returned clone(), which
-    # adds avoidable graph nodes and copies in PyTorch code that calls
-    # transpose(...).contiguous() before export or parameter construction.
+    # The refactored core exposes true strided storage. Preserve identity for
+    # dense tensors and materialize non-contiguous views before Torch callers
+    # reshape them.
     Var.contiguous = _api_contiguous
     # torch's Tensor.is_cuda / .is_cpu report the tensor's ACTUAL residency.
     # A Var built/migrated to host (torch.zeros(device='cpu'), .cpu()) is on the
@@ -568,5 +592,5 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             setattr(Var, name, implementation)
 
     register_api_bindings(Var, 'torch.Tensor',
-        ('T', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'fill_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_signed', 'is_xpu', 'mT', 'mul_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
+        ('T', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'fill_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_signed', 'is_xpu', 'mT', 'mul_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'type_as', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
         Fidelity.APPROXIMATE, 'Tensor operations share the native Var/Op graph and explicit frontend state; unsupported layouts, device capabilities, and retained compatibility approximations remain restricted')

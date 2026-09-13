@@ -70,13 +70,17 @@ def test_python_backend_prototype_is_retired_from_runtime_exports():
 def test_python_dispatch_queries_native_placement_without_fake_backend_capabilities():
     tree = _parse("dispatch.py")
     context = next(node for node in tree.body
-                   if isinstance(node, ast.FunctionDef) and node.name == "dispatch_context")
+                   if isinstance(node, ast.FunctionDef) and node.name == "_dispatch_placement")
     assert any(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "dispatch_context"
-        and isinstance(node.func.value, ast.Attribute)
-        and node.func.value.attr == "core"
+        and (
+            (isinstance(node.func.value, ast.Attribute)
+             and node.func.value.attr == "core")
+            or (isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "core")
+        )
         for node in ast.walk(context)
     )
     # Backend selection belongs to the native query, including no-input calls.

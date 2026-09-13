@@ -8,4 +8,4 @@
 - [源码架构与渐进式拆分规范](../../docs/development/source-architecture.md)
 
 新增持久设计说明放入 `../../docs/` 下的语义目录；阶段性执行结果应写入
-`../../docs/results/`，不要继续把报告混入 skill 目录。
+`../../refactor-wip/results/`，不要继续把报告混入 skill 目录。

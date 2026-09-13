@@ -2,6 +2,7 @@
 
 import numbers as _numbers
 from jittor_core import Var
+from .._core.dtypes import dtype_name as _dtype_name
 from .._runtime.dispatch import try_dispatch
 
 def index_add_(x, dim, index, tensor):
@@ -122,7 +123,13 @@ def _indexing_index(op, x, dim, index, bounded):
     if not isinstance(index, Var):
         raise TypeError("%s: index must be a jt.Var, got %s"
                         % (op, type(index).__name__))
-    if index.dtype.is_float() or index.dtype.is_complex():
+    # Torch compatibility exposes ``Var.dtype`` as a frontend dtype object,
+    # whose ``is_complex`` is a property, while native NanoString exposes
+    # callable flags.  Use the canonical name at this shared boundary so both
+    # process modes reject floating/complex indices without a shape-dependent
+    # ``bool object is not callable`` failure.
+    index_dtype = _dtype_name(index.dtype)
+    if index_dtype.startswith(("float", "bfloat", "complex")):
         raise TypeError("%s: index must have an integer dtype, got %s"
                         % (op, index.dtype))
     if index.ndim != x.ndim:

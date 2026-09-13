@@ -28,7 +28,7 @@ from ..factories import _install_random_and_linspace, _set_use_cuda, _wrap_const
 
 from ..numerical import log_softmax as _numerical_log_softmax, masked_select as _numerical_masked_select, softmax as _numerical_softmax
 
-from ...types import _DEVICE_CTX_STACK, _device_is_cpu, _device_is_cuda, _dtype_to_str, _make_cpu_resident, _make_cuda_resident, _mark_cpu_like, _var_has_cpu_residency_hint, _var_is_cpu_resident, device, dtype, _cuda_index_of, _move_to_cuda_index
+from ...types import _DEVICE_CTX_STACK, _device_is_cpu, _device_is_cuda, _device_is_meta, _dtype_to_str, _make_cpu_resident, _make_cuda_resident, _mark_cpu_like, _set_meta_placeholder, _var_has_cpu_residency_hint, _var_is_cpu_resident, device, dtype, _cuda_index_of, _move_to_cuda_index
 
 from ...fidelity import Fidelity, register_fidelity
 
@@ -499,7 +499,13 @@ def _array_keep_dtype(data):
 def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
     g = compatibility_owner(jt)
     Var = g.Var
-    with tensor_frontend(Var, device=device, like=data):
+    source_is_var = isinstance(data, jt.Var)
+    want_meta = (_device_is_meta(device)
+                 or (device is None and not source_is_var and bool(_DEVICE_CTX_STACK)))
+    placement = device
+    if placement is None and not source_is_var:
+        placement = None if want_meta else "cpu"
+    with tensor_frontend(Var, device=placement, like=data):
         import numpy as _np
         ds = _dtype_to_str(dtype)
         numpy_dtypes = {"bool", "uint8", "int8", "int16", "int32", "int64",
@@ -546,6 +552,8 @@ def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
         elif _device_is_cuda(device):
             v = _make_cuda_resident(v, force=True, device=device)
             v = _move_to_cuda_index(v, g.device(device))
+        if want_meta:
+            _set_meta_placeholder(v)
         v.requires_grad_(bool(requires_grad))
         if requires_grad:
             v.requires_grad_(True)
@@ -558,6 +566,7 @@ def as_tensor(data, dtype=None, device=None):
     Var = g.Var
     with tensor_frontend(Var, device=device, like=data):
         if isinstance(data, jt.Var):
+            source_is_meta = bool(getattr(data, "_jittor_torch_meta", False))
             r = data if isinstance(data, Var) else g.Tensor(data)
             if dtype is not None and _jittor_dtype_name(r.dtype) != _dtype_to_str(dtype):
                 r = r.cast(_dtype_to_str(dtype))
@@ -565,6 +574,12 @@ def as_tensor(data, dtype=None, device=None):
                 return _make_cpu_resident(r)
             if _device_is_cuda(device):
                 return _move_to_cuda_index(_make_cuda_resident(r, force=True, device=device), g.device(device))
+            if _device_is_meta(device):
+                if r is data and not source_is_meta:
+                    r = jt.Var.copy(data).detach()
+                return _set_meta_placeholder(r)
+            if source_is_meta:
+                return _set_meta_placeholder(r)
             return r
         return tensor(data, dtype=dtype, device=device)
 

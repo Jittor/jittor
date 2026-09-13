@@ -5,7 +5,12 @@ import numpy as np
 import jittor as jt
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ..context import get_install_context
-from ..types import _make_cpu_resident, _make_cuda_resident, _move_to_cuda_index
+from ..types import (
+    _make_cpu_resident,
+    _make_cuda_resident,
+    _move_to_cuda_index,
+    _set_meta_placeholder,
+)
 from ...diagnostics import EXPECTED, swallowed
 from .security import _portable_pickle_load
 from .torch_archive import _load_torch_pt
@@ -158,6 +163,17 @@ def _apply_map_location(obj, map_location, _depth=0, source_devices=None):
         with tensor_frontend(g.Var):
             return _preserve_parameter(obj, _make_cpu_resident(
                 obj, inplace=isinstance(obj, g.nn.Parameter)), g)
+    if name == "meta":
+        # Transformers uses ``map_location='meta'`` for a cheap key/shape
+        # inspection before loading legacy ``pytorch_model.bin`` weights.
+        # Jittor cannot allocate a storage-free Var, so keep a real CPU copy
+        # and expose the Torch-facing meta marker.  The follow-up load uses
+        # map_location='cpu' and remains fully materialized.
+        from ..frontend import tensor_frontend
+        with tensor_frontend(g.Var):
+            moved = _make_cpu_resident(
+                obj, inplace=isinstance(obj, g.nn.Parameter))
+        return _set_meta_placeholder(_preserve_parameter(obj, moved, g))
     if name in ("cuda", "npu", "gpu"):
         if obj.placement_backend >= 0:
             if name == "gpu":

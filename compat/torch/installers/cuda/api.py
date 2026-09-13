@@ -878,6 +878,26 @@ class _CudnnBackendModule(_types.ModuleType):
             return None
         return super().__setattr__(name, value)
 
+    @contextlib.contextmanager
+    def flags(self, enabled=False, benchmark=False, deterministic=False,
+              allow_tf32=True):
+        """Temporarily set the cuDNN switches used by Torch model code."""
+        previous = (
+            self.enabled,
+            self.benchmark,
+            self.deterministic,
+            self.allow_tf32,
+        )
+        self.enabled = enabled
+        self.benchmark = benchmark
+        self.deterministic = deterministic
+        self.allow_tf32 = allow_tf32
+        try:
+            yield self
+        finally:
+            self.enabled, self.benchmark, self.deterministic = previous[:3]
+            self.allow_tf32 = previous[3]
+
 
 class _SDPKernel:
     def __init__(self, *a, **k): pass

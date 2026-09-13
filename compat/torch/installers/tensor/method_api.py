@@ -163,6 +163,58 @@ def _torch_setitem(self, slices, value):
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _orig_setitem = _native['_orig_setitem']
+    # PyTorch promotes a no-grad destination to a differentiable non-leaf when
+    # an indexed assignment consumes a grad-enabled source.  Jittor otherwise
+    # leaves the destination stopped, so even a differentiable replacement
+    # expression cannot reach its source during ``backward()``.  Respect
+    # ``no_grad`` while enabling the normal training-time promotion.
+    if (isinstance(value, _NativeVar) and bool(value.requires_grad)
+            and not bool(getattr(_owner.jt.flags, "no_grad", 0))
+            and not bool(self.requires_grad)):
+        self.start_grad()
+    # Jittor's indexed-assignment backward exposes one gradient row per
+    # selected position when a rank-1 parameter is assigned through a lower
+    # rank boolean mask (for example Wav2Vec2 SpecAugment's
+    # ``hidden_states[mask] = masked_spec_embed``).  Torch reduces that RHS
+    # gradient to the parameter's shape.  Express the same update as a
+    # device-resident blend so the normal broadcast backward performs the
+    # reduction without changing the visible in-place holder.
+    if (isinstance(slices, _NativeVar)
+            and _jittor_dtype_name(slices.dtype) in ("bool", "uint8")
+            and isinstance(value, _NativeVar)
+            and len(slices.shape) + 1 == len(self.shape)
+            and tuple(value.shape) == (int(self.shape[-1]),)):
+        mask = slices.unsqueeze(-1).broadcast(self.shape)
+        rhs_shape = (1,) * len(slices.shape) + (int(self.shape[-1]),)
+        expanded = value.reshape(rhs_shape).broadcast(self.shape)
+        updated = self + mask * (expanded - self)
+        self.assign(updated)
+        return self
+    # A lower-rank boolean mask with a per-selected-row source (for example
+    # SmolVLM's ``image_embeds[image_mask] = image_hidden_states[...]``)
+    # must preserve the source graph.  Native setitem mutates the destination
+    # without an autograd edge, so the vision tower and connector receive no
+    # gradients.  The torch masked-scatter implementation expresses the same
+    # update as ``where`` and is differentiable with respect to ``value``.
+    if (isinstance(slices, _NativeVar)
+            and _jittor_dtype_name(slices.dtype) in ("bool", "uint8")
+            and isinstance(value, _NativeVar)
+            and len(slices.shape) < len(self.shape)
+            and len(value.shape) == len(self.shape) - len(slices.shape) + 1):
+        try:
+            trailing = 1
+            for dimension in self.shape[len(slices.shape):]:
+                trailing *= int(dimension)
+            selected = int(slices.sum().item())
+            if selected > 0 and int(value.numel()) == selected * trailing:
+                updated = _owner.masked_scatter(self, slices, value)
+                self.assign(updated)
+                return self
+        except _owner.EXPECTED as exc:
+            _owner.swallowed(
+                "torch/installers/tensor.py _torch_setitem: differentiable masked assignment",
+                exc,
+            )
     if _set_data_owner(self, slices, value):
         return self
     try:
@@ -194,7 +246,18 @@ def _ip(self, value):
     if _assign_data_owner(self, value):
         return self
     target = self
-    was_trainable = not target.is_stop_grad()
+    # The refactored core can expose a non-stopped factory result while its
+    # Torch-facing requires_grad bit is still false.  Use the public autograd
+    # contract here; is_stop_grad() would misclassify zeros_like destinations
+    # used by MoE index_add_ and assign away the expert graph.
+    was_trainable = bool(target.requires_grad)
+    value_is_trainable = isinstance(value, _NativeVar) and bool(value.requires_grad)
+    if not was_trainable and value_is_trainable:
+        # assign() deliberately copies the old holder's stop-grad state onto
+        # the new graph. Torch instead lets a constant destination become
+        # differentiable when an in-place result depends on a trainable source.
+        target._update(value)
+        return self
     target.assign(value)
     if was_trainable and target.is_stop_grad():
         target.start_grad()
@@ -234,6 +297,8 @@ def _new_finish(v, device=None, requires_grad=False):
         if v.placement_backend < 0:
             _owner._set_use_cuda()
         v = _owner._make_cuda_resident(v, force=True, device=device)
+    if _owner._device_is_meta(device):
+        _owner._set_meta_placeholder(v)
     if requires_grad:
         v.requires_grad_(True)
         _owner._torch_register_leaf(v)
@@ -344,12 +409,21 @@ def _element_size(self):
 class _Storage:
     def __init__(self, var):
         self._var = var
+
+    def _owner(self):
+        owner = getattr(self._var, "_torch_data_owner", None)
+        return owner if isinstance(owner, _NativeVar) else self._var
+
+    def _element_size(self):
+        return _DTYPE_BYTES.get(_jittor_dtype_name(self._owner().dtype), 4)
+
     def data_ptr(self):
-        return id(self._var)
+        first_element = int(self._var._storage_address)
+        return first_element - int(self._var._storage_offset()) * self._element_size()
     def size(self):
-        return int(self._var.numel())
+        return int(self._owner().numel())
     def nbytes(self):
-        return int(self._var.numel()) * _DTYPE_BYTES.get(_jittor_dtype_name(self._var.dtype), 4)
+        return self.size() * self._element_size()
 
 
 def _add(input, other, *, alpha=1, out=None):
@@ -371,16 +445,13 @@ def _invert(self):
 
 
 def _device(self):
+    if getattr(self, "_jittor_torch_meta", False):
+        return _owner.device("meta")
     if self.placement_backend >= 0:
         if self.placement_backend == 0:
             return _owner.device("cpu")
         name = "npu" if self.placement_backend == 2 else "cuda"
         return _owner.device(name, int(self.device_id))
-    # Inside a `with torch.device("meta")` block (transformers'
-    # from_pretrained), report "meta" so its meta-context detection
-    # fires and eager weight init is skipped. See device.__enter__.
-    if _owner._DEVICE_CTX_STACK:
-        return _owner._DEVICE_CTX_STACK[-1]
     # Report the Var's ACTUAL memory residency (matches jtorch's C++
     # is_cpu()/device()): a Var built/migrated to host -- e.g. via
     # torch.zeros(device='cpu') or .cpu() -- is "cpu" even while the
@@ -411,10 +482,26 @@ def _is_basic_index(index):
     return isinstance(index, _owner.numbers.Integral) and not isinstance(index, (bool, _owner.np.bool_))
 
 
+def _align_advanced_index(data, index):
+    """Move tensor indices beside the indexed tensor before native dispatch."""
+    if isinstance(index, _NativeVar):
+        data_cuda = bool(getattr(data, "is_cuda", False))
+        index_cuda = bool(getattr(index, "is_cuda", False))
+        if data_cuda != index_cuda:
+            return index.cuda() if data_cuda else index.cpu()
+        return index
+    if isinstance(index, tuple):
+        return tuple(_align_advanced_index(data, item) for item in index)
+    if isinstance(index, list):
+        return [_align_advanced_index(data, item) for item in index]
+    return index
+
+
 def _torch_getitem(self, slices):
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _orig_getitem = _native['_orig_getitem']
+    slices = _align_advanced_index(self, slices)
     out = _orig_getitem(self, slices)
     if isinstance(out, _NativeVar) and _owner._var_has_cpu_residency_hint(self):
         out = _owner._mark_cpu_like(out, self)
@@ -520,7 +607,7 @@ def _to(self, *args, **kwargs):
             bare = a.replace("torch.", "")
             if bare in _owner.dtype._registry:
                 ds = bare
-            elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
+            elif bare.split(":")[0] in ("cpu", "cuda", "npu", "meta"):
                 dev = bare
     if dev is None:
         dev = self.device
@@ -533,19 +620,31 @@ def _to(self, *args, **kwargs):
         out = _owner._make_cpu_resident(out)
     elif _owner._device_is_cuda(dev):
         if out.placement_backend >= 0:
-            return _owner._make_cuda_resident(out, force=True, device=dev)
-        src_index = getattr(self, "device_id", -1)
-        out = _owner._make_cuda_resident(out, force=True)
-        # .to("cuda:N") copies across devices when N is not where the Var
-        # already is; a bare .to("cuda") leaves the tensor on its own
-        # device, as in torch.
-        moved = _owner._move_to_cuda_index(out, dev, src_index)
-        if moved is not out and getattr(out, "_torch_0d", False):
-            moved._torch_0d = True
-        out = moved
+            out = _owner._make_cuda_resident(out, force=True, device=dev)
+        else:
+            src_index = getattr(self, "device_id", -1)
+            out = _owner._make_cuda_resident(out, force=True)
+            # .to("cuda:N") copies across devices when N is not where the Var
+            # already is; a bare .to("cuda") leaves the tensor on its own
+            # device, as in torch.
+            out = _owner._move_to_cuda_index(out, dev, src_index)
+    elif _owner._device_is_meta(dev):
+        if out is self and not getattr(self, "_jittor_torch_meta", False):
+            out = self.clone()
+        _owner._set_meta_placeholder(out)
     if getattr(self, "_torch_0d", False):
         out._torch_0d = True
     return out
+
+
+def _type_as(self, other):
+    """Match ``Tensor.type_as`` by inheriting dtype and device from ``other``."""
+    if not isinstance(other, _NativeVar):
+        raise TypeError("type_as expects a Tensor argument")
+    # Passing the tensor itself through ``_to`` applies both its dtype and
+    # device.  Jittor's native ``type_as`` only changes dtype, which leaves
+    # CUDA constants created by Transformers on the host.
+    return _to(self, other)
 
 
 def _var_detach(self):
@@ -568,6 +667,8 @@ def _var_detach(self):
         out = out.stop_grad()
     if getattr(self, "_torch_0d", False):
         out._torch_0d = True
+    if getattr(self, "_jittor_torch_meta", False):
+        _owner._set_meta_placeholder(out)
     return out
 
 
@@ -583,12 +684,12 @@ def _var_numpy(self, *args, **kwargs):
 
 def _var_cpu(self, *a, **k):
     out = _owner._make_cpu_resident(self)
+    if getattr(self, "_torch_0d", False):
+        out._torch_0d = True
     if out.placement_backend >= 0:
         return out
     try:
         out._jittor_torch_force_cpu = True
-        if getattr(self, "_torch_0d", False):
-            out._torch_0d = True
     except (AttributeError, TypeError) as exc:
         _owner.swallowed("torch/installers/tensor.py _var_cpu: out._jittor_torch_force_cpu = True", exc)
     return out
@@ -596,12 +697,13 @@ def _var_cpu(self, *a, **k):
 
 def _var_cuda(self, device=None, *a, **k):
     if self.placement_backend >= 0:
-        return _owner._make_cuda_resident(self, force=True, device=device)
-    _owner._set_use_cuda()
-    src_index = getattr(self, "device_id", -1)
-    out = _owner._make_cuda_resident(self, force=True)
-    # .cuda(N) is .to("cuda:N"); .cuda() keeps the tensor where it is.
-    out = _owner._move_to_cuda_index(out, device, src_index)
+        out = _owner._make_cuda_resident(self, force=True, device=device)
+    else:
+        _owner._set_use_cuda()
+        src_index = getattr(self, "device_id", -1)
+        out = _owner._make_cuda_resident(self, force=True)
+        # .cuda(N) is .to("cuda:N"); .cuda() keeps the tensor where it is.
+        out = _owner._move_to_cuda_index(out, device, src_index)
     if getattr(self, "_torch_0d", False):
         out._torch_0d = True
     return out
@@ -617,6 +719,12 @@ def _var_type(self, dst_type=None, non_blocking=False, **kw):
         return _DTYPE_TO_TYPENAME.get(_jittor_dtype_name(self.dtype), "torch.FloatTensor")
     if isinstance(dst_type, str) and dst_type in _jittor_dtype_name(_TYPENAME_TO_DTYPE):
         return _cast_if_needed(self, _TYPENAME_TO_DTYPE[dst_type])
+    # Typed tensor classes (torch.BoolTensor, torch.FloatTensor, ...) expose
+    # their native Jittor dtype through the adapter's `_jdtype` marker.  The
+    # class name itself is not a valid Jittor cast target.
+    typed_dtype = getattr(dst_type, "_jdtype", None)
+    if typed_dtype is not None:
+        return _cast_if_needed(self, typed_dtype)
     ds = _owner._dtype_to_str(dst_type)
     return _cast_if_needed(self, ds) if ds is not None else self
 
@@ -652,6 +760,8 @@ def _scalar_dtype_name(x):
 
 
 def _is_cuda(self):
+    if getattr(self, "_jittor_torch_meta", False):
+        return False
     if self.placement_backend >= 0:
         return self.placement_backend != 0
     if not (_owner.jt.flags.use_cuda or getattr(_owner.jt.compiler, "has_acl", 0)):
@@ -797,9 +907,30 @@ def _binary_native(opname, left, right):
 
 def _promoting_binary(self, other, opname, reflected):
     g = get_install_context(_owner.jt).target_namespace
+    if isinstance(other, (str, bytes)):
+        if reflected and opname == '__rmul__':
+            if self.numel() != 1 or _jittor_dtype_name(self.dtype) not in (
+                    "bool", "uint8", "int8", "int16", "int32", "int64"):
+                raise TypeError("only integer tensors of a single element can be converted to an index")
+            return other * int(self.item())
+        return NotImplemented
     if isinstance(other, (complex, _owner.np.complexfloating)):
         other = _complex_scalar_var(other)
     if isinstance(other, _NativeVar):
+        # PyTorch permits a CPU zero-dimensional scalar to participate in a
+        # CUDA tensor operation (for example ``cuda.arange(3) + x.max()``),
+        # while still rejecting mixed-device non-scalar tensors.  Jittor's
+        # native binary operators require matching placements, so migrate
+        # only the scalar operand before dispatching.
+        self_scalar = getattr(self, "ndim", None) == 0
+        other_scalar = getattr(other, "ndim", None) == 0
+        self_cuda = bool(getattr(self, "is_cuda", False))
+        other_cuda = bool(getattr(other, "is_cuda", False))
+        if self_cuda != other_cuda and (self_scalar or other_scalar):
+            if self_scalar and not other_scalar:
+                self = self.cuda() if other_cuda else self.cpu()
+            elif other_scalar and not self_scalar:
+                other = other.cuda() if self_cuda else other.cpu()
         da, db = _jittor_dtype_name(self.dtype), _jittor_dtype_name(other.dtype)
         if da == db and not da.startswith("uint"):
             return _binary_native(opname, self, other)
@@ -819,6 +950,24 @@ def _promoting_binary(self, other, opname, reflected):
     # `_extend_tokens` list concatenation). Match torch: defer to the sequence.
     if isinstance(other, (list, tuple)):
         return NotImplemented
+    if isinstance(other, (bool, int, float)) and (
+            reflected or bool(getattr(self, "is_cuda", False)) or
+            bool(getattr(self, "is_cpu", False))):
+        # Jittor may materialize a Python scalar on CPU even for a regular
+        # CUDA operation (``cuda_tensor + 1``), while PyTorch keeps scalar
+        # promotion on the tensor's backend.  Materialize it explicitly so
+        # native operators never receive a mixed-device graph.
+        scalar_dtype = _owner._dtype_to_str(g.result_type(self, other))
+        scalar = _owner.jt.array(other, dtype=scalar_dtype)
+        if bool(getattr(self, "is_cuda", False)):
+            scalar = scalar.cuda()
+        elif bool(getattr(self, "is_cpu", False)):
+            # A frontend CPU tensor remains explicitly host-resident even
+            # when the process-wide Jittor default is CUDA.  Without this
+            # branch ``0 + cpu_tensor`` can combine a CUDA-default scalar
+            # with an explicit CPU Var inside a module frontend scope.
+            scalar = scalar.cpu()
+        return _promoting_binary(self, scalar, opname, reflected)
     out = _binary_native(opname, self, other)
     if isinstance(other, (bool, int, float)) and isinstance(out, _NativeVar):
         expected = _owner._dtype_to_str(g.result_type(self, other))
@@ -856,7 +1005,18 @@ def _true_division(self, other, opname):
         use_wide = sd.startswith("float") and src_dt != "float64" and not acl_active
         calc_dt = "float64" if use_wide else tgt
         a = self if src_dt == calc_dt else self.cast(calc_dt)
-        b = _owner.jt.array(other, dtype=calc_dt) if use_wide else other
+        # Reflected scalar division (``1 / cuda_tensor``) otherwise hands a
+        # Python scalar to Jittor's native op, which may materialize it on the
+        # host even though the tensor operand is CUDA-resident.
+        reflected = opname.startswith("__r")
+        if reflected or use_wide:
+            b = _owner.jt.array(other, dtype=calc_dt)
+            if bool(getattr(self, "is_cuda", False)):
+                b = b.cuda()
+            elif bool(getattr(self, "is_cpu", False)):
+                b = b.cpu()
+        else:
+            b = other
         out = _binary_native(opname, a, b)
         if isinstance(out, _NativeVar) and _jittor_dtype_name(out.dtype) != tgt:
             out = out.cast(tgt)
@@ -1003,7 +1163,17 @@ def _api_tolist(self):
 
 
 def _api_contiguous(self):
-    return self
+    if self._storage_is_contiguous():
+        return self
+    from ...frontend import tensor_frontend
+    context = get_install_context(_owner.jt)
+    with tensor_frontend(context.state["Var"], like=self):
+        out = _owner.jt.ops.contiguous(self)
+    if getattr(self, "_torch_0d", False):
+        out._torch_0d = True
+    if getattr(self, "_jittor_torch_meta", False):
+        _owner._set_meta_placeholder(out)
+    return out
 
 
 def _api_argwhere(input):
@@ -1059,7 +1229,7 @@ def _api_retains_grad(self):
 
 
 def _api_is_cpu(self):
-    return not _is_cuda(self)
+    return not getattr(self, "_jittor_torch_meta", False) and not _is_cuda(self)
 
 
 def _api_is_mps(self):
@@ -1199,6 +1369,10 @@ def _api_sigmoid_(self):
 def _api_tanh_(self):
     return _ip(self, _owner.jt.tanh(self))
 
+
+def _api_floor_(self):
+    return _ip(self, _owner.jt.floor(self))
+
 _UNARY_INPLACE_APIS.update({
     'log_': _api_log_,
     'exp_': _api_exp_,
@@ -1206,4 +1380,5 @@ _UNARY_INPLACE_APIS.update({
     'abs_': _api_abs_,
     'sigmoid_': _api_sigmoid_,
     'tanh_': _api_tanh_,
+    'floor_': _api_floor_,
 })

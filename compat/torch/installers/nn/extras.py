@@ -301,6 +301,9 @@ def _install_nn_extras(nn, registry=None):
     if not hasattr(nn, "Hardswish"):
         Hardswish = _adapt_extra(_extra_api.Hardswish, active_registry)
         nn.Hardswish = Hardswish
+    if not hasattr(nn, "LogSoftmax"):
+        LogSoftmax = _adapt_extra(_extra_api.LogSoftmax, active_registry)
+        nn.LogSoftmax = LogSoftmax
     if not hasattr(nn, "CELU"):           # timm uses nn.CELU
         CELU = _adapt_extra(_extra_api.CELU, active_registry)
         nn.CELU = CELU

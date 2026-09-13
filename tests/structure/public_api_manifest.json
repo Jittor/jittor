@@ -541,7 +541,6 @@
   "number_of_hold_vars",
   "number_of_lived_ops",
   "number_of_lived_vars",
-  "numpy2cupy",
   "numpy_code",
   "numpy_cumprod",
   "numpy_cumsum",

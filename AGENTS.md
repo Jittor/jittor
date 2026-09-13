@@ -52,13 +52,16 @@ python -m pytest -q tests/structure
 ## Documentation Ownership
 
 - 根目录只保留一份双语 [`README.md`](README.md)。不要新增生成版或按语言复制的 README。
-- 长期架构决策放在 `docs/architecture/`，测试契约放在 `docs/testing/`，开发指南和
-  已知问题放在 `docs/development/`，研究提案放在 `docs/research/`。
+- 面向用户和贡献者的长期文档放在 `docs/` 的现有语义目录中，例如 `docs/notes/`、
+  `docs/development/`、`docs/guides/` 和 `docs/performance/`。
+- 整改期架构、测试、研究和验证材料分别放在 `refactor-wip/architecture/`、
+  `refactor-wip/testing/`、`refactor-wip/research/` 和 `refactor-wip/results/`；整改收口后
+  整棵 `refactor-wip/` 删除，不迁回公开文档树。
 - [`agent/manuals/project-context.md`](agent/manuals/project-context.md) 只做当前状态索引；
   环境规则与问题总账分别维护在
   [`agent/manuals/environment.md`](agent/manuals/environment.md) 和
   [`agent/manuals/known-issues.md`](agent/manuals/known-issues.md)。
-- `docs/results/` 保存可复现的维护者验证结论，不复制成长篇项目历史。原始日志、缓存、
-  二进制和 benchmark 数据不进入文档树。
+- `refactor-wip/results/` 保存整改期可复现的维护者验证结论，不复制成长篇项目历史。
+  原始日志、缓存、二进制和 benchmark 数据不进入文档树。
 - 稳定结论注明状态、对应提交、验证范围、维护者和复查条件；过期信息应删除或归档，
   不在多个文件中重复维护。

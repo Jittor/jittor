@@ -68,6 +68,8 @@ _OWNERSHIP = {
     # what the `value.__module__ == module.__name__` check below is for.
     common: {
         "_prod", "_flatten_var", "_ceil_div", "_pad_flat", "_param_numel",
+        "_primary_input_requires_grad", "_materialize_frozen_output",
+        "_tensor_values", "_full_gradient_from_shard",
         "_fsdp2_flat_enabled",
     },
     dtensor: {

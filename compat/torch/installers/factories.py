@@ -17,7 +17,12 @@ from ..api_delegates import bind_delegates
 import jittor as jt
 import numpy as np
 
-from ..types import _dtype_to_str
+from ..types import (
+    _DEVICE_CTX_STACK,
+    _device_is_meta,
+    _dtype_to_str,
+    _set_meta_placeholder,
+)
 from ..nested import _torch_register_leaf
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
@@ -51,8 +56,30 @@ def _invoke_factory(name, args, kwargs):
     if implementation is None:
         raise RuntimeError("torch.%s is not installed" % name)
     from ..frontend import tensor_frontend
-    like = args[0] if args and (name.endswith("_like") or name in _TENSOR_ARGUMENT) else None
-    with tensor_frontend(context.target_namespace.Var, device=kwargs.get("device"), like=like):
+    like = args[0] if args and (
+        name.endswith("_like") or name in _TENSOR_ARGUMENT
+        or name in _INPUT_TENSOR_FACTORIES) else None
+    # Torch treats an omitted (or explicit ``None``) device as CPU for data
+    # constructors.  Jittor otherwise follows its process-wide ``use_cuda``
+    # flag, which would incorrectly build CPU-only initialization constants on
+    # CUDA.  Like/tensor-transform factories still inherit their input, and a
+    # meta device context remains authoritative.
+    placement = kwargs.get("device")
+    # ``torch.arange(tensor_bound)`` inherits the bound tensor's device when
+    # no explicit device is supplied.  This matters for CUDA scalar bounds
+    # used by multimodal position-grid construction.  Keep the general
+    # factory default (CPU) unchanged for ordinary Python bounds.
+    if placement is None and name == "arange":
+        # A tensor start/end selects the output placement.  A tensor `step`
+        # is only a scalar value; treating it as a device anchor breaks
+        # position-grid code that intentionally builds CPU indices first.
+        for value in args[:2]:
+            if isinstance(value, jt.Var):
+                placement = "cuda" if value.is_cuda else "cpu"
+                break
+    if placement is None and like is None and not _DEVICE_CTX_STACK:
+        placement = "cpu"
+    with tensor_frontend(context.target_namespace.Var, device=placement, like=like):
         return implementation(*args, **kwargs)
 
 
@@ -182,6 +209,9 @@ def _install_empty_like(root):
 _DROP = ("device", "requires_grad", "layout", "pin_memory", "memory_format", "out", "non_blocking")
 _DEFAULT_FLOAT_FACTORIES = {"zeros", "ones", "empty", "rand", "randn", "eye", "linspace"}
 _TENSOR_ARGUMENT = ("tril", "triu")
+# These APIs are not named ``*_like`` but take a tensor as their first
+# argument and must create their random/intermediate values beside it.
+_INPUT_TENSOR_FACTORIES = ("bernoulli", "multinomial", "normal")
 
 
 def _shape_dim(v):
@@ -206,8 +236,19 @@ def _shape_arg(v):
 
 def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     g = get_install_context(jt).target_namespace
+    requested_device = kwargs.get("device")
+    inherits_device = (name.endswith("_like") or name in _TENSOR_ARGUMENT
+                       or name in _INPUT_TENSOR_FACTORIES)
+    device_input = args[0] if inherits_device and args and isinstance(args[0], jt.Var) else None
+    want_meta = (
+        _device_is_meta(requested_device)
+        or (requested_device is None and device_input is not None
+            and getattr(device_input, "_jittor_torch_meta", False))
+        or (requested_device is None and device_input is None
+            and bool(_DEVICE_CTX_STACK))
+    )
     # ACL adapters call jt.empty thousands of times; keep the FP32 fast path.
-    if (name == "empty" and not kwargs and args and
+    if (name == "empty" and not want_meta and not kwargs and args and
             g.get_default_dtype() == g.float32 and
             (len(args) == 1 or all(type(dim) is int for dim in args))):
         shape = args[0]
@@ -220,6 +261,21 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
             return out
     # _invoke_factory already established native construction placement.
     _requires_grad = bool(kwargs.get("requires_grad", False))
+    # Capture tensor scalar bounds before `_shape_arg` turns one-element Vars
+    # into Python integers; their dtype still determines arange's default.
+    arange_float_bound = (
+        name == "arange"
+        and any(
+            isinstance(value, (float, np.floating))
+            or (
+                isinstance(value, jt.Var)
+                and _jittor_dtype_name(value.dtype).startswith(
+                    ("float", "bfloat", "complex")
+                )
+            )
+            for value in args[:3]
+        )
+    )
     for k in _DROP:
         kwargs.pop(k, None)
     # Jittor shape conversion rejects numpy scalars; normalize them.
@@ -227,7 +283,10 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     # the matrix to transform, and a 1x1 matrix holds a single element,
     # so shape conversion would collapse it into an integer dimension.
     _takes_shape = not (name.endswith("_like") or name in _TENSOR_ARGUMENT)
-    if args and _takes_shape:
+    # arange arguments are scalar bounds/steps, not shape dimensions.  In
+    # particular, a 0-D floating tensor step must remain fractional; routing
+    # it through `_shape_arg` would coerce `0.03125` to integer zero.
+    if args and _takes_shape and name != "arange":
         args = tuple(_shape_arg(a) for a in args)
     # Jittor factories reject Size/NanoVector tuple subclasses.
     if _takes_shape and args and (isinstance(args[0], jt.NanoVector) or
@@ -236,7 +295,11 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     # Torch also allows shape via size=.
     if "size" in kwargs and not args:
         sz = kwargs.pop("size")
-        args = (tuple(sz),) if hasattr(sz, "__len__") else (sz,)
+        # Route the keyword spelling through the same scalar-dimension
+        # normalization as the positional spelling. Multimodal audio
+        # encoders commonly compute a padded length as a CUDA 0-D tensor and
+        # pass it through ``torch.full(size=(..., length))``.
+        args = (_shape_arg(sz),)
     # torch.full(size, fill_value=...) / full_like(input, fill_value=...):
     # jittor's full(shape, val) / full_like(x, val) take the value as the 2nd
     # positional. transformers' beam scorer passes fill_value= as a keyword, so
@@ -244,6 +307,29 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     if "fill_value" in kwargs:
         args = tuple(args) + (kwargs.pop("fill_value"),)
     _cast_to = None  # cast after construction when needed for torch dtype semantics
+    if ("dtype" not in kwargs or kwargs["dtype"] is None) and name == "arange":
+        # PyTorch chooses the integral default (int64) from integral bounds,
+        # while Jittor's native arange defaults to int32.  Float bounds keep
+        # the regular torch default floating dtype below.
+        has_float_bound = any(
+            isinstance(value, (float, np.floating))
+            or (
+                isinstance(value, jt.Var)
+                and _jittor_dtype_name(value.dtype).startswith(
+                    ("float", "bfloat", "complex")
+                )
+            )
+            for value in args[:3]
+        ) or arange_float_bound
+        if not has_float_bound:
+            if _accepts_dtype:
+                kwargs["dtype"] = "int64"
+            else:
+                _cast_to = "int64"
+        elif _accepts_dtype:
+            kwargs["dtype"] = _dtype_to_str(g.get_default_dtype())
+        else:
+            _cast_to = _dtype_to_str(g.get_default_dtype())
     if "dtype" not in kwargs and name in _DEFAULT_FLOAT_FACTORIES:
         default_dtype = _dtype_to_str(g.get_default_dtype())
         if _jittor_dtype_name(default_dtype) != "float32":
@@ -274,6 +360,8 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     if _cast_to is not None:
         out = out.cast(_cast_to)
     out._jittor_torch_ext_mutable = True
+    if want_meta:
+        _set_meta_placeholder(out)
     out.requires_grad_(_requires_grad)
     if _requires_grad:
         _torch_register_leaf(out)

@@ -21,8 +21,8 @@ HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md
 2. **行为形状的静态合同。** 断言「每个 family 都不自己发 execute 调用」这类**不变量**，而不是
    「共有 65 处调用 `checkRet`」这类**计数**。计数式合同挡不住合法重构：`test_acl_runner_failure_contract`
    曾断言 65 处，8.06 的第一个提交把样板收进共享 launcher 后它就作废，然后红了约 40 个提交没人看见。
-   不变量式合同还要**自证扫到了东西**：ACL 正处在 `python/jittor/extern/acl` 与 `backends/acl`
-   两处都有内容的半途搬迁状态，按「总数 > N」断言会在只扫到一侧时仍然发绿，所以要求**每个根各自非空**。
+   不变量式合同还要**自证扫到了东西**：ACL 已迁入顶层 `backends/acl`，按「总数 > N」断言会在
+   只扫到错误的目录时仍然发绿，所以要求实际 backend 根各自非空。
 2b. **去样板前后的静态等价性。** 把每个 owner 归约成 (workspace 查询, execute 入口, 同步策略)
    的有序 token 流，逐 owner 对比改前改后。`tools/build/acl_launch_program.py` 做这件事，两个树
    当参数、退出码非 0 即有差异。它把「样板删对了」和「顺手改了行为」分开：前者 token 流不动，
@@ -46,7 +46,7 @@ HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md
 | --- | --- |
 | 命令 | `nox -s npu`（需 `CANN_SET_ENV` 指向 `set_env.sh`，否则 session 直接 error） |
 | fail-closed | `JITTOR_TEST_REQUIRE_ACL=1`、`JITTOR_TEST_ACCELERATOR_MIN_EXECUTED=1`；session 先跑 `npu-smi info`，再跑一个带精确期望值的 matmul 探针 |
-| 覆盖 | `tests/backends/acl/test_acl.py`、`test_acl_torch_compat.py`、`test_aclop.py`、`test_acl_indexing.py`、`tests/ops/test_ops.py`、`tests/ops/test_floor_divide.py::TestFloorDivideNPU` 等 |
+| 覆盖 | `tests/backends/acl/test_acl.py`、`tests/backends/acl/test_acl_torch_compat.py`、`tests/backends/acl/test_aclop.py`、`tests/backends/acl/test_acl_indexing.py`、`tests/ops/test_ops.py`、`tests/ops/test_floor_divide.py::TestFloorDivideNPU` 等 |
 | 步骤 | [`docs/guides/ascend-910b.md`](../../docs/guides/ascend-910b.md) |
 
 绿了之后可以判定的看板项：**`6.B02`**（executeOp 失败都抛；静态侧已由
@@ -58,7 +58,7 @@ HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md
 
 本机做到的是三档里的第 1、2 档：桩 SDK 过 TU（44 个源文件 `-fsyntax-only` 全过、70 个
 launcher ABI 断言全过，反向对照见下）、以及不变量式静态合同。**一条设备指令都没执行过**，
-`tests/backends/npu` 在本机是 `164 skipped, 0 executed -- explained: skipped: no acl found`。
+`tests/backends/acl` 在本机是 `164 skipped, 0 executed -- explained: skipped: no acl found`。
 
 前置：Ascend 910B3 + CANN，`CANN_SET_ENV` 指向 `set_env.sh`。四条按顺序跑，前一条不过不要往下走。
 
@@ -210,7 +210,7 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 
 | 符号 | 源码 | 现状 |
 | --- | --- | --- |
-| `HcclAllGatherOp` | `python/jittor/extern/acl/hccl/ops/hccl_all_gather_op.cc` | `grad()` 直接 `LOGf << "not implemented"`；要在 Ascend 910B3 多卡上补实现与 CPU 对照 |
+| `HcclAllGatherOp` | `backends/comm/hccl/ops/hccl_all_gather_op.cc` | `grad()` 直接 `LOGf << "not implemented"`；要在 Ascend 910B3 多卡上补实现与 CPU 对照 |
 | `RocprimCumsumOp` | `backends/rocm/libraries/rocprim/rocprim_cumsum_op.cc` | 全树**没有任何用例**碰过它，前向反向都没有；`tests/backends/rocm/test_rocm.py` 里要补一条照 `TestBMM` 形状的 CPU 对拍 |
 | `FloorIntACL` | `backends/acl/kernels/ops/floor_op.py` | 只有 `test_aclop.py::TestACL::test_floor_int` 前向 |
 | `IndexACL` | `backends/acl/kernels/ops/index_op.py` | 只有 `test_aclop.py::TestACL::test_index` 前向 |

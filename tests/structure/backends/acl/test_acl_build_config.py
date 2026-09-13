@@ -81,7 +81,7 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
     # The provider runtime is compiled by BuildConfig, not folded into the
     # registration module.
     assert [os.path.basename(source.path) for source in config.backend_sources] == [
-        "backend.cc", "workspace.cc", "foreach_coefficients.cc"]
+        "backend.cc", "foreach_coefficients.cc", "workspace.cc"]
     assert all(isinstance(source, setup.api.BuildSource)
                for source in config.backend_sources)
     # A generated ACL operator is host C++ calling aclnn, not ccec device source.
@@ -98,12 +98,10 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
     assert config.resources["acl_library"] is setup.library
     assert config.resources["existing_resource"] == 3
     assert config.extra_core_files[0] == "existing.cc"
-    expected_extra = [str(SOURCE.parent / "src/acl_op_exec.cc")]
-    expected_extra.extend(str(path) for path in sorted(
-        (SOURCE.parent / "kernels/native").glob("*.cc")))
+    expected_extra = [str(SOURCE.parent / name) for name in acl.CORE_SOURCES]
     converter_sources = [str(SOURCE.parent / "src" / name) for name in (
         "acl_error_code.cc", "acl_jittor.cc", "aclnn.cc")]
-    assert len(expected_extra) == 46
+    assert len(expected_extra) == len(acl.CORE_SOURCES)
     assert len(converter_sources) == 3
     assert config.extra_core_files == ("existing.cc", *expected_extra)
     assert [call[0] for call in setup.calls] == ["load", "compile"]

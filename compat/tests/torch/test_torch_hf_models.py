@@ -2,10 +2,10 @@
 # torch-level regression test (#6): run real transformers models
 # through `import torch` -> jittor, on the torch-compat layer.
 #
-# REQUIRES an env with the torch_shim deployed + transformers, e.g. the
-# py3.11 conda env used for jittor-as-torch:
+# REQUIRES an isolated environment with the torch shim deployed and a pinned
+# Transformers installation:
 #   export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DEACTIVATE_ASYNC_LOAD=1
-#   /home/yizhang/miniconda3/envs/jt-torch/bin/python -m pytest compat/tests/torch/test_torch_hf_models.py
+#   python -m pytest compat/tests/torch/test_torch_hf_models.py
 # Skips cleanly if torch_shim/transformers are unavailable.
 #
 # Covers ~30 architectures (decoder / encoder / encoder-decoder / vision):
@@ -23,7 +23,12 @@ try:
     import torch  # torch_shim -> jittor
     import jittor as jt
     from transformers import AutoConfig, AutoModel, AutoModelForCausalLM
-    _HAS = (getattr(torch, '__name__', '') == 'torch') and hasattr(torch, 'tensor')
+    _HAS = (
+        torch is not jt
+        and torch.Tensor is not jt.Var
+        and issubclass(torch.Tensor, jt.Var)
+        and hasattr(torch, 'tensor')
+    )
 except Exception:
     _HAS = False
 
@@ -46,6 +51,8 @@ CFG = {
  'stablelm':  dict(hidden_size=64,intermediate_size=128,num_hidden_layers=2,num_attention_heads=2,num_key_value_heads=2,vocab_size=128,max_position_embeddings=128),
  'starcoder2':dict(hidden_size=64,intermediate_size=128,num_hidden_layers=2,num_attention_heads=2,num_key_value_heads=2,vocab_size=128,max_position_embeddings=128),
  'mpt':       dict(d_model=64,n_heads=2,n_layers=2,vocab_size=128,max_seq_len=128,expansion_ratio=2),
+ 'falcon':    dict(hidden_size=64,intermediate_size=128,num_hidden_layers=2,num_attention_heads=2,vocab_size=128,max_position_embeddings=128,multi_query=True,parallel_attn=True,new_decoder_architecture=False,bias=False,alibi=False,hidden_dropout=0.0,attention_dropout=0.0),
+ 'mixtral':   dict(hidden_size=64,intermediate_size=128,num_hidden_layers=2,num_attention_heads=2,num_key_value_heads=1,vocab_size=128,max_position_embeddings=128,num_local_experts=2,num_experts_per_tok=2,attention_dropout=0.0),
  # encoder
  'bert':  dict(hidden_size=64,num_hidden_layers=2,num_attention_heads=2,intermediate_size=128,vocab_size=128,max_position_embeddings=64,hidden_dropout_prob=0.5,attention_probs_dropout_prob=0.5),
  'roberta':   dict(hidden_size=64,num_hidden_layers=2,num_attention_heads=2,intermediate_size=128,vocab_size=128,max_position_embeddings=64,hidden_dropout_prob=0.5),
@@ -91,6 +98,15 @@ def _inp(m):
 
 @unittest.skipUnless(_HAS, "needs torch_shim + transformers")
 class TestTorchHFModels(unittest.TestCase):
+    def setUp(self):
+        from contextlib import ExitStack
+
+        self._runtime_stack = ExitStack()
+        self.addCleanup(self._runtime_stack.close)
+        self._runtime_stack.enter_context(
+            jt.runtime.scope(use_cuda=0, backend_fallback="error")
+        )
+
     def test_forward_and_eval_determinism(self):
         for a, cfg in CFG.items():
             with self.subTest(model=a):
@@ -128,13 +144,17 @@ class TestTorchHFModels(unittest.TestCase):
     def test_grad_populated_after_backward(self):
         # Regression for the no-optimizer autograd bridge: enumerating params then
         # loss.backward() must populate param.grad for every trainable param.
-        for a in ('gpt2', 'llama', 'bert', 't5', 'vit', 'bloom', 'falcon', 'mpt'):
+        for a in ('gpt2', 'llama', 'bert', 't5', 'vit', 'bloom', 'falcon', 'mixtral', 'mpt'):
             if a not in CFG:
                 continue
             with self.subTest(model=a):
                 m = _build(a); m.eval()
                 named = list(m.named_parameters())
-                loss = m(**_inp(m)).last_hidden_state.float().pow(2).sum()
+                output = m(**_inp(m))
+                loss = output.last_hidden_state.float().pow(2).sum()
+                pooler_output = getattr(output, 'pooler_output', None)
+                if pooler_output is not None:
+                    loss = loss + pooler_output.float().pow(2).sum()
                 loss.backward()
                 none = [n for n, p in named if p.grad is None]
                 self.assertEqual(none, [], f"{a}: {len(none)} params have None grad after backward")
@@ -181,7 +201,6 @@ class TestTorchHFModels(unittest.TestCase):
         self.assertTrue(_valid(m.generate(ids2, attention_mask=torch.ones(2, 4),
                                           max_new_tokens=5, do_sample=False)),
                         "batched generation produced invalid tokens")
-
 
 if __name__ == '__main__':
     unittest.main()

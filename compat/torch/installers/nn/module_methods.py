@@ -9,11 +9,11 @@ from jittor import nn
 from jittor.nn.backends import hooks as _backend_hooks
 from jittor.backends.cuda.kernels.nn.rms_norm_training_cuda import _rms_norm_training_cuda
 from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _rms_norm_cuda
-from ...context import registry_for
+from ...context import get_install_context, registry_for
 from ...fidelity import Fidelity, register_fidelity
 from ...nested import _torch_register_leaf
 from ...tensor_state import get_tensor_state
-from ...types import _device_is_cpu, _device_is_cuda, _make_cpu_resident, _make_cuda_resident, device, dtype, _cuda_index_of
+from ...types import _device_is_cpu, _device_is_cuda, _device_is_meta, _make_cpu_resident, _make_cuda_resident, _set_meta_placeholder, device, dtype, _cuda_index_of
 from ....diagnostics import EXPECTED, swallowed
 from .... import fsdp_hooks as _fsdp_hooks
 
@@ -253,7 +253,13 @@ def _call(self, *args, **kwargs):
             swallowed("torch/installers/nn.py _call: _leaves_published.add(self)", exc)
         try:
             registry = get_tensor_state(jt).leaf_params
-            for _leaf in _ORIG_MODULE_NAMED_PARAMETERS(self, recurse=False):
+            # Register a root module's complete parameter traversal at its
+            # first call.  Registering only direct children makes the global
+            # leaf order depend on the order nested modules execute; Jittor's
+            # multi-target gradient query is sensitive to that order even
+            # though Torch's autograd is not.  The recursive traversal is
+            # de-duplicated and nested calls keep their existing entries.
+            for _leaf in _ORIG_MODULE_NAMED_PARAMETERS(self, recurse=True):
                 _leaf = _leaf[1] if isinstance(_leaf, tuple) else _leaf
                 if isinstance(_leaf, jt.Var) and _leaf.requires_grad:
                     registry[id(_leaf)] = _leaf
@@ -281,7 +287,24 @@ def _named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
     """Torch's ``named_parameters``: an iterator, with prefix/dedup."""
     reg = get_tensor_state(jt).leaf_params
     seen = set()
-    for name, v in _ORIG_MODULE_NAMED_PARAMETERS(self, recurse=recurse):
+    if remove_duplicate:
+        parameters = _ORIG_MODULE_NAMED_PARAMETERS(self, recurse=recurse)
+    else:
+        # Jittor's recursive traversal always de-duplicates shared Vars. Walk
+        # each module's direct parameters so callers such as Accelerate can
+        # observe every public path and discover tied-parameter groups.
+        modules = _ORIG_MODULE_NAMED_MODULES(self) if recurse else (("", self),)
+        parameters = (
+            (
+                module_name + ("." if module_name else "") + parameter_name,
+                parameter,
+            )
+            for module_name, module in modules
+            for parameter_name, parameter in _ORIG_MODULE_NAMED_PARAMETERS(
+                module, recurse=False
+            )
+        )
+    for name, v in parameters:
         if remove_duplicate and id(v) in seen:
             continue
         seen.add(id(v))
@@ -342,6 +365,31 @@ def _find_state_target(root, key):
     return obj
 
 
+def _find_state_owner(root, key):
+    """Resolve a state key to its owning module, local name, and value."""
+    parts = str(key).split(".")
+    obj = root
+    for part in parts[:-1]:
+        if isinstance(obj, nn.Sequential):
+            if part in obj.layers:
+                obj = obj.layers[part]
+            elif part.isdigit() and int(part) in obj.layers:
+                obj = obj.layers[int(part)]
+            else:
+                return None, None, None
+        elif hasattr(obj, part):
+            obj = getattr(obj, part)
+        else:
+            return None, None, None
+    leaf = parts[-1]
+    if isinstance(obj, nn.ParameterList):
+        key = int(leaf) if leaf.isdigit() and int(leaf) in obj.params else leaf
+        return (obj, key, obj.params[key]) if key in obj.params else (None, None, None)
+    if not hasattr(obj, leaf):
+        return None, None, None
+    return obj, leaf, getattr(obj, leaf)
+
+
 def _state_source_to_var(value):
     """Coerce one state-dict value to a Jittor Var."""
     if isinstance(value, jt.Var):
@@ -380,6 +428,40 @@ def _preserve_target_dtypes_for_load(root, state_dict):
             converted = dict(state_dict)
         converted[key] = src.cast(target_dtype)
     return state_dict if converted is None else converted
+
+
+def _assign_state_value(root, key, value):
+    """Replace one parameter/buffer for Torch ``assign=True`` semantics."""
+    owner, leaf, target = _find_state_owner(root, key)
+    if owner is None or not isinstance(target, jt.Var):
+        return False
+    source = _state_source_to_var(value)
+    if not isinstance(source, jt.Var) or source.shape != target.shape:
+        return False
+    role = next((item_role for item_name, item, item_role in owner._var_roles()
+                 if str(item_name) == str(leaf) and item is target), None)
+    if role == "parameter":
+        # ``target`` may be the plain Torch frontend Tensor produced by
+        # Transformers' meta/low-memory loader.  Calling ``type(target)``
+        # rejects ``requires_grad=``; parameter replacement must go through
+        # the installed Parameter factory so assign=True preserves the role.
+        parameter_type = get_install_context(jt).target_namespace.nn.Parameter
+        replacement = parameter_type(source, requires_grad=bool(target.requires_grad))
+    else:
+        replacement = source.clone().detach()
+        replacement.requires_grad = False
+        if role in ("buffer", "non_persistent_buffer"):
+            replacement.is_buffer = True
+            replacement.persistent = role == "buffer"
+    if getattr(source, "_jittor_torch_meta", False):
+        _set_meta_placeholder(replacement)
+    else:
+        _set_meta_placeholder(replacement, False)
+    if isinstance(owner, nn.ParameterList):
+        owner.params[leaf] = replacement
+    else:
+        setattr(owner, leaf, replacement)
+    return True
 
 
 def _state_dict_key_diff(root, state_dict):
@@ -458,7 +540,16 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
         # here so a strict=False load stays quiet, exactly like torch.
         load_state = {k: v for k, v in load_state.items()
                       if str(k) not in set(unexpected)}
-    _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)
+    if assign and isinstance(load_state, dict):
+        remaining = {
+            key: value for key, value in load_state.items()
+            if str(key) not in set(unexpected)
+            and not _assign_state_value(self, key, value)
+        }
+        if remaining:
+            _ORIG_MODULE_LOAD_STATE_DICT(self, remaining)
+    else:
+        _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)
     try:
         for n, p in self.named_parameters():
             if n in trainable and p.is_stop_grad():
@@ -466,6 +557,16 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
     except EXPECTED as exc:
         swallowed("torch/installers/nn.py _load_state_dict: for n, p in self.named_parameters():", exc)
     return _IncompatibleKeys(missing, unexpected)
+
+
+def _register_load_state_dict_pre_hook(self, hook, with_module=False):
+    """Accept Torch's private load hook used by legacy remote checkpoints.
+
+    Jittor's loader has no per-module pre-hook dispatch.  The hook is therefore
+    intentionally recorded as an import-compatible no-op; current callers use
+    it only to discard obsolete checkpoint keys before loading.
+    """
+    return None
 
 
 # torch's Module.parameters() returns an *iterator*; peft does
@@ -744,6 +845,8 @@ def _module_to_conversion(ds, dev, copy, v):
                     out = v
                 else:
                     out = moved
+    elif _device_is_meta(dev):
+        out = _set_meta_placeholder(out)
     return out
 
 
@@ -766,7 +869,7 @@ def _module_to(self, *args, **kwargs):
             bare = a.replace("torch.", "")
             if bare in dtype._registry:
                 ds = bare
-            elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
+            elif bare.split(":")[0] in ("cpu", "cuda", "npu", "meta"):
                 dev = bare
     if _device_is_cuda(dev):
         jt.flags.use_cuda = 1
@@ -920,6 +1023,9 @@ def _register_parameter(self, name, param):
     object.__setattr__(self, name, param)
 
 
+_register_parameter._jittor_torch_native_registration = True
+
+
 def _module_type(self, dst_type=None):
     """Torch's ``Module.type``, which Jittor has nothing to do for."""
     return self
@@ -1042,6 +1148,7 @@ def _install_module_methods(nn, registry=None):
     M.named_buffers = _named_buffers
     M.named_modules = _named_modules
     M.load_state_dict = _load_state_dict
+    M._register_load_state_dict_pre_hook = _register_load_state_dict_pre_hook
     M.parameters = _parameters
     M.train = _train
     M.eval = _eval
@@ -1075,5 +1182,5 @@ def _install_module_methods(nn, registry=None):
         M._non_persistent_buffers_set = property(_nonpersist_set)
 
     register_api_bindings(M, 'torch.nn.Module',
-        ('__setattr__', 'buffers', 'cpu', 'cuda', 'double', 'eval', 'execute', 'float', 'forward', 'get_buffer', 'get_execution_pipelining', 'get_parameter', 'get_submodule', 'half', 'load_state_dict', 'named_buffers', 'named_modules', 'named_parameters', 'npu', 'parameters', 'register_parameter', 'set_execution_pipelining', 'to', 'to_empty', 'train', 'type', 'zero_grad') + tuple(()),
+        ('__setattr__', '_register_load_state_dict_pre_hook', 'buffers', 'cpu', 'cuda', 'double', 'eval', 'execute', 'float', 'forward', 'get_buffer', 'get_execution_pipelining', 'get_parameter', 'get_submodule', 'half', 'load_state_dict', 'named_buffers', 'named_modules', 'named_parameters', 'npu', 'parameters', 'register_parameter', 'set_execution_pipelining', 'to', 'to_empty', 'train', 'type', 'zero_grad') + tuple(()),
         Fidelity.APPROXIMATE, 'Module state and parameter management over native holders; Torch lazy iterator, meta, and layout semantics are approximate')

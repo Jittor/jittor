@@ -248,6 +248,11 @@ class TestCleanupStructure(unittest.TestCase):
                 return True
             paths = {path for path, _name in group}
             names = {name for _path, name in group}
+            # Compatibility test fixtures intentionally mirror small runtime
+            # helpers; they are test scaffolding rather than duplicate runtime
+            # implementations.
+            if all(path.startswith("compat/tests/") for path in paths):
+                return True
             if (
                 paths
                 == {

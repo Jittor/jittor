@@ -102,14 +102,14 @@ def trunc_normal_(tensor, mean=0.0, std=1.0, a=-2.0, b=2.0, generator=None):
 
 
 def _fan(t):
-    sh = t.shape
+    sh = tuple(int(dim) for dim in t.shape)
     if len(sh) < 2:
-        return sh[0], sh[0]
+        return int(sh[0]), int(sh[0])
     num_input_fmaps, num_output_fmaps = sh[1], sh[0]
     rf = 1
     for s in sh[2:]:
         rf *= s
-    return num_input_fmaps * rf, num_output_fmaps * rf
+    return int(num_input_fmaps * rf), int(num_output_fmaps * rf)
 
 
 def _calculate_correct_fan(tensor, mode):
@@ -273,10 +273,13 @@ def _install_init_aliases(registry=None):
         if not hasattr(_init, tname) and hasattr(_init, jname):
             setattr(_init, tname, getattr(_init, jname))
     # initializers torch has that jittor lacks -- best-effort implementations
-    if not hasattr(_init, "_calculate_fan_in_and_fan_out"):
-        _init._calculate_fan_in_and_fan_out = _fan
-    if not hasattr(_init, "_calculate_correct_fan"):
-        _init._calculate_correct_fan = _calculate_correct_fan
+    # Jittor's native fan helpers return tensors, while Torch's initialization
+    # contract requires Python integer fan counts (SigLIP computes
+    # ``math.sqrt(scale / fan_in)`` during model construction).  Always bind
+    # the scalar adapter, including when the native namespace already exposes
+    # a same-named helper.
+    _init._calculate_fan_in_and_fan_out = _fan
+    _init._calculate_correct_fan = _calculate_correct_fan
     if not hasattr(_init, "dirac_"):
         _init.dirac_ = _dirac
     if not hasattr(_init, "orthogonal_"):

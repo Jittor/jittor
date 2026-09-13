@@ -18,6 +18,7 @@ import unittest
 
 import numpy as np
 import torch
+import jittor as jt
 
 
 def _cuda_available():
@@ -39,8 +40,7 @@ class _FamilyChecks(object):
     device = "cpu"
 
     def _tensor(self, array):
-        tensor = torch.tensor(array)
-        return tensor.cuda() if self.device == "cuda" else tensor
+        return torch.tensor(array, device=self.device)
 
     def _check(self, got, want, label):
         got = np.asarray(got.cpu().numpy(), dtype="float64")
@@ -150,6 +150,20 @@ class _FamilyChecks(object):
                 self.assertAlmostEqual(float(result.item()), 3.0, places=5)
                 self.assertEqual(tuple(result.shape), (),
                                  "%s of a rank-0 tensor should stay rank-0" % name)
+
+    def test_explicit_device_reduction_ignores_runtime_default(self):
+        """Codegen follows tensor placement even when the runtime default differs."""
+        if not _cuda_available():
+            self.skipTest("CUDA is required to select the opposite runtime default")
+        opposite_runtime = int(self.device == "cpu")
+        with jt.flag_scope(use_cuda=opposite_runtime):
+            for dtype in (torch.float32, torch.float16):
+                with self.subTest(dtype=str(dtype)):
+                    scalar = torch.tensor(3.0, dtype=dtype, device=self.device)
+                    result = scalar.max()
+                    self.assertAlmostEqual(float(result.item()), 3.0, places=3)
+                    self.assertEqual(tuple(result.shape), ())
+                    self.assertEqual(result.device.type, self.device)
 
 
 class TestDivisionRemainderFamilyCPU(_FamilyChecks, unittest.TestCase):

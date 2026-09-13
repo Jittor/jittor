@@ -45,10 +45,10 @@ class Adan(Optimizer):
             pg["d"] = []
             pg["pre_grad"] = []
             for p in pg["params"]:
-                pg["m"].append(jt.zeros(p.shape, p.dtype).stop_grad())
-                pg["v"].append(jt.zeros(p.shape, p.dtype).stop_grad())
-                pg["d"].append(jt.zeros(p.shape, p.dtype).stop_grad())
-                pg["pre_grad"].append(jt.zeros(p.shape, p.dtype).stop_grad())
+                pg["m"].append(jt.zeros_like(p).stop_grad())
+                pg["v"].append(jt.zeros_like(p).stop_grad())
+                pg["d"].append(jt.zeros_like(p).stop_grad())
+                pg["pre_grad"].append(jt.zeros_like(p).stop_grad())
 
 
     def add_param_group(self, group):
@@ -57,10 +57,10 @@ class Adan(Optimizer):
         group["d"] = []
         group["pre_grad"] = []
         for p in group["params"]:
-            group["m"].append(jt.zeros(p.shape, p.dtype).stop_grad())
-            group["v"].append(jt.zeros(p.shape, p.dtype).stop_grad())
-            group["d"].append(jt.zeros(p.shape, p.dtype).stop_grad())
-            group["pre_grad"].append(jt.zeros(p.shape, p.dtype).stop_grad())
+            group["m"].append(jt.zeros_like(p).stop_grad())
+            group["v"].append(jt.zeros_like(p).stop_grad())
+            group["d"].append(jt.zeros_like(p).stop_grad())
+            group["pre_grad"].append(jt.zeros_like(p).stop_grad())
         self.param_groups.append(group)
 
     def _global_max_grad_norm(self):

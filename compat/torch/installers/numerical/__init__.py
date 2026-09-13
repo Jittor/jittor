@@ -862,6 +862,16 @@ register_fidelity(
     _MASKED_SELECT_FIDELITY_DETAIL,
 )
 
+from .indexing import masked_fill
+
+register_fidelity(
+    "torch.masked_fill",
+    masked_fill,
+    Fidelity.APPROXIMATE,
+    "delegates to the Torch-compatible Tensor method with broadcast mask "
+    "semantics on supported CPU and accelerator backends",
+)
+
 _NARROW_FIDELITY_DETAIL = (
     "matches Torch contiguous slice values and shape for supported real tensors "
     "but omits device, layout, and dtype keyword semantics"
@@ -1037,6 +1047,26 @@ register_fidelity(
     Fidelity.APPROXIMATE,
     "matches Torch periodic and symmetric CPU window values; device, dtype, "
     "layout, and requires_grad semantics are not implemented",
+)
+
+from .signal import kaiser_window
+
+register_fidelity(
+    "torch.kaiser_window",
+    kaiser_window,
+    Fidelity.APPROXIMATE,
+    "matches Torch periodic, symmetric, and beta CPU window values; device, "
+    "layout, pin_memory, and requires_grad semantics are not implemented",
+)
+
+from .signal import sinc
+
+register_fidelity(
+    "torch.sinc",
+    sinc,
+    Fidelity.APPROXIMATE,
+    "matches Torch normalized sinc values for CPU tensors and scalar inputs; "
+    "device, dtype, and requires_grad semantics retain compatibility limits",
 )
 
 from .signal import stft
@@ -1232,6 +1262,7 @@ def install(ctx):
     _bind_missing(g, "mm", mm)
     _bind_missing(g, "mv", mv)
     _bind_missing(g, "masked_select", masked_select)
+    g.masked_fill = masked_fill
     _bind_missing(g, "split_with_sizes", split_with_sizes)
     _bind_missing(g, "_shape_as_tensor", _shape_as_tensor)
     _bind_missing(g, "nan_to_num_", nan_to_num_)
@@ -1298,5 +1329,9 @@ def install_signal(ctx):
     g = ctx.jittor_module
     if not hasattr(g, "hann_window"):
         g.hann_window = hann_window
+    if not hasattr(g, "kaiser_window"):
+        g.kaiser_window = kaiser_window
+    if not hasattr(g, "sinc"):
+        g.sinc = sinc
     if not hasattr(g, "stft"):
         g.stft = stft

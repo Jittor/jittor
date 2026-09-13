@@ -106,6 +106,14 @@ PyObject* set_tensor_placement_context(int backend, int device) {
     return token;
 }
 
+PyObject* get_tensor_placement_context() {
+    PyObject* value = nullptr;
+    if (PyContextVar_Get(placement_variable(), nullptr, &value) < 0)
+        throw std::runtime_error("cannot read tensor placement context");
+    if (value) return value;
+    Py_RETURN_NONE;
+}
+
 void reset_tensor_placement_context(PyObject* token) {
     if (PyContextVar_Reset(placement_variable(), token) < 0)
         throw std::runtime_error("cannot reset tensor placement context");

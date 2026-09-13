@@ -23,6 +23,12 @@ def cdist(x1, x2, p=2.0, compute_mode=None, **kwargs):
 
 def _bucketize_impl(
         input, boundaries, out_int32=False, right=False, **kwargs):
+    # Torch permits the boundary vector to originate on the default device;
+    # compare on the input placement so CUDA multimodal position grids do not
+    # mix backends during the broadcasted comparison.
+    if hasattr(input, "is_cuda") and hasattr(boundaries, "is_cuda"):
+        if bool(input.is_cuda) != bool(boundaries.is_cuda):
+            boundaries = boundaries.to("cuda" if input.is_cuda else "cpu")
     flattened = boundaries.reshape((-1,))
     comparison = ((input.unsqueeze(-1) >= flattened)
                   if right else (input.unsqueeze(-1) > flattened))

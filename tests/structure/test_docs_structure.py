@@ -430,6 +430,16 @@ class TestDocsStructure(unittest.TestCase):
             self.repo_root, source, "https://cg.cs.tsinghua.edu.cn/jittor/", "markdown")
         self.assertIsNone(website, website)
 
+    def test_link_checker_skips_only_historical_refactor_results(self):
+        import sys
+        sys.path.insert(0, str(self.repo_root / "tools" / "docs"))
+        import check_links
+
+        self.assertEqual(
+            check_links.HISTORICAL_TREES,
+            ("refactor-wip/results/",),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

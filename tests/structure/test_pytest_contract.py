@@ -405,6 +405,29 @@ def test_complete_suite_runner_owns_cpu_and_process_mode_environment(monkeypatch
     assert native["TMPDIR"] != torch["TMPDIR"]
 
 
+def test_torch_structure_selection_does_not_report_native_only_files_as_empty(monkeypatch):
+    policy = _load_test_conftest()
+    from _helpers import gate_scope
+
+    selected = {
+        "tests/structure/test_pytest_contract.py",
+        "tests/structure/backends/acl/test_acl_dtype_preservation.py",
+    }
+    monkeypatch.setattr(gate_scope, "selected_files", lambda root, arguments: selected)
+    monkeypatch.setattr(policy, "_torch_mode_is_active", lambda: True)
+    policy._SELECTED_FILES.clear()
+    config = SimpleNamespace(
+        invocation_params=SimpleNamespace(dir=REPO_ROOT),
+        args=["tests/structure"],
+        option=SimpleNamespace(ignore=[]),
+    )
+
+    policy._snapshot_selected_files(config)
+
+    assert "tests/structure/test_pytest_contract.py" in policy._SELECTED_FILES
+    assert "tests/structure/backends/acl/test_acl_dtype_preservation.py" not in policy._SELECTED_FILES
+
+
 def test_complete_suite_runner_retries_a_zero_exit_cold_cache_refresh():
     module = _load_test_suite_runner()
     refreshed = SimpleNamespace(returncode=0, stdout="jit_utils updated, rerun\n")

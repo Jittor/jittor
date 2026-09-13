@@ -440,7 +440,11 @@ def _zero_grad_compat(self, set_to_none=True):
         object.__setattr__(self, "_grad_map", {})
     except (AttributeError, TypeError) as exc:
         swallowed("torch/optimizers.py _zero_grad_compat: object.__setattr__(self, '_grad_map', {})", exc)
-    result = _orig_zero(self)
+    # The compatibility pass above has already materialized zero tensors for
+    # existing gradients and preserved None for untouched parameters. Jittor's
+    # native implementation assumes every entry in ``pg['grads']`` is a Var,
+    # so calling it for the mixed list used by set_to_none=False raises.
+    result = _orig_zero(self) if set_to_none else None
     _fsdp2_zero = _fsdp_hooks.provider()
     if _fsdp2_zero is not None and _fsdp2_zero.optimizer_has_fsdp_params(self):
         _fsdp2_zero.refresh_visible_full_grads(self)

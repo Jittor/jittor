@@ -206,11 +206,9 @@ class device:
     # inits run anyway, modules end up flagged initialized, and the later
     # `_initialize_missing_keys()` step never recomputes non-persistent buffers
     # (e.g. RoPE inv_freq), leaving them as the `torch.empty_like` garbage that
-    # `_move_missing_keys_from_meta_to_device` wrote. We can't allocate real
-    # meta tensors in jittor, but we can make the *meta* context observable: push
-    # it on a thread-local stack so Var.device reports "meta" inside it. Tensors
-    # are still really allocated (harmless -- real weights get loaded over them),
-    # but transformers correctly skips the eager init.
+    # `_move_missing_keys_from_meta_to_device` wrote. We cannot allocate real
+    # meta storage in Jittor, but factories and parameter registration retain a
+    # placeholder marker until checkpoint assignment or explicit migration.
     # An *indexed* CUDA device context is not a no-op any more: torch's
     # `with torch.device("cuda:1"):` makes device 1 the default new tensors
     # are built on, and jittor now has a current device that means exactly
@@ -385,6 +383,28 @@ def _move_to_cuda_index(v, dev, default_index=None):
     return v.to_device(idx)
 
 
+def _device_is_meta(dev):
+    """True if a torch device= argument explicitly designates meta."""
+    if dev is None:
+        return False
+    t = getattr(dev, "type", None)
+    if t is not None:
+        return t == "meta"
+    if isinstance(dev, str):
+        return dev.split(":")[0] == "meta"
+    return False
+
+
+def _set_meta_placeholder(v, enabled=True):
+    """Track a real Jittor Var that stands in for a torch meta tensor."""
+    if isinstance(v, jt.Var):
+        try:
+            v._jittor_torch_meta = bool(enabled)
+        except EXPECTED as exc:
+            swallowed("torch/types.py _set_meta_placeholder: set marker", exc)
+    return v
+
+
 def _var_is_cpu_resident(v):
     """Explicit tensor backend, or legacy storage residency when unplaced.
 
@@ -433,6 +453,7 @@ def _make_cpu_resident(v, inplace=False):
     """
     if not isinstance(v, jt.Var):
         return v
+    _set_meta_placeholder(v, False)
     if v.placement_backend >= 0:
         if v.placement_backend == 0:
             return v
@@ -488,6 +509,7 @@ def _make_cuda_resident(v, force=False, inplace=False, device=None):
     """
     if not isinstance(v, jt.Var):
         return v
+    _set_meta_placeholder(v, False)
     if v.placement_backend >= 0:
         from .frontend import _placement_request
         request = device
@@ -512,6 +534,15 @@ def _make_cuda_resident(v, force=False, inplace=False, device=None):
         swallowed("torch/types.py _make_cuda_resident: loc = v.location()", exc)
         loc = None
     if loc == "device":
+        try:
+            v._jittor_torch_force_cpu = False
+            v._jittor_torch_force_cuda = True
+        except EXPECTED as exc:
+            swallowed(
+                "torch/types.py _make_cuda_resident: set CUDA residency hints",
+                exc,
+                "the Var will report residency from its native placement",
+            )
         return v
     if v.numel() == 0:
         out = v if inplace or loc != "cpu" else v.clone()

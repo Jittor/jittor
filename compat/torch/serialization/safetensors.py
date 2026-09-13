@@ -74,11 +74,12 @@ class _PySafeSlice:
 
 class _PySafeOpen:
     def __init__(self, filename, framework="pt", device="cpu", backend="mmap"):
+        self._filename = filename
         self._device = device
         with open(filename, "rb") as fh:
             n = struct.unpack("<Q", fh.read(8))[0]
             self._header = json.loads(fh.read(n).decode("utf-8"))
-            self._data = fh.read()
+            self._data_offset = 8 + n
         self._meta = self._header.pop("__metadata__", {})
 
     def keys(self):
@@ -90,7 +91,15 @@ class _PySafeOpen:
     def _entry(self, key):
         entry = self._header[key]
         start, end = entry["data_offsets"]
-        return entry["dtype"], entry["shape"], self._data[start:end]
+        expected = end - start
+        with open(self._filename, "rb") as fh:
+            fh.seek(self._data_offset + start)
+            raw = fh.read(expected)
+        if len(raw) != expected:
+            raise EOFError(
+                "short safetensors payload for {!r}: expected {}, got {}".format(
+                    key, expected, len(raw)))
+        return entry["dtype"], entry["shape"], raw
 
     def get_slice(self, key):
         st_dtype, shape, raw = self._entry(key)

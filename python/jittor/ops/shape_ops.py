@@ -269,9 +269,14 @@ def meshgrid(*tensors, indexing=None):
 
 
 def _split_slice(d, selection, is_last, gopt_disable):
-    if gopt_disable:
-        return d.getitem(selection), d
-    return d.getitem(selection, int(is_last))
+    # The multiple-output getitem optimization materializes an inner-dimension
+    # slice as if each outer row were adjacent.  With storage strides enabled,
+    # that turns x[:, :, a:b] into flattened blocks spanning row boundaries.
+    # Keep that optimization for contiguous leading blocks, and represent inner
+    # chunks as ordinary basic-index views of the original tensor.
+    if not gopt_disable and len(selection) == 1:
+        return d.getitem(selection, int(is_last))
+    return d.getitem(selection), d
 
 
 def _split_slice_acl(d, selection, is_last, gopt_disable):

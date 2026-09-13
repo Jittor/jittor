@@ -16,7 +16,7 @@ REFERENCE_LINK = re.compile(r"^\s*\[[^\]]+\]:\s*(\S+)")
 HTML_LINK = re.compile(r"\b(?:href|src)=[\"']([^\"']+)[\"']", re.IGNORECASE)
 DOC_ROLE = re.compile(r"\{(?:doc|download)\}`([^`]+)`")
 SCHEMES = frozenset(("data", "ftp", "http", "https", "mailto", "tel"))
-HISTORICAL_TREES = ("docs/results/",)
+HISTORICAL_TREES = ("refactor-wip/results/",)
 
 
 def _tracked_markdown(repo_root):
@@ -33,7 +33,7 @@ def _tracked_markdown(repo_root):
     for relative in result.stdout.decode("utf-8").split("\0"):
         if not relative.endswith(".md"):
             continue
-        if relative != "docs/results/README.md" and any(
+        if relative != "refactor-wip/results/README.md" and any(
                 relative.startswith(prefix) for prefix in HISTORICAL_TREES):
             continue
         # Cached paths may have been deleted or moved in the working tree.

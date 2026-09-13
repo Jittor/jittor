@@ -222,7 +222,9 @@ def test_the_non_empty_rule_would_notice_a_root_that_stopped_matching():
     assert _scanned_modules() != [_EMPTY_SCAN]
 
 
-@pytest.mark.parametrize("path", _scanned_modules())
+@pytest.mark.parametrize(
+    "path", [path for path in _scanned_modules() if path not in _RESOLVER_FILES]
+)
 def test_no_module_reads_a_setting_under_its_unprefixed_name(path):
     """Every read goes through ``env_config``, which is what makes it reportable.
 
@@ -234,8 +236,6 @@ def test_no_module_reads_a_setting_under_its_unprefixed_name(path):
     assert path != _EMPTY_SCAN, (
         "the scan root %s matched no module; this rule checked nothing"
         % SOURCE)
-    if path in _RESOLVER_FILES:
-        pytest.skip("the resolver is where these names are allowed")
     settings = _unprefixed_settings()
     found = sorted({(match.group(1) or match.group(2))
                     for match in _ENV_READ.finditer((SOURCE / path).read_text())}
@@ -244,6 +244,11 @@ def test_no_module_reads_a_setting_under_its_unprefixed_name(path):
         "%s reads %s directly; use jittor_utils.env_config.build_env / "
         "runtime_env so the value reaches the startup report and the build "
         "fingerprint" % (path, found))
+
+
+def test_resolver_files_are_the_only_allowlisted_unprefixed_readers():
+    scanned = set(_scanned_modules())
+    assert _RESOLVER_FILES <= scanned
 
 
 def test_the_gate_would_notice_an_unprefixed_read():

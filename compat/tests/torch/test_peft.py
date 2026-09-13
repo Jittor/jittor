@@ -34,7 +34,9 @@ try:
     import jittor as jt
     from torch import nn
     from peft import LoraConfig, get_peft_model, PeftModel
-    _HAS = _is_active_jittor_frontend(torch, jt)
+    # Import availability is safe to determine during collection. Frontend
+    # activation is a runtime concern and is checked by the test itself.
+    _HAS = True
 except Exception:
     if _REQUIRE_OPTIONAL_DEPS:
         raise

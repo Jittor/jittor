@@ -34,6 +34,10 @@ def _placement_request(backend, device, like=None):
         return None
     numeric_index = isinstance(device, int) and not isinstance(device, bool)
     name = "cuda" if numeric_index else (getattr(device, "type", None) or str(device).split(":", 1)[0])
+    # Meta tensors use real storage plus a Torch-facing marker, so there is no
+    # native placement backend to select for them.
+    if name == "meta":
+        return None
     if name == "cpu":
         return 0, 0
     if name not in ("cuda", "npu"):
@@ -101,6 +105,10 @@ def frontend_factory(function, tensor_type):
 
 
 class _TensorMeta(type):
+    def __instancecheck__(cls, instance):
+        from .nested import _NestedTensor
+        return isinstance(instance, _NestedTensor) or super().__instancecheck__(instance)
+
     def __call__(cls, *args, **kwargs):
         backend = vars(cls).get("_frontend_backend")
         if backend is None:
@@ -109,7 +117,11 @@ class _TensorMeta(type):
             raise TypeError("Tensor constructor does not accept keyword arguments")
         from .nested import _TorchSize
         dtype = _default_tensor_dtype(backend)
-        with tensor_frontend(cls, like=args[0] if len(args) == 1 else None):
+        like = args[0] if len(args) == 1 and isinstance(args[0], backend.Var) else None
+        # Like torch.Tensor, data and shape construction defaults to CPU even
+        # when Jittor's process-wide backend is CUDA. Tensor copy construction
+        # is the exception and inherits the source tensor's explicit placement.
+        with tensor_frontend(cls, device=None if like is not None else "cpu", like=like):
             if not args:
                 result = backend.empty((0,), dtype=dtype)
             elif all(isinstance(arg, int) for arg in args):
@@ -162,8 +174,13 @@ def clone(input, *, memory_format=None):
         return backend.Var.copy(input)
 
 
-def parameter_new(cls, data=None, requires_grad=True):
+def parameter_new(cls, data=None, requires_grad=True, **state):
     backend = cls._parameter_backend
+    from .types import _DEVICE_CTX_STACK, _set_meta_placeholder
+    meta = bool(_DEVICE_CTX_STACK) or bool(
+        isinstance(data, backend.Var)
+        and getattr(data, "_jittor_torch_meta", False)
+    )
     with tensor_frontend(cls, like=data):
         if data is None:
             value = backend.empty((0,), dtype=_default_tensor_dtype(backend))
@@ -171,10 +188,14 @@ def parameter_new(cls, data=None, requires_grad=True):
             source = data if isinstance(data, backend.Var) else backend.array(data)
             value = backend.Var.detach(source)
     value.requires_grad = bool(requires_grad)
+    if meta:
+        _set_meta_placeholder(value)
+    for name, item in state.items():
+        object.__setattr__(value, name, item)
     return value
 
 
-def parameter_init(self, data=None, requires_grad=True):
+def parameter_init(self, data=None, requires_grad=True, **state):
     # The conversion boundary already initialized the native holder. Python
     # subclasses still receive their real __init__ through normal dispatch.
     return None
