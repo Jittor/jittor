@@ -8,12 +8,16 @@ Jittor 提供一层 Torch 兼容前端：把 `import torch` 指向 Jittor，让�
 
 torch
 torch-shim
+torch-architecture
+torch-lowering
 ```
 
 | 文档 | 内容 |
 | --- | --- |
 | [Torch 兼容 API](torch.md) | 支持的接口范围、语义差异与不支持的部分 |
 | [Torch shim](torch-shim.md) | shim 的部署方式、生效范围与排查方法 |
+| [分层架构](torch-architecture.md) | 统一计算图、框架下沉与算子优化的分层设计 |
+| [调用下沉](torch-lowering.md) | PyTorch 调用变成 IR 节点的关键技术与新增 API 清单 |
 
 兼容层只负责**拼写与签名的适配**；能力本身由 Jittor 框架提供。如果某个能力
 Jittor 没有，兼容层会明确报错，而不是静默给出可疑结果。

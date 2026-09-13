@@ -116,8 +116,14 @@ regression.
 ## Open items
 
 1. **JIT compile cost for a large model.** One forward of the 33B transformer
-   needs thousands of distinct kernels, compiled serially. Parallel compilation
-   is pinned off by the shim's preflight defaults and the override did not take.
+   needs thousands of distinct kernels. `jt.flags.use_parallel_op_compiler`
+   arrives as `0` -- exporting `use_parallel_op_compiler` or
+   `JT_USE_PARALLEL_OP_COMPILER` from the caller's environment does not change
+   it -- and with it off the kernels are built one at a time, measured at
+   15-30 per minute. The flag *is* settable at runtime, and the run harness sets
+   it to 16 before the pipeline call; the framework-side question is why the
+   environment spelling is ignored, and whether the compatibility layer should
+   raise it by default for models this large.
 2. **Autocast asks for mixed-dtype convolutions.** H3's video decode runs under
    `torch.autocast(float16)`; the shim's amp register changes the *result* dtype
    only, so a float32 convolution is asked for a float16 output, which cuDNN
