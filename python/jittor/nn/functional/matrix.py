@@ -175,6 +175,19 @@ def matmul_transpose(a, b):
     # arrives with. The flattening is the same reshape as before.
     restore = None
     if len(a.shape) != 2:
+        # The 2-D kernel reads `a` as its flattened `(prod(leading), m)`, which
+        # for a dense row-major buffer is the same pointer and the same leading
+        # dimension -- so hand it the rank it already has instead of reshaping
+        # into rank 2 and back out. Those two reshapes are pure views that
+        # generate no code, but a graph node each, and measured 5.8 of the 7.9
+        # us this function costs per call. `> 2`, not `!= 2`: a rank-1 `a`
+        # reaches here too and its flattening is `(1, m)` -- a row the reshape
+        # has to add, not a rank the kernel can read off the buffer. A strided
+        # `a` is not described by the flattening and keeps the reshape.
+        if len(a.shape) > 2 and a._storage_is_contiguous():
+            fast = _matmul_2d_cublas(a, b, 0, 1)
+            if fast is not None:
+                return fast
         restore = a.shape[:-1] + (-1,)
         a = a.reshape((-1, a.shape[-1]))
     fast = _matmul_2d_cublas(a, b, 0, 1)
@@ -352,6 +365,20 @@ def matmul(a, b):
         #     -->
         #     012
         if len_b == 2 and len_a > 2:
+            # The 2-D kernel reads `a` as its flattened `(prod(leading), m)`,
+            # which for a dense row-major buffer is the same pointer and the
+            # same leading dimension -- so hand it the higher rank directly
+            # rather than reshaping into rank 2 and back out. Those two reshapes
+            # are pure views that generate no code, but a graph node each:
+            # measured at 64 of the 408 nodes a transformer decode step builds,
+            # and 34% of a stack of Linears. `a` must actually be dense for the
+            # flattening to describe it, so a strided view keeps the old route.
+            if a._storage_is_contiguous():
+                b_base = _transpose_base_last2(b)
+                bb = b_base if b_base is not None else b
+                fast = _matmul_2d_cublas(a, bb, 0, 1 if b_base is not None else 0)
+                if fast is not None:
+                    return fast
             # TODO:ugly implementation for tuner
             aa = a.reshape((-1, m))
             cc = jt.nn.matmul(aa, b)
