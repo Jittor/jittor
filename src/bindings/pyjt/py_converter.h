@@ -616,8 +616,15 @@ DEF_IS(VarHolder*, PyObject*) to_py_object(T a) {
     auto vh_type = reinterpret_cast<PyTypeObject*>(frontend_type.obj);
     PyObjHolder obj(vh_type->tp_alloc(vh_type, 0));
     auto ptr = GET_RAW_PTR(T, obj.obj);
-    ((PyObject**)(((char*)obj.obj) + sizeof(PyObject) + sizeof(typename std::remove_pointer<T>::type)))[0] = PyDict_New();
-    // new attr_dict
+    // The instance dict is left NULL and created on demand. `tp_alloc` zeroes
+    // the slot; `tp_dictoffset` is set, so `PyObject_GenericSetAttr` builds it
+    // on the first attribute write and `PyObject_GenericGetDict` (the
+    // `__dict__` descriptor) builds it on the first read. `tp_traverse` and
+    // `tp_clear` use Py_VISIT/Py_CLEAR and `tp_dealloc` uses Py_XDECREF, all
+    // of which already accept NULL -- the dealloc path even documents it, for
+    // the failed-tp_init case. Eagerly allocating one cost a dict per Var
+    // *created*, and a graph step creates hundreds of intermediates that never
+    // carry an attribute.
     // will move and delete a
     new (ptr) typename std::remove_pointer<T>::type (a);
     GET_INITED_FLAG(typename std::remove_pointer<T>::type, 1, obj.obj) = 1;
