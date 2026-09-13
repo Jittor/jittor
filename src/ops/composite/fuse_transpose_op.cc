@@ -51,6 +51,19 @@ FuseTransposeOp::FuseTransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
             axes.push_back(xdim-1-i);
     }
     y = create_output(nullptr, x->dtype());
+    // Parallelise every axis, not just the default four. ParallelPass splits
+    // the thread budget over the *outermost* `max_parallel_depth` loops, so a
+    // rank-8 permute whose outer axes are all small -- MiniMax-H3's decoder
+    // folds its (1, T, H, W, C, pt, ph, pw) patch grid back to
+    // (1, C, T*pt, H*ph, W*pw) and permutes the 8-D view first -- spends the
+    // whole budget on 1, 3, 7 and 4 and leaves a single block of 32 threads to
+    // move five million elements. The transpose writes each element exactly
+    // once, so parallelising the inner axes too is safe.
+    if (axes.size() > 4) {
+        loop_options_t options = y->loop_options;
+        options["max_parallel_depth"] = (int)axes.size();
+        y->loop_options = move(options);
+    }
 }
 
 void FuseTransposeOp::infer_shape() {
