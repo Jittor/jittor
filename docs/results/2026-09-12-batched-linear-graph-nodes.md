@@ -118,11 +118,48 @@ decode 与 prefill 各测三轮，三轮都复现。
   float64 对 numpy 逐位相等。
 - `tests/ops/test_matmul.py` 与 `tests/nn/test_bmm.py`：失败集合与改动前**逐 nodeid
   相同（各 7 条）**。rank-1 的那条 bug 就是这里抓到的。
-- 真实网络的前向/反向对拍（`tests/models/test_network_parity.py` 与
-  `test_network_training_parity.py`，ResNet/ViT/GPT-2/diffusion UNet，
-  对独立二进制 PyTorch）与逐算子 CPU/CUDA 对拍（约 227 个生成用例）在两棵树上运行中。
-  注意这两个对拍需要 `REAL_TORCH_SITE` 指向真 PyTorch 的 site-packages，
-  不设会 16 个全部 skip 而门禁照样报绿。
+- 逐算子 CPU/CUDA 对拍（约 227 个生成用例）：在干净缓存上重跑中，结论另附。
+  **第一次的结论作废，原因是我自己制造的环境问题，记下来避免重复**：见下一节。
+- **真实网络的前向/反向对拍未跑**（`tests/models/test_network_parity.py` 与
+  `test_network_training_parity.py`，ResNet/ViT/GPT-2/diffusion UNet）。
+  两个坑：不设 `REAL_TORCH_SITE` 时 16 个用例**全部 skip 而门禁照样报绿**；
+  设了之后本轮仍失败于 `REAL_TORCH_SITE did not provide independent binary PyTorch`
+  ——该 session 里的 `torch` 被已部署的 shim 抢先解析，oracle 需要真 torch 压过 shim 的
+  环境，本轮没有配通。
+
+## 一次我自己制造的「大面积失败」，以及正确的顺序
+
+第一次在 mm 树上跑这道门禁得到 `671 failed / 104 passed`（基线 `121 failed / 654 passed`），
+1304 次 `cudaErrorIllegalAddress`——一次非法访存污染 CUDA context，之后 549 个用例级联失败，
+第一个「新增」失败是 `test_inner`。
+
+**不是回归。** 排除过程（每一条都值得记，因为它们各自也是方法）：
+
+- 用全新缓存在两棵树上跑 `test_inner` 所在的 105-125 窗口：**失败集合逐 nodeid 完全一致**
+  （各 7 条，耗时 422 对 429 秒）。
+- `test_inner` 是 `jt.matmul(a, b.transpose(-1,-2))`，两个操作数都是 rank 2；逐步核对
+  `infer_shape` 与 `jit_run` 在 rank 2 下给出的 `n/m/k` 与输出形状，与改动前**逐字等价**，
+  梯度也全是 rank 2。
+- 曾怀疑 `CublasMatmulOp::grad` 造出的 rank>2 `dout` 可能是 strided 视图使展平错位。
+  加硬检查后不触发：`CublasMatmulOp` 没有声明 `accepts_storage_strides`，框架在**构造时**
+  就把 strided 输入物化成连续的了。检查保留下来——它把契约写在 op 自己身上，
+  而不是散落在各个调用点。
+- `compute-sanitizer` 这条线索是**假的**：三棵树（含一行未改的基线 `d40a2e97`）都报
+  「错误」，但正文是 `CUDA_ERROR_INVALID_HANDLE (error 400) on cuKernelGetFunction`，
+  是 sanitizer 对 jittor 动态加载 JIT `.so` 的已知副作用，不是访存错误。
+  **计数只反映探测到多少个 JIT 模块**（基线 1、scalar 2、mm 3），不要当成回归证据。
+
+**起因**：我在第一个门禁进程**还活着**的时候 `rm -rf` 了它的 `JITTOR_HOME`，之后才杀掉它。
+计划文档的规则是「不得 kill -9 门禁；必须杀时先删掉它的 JIT 缓存再重跑」——
+「先删缓存再重跑」指的是**杀完之后、下一次运行之前**删，不是在它还在跑的时候删。
+正确顺序：
+
+```bash
+pkill -TERM -f '<这道门禁的选择器>'     # 1. 先停
+pgrep -f '<同上>' || echo stopped       # 2. 确认真的停了
+rm -rf "$JITTOR_HOME" && mkdir -p "$JITTOR_HOME"   # 3. 再清缓存
+# 4. 然后才重跑
+```
 - **未跑**：`tools/run_test_suite.py` 的完整维护口径、ROCm、NPU。本改动只影响
   CUDA 的 `cublas_matmul` 与 `matmul`/`matmul_transpose` 的路由；CPU 走原路线。
 

@@ -68,6 +68,20 @@ void CublasMatmulOp::infer_shape() {
         << "cublas matmul requires rank-2 or higher input a, got rank " << a->shape.size();
     USER_CHECKop(b->shape.size(),>=,2)
         << "cublas matmul requires rank-2 or higher input b, got rank " << b->shape.size();
+    // The flattening below is only a description of the buffer when the buffer
+    // is dense: a strided rank>2 operand would be read at addresses that are
+    // not its own. The callers that build a rank>2 operand check this, but the
+    // gradients build one too (`matmul(dout, b, ..)` and `matmul(a, dout, ..)`),
+    // and a cotangent can arrive as a view -- so the contract is enforced here,
+    // where every route passes, rather than at each route.
+    USER_CHECK(a->shape.size() == 2 || a->is_contiguous())
+        << "cublas matmul needs a dense rank>2 input a; got strides"
+        << a->storage_strides << "for shape" << a->shape
+        << "(call contiguous() first, or pass rank 2)";
+    USER_CHECK(b->shape.size() == 2 || b->is_contiguous())
+        << "cublas matmul needs a dense rank>2 input b; got strides"
+        << b->storage_strides << "for shape" << b->shape
+        << "(call contiguous() first, or pass rank 2)";
     int64 an, am, bn, bm;
     flatten_2d(a->shape, an, am);
     flatten_2d(b->shape, bn, bm);
