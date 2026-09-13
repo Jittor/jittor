@@ -72,7 +72,7 @@ void ReshapeOp::infer_shape() {
             old_count = new_count = 1;
         }
         USER_CHECK(vd == -1) << "view shape is incompatible with storage strides";
-        y->set_storage_strides(NanoVector::make(strides.data(), strides.size()));
+        y->set_storage_strides(strides);
     }
     y->share_with(x);
 }

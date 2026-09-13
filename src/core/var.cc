@@ -180,11 +180,45 @@ bool Var::is_contiguous() const {
     return true;
 }
 
+// A view whose strides are exactly the contiguous ones needs no vector:
+// `storage_stride` derives those from the shape, and the empty vector is
+// already the "contiguous" sentinel every reader tests for. Storing them anyway
+// is not just redundant, it is impossible past a point -- the packed NanoVector
+// holds 64 bits, while the strides of a 5-D view of a large tensor (the video
+// VAE decodes into `[1, 3, 28, 288, 512]`) need 75, and the overflow check
+// rejects that outright with "NanoVector exceeds its ten-entry or 64-bit value
+// capacity". Every value is identical either way, so dropping the vector
+// changes no layout, only whether it is materialized.
+static bool is_contiguous_strides(const NanoVector& shape, const int64* strides, int n) {
+    int64 expected = 1;
+    for (int i = n - 1; i >= 0; --i) {
+        if (strides[i] != expected) return false;
+        expected *= std::abs(shape[i]);
+    }
+    return true;
+}
+
+void Var::set_storage_strides(const vector<int64>& strides) {
+    USER_CHECK((int)strides.size() == shape.size()) << "Storage stride rank must match shape";
+    for (auto stride : strides)
+        USER_CHECK(stride >= 0) << "Negative storage strides require an explicit offset view";
+    // The check has to happen before the packing: `NanoVector::make` rejects an
+    // over-long vector, so a caller that builds one first never reaches this
+    // function at all.
+    if (is_contiguous_strides(shape, strides.data(), strides.size())) {
+        storage_strides.clear();
+        return;
+    }
+    storage_strides = NanoVector::make(strides.data(), strides.size());
+}
+
 void Var::set_storage_strides(NanoVector strides) {
     USER_CHECK(strides.size() == shape.size()) << "Storage stride rank must match shape";
     for (auto stride : strides)
         USER_CHECK(stride >= 0) << "Negative storage strides require an explicit offset view";
-    storage_strides = std::move(strides);
+    vector<int64> expanded(strides.size());
+    for (int i = 0; i < strides.size(); ++i) expanded[i] = strides[i];
+    set_storage_strides(expanded);
 }
 
 bool Var::alloc(Allocator* allocator) {

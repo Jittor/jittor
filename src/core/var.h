@@ -26,6 +26,7 @@ struct Var : Node {
     int64 storage_span_bytes() const;
     bool is_contiguous() const;
     void set_storage_strides(NanoVector strides);
+    void set_storage_strides(const vector<int64>& strides);
     cstr name;
     fast_shared_ptr<loop_options_t> loop_options;
     static int64 number_of_lived_vars;

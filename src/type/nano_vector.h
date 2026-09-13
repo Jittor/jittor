@@ -85,6 +85,16 @@ struct NanoVector {
         return 65 - lzcnt(v);
     }
 
+    // Whether a value list can be packed at all. Callers that would otherwise
+    // build a vector past the capacity use this to choose a fallback (a copy)
+    // instead of hitting `push_back_check_overflow`'s hard check.
+    static inline bool fits(const vector<int64>& v) {
+        if ((int)v.size() > 10) return false;
+        int total = 0;
+        for (auto x : v) total += get_nbits(x);
+        return total <= 64;
+    }
+
     inline int get_offset(int i) const {
         return (offset >> (size_nbits+i*offset_nbits)) 
             & ((1<<offset_nbits)-1);
@@ -121,7 +131,11 @@ struct NanoVector {
         auto nbits = get_nbits(v);
         int pre_offset = s ? get_offset(s-1) : 0;
         int next_offset = pre_offset+nbits;
-        USER_CHECK(s<10 && next_offset<=64) << "NanoVector exceeds its ten-entry or 64-bit value capacity";
+        USER_CHECK(s<10 && next_offset<=64) << "NanoVector exceeds its ten-entry or 64-bit value capacity"
+            << "entries:" << s << "bits:" << next_offset << "value:" << v
+            << "prefix:" << (s ? at(0) : 0) << "," << (s>1 ? at(1) : 0)
+            << "," << (s>2 ? at(2) : 0) << "," << (s>3 ? at(3) : 0)
+            << "," << (s>4 ? at(4) : 0);
         offset ++; 
         set_offset(s, next_offset);
         set_data(v, nbits, pre_offset);
