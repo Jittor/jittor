@@ -282,6 +282,32 @@ void copy(void* dst, Device target, const void* src, Device source, size_t size,
             backend_default_stream_wait_side(BackendStreamKind::Copy, device, device);
             if (source.index != device)
                 backend_default_stream_wait_side(BackendStreamKind::Copy, device, source.index);
+        } else if (ordered && source.backend == BackendId::Cpu) {
+            // A host input, ordered against the compute stream rather than
+            // blocking on it. The blocking form is pathologically slow for
+            // small transfers on some drivers -- a 2 KB copy measures 2.3 ms
+            // here against 1.5 us for the same bytes issued asynchronously,
+            // and the cliff sits exactly at the 64 KB pageable staging
+            // threshold. A caller that asks for `ordered` only needs the bytes
+            // to land before the kernels that read them, which stream order
+            // already gives.
+            //
+            // Pageable source memory is staged into the driver's own buffer
+            // before cudaMemcpyAsync returns, so the caller may reuse it the
+            // moment this call does. Pinned memory carries no such guarantee,
+            // so that case still waits for the copy to drain.
+            cudaPointerAttributes attr{};
+            const auto query = cudaPointerGetAttributes(&attr, src);
+            // An unregistered pointer is the ordinary case, not a failure;
+            // older drivers report it as an error, so clear the sticky flag.
+            if (query != cudaSuccess) cudaGetLastError();
+            const bool pageable = query != cudaSuccess
+                || attr.type == cudaMemoryTypeUnregistered;
+            checkCudaErrors(cudaMemcpyAsync(dst, src, size, cudaMemcpyHostToDevice, 0));
+            if (!pageable) {
+                LaunchErrorScope error_scope(target, true, 0);
+                checkCudaErrors(cudaStreamSynchronize(0));
+            }
         } else if (target.backend == BackendId::Cpu && source.backend != BackendId::Cpu) {
             LaunchErrorScope error_scope(source, true, 0);
             // Readback waits for its producer stream's event, not the device.
