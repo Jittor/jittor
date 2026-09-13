@@ -182,6 +182,11 @@ if (x->num < 0 || BroadcastToOp::need_broadcast(y, x->shape)) { yh = ...; yp = y
 `y->num < 0` 那一半不能省：形状未定的操作数，`BroadcastToOp` 的构造函数本来
 就不会转发，这里也必须照建。
 
+这不是一个新形状：同一个文件旁边的 `TernaryOp` 本来就是这么写的——
+`if (bx2) cc = make_broadcast(...)`、`if (bx) xx = make_broadcast(...)`，
+四个方向各判一次，只给需要的那个建。`BinaryOp` 是这三个元算子里唯一
+无条件建两个的那一个。
+
 实测（同一台机、同一张卡、前后各测一次）：
 
 | 行 | 无此改动 | 有此改动 | 倍数 |
