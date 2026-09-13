@@ -272,9 +272,21 @@ cache 热了之后 CPU 那一半根本不跑。而 **`source_fingerprint()` 覆�
   reduce 和 matmul 写成一个来回切 40 轮的脚本，两棵树都干净。所以触发还需要
   前六个测试里某个具体算子。
 
-**还欠一步**：`9a60c3e9`（发射配置 + strided 下标特化）与 `2fc3837d`（标量融合）
-两个提交里是哪一个。四点对照（基线 / 9a60c3e9 / 9e17002d / 今晚的 tip，每个跑
-前六个测试）正在跑。
+**已经定位到提交**。四点对照，每个全新缓存、冷 reference cache、只跑前六个测试：
+
+| 点 | 提交 | 第 6 号 `test_affine_grid` |
+| --- | --- | --- |
+| base | `d40a2e97` 未改基线 | 6 passed |
+| launch | `9a60c3e9` 发射配置 + strided 下标特化 | 6 passed |
+| **scalar** | `9e17002d`（含 `2fc3837d` 一元素 expand） | **signal 11，`(no mapping)`** |
+
+**成因在 `2fc3837d`**——就是"一元素 expand 保留可融合形式"那一条：它把
+`broadcast_to` 在 `x->num == 1` 时的 `is_storage_view()` 从 true 改成了 false。
+`test_affine_grid` 建的正是 `jt.zeros` / 索引网格这类一元素 expand。发射配置与
+strided 下标那一条是干净的。
+
+**下一步**：`2fc3837d` 之后，哪一处仍然假定"广播一定是 storage view"（或反过来）。
+`test_affine_grid` 是最小入口，六个测试十分钟就能复现。
 
 **对今晚成果的影响**：性能数字不受影响（都是构图与端到端计时，不依赖这条路径），
 两个提交相对各自起点的门禁也不受影响。但**这一叠在这条故障定位并修掉之前不该合**。
