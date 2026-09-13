@@ -191,6 +191,17 @@ class Conv1d(jt.Module):
         N,C,D = x.shape
         assert C==self.in_channels
         self._conv[0].weight = self.weight.unsqueeze(-1)
+        # The bias needs the same re-sync as the weight, and for the same
+        # reason: the inner Conv is held in a list to escape module traversal,
+        # so whatever replaces this module's parameters -- `load_state_dict`,
+        # `.to()`, the offload manager -- updates `self.bias` and leaves the
+        # inner one behind. Without this line the convolution runs with the
+        # *initialisation* value, which is `uniform(-1/sqrt(fan_in),
+        # 1/sqrt(fan_in))`: uncorrelated with the checkpoint's bias, identical
+        # in distribution from run to run, and different in value every run
+        # because it is drawn from the RNG. That is what made the audio VAE's
+        # output move between processes while its weights checked out.
+        self._conv[0].bias = self.bias
         x = x.unsqueeze(-1)
         x = self._conv[0](x)
         y = x.squeeze(-1)
