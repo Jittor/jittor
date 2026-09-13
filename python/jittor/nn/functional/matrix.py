@@ -125,13 +125,15 @@ def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul"):
     # The message formatter used to be a nested `describe`, i.e. a closure built
     # on every call -- including the successful ones, which are all of them in a
     # model. It is now inlined into the two error paths; the text is unchanged.
-    if a.ndim == 0 or b.ndim == 0:
+    a_ndim = a.ndim
+    b_ndim = b.ndim
+    if a_ndim == 0 or b_ndim == 0:
         raise RuntimeError(
             "%s: both operands need at least 1 dim, but got a:%s%s (%d-D) and "
-            "b:%s%s (%d-D)" % (op, a.dtype, list(a.shape), a.ndim,
-                               b.dtype, list(b.shape), b.ndim))
-    a_axis = 0 if a.ndim == 1 else (-2 if trans_a else -1)
-    b_axis = 0 if b.ndim == 1 else (-1 if trans_b else -2)
+            "b:%s%s (%d-D)" % (op, a.dtype, list(a.shape), a_ndim,
+                               b.dtype, list(b.shape), b_ndim))
+    a_axis = 0 if a_ndim == 1 else (-2 if trans_a else -1)
+    b_axis = 0 if b_ndim == 1 else (-1 if trans_b else -2)
     inner_a = a.shape[a_axis]
     inner_b = b.shape[b_axis]
     if inner_a != inner_b:
@@ -140,6 +142,12 @@ def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul"):
             "%d but dim %d of b is %d, and the two contracted dims must be equal"
             % (op, a.dtype, list(a.shape), b.dtype, list(b.shape),
                a_axis, inner_a, b_axis, inner_b))
+    # `shape[:-2]` is empty as soon as either operand has 2 dims or fewer, so
+    # the loop below cannot run then -- but it still built two slices, two
+    # reversed views, a zip and an enumerate to discover that, on every matrix
+    # product in every model. `nn.Linear` is exactly that shape.
+    if a_ndim <= 2 or b_ndim <= 2:
+        return
     for offset, (left, right) in enumerate(
             zip(reversed(a.shape[:-2]), reversed(b.shape[:-2]))):
         if left != right and left != 1 and right != 1:

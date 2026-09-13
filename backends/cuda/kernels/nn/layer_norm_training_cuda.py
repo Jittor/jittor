@@ -216,20 +216,27 @@ def _supports_layer_norm_training(x, normalized_shape, weight, bias, eps):
         and isinstance(bias, jt.Var)
     ):
         return False
-    shape = tuple(int(size) for size in x.shape)
-    normalized_shape = tuple(int(size) for size in normalized_shape)
-    if (
-        not shape
-        or any(size <= 0 for size in shape)
-        or len(normalized_shape) != 1
-        or normalized_shape[0] != shape[-1]
-        or int(weight.numel()) != shape[-1]
-        or int(bias.numel()) != shape[-1]
-        or not math.isfinite(float(eps))
-        or float(eps) <= 0.0
-    ):
+    # This runs on every layer_norm of every step, so the cheap disqualifiers
+    # go first and nothing is converted before it is needed: the two
+    # `tuple(int(size) for size in ...)` builds and the `any(...)` genexpr used
+    # to run even when the rank was already wrong. `x.shape` entries and
+    # `numel()` are native ints already, and the last axis is the only one the
+    # kernel reads, so only it is compared.
+    if len(normalized_shape) != 1:
         return False
-    return True
+    shape = x.shape
+    if not len(shape):
+        return False
+    hidden = shape[-1]
+    if (normalized_shape[0] != hidden
+            or weight.numel() != hidden
+            or bias.numel() != hidden):
+        return False
+    for size in shape:
+        if size <= 0:
+            return False
+    eps = float(eps)
+    return eps > 0.0 and math.isfinite(eps)
 
 
 @optional_kernel("nn.layer_norm.training", ("cuda", "rocm_legacy", "corex_legacy"),

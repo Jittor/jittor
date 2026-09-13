@@ -148,13 +148,55 @@ def _collect_tensors(values, var_type, tensors, active_containers):
                 active_containers.remove(identity)
 
 
-def _dispatch_placement(args, kwargs):
-    """The argument Vars and the (backend, device_id) the runtime puts them on."""
+#: `jittor.core` and `jittor.core.Var`, looked up once. They are the same
+#: objects for the life of the process once the extension is imported, and
+#: finding them cost a `sys.modules` read, a `hasattr`, and two attribute
+#: lookups on every dispatched operator -- of which a decode step has a
+#: hundred.
+_VAR_TYPE = None
+_DISPATCH_CONTEXT_NATIVE = None
+
+
+def _bind_core():
+    """Bind the native handles, or say that Jittor is not up yet."""
+    global _VAR_TYPE, _DISPATCH_CONTEXT_NATIVE
     native = sys.modules.get("jittor")
     if native is None or not hasattr(native, "core"):
         raise RuntimeError("Jittor must be initialized before selecting a kernel")
     core = native.core
-    var_type = core.Var
+    _VAR_TYPE = core.Var
+    _DISPATCH_CONTEXT_NATIVE = core.dispatch_context
+
+
+def _walk_container(container, var_type, tensors):
+    """One container argument, cheaply when it holds no container of its own.
+
+    A container argument is almost always a shape, a permutation or a dim list
+    -- a flat tuple of ints. `_collect_tensors` handles the general case, but
+    to do so it allocates a cycle set, an id, an add, a `try`/`finally` and a
+    remove for every container it enters, including these. That bookkeeping
+    only means anything once a container is reachable from inside itself, which
+    needs at least one nested container, so it is deferred until one is seen --
+    at which point whatever this found is dropped and the general walk redoes
+    the whole container, cycle set and all.
+    """
+    mark = len(tensors)
+    values = container.values() if isinstance(container, dict) else container
+    for value in values:
+        if isinstance(value, var_type):
+            tensors.append(value)
+        elif isinstance(value, (tuple, list, dict)):
+            del tensors[mark:]
+            _collect_tensors((container,), var_type, tensors, None)
+            return
+
+
+def _dispatch_placement(args, kwargs):
+    """The argument Vars and the (backend, device_id) the runtime puts them on."""
+    var_type = _VAR_TYPE
+    if var_type is None:
+        _bind_core()
+        var_type = _VAR_TYPE
     tensors: List[Any] = []
     # `args` and `kwargs` are freshly built by this call, so neither can be
     # reachable from itself and neither needs an entry in the cycle set. A
@@ -165,15 +207,17 @@ def _dispatch_placement(args, kwargs):
         if isinstance(value, var_type):
             tensors.append(value)
         elif isinstance(value, (tuple, list, dict)):
-            _collect_tensors((value,), var_type, tensors, None)
+            _walk_container(value, var_type, tensors)
     if kwargs:
         for value in kwargs.values():
             if isinstance(value, var_type):
                 tensors.append(value)
             elif isinstance(value, (tuple, list, dict)):
-                _collect_tensors((value,), var_type, tensors, None)
-    backend, device_id = core.dispatch_context(tensors)
-    return tensors, _canonical_backend(backend), device_id
+                _walk_container(value, var_type, tensors)
+    backend, device_id = _DISPATCH_CONTEXT_NATIVE(tensors)
+    # `_canonical_backend` inlined: it is one comparison, and this is the
+    # innermost frame of every dispatched operator.
+    return tensors, ("acl" if backend == "acl_legacy" else backend), device_id
 
 
 def _dispatch_backend(args, kwargs):
@@ -267,7 +311,12 @@ def select_kernel(op, *args, **kwargs):
     else:
         context = dispatch_context(*args, **kwargs)
         tensors, backend, dtypes = None, context.backend, context.dtypes
-    for entry in _candidates(op, backend):
+    # `_candidates` resolves and memoizes; once it has, the answer is a plain
+    # dict read, so take it here rather than through another frame.
+    entries = _resolved.get((op, backend))
+    if entries is None:
+        entries = _candidates(op, backend)
+    for entry in entries:
         if entry.runtime_modes is not None:
             runtime_mode = sys.modules["jittor"].runtime.use_cuda
             # Explicit CPU/CUDA tensor placement can differ from the Runtime
@@ -278,8 +327,9 @@ def select_kernel(op, *args, **kwargs):
         if entry.dtypes is not None:
             if dtypes is None and tensors is not None:
                 dtypes = _dtype_names(tensors)
-            entry_dtypes = entry.dtypes
-            if any(dtype not in entry_dtypes for dtype in dtypes):
+            # A set test, not a generator: `entry.dtypes` is a frozenset and
+            # this runs per candidate of every dtype-filtered operator.
+            if not entry.dtypes.issuperset(dtypes):
                 continue
         if entry.supports is not None and not entry.supports(*args, **kwargs):
             continue
@@ -305,7 +355,12 @@ def optional_kernel(op, backend, *, dtypes=None, supports=None, priority=0,
 
         @wraps(implementation)
         def optional(*args, **kwargs):
-            return try_dispatch(op, *args, **kwargs)
+            # `try_dispatch` inlined. This wrapper is the published entry point
+            # of every optional kernel -- `nn.gelu`, `nn.softmax`,
+            # `nn.layer_norm.training`, `tensor.transpose` -- so the extra
+            # frame is on the hot path of every one of them.
+            selected = select_kernel(op, *args, **kwargs)
+            return None if selected is None else selected(*args, **kwargs)
 
         return optional
     return decorate

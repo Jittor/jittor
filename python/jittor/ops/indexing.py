@@ -10,6 +10,22 @@ from .._runtime.dispatch import dispatch_context, try_dispatch
 _native_var_getitem = Var.getitem
 _native_var_setitem = Var.setitem
 
+#: `jittor` itself, bound on first use. It cannot be imported at module scope
+#: -- jittor imports this module -- but the `import jittor as jt` statement the
+#: functions below used instead is an IMPORT_NAME on every indexing operation,
+#: and one `x[i]` reaches four of them.
+_jt = None
+
+
+def _jittor():
+    global _jt
+    import jittor
+    _jt = jittor
+    return jittor
+
+
+_PYINT = (0).__class__
+
 
 def _is_cascade_index(slices):
     if isinstance(slices, tuple) and len(slices) == 1:
@@ -18,6 +34,9 @@ def _is_cascade_index(slices):
 
 
 def _is_plain_int(value):
+    # `x[0]` -- the commonest index there is -- settles on the first line.
+    if type(value) is _PYINT:
+        return True
     return isinstance(value, (int, np.integer)) and not isinstance(value, (bool, np.bool_))
 
 
@@ -40,7 +59,7 @@ def _is_basic_index(index):
 
 
 def _native_bool_coordinates(slices):
-    import jittor as jt
+    jt = _jt if _jt is not None else _jittor()
     if isinstance(slices, jt.Var) and _jittor_dtype_name(slices.dtype) == "bool":
         return tuple(slices.where())
     return slices
@@ -74,7 +93,7 @@ def var_setitem(x, slices, value, reduce=None):
 
 
 def _acl_assignment_value(x, value, reduce=None):
-    import jittor as jt
+    jt = _jt if _jt is not None else _jittor()
     if reduce not in (None, "void") or dispatch_context(x).backend != "acl":
         return value
     if not isinstance(value, jt.Var):
@@ -85,7 +104,7 @@ def _acl_assignment_value(x, value, reduce=None):
 
 
 def _dispatch_slices(slices):
-    import jittor as jt
+    jt = _jt if _jt is not None else _jittor()
     if isinstance(slices, range):
         return jt.array(list(slices))
     if isinstance(slices, tuple):
@@ -99,7 +118,7 @@ def _dispatch_slices(slices):
 
 
 def _maybe_constant_index_gather(x, slices):
-    import jittor as jt
+    jt = _jt if _jt is not None else _jittor()
     if not isinstance(slices, jt.Var) or slices.ndim != 1 or x.ndim < 1:
         return None
     const_value = getattr(slices, "_jittor_constant_index_value", None)
@@ -121,7 +140,7 @@ def _maybe_constant_index_gather(x, slices):
 
 def getitem(x, slices):
     """Apply Jittor indexing, recording a view when the index is a basic one."""
-    import jittor as jt
+    jt = _jt if _jt is not None else _jittor()
 
     out = _getitem_result(x, slices)
     if isinstance(out, jt.Var) and _is_basic_index(slices):
@@ -131,7 +150,7 @@ def getitem(x, slices):
 
 def _getitem_result(x, slices):
     """Apply Jittor indexing with the established Torch-compatible extensions."""
-    import jittor as jt
+    jt = _jt if _jt is not None else _jittor()
 
     if isinstance(slices, jt.Var) and _jittor_dtype_name(slices.dtype) == "uint8":
         slices = slices != 0
@@ -166,7 +185,7 @@ def _getitem_result(x, slices):
 
 def setitem(x, slices, value):
     """Apply Jittor assignment with the established mask and complex rules."""
-    import jittor as jt
+    jt = _jt if _jt is not None else _jittor()
 
     if _jittor_dtype_name(x.dtype) == "complex64" and isinstance(value, (complex, np.complexfloating)):
         value = jt.array(np.asarray([value], dtype=np.complex64))
@@ -204,7 +223,7 @@ def setitem(x, slices, value):
 
 def install_var_indexing():
     """Install the native indexing layer before backend and Torch wrappers."""
-    import jittor as jt
+    jt = _jt if _jt is not None else _jittor()
 
     jt.Var.getitem = var_getitem
     jt.Var.setitem = var_setitem

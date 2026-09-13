@@ -588,11 +588,14 @@ def _load_accelerator_transpose():
     Failing to build cuTT is not fatal -- TransposeOp has its own kernel -- so
     it is reported once and not retried.
     """
-    from jittor.compiler import LOG
     global _accelerator_transpose_tried
     if _accelerator_transpose_tried:
         return
     _accelerator_transpose_tried = True
+    # The import is inside the guard: it walks `sys.modules` and does an
+    # attribute lookup, and it used to run on every transpose in every model
+    # rather than on the one call that actually builds cuTT.
+    from jittor.compiler import LOG
     try:
         _get_library("cutt", load=True)
     except Exception as e:
@@ -661,6 +664,27 @@ def _transpose_permutation(dim, ndim, shape):
     caller mistakes, so they are reported here, where the argument still has a
     name and the var still has a shape to print.
     """
+    # A permutation of exact, in-range, distinct python ints -- which is what
+    # `x.transpose(0, 2, 1, 3)` and every framework-generated permutation is --
+    # is accepted here. `numbers.Integral` is an ABC, so the isinstance below
+    # reaches `ABCMeta.__instancecheck__` for every axis of every transpose;
+    # the loop after it then builds a dict to find repeats. Anything this does
+    # not accept (a negative axis, a numpy integer, a Var, a wrong count, a
+    # repeat) falls through to the checks below, which own every diagnostic.
+    if len(dim) == ndim:
+        fast = []
+        seen_mask = 0
+        for value in dim:
+            if type(value) is not _pyint or not 0 <= value < ndim:
+                break
+            bit = 1 << value
+            if seen_mask & bit:
+                break
+            seen_mask |= bit
+            fast.append(value)
+        else:
+            return tuple(fast)
+
     axes = []
     for position, value in enumerate(dim):
         if isinstance(value, Var):
@@ -715,14 +739,13 @@ def transpose(x, *dim):
     # NumPy helpers such as np.argsort return numpy.integer axis values.  The
     # C++ transpose binding requires exact Python ints, while torch accepts any
     # integral sequence in Tensor.permute().
-    pyint = (0).__class__
     coerce = False
     for d in dim:
-        if type(d) is not pyint:
+        if type(d) is not _pyint:
             coerce = True
             break
     if coerce:
-        dim = tuple(pyint(d.item()) if isinstance(d, Var) else pyint(d) for d in dim)
+        dim = tuple(_pyint(d.item()) if isinstance(d, Var) else _pyint(d) for d in dim)
     out = _try_dispatch("tensor.transpose", x, dim)
     if out is None:
         out = origin_transpose(x, dim)
