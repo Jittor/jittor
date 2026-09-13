@@ -173,6 +173,20 @@ static inline int op_target_device(Op* op) {
 #endif
 
 
+// Opt-in: leave the batch's nodes unfinished so the same graph can be run
+// again. Normally the Runner ends each op with `finish_pending_liveness()`,
+// which sets `_finished` and releases the pending liveness of that op's inputs
+// -- that release is how intermediates are reclaimed, and it is also what makes
+// a graph single-use.
+//
+// Undoing it afterwards is NOT an option: `finish_pending_liveness` opens with
+// `if (is_finished()) return;`, so clearing the flag and running again would
+// release the same inputs a second time -- a refcount underflow and then a
+// use-after-free. The only safe form is to never finish in the first place,
+// which is what this does. The caller is then responsible for holding the
+// graph's vars; nothing is reclaimed while it is set.
+DEFINE_FLAG(int, keep_graph, 0, "Leave a batch's nodes unfinished so the same graph can be executed again. The caller must hold the graph: nothing it builds is reclaimed while this is on. Every leaf the graph reads must already be materialized before the graph is built, because a re-run re-executes whatever is still pending -- including a leaf's own producer, whose host staging is gone by then. 0 is the normal single-use behaviour.");
+
 void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                    vector<Var*>& vars, bool device_sync, int entry_device) {
     ExecutionBackendScope backend_scope(plan.backend);
@@ -368,10 +382,13 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             "/" >> queue.size() >> ") output:" << op->outputs();
         if (is_fused_op) {
             propergate_needed_flags(fused_op);
-            for (Var* var : op->outputs())
-                var->finish_pending_liveness();
+            if (!keep_graph)
+                for (Var* var : op->outputs())
+                    var->finish_pending_liveness();
             continue;
         }
+        // Leave everything alive and re-runnable; see the `keep_graph` flag.
+        if (keep_graph) continue;
         // release liveness when op is finished
         // outputs may change during free, we need to backup it;
         outputs_bk.clear();

@@ -100,6 +100,36 @@ uint64 VarHolder::raw_ptr() {
     return (uint64)var->mem_ptr;
 }
 
+void VarHolder::write_inplace(ArrayArgs&& array) {
+    ExecutorEntryScope entry;
+    // Not a device sync. The copy below goes to the same device as the
+    // buffer and is ordered against the work already queued on it, so the
+    // host does not have to stand and wait for the previous step to drain --
+    // which is the whole point when this is feeding a kept graph once per
+    // step. `sync(false, ...)` still resolves anything this Var is waiting on.
+    sync(false, false);
+    USER_CHECK(var->mem_ptr) << "_write_inplace needs an allocated tensor";
+    USER_CHECK(var->is_contiguous())
+        << "_write_inplace needs a dense tensor; got strides"
+        << var->storage_strides << "for shape" << var->shape;
+    USER_CHECK(array.dtype.dsize() == var->dtype().dsize()
+        && array.dtype.is_int() == var->dtype().is_int())
+        << "_write_inplace dtype mismatch:" << array.dtype << "into" << var->dtype();
+    int64 size = array.dtype.dsize();
+    for (int i=0; i<array.shape.size(); i++)
+        size *= array.shape[i];
+    USER_CHECK(size == var->size)
+        << "_write_inplace size mismatch:" << size << "bytes into" << var->size;
+    // Wherever the buffer already lives; no migration either way.
+    Device dst{};
+    if (var->allocator && var->allocator->is_cuda())
+        dst = Device{accelerator_backend_id(), var->device_id < 0 ? 0 : var->device_id};
+    // Ordered, not blocking: the bytes have to land before the kernels that
+    // read them, which is stream order, not a host-side wait. See the H2D
+    // branch in the CUDA backend's copy() for why the difference is 1000x.
+    backend_copy(var->mem_ptr, dst, array.ptr, {}, size, true);
+}
+
 void VarHolder::set_data(ArrayArgs&& array) {
     ExecutorEntryScope entry;
     sync(true);

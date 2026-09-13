@@ -496,6 +496,22 @@ struct VarHolder {
     // @pyjt(__set__data)
     void set_data(ArrayArgs&& array);
 
+    /** Overwrite this Var's existing buffer, leaving it where it already is.
+
+        `set_data` migrates the Var to the host first, so feeding a
+        device-resident input costs a device-to-host move and then a move back
+        on the next kernel that reads it. That is the wrong shape for the one
+        case this exists for: re-running a kept graph (`keep_graph`) with new
+        input each step, where the buffer is already on the device and only its
+        contents change.
+
+        Requires an allocated, dense Var of matching dtype and size: this
+        writes bytes into a buffer a graph may already point at, so it refuses
+        anything it cannot describe rather than writing somewhere wrong.
+     */
+    // @pyjt(_write_inplace)
+    void write_inplace(ArrayArgs&& array);
+
     // @pyjt(share_with)
     // @attrs(return_self)
     inline VarHolder* share_with(VarHolder* other) {
