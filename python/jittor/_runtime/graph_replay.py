@@ -49,22 +49,39 @@ Typical use::
     for batch in stream:
         out = replay(batch)
 
-Measured across the comparison shapes (ms per forward, same inputs, answers
-identical to eager to the last bit):
+What it is worth, on the one shape that measured reproducibly here -- a
+decode step, eager and replayed in separate processes, a different input every
+call, every answer checked against eager:
 
-    tf-d512-L8  decode  b1s1     2.54 -> 1.20     (torch 1.37)
-    tf-d1024-L4 decode  b1s1     1.30 -> 0.46     (torch 0.67)
-    tf-d512-L8  prefill b1s128   2.79 -> 2.25     (torch 2.81)
-    tf-d512-L8  batch   b8s256  14.04 -> 6.78     (torch 13.39)
-    mlp-1024x4  b256             0.19 -> 0.18
-    cnn-6conv   b64x3x64x64      4.09 -> 4.24
+    tf-d512-L8 decode b1s1   eager 2.54-2.67 ms   replayed 1.57-1.79 ms
 
-It is not free money, though: the last row is a graph the runtime already
-overlaps well, and replaying it costs a little rather than saving. So the
-first capture is timed against eager, and if replay comes out slower the
-wrapper hands every call to the module and says so in `refused`. A tie still
-replays -- demanding a win would switch the wrapper off unpredictably on
-graphs where the two measurements sit inside each other's noise.
+About 1.5x, repeatable across runs. For reference the equivalent PyTorch step
+is 1.37-1.43 ms, so this closes most of that gap without closing all of it.
+
+The other shapes are not quoted because they did not measure reproducibly on
+this machine: a b8s256 forward lands in one of two states about 2x apart
+(14.06 ms or 6.49 ms) from run to run, on the eager side as much as here, and
+the same bimodality shows up in prefill. Measure your own model rather than
+believing a table.
+
+Two ways to be fooled, both of which fooled the author:
+
+  - Feeding the captured Var back in measures nothing. `_replay_once` skips
+    the input copy when the argument *is* the captured Var, and with no input
+    written the graph does not re-execute -- the call collapses to copying the
+    output it already holds, and it still answers correctly, because the
+    answer for that input has not changed. b8s256 "replayed" in 6.8 ms that
+    way against 14.0 eager.
+  - Timing both arms in one process measures the order. Whichever runs second
+    starts warm: with replay refused, so that both arms ran the very same
+    eager code, the second measured 1.57 ms against the first's 2.74.
+
+Replay is not free money -- a graph the runtime already overlaps well comes
+out slower replayed. So the first capture is timed against eager, alternating
+the two arms for the reason above, and if replay loses the wrapper hands every
+call to the module and says so in `refused`. A tie still replays: demanding a
+win switches the wrapper off unpredictably on graphs where the two sit inside
+each other's noise.
 
 `replay.stats` says what actually happened -- how many calls replayed, how
 many fell back and why -- because a silent fallback that quietly costs the
@@ -121,11 +138,17 @@ def _graph_has_nondeterministic_op():
 class GraphReplay:
     """A callable that re-runs `module`'s captured graph. See the module docstring."""
 
-    def __init__(self, module, *example_inputs):
+    def __init__(self, module, *example_inputs, measure=True):
+        """`measure=False` skips the timing and always replays.
+
+        The timing costs about forty extra forwards at the first capture. Skip
+        it when you have already decided -- and note that skipping it means
+        nothing stops replay from being slower than eager for this graph.
+        """
         self._module = module
         self._capture = None
         self._refused = None
-        self._worth_it = None
+        self._worth_it = None if measure else True
         self.stats = {"captured": 0, "replayed": 0, "rebuilt": 0}
         if example_inputs:
             self(*example_inputs)
@@ -210,7 +233,7 @@ class GraphReplay:
         return None
 
     # -- is it actually faster? ----------------------------------------
-    def _time(self, run, rounds=3, per=5):
+    def _time(self, run, rounds=3, per=10):
         """Wall time per call, with the device waited on.
 
         The wait happens inside `keep_graph`, so draining the device does not
@@ -235,13 +258,43 @@ class GraphReplay:
         return best
 
     def _measure(self, args):
-        """Time replay against eager once, and refuse if replay does not win."""
+        """Time replay against eager once, and refuse if replay does not win.
+
+        The replay side has to be fed a *different* Var than the captured one,
+        or it measures nothing: `_replay_once` skips the input copy when the
+        argument is already the captured Var, and with no input written the
+        graph does not re-execute -- the call collapses to copying the output
+        it already holds. Timed that way a b8s256 forward "replayed" in 6.8 ms
+        against 14.0 eager, and the wrapper happily concluded replay was worth
+        it. Fed a changing input it is 15.7 ms, i.e. slower.
+
+        The stand-in carries the captured input's own bytes, so feeding it
+        writes the same values back and the caller's Var is not disturbed.
+        """
         def eager():
             with jt.no_grad():
                 self._module(*args).sync(False)
         try:
-            replayed = self._time(lambda: self._replay_once(self._capture, args))
-            rebuilt = self._time(eager)
+            cap = self._capture
+            stand_in = []
+            for captured in cap.inputs:
+                copy = jt.empty(captured.shape, captured.dtype)
+                copy.sync(True, False)
+                copy._copy_into(captured)
+                stand_in.append(copy)
+            probe = list(args)
+            for slot, (captured, copy) in enumerate(zip(cap.inputs, stand_in)):
+                probe[probe.index(captured)] = copy
+            # Alternate the two rather than running one and then the other:
+            # whichever goes second starts warm, and that bias is worth more
+            # than the difference being measured. With prefill refused -- both
+            # arms running the very same eager code -- the second measured
+            # 1.57 ms against the first's 2.74.
+            replay_once = lambda: self._replay_once(self._capture, tuple(probe))
+            replayed = rebuilt = float("inf")
+            for _ in range(2):
+                replayed = min(replayed, self._time(replay_once))
+                rebuilt = min(rebuilt, self._time(eager))
         except Exception:
             # Timing is an optimization, not a contract. If anything about the
             # measurement fails, keep the capture and let the guards do their
@@ -328,8 +381,32 @@ class GraphReplay:
         return out
 
     def invalidate(self):
-        """Drop the captured graph; the next call captures again."""
-        self._capture = None
+        """Release the captured graph; the next call captures again.
+
+        Dropping the python reference is not enough. The graph's nodes were
+        deliberately left unfinished, and an unfinished node stays pending
+        forever -- every later sync collects it and runs it again. Two
+        recaptures and the device was executing three copies of the model per
+        call: nsys counted 321 kernels a step against eager's 130. So the
+        graph is handed back to the executor once with `keep_graph` off, which
+        collects it, finishes it, and lets it be reclaimed. That costs one
+        extra execution per invalidation, which is the price of not leaving a
+        zombie behind.
+        """
+        cap, self._capture = self._capture, None
+        if cap is None or cap.output.is_finished:
+            return
+        before = jt.flags.keep_graph
+        jt.flags.keep_graph = 0
+        try:
+            cap.output.sync(False)
+        except Exception:
+            # Releasing is best effort: a graph that cannot run any more (its
+            # parameters went away, say) must not turn into an exception from
+            # whatever call happened to notice the capture was stale.
+            pass
+        finally:
+            jt.flags.keep_graph = before
 
     @property
     def refused(self):
@@ -337,6 +414,6 @@ class GraphReplay:
         return self._refused
 
 
-def graph_replay(module, *example_inputs):
+def graph_replay(module, *example_inputs, measure=True):
     """Wrap `module` so repeated inference re-runs its graph. See the module docstring."""
-    return GraphReplay(module, *example_inputs)
+    return GraphReplay(module, *example_inputs, measure=measure)

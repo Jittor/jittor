@@ -5,6 +5,10 @@
 # ***************************************************************
 """Replaying a captured inference graph instead of rebuilding it.
 
+These pass `measure=False`, so the guards are exercised whatever the timing
+verdict for this small model happens to be on this machine. The timing path
+has its own test below.
+
 The speedup is only worth anything if the answer is still right, and the
 ways a captured graph can stop being right are all silent: it keeps
 answering with whatever it last computed. So most of what is pinned down
@@ -54,7 +58,7 @@ class TestGraphReplay(unittest.TestCase):
 
     def test_it_answers_for_each_input_not_just_the_captured_one(self):
         want = [self._eager(f) for f in self.feed]
-        replay = graph_replay(self.model, self.feed[0])
+        replay = graph_replay(self.model, self.feed[0], measure=False)
         got = [replay(f).numpy().copy() for f in self.feed]
         for a, b in zip(got, want):
             np.testing.assert_allclose(a, b, rtol=1e-5, atol=1e-5)
@@ -62,14 +66,14 @@ class TestGraphReplay(unittest.TestCase):
         self.assertEqual(len({g.tobytes() for g in got}), 4)
 
     def test_the_returned_var_survives_the_next_call(self):
-        replay = graph_replay(self.model, self.feed[0])
+        replay = graph_replay(self.model, self.feed[0], measure=False)
         held = replay(self.feed[0])
         snapshot = held.numpy().copy()
         replay(self.feed[1])
         np.testing.assert_array_equal(held.numpy(), snapshot)
 
     def test_a_shape_change_is_answered_correctly(self):
-        replay = graph_replay(self.model, self.feed[0])
+        replay = graph_replay(self.model, self.feed[0], measure=False)
         replay(self.feed[0])
         wide = jt.array(np.random.RandomState(1).randn(5, 8).astype("float32"))
         wide.sync(True, False)
@@ -83,7 +87,7 @@ class TestGraphReplay(unittest.TestCase):
         # the graph did get finished, the capture was retaken rather than
         # replayed. A finished graph still answers, with the value it last
         # computed, which is exactly the silent failure the guard exists for.
-        replay = graph_replay(self.model, self.feed[0])
+        replay = graph_replay(self.model, self.feed[0], measure=False)
         replay(self.feed[0])
         capture = replay._capture
         float(capture.output.numpy().sum())
@@ -94,7 +98,7 @@ class TestGraphReplay(unittest.TestCase):
             self.assertGreater(replay.stats["captured"], before)
 
     def test_a_replaced_parameter_is_noticed(self):
-        replay = graph_replay(self.model, self.feed[0])
+        replay = graph_replay(self.model, self.feed[0], measure=False)
         replay(self.feed[0])
         before = replay.stats["captured"]
         # An optimizer step rebinds the holder; the captured graph still reads
@@ -117,9 +121,20 @@ class TestGraphReplay(unittest.TestCase):
         self.assertFalse(np.array_equal(a, b))
         self.assertEqual(replay.stats["replayed"], 0)
 
+    def test_a_graph_that_replay_does_not_help_falls_back(self):
+        # With the timing on, the verdict is the machine's to make -- what has
+        # to hold either way is that the answer is right and that a refusal is
+        # stated rather than silently costing the speedup.
+        replay = graph_replay(self.model, self.feed[0])
+        np.testing.assert_allclose(replay(self.feed[1]).numpy(),
+                                   self._eager(self.feed[1]), rtol=1e-5, atol=1e-5)
+        if replay.refused is not None:
+            self.assertIn("slower", replay.refused)
+            self.assertEqual(replay.stats["replayed"], 0)
+
     def test_the_flag_is_left_as_it_was_found(self):
         self.assertEqual(jt.flags.keep_graph, 0)
-        replay = graph_replay(self.model, self.feed[0])
+        replay = graph_replay(self.model, self.feed[0], measure=False)
         replay(self.feed[1])
         self.assertEqual(jt.flags.keep_graph, 0)
 
