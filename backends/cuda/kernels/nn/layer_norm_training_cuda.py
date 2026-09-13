@@ -41,9 +41,25 @@ def _layer_norm_cuda_cls(hidden, eps):
                     int row = blockIdx.x;
                     if (row >= rows) return;
                     int base = row * {hidden};
+                    // The row is read once and kept in registers: the mean
+                    // pass, the variance pass and the write all want the same
+                    // values. Re-reading made this move 4x the row where
+                    // torch's Welford moves 2x. Capped so a wide row falls
+                    // back to re-reading rather than spilling.
+                    constexpr int kPer = ({hidden} + {threads} - 1) / {threads};
+                    constexpr bool kCache = kPer <= 8;
+                    float cache[kCache ? kPer : 1];
                     float local = 0.0f;
-                    for (int j = threadIdx.x; j < {hidden}; j += blockDim.x)
-                        local += static_cast<float>(x[base + j]);
+                    if (kCache) {{
+                        int i = 0;
+                        for (int j = threadIdx.x; j < {hidden}; j += blockDim.x, ++i) {{
+                            cache[i] = static_cast<float>(x[base + j]);
+                            local += cache[i];
+                        }}
+                    }} else {{
+                        for (int j = threadIdx.x; j < {hidden}; j += blockDim.x)
+                            local += static_cast<float>(x[base + j]);
+                    }}
                     float reduced = BlockReduce(storage).Sum(local);
                     if (threadIdx.x == 0) {{
                         mean_shared = reduced / {hidden}.0f;
@@ -53,9 +69,17 @@ def _layer_norm_cuda_cls(hidden, eps):
 
                     float row_mean = mean_shared;
                     local = 0.0f;
-                    for (int j = threadIdx.x; j < {hidden}; j += blockDim.x) {{
-                        float delta = static_cast<float>(x[base + j]) - row_mean;
-                        local += delta * delta;
+                    if (kCache) {{
+                        int i = 0;
+                        for (int j = threadIdx.x; j < {hidden}; j += blockDim.x, ++i) {{
+                            float delta = cache[i] - row_mean;
+                            local += delta * delta;
+                        }}
+                    }} else {{
+                        for (int j = threadIdx.x; j < {hidden}; j += blockDim.x) {{
+                            float delta = static_cast<float>(x[base + j]) - row_mean;
+                            local += delta * delta;
+                        }}
                     }}
                     __syncthreads();
                     reduced = BlockReduce(storage).Sum(local);
@@ -67,10 +91,11 @@ def _layer_norm_cuda_cls(hidden, eps):
                     __syncthreads();
 
                     float row_rstd = rstd_shared;
-                    for (int j = threadIdx.x; j < {hidden}; j += blockDim.x) {{
-                        float normalized =
-                            (static_cast<float>(x[base + j]) - row_mean)
-                            * row_rstd;
+                    int wi = 0;
+                    for (int j = threadIdx.x; j < {hidden}; j += blockDim.x, ++wi) {{
+                        float xv = kCache ? cache[wi]
+                                          : static_cast<float>(x[base + j]);
+                        float normalized = (xv - row_mean) * row_rstd;
                         y[base + j] = out0_type(
                             normalized * static_cast<float>(weight[j])
                             + static_cast<float>(bias[j]));
