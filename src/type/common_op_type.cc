@@ -17,7 +17,15 @@ unordered_map<string,string> common_op_type_cuda_map = {
     {"logical_not", "(!($2))"},
     {"bitwise_not", "(~($2))"},
     {"negative", "(-($2))"},
-    {"abs", "::abs($2)"},
+    // `::abs` in device code resolves to the *integer* overload: the CUDA
+    // headers expose `abs(int)`/`abs(long)` from <cstdlib> and nothing takes a
+    // float, so a float32 argument is converted to int first and the absolute
+    // value is taken of the truncated value. abs(1.7) came back as 1, abs(0.5)
+    // as 0, and every weight smaller than 1 as 0 -- which is how a loaded
+    // parameter's `.abs()` reported 0.0 while `.sum()` and `.numpy()` were
+    // right. The log/exp/sqrt entries above already spell their float variants
+    // out for the same reason; abs has to as well.
+    {"abs", "@if(@strcmp($1,float32)==0,::fabsf(($2)),@if(@strcmp($1,float64)==0,::fabs(($2)),::abs(($2))))"},
     {"conj", "($2)"},   // conj(real) is identity (torch parity)
     {"log", "@if(@strcmp($1,float32)==0,::logf(($1)($2)),::log(($1)($2)))"},
     {"exp", "@if(@strcmp($1,float32)==0,::expf(($1)($2)),::exp(($1)($2)))"},
