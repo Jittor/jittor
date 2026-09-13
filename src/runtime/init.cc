@@ -67,16 +67,21 @@ int64 current_offset;
 // fron fetch_op.cc
 EXTERN_LIB list<VarPtr> fetcher;
 EXTERN_LIB list<VarPtr> fetcher_to_free;
-EXTERN_LIB vector<void(*)()> cleanup_callback;
+EXTERN_LIB vector<void(*)()> take_cleanup_callbacks();
 EXTERN_LIB volatile sig_atomic_t exited;
 
 void cleanup() {
     exited = true;
     fetcher_to_free.clear();
     fetcher.clear();
-    for (auto cb : cleanup_callback)
+    // Walk a private copy, taken under the registration lock, rather than the
+    // live vector: a callback may register another one (`get_resources` does,
+    // on whichever thread first touches a side stream), and `push_back` then
+    // reallocates storage the walk is still holding iterators into. Taking the
+    // whole list also makes a second `cleanup()` a no-op instead of a second
+    // round of stream destruction.
+    for (auto cb : take_cleanup_callbacks())
         cb();
-    cleanup_callback.clear();
 }
 
 static void init_device_architectures() {
