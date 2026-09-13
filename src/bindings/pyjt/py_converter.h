@@ -464,6 +464,11 @@ DEF_IS(ArrayArgs, bool) is_type(PyObject* obj) {
         PyFloat_CheckExact(obj) ||
         PyLong_CheckExact(obj) ||
         PyBool_Check(obj) ||
+        // Not CheckExact: numpy's complex128 scalar is a subclass of python
+        // complex, and it is the one complex numpy scalar the type table
+        // cannot serve (NPY_CDOUBLE maps to ns_void). complex64 scalars are
+        // not a subclass and go down the numpy path, which handles them.
+        PyComplex_Check(obj) ||
         PyList_CheckExact(obj) ||
         PyObject_TypeCheck(obj, PyNumberArrType_Type);
 }
@@ -539,6 +544,22 @@ DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
     if (PyBool_Check(obj)) {
         T args;
         _fill_scalar_array_args(args, (int8)(obj == Py_True), ns_bool);
+        return args;
+    }
+    // A complex scalar. jittor's complex support is complex64 throughout --
+    // binary_dtype_infer returns ns_complex64 for every complex combination --
+    // so narrow here the same way a python float becomes float32 above.
+    // This has to precede the numpy scalar path: numpy's complex128 is a
+    // subclass of python complex, and NPY_CDOUBLE has no NanoString.
+    if (PyComplex_Check(obj)) {
+        T args;
+        args.buffer.reset(new char[sizeof(float32) * 2]);
+        auto* p = (float32*)args.buffer.get();
+        p[0] = (float32)PyComplex_RealAsDouble(obj);
+        p[1] = (float32)PyComplex_ImagAsDouble(obj);
+        args.ptr = args.buffer.get();
+        args.shape.push_back(1);
+        args.dtype = ns_complex64;
         return args;
     }
     if (PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type)) {
