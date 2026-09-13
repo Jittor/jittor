@@ -100,6 +100,15 @@ uint64 VarHolder::raw_ptr() {
     return (uint64)var->mem_ptr;
 }
 
+// Both Vars, described the same way, so the two entry points refuse the same
+// things in the same words.
+static void check_inplace_target(Var* var, const char* what) {
+    USER_CHECK(var->mem_ptr) << what << "needs an allocated tensor";
+    USER_CHECK(var->is_contiguous())
+        << what << "needs a dense tensor; got strides"
+        << var->storage_strides << "for shape" << var->shape;
+}
+
 void VarHolder::write_inplace(ArrayArgs&& array) {
     ExecutorEntryScope entry;
     // Not a device sync. The copy below goes to the same device as the
@@ -108,10 +117,7 @@ void VarHolder::write_inplace(ArrayArgs&& array) {
     // which is the whole point when this is feeding a kept graph once per
     // step. `sync(false, ...)` still resolves anything this Var is waiting on.
     sync(false, false);
-    USER_CHECK(var->mem_ptr) << "_write_inplace needs an allocated tensor";
-    USER_CHECK(var->is_contiguous())
-        << "_write_inplace needs a dense tensor; got strides"
-        << var->storage_strides << "for shape" << var->shape;
+    check_inplace_target(var, "_write_inplace");
     USER_CHECK(array.dtype.dsize() == var->dtype().dsize()
         && array.dtype.is_int() == var->dtype().is_int())
         << "_write_inplace dtype mismatch:" << array.dtype << "into" << var->dtype();
@@ -128,6 +134,29 @@ void VarHolder::write_inplace(ArrayArgs&& array) {
     // read them, which is stream order, not a host-side wait. See the H2D
     // branch in the CUDA backend's copy() for why the difference is 1000x.
     backend_copy(var->mem_ptr, dst, array.ptr, {}, size, true);
+}
+
+void VarHolder::copy_into(VarHolder* src) {
+    ExecutorEntryScope entry;
+    // Neither sync waits on the device; both only resolve what the Var is
+    // still pending on. The copy itself is stream-ordered against the work
+    // already queued, which is what makes this usable once per step.
+    sync(false, false);
+    src->sync(false, false);
+    check_inplace_target(var, "_copy_into");
+    check_inplace_target(src->var, "_copy_into source");
+    USER_CHECK(src->var->dtype() == var->dtype())
+        << "_copy_into dtype mismatch:" << src->var->dtype() << "into" << var->dtype();
+    USER_CHECK(src->var->size == var->size)
+        << "_copy_into size mismatch:" << src->var->size << "bytes into" << var->size;
+    auto device_of = [](Var* v) {
+        Device d{};
+        if (v->allocator && v->allocator->is_cuda())
+            d = Device{accelerator_backend_id(), v->device_id < 0 ? 0 : v->device_id};
+        return d;
+    };
+    backend_copy(var->mem_ptr, device_of(var),
+                 src->var->mem_ptr, device_of(src->var), var->size, true);
 }
 
 void VarHolder::set_data(ArrayArgs&& array) {

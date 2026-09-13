@@ -288,6 +288,22 @@ struct VarHolder {
         return (int32)(var->flags.flags);
     }
 
+    /**
+     * Whether the executor has finished this Var's node.
+     *
+     * A finished node has released its pending liveness and will not be
+     * executed again. That is the normal end of a graph's single use, but it
+     * is exactly what a `keep_graph` caller must not let happen behind its
+     * back: reading a value out of a kept graph finishes it, and so does any
+     * other work that finishes a node the kept graph shares. The graph then
+     * still answers -- with the values it last computed -- so a replay has to
+     * be able to ask.
+     */
+    // @pyjt(__get__is_finished)
+    inline bool is_finished() {
+        return var->is_finished();
+    }
+
     /** 
      * disable the gradient calculation for the Var.
      */
@@ -511,6 +527,19 @@ struct VarHolder {
      */
     // @pyjt(_write_inplace)
     void write_inplace(ArrayArgs&& array);
+
+    /**
+        Overwrite this Var's buffer with another Var's contents, in place.
+
+        The device-resident twin of `_write_inplace`: the source stays where
+        it is and the bytes move straight across, so feeding a kept graph
+        from a Var that is already on the accelerator costs one ordered
+        device-to-device copy rather than a round trip through the host.
+
+        Same refusals as `_write_inplace`, on both Vars.
+     */
+    // @pyjt(_copy_into)
+    void copy_into(VarHolder* src);
 
     // @pyjt(share_with)
     // @attrs(return_self)

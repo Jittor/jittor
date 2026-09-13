@@ -1,0 +1,142 @@
+# ***************************************************************
+# Copyright (c) 2023 Jittor. All Rights Reserved.
+# This file is subject to the terms and conditions defined in
+# file 'LICENSE.txt', which is part of this source code package.
+# ***************************************************************
+"""Replaying a captured inference graph instead of rebuilding it.
+
+The speedup is only worth anything if the answer is still right, and the
+ways a captured graph can stop being right are all silent: it keeps
+answering with whatever it last computed. So most of what is pinned down
+here is the refusals -- every guard, and what happens when it fires.
+"""
+
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+from _helpers import capability as _test_capability
+import unittest
+
+import numpy as np
+
+import jittor as jt
+from jittor import nn
+from jittor._runtime.graph_replay import graph_replay
+
+
+class _Net(nn.Module):
+    def __init__(self, d=8):
+        super().__init__()
+        self.l1 = nn.Linear(d, d)
+        self.l2 = nn.Linear(d, d)
+
+    def execute(self, x):
+        return self.l2(nn.relu(self.l1(x)))
+
+
+class _Random(nn.Module):
+    def execute(self, x):
+        return x + jt.rand(x.shape)
+
+
+@_test_preserve_policy(jt, 'keep_graph')
+class TestGraphReplay(unittest.TestCase):
+
+    def setUp(self):
+        jt.flags.keep_graph = 0
+        self.model = _Net()
+        rs = np.random.RandomState(0)
+        self.feed = [jt.array(rs.randn(2, 8).astype("float32")) for _ in range(4)]
+        for f in self.feed:
+            f.sync(True, False)
+
+    def _eager(self, x):
+        with jt.no_grad():
+            return self.model(x).numpy().copy()
+
+    def test_it_answers_for_each_input_not_just_the_captured_one(self):
+        want = [self._eager(f) for f in self.feed]
+        replay = graph_replay(self.model, self.feed[0])
+        got = [replay(f).numpy().copy() for f in self.feed]
+        for a, b in zip(got, want):
+            np.testing.assert_allclose(a, b, rtol=1e-5, atol=1e-5)
+        # The real failure mode is one answer repeated, so check that too.
+        self.assertEqual(len({g.tobytes() for g in got}), 4)
+
+    def test_the_returned_var_survives_the_next_call(self):
+        replay = graph_replay(self.model, self.feed[0])
+        held = replay(self.feed[0])
+        snapshot = held.numpy().copy()
+        replay(self.feed[1])
+        np.testing.assert_array_equal(held.numpy(), snapshot)
+
+    def test_a_shape_change_is_answered_correctly(self):
+        replay = graph_replay(self.model, self.feed[0])
+        replay(self.feed[0])
+        wide = jt.array(np.random.RandomState(1).randn(5, 8).astype("float32"))
+        wide.sync(True, False)
+        np.testing.assert_allclose(replay(wide).numpy(), self._eager(wide),
+                                   rtol=1e-5, atol=1e-5)
+
+    def test_a_finished_capture_is_noticed_and_retaken(self):
+        # Reading the captured output can finish the graph -- whether it does
+        # depends on what else the batch collected, so this asserts the
+        # contract rather than the mechanism: the answer stays right, and if
+        # the graph did get finished, the capture was retaken rather than
+        # replayed. A finished graph still answers, with the value it last
+        # computed, which is exactly the silent failure the guard exists for.
+        replay = graph_replay(self.model, self.feed[0])
+        replay(self.feed[0])
+        capture = replay._capture
+        float(capture.output.numpy().sum())
+        before = replay.stats["captured"]
+        np.testing.assert_allclose(replay(self.feed[2]).numpy(),
+                                   self._eager(self.feed[2]), rtol=1e-5, atol=1e-5)
+        if capture.output.is_finished:
+            self.assertGreater(replay.stats["captured"], before)
+
+    def test_a_replaced_parameter_is_noticed(self):
+        replay = graph_replay(self.model, self.feed[0])
+        replay(self.feed[0])
+        before = replay.stats["captured"]
+        # An optimizer step rebinds the holder; the captured graph still reads
+        # the Var it captured, so this must not answer with the old weights.
+        self.model.l1.weight.update(self.model.l1.weight * 2)
+        # This Var only: a process-wide sync_all would also try to run
+        # whatever another test left pending.
+        self.model.l1.weight.sync(True, False)
+        np.testing.assert_allclose(replay(self.feed[0]).numpy(),
+                                   self._eager(self.feed[0]), rtol=1e-5, atol=1e-5)
+        self.assertGreater(replay.stats["captured"], before)
+
+    def test_a_random_graph_is_refused_rather_than_repeated(self):
+        replay = graph_replay(_Random(), self.feed[0])
+        self.assertIsNotNone(replay.refused)
+        self.assertIn("random", replay.refused)
+        # And it still works, eagerly: two calls must not agree.
+        a = replay(self.feed[0]).numpy().copy()
+        b = replay(self.feed[0]).numpy().copy()
+        self.assertFalse(np.array_equal(a, b))
+        self.assertEqual(replay.stats["replayed"], 0)
+
+    def test_the_flag_is_left_as_it_was_found(self):
+        self.assertEqual(jt.flags.keep_graph, 0)
+        replay = graph_replay(self.model, self.feed[0])
+        replay(self.feed[1])
+        self.assertEqual(jt.flags.keep_graph, 0)
+
+
+@unittest.skipIf(not _test_capability.machine_has_accelerator("cuda"),
+                 "no CUDA device")
+@_test_preserve_policy(jt, 'keep_graph')
+class TestGraphReplayCuda(TestGraphReplay):
+
+    def setUp(self):
+        self._use_cuda = jt.flags.use_cuda
+        jt.flags.use_cuda = 1
+        super().setUp()
+
+    def tearDown(self):
+        jt.flags.use_cuda = self._use_cuda
+
+
+if __name__ == "__main__":
+    unittest.main()
