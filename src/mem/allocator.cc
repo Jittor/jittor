@@ -17,6 +17,8 @@
 #include "mem/allocator/temp_allocator.h"
 #include "mem/swap.h"
 #include "runtime/traversal_epoch.h"
+#include <mutex>
+
 #include "core/var.h"
 
 namespace jittor {
@@ -35,9 +37,22 @@ std::unordered_map<
     unique_ptr<Allocator>,
     pair_hash> allocators;
 
+// Guards `allocators`: read on every allocation (`setup_allocator`), written
+// when a new (type, underlying) pair first appears, and walked by `gc_all`,
+// which runs from a background thread. Unsynchronised those interleave into a
+// corrupted node chain, and the damage is not reported where it happens -- it
+// surfaces at static destruction, as glibc's "corrupted double-linked list"
+// inside ~unordered_map, long after the racing access.
+//
+// The lock is held for a lookup or a single insertion, not across `gc()`: that
+// is the one part that can be slow, and it is why `gc_all` copies the
+// allocators out first.
+static std::mutex allocators_mutex;
+
 template <class T>
 Allocator* setup_allocator(Allocator* underlying) {
     pair<string, Allocator*> key{typeid(T).name(), underlying};
+    std::lock_guard<std::mutex> guard(allocators_mutex);
     auto iter = allocators.find(key);
     if (iter != allocators.end()) return iter->second.get();
     auto a = std::make_unique<T>();
@@ -149,7 +164,15 @@ Allocator* get_allocator(Device device, bool temp_allocator) {
 }
 
 void gc_all() {
-    for (auto& kv : allocators) kv.second->gc();
+    // Copy under the lock, collect outside it: `gc()` walks and releases memory
+    // and must not hold up every other thread's allocations while it does.
+    vector<Allocator*> all;
+    {
+        std::lock_guard<std::mutex> guard(allocators_mutex);
+        all.reserve(allocators.size());
+        for (auto& kv : allocators) all.push_back(kv.second.get());
+    }
+    for (auto* allocator : all) allocator->gc();
 }
 
 static void migrate_empty_var(Var* var, Allocator* allocator) {
