@@ -76,12 +76,16 @@ Two ways to be fooled, both of which fooled the author:
     starts warm: with replay refused, so that both arms ran the very same
     eager code, the second measured 1.57 ms against the first's 2.74.
 
-Replay is not free money -- a graph the runtime already overlaps well comes
-out slower replayed. So the first capture is timed against eager, alternating
-the two arms for the reason above, and if replay loses the wrapper hands every
-call to the module and says so in `refused`. A tie still replays: demanding a
-win switches the wrapper off unpredictably on graphs where the two sit inside
-each other's noise.
+Replay is not free money. A graph the runtime already overlaps well comes out
+slower replayed -- an mlp forward measured 0.33 ms eager and 0.42 ms replayed,
+a conv stack was level. **A/B your own model** before keeping this; the two
+traps above say how to do it without fooling yourself.
+
+`measure=True` will do that A/B once at capture and refuse for good if replay
+loses, but it is off by default: the measurement perturbs the process it
+measures, leaving every later replay executing 219 kernels instead of 132 and
+the wrapper 30% slower than it is without it. That is more than the margin it
+exists to protect.
 
 `replay.stats` says what actually happened -- how many calls replayed, how
 many fell back and why -- because a silent fallback that quietly costs the
@@ -138,12 +142,17 @@ def _graph_has_nondeterministic_op():
 class GraphReplay:
     """A callable that re-runs `module`'s captured graph. See the module docstring."""
 
-    def __init__(self, module, *example_inputs, measure=True):
-        """`measure=False` skips the timing and always replays.
+    def __init__(self, module, *example_inputs, measure=False):
+        """`measure=True` times replay against eager once and refuses if it loses.
 
-        The timing costs about forty extra forwards at the first capture. Skip
-        it when you have already decided -- and note that skipping it means
-        nothing stops replay from being slower than eager for this graph.
+        Off by default, because the measurement does not leave the process as
+        it found it: after it runs, every replay executes 219 kernels instead
+        of 132 (nsys), and the wrapper measures 1.53 ms a call instead of 1.18.
+        Where those extra kernels come from was not isolated -- capturing only
+        the requested graph, sweeping pending work, and `jt.gc()` afterwards
+        all left it unchanged -- so rather than ship a safety check that costs
+        30% of what it is protecting, it is opt-in and the caller is told to
+        A/B their own model instead.
         """
         self._module = module
         self._capture = None
@@ -176,7 +185,13 @@ class GraphReplay:
                     self._refused = ("the module returned "
                                      f"{type(output).__name__}, not a single Var")
                     return None
-                output.sync()
+                # This var's own graph and nothing else. A plain `sync()` is a
+                # weak sync: it also sweeps in whatever other holder vars happen
+                # to be pending, and with `keep_graph` on those become part of
+                # what the capture keeps alive and re-runs on every single
+                # replay. Measured through nsys, a capture taken with unrelated
+                # work pending executed 219 kernels a call instead of 132.
+                output.sync(False, False)
             if _graph_has_nondeterministic_op():
                 self._refused = "the graph draws random numbers, so a replay would repeat them"
                 return None
@@ -233,16 +248,20 @@ class GraphReplay:
         return None
 
     # -- is it actually faster? ----------------------------------------
-    def _time(self, run, rounds=3, per=10):
+    def _time(self, run, keep, rounds=3, per=10):
         """Wall time per call, with the device waited on.
 
-        The wait happens inside `keep_graph`, so draining the device does not
-        finish the captured graph along the way -- which is what an ordinary
-        sync_all would do, leaving the thing being measured dead.
+        `keep` says whether the runs being timed are replays. It has to differ
+        between the two arms and this is not a detail: with `keep_graph` on for
+        the eager arm as well, each of its forwards leaves a graph that is
+        never finished, and every later sync collects and re-runs all of them.
+        The measurement then made the wrapper permanently 0.35 ms a call slower
+        than it is -- 1.53 ms against 1.18 -- which is more than the whole
+        difference it was supposed to be measuring.
         """
         best = float("inf")
         before = jt.flags.keep_graph
-        jt.flags.keep_graph = 1
+        jt.flags.keep_graph = 1 if keep else 0
         try:
             for _ in range(per):
                 run()
@@ -293,8 +312,16 @@ class GraphReplay:
             replay_once = lambda: self._replay_once(self._capture, tuple(probe))
             replayed = rebuilt = float("inf")
             for _ in range(2):
-                replayed = min(replayed, self._time(replay_once))
-                rebuilt = min(rebuilt, self._time(eager))
+                # The eager arm runs with keep_graph off, which means its final
+                # sync_all finishes the capture too -- so take a fresh one
+                # before each replay round rather than timing a dead graph.
+                if self._capture is None or self._capture.output.is_finished:
+                    self._capture = self._capture_now(args)
+                    if self._capture is None:
+                        self._worth_it = True
+                        return
+                replayed = min(replayed, self._time(replay_once, keep=True))
+                rebuilt = min(rebuilt, self._time(eager, keep=False))
         except Exception:
             # Timing is an optimization, not a contract. If anything about the
             # measurement fails, keep the capture and let the guards do their
@@ -314,6 +341,20 @@ class GraphReplay:
         # The measurement ran the graph many times and drained the device
         # around it; take a fresh capture rather than trusting that one.
         self.invalidate()
+        # And sweep up. The replay arm drains the device with `keep_graph` on,
+        # which leaves *everything* pending at that moment unfinished -- not
+        # only the capture -- and an unfinished node is re-run by every later
+        # sync. Left behind, that made every subsequent call 0.35 ms slower
+        # (1.53 ms against 1.18) for the rest of the process.
+        before = jt.flags.keep_graph
+        jt.flags.keep_graph = 0
+        try:
+            jt.sync_all(True)
+            jt.gc()
+        except Exception:
+            pass
+        finally:
+            jt.flags.keep_graph = before
 
     # -- call ----------------------------------------------------------
     def _replay_once(self, cap, args):
@@ -414,6 +455,6 @@ class GraphReplay:
         return self._refused
 
 
-def graph_replay(module, *example_inputs, measure=True):
+def graph_replay(module, *example_inputs, measure=False):
     """Wrap `module` so repeated inference re-runs its graph. See the module docstring."""
     return GraphReplay(module, *example_inputs, measure=measure)
