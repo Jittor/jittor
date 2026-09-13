@@ -40,6 +40,19 @@ _kernels: Dict[Tuple[str, str], Tuple[KernelRegistration, ...]] = {}
 #: replaces this map, so an entry can only be as old as the last registration.
 _resolved: Dict[Tuple[str, str], Tuple[KernelRegistration, ...]] = {}
 
+#: Every op name that has a registration for any backend. An op absent from
+#: this set cannot match on any backend, so `select_kernel` can answer None
+#: without walking the arguments or asking the runtime where they live. That
+#: walk is most of a dispatch's cost, and the misses are not rare: with cuTT
+#: absent, every `tensor.transpose` in every model is one.
+_registered_ops: FrozenSet[str] = frozenset()
+
+
+def _rebuild_op_names():
+    """Callers must hold `_lock`."""
+    global _registered_ops
+    _registered_ops = frozenset(op for op, _backend in _kernels)
+
 
 def _entry_priority(entry):
     return entry.priority
@@ -49,6 +62,7 @@ def _invalidate():
     """Drop the resolved candidate lists; callers must hold `_lock`."""
     global _resolved
     _resolved = {}
+    _rebuild_op_names()
 
 
 def _candidates(op, backend):
@@ -305,6 +319,10 @@ def select_kernel(op, *args, **kwargs):
     # registration declares `dtypes`, and the CUDA softmax entry that does is
     # only a candidate on a CUDA backend, so on ACL the names were built --
     # a `str` and a memo lookup per argument -- and then never read.
+    # Nothing is registered under this name on any backend, so no argument
+    # walk and no placement query can change the answer.
+    if op not in _registered_ops:
+        return None
     if dispatch_context is _NATIVE_DISPATCH_CONTEXT:
         tensors, backend, _device_id = _dispatch_placement(args, kwargs)
         dtypes = None

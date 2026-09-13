@@ -4,6 +4,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from functools import lru_cache, wraps
 
 import jittor as jt
+from jittor._runtime.core_api import _output_requires_grad
 
 from ... import _arg_policy
 from ..backends import hooks as _backend_hooks
@@ -302,12 +303,21 @@ def layer_norm(
     # `normalized_shape` is already the tuple both relays are handed; it was
     # rebuilt from itself once for each of them. `dims` is read only by the
     # generic path, and was built before either relay had been tried.
-    fast = _layer_norm_cuda(x, normalized_shape, weight, bias, eps)
-    if fast is not None:
-        return fast
-    fast = _layer_norm_no_grad_cuda(x, normalized_shape, weight, bias, eps)
-    if fast is not None:
-        return fast
+    #
+    # The two relays are mutually exclusive by construction: the training one
+    # requires `_output_requires_grad(x, weight, bias)` and the inference one
+    # requires its negation. Trying both meant every layer_norm paid two full
+    # dispatch rounds -- argument walk, placement, candidate list, dtype names,
+    # predicate -- to discover that one of them could never match. Ask the
+    # question once and try only the relay that can answer it.
+    if _output_requires_grad(x, weight, bias):
+        fast = _layer_norm_cuda(x, normalized_shape, weight, bias, eps)
+        if fast is not None:
+            return fast
+    else:
+        fast = _layer_norm_no_grad_cuda(x, normalized_shape, weight, bias, eps)
+        if fast is not None:
+            return fast
     dims = [-i for i in range(rank, 0, -1)]
     xhat = _ln_normalize(x, dims, eps)
     return xhat * weight + bias
