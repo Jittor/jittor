@@ -98,7 +98,9 @@ struct BroadcastToOp : Op {
     // @pybind(None)
     BroadcastToOp(Var* x, NanoVector shape, uint dims_mask, uint keepdims_mask);
 
-    bool need_broadcast(const Var* x, const NanoVector& shape);
+    // Static: a pure predicate on a shape pair, and BinaryOp asks it
+    // before deciding whether an operand needs a BroadcastToOp at all.
+    static bool need_broadcast(const Var* x, const NanoVector& shape);
     
     const char* name() const override { return "broadcast_to"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;

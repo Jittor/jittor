@@ -161,6 +161,41 @@ acl_registry_routing}`、`tests/autograd` 全量，与分支起点 `48055a75` �
    把算子序列录一次、之后在 C++ 侧回放，才能逼近 0.57 ms 的地板。这是
    torch.compile / CUDA Graph 那一档的工作量，本轮没有做。
 
+## 少建一个节点：BinaryOp 的单侧广播
+
+第 1 条「剩下的空间」里最便宜的一条已经做了。`BinaryOp` 的广播分支原来为
+**两个**操作数各建一个 `BroadcastToOp`，而 `BroadcastToOp(x, y, {})` 自己会问
+`need_broadcast`，答案是否就把输入原样转发出去——也就是说，对每一个
+`x * 0.5`、每一个 `x + bias`、每一个 `x * mask`，总有一个操作数的
+`BroadcastToOp` 纯粹是建出来扔掉的。改成先问同一个谓词、只给真正需要的那一侧
+建：
+
+```cpp
+VarPtr xh, yh;
+Var* xp = x;
+Var* yp = y;
+if (y->num < 0 || BroadcastToOp::need_broadcast(x, y->shape)) { xh = ...; xp = xh; }
+if (x->num < 0 || BroadcastToOp::need_broadcast(y, x->shape)) { yh = ...; yp = yh; }
+```
+
+`y->num < 0` 那一半不能省：形状未定的操作数，`BroadcastToOp` 的构造函数本来
+就不会转发，这里也必须照建。
+
+实测（同一台机、同一张卡、前后各测一次）：
+
+| 行 | 无此改动 | 有此改动 | 倍数 |
+| --- | --- | --- | --- |
+| `x + bias`（广播） | 4.073 | 3.470 | **1.17** |
+| `x * 0.5`（标量） | 5.350 | 4.697 | **1.14** |
+| gelu(2048)（四个标量二元） | 25.33 | 22.74 | 1.11 |
+| decode 一步（8 层） | 2532.6 | 2377.5 | **1.07** |
+| 一个 block | 310.4 | 299.0 | 1.04 |
+| *`x + x`（对照）* | 1.595 | 1.622 | 0.98 |
+| *getitem（对照）* | 3.175 | 3.251 | 0.98 |
+| *reshape（对照）* | 2.307 | 2.237 | 1.03 |
+
+连同前面的 Python 改动，decode 一步的构图从 2991 us 降到 2378 us，**1.26x**。
+
 ## `perf/matmul-rank` 的现状
 
 - matmul 的 rank>2 改动**单独打在未改基线 `d40a2e97` 上**（分支

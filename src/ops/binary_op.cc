@@ -428,8 +428,25 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
             << "(broadcasting requires matching dims or one of them to be 1).";
     }
     if (need_broadcast) {
-        auto xp = make_broadcast_to(x, y, {});
-        auto yp = make_broadcast_to(y, x, {});
+        // Only the side that is actually short of the result shape gets a
+        // BroadcastToOp. `BroadcastToOp(x, y, {})` answers `need_broadcast`
+        // itself and forwards its input when the answer is no -- and when the
+        // other operand's shape is known, a dynamic one still needing the op.
+        // So building it for an operand that already has the result shape
+        // constructs an op purely to throw it away, and one operand is always
+        // in that position for the commonest broadcasts there are: `x * 0.5`,
+        // `x + bias`, `x * mask`.
+        VarPtr xh, yh;
+        Var* xp = x;
+        Var* yp = y;
+        if (y->num < 0 || BroadcastToOp::need_broadcast(x, y->shape)) {
+            xh = make_broadcast_to(x, y, {});
+            xp = xh;
+        }
+        if (x->num < 0 || BroadcastToOp::need_broadcast(y, x->shape)) {
+            yh = make_broadcast_to(y, x, {});
+            yp = yh;
+        }
         auto zp = make_binary(xp, yp, op);
         forward(zp);
         return;
