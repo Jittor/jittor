@@ -202,19 +202,36 @@ if (x->num < 0 || BroadcastToOp::need_broadcast(y, x->shape)) { yh = ...; yp = y
 
 连同前面的 Python 改动，decode 一步的构图从 2991 us 降到 2378 us，**1.26x**。
 
-## `perf/matmul-rank` 的现状
+## `perf/matmul-rank` 的现状：671 条已经收敛成一条
 
-- matmul 的 rank>2 改动**单独打在未改基线 `d40a2e97` 上**（分支
-  `perf/matmul-on-baseline`，`a03c88ef`）：121 failed / 654 passed，与基线
-  对照组**逐 nodeid 完全相同**。这个 op 改动本身是干净的。
-- 同样的改动在 `perf/matmul-rank`（`bd43655e`，且已补上
-  `push_back_check_overflow`）上、用全新缓存、串行预热之后，仍然是
-  671 failed。但失败的形状说明问题不在 matmul：前面若干条是基线本来就红的
-  （`all() got an unexpected keyword argument 'keepdim'`、fft 对拍），随后
-  出现一条 **`cudaErrorIllegalAddress`（code 700，设备级）**，此后 600 多条
-  全部失败——包括 `test_isnan`、`test_log` 这类不可能与矩阵乘有关的。
-  也就是说：**一次非法访存把上下文打坏了，剩下的全是连带**。
-- 所以现在要回答的是"matmul 之下的那一叠改动（发射配置、strided 下标、
-  标量融合）在整套设备门禁上是否干净"，`perf/host-path` 带着同一叠改动，
-  它的全量门禁正在跑。在那个结果出来之前，不能说 matmul 有问题，也不能说
-  它没问题。
+不再是"六百多条神秘失败"。按第一条**额外**失败往回查：
+
+- 那一条是 `test_device_parity.py::TestDeviceParity::test_inner`，**单独跑就能
+  复现**，8 次里 8 次失败（最早的 15 次里 13 次，前两次通过是因为那时相关
+  kernel 还没编出来）。之后的六百多条是连带：一次失败把 CUDA 上下文打坏，
+  剩下的全部跟着红。
+- **炸在反向，不在前向**：
+  `jt.grad(loss, diff)` → `sfrl_allocator.cc:305: mem_ptr does not belong to
+  allocation`。前向的值是对的。
+- **和 rank>2 那条快路径无关**：`sample_inner` 喂的是 A:(3,4)、B:(2,4)，两个
+  都是 rank 2，`len_b == 2 and len_a > 2` 根本不成立。
+- 三方对照把它夹住了：
+
+  | 树 | 内容 | `test_inner` |
+  | --- | --- | --- |
+  | `d40a2e97` | 未改基线 | 通过 |
+  | `perf/matmul-on-baseline` (`a03c88ef`) | 基线 + matmul 改动 | 通过（整套 121，逐 nodeid 同基线） |
+  | `perf/host-path` (`6ae82f2b`) | 基线 + 发射配置/strided 下标/标量融合 | 通过（它是第 115 号测试，在那次跑到的 172 号之内，逐字符与基线一致） |
+  | `perf/matmul-rank` (`e426abf8`) | 上面两叠**都有** | **失败 8/8** |
+
+  也就是说：**两叠改动各自干净，叠在一起才炸**，而且触发点是一个 rank-2 的
+  矩阵乘。
+- 还没收口的是：把同样的形状、同样的梯度、同样的 cotangent 写成一个不带测试
+  框架的脚本，**它通过**（rank2/rank3/rank4 的前向反向、`matmul_transpose`、
+  `matmul(a, b.transpose(-1,-2))` 全对）。所以触发还需要框架里的某个状态，
+  下一步要在框架内部打点，而不是继续在外面凑复现。
+
+**结论：这条不落地。** 它值一个 block 的 7%（每个 batched `nn.Linear` 省掉
+一对 reshape），但带着一条能复现的分配器不变式崩溃不能合。上面那张表和
+`test_inner` 这个最小入口是下一位接手时省下来的那几个小时。
+
