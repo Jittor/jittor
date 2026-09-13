@@ -30,8 +30,19 @@ def _rms_norm(input, normalized_shape, weight=None, eps=None):
         eps = 1.1920929e-07                          # finfo(float32).eps, torch default
     ndn = len(normalized_shape) if hasattr(normalized_shape, "__len__") else 1
     dims = list(range(input.ndim - ndn, input.ndim))
-    out = input * (1.0 / jt.sqrt((input * input).mean(dims, keepdims=True) + eps))
-    return out * weight if weight is not None else out
+    # ATen accumulates the statistic in float32 for half and bfloat16, then
+    # casts the result back: bfloat16 in, bfloat16 out. Computing at whatever
+    # dtype the reduction promotes to instead (`mean` hands back float32)
+    # silently widened every model whose norms are RMSNorm -- MiniMax-H3's
+    # block stack is bfloat16 throughout -- to float32, which takes the matmuls
+    # off the tensor cores and the attention off the flash backend.
+    name = _dtype_to_str(input.dtype)
+    wide = "float32" if name in ("float16", "bfloat16") else name
+    x = input.cast(wide)
+    out = x * (1.0 / jt.sqrt((x * x).mean(dims, keepdims=True) + eps))
+    if weight is not None:
+        out = out * weight.cast(wide)
+    return out.cast(name)
 
 def _selu(input, inplace=False):
     a = 1.6732632423543772848170429916717
