@@ -96,9 +96,16 @@ void CublasMatmulOp::infer_shape() {
     // is rank 2. Either way the row count is `n`, which is what the kernel and
     // the allocation see.
     if (!trans_a && a->shape.size() > 2) {
+        // `push_back_check_overflow`, not `push_back`: NanoVector packs every
+        // dimension into one 64-bit word and the bare push_back does not check
+        // that budget. `set_shape({n, k})` below reaches the checked one through
+        // the initializer-list constructor, so using the unchecked one here
+        // would be the one place a shape past the budget is written silently --
+        // and a wrong shape is a wrong allocation and an out-of-bounds write.
         NanoVector cshape;
-        for (uint i = 0; i + 1 < a->shape.size(); ++i) cshape.push_back(a->shape[i]);
-        cshape.push_back(k);
+        for (uint i = 0; i + 1 < a->shape.size(); ++i)
+            cshape.push_back_check_overflow(a->shape[i]);
+        cshape.push_back_check_overflow(k);
         c->set_shape(cshape);
     } else {
         c->set_shape({n, k});
