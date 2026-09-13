@@ -24,7 +24,7 @@ import numpy as np
 import jittor as jt
 
 
-@_test_preserve_policy(jt, 'keep_graph', 'use_cuda')
+@_test_preserve_policy(jt, 'keep_graph')
 class TestKeepGraph(unittest.TestCase):
 
     def setUp(self):
@@ -39,8 +39,11 @@ class TestKeepGraph(unittest.TestCase):
         then. Every caller of ``keep_graph`` owes the graph this.
         """
         x = jt.array(value)
-        x.sync()
-        jt.sync_all(True)
+        # This var only, and no weak sync: a process-wide sync_all would also
+        # try to run whatever another test left pending, and a graph that
+        # cannot run (a numpy_code op with no cupy, say) would fail here for
+        # reasons that have nothing to do with keep_graph.
+        x.sync(True, False)
         return x
 
     def _chain(self, x):
@@ -111,7 +114,7 @@ class TestKeepGraph(unittest.TestCase):
 
 @unittest.skipIf(not _test_capability.machine_has_accelerator("cuda"),
                  "no CUDA device")
-@_test_preserve_policy(jt, 'keep_graph', 'use_cuda')
+@_test_preserve_policy(jt, 'keep_graph')
 class TestKeepGraphCuda(TestKeepGraph):
 
     def setUp(self):

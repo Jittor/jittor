@@ -51,6 +51,24 @@ FuseTransposeOp::FuseTransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
             axes.push_back(xdim-1-i);
     }
     y = create_output(nullptr, x->dtype());
+    // ParallelPass hands threads to the outermost `max_parallel_depth` loops,
+    // 4 by default on CUDA. A permute of rank 5 or more therefore leaves its
+    // innermost loop -- the contiguous one -- running serially inside each
+    // thread, so neighbouring threads land a whole inner row apart and not one
+    // access in a warp coalesces. The qkv permute of an attention block is
+    // exactly that shape, and it measured 152 GB/s against 404 GB/s once the
+    // inner loop is parallelized too (166 us -> 62 us at b8s256 d512).
+    //
+    // Only for the broadcast form: that one is a pure permute, so every loop
+    // is independent and giving them all threads costs nothing. The reduce
+    // form fuses into a kernel that may carry a reduction, where parallelizing
+    // the reduced axis would mean atomics and a float summation order that
+    // changes run to run.
+    if (tp == OpType::broadcast && axes.size() > 4) {
+        loop_options_t options = y->loop_options;
+        options["max_parallel_depth"] = axes.size();
+        y->loop_options = move(options);
+    }
 }
 
 void FuseTransposeOp::infer_shape() {
