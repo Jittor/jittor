@@ -235,3 +235,46 @@ if (x->num < 0 || BroadcastToOp::need_broadcast(y, x->shape)) { yh = ...; yp = y
 一对 reshape），但带着一条能复现的分配器不变式崩溃不能合。上面那张表和
 `test_inner` 这个最小入口是下一位接手时省下来的那几个小时。
 
+
+## 未解决：这一叠改动本身在冷 reference cache 下有一条设备级故障
+
+**这条比上面所有加速都重要，先写下来。**
+
+现象：`tests/backends/parity/test_device_parity.py` 在 **reference cache 是冷的**
+时候，第 6 号测试 `test_affine_grid` 会死在一条设备级
+`cudaErrorIllegalAddress`，之后整个文件跟着红（241 failed / 5 passed，约 11 分钟）。
+未改基线不会。
+
+为什么是冷 reference cache 才触发：这个文件的 CPU 参照值是 `_cpu_oracle` 在
+**同一个进程里**用 `_run(op, sample, use_cuda=0)` 现算的，算过一次就落盘。所以
+冷 cache 的一轮里，每个测试都会先在 CPU 上建一遍图、再在 CUDA 上建一遍；
+cache 热了之后 CPU 那一半根本不跑。而 **`source_fingerprint()` 覆盖整个
+`python/jittor`**——任何一行 Python 改动都会让全部 reference 失效，所以每次改完
+第一次跑必然是冷的。
+
+对照（都是全新缓存、冷 reference cache、六个测试就够看出来）：
+
+| 树 | 卡 | 第 6 号 `test_affine_grid` |
+| --- | --- | --- |
+| `d40a2e97` 未改基线 | GPU 7 | 通过（整份文件 11 failed，是已知红灯） |
+| `d40a2e97` 未改基线 | GPU 1 | 通过（`......FF..FFFF` 正是基线花样） |
+| 带这一叠的任意树（`perf/host-path`、`perf/metaop-broadcast`） | GPU 1 / GPU 7 | **失败**，其后全部连带 |
+
+所以既不是卡，也不是门禁框架，**是树**。而且它早于今晚的工作：今晚的两个提交
+各自相对自己的分支起点都是逐 nodeid 干净的，但**分支起点本身不干净**。
+
+已经排除的：
+- 不是 JIT 缓存损坏——全新缓存、串行预热之后照样复现；
+- 不是 `perf/matmul-rank` 的 matmul 改动——不带那条改动的树一样炸，而且
+  同样的 `cudaErrorIllegalAddress` 与同一串 launch candidates
+  （`setitem id=30`、`cublas_batched_matmul id=43`、`fused_op fused_ids=[10,2]`）；
+- 不是"在一个进程里先 CPU 后 CUDA"这件事本身——把广播二元、strided 读、
+  reduce 和 matmul 写成一个来回切 40 轮的脚本，两棵树都干净。所以触发还需要
+  前六个测试里某个具体算子。
+
+**还欠一步**：`9a60c3e9`（发射配置 + strided 下标特化）与 `2fc3837d`（标量融合）
+两个提交里是哪一个。四点对照（基线 / 9a60c3e9 / 9e17002d / 今晚的 tip，每个跑
+前六个测试）正在跑。
+
+**对今晚成果的影响**：性能数字不受影响（都是构图与端到端计时，不依赖这条路径），
+两个提交相对各自起点的门禁也不受影响。但**这一叠在这条故障定位并修掉之前不该合**。
