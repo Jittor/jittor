@@ -196,6 +196,22 @@ class TestBooleanMask(Base):
                     msg=f"rank1 RHS grad {dev}")
         both_devices(body)
 
+    def test_mask_setitem_per_row_rhs_preserves_gradient(self):
+        # Vision-language mergers assign one hidden vector per selected image
+        # token.  Native Jittor setitem used to drop this RHS graph entirely.
+        mask = np.array([[True, False, True, False]], dtype=bool)
+        def body(dev):
+            source = torch.tensor([[1., 2., 3.], [4., 5., 6.]],
+                                  dtype=torch.float32, device=dev,
+                                  requires_grad=True)
+            hidden = torch.zeros((1, 4, 3), dtype=torch.float32, device=dev)
+            hidden[t(mask, device=dev)] = source
+            hidden.sum().backward()
+            self.assertIsNotNone(source.grad)
+            self.ae(source.grad.numpy(), np.ones((2, 3), dtype=np.float32),
+                    msg=f"per-row RHS grad {dev}")
+        both_devices(body)
+
 
 class TestIndexSelect(Base):
     def test_index_select_dim0(self):

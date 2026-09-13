@@ -163,6 +163,15 @@ def _torch_setitem(self, slices, value):
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _orig_setitem = _native['_orig_setitem']
+    # PyTorch promotes a no-grad destination to a differentiable non-leaf when
+    # an indexed assignment consumes a grad-enabled source.  Jittor otherwise
+    # leaves the destination stopped, so even a differentiable replacement
+    # expression cannot reach its source during ``backward()``.  Respect
+    # ``no_grad`` while enabling the normal training-time promotion.
+    if (isinstance(value, _NativeVar) and bool(value.requires_grad)
+            and not bool(getattr(_owner.jt.flags, "no_grad", 0))
+            and not bool(self.requires_grad)):
+        self.start_grad()
     # Jittor's indexed-assignment backward exposes one gradient row per
     # selected position when a rank-1 parameter is assigned through a lower
     # rank boolean mask (for example Wav2Vec2 SpecAugment's
@@ -181,6 +190,31 @@ def _torch_setitem(self, slices, value):
         updated = self + mask * (expanded - self)
         self.assign(updated)
         return self
+    # A lower-rank boolean mask with a per-selected-row source (for example
+    # SmolVLM's ``image_embeds[image_mask] = image_hidden_states[...]``)
+    # must preserve the source graph.  Native setitem mutates the destination
+    # without an autograd edge, so the vision tower and connector receive no
+    # gradients.  The torch masked-scatter implementation expresses the same
+    # update as ``where`` and is differentiable with respect to ``value``.
+    if (isinstance(slices, _NativeVar)
+            and _jittor_dtype_name(slices.dtype) in ("bool", "uint8")
+            and isinstance(value, _NativeVar)
+            and len(slices.shape) < len(self.shape)
+            and len(value.shape) == len(self.shape) - len(slices.shape) + 1):
+        try:
+            trailing = 1
+            for dimension in self.shape[len(slices.shape):]:
+                trailing *= int(dimension)
+            selected = int(slices.sum().item())
+            if selected > 0 and int(value.numel()) == selected * trailing:
+                updated = _owner.masked_scatter(self, slices, value)
+                self.assign(updated)
+                return self
+        except _owner.EXPECTED as exc:
+            _owner.swallowed(
+                "torch/installers/tensor.py _torch_setitem: differentiable masked assignment",
+                exc,
+            )
     if _set_data_owner(self, slices, value):
         return self
     try:
