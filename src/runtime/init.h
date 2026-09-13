@@ -31,6 +31,12 @@ Returns the seed of jittor random number generator.
 // @pyjt(get_seed)
 int get_seed();
 
+// @pyjt(get_cpu_num_threads)
+int get_cpu_num_threads();
+
+// @pyjt(set_cpu_num_threads, threads)
+void set_cpu_num_threads(int threads);
+
 void add_set_seed_callback(set_seed_callback callback);
 
 extern

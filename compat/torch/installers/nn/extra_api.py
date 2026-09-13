@@ -1,4 +1,5 @@
 """Module-owned Torch neural-network implementations and layer templates."""
+import collections.abc as _collections_abc
 import jittor as jt
 from jittor import nn
 import jittor as _jt
@@ -430,11 +431,11 @@ class ModuleDict(nn.Module):
     def __iter__(self):
         return iter(self._keys)
     def keys(self):
-        return list(self._keys)
+        return _collections_abc.KeysView(self)
     def values(self):
-        return [getattr(self, k) for k in self._keys]
+        return _collections_abc.ValuesView(self)
     def items(self):
-        return [(k, getattr(self, k)) for k in self._keys]
+        return _collections_abc.ItemsView(self)
     def pop(self, key):
         v = getattr(self, key); self.__delitem__(key); return v
 

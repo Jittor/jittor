@@ -172,6 +172,49 @@ def _versions(report):
     }
 
 
+def _parameter_grad_state(report):
+    state = report.get("parameters") or {}
+    return {
+        "trainable": list(state.get("trainable") or []),
+        "frozen": list(state.get("frozen") or []),
+    }
+
+
+def _assert_matching_parameter_grad_state(test_case, case, reference, candidate):
+    expected = _parameter_grad_state(reference)
+    actual = _parameter_grad_state(candidate)
+    test_case.assertTrue(
+        expected["trainable"] or expected["frozen"],
+        "{} reported no parameter freeze state".format(case),
+    )
+    test_case.assertEqual(
+        actual,
+        expected,
+        "{} used a different trainable/frozen parameter set".format(case),
+    )
+
+
+def _assert_declared_parameter_grads(test_case, case, report):
+    contracts = _ecosystem_cases.EXPECTED_MISSING_TRAINABLE_GRADS
+    if case not in contracts:
+        return
+    state = _parameter_grad_state(report)
+    present = set(report.get("parameter_grads") or [])
+    trainable = set(state["trainable"])
+    frozen = set(state["frozen"])
+    allowed_missing = set(contracts[case])
+    test_case.assertEqual(
+        present & frozen,
+        set(),
+        "{} produced gradients for frozen parameters".format(case),
+    )
+    test_case.assertEqual(
+        trainable - present,
+        allowed_missing,
+        "{} violated its declared trainable-gradient contract".format(case),
+    )
+
+
 def _torch_shim_is_active():
     """Whether this interpreter's ``torch`` is Jittor rather than PyTorch."""
     try:
@@ -389,6 +432,11 @@ class EcosystemComparison(unittest.TestCase):
                 "{} timed the runtimes with different thread counts, affinity, "
                 "or precision policy".format(case),
             )
+            _assert_matching_parameter_grad_state(
+                self, case, torch_report, jittor_report
+            )
+            _assert_declared_parameter_grads(self, case, torch_report)
+            _assert_declared_parameter_grads(self, case, jittor_report)
             self.assertEqual(jittor_report.get("fallback_policy"), "error")
             self.assertEqual(jittor_report.get("fallback_count"), 0)
             if self.device == "npu":

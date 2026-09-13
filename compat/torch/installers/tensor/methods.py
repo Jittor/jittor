@@ -7,6 +7,7 @@ from .method_api import (
     _api_fill,
     _api_zero,
     _api_add,
+    _tensor_iadd,
     _api_sub,
     _api_mul,
     _api_div,
@@ -207,6 +208,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # constant source's stop-grad flag and permanently freeze the parameter.
     Var.fill_ = _api_fill
     Var.zero_ = _api_zero
+    Var.__iadd__ = _tensor_iadd
     Var.add_ = _api_add
     Var.sub_ = _api_sub
     Var.mul_ = _api_mul

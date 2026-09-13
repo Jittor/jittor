@@ -961,10 +961,12 @@ def _api_cuda_synchronize(*a, **k):
 
 
 def _api_cuda_manual_seed(s):
+    jt.sync_all()
     return jt.set_global_seed(int(s))
 
 
 def _api_cuda_manual_seed_all(s):
+    jt.sync_all()
     return jt.set_global_seed(int(s))
 
 

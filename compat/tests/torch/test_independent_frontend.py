@@ -102,6 +102,9 @@ for cls, original in optimizer_before:
     assert all(value is vars(cls)[key] for key, value in original.items())
 assert torch.optim is not jt.optim
 assert issubclass(torch.optim.SGD, torch.optim.Optimizer)
+independent_adamw = torch.optim.AdamW([torch.ones(1)])
+assert independent_adamw.weight_decay == 0.01
+assert torch.optim.AdamW([torch.ones(1)], weight_decay=0).weight_decay == 0
 assert torch.autograd is not jt.autograd
 assert torch.autograd.Function is not jt.Function
 assert function_before.keys() == vars(jt.Function).keys()
@@ -123,6 +126,31 @@ assert torch.nn is not native_nn
 assert torch.nn.init is not native_init
 assert torch.nn.Module is not jt.Module
 assert issubclass(torch.nn.Linear, torch.nn.Module)
+linear = torch.nn.Linear(2, 3)
+linear_input = torch.ones(1, 2, device=linear.weight.device)
+linear_output = linear(linear_input)
+assert tuple(linear_output.shape) == (1, 3)
+assert isinstance(linear, jt.nn.Linear)
+assert isinstance(linear, torch.nn.Module)
+assert set(dict(linear.named_parameters())) == {"weight", "bias"}
+
+class LinearForwardOverride(torch.nn.Linear):
+    def forward(self, value):
+        return torch.ones(value.shape[0], 4)
+
+override = LinearForwardOverride(2, 3)
+override_input = torch.ones(1, 2, device=override.weight.device)
+assert tuple(override(override_input).shape) == (1, 4)
+
+class LinearSuperAnchor(torch.nn.Linear):
+    def __init__(self):
+        super(torch.nn.Linear, self).__init__()
+        self.ready = True
+
+anchored = LinearSuperAnchor()
+assert anchored.ready
+assert isinstance(anchored, jt.nn.Linear)
+assert isinstance(anchored, torch.nn.Module)
 assert jt.autograd.get_policy() is policy_before
 x = torch.tensor([1., 2.], requires_grad=True)
 assert type(x) is torch.Tensor
@@ -145,6 +173,11 @@ assert x.requires_grad
 plain = torch.ones(2)
 assert not plain.requires_grad
 assert not (plain + 1).requires_grad
+assert not (1 + plain).requires_grad
+trainable_scalar_result = x + 1
+assert trainable_scalar_result.requires_grad
+scalar_gradient, = torch.autograd.grad(trainable_scalar_result.sum(), x)
+np.testing.assert_array_equal(scalar_gradient.numpy(), [1., 1.])
 assert not x.detach().requires_grad
 assert jt.autograd.get_policy() is policy_before
 assert type(jt.array([1.])) is jt.Var
@@ -406,7 +439,8 @@ assert object_state.force_cpu and object_state.rms_norm_unit_weight is fresh
 assert "_jittor_torch_force_cpu" not in vars(fresh)
 assert "_torch_acl_rms_norm_unit_weight" not in vars(fresh)
 copied_state = copy.deepcopy(fresh)
-assert copied_state._torch_data_owner is copied_state
+assert copied_state._torch_data_owner is None
+assert copied_state._torch_data_path == ()
 assert copied_state._torch_acl_rms_norm_unit_weight is copied_state
 assert copied_state._jittor_torch_force_cpu
 restored_state = pickle.loads(pickle.dumps(fresh))

@@ -65,6 +65,50 @@ def _lora(model, r=4):
 
 @unittest.skipUnless(_HAS, "needs torch_shim + peft")
 class TestPeftLora(unittest.TestCase):
+    def test_qwen2_ordinary_torch_training_preserves_frozen_base(self):
+        from transformers import Qwen2Config, Qwen2ForCausalLM
+
+        base = Qwen2ForCausalLM(Qwen2Config(
+            vocab_size=41, hidden_size=16, intermediate_size=32,
+            num_hidden_layers=1, num_attention_heads=4, num_key_value_heads=2,
+            max_position_embeddings=32, tie_word_embeddings=False,
+        ))
+        model = get_peft_model(base, LoraConfig(
+            r=2, lora_alpha=4, lora_dropout=0.0,
+            target_modules=["q_proj", "v_proj"], task_type="CAUSAL_LM",
+        ))
+        device = torch.device("cuda" if jt.flags.use_cuda else "cpu")
+        model = model.to(device)
+        named = dict(model.named_parameters())
+        trainable = [name for name, parameter in named.items() if parameter.requires_grad]
+        frozen = [name for name, parameter in named.items() if not parameter.requires_grad]
+        self.assertEqual(len(trainable), 4)
+        self.assertTrue(frozen)
+        self.assertTrue(all("lora_" in name for name in trainable))
+        frozen_before = {name: parameter.detach().clone() for name, parameter in named.items()
+                         if name in frozen}
+        ids = torch.tensor(
+            [[1, 3, 5, 7], [2, 4, 6, 8]], dtype=torch.long,
+            device=device,
+        )
+        optimizer = torch.optim.SGD(
+            [parameter for parameter in model.parameters() if parameter.requires_grad],
+            lr=0.05,
+        )
+        initial_b = [parameter.detach().clone() for name, parameter in named.items()
+                     if "lora_B" in name]
+        self.assertTrue(all(float(value.abs().max().item()) == 0.0 for value in initial_b))
+        for _ in range(3):
+            optimizer.zero_grad(set_to_none=True)
+            loss = model(input_ids=ids, labels=ids).loss
+            loss.backward()
+            self.assertTrue(all(named[name].grad is not None for name in trainable))
+            self.assertTrue(all(named[name].grad is None for name in frozen))
+            optimizer.step()
+        self.assertTrue(all(torch.equal(named[name], frozen_before[name]) for name in frozen))
+        self.assertTrue(any(float(named[name].abs().max().item()) > 0.0
+                            for name in trainable if "lora_B" in name))
+
     def test_wrap_freezes_base_and_grad_semantics(self):
         pm = _lora(_Tiny())
         trainable = [n for n, p in pm.named_parameters() if getattr(p, 'requires_grad', True)]

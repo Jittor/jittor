@@ -13,6 +13,7 @@ import jittor as jt
 from jittor import nn
 
 import numbers
+import struct
 
 import numpy as np
 
@@ -630,12 +631,48 @@ class Generator:
     def __init__(self, device=None):
         self.device = globals()["device"](device or "cpu")
         self._seed = 0
+        self._offset = 0
     def manual_seed(self, s):
         self._seed = int(s)
+        self._offset = 0
         return self
+    def _reserve(self, count):
+        offset = self._offset
+        self._offset += int(count)
+        return offset
+    def _uniform(self, low, high, shape, dtype="float32"):
+        if self.device.type != "cpu":
+            raise RuntimeError("explicit Generator uniform currently supports CPU only")
+        dtype_name = _dtype_to_str(dtype)
+        precision_bits = {"float16": 11, "bfloat16": 8, "float32": 24, "float64": 53}.get(dtype_name)
+        if precision_bits is None:
+            raise NotImplementedError("explicit Generator uniform requires a floating dtype")
+        count = int(np.prod(tuple(shape)))
+        offset = self._reserve(count * (2 if precision_bits > 32 else 1))
+        if dtype_name == "float16":
+            quantize = lambda value: float(np.float16(value))
+        elif dtype_name == "bfloat16":
+            def quantize(value):
+                bits = struct.unpack("I", struct.pack("f", float(value)))[0]
+                bits += 0x7fff + ((bits >> 16) & 1)
+                return float(struct.unpack("f", struct.pack("I", bits & 0xffff0000))[0])
+        else:
+            quantize = float
+        quantized_low = quantize(low)
+        quantized_high = quantize(high)
+        quantized_span = quantize(quantized_high - quantized_low)
+        compute_dtype = "float64" if dtype_name == "float64" else "float32"
+        values = jt.ops.generator_uniform(shape, compute_dtype, quantized_low,
+                                          quantized_low + quantized_span,
+                                          self._seed, offset, precision_bits)
+        return values if dtype_name == compute_dtype else values.cast(dtype_name)
     def get_state(self):
-        return jt.array([self._seed])
+        return jt.array([self._seed, self._offset], dtype="int64")
     def set_state(self, s):
+        values = s.tolist()
+        if len(values) != 2:
+            raise RuntimeError("invalid Generator state")
+        self._seed, self._offset = int(values[0]), int(values[1])
         return self
     def seed(self):
         return self._seed
@@ -887,6 +924,9 @@ def install(ctx):
     g.broadcast_shapes = broadcast_shapes
 
     g.corrcoef = corrcoef
+    g.remainder = _shape_remainder
+    from ..factories import triu_indices
+    g.triu_indices = triu_indices
 
     # torch.Generator (RNG handle) -- jittor uses a global seed; provide a
     # lightweight stand-in that supports manual_seed and is accepted where a
@@ -957,7 +997,7 @@ def install(ctx):
     _install_reductions(g)
 
     register_api_bindings(g, 'torch',
-        ('Generator', 'Size', 'Tensor', 'as_tensor', 'broadcast_shapes', 'cat', 'channels_last', 'concat', 'concatenate', 'contiguous_format', 'corrcoef', 'e', 'enable_grad', 'from_numpy', 'frombuffer', 'grad', 'index_select', 'inf', 'inference_mode', 'jagged', 'layout', 'memory_format', 'nan', 'nested', 'no_grad', 'pi', 'preserve_format', 'stack', 'strided', 'tensor') + tuple(_TYPED_TENSOR_CLASSES.keys()),
+        ('Generator', 'Size', 'Tensor', 'as_tensor', 'broadcast_shapes', 'cat', 'channels_last', 'concat', 'concatenate', 'contiguous_format', 'corrcoef', 'e', 'enable_grad', 'from_numpy', 'frombuffer', 'grad', 'index_select', 'inf', 'inference_mode', 'jagged', 'layout', 'memory_format', 'nan', 'nested', 'no_grad', 'pi', 'preserve_format', 'remainder', 'stack', 'strided', 'tensor', 'triu_indices') + tuple(_TYPED_TENSOR_CLASSES.keys()),
         Fidelity.APPROXIMATE, 'Native tensor allocation and conversion with Torch dtype, device, and frontend policies; supported argument and backend subsets apply')
 
 from .shape_api import (

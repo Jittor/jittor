@@ -159,6 +159,26 @@ def triu(*args, **kwargs):
     return _invoke_factory("triu", args, kwargs)
 
 
+def triu_indices(row, col, offset=0, *, dtype=None, device=None,
+                 layout=None, pin_memory=False):
+    context = get_install_context(jt)
+    g = context.target_namespace
+    if layout not in (None, getattr(g, "strided", None)):
+        raise RuntimeError("torch.triu_indices only supports strided layout")
+    if pin_memory:
+        raise RuntimeError("torch.triu_indices does not support pin_memory=True")
+    row = int(row)
+    col = int(col)
+    if row < 0 or col < 0:
+        raise RuntimeError("row and col must be non-negative")
+    rows = g.arange(row, dtype=g.long, device=device).reshape(row, 1)
+    cols = g.arange(col, dtype=g.long, device=device).reshape(1, col)
+    row_grid = rows.broadcast_to((row, col))
+    col_grid = cols.broadcast_to((row, col))
+    selected = (col_grid - row_grid >= int(offset)).nonzero(as_tuple=False)
+    return selected.transpose(0, 1).to(dtype=dtype or g.long, device=device)
+
+
 def zeros(*args, **kwargs):
     return _invoke_factory("zeros", args, kwargs)
 
@@ -293,7 +313,12 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
                  (isinstance(args[0], tuple) and type(args[0]) is not tuple)):
         args = (tuple(int(x) for x in args[0]),) + tuple(args[1:])
     # Torch also allows shape via size=.
-    if "size" in kwargs and not args:
+    if name == "normal" and "size" in kwargs and not args:
+        size = _shape_arg(kwargs.pop("size"))
+        mean = kwargs.pop("mean", 0.0)
+        std = kwargs.pop("std", 1.0)
+        args = (mean, std, size)
+    elif "size" in kwargs and not args:
         sz = kwargs.pop("size")
         # Route the keyword spelling through the same scalar-dimension
         # normalization as the positional spelling. Multimodal audio
@@ -421,8 +446,24 @@ def _seed_from(gen):
         jt.set_global_seed(int(s))
 
 
-def _random_adapter(original, *args, generator=None, **kwargs):
-    _seed_from(generator)
+def _random_adapter(name, original, *args, generator=None, **kwargs):
+    if generator is not None:
+        if name != "randperm":
+            raise NotImplementedError("explicit Generator is not implemented for torch.{}".format(name))
+        if generator.device.type != "cpu":
+            raise RuntimeError("torch.randperm with an explicit Generator currently supports CPU only")
+        n = int(args[0] if args else kwargs.pop("n"))
+        dtype = kwargs.pop("dtype", None) or jt.int64
+        device = kwargs.pop("device", None)
+        device_type = getattr(device, "type", str(device).split(":", 1)[0]) if device is not None else "cpu"
+        if device_type != "cpu":
+            raise RuntimeError("Expected a CPU generator for a CPU randperm result")
+        kwargs.pop("layout", None)
+        kwargs.pop("pin_memory", None)
+        if kwargs:
+            raise TypeError("unsupported randperm arguments: {}".format(sorted(kwargs)))
+        offset = generator._reserve(max(0, n - 1))
+        return jt.ops.generator_randperm(n, generator._seed, offset, _dtype_to_str(dtype))
     return original(*args, **kwargs)
 
 
@@ -434,4 +475,4 @@ def _install_random_and_linspace(g):
                  "randn_like", "rand_like", "multinomial", "bernoulli"):
         original = _factory_implementation(getattr(g, name, None))
         if original is not None:
-            _publish_factory(g, name, functools.partial(_random_adapter, original))
+            _publish_factory(g, name, functools.partial(_random_adapter, name, original))

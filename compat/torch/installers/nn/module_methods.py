@@ -402,7 +402,7 @@ def _state_source_to_var(value):
 
 
 def _preserve_target_dtypes_for_load(root, state_dict):
-    """Cast each source value to the dtype of the live destination."""
+    """Align source dtype and placement with the live destination."""
     # torch.load_state_dict(assign=False), the default used by TRELLIS.2,
     # copies checkpoint values into existing parameters/buffers and keeps
     # the destination dtype.  Jittor's native load replaces through update(),
@@ -421,12 +421,25 @@ def _preserve_target_dtypes_for_load(root, state_dict):
             continue
         if src.shape != target.shape:
             continue
+        replacement = src
         target_dtype = _jittor_dtype_name(target.dtype)
-        if _jittor_dtype_name(src.dtype) == target_dtype:
+        if _jittor_dtype_name(replacement.dtype) != target_dtype:
+            replacement = replacement.cast(target_dtype)
+        target_backend = getattr(target, "placement_backend", -1)
+        source_backend = getattr(replacement, "placement_backend", -1)
+        target_device = getattr(target, "device", None)
+        source_device = getattr(replacement, "device", None)
+        if target_backend == 0 and source_backend != 0:
+            replacement = _make_cpu_resident(replacement)
+        elif target_backend > 0 and (
+                source_backend != target_backend or source_device != target_device):
+            replacement = _make_cuda_resident(
+                replacement, force=True, device=target_device)
+        if replacement is value:
             continue
         if converted is None:
             converted = dict(state_dict)
-        converted[key] = src.cast(target_dtype)
+        converted[key] = replacement
     return state_dict if converted is None else converted
 
 

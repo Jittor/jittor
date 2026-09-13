@@ -235,5 +235,13 @@ def deepcopy_tensor(value, memo):
     result = rebuild_tensor(type(value), value.numpy(), _jittor_dtype_name(value.dtype),
                             value.requires_grad, str(value.device))
     memo[id(value)] = result
-    result.__dict__.update(deepcopy(value.__dict__, memo))
+    state = value.__dict__.copy()
+    state.pop("_torch_data_owner", None)
+    state.pop("_torch_data_path", None)
+    result.__dict__.update(deepcopy(state, memo))
+    # These fields live in the native per-object side table rather than
+    # ``__dict__``. A deepcopy owns independent storage and must not retain
+    # the source ``.data`` view's write-back relationship.
+    result._torch_data_owner = None
+    result._torch_data_path = ()
     return result

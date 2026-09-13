@@ -6,6 +6,10 @@ class _SparseCOO:
         self._dense = dense
     def to_dense(self):
         return self._dense
+    def __add__(self, other):
+        return self._dense + other
+    def __radd__(self, other):
+        return other + self._dense
     @property
     def shape(self):
         return self._dense.shape

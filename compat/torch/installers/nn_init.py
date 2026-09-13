@@ -52,6 +52,8 @@ def _not_var(t):
 
 def normal_(tensor, mean=0.0, std=1.0, generator=None):
     if _not_var(tensor): return tensor
+    if generator is not None:
+        raise NotImplementedError("normal_ with an explicit Generator is not implemented")
     return _assign(tensor, _jt2.normal(float(mean), float(std), tensor.shape).cast(_jittor_dtype_name(tensor.dtype)))
 
 
@@ -65,6 +67,11 @@ def uniform_(tensor, a=0.0, b=1.0, generator=None, *, low=None, high=None):
             raise TypeError("uniform_ received conflicting values for b and high")
         b = high
     if _not_var(tensor): return tensor
+    if generator is not None:
+        if not hasattr(generator, "_uniform"):
+            raise NotImplementedError("generator does not provide a compatible uniform stream")
+        values = generator._uniform(float(a), float(b), tensor.shape, _jittor_dtype_name(tensor.dtype))
+        return _assign(tensor, values)
     return _assign(tensor, (_jt2.rand(tensor.shape) * (b - a) + a).cast(_jittor_dtype_name(tensor.dtype)))
 
 

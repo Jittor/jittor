@@ -489,6 +489,9 @@ VarHolder* VarHolder::update(VarHolder* v) {
 }
 
 VarHolder* VarHolder::_update(VarHolder* v) {
+    // Python in-place wrappers call `_update` directly. A view must write the
+    // replacement through its root instead of rebinding only the view holder.
+    if (is_view()) return assign(v);
     if (var->flag(VarFlags::_placement_published))
         v->var->set_flag(VarFlags::_placement_published);
     release_holder();

@@ -67,6 +67,8 @@ def _write_data_owner_numpy(view, value, slices):
     target = _native_data_descriptor.__get__(owner, Var)
     for index in getattr(view, "_torch_data_path", ()):
         target = target[_numpy_data_value(index)]
+    if not getattr(getattr(target, "flags", None), "writeable", True):
+        return _assign_data_owner(view, value, (slices,))
     target[_numpy_data_value(slices)] = _numpy_data_value(value)
     return True
 
@@ -163,6 +165,7 @@ def _torch_setitem(self, slices, value):
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _orig_setitem = _native['_orig_setitem']
+    slices = _align_advanced_index(self, slices)
     # PyTorch promotes a no-grad destination to a differentiable non-leaf when
     # an indexed assignment consumes a grad-enabled source.  Jittor otherwise
     # leaves the destination stopped, so even a differentiable replacement
@@ -509,8 +512,11 @@ def _torch_getitem(self, slices):
     # Complete that record for Torch-only slice spellings; advanced
     # indexing stays a copy. No Python parent chain is needed.
     if isinstance(out, _NativeVar) and _is_basic_index(slices):
-        if not out._is_view():
-            out._set_view_of(self, slices)
+        # Re-register even when the native result already carries a view
+        # marker: set_view_of flattens a view-of-view to its live root, while
+        # retaining the intermediate marker can leave chained writes attached
+        # to a temporary holder.
+        out._set_view_of(self, slices)
         try:
             data_owner = getattr(self, "_torch_data_owner", None)
             if isinstance(data_owner, _NativeVar):
@@ -967,7 +973,15 @@ def _promoting_binary(self, other, opname, reflected):
             # branch ``0 + cpu_tensor`` can combine a CUDA-default scalar
             # with an explicit CPU Var inside a module frontend scope.
             scalar = scalar.cpu()
-        return _promoting_binary(self, scalar, opname, reflected)
+        # Python numbers are constants in Torch autograd. Placement conversion
+        # creates a new native Var, so stop gradients only after that conversion.
+        scalar.stop_grad()
+        result = _promoting_binary(self, scalar, opname, reflected)
+        # CUDA native binary ops may mark an output trainable even when both
+        # inputs are stopped. The Python scalar contributes no autograd edge.
+        if not bool(self.requires_grad):
+            result.stop_grad()
+        return result
     out = _binary_native(opname, self, other)
     if isinstance(other, (bool, int, float)) and isinstance(out, _NativeVar):
         expected = _owner._dtype_to_str(g.result_type(self, other))
@@ -1025,7 +1039,47 @@ def _true_division(self, other, opname):
 
 
 def _tensor_add(self, other):
+    from ..numerical.sparse import _SparseCOO
+    if isinstance(other, _SparseCOO):
+        other = other.to_dense()
     return _promoting_binary(self, other, '__add__', False)
+
+
+def _inplace_dtype_category(name):
+    if name == "bool":
+        return 0
+    if name.startswith(("int", "uint")):
+        return 1
+    if name.startswith(("float", "bfloat")):
+        return 2
+    if name.startswith("complex"):
+        return 3
+    return 4
+
+
+def _tensor_iadd(self, other):
+    if (bool(self.requires_grad) and bool(self.is_leaf)
+            and not bool(getattr(_owner.jt.flags, "no_grad", 0))):
+        raise RuntimeError(
+            "a leaf Variable that requires grad is being used in an in-place operation."
+        )
+    value = _tensor_add(self, other)
+    if tuple(value.shape) != tuple(self.shape):
+        raise RuntimeError(
+            f"output with shape {list(self.shape)} doesn't match the broadcast shape "
+            f"{list(value.shape)}"
+        )
+    source_dtype = _jittor_dtype_name(value.dtype)
+    target_dtype = _jittor_dtype_name(self.dtype)
+
+    if _inplace_dtype_category(source_dtype) > _inplace_dtype_category(target_dtype):
+        raise RuntimeError(
+            f"result type {source_dtype} can't be cast to the desired output type "
+            f"{target_dtype}"
+        )
+    if source_dtype != target_dtype:
+        value = value.cast(target_dtype)
+    return _ip(self, value)
 
 
 def _tensor_radd(self, other):
@@ -1151,11 +1205,28 @@ def _api_nonzero(input, as_tuple=False, **kw):
 
 
 def _api_normal(self, mean=0.0, std=1.0, generator=None):
-    return _ip(self, _owner.jt.normal(float(mean), float(std), self.shape).cast(_jittor_dtype_name(self.dtype)))
+    value = _owner.jt.normal(float(mean), float(std), self.shape).cast(
+        _jittor_dtype_name(self.dtype)
+    )
+    value.stop_grad()
+    return _ip(self, value)
 
 
 def _api_uniform(self, a=0.0, b=1.0, generator=None):
-    return _ip(self, (_owner.jt.rand(self.shape) * (b - a) + a).cast(_jittor_dtype_name(self.dtype)))
+    if generator is not None:
+        if not hasattr(generator, "_uniform"):
+            raise NotImplementedError(
+                "generator does not provide a compatible uniform stream"
+            )
+        value = generator._uniform(
+            float(a), float(b), self.shape, _jittor_dtype_name(self.dtype)
+        )
+    else:
+        value = (_owner.jt.rand(self.shape) * (b - a) + a).cast(
+            _jittor_dtype_name(self.dtype)
+        )
+    value.stop_grad()
+    return _ip(self, value)
 
 
 def _api_tolist(self):

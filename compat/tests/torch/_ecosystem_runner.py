@@ -112,13 +112,15 @@ def _select_device(torch, runtime, device, *, policy_stack=None):
             if not _test_capability.check_accelerator("cuda", backend=jt).enabled:
                 raise SystemExit("CUDA is unavailable in this Jittor build")
             policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
+            return lambda tensor: tensor.cuda()
         elif device == "npu":
             if not _test_capability.check_accelerator("acl", backend=jt).enabled:
                 raise SystemExit("ACL is unavailable in this Jittor build")
             policy_stack.enter_context(jt.runtime.scope(use_cuda=1, use_acl=1))
+            return lambda tensor: tensor.cuda()
         else:
             policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
-        return lambda tensor: tensor
+            return lambda tensor: tensor.cpu()
     if device == "cuda":
         if not torch.cuda.is_available():
             raise SystemExit("CUDA is unavailable in this PyTorch build")
@@ -187,6 +189,13 @@ def _runtime_conditions(torch, tf32):
         },
         "precision": tf32,
     }
+
+
+def _configure_runtime_threads(torch):
+    configured = os.environ.get("OMP_NUM_THREADS", "").strip()
+    setter = getattr(torch, "set_num_threads", None)
+    if configured and callable(setter):
+        setter(int(configured))
 
 
 def _configure_tf32(torch, device):
@@ -263,6 +272,26 @@ def _numpy_snapshot(value):
     return np.array(value.detach().cpu().numpy(), dtype="float32", copy=True)
 
 
+def _parameter_grad_state(model):
+    """Return the complete parameter freeze contract without mutating it."""
+    trainable = []
+    frozen = []
+    for name, parameter in model.named_parameters():
+        destination = trainable if bool(parameter.requires_grad) else frozen
+        destination.append(name)
+    return {"trainable": trainable, "frozen": frozen}
+
+
+def _evaluate_preserving_parameter_grads(model):
+    """Enter eval mode and capture the caller's unchanged freeze contract."""
+    before = _parameter_grad_state(model)
+    model.eval()
+    after = _parameter_grad_state(model)
+    if after != before:
+        raise RuntimeError("model.eval() changed parameter requires_grad state")
+    return after
+
+
 def main():
     with ExitStack() as policy_stack:
         return _run(policy_stack)
@@ -282,6 +311,7 @@ def _run(policy_stack):
     torch = _import_torch(options.runtime)
     to_device = _select_device(torch, options.runtime, options.device, policy_stack=policy_stack)
     tf32 = _configure_tf32(torch, options.device)
+    _configure_runtime_threads(torch)
     runtime_conditions = _runtime_conditions(torch, tf32)
 
     fallback_scope = nullcontext()
@@ -299,7 +329,7 @@ def _run(policy_stack):
         builder, requirements = _ecosystem_cases.CASES[options.case]
         model, input_spec = builder(torch)
         dependencies = _dependency_report(requirements)
-        model.eval()
+        parameter_grad_state = _evaluate_preserving_parameter_grads(model)
         if options.runtime == "torch" and options.device != "cpu":
             model.to(options.device)
 
@@ -341,15 +371,6 @@ def _run(policy_stack):
                 },
             )
 
-        # ``eval()`` in Jittor also stops gradients on every parameter; PyTorch's
-        # does not.  Re-enable them so both runtimes differentiate the same graph.
-        for parameter in model.parameters():
-            start_grad = getattr(parameter, "start_grad", None)
-            if callable(start_grad):
-                start_grad()
-            else:
-                parameter.requires_grad_(True)
-
         inputs = _make_inputs(torch, input_spec, options.seed + 1, to_device)
         output = _primary_output(model(**inputs))
 
@@ -360,10 +381,12 @@ def _run(policy_stack):
 
         _synchronize(torch, options.runtime, options.device)
         arrays = {"__output__": _numpy_snapshot(output)}
+        parameter_grads = []
         for name, parameter in model.named_parameters():
             grad = getattr(parameter, "grad", None)
             if grad is None:
                 continue
+            parameter_grads.append(name)
             arrays["grad::" + name] = _numpy_snapshot(grad)
         for name, tensor in inputs.items():
             grad = getattr(tensor, "grad", None)
@@ -443,6 +466,8 @@ def _run(policy_stack):
                 "fallback_policy": "error" if options.runtime == "jittor" else None,
                 "package_site": os.environ.get("JITTOR_ECOSYSTEM_PACKAGE_SITE", ""),
                 "dependencies": dependencies,
+                "parameters": parameter_grad_state,
+                "parameter_grads": parameter_grads,
                 "tf32": tf32,
                 "runtime_conditions": runtime_conditions,
             }

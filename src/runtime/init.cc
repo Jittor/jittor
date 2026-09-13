@@ -6,6 +6,7 @@
 // ***************************************************************
 #include "runtime/device.h"
 #include "runtime/backend.h"
+#include <dlfcn.h>
 #include <random>
 
 #include <csignal>
@@ -125,6 +126,21 @@ void set_seed(int seed) {
 
 int get_seed() {
     return current_seed;
+}
+
+int get_cpu_num_threads() {
+    using Getter = int (*)();
+    auto getter = reinterpret_cast<Getter>(dlsym(RTLD_DEFAULT, "omp_get_max_threads"));
+    if (getter) return getter();
+    return 1;
+}
+
+void set_cpu_num_threads(int threads) {
+    USER_CHECK(threads > 0) << "set_cpu_num_threads expects a positive integer, got" << threads;
+    using Setter = void (*)(int);
+    auto setter = reinterpret_cast<Setter>(dlsym(RTLD_DEFAULT, "omp_set_num_threads"));
+    USER_CHECK(setter || threads == 1) << "this Jittor build has no OpenMP support";
+    if (setter) setter(threads);
 }
 
 void add_set_seed_callback(set_seed_callback callback) {

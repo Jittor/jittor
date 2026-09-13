@@ -40,6 +40,8 @@ class LayerInitializer:
         self.original = native.__init__
         self.__wrapped__ = self.original
         self.__name__ = "__init__"
+        self.__code__ = self.original.__code__
+        self.__defaults__ = self.original.__defaults__
 
     def __get__(self, instance, owner=None):
         return self if instance is None else types.MethodType(self, instance)
@@ -74,6 +76,7 @@ class NNFrontendOwner:
         self.Module = type("Module", (self.native_module,), {
             "__module__": "torch.nn", "__slots__": (),
             "_frontend_tensor_type": tensor_type, "_nn_frontend_owner": self,
+            "__init__": self.native_module.__init__,
             "__setattr__": module_setattr, "__call__": module_call,
         })
         self.adapters = {self.native_module: self.Module}
@@ -99,10 +102,15 @@ class NNFrontendOwner:
         known = self.adapters.get(native)
         if known is not None:
             return known
-        adapted = type(native.__name__, (native, self.Module), {
+        is_linear = native is getattr(self.backend.nn, "Linear", None)
+        bases = (self.Module, native) if is_linear else (native, self.Module)
+        namespace = {
             "__module__": "torch.nn", "__slots__": (),
             "__init__": LayerInitializer(self, native), "_torch_native_layer": native,
-        })
+        }
+        if is_linear:
+            namespace["execute"] = native.execute
+        adapted = type(native.__name__, bases, namespace)
         self.adapters[native] = adapted
         return adapted
 

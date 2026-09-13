@@ -662,8 +662,11 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
         # unused parameters. loss.backward() then leaves the group
         # without gradients and step() must be a no-op, not KeyError.
         grads = pg.get("grads") or [None] * len(pg["params"])
-        fused = (decoupled_weight_decay and jt.flags.use_acl and
-                 pg.get("fused", getattr(self, "fused", None)) is True)
+        fused_requested = pg.get("fused", getattr(self, "fused", None)) is True
+        fused = False
+        if decoupled_weight_decay and fused_requested and pg["params"]:
+            from jittor._runtime.dispatch import dispatch_context
+            fused = dispatch_context(pg["params"]).backend == "acl"
         if fused:
             active = []
             for i, (p, g, v, m) in enumerate(zip(
@@ -747,6 +750,10 @@ def adam_init(self, params, lr=1e-3, *args, **kwargs):
 
 
 def adamw_init(self, params, lr=1e-3, *args, **kwargs):
+    # torch.optim.AdamW defaults to decoupled weight decay, while Jittor's
+    # native optimizer keeps its historical no-decay default.
+    if len(args) < 3 and "weight_decay" not in kwargs:
+        kwargs["weight_decay"] = 0.01
     return _initialize_default(self, params, lr, args, kwargs, 'AdamW')
 
 

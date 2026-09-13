@@ -563,11 +563,13 @@ def _api_python_dispatch__get_current_dispatch_mode(*args, **kwargs):
 
 
 def _api_g_get_num_threads():
-    return os.cpu_count() or 1
+    return int(jt.get_cpu_num_threads())
 
 
-def _api_g_set_num_threads(*args, **kwargs):
-    return None
+def _api_g_set_num_threads(threads):
+    if isinstance(threads, bool) or not isinstance(threads, int) or threads <= 0:
+        raise RuntimeError("set_num_threads expects a positive integer")
+    jt.set_cpu_num_threads(threads)
 
 
 def _api_g_get_num_interop_threads():

@@ -387,6 +387,12 @@ def _manual_seed(s):
     ctx = _misc_context()
     g = ctx.jittor_module
     s = int(s)
+    # Torch random factories consume their old stream before manual_seed
+    # returns. Jittor evaluates lazily, so materialize the currently live graph
+    # before resetting its stream; otherwise pending model initialization runs
+    # under the new sampling seed and shifts every later random draw.
+    if hasattr(jt, "sync_all"):
+        jt.sync_all()
     ctx.state["core_misc"]["seed"] = s
     if hasattr(jt, "set_global_seed"):
         jt.set_global_seed(s)

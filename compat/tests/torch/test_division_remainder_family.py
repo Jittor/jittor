@@ -65,6 +65,11 @@ class _FamilyChecks(object):
             self._check(tensor.remainder(divisor), np.mod(reference, divisor),
                         "remainder({0})".format(divisor))
 
+    def test_module_remainder_matches_tensor_method(self):
+        tensor = self._tensor(_DIVIDENDS)
+        self._check(torch.remainder(tensor, -2.0), np.mod(_DIVIDENDS, -2.0),
+                    "torch.remainder")
+
     def test_fmod_and_remainder_disagree_on_mixed_signs(self):
         """The guard against implementing one as the other."""
         tensor = self._tensor(_DIVIDENDS)
