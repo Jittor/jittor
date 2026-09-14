@@ -637,6 +637,28 @@ def get_default_device():
     return g.device("cuda", index if index >= 0 else 0)
 
 
+def get_device_module(device=None):
+    """torch.get_device_module: the module that implements a device's runtime.
+
+    No argument means "the current accelerator", as in torch; under the facade
+    that is CUDA whenever jittor's ``use_cuda`` flag is on. MiniMax-H3's video
+    VAE stores the result and drives its ``device()`` scope and ``manual_seed``
+    through it, so a missing name aborted engine construction.
+    """
+    ctx = _misc_context()
+    g = ctx.jittor_module
+    resolved = get_default_device() if device is None else device
+    name = getattr(resolved, "type", None) or str(resolved).split(":")[0]
+    if name in ("cuda", "gpu"):
+        return g.cuda
+    if name == "npu" and hasattr(g, "npu"):
+        return g.npu
+    if name == "cpu":
+        return g.cpu
+    raise NotImplementedError(
+        "torch.get_device_module(%r): unsupported device type %r" % (device, name))
+
+
 def set_default_device(device=None):
     """torch.set_default_device -- now actually moves the default.
 
@@ -856,6 +878,7 @@ _MISC_BINDINGS = {
     "set_default_dtype": set_default_dtype,
     "get_default_device": get_default_device,
     "set_default_device": set_default_device,
+    "get_device_module": get_device_module,
 }
 _MISC_DETAILS = {
     "PyTorchFileReader": "raises NotImplementedError; use torch.load instead",
