@@ -62,6 +62,27 @@ framework defects.
 - Review/expiry condition: remove only after sanitizer-backed root cause and
   repeated cold/warm stress, deadlock, multiprocess-cache, and performance gates
 
+## KI-COMPILER-005: a relayed subgraph's inputs are freed while the fused op still points at them
+
+- Severity: High
+- Status: Open
+- Owner: compiler and tuner maintainers
+- Evidence: AddressSanitizer report from the MiniMax-H3 tiny run under
+  `cc_flags=-fsanitize=address`; the
+  [exit-corruption report](../../docs/results/2026-09-14-exit-heap-corruption.md)
+- Symptom: `VarRelayManager::add_relay_group` calls `op->set_inputs(new_inputs)`
+  to break the link between a relayed source and its target, and
+  `release_inputs` then frees inputs that `FusedOp::vars` and the relay op's own
+  Var members still reference. `ReindexOp::jit_prepare` reads `x->ns`
+  afterwards, and `FusedOp::prepare_fused_key` walks the same vars, so a fused
+  key can be built from freed memory (or Crash). The MiniMax-H3 video VAE
+  reaches it through `ConvTuner::forwardTune`.
+- Workaround: none known; `jt.flags.use_parallel_op_compiler = 0` does not close
+  the window, because the free and the read are on the same thread.
+- Review/expiry condition: make the removed inputs outlive key preparation
+  (keep them alive, or point the relay op's members at live vars before
+  `prepare_fused_key`), then re-run the tiny pipeline under ASAN with no report.
+
 ## KI-BACKEND-001: narrow integer sum/max/min lack NPU atomics
 
 - Severity: High
