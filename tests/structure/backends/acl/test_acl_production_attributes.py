@@ -172,7 +172,9 @@ def test_generated_and_runtime_attribute_sources_cannot_be_mixed(pipeline):
 
 
 def test_encoded_values_reach_real_cpp_attribute_types(pipeline, tmp_path):
-    load, _, _ = pipeline
+    import re
+
+    load, Tensor, calls = pipeline
     encode = load("_attributes").attribute_data
     spec = importlib.util.spec_from_file_location(
         "attribute_sdk_stub", ROOT / "agent/skills/acl-host-syntax-check/make_cann_stub.py"
@@ -182,6 +184,9 @@ def test_encoded_values_reach_real_cpp_attribute_types(pipeline, tmp_path):
     stub = tmp_path / "sdk"
     stubber.build(ROOT / "backends/acl", stub)
     cases = [
+        ("AdaptiveAvgPool2d", {"outputSize": [3, 4]},
+         "dynamic_cast<AdaptiveAvgPool2dAttr*>(runner.op_attr.get())->outputSize == std::vector<int64_t>({3, 4})"),
+        ("AdaptiveAvgPool2dBackward", {}, 'runner.jt_name == "adaptive_avg_pool2d_backward"'),
         ("Softmax", {"dim": -1}, "dynamic_cast<SoftmaxAttr*>(runner.op_attr.get())->dim == -1"),
         (
             "SoftmaxBackward",
@@ -312,6 +317,75 @@ def test_encoded_values_reach_real_cpp_attribute_types(pipeline, tmp_path):
                 'try { apply_acl_code_attributes(runner,data,"acl_attr.","Range"); } '
                 'catch (const InternalInvariantError&) { rejected=true; } assert(rejected); }'
             )
+    # Exercise one real CodeOp data map carrying forward and backward owners.
+    # Distinct values catch field overwrites as well as the extra-op-marker bug.
+    code = load("_code").acl_code
+    code("Softmax", [Tensor((2, 3))], output_shapes=[(2, 3)],
+         output_dtypes=["float32"], attributes={"dim": 0},
+         multi_grad_src="SoftmaxBackwardOpRunner op; op.run();",
+         multi_grad_attributes={"dim": 1})
+    combined = calls[-1]
+    entries = ",".join(
+        "{" + json.dumps(key) + "," + repr(value) + "}"
+        for key, value in combined["data"].items()
+    )
+    for name, source, expected_dim in (
+        ("Softmax", combined["cuda_src"], 0),
+        ("SoftmaxBackward", combined["cuda_grad_src"][0], 1),
+    ):
+        application = re.search(r'apply_acl_code_attributes\(op, data, "([^"]+)", "[^"]+"\);', source)
+        assert application is not None
+        prefix = application.group(1)
+        body.append(
+            "{ Runner op{" + json.dumps(name) + "}; Map data{" + entries + "}; "
+            + application.group() +
+            " assert(dynamic_cast<SoftmaxAttr*>(op.op_attr.get())->dim == "
+            + str(expected_dim) + "); "
+            "data[" + json.dumps(prefix + "surprise") + "] = 1; bool rejected=false; "
+            "try { " + application.group() + " } "
+            "catch (const UserError&) { rejected=true; } assert(rejected); }"
+        )
+    # Feed the real SwiGlu producer into the production decoder and assignment.
+    # A separate carrier without dim also instantiates the same template: adding
+    # SwiGlu must not require every other runner to have a dimension member.
+    for dim in (0, -1):
+        load("silu_op").SwiGluACL().execute(Tensor((2, 8), "float16"), dim)
+        swiglu = calls[-1]
+        entries = ",".join(
+            "{" + json.dumps(key) + "," + repr(value) + "}"
+            for key, value in swiglu["data"].items()
+        )
+        application = re.search(
+            r'apply_acl_code_attributes\(op, data, "([^"]+)", "SwiGlu"\);',
+            swiglu["cuda_src"],
+        )
+        assert application is not None
+        prefix = application.group(1)
+        body.append(
+            '{ SwiGluRunner op; Map data{' + entries + '}; '
+            + application.group()
+            + ' assert(op.dim == ' + str(dim % 2) + ' && op.jt_name == "swiglu"); '
+            'auto good = data; data[' + json.dumps(prefix + 'surprise') + '] = 1; '
+            'bool rejected=false; try { ' + application.group() + ' } '
+            'catch (const UserError&) { rejected=true; } assert(rejected); '
+            'Runner missing{"SwiGlu"}; rejected=false; '
+            'try { apply_acl_code_attributes(missing, good, ' + json.dumps(prefix) + '); } '
+            'catch (const InternalInvariantError&) { rejected=true; } assert(rejected); }'
+        )
+    # Run the *whole* generated BatchNorm backward program, not just an
+    # extracted apply statement: attributes must exist when the runner launches.
+    load("norms_op").BatchNormACL(eps=0.125, momentum=0.25, is_train=False)(
+        Tensor((2, 3, 4, 4)), Tensor((3,)), Tensor((3,)), Tensor((3,)), Tensor((3,)))
+    batch_norm = calls[-1]
+    entries = ",".join(
+        "{" + json.dumps(key) + "," + repr(value) + "}"
+        for key, value in batch_norm["data"].items()
+    )
+    body.append(
+        "{ Map data{" + entries + "}; "
+        "int dout=0,in0=0,in1=0,in3=0,in4=0,pout1=0,pout2=0,out0=0,out1=0,out2=0; "
+        + batch_norm["cuda_grad_src"][0] + " assert(op.executed); }"
+    )
     unit = tmp_path / "attributes.cc"
     unit.write_text(
         """
@@ -329,6 +403,22 @@ struct Runner {
     vector<int64_t> shifts, dims;
 };
 using Map = std::unordered_map<string, double>;
+struct SwiGluRunner : Runner {
+    int64_t dim = -1;
+    SwiGluRunner() { name = "SwiGlu"; }
+};
+struct BatchNormBackwardOpRunner : Runner {
+    bool executed = false;
+    BatchNormBackwardOpRunner() { name = "BatchNormBackward"; }
+    void add(int, bool) {}
+    void run() {
+        assert(op_attr && "attributes must be installed before executeOp");
+        auto* attributes = dynamic_cast<BatchNormAttr*>(op_attr.get());
+        assert(attributes && !attributes->is_train);
+        assert(attributes->eps == 0.125 && attributes->momentum == 0.25);
+        executed = true;
+    }
+};
 int main() {
 """
         + "\n".join(body)
@@ -412,3 +502,32 @@ def test_complete_forward_backward_payloads_are_disjoint(pipeline):
     dropout.execute(x, 0.5, False)
     assert calls[-1]["cuda_src"] == calls[-2]["cuda_src"]
     assert calls[-1]["data"] != calls[-2]["data"]
+
+
+def test_flash_attention_backward_attributes_precede_single_launch(pipeline):
+    """Assemble the real attention CodeOp, including its multi-output gradient."""
+    load, Tensor, calls = pipeline
+    attention = load("flashattention_op").FlashAttentionACL(
+        headnum=2, scale=0.25, layout="BNSD")
+    q = Tensor((1, 2, 3, 8), "float16")
+    output = attention(q, q, q)
+    assert output.shape == q.shape
+    call = calls[-1]
+    assert call["data"]["multi_grad"] == 1
+    assert len(call["cuda_grad_src"]) == 1
+    backward = call["cuda_grad_src"][0]
+    application = 'apply_acl_code_attributes(op, data, "acl_grad_attr.", "FlashAttentionBackward");'
+    assert application in backward
+    assert backward.count("op.run();") == 1
+    assert backward.index(application) < backward.index("op.run();")
+    assert all("op.add(out{}, false);".format(i) in backward for i in range(3))
+    attribute_data = load("_attributes").attribute_data
+    expected = attribute_data("FlashAttentionBackward", {
+        "scale": 0.25, "keepProb": 1.0, "preToken": 2147483647,
+        "nextToken": 2147483647, "headNum": 2, "inputLayout": "BNSD",
+        "innerPrecise": 0, "sparseMode": 0, "psetype": 1,
+        "prefix": [0], "qStartIdx": [0], "kvStartIdx": [0],
+        "hasRealshift": False, "hasDropmask": False,
+        "hasPaddingmask": False, "hasAttentmask": False,
+    }, prefix="acl_grad_attr.")
+    assert all(call["data"][key] == value for key, value in expected.items())

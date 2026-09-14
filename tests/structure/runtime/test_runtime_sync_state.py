@@ -681,7 +681,7 @@ def test_disable_lock_is_startup_config_not_a_runtime_switch():
         with pytest.raises(AttributeError):
             setattr(owner, "disable_lock", not bool(original))
     with pytest.raises(RuntimeError, match="immutable startup configuration"):
-        jt.flags.disable_lock = not bool(original)
+        setattr(jt.flags, "disable_lock", not bool(original))
     with pytest.raises(AttributeError):
         jt.runtime.scope(disable_lock=not bool(original))
     assert jt.flags.disable_lock == original

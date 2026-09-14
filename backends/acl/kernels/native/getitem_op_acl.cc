@@ -115,6 +115,22 @@ namespace jittor
             ret = aclrtMemsetAsync(out_[0]->mem_ptr, out_[0]->size, 0, out_[0]->size, aclstream);
             if (ret != ACL_SUCCESS) LOGf << name << ": aclrtMemsetAsync failed. ERROR:" << ret;
         }
+        else
+        {
+            CHECK(in_.size() == 2);
+            CHECK(inputShapes[1] == outputShapes[0]);
+            CHECK(in_[1]->is_contiguous());
+            CHECK(in_[1]->size == out_[0]->size);
+            // Forward partial assignment reads the full base as a tracked
+            // dense input; untouched elements must survive the slice write.
+            if (in_[1]->mem_ptr != out_[0]->mem_ptr)
+            {
+                ret = aclrtMemcpyAsync(out_[0]->mem_ptr, out_[0]->size,
+                    in_[1]->mem_ptr, in_[1]->size,
+                    ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
+                if (ret != ACL_SUCCESS) LOGf << name << ": base copy failed. ERROR:" << ret;
+            }
+        }
         auto begins = aclCreateIntArray(attr->begins.data(), attr->begins.size());
         auto ends = aclCreateIntArray(attr->ends.data(), attr->ends.size());
         auto steps = aclCreateIntArray(attr->steps.data(), attr->steps.size());

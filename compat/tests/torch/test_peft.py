@@ -34,9 +34,9 @@ try:
     import jittor as jt
     from torch import nn
     from peft import LoraConfig, get_peft_model, PeftModel
-    _HAS = _is_active_jittor_frontend(torch, jt)
-except Exception:
-    if _REQUIRE_OPTIONAL_DEPS:
+    _HAS = True
+except ModuleNotFoundError as error:
+    if error.name != "peft" or _REQUIRE_OPTIONAL_DEPS:
         raise
     _HAS = False
 
@@ -63,6 +63,12 @@ def _lora(model, r=4):
 
 @unittest.skipUnless(_HAS, "needs torch_shim + peft")
 class TestPeftLora(unittest.TestCase):
+    def setUp(self):
+        self.assertTrue(
+            _is_active_jittor_frontend(torch, jt),
+            "PEFT must execute through the active independent Jittor frontend",
+        )
+
     def test_wrap_freezes_base_and_grad_semantics(self):
         pm = _lora(_Tiny())
         trainable = [n for n, p in pm.named_parameters() if getattr(p, 'requires_grad', True)]

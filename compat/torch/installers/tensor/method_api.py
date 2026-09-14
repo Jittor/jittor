@@ -1023,7 +1023,7 @@ def _api_tolist(self):
     return self.item() if getattr(self, '_torch_0d', False) else self.numpy().tolist()
 
 
-def _api_contiguous(self, memory_format=None):
+def _api_contiguous(self, memory_format="contiguous_format"):
     """Torch's ``contiguous``: the same tensor when already contiguous, else a copy.
 
     A Jittor Var can carry storage smaller than its logical shape -- ``broadcast``
@@ -1033,7 +1033,13 @@ def _api_contiguous(self, memory_format=None):
     contiguous() first" while the call meant to fix the layout did nothing.
     A Var whose storage already matches its shape is still returned unchanged,
     so the hot ``transpose(...).contiguous()`` path keeps its zero-copy behavior.
+
+    Only ``contiguous_format`` is supported. Accepting and ignoring
+    ``channels_last`` would hand back a tensor in the wrong layout under a name
+    that promises otherwise, so it is refused instead.
     """
+    if memory_format not in (None, "contiguous_format"):
+        raise NotImplementedError("contiguous supports contiguous_format")
     if self._storage_is_contiguous():
         return self
     return _owner.jt.contiguous(self)

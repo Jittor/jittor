@@ -69,19 +69,28 @@ def test_python_backend_prototype_is_retired_from_runtime_exports():
 
 def test_python_dispatch_queries_native_placement_without_fake_backend_capabilities():
     tree = _parse("dispatch.py")
-    context = next(node for node in tree.body
-                   if isinstance(node, ast.FunctionDef) and node.name == "dispatch_context")
-    assert any(
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "dispatch_context"
-        and isinstance(node.func.value, ast.Attribute)
-        and node.func.value.attr == "core"
-        for node in ast.walk(context)
-    )
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    context = functions["dispatch_context"]
+    backend = functions["_dispatch_backend"]
+    placement = functions["_dispatch_placement"]
+    # The optimized public facade delegates through two helpers. Follow the
+    # complete chain so a helper rename cannot hide a Python backend guess.
+    assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+               and node.func.id == "_dispatch_backend" for node in ast.walk(context))
+    assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+               and node.func.id == "_dispatch_placement" for node in ast.walk(backend))
+    assert any(isinstance(node, ast.Assign) and isinstance(node.value, ast.Attribute)
+               and node.value.attr == "core"
+               and any(isinstance(target, ast.Name) and target.id == "core"
+                       for target in node.targets) for node in ast.walk(placement))
+    assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+               and node.func.attr == "dispatch_context"
+               and isinstance(node.func.value, ast.Name) and node.func.value.id == "core"
+               for node in ast.walk(placement))
     # Backend selection belongs to the native query, including no-input calls.
-    assert not any(isinstance(node, ast.Str) and node.s in {"cpu", "cuda", "acl"}
-                   for node in ast.walk(context))
+    for function in (context, backend, placement):
+        assert not any(isinstance(node, ast.Str) and node.s in {"cpu", "cuda", "acl"}
+                       for node in ast.walk(function))
     assert not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                    and node.func.id == "bytearray" for node in ast.walk(tree))
     assert not any(isinstance(node, (ast.ClassDef, ast.FunctionDef))

@@ -126,7 +126,10 @@ class OpInfo:
                             INDEPENDENT oracle that makes a green forward meaningful.
       sample_inputs_func:   ``f(opinfo, device, dtype, requires_grad) -> [SampleInput]``.
       error_inputs_func:    ``f(opinfo, device, dtype) -> [ErrorInput]``.
-      dtypes / dtypesIfCUDA: supported dtype sets (``cu.floating_types()`` etc.).
+      dtypes / dtypesIfCUDA: dtype sets (``cu.floating_types()`` etc.).
+      dtypesIfNPU:          independently audited NPU dtype set. None means the
+                            generic dtypes remain unverified test candidates;
+                            CUDA-specific declarations never imply NPU support.
       supports_autograd:    whether to run gradcheck (default True).
       supports_gradgrad:    whether to run gradgradcheck (default = supports_autograd).
       gradcheck_nondet_tol: extra absolute slack for nondeterministic ops.
@@ -138,7 +141,7 @@ class OpInfo:
 
     def __init__(self, name, *, op=None, ref=None, sample_inputs_func=None,
                  error_inputs_func=None,
-                 dtypes=None, dtypesIfCUDA=None,
+                 dtypes=None, dtypesIfCUDA=None, dtypesIfNPU=None,
                  supports_autograd=True, supports_gradgrad=None,
                  gradcheck_nondet_tol=0.0, gradcheck_wrapper=None,
                  reference_tol=None,
@@ -166,6 +169,8 @@ class OpInfo:
         self.dtypes_are_explicit = dtypes is not None
         self.dtypes = tuple(dtypes) if dtypes is not None else cu.floating_types()
         self.dtypesIfCUDA = tuple(dtypesIfCUDA) if dtypesIfCUDA is not None else self.dtypes
+        self.dtypesIfNPU = tuple(dtypesIfNPU) if dtypesIfNPU is not None else None
+        self.npu_dtypes_are_explicit = dtypesIfNPU is not None
         self.supports_autograd = supports_autograd
         self.supports_gradgrad = (supports_autograd if supports_gradgrad is None
                                   else supports_gradgrad)
@@ -194,7 +199,11 @@ class OpInfo:
 
     # -- sample inputs ------------------------------------------------------
     def supported_dtypes(self, device):
-        return self.dtypesIfCUDA if device in ("cuda", "npu") else self.dtypes
+        if device == "npu":
+            # Keep unaudited entries under test rather than silently dropping
+            # them. Their generic candidates are not a verified support claim.
+            return self.dtypes if self.dtypesIfNPU is None else self.dtypesIfNPU
+        return self.dtypesIfCUDA if device == "cuda" else self.dtypes
 
     def supports_dtype(self, dtype, device):
         return dtype in self.supported_dtypes(device)

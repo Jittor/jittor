@@ -58,6 +58,8 @@ SCHEMAS = {
         "eps": {"type": "float64"},
     },
     "RmsNorm": {"eps": {"type": "float64"}},
+    "AdaptiveAvgPool2d": {"outputSize": {"type": "int64[]"}},
+    "AdaptiveAvgPool2dBackward": {},
     "Maxpool": {
         "kernel_size": {"type": "int64[]"},
         "poolStrides": {"type": "int64[]"},

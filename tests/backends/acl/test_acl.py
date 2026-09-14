@@ -16,6 +16,28 @@ from jittor import init, Module
 from jittor.nn.backends import hooks as backend_hooks
 
 
+def _assert_acl_device(test_case, value):
+    """Check executed placement before a host fetch changes tensor residency."""
+    test_case.assertTrue(jt.compiler.has_acl)
+    test_case.assertEqual(jt.runtime.use_cuda, 1)
+    value.sync()
+    test_case.assertEqual(value.location(), "device")
+    test_case.assertGreaterEqual(value.device_id, 0)
+    # -1 is native FollowRuntime, which selects ACL in this runtime;
+    # 2 is explicit BackendId::Acl. Do not force native graph placement.
+    test_case.assertIn(value.placement_backend, (-1, 2))
+    return value
+
+
+def _fetch_acl(test_case, values, *, as_float=False):
+    values = list(values)
+    for value in values:
+        _assert_acl_device(test_case, value)
+    if as_float:
+        values = [value.float() for value in values]
+    return jt.fetch_sync(values)
+
+
 def _bfloat16_round(values):
     values = np.asarray(values, dtype=np.float32)
     bits = values.view(np.uint32).copy()
@@ -24,6 +46,136 @@ def _bfloat16_round(values):
 
 @unittest.skipIf(not _test_capability.check_accelerator('acl', backend=jt).enabled, "No ACL found")
 class TestACL(unittest.TestCase):
+
+    def test_setitem_mask_scalar_forward_and_gradients_cpu_and_acl(self):
+        source = np.array([[1., 2.], [3., 4.]], dtype=np.float32)
+        weight = np.array([[2., -3.], [5., 7.]], dtype=np.float32)
+        for mask_np in (np.zeros((2, 2), dtype=bool),
+                        np.array([[False, True], [True, False]]),
+                        np.ones((2, 2), dtype=bool)):
+            expected = source.copy()
+            expected[mask_np] = 5.
+            base_gradient = weight.copy()
+            base_gradient[mask_np] = 0
+            rhs_gradient = np.asarray(weight[mask_np].sum(), dtype=np.float32)
+            for use_cuda in (0, 1):
+                with self.subTest(mask=mask_np.tolist(), use_cuda=use_cuda):
+                    with jt.flag_scope(use_cuda=use_cuda):
+                        base, rhs = jt.array(source), jt.array(np.array(5., dtype=np.float32))
+                        mask = jt.array(mask_np)
+                        output = base.clone()
+                        output[mask] = rhs
+                        gradients = jt.grad((output * jt.array(weight)).sum(), [base, rhs])
+                        values = [output] + list(gradients)
+                        for value in values:
+                            value.sync()
+                            if use_cuda:
+                                _assert_acl_device(self, value)
+                            else:
+                                self.assertEqual(value.location(), "cpu")
+                        for value, reference in zip(values, [expected, base_gradient, rhs_gradient]):
+                            self.assertEqual(tuple(value.shape), reference.shape)
+                            np.testing.assert_allclose(value.numpy(), reference, atol=1e-6, rtol=1e-6)
+
+        with jt.flag_scope(use_cuda=1):
+            mask = jt.array([[False, True], [True, False]])
+            # A one-element vector is not a scalar: preserve the existing
+            # exact-length contract for one-dimensional masked RHS tensors.
+            with self.assertRaisesRegex(ValueError, "length must equal selected"):
+                base = jt.array(source)
+                base[mask] = jt.array([5.])
+
+    def test_setitem_slice_scalar_broadcast_and_gradients_cpu_and_acl(self):
+        rng = np.random.RandomState(31)
+        cases = [
+            ((slice(0, 1), slice(0, 1)), np.array(0., dtype=np.float32)),
+            ((1, 2), np.array(2., dtype=np.float32)),
+            ((slice(1, 3), slice(0, 3)), np.array([2., 3., 4.], dtype=np.float32)),
+            ((slice(None), slice(1, 3)), np.array([[2.], [3.], [4.]], dtype=np.float32)),
+            ((slice(None), slice(None, None, 2)), np.array(2., dtype=np.float32)),
+            ((slice(None), 1), np.array(3., dtype=np.float32)),
+        ]
+        for slices, rhs_np in cases:
+            for initialized_full in (False, True):
+                source_np = (np.ones((3, 4), dtype=np.float32) if initialized_full
+                             else rng.randn(3, 4).astype(np.float32))
+                weight = rng.randn(3, 4).astype(np.float32)
+                expected = source_np.copy()
+                expected[slices] = rhs_np
+                base_gradient = weight.copy()
+                base_gradient[slices] = 0
+                rhs64 = rhs_np.astype(np.float64)
+                rhs_gradient = np.empty_like(rhs64)
+                for index in np.ndindex(rhs64.shape):
+                    saved = rhs64[index]
+                    positive, negative = source_np.astype(np.float64), source_np.astype(np.float64)
+                    rhs64[index] = saved + 1e-5
+                    positive[slices] = rhs64
+                    rhs64[index] = saved - 1e-5
+                    negative[slices] = rhs64
+                    rhs64[index] = saved
+                    rhs_gradient[index] = ((positive - negative) * weight).sum() / 2e-5
+                for use_cuda in (0, 1):
+                    with self.subTest(slices=slices, full=initialized_full, use_cuda=use_cuda):
+                        with jt.flag_scope(use_cuda=use_cuda):
+                            base = jt.ones((3, 4)) if initialized_full else jt.array(source_np)
+                            rhs = jt.array(rhs_np)
+                            output = base.clone()
+                            output[slices] = rhs
+                            gradients = jt.grad((output * jt.array(weight)).sum(), [base, rhs])
+                            values = [output] + list(gradients)
+                            for value in values:
+                                value.sync()
+                                if use_cuda:
+                                    _assert_acl_device(self, value)
+                                else:
+                                    self.assertEqual(value.location(), "cpu")
+                            for value, reference in zip(values, [expected, base_gradient, rhs_gradient]):
+                                self.assertEqual(tuple(value.shape), reference.shape)
+                                np.testing.assert_allclose(value.numpy(), reference, atol=2e-5, rtol=2e-5)
+
+    def test_matmul_transpose_broadcast_forward_and_both_gradients_cpu_and_acl(self):
+        rng = np.random.RandomState(20260910)
+        for batch_a, batch_b in (
+            ((1,), (1,)), ((2, 1), (1, 3)), ((), (2, 3)),
+            ((3,), (2, 1)), ((2, 1), (3,)), ((2, 3), ()), ((), ()),
+        ):
+            a_np = rng.randn(*(batch_a + (2, 3))).astype(np.float32)
+            b_np = rng.randn(*(batch_b + (4, 3))).astype(np.float32)
+            expected = a_np @ b_np.swapaxes(-1, -2)
+            weight = rng.randn(*expected.shape).astype(np.float32)
+            # Finite differences provide an independent reference for both
+            # broadcast-gradient reductions, including missing batch axes.
+            sources = [a_np.astype(np.float64), b_np.astype(np.float64)]
+            expected_grads = []
+            for source in sources:
+                gradient = np.empty_like(source)
+                for index in np.ndindex(source.shape):
+                    saved = source[index]
+                    source[index] = saved + 1e-5
+                    positive = ((sources[0] @ sources[1].swapaxes(-1, -2)) * weight).sum()
+                    source[index] = saved - 1e-5
+                    negative = ((sources[0] @ sources[1].swapaxes(-1, -2)) * weight).sum()
+                    source[index] = saved
+                    gradient[index] = (positive - negative) / 2e-5
+                expected_grads.append(gradient)
+            for use_cuda in (0, 1):
+                with self.subTest(batch_a=batch_a, batch_b=batch_b, use_cuda=use_cuda):
+                    with jt.flag_scope(use_cuda=use_cuda):
+                        a, b = jt.array(a_np), jt.array(b_np)
+                        output = jt.nn.matmul_transpose(a, b)
+                        gradients = jt.grad((output * jt.array(weight)).sum(), [a, b])
+                        values = [output] + list(gradients)
+                        self.assertEqual(jt.runtime.use_cuda, use_cuda)
+                        for value in values:
+                            value.sync()
+                            if use_cuda:
+                                _assert_acl_device(self, value)
+                            else:
+                                self.assertEqual(value.location(), "cpu")
+                        for value, reference in zip(values, [expected] + expected_grads):
+                            self.assertEqual(tuple(value.shape), reference.shape)
+                            np.testing.assert_allclose(value.numpy(), reference, atol=3e-5, rtol=3e-5)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_clamp_scalar_forward_backward_uses_cann(self):
@@ -36,21 +188,17 @@ class TestACL(unittest.TestCase):
             (source_np >= -1.0) & (source_np <= 1.0)
         ).astype(np.float32)
 
-        with jt.log_capture_scope(
-                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
-            source = jt.array(source_np)
-            output = jt.clamp(source, -1.0, 1.0)
-            gradient = jt.grad(output.sum(), source)
-            output.sync()
-            gradient.sync()
-            locations = output.location(), gradient.location()
-            actual, actual_grad = jt.fetch_sync([output, gradient])
+        source = jt.array(source_np)
+        output = jt.clamp(source, -1.0, 1.0)
+        gradient = jt.grad(output.sum(), source)
+        output.sync()
+        gradient.sync()
+        locations = output.location(), gradient.location()
+        actual, actual_grad = _fetch_acl(self, [output, gradient])
 
         self.assertEqual(locations, ("device", "device"))
         np.testing.assert_allclose(actual, expected, equal_nan=True)
         np.testing.assert_array_equal(actual_grad, expected_grad)
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertTrue(any("code->" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_native_fused_adamw_bfloat16_two_steps(self):
@@ -80,6 +228,8 @@ class TestACL(unittest.TestCase):
 
         self.assertEqual(optimizer.n_step, 2)
         self.assertFalse(parameter.is_stop_grad())
+        for state_name in ("m", "values"):
+            self.assertTrue(optimizer.param_groups[0][state_name][0]._storage_is_contiguous())
 
     @staticmethod
     def _paged_attention_reference(query, key, value):
@@ -238,9 +388,9 @@ class TestACL(unittest.TestCase):
         b_np = np.arange(20, dtype=np.float32).reshape(4, 5)
 
         with jt.log_capture_scope(
-            log_v=0, log_vprefix="acl_op_exec.cc=100"
-        ) as logs:
-            actual = jt.matmul(jt.array(a_np), jt.array(b_np)).numpy()
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            output = jt.matmul(jt.array(a_np), jt.array(b_np))
+            actual = _fetch_acl(self, [output])[0]
 
         np.testing.assert_allclose(actual, a_np @ b_np, rtol=1e-5, atol=1e-5)
         messages = [log["msg"].lower() for log in logs]
@@ -365,7 +515,7 @@ class TestACL(unittest.TestCase):
                 x.start_grad()
                 _indices, values = jt.arg_reduce(x, op, dim, keepdims)
                 grad = jt.grad((values * weight).sum(), x)
-                actual.append(grad.numpy())
+                actual.append(_assert_acl_device(self, grad).numpy())
 
         for grad, case in zip(actual, cases):
             np.testing.assert_allclose(grad, case[5], rtol=0, atol=0)
@@ -375,23 +525,22 @@ class TestACL(unittest.TestCase):
             "exec acl op" in message and "arg_reduce" in message
             for message in messages
         ))
-        self.assertTrue(any("compile acl op" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_item_waits_for_acl_stream(self):
         actual = []
-        with jt.log_capture_scope(
-                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
-            for value in range(32):
-                source = jt.array([value], dtype="int64")
-                actual.append(int((source * 3 + 7).item()))
+        for value in range(32):
+            source = jt.array([value], dtype="int64")
+            # Keep item() as the first synchronization on this result.
+            output = source * 3 + 7
+            actual.append(int(output.item()))
+
+        # Verify the same expression on ACL separately, so an explicit
+        # sync does not mask a missing stream wait inside item().
+        probe = jt.array([31], dtype="int64") * 3 + 7
+        self.assertEqual(_fetch_acl(self, [probe])[0].item(), 100)
 
         self.assertEqual(actual, [value * 3 + 7 for value in range(32)])
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertTrue(any(
-            "compile acl op" in message or "compile op(" in message
-            for message in messages
-        ))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_var_gather_uses_acl(self):
@@ -429,23 +578,16 @@ class TestACL(unittest.TestCase):
         left = jt.array(left_np).bfloat16()
         right = jt.array(right_np).bfloat16()
 
-        with jt.log_capture_scope(
-                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
-            added = left + right
-            subtracted = left - right
-            self.assertEqual(str(added.dtype), "bfloat16")
-            self.assertEqual(str(subtracted.dtype), "bfloat16")
-            added, subtracted = jt.fetch_sync(
-                [added.float32(), subtracted.float32()])
+        added = left + right
+        subtracted = left - right
+        self.assertEqual(str(added.dtype), "bfloat16")
+        self.assertEqual(str(subtracted.dtype), "bfloat16")
+        added, subtracted = _fetch_acl(
+            self, [added, subtracted], as_float=True)
 
         np.testing.assert_allclose(added, left_np + right_np, atol=0, rtol=0)
         np.testing.assert_allclose(
             subtracted, left_np - right_np, atol=0, rtol=0)
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertTrue(any(
-            "compile acl op" in message or "compile op(" in message
-            for message in messages
-        ))
 
     @jt.flag_scope(use_acl=1)
     def test_array_cast(self):
@@ -603,12 +745,11 @@ class TestACL(unittest.TestCase):
         )
         source = jt.array(source_np).bfloat16()
 
-        with jt.no_grad(), jt.log_capture_scope(
-                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+        with jt.no_grad():
             output = jt.nn.silu_and_mul(source)
             output.sync()
             location = output.location()
-            actual = output.float32().numpy()
+            actual = _assert_acl_device(self, output).float32().numpy()
 
         expected = np.asarray(
             [[0.384765625, 0.330078125]], dtype=np.float32
@@ -616,16 +757,13 @@ class TestACL(unittest.TestCase):
         self.assertEqual(str(output.dtype), "bfloat16")
         self.assertEqual(location, "device")
         np.testing.assert_array_equal(actual, expected)
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertTrue(any("compile acl op" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_inference_split_uses_cann_split_with_size(self):
         source_np = np.arange(20, dtype=np.float32).reshape(2, 10)
         source = jt.array(source_np).bfloat16()
 
-        with jt.no_grad(), jt.log_capture_scope(
-                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+        with jt.no_grad():
             outputs = source.split([3, 2, 5], dim=-1)
             chunked = source.split(4, dim=-1)
             empty_outputs = jt.empty((0, 10), dtype="float32").split(4, dim=0)
@@ -634,8 +772,8 @@ class TestACL(unittest.TestCase):
             for output in chunked:
                 output.sync()
             locations = [output.location() for output in outputs]
-            actual = [output.float32().numpy() for output in outputs]
-            chunked_actual = [output.float32().numpy() for output in chunked]
+            actual = _fetch_acl(self, outputs, as_float=True)
+            chunked_actual = _fetch_acl(self, chunked, as_float=True)
 
         expected = np.split(source_np, [3, 5], axis=-1)
         self.assertEqual(empty_outputs, ())
@@ -645,8 +783,6 @@ class TestACL(unittest.TestCase):
         chunked_expected = np.split(source_np, [4, 8], axis=-1)
         for output, reference in zip(chunked_actual, chunked_expected):
             np.testing.assert_array_equal(output, reference)
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertTrue(any("compile acl op" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_training_split_keeps_slice_backward(self):
@@ -759,41 +895,38 @@ class TestACL(unittest.TestCase):
                 if index != padding_idx:
                     expected_grad[index] += cotangent_np[batch, token]
 
-        with jt.log_capture_scope(
-            log_v=0, log_vprefix="acl_op_exec.cc=100"
-        ) as logs:
-            weight = jt.array(weight_np)
-            output = jt.nn.embedding(
-                jt.array(indices_np), weight, padding_idx=padding_idx
-            )
-            grad_weight = jt.grad(
-                (output * jt.array(cotangent_np)).sum(), weight
-            )
-            output_no_padding = jt.nn.embedding(
-                jt.array(indices_np), weight
-            )
-            grad_weight_no_padding = jt.grad(
-                (output_no_padding * jt.array(cotangent_np)).sum(), weight
-            )
-            values = jt.fetch_sync([
-                output,
-                grad_weight,
-                output_no_padding,
-                grad_weight_no_padding,
-            ])
-            weight_bf = _bfloat16_round(weight_np)
-            cotangent_bf = _bfloat16_round(cotangent_np)
-            weight_var_bf = jt.array(weight_bf).bfloat16()
-            output_bf = jt.nn.embedding(
-                jt.array(indices_np), weight_var_bf,
-                padding_idx=padding_idx,
-            )
-            grad_weight_bf = jt.grad(
-                (output_bf * jt.array(cotangent_bf).bfloat16()).sum(),
-                weight_var_bf,
-            )
-            bf_values = jt.fetch_sync([
-                output_bf.float32(), grad_weight_bf.float32()])
+        weight = jt.array(weight_np)
+        output = jt.nn.embedding(
+            jt.array(indices_np), weight, padding_idx=padding_idx
+        )
+        grad_weight = jt.grad(
+            (output * jt.array(cotangent_np)).sum(), weight
+        )
+        output_no_padding = jt.nn.embedding(
+            jt.array(indices_np), weight
+        )
+        grad_weight_no_padding = jt.grad(
+            (output_no_padding * jt.array(cotangent_np)).sum(), weight
+        )
+        values = _fetch_acl(self, [
+            output,
+            grad_weight,
+            output_no_padding,
+            grad_weight_no_padding,
+        ])
+        weight_bf = _bfloat16_round(weight_np)
+        cotangent_bf = _bfloat16_round(cotangent_np)
+        weight_var_bf = jt.array(weight_bf).bfloat16()
+        output_bf = jt.nn.embedding(
+            jt.array(indices_np), weight_var_bf,
+            padding_idx=padding_idx,
+        )
+        grad_weight_bf = jt.grad(
+            (output_bf * jt.array(cotangent_bf).bfloat16()).sum(),
+            weight_var_bf,
+        )
+        bf_values = _fetch_acl(
+            self, [output_bf, grad_weight_bf], as_float=True)
 
         np.testing.assert_allclose(
             values[0], weight_np[indices_np], atol=2e-5, rtol=2e-5
@@ -818,8 +951,6 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(
             bf_values[1], _bfloat16_round(expected_grad_bf),
             atol=3e-2, rtol=3e-2)
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertTrue(any("compile acl op" in message for message in messages))
         self.assertIsNotNone(backend_hooks.acl_embedding(
             jt.array(indices_np), jt.array(weight_np).bfloat16()))
 
@@ -830,8 +961,7 @@ class TestACL(unittest.TestCase):
         residual_np = rng.randn(3, 128).astype("float32")
         weight_np = (rng.rand(128) + 0.5).astype("float32")
 
-        with jt.no_grad(), jt.log_capture_scope(
-                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+        with jt.no_grad():
             hidden = jt.array(hidden_np).bfloat16()
             residual = jt.array(residual_np).bfloat16()
             weight = jt.array(weight_np).bfloat16()
@@ -839,17 +969,14 @@ class TestACL(unittest.TestCase):
                 hidden, residual, weight, 1e-6)
             reference_carried = hidden + residual
             reference = jt.nn.rms_norm(reference_carried, weight, 1e-6)
-            fetched = jt.fetch_sync([
-                actual.float32(), carried.float32(),
-                reference.float32(), reference_carried.float32(),
-            ])
+            fetched = _fetch_acl(
+                self, [actual, carried, reference, reference_carried],
+                as_float=True)
             locations = actual.location(), carried.location()
 
         self.assertEqual(locations, ("device", "device"))
         np.testing.assert_array_equal(fetched[0], fetched[2])
         np.testing.assert_array_equal(fetched[1], fetched[3])
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertTrue(any("compile acl op" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_inference_rotary_embedding(self):
@@ -870,8 +997,7 @@ class TestACL(unittest.TestCase):
             rotated = np.concatenate((-x[..., half:], x[..., :half]), axis=-1)
             return x * cos + rotated * sin
 
-        with jt.no_grad(), jt.log_capture_scope(
-                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+        with jt.no_grad():
             results = []
             for dtype, atol, rtol in dtype_cases:
                 q = getattr(jt.array(q_np), dtype)()
@@ -884,10 +1010,12 @@ class TestACL(unittest.TestCase):
                 self.assertEqual(str(actual_k.dtype), dtype)
                 results.append((
                     dtype, atol, rtol,
-                    actual_q.float32(), actual_k.float32(),
-                    q.float32(), k.float32(), cos.float32(), sin.float32()))
+                    actual_q, actual_k, q, k, cos, sin))
 
-            results = [jt.fetch_sync(list(result[3:])) for result in results]
+            results = [
+                _fetch_acl(self, result[3:], as_float=True)
+                for result in results
+            ]
 
         for result, (dtype, atol, rtol) in zip(results, dtype_cases):
             actual_q, actual_k, q, k, cos, sin = result
@@ -897,8 +1025,6 @@ class TestACL(unittest.TestCase):
             np.testing.assert_allclose(
                 actual_k, expected(k, cos, sin), atol=atol, rtol=rtol,
                 err_msg=dtype)
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertTrue(any("compile acl op" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_serving_rotary_embedding_packed_neox_stays_on_device(self):
@@ -1196,38 +1322,30 @@ class TestACL(unittest.TestCase):
         bool_values = values != 0
         x = jt.array(values)
         bool_x = jt.array(bool_values)
-        with jt.log_capture_scope(
-                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
-            full = x.all()
-            full_from_list = jt.all(x, dim=[])
-            by_row = jt.all(x, dim=1)
-            bool_by_column = jt.all(bool_x, dim=-2)
-            full, full_from_list, by_row, bool_by_column = jt.fetch_sync(
-                [full, full_from_list, by_row, bool_by_column])
+        full = x.all()
+        full_from_list = jt.all(x, dim=[])
+        by_row = jt.all(x, dim=1)
+        bool_by_column = jt.all(bool_x, dim=-2)
+        full, full_from_list, by_row, bool_by_column = _fetch_acl(
+            self, [full, full_from_list, by_row, bool_by_column])
 
         np.testing.assert_array_equal(full, values.all())
         np.testing.assert_array_equal(full_from_list, values.all())
         np.testing.assert_array_equal(by_row, values.all(axis=1))
         np.testing.assert_array_equal(
             bool_by_column, bool_values.all(axis=-2))
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertTrue(any("compile acl op" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_any_reduction(self):
         values = np.array([[0.0, 0.0, 2.0], [0.0, 0.0, 0.0]],
                           dtype=np.float32)
         bool_values = values != 0
-        with jt.log_capture_scope(
-                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
-            full = jt.any(jt.array(values))
-            by_row = jt.array(bool_values).any(dim=-1)
-            full, by_row = jt.fetch_sync([full, by_row])
+        full = jt.any(jt.array(values))
+        by_row = jt.array(bool_values).any(dim=-1)
+        full, by_row = _fetch_acl(self, [full, by_row])
 
         np.testing.assert_array_equal(full, values.any())
         np.testing.assert_array_equal(by_row, bool_values.any(axis=-1))
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertTrue(any("compile acl op" in message for message in messages))
 
     @jt.flag_scope(use_acl=1)
     def test_sum(self):

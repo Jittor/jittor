@@ -141,7 +141,8 @@ class TestCleanupStructure(unittest.TestCase):
     def test_cross_file_duplicate_implementations_are_reviewed(self):
         implementations: Dict[str, List[Tuple[str, str]]] = {}
         sources = sorted(path for root in (self.repo_root / "python", self.repo_root / "backends", self.repo_root / "compat")
-                         for path in root.rglob("*.py"))
+                         for path in root.rglob("*.py")
+                         if "tests" not in path.relative_to(root).parts)
         for path in sources:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in tree.body:

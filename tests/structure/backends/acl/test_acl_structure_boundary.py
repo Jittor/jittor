@@ -15,14 +15,14 @@ def test_acl_structure_boundary_names_atomic_migrations_and_hardware_gate():
         "BaseOpRunner::launch",
         "Ascend 910B3/CANN",
         "no CPU fallback",
-        "triu.diagonal",
-        "softmax.dim",
-        "flip.axes",
+        "Triu",
+        "Softmax",
+        "Flip",
         "data-channel",
         "schema",
         "Migration order",
-        "softmax.dim",
-        "triu.diagonal",
+        "Softmax",
+        "Triu",
         "npu-smi info",
         "forbid_backend_fallbacks()",
         "backend_fallback_count()",
@@ -30,7 +30,7 @@ def test_acl_structure_boundary_names_atomic_migrations_and_hardware_gate():
         "schema_version",
         "cache_key",
         "type_tag",
-        "BaseOpRunner` helper",
+        "AclDataOwner",
         "AclDecodedData decode_acl_data",
         "AclDataRecord& record",
         "UserError",
@@ -48,7 +48,7 @@ def test_acl_data_schema_contract_for_future_decoder():
     assert "typed homogeneous `int64[]`/`float64[]`/`bool[]`" in text
     assert "pointer addresses and Python object ids are forbidden" in text
     assert "validates the\noperator name, schema version, type tag, and required fields" in text
-    assert "host-only C++ decoder boundary" in text
+    assert "header has no\nACL/CANN include and can be compiled on a CPU-only host" in text
 
 
 def test_acl_guides_use_runtime_fallback_evidence_not_log_matching():
@@ -58,8 +58,12 @@ def test_acl_guides_use_runtime_fallback_evidence_not_log_matching():
         assert "with forbid_backend_fallbacks():" in text
         assert "jt.sync_all(True)" in text
         assert "jt.runtime.backend_fallback" in text
-        assert "rejected" in text
-        assert "preflight unsupported" in text
-        assert "debugging policies" in text
+        # The developer contract is English; the user guide is Chinese.
+        # Both must explain rejected attempts, preflight-only fallback, and
+        # warn/allow as debugging policies rather than device acceptance.
+        required = (("rejected", "preflight unsupported", "debugging policies")
+                    if path == GUIDE else ("拒绝", "预检阶段判定不支持", "调试策略"))
+        for phrase in required:
+            assert phrase in text
         assert 'if rg -i "fallback cpu|cpu fallback"' not in text
         assert '"compile cpu"' not in text

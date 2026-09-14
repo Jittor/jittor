@@ -72,6 +72,13 @@ class TestPublicApiSurface(unittest.TestCase):
                 continue
             for name in names:
                 obj = getattr(mod, name, None)
+                if mod_name == "jt" and name == "numpy2cupy" and not jt.has_cuda:
+                    # This optional bridge is explicitly None without CUDA.
+                    # Keep its name in the manifest so a CUDA build still
+                    # has to provide the callable converter.
+                    self.assertTrue(hasattr(mod, name))
+                    self.assertIsNone(obj)
+                    continue
                 if obj is None or not callable(obj):
                     missing.append(mod_name + "." + name)
         self.assertEqual(

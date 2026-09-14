@@ -4,6 +4,22 @@
 
 namespace jittor
 {
+    class AdaptiveAvgPool2dOpRunner : public BaseOpRunner
+    {
+    protected:
+        void executeOp(AclOpRegistry::const_iterator &it) override;
+    public:
+        AdaptiveAvgPool2dOpRunner();
+    };
+
+    class AdaptiveAvgPool2dBackwardOpRunner : public BaseOpRunner
+    {
+    protected:
+        void executeOp(AclOpRegistry::const_iterator &it) override;
+    public:
+        AdaptiveAvgPool2dBackwardOpRunner();
+    };
+
     class MaxpoolOpRunner : public BaseOpRunner
     {
 

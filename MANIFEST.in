@@ -2,6 +2,8 @@
 # Source: pyproject.toml [tool.setuptools.package-data] and [tool.jittor.sdist].
 # Exact paths avoid MANIFEST glob's non-recursive ** and cache leakage.
 include MANIFEST.in
+include backends/acl/include/acl_foreach_coefficients.h
+include backends/acl/include/acl_fused_ascendc.h
 include backends/acl/include/acl_jittor.h
 include backends/acl/include/acl_op_registry.h
 include backends/acl/include/acl_runtime.h
@@ -19,6 +21,7 @@ include backends/acl/include/aclops/bmm_op_acl.h
 include backends/acl/include/aclops/clamp_op_acl.h
 include backends/acl/include/aclops/concat_op_acl.h
 include backends/acl/include/aclops/conv_op_acl.h
+include backends/acl/include/aclops/cross_entropy_loss_op_acl.h
 include backends/acl/include/aclops/cumsum_op_acl.h
 include backends/acl/include/aclops/dropout_op_acl.h
 include backends/acl/include/aclops/embedding_op_acl.h
@@ -26,7 +29,10 @@ include backends/acl/include/aclops/expand_op_acl.h
 include backends/acl/include/aclops/flashattention_op_acl.h
 include backends/acl/include/aclops/flip_op_acl.h
 include backends/acl/include/aclops/floor_op_acl.h
+include backends/acl/include/aclops/foreach_op_acl.h
+include backends/acl/include/aclops/fused_sgd_op_acl.h
 include backends/acl/include/aclops/gather_scatter_op_acl.h
+include backends/acl/include/aclops/gelu_op_acl.h
 include backends/acl/include/aclops/getitem_op_acl.h
 include backends/acl/include/aclops/index_op_acl.h
 include backends/acl/include/aclops/matmul_op_acl.h
@@ -60,6 +66,7 @@ include backends/acl/kernels/native/bmm_op_acl.cc
 include backends/acl/kernels/native/clamp_op_acl.cc
 include backends/acl/kernels/native/concat_op_acl.cc
 include backends/acl/kernels/native/conv_op_acl.cc
+include backends/acl/kernels/native/cross_entropy_loss_op_acl.cc
 include backends/acl/kernels/native/cumsum_op_acl.cc
 include backends/acl/kernels/native/dropout_op_acl.cc
 include backends/acl/kernels/native/embedding_op_acl.cc
@@ -67,7 +74,10 @@ include backends/acl/kernels/native/expand_op_acl.cc
 include backends/acl/kernels/native/flashattention_op_acl.cc
 include backends/acl/kernels/native/flip_op_acl.cc
 include backends/acl/kernels/native/floor_op_acl.cc
+include backends/acl/kernels/native/foreach_op_acl.cc
+include backends/acl/kernels/native/fused_sgd_op_acl.cc
 include backends/acl/kernels/native/gather_scatter_op_acl.cc
+include backends/acl/kernels/native/gelu_op_acl.cc
 include backends/acl/kernels/native/getitem_op_acl.cc
 include backends/acl/kernels/native/index_op_acl.cc
 include backends/acl/kernels/native/matmul_op_acl.cc
@@ -94,10 +104,12 @@ include backends/acl/kernels/native/upsample_op_acl.cc
 include backends/acl/kernels/native/utils.cc
 include backends/acl/kernels/native/where_op_acl.cc
 include backends/acl/src/acl_error_code.cc
+include backends/acl/src/acl_fused_ascendc.cc
 include backends/acl/src/acl_jittor.cc
 include backends/acl/src/acl_op_exec.cc
 include backends/acl/src/aclnn.cc
 include backends/acl/src/backend.cc
+include backends/acl/src/foreach_coefficients.cc
 include backends/acl/src/workspace.cc
 include backends/comm/hccl/inc/hccl_wrapper.h
 include backends/comm/hccl/ops/hccl_all_gather_op.cc
@@ -301,6 +313,7 @@ include docs/development/error-categories.md
 include docs/development/index.md
 include docs/development/jit-operator-source.md
 include docs/development/known-issues/parallel-compiler-segfault.md
+include docs/development/npu-validation-templates.md
 include docs/development/repository-layout.md
 include docs/development/source-architecture.md
 include docs/development/storage-layout.md
@@ -534,6 +547,7 @@ include src/mem/allocator/nfef_allocator.cc
 include src/mem/allocator/nfef_allocator.h
 include src/mem/allocator/sfrl_allocator.cc
 include src/mem/allocator/sfrl_allocator.h
+include src/mem/allocator/shared_allocator.h
 include src/mem/allocator/stat_allocator.cc
 include src/mem/allocator/stat_allocator.h
 include src/mem/allocator/temp_allocator.cc
@@ -572,11 +586,15 @@ include src/ops/composite/fuse_transpose_op.cc
 include src/ops/composite/fuse_transpose_op.h
 include src/ops/composite/fused_adamw_op.cc
 include src/ops/composite/fused_adamw_op.h
+include src/ops/composite/fused_sgd_op.cc
+include src/ops/composite/fused_sgd_op.h
 include src/ops/composite/getitem_op.cc
 include src/ops/composite/getitem_op.h
 include src/ops/composite/index_bounds.h
 include src/ops/composite/index_op.cc
 include src/ops/composite/index_op.h
+include src/ops/composite/mapped_matmul_op.cc
+include src/ops/composite/mapped_matmul_op.h
 include src/ops/composite/numpy_code_op.cc
 include src/ops/composite/numpy_code_op.h
 include src/ops/composite/op_capability.cc
@@ -630,6 +648,7 @@ include src/runtime/configuration.h
 include src/runtime/cuda_streams.h
 include src/runtime/device.cc
 include src/runtime/device.h
+include src/runtime/device_mode_scope.cc
 include src/runtime/device_state.h
 include src/runtime/dispatch_context.cc
 include src/runtime/dispatch_context.h

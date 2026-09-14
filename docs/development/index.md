@@ -20,6 +20,7 @@ jit-operator-source
 error-categories
 async-error-diagnostics
 test-system
+npu-validation-templates
 known-issues/parallel-compiler-segfault
 ```
 

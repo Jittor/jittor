@@ -121,7 +121,7 @@ def providers(monkeypatch):
         module = load("jittor.backends.acl.kernels." + name, KERNELS / (name + ".py"))
         setattr(sys.modules["jittor.backends.acl.kernels"], name, module)
         modules[name] = module
-    return SimpleNamespace(native=native, dispatch=dispatch, calls=calls, **modules)
+    return SimpleNamespace(native=native, dispatch=dispatch, calls=calls, load=load, **modules)
 
 
 def test_acl_install_publishes_real_owners_idempotently_without_facade_writes(providers):
@@ -132,7 +132,9 @@ def test_acl_install_publishes_real_owners_idempotently_without_facade_writes(pr
     assert providers.dispatch._kernels == first
     assert vars(providers.native) == before
     assert providers.calls == []
-    assert len(providers.install.KERNELS) == 44
+    operations = [operation for operation, _ in providers.install.KERNELS]
+    assert len(operations) == len(set(operations)), "duplicate ACL registrations"
+    assert len(first) == len(operations)
     for operation, implementation in providers.install.KERNELS:
         assert providers.dispatch.registered_kernel(operation, "acl") is implementation
         assert implementation.__module__.startswith("jittor.backends.acl.kernels.") or (
@@ -237,11 +239,12 @@ def test_acl_pool_uses_canonical_output_geometry(
         geometry_calls.append(args)
         return actual_geometry(*args)
 
-    for name in ("jittor.nn", "jittor.nn.functional", "jittor.nn.functional.pooling"):
+    for name in ("jittor.nn", "jittor.nn.functional", "jittor.nn.functional.pooling",
+                 "jittor.nn.functional.pooling.average"):
         package = ModuleType(name)
         package.__path__ = []
         monkeypatch.setitem(sys.modules, name, package)
-    sys.modules["jittor.nn.functional.pooling"]._pool_output_size = record_geometry
+    sys.modules["jittor.nn.functional.pooling.average"]._pool_output_size = record_geometry
 
     class Function:
         def __call__(self, *args):
@@ -250,21 +253,25 @@ def test_acl_pool_uses_canonical_output_geometry(
     providers.native.Function = Function
     launches = []
 
-    def record_pool(name, inputs, output_dtypes, output_shapes, attr_code):
-        launches.append((name, output_shapes, attr_code))
+    def record_pool(name, inputs, output_dtypes, output_shapes, attributes):
+        launches.append((name, output_shapes, attributes))
         return [_Tensor(shape, dtype) for shape, dtype in zip(output_shapes, output_dtypes)]
 
     pool_source = (KERNELS / "ops/pool_op.py").read_text(encoding="utf-8")
-    pool_class = next(
-        node
-        for node in ast.parse(pool_source).body
-        if isinstance(node, ast.ClassDef) and node.name == "PoolACL"
-    )
-    namespace = {"jt": providers.native, "pool_cmd": record_pool}
-    exec(
-        compile(ast.get_source_segment(pool_source, pool_class), "<actual_pool_acl>", "exec"),
-        namespace,
-    )
+    pool_tree = ast.parse(pool_source)
+    pool_tree.body = [node for node in pool_tree.body
+                      if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+                      and node.name in {"PoolACL", "_output_size_fn", "_pool_program"}]
+
+    def record_program(name, input_count, output_count, attributes):
+        return name, attributes
+
+    def record_emit(program, inputs, output_dtypes, output_shapes):
+        return record_pool(program[0], inputs, output_dtypes, output_shapes, program[1])
+
+    namespace = {"jt": providers.native, "acl_program": record_program,
+                 "acl_emit": record_emit, "_POOL_PROGRAMS": {}, "_pool_output_size": None}
+    exec(compile(pool_tree, "<actual_pool_acl>", "exec"), namespace)
     monkeypatch.setattr(providers.neural, "PoolACL", namespace["PoolACL"])
     value = _Tensor((1, 2, size, size))
     result = providers.neural.pool_acl(
@@ -273,7 +280,7 @@ def test_acl_pool_uses_canonical_output_geometry(
     assert result.shape == (1, 2, expected, expected)
     assert geometry_calls == [(size, kernel, stride, padding, ceil_mode)] * 2
     assert launches[0][0] == ("Maxpool" if op == "maximum" else "Avgpool")
-    assert "attr->countIncludePad = false" in launches[0][2]
+    assert launches[0][2]["countIncludePad"] is False
 
 
 @pytest.mark.parametrize(

@@ -19,9 +19,15 @@ def _acl_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
         buckets.setdefault(int(entry[4]), []).append((index,) + entry[:4])
     for step_value, bucket in buckets.items():
         step = jt.array(float(step_value), dtype="float32").stop_grad()
+        # Newly initialized moments are broadcast-zero views. The in-place
+        # CANN update needs independent dense state; returned states are
+        # published back to the optimizer below. Gradients are read-only and
+        # may also arrive as broadcast/strided views.
         updated = fused_adamw_acl(
-            [item[1] for item in bucket], [item[2] for item in bucket],
-            [item[3] for item in bucket], [item[4] for item in bucket],
+            [item[1] for item in bucket],
+            [item[2].contiguous() for item in bucket],
+            [item[3].contiguous() for item in bucket],
+            [item[4].contiguous() for item in bucket],
             step, lr, beta1, beta2, weight_decay, eps)
         for output_index, item in enumerate(bucket):
             results[item[0]] = tuple(

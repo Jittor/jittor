@@ -34,11 +34,12 @@ def _atleast1d(a):
 
 
 def amax_ref(x, dim=None, keepdim=False):
-    return _atleast1d(np.max(x, axis=dim, keepdims=keepdim))
+    # Full reductions preserve NumPy/Torch scalar rank; Jittor supports 0-D.
+    return np.max(x, axis=dim, keepdims=keepdim)
 
 
 def amin_ref(x, dim=None, keepdim=False):
-    return _atleast1d(np.min(x, axis=dim, keepdims=keepdim))
+    return np.min(x, axis=dim, keepdims=keepdim)
 
 
 def maxdim_ref(x, dim, keepdim=False):

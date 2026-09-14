@@ -279,5 +279,6 @@ op_db = [
     OpInfo("avg_pool2d", op=nn.avg_pool2d, ref=avg_pool2d_ref,
            sample_inputs_func=sample_avg_pool2d),
     OpInfo("adaptive_avg_pool2d", op=nn.adaptive_avg_pool2d, ref=adaptive_avg_ref,
-           sample_inputs_func=sample_adaptive_avg_pool2d),
+           sample_inputs_func=sample_adaptive_avg_pool2d,
+           dtypesIfNPU=("float16", "bfloat16", "float32")),
 ]

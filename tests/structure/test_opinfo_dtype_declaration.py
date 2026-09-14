@@ -105,5 +105,39 @@ class TestTheRuleHasTeeth(unittest.TestCase):
             self.assertNotIn(_entry_name(info), allowed)
 
 
+class TestIndependentNPUDtypes(unittest.TestCase):
+    def test_npu_declaration_does_not_change_cpu_or_cuda(self):
+        from opinfo.core import OpInfo
+        info = OpInfo("probe", dtypes=("float32", "float64"),
+                      dtypesIfCUDA=("float64",), dtypesIfNPU=("float32",))
+        self.assertEqual(info.supported_dtypes("cpu"), ("float32", "float64"))
+        self.assertEqual(info.supported_dtypes("cuda"), ("float64",))
+        self.assertEqual(info.supported_dtypes("npu"), ("float32",))
+        self.assertTrue(info.npu_dtypes_are_explicit)
+
+    def test_unaudited_npu_candidates_never_inherit_cuda_override(self):
+        from opinfo.core import OpInfo
+        info = OpInfo("probe", dtypes=("float16", "float32", "float64"),
+                      dtypesIfCUDA=("float16",))
+        self.assertIsNone(info.dtypesIfNPU)
+        self.assertFalse(info.npu_dtypes_are_explicit)
+        self.assertEqual(info.supported_dtypes("npu"), info.dtypes)
+        self.assertEqual(info.supported_dtypes("cuda"), ("float16",))
+
+    def test_abs_has_independent_npu_declaration_and_retains_cpu_float64(self):
+        info = next(info for info in op_db if info.full_name == "abs")
+        self.assertTrue(info.npu_dtypes_are_explicit)
+        self.assertEqual(info.supported_dtypes("npu"), ("float16", "float32"))
+        self.assertIn("float64", info.supported_dtypes("cpu"))
+
+    def test_report_distinguishes_audited_from_candidate_dtypes(self):
+        from opinfo.report import build_rows
+        rows = {row["name"]: row for row in build_rows()}
+        for info in op_db:
+            self.assertEqual(rows[info.full_name]["npu_dtypes"], info.dtypesIfNPU)
+        self.assertEqual(rows["abs"]["npu_dtypes"], ("float16", "float32"))
+        self.assertTrue(any(row["npu_dtypes"] is None for row in rows.values()))
+
+
 if __name__ == "__main__":
     unittest.main()

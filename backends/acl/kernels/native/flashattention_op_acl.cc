@@ -146,15 +146,57 @@ namespace jittor
         return;
     }
 
-    KVCacheMemcpyOpRunner::KVCacheMemcpyOpRunner() : BaseOpRunner("KVCacheMemcpy")
+    KVCacheMemcpyOpRunner::KVCacheMemcpyOpRunner()
+        : BaseOpRunner("KVCacheMemcpy")
     {
+    }
+
+    void KVCacheMemcpyOpRunner::run()
+    {
+        // Cache writes use aclrtMemcpyAsync and have no aclnn workspace or
+        // launcher. Keep this exception local to the concrete copy runner;
+        // BaseOpRunner still rejects every unregistered operator.
+        auto entry = acl_op_registry().end();
+        try
+        {
+            setupInputDesc();
+            setupOutputDesc();
+            executeOp(entry);
+            cleanupDesc();
+        }
+        catch (...)
+        {
+            // A failed setup may have constructed only part of either vector.
+            // Drain queued copies before releasing descriptors and preserve
+            // the original exception, including the original copy error.
+            aclrtSynchronizeStream(aclstream);
+            for (auto *&tensor : inputTensors)
+                if (tensor) { aclDestroyTensor(tensor); tensor = nullptr; }
+            for (auto *&tensor : outputTensors)
+                if (tensor) { aclDestroyTensor(tensor); tensor = nullptr; }
+            throw;
+        }
     }
 
     void KVCacheMemcpyOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<KVCacheMemcpyAttr *>(op_attr.get());
-        CHECK(in_.size() == 2);
+        CHECK(in_.size() == 3);
         CHECK(out_.size() == 1);
+        // The input edge materializes the old cache before this partial write.
+        // outputs= requests sharing, but a materialized broadcast initializer
+        // can have a different buffer. Preserve its untouched rows explicitly.
+        CHECK(inputShapes[2] == outputShapes[0]);
+        CHECK(in_[2]->is_contiguous());
+        CHECK(in_[2]->size == out_[0]->size);
+        if (in_[2]->mem_ptr != out_[0]->mem_ptr)
+        {
+            ret = aclrtMemcpyAsync(out_[0]->mem_ptr, out_[0]->size,
+                in_[2]->mem_ptr, in_[2]->size,
+                ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
+            if (ret != ACL_SUCCESS)
+                LOGf << name << ": previous cache copy failed. ERROR:" << ret;
+        }
         CHECK(inputShapes[0].size() == 3);
         CHECK(inputShapes[1] == inputShapes[0]);
         CHECK(outputShapes[0].size() == 5);

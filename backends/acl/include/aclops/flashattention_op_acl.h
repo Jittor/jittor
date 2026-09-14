@@ -40,6 +40,8 @@ namespace jittor
 
     public:
         KVCacheMemcpyOpRunner();
+        // This runner issues runtime copies, not a registered aclnn launcher.
+        void run();
     };
 
 }

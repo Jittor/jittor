@@ -58,7 +58,7 @@ HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md
 
 本机做到的是三档里的第 1、2 档：桩 SDK 过 TU（44 个源文件 `-fsyntax-only` 全过、70 个
 launcher ABI 断言全过，反向对照见下）、以及不变量式静态合同。**一条设备指令都没执行过**，
-`tests/backends/npu` 在本机是 `164 skipped, 0 executed -- explained: skipped: no acl found`。
+`tests/backends/acl` 在本机是 `164 skipped, 0 executed -- explained: skipped: no acl found`。
 
 前置：Ascend 910B3 + CANN，`CANN_SET_ENV` 指向 `set_env.sh`。四条按顺序跑，前一条不过不要往下走。
 
