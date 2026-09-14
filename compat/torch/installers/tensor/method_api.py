@@ -697,6 +697,21 @@ def _stride(self, dim=None):
     return st[dim]
 
 
+def _is_pinned(self, device=None):
+    """torch.Tensor.is_pinned -- jittor has no page-locked allocator."""
+    return False
+
+
+def _pin_memory(self, device=None):
+    """torch.Tensor.pin_memory -- jittor has no page-locked allocator.
+
+    Returns ``self``: there is no pinned copy to make. vLLM-Omni's residency
+    manager uses the result only as the host backing buffer, so the values are
+    what matter, not the page-locking.
+    """
+    return self
+
+
 def _set_(self, source, storage_offset=0, size=None, stride=None):
     """torch.Tensor.set_ -- re-point this tensor at `source`'s storage.
 
