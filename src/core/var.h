@@ -188,6 +188,25 @@ std::ostream& operator<<(std::ostream& os, const Var* var);
 std::ostream& operator<<(std::ostream& os, const VarPtr& v);
 
 VarPtr contiguous_storage(Var* value);
+/**
+ * Cast a floating operand to the dtype an operator will compute it in.
+ *
+ * `dtype` is the operator's chosen compute (and output) dtype -- for a
+ * convolution, `dtype_infer(x->ns, w->ns)`. Under the auto-mixed-precision
+ * register that can be narrower than the operand: with ``amp_prefer16`` a
+ * float32 convolution is asked for a float16 result. An elementwise kernel
+ * absorbs that (its generated code converts on store), but a library that
+ * needs one dtype for every operand -- cuDNN -- has no algorithm for
+ * "float32 in, float16 out" and the operator dies on ``best_algo_idx == -1``.
+ * Torch's autocast casts the operands *before* building the operator; this is
+ * that cast, for the operators whose compute dtype is not simply their
+ * inputs' (see ``conv`` and its backward ops).
+ *
+ * Returns an owner only when a cast is needed, nullptr otherwise. The caller
+ * must keep it alive until the operator that consumes the cast has recorded
+ * it as an input -- the ``forward``ed-op pattern does this.
+ */
+VarPtr cast_operand_to_compute_dtype(Var* value, NanoString dtype);
 void adapt_cpu_scalar_operands(const vector<Var**>& inputs, vector<VarPtr>& owners);
 inline void collect_placement_inputs(Var*& value, vector<Var**>& inputs) { inputs.push_back(&value); }
 inline void collect_placement_inputs(vector<Var*>& values, vector<Var**>& inputs) {

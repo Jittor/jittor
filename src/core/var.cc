@@ -25,6 +25,15 @@ VarPtr contiguous_storage(Var* value) {
     return make_contiguous(value);
 }
 
+VarPtr cast_operand_to_compute_dtype(Var* value, NanoString dtype) {
+    // Only a floating operand can meet the preference, and only a floating
+    // target is a compute dtype this cast can move to.
+    if (!value->dtype().is_float() || !dtype.is_float()) return nullptr;
+    if (value->dtype() == dtype) return nullptr;
+    static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
+    return make_unary(value, dtype);
+}
+
 DEFINE_FLAG(fast_shared_ptr<loop_options_t>, compile_options, {}, 
     "Override the default loop transfrom options");
 DEFINE_FLAG(bool, no_grad, 0, 

@@ -26,6 +26,8 @@ namespace jittor {
 
 #ifndef JIT
 
+static auto make_backwardx = op_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, int, int, int, int, string>("cudnn_conv3d_backward_x");
+
 CudnnConv3dBackwardXOp::CudnnConv3dBackwardXOp(Var* w, Var* dy, int depth, int height, int width, int strided, int strideh, int stridew, int paddingd, int paddingh, int paddingw, int dilationd, int dilationh, int dilationw, int groups, string xformat) 
         : w(w), dy(dy), xd(depth), xh(height), xw(width), strided(strided), strideh(strideh), stridew(stridew), paddingd(paddingd), paddingh(paddingh), paddingw(paddingw), dilationd(dilationd), dilationh(dilationh), dilationw(dilationw), groups(groups),
       xformat(move(xformat)) {
@@ -41,7 +43,20 @@ CudnnConv3dBackwardXOp::CudnnConv3dBackwardXOp(Var* w, Var* dy, int depth, int h
     set_flag(OpFlags::_manual_set_vnbb);
     w->set_flag(VarFlags::_needed_by_backward);
     dy->set_flag(VarFlags::_needed_by_backward);
-    dx = create_output(nullptr, dtype_infer(dy->ns, w->ns));
+    // cuDNN needs one dtype for filter, output gradient and input gradient;
+    // dtype_infer may pick a narrower one under amp_prefer16. See
+    // cast_operand_to_compute_dtype.
+    auto xtype = dtype_infer(dy->ns, w->ns);
+    auto wt = cast_operand_to_compute_dtype(w, xtype);
+    auto dyt = cast_operand_to_compute_dtype(dy, xtype);
+    if (wt || dyt) {
+        auto dxp = make_backwardx(wt ? wt.ptr : w, dyt ? dyt.ptr : dy,
+            xd, xh, xw, strided, strideh, stridew, paddingd, paddingh, paddingw,
+            dilationd, dilationh, dilationw, groups, this->xformat);
+        forward(dxp);
+        return;
+    }
+    dx = create_output(nullptr, xtype);
 }
 
 void CudnnConv3dBackwardXOp::infer_shape() {
