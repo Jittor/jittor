@@ -17,12 +17,8 @@ EXTERN_LIB unordered_map<int64, Node*> lived_nodes_id;
 // Atomic: Node ids are handed out from the compile workers as well, and two
 // workers that read the same value hand out the same id.
 EXTERN_LIB std::atomic<int64> total_node;
-// Per-thread. The deferred-free round is a scope on one thread's stack
-// (`SetupFreeBuffer`), and the compile workers each run their own; sharing one
-// list meant a thread deleting nodes another thread had queued, and a depth
-// counter that two threads incremented and decremented under each other.
-EXTERN_LIB thread_local int free_buffer_depth;
-EXTERN_LIB thread_local vector<Node*> free_buffer;
+EXTERN_LIB int free_buffer_depth;
+EXTERN_LIB vector<Node*> free_buffer;
 EXTERN_LIB uint8 node_order;
 // Non-zero while lived_nodes is being maintained in a build without
 // NODE_MEMCHECK; set by check_graph's setter (graph.cc).

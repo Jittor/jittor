@@ -13,14 +13,14 @@
 
 namespace jittor {
 
-thread_local int free_buffer_depth = 0;
+int free_buffer_depth = 0;
 // See graph.cc: check_graph turns this on so that the dangling-node half of
 // do_graph_check has something to sweep in a build without NODE_MEMCHECK.
 int node_track_lived = 0;
 unordered_map<void*, int64> lived_nodes;
 unordered_map<int64, Node*> lived_nodes_id;
 std::atomic<int64> total_node{0};
-thread_local vector<Node*> free_buffer;
+vector<Node*> free_buffer;
 NodeLifecycleObserver* node_lifecycle_observer = nullptr;
 
 NodeLifecycleObserver* set_node_lifecycle_observer(NodeLifecycleObserver* observer) {
@@ -65,12 +65,8 @@ extern void free_var_mem(Var* v);
 // pointer to member expresses the same thing and `(node->*op)()` compiles to the
 // same call. No symbol changes: the queue is a file static.
 typedef void (Node::*liveness_op_t)();
-// Per-thread, for the same reason as `free_buffer`: the drain is entered from
-// whichever thread is mutating the graph, it clears the queue when it returns,
-// and it was shared. Two workers draining at once emptied each other's queue
-// and ran each other's callbacks -- on nodes neither of them owned.
-static thread_local vector<pair<Node*, liveness_op_t>> liveness_queue;
-static thread_local size_t liveness_queue_front = 0;
+static vector<pair<Node*, liveness_op_t>> liveness_queue;
+static size_t liveness_queue_front = 0;
 
 // Only used for logging: turns one of the six propagation steps back into a
 // readable name.
