@@ -200,9 +200,12 @@ class _LibraryAutograd(jt.Function):
 
 
 class _RegisteredOp:
-    def __init__(self, namespace, name):
+    def __init__(self, namespace, name, namespace_obj=None):
         self.namespace = namespace
         self.name = name
+        # `ns.op` is the packet its overloads hang off; `ns.op.overload` is a
+        # `_RegisteredOp` too, created and stored under the full name.
+        self._namespace_obj = namespace_obj
         self.default = self
         self._schema = None
         self._tags = ()
@@ -259,8 +262,29 @@ class _RegisteredOp:
             return function(*args, **kwargs)
         return _call_with_registered_autograd(self, function, args, kwargs)
 
+    def __getattr__(self, name):
+        # `torch.ops.ns.op.overload`: the overload is registered as its own
+        # operator under the full name, so resolve it through the namespace.
+        namespace = object.__getattribute__(self, "_namespace_obj")
+        if namespace is not None:
+            ops = object.__getattribute__(namespace, "_ops")
+            full = "%s.%s" % (object.__getattribute__(self, "name"), name)
+            if full in ops:
+                return ops[full]
+        raise AttributeError(
+            "torch.ops.%s.%s has no overload '%s'"
+            % (object.__getattribute__(self, "namespace"),
+               object.__getattribute__(self, "name"), name))
+
     def overloads(self):
-        return ["default"]
+        names = ["default"]
+        namespace = self._namespace_obj
+        if namespace is not None:
+            ops = object.__getattribute__(namespace, "_ops")
+            prefix = self.name + "."
+            names += sorted(key[len(prefix):] for key in ops
+                            if key.startswith(prefix))
+        return names
 
     def __repr__(self):
         return "%s.%s" % (self.namespace, self.name)
@@ -275,7 +299,8 @@ class _OpNamespace:
         with InstallTransaction._lock:
             ops = object.__getattribute__(self, "_ops")
             if name not in ops:
-                _set_item(ops, name, _RegisteredOp(object.__getattribute__(self, "_namespace"), name))
+                _set_item(ops, name, _RegisteredOp(
+                    object.__getattribute__(self, "_namespace"), name, self))
             return ops[name]
 
     def __getattr__(self, name):
@@ -319,7 +344,13 @@ def _operator_name(schema_or_name):
     name = str(schema_or_name).split("(", 1)[0]
     if "::" in name:
         _, name = name.split("::", 1)
-    return name.split(".", 1)[0].strip()
+    # Keep the overload suffix. In torch `ns.op` and `ns.op.overload` are
+    # *distinct* operators, each with its own schema and kernels; dropping the
+    # suffix collapsed them onto one operator, so a library that registers an
+    # inplace overload (vLLM's `fused_add_rms_norm.maybe_inplace`, on
+    # `CompositeExplicitAutograd`, exactly like the base op) hit "already has an
+    # implementation". `_RegisteredOp.__getattr__` resolves `ns.op.overload`.
+    return name.strip()
 
 
 def _integration_custom_op_overrides():

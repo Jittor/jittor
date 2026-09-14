@@ -984,6 +984,10 @@ def _install_distributed(g, registry=None):
     c10d._get_default_group = _api_c10d_get_default_group
     c10d._get_default_store = _api_c10d_get_default_store
     c10d.Work = _JittorWork
+    # and its public alias on `torch.distributed`: vLLM's diffusion
+    # GroupCoordinator annotates `list[torch.distributed.Work]`, which is
+    # evaluated at import time.
+    dist.Work = _JittorWork
     c10d.default_pg_timeout = getattr(c10d, "default_pg_timeout", None)
     c10d._get_default_timeout = _api_c10d_get_default_timeout
     c10d._unregister_process_group = _api_c10d_unregister_process_group
@@ -1092,6 +1096,17 @@ def _install_distributed(g, registry=None):
     for name in ("Store", "TCPStore", "FileStore", "PrefixStore"):
         setattr(c10d, name, getattr(dist, name))
         setattr(g._C._distributed_c10d, name, getattr(dist, name))
+
+    # `torch._C._distributed_c10d` is the extension module the public names come
+    # from, and callers reach for them there as well as on `torch.distributed`:
+    # `op=torch._C._distributed_c10d.ReduceOp.SUM` is a default argument in
+    # vLLM's diffusion GroupCoordinator signature, evaluated at class-definition
+    # time. The stub carried only `Reducer`, so importing vllm_omni's H3
+    # pipeline raised AttributeError.
+    for name in ("Backend", "P2POp", "ReduceOp", "RedOpType", "ProcessGroup"):
+        value = getattr(dist, name, None)
+        if value is not None and not hasattr(g._C._distributed_c10d, name):
+            setattr(g._C._distributed_c10d, name, value)
 
 
     rendezvous_mod = _modules.get("torch.distributed.rendezvous")

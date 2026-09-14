@@ -521,7 +521,10 @@ def segment_reduce(data, reduce="sum", *, lengths=None, **kw):
 
 class finfo:
     def __init__(self, dt):
-        ds = _dtype_to_str(dt) or "float32"
+        # A range query computes nothing: resolve the name without demanding
+        # compute support, or the float8/float4 entries in _FINFO_SPECIAL are
+        # unreachable and `torch.finfo(torch.float8_e4m3fn)` raises.
+        ds = _dtype_to_str(dt, require_compute=False) or "float32"
         if ds in _FINFO_SPECIAL:
             mn, mx, eps, tiny, bits = _FINFO_SPECIAL[ds]
             self.min, self.max, self.eps, self.tiny, self.smallest_normal = (
@@ -547,7 +550,8 @@ class finfo:
 
 class iinfo:
     def __init__(self, dt):
-        ds = _dtype_to_str(dt) or "int64"
+        # Same as finfo: an integer range query computes nothing.
+        ds = _dtype_to_str(dt, require_compute=False) or "int64"
         info = _np.iinfo(_np.dtype(ds))
         self.min = int(info.min)
         self.max = int(info.max)

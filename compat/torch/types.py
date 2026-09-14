@@ -148,15 +148,26 @@ def _make_dtypes(ns):
     return objs
 
 
-def _dtype_to_str(d):
+def _dtype_to_str(d, *, require_compute=True):
+    """The dtype's canonical Jittor name.
+
+    ``require_compute`` is what ``finfo``/``iinfo`` need to turn off. A cast or
+    a kernel must refuse a dtype this backend has no kernels for, so the
+    default keeps that check; but a range query computes nothing, and the float8
+    and float4 entries the core installer keeps for exactly those queries are
+    otherwise unreachable. With the check on, ``torch.finfo(torch.float8_e4m3fn)``
+    raised, which stopped vLLM at import on ``torch.finfo(...).max``.
+    """
     if d is None:
         return None
     if isinstance(d, dtype):
-        return d._jittor_compute_name
+        return d._jittor_compute_name if require_compute else d.name
     if isinstance(d, str):
         name = d.replace("torch.", "")
         registered = dtype._registry.get(name)
-        return registered._jittor_compute_name if registered is not None else name
+        if registered is None:
+            return name
+        return registered._jittor_compute_name if require_compute else registered.name
     if callable(d) and hasattr(d, "__name__"):
         return d.__name__
     return str(d)
