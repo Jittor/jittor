@@ -25,7 +25,7 @@ struct FP16OpType : OpByType {
         };
     }
 
-    string expand_op(const vector<string>& args) {
+    string expand_op(const vector<string>& args, bool is_cuda) {
         bool found_fp16 = 0;
         bool found_bf16 = 0;
         for (int i=1; i<args.size(); i+=2) {
@@ -166,11 +166,11 @@ struct FP16OpType : OpByType {
         string ret;
         if (both_map.count(args.at(0)))
             ret = both_map.at(args.at(0));
-        else if (runtime_flag_use_cuda())
+        else if (is_cuda)
             ret = lookup(cuda_map, args.at(0));
         else
             ret = lookup(cpu_map, args.at(0));
-        if (runtime_flag_use_cuda()) {
+        if (is_cuda) {
             if (args[1] == "float32" && !both_map.count(args.at(0))) {
                 ret = lookup(common_op_type_cuda_map, args.at(0));
             }

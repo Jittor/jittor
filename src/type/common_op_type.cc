@@ -91,7 +91,7 @@ struct CommonOpType : OpByType {
         };
     }
 
-    string expand_op(const vector<string>& args) {
+    string expand_op(const vector<string>& args, bool is_cuda) {
         for (int i=1; i<args.size(); i+=2) {
             if (!types.count(args[i]))
                 return "";
@@ -195,7 +195,7 @@ struct CommonOpType : OpByType {
         string ret;
         if (both_map.count(args.at(0)))
             ret = both_map.at(args.at(0));
-        else if (runtime_flag_use_cuda())
+        else if (is_cuda)
             ret = lookup(cuda_map, args.at(0));
         else
             ret = lookup(cpu_map, args.at(0));

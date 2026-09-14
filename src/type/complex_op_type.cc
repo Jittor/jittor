@@ -21,7 +21,8 @@ struct ComplexOpType : OpByType {
         };
     }
 
-    string expand_op(const vector<string>& args) {
+    // This backend has a single table; the target only matters to the others.
+    string expand_op(const vector<string>& args, bool /*is_cuda*/) {
         bool found = 0;
         for (int i=1; i<args.size(); i+=2)
             if (types.count(args[i])) found = 1;

@@ -701,7 +701,11 @@ inline OpConstructor<To, Ts...> op_constructor(const char* name) {
 struct OpCompiler;
 struct OpByType {
     unordered_set<string> types;
-    virtual string expand_op(const vector<string>& args) = 0;
+    //: `is_cuda` is the translation unit's own backend (`#define JIT_cuda`),
+    //: not the process-wide use_cuda flag: a CUDA-enabled runtime still
+    //: compiles host kernels for CPU-resident Vars, and the two tables use
+    //: device-only intrinsics (::__habs, jittor::_signed_pow).
+    virtual string expand_op(const vector<string>& args, bool is_cuda) = 0;
     virtual void post_pass(OpCompiler*) = 0;
 };
 

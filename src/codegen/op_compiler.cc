@@ -18,6 +18,7 @@
 #include "ops/op_register.h"
 #include "ops/composite/array_op.h"
 #include "runtime/lock.h"
+#include "runtime/device_state.h"
 #include "codegen/opt/expr.h"
 #include "bindings/pyjt/py_caller.h"
 
@@ -299,9 +300,23 @@ void load_macros(const string& src, unordered_map<string,string>& macros) {
     }
 }
 
-string expand_op_search(const vector<string>& args) {
+// Which op-type table this expansion should use.
+//
+// The translation unit's own `#define JIT_cuda`/`JIT_cpu` decides it -- *not*
+// the process-wide `use_cuda` flag, which stays 1 for the host kernels a
+// CUDA-enabled process compiles for CPU-resident Vars. Choosing by the runtime
+// flag hands a host unit CUDA-only entries (::__habs, jittor::_signed_pow) and
+// it fails to compile. A caller of precompile() that declares no backend has
+// only the runtime flag to go on, which is what it used before.
+static bool expand_op_target_is_cuda(const unordered_map<string,string>& defs) {
+    if (defs.count("JIT_cuda")) return true;
+    if (defs.count("JIT_cpu")) return false;
+    return runtime_flag_use_cuda();
+}
+
+string expand_op_search(const vector<string>& args, bool is_cuda) {
     for (auto op_type : get_op_types()) {
-        string ret = op_type->expand_op(args);
+        string ret = op_type->expand_op(args, is_cuda);
         if (ret.size())
             return ret;
     }
@@ -674,7 +689,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                         while (p<arg.size() && arg[p] == ' ') p++;
                         arg = precompile(defs, arg.substr(p), macros);
                     }
-                    string ns = expand_op_search(args);
+                    string ns = expand_op_search(args, expand_op_target_is_cuda(defs));
                     new_src += precompile(defs, ns, macros);
                     i = l-1;
                     continue;
