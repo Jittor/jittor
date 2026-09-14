@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include <mutex>
 #include <atomic>
 #include "core/common.h"
 #include "type/nano_string.h"
@@ -475,6 +476,16 @@ inline Node::input_t& Node::output_t::reverse() {
     return node->_inputs[back_index];
 }
 
+// Serialises the graph mutation the compile workers can reach at the same
+// time: the liveness propagation, the deferred-free round, and the queue that
+// carries them. Each worker relays a different operator, but they share the
+// nodes those operators touch -- one releasing a node while another is still
+// walking it writes into freed memory, and the heap only reports that much
+// later, at exit, as "corrupted double-linked list". Recursive because a
+// propagation step re-enters these same functions; nothing here waits on
+// another thread, so there is no lock order to get wrong.
+EXTERN_LIB std::recursive_mutex& graph_mutation_mutex();
+
 struct SetupFreeBuffer {
 
 bool outside;
@@ -484,6 +495,10 @@ inline SetupFreeBuffer() {
 
 inline ~SetupFreeBuffer() {
     if (outside) {
+        // Held across the delete round: another thread must not be walking a
+        // node that this round is destroying, nor appending to the buffer
+        // while it is being drained.
+        std::lock_guard<std::recursive_mutex> guard(graph_mutation_mutex());
         for (int i=0; i<free_buffer.size(); i++)
             delete free_buffer[i];
         free_buffer.clear();
