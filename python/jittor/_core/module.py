@@ -514,9 +514,26 @@ class Module:
         if d is None and create:
             d = OrderedDict()
             self.__dict__[name] = d
+            # Every hook table is created here and only here, so this is the
+            # one place that has to remember a module ever had one. Written
+            # through __dict__ because Module.__setattr__ classifies
+            # assignments into parameters and buffers, and this is neither.
+            self.__dict__["_hook_table_created"] = True
         return d
 
+    #: Set once, on the module that first creates a hook table. Never cleared:
+    #: removing a hook leaves it True, which only costs that module the four
+    #: lookups below. Clearing it would be the unsafe direction -- a module
+    #: that still has hooks would stop running them.
+    _hook_table_created = False
+
     def _has_hooks(self):
+        # `__call__` asks this for every module of every forward, and almost no
+        # module has ever had a hook: four dict lookups each, 228 a step on an
+        # 8-layer transformer. The flag answers that case with one attribute
+        # read that falls through to the class.
+        if not self._hook_table_created:
+            return False
         # NB: no bool() -- ``from jittor import *`` at the top of this module
         # rebinds the name to jittor's `bool` CAST OP, which raises on a dict.
         # The `or` chain already returns something falsy when every table is
