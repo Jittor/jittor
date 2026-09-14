@@ -677,6 +677,24 @@ def as_strided(input, size, stride, storage_offset=None):
     return input.as_strided(size, stride, 0 if storage_offset is None else storage_offset)
 
 
+def empty_strided(size, stride, *, dtype=None, layout=None, device=None,
+                  requires_grad=False, pin_memory=False):
+    """torch.empty_strided -- a tensor with the requested size and strides.
+
+    jittor tensors are contiguous, so `stride` cannot be honored: the result
+    has `size` with contiguous strides. vLLM-Omni's offload calls this only to
+    get an independent buffer and then `copy_`s into it, so the values are
+    exact. A non-strided `layout` is refused rather than silently ignored.
+    """
+    if layout is not None and "strided" not in str(layout):
+        raise NotImplementedError(
+            "torch.empty_strided(layout=%r): only the strided layout exists"
+            % (layout,))
+    g = _misc_context().target_namespace
+    return g.empty(tuple(size), dtype=dtype, device=device,
+                   requires_grad=requires_grad, pin_memory=pin_memory)
+
+
 def set_default_device(device=None):
     """torch.set_default_device -- now actually moves the default.
 
@@ -898,6 +916,7 @@ _MISC_BINDINGS = {
     "set_default_device": set_default_device,
     "get_device_module": get_device_module,
     "as_strided": as_strided,
+    "empty_strided": empty_strided,
 }
 _MISC_DETAILS = {
     "PyTorchFileReader": "raises NotImplementedError; use torch.load instead",
@@ -914,6 +933,7 @@ _MISC_DETAILS = {
     "is_autocast_available": "legacy True capability answer; does not verify a requested device",
     "are_deterministic_algorithms_enabled": "legacy False answer; deterministic algorithms are not configurable",
     "as_strided": "gather-based view; reads are exact but the result does not alias the input storage",
+    "empty_strided": "contiguous allocation; the requested strides are not honored",
 }
 for _name, _implementation in _MISC_BINDINGS.items():
     _level = (
