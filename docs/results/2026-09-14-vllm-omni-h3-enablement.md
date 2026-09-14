@@ -1,11 +1,11 @@
 # MiniMax-H3 through jittor + torch-compat + vLLM-Omni: the shim gaps
 
-- Status: In progress; five shim/backend defects fixed and verified individually,
-  engine construction still walking forward
+- Status: Engine construction now completes (`ENGINE-CONSTRUCTED`, 10.0 GiB peak
+  during load, clean shutdown); end-to-end generation still being brought up
 - Date: 2026-09-14
 - Owner: Jittor compatibility maintainers
-- Review when: the offload path, `torch.device` placement, or the conv/pow
-  op-type tables change
+- Review when: the offload path, `torch.device` placement, the conv/pow op-type
+  tables, `.data`/view handling, or `torch.as_strided`/`empty_strided` change
 
 ## Question
 
@@ -113,6 +113,47 @@ existing `requires_grad` restoration. Equal-shape `x.data = y` now aliases
 `y` rather than copying into it, which is what torch does and why torch
 documents `.data` as unsafe.
 
+## 7. A size-changing rebind aborted on lazily-recorded views
+
+`view(-1)` (which the shim's `flatten()` reaches) records a *storage view* on
+its base: a lazy reshape expression that `refresh_transpose_views` re-derives
+whenever the base's data changes. vLLM-Omni's offload flattens each parameter
+and then swaps it for a zero-element placeholder, so the refresh re-applied a
+reshape of 1152 elements to an empty holder and aborted with
+`reshape shape is invalid for input of size [x_items(0) == y_items(1152)]`.
+Both `assign` and `_update` call the refresh, so neither data path could work.
+
+Fix: a recorded step is only re-derived when it still fits the new value.
+Reshape/Expand record the target shape, so their product must match the new
+element count (Expand additionally needs each source axis to be that size or
+1); Transpose records a permutation, so it needs a matching rank; Slices are
+left alone. A view that no longer fits is dropped and keeps the data it was
+taken from -- the same outcome torch's views have after `x.data = y` replaces
+the storage under them.
+
+## 8. `torch.as_strided` and `torch.empty_strided` were missing
+
+`prefetch_layer`/`restore_next_block` rebuild each parameter from the packed
+host buffer with `torch.as_strided(flat[offset:offset+numel], size=..., stride=...)`,
+and `restore_tensor_storage` allocates an independent buffer with
+`torch.empty_strided(value.shape, value.stride(), ...)` before `copy_`-ing into
+it and installing it as the parameter's data. `Tensor.as_strided` exists in the
+shim but neither module-level entry point did, so the offload died with
+`AttributeError: as_strided` and then `AttributeError: empty_strided`.
+
+Fix: add both in `installers/core.py`. `as_strided` delegates to the existing
+method, which materializes the window with a gather: reads are exact, and the
+result does not alias `input`, which matters only for the `copy_`-into-the-view
+direction `flatten_physical_storage` uses for a *non-contiguous* tensor (the
+shim reports its parameters contiguous, so that branch is not taken). Its
+default offset is 0 rather than torch's `input.storage_offset()`: jittor
+materializes slices, so `input`'s own data already starts at its first element
+and torch's default applied the parent-relative offset twice ("index 10751 is
+out of bounds for dimension 0 with size 5376" on
+`gpu_weight[offset:offset+numel]`). `empty_strided` allocates `size`
+contiguously -- jittor cannot honor `stride`, and a non-strided `layout` is
+refused -- which is all the caller needs before its element-wise `copy_`.
+
 ## Verification
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails
@@ -128,6 +169,18 @@ documents `.data` as unsafe.
   even with the header reverted.
 - 4: `compat/tests/torch/test_torch_compat_conv_pool.py` `padding_mode` test.
 - 5: probe only; the engine run is the integration check.
+- 6: `compat/tests/torch/_torch_compat_checks.py` (`x.data =` checks) and a
+  standalone probe: empty placeholder, shape restore, dtype change,
+  `requires_grad` preserved.
+- 7: `tests/core/test_transpose_view_staleness.py` (13 existing cases plus the
+  new size-changing-rebind case, all 14 passing on CPU and CUDA). The
+  same-shape refresh cases in that file are what caught an early version that
+  also dropped Transpose views.
+- 8: standalone probes: `as_strided` over a plain and over a slice of a larger
+  flat buffer, and `empty_strided` + `copy_` matching the source.
+- Integration: with every fix above in the working tree, engine construction
+  reached `[try] ENGINE-CONSTRUCTED` at 10.0 GiB peak during load and shut
+  down cleanly (`vllmomni-try18.log`).
 - 6: `compat/tests/torch/_torch_compat_checks.py` (`x.data =` checks) and a
   standalone probe: empty placeholder, shape restore, dtype change,
   `requires_grad` preserved.
