@@ -143,11 +143,24 @@ d1024-L4 一步 8 个 layer_norm + 4 个 softmax，按这个差距就是约 380 
 所以外层的校验和派发都不是问题（3.3 + 0.9），**成本在 `jt.Function` 的机制加上三输出
 的 code op**。torch 的整个 layer_norm 是 11 us。
 
-看得见的修法是把训练版 layer_norm 的 `jt.Function` 换成 code op 上的 `cuda_grad_src`
-——省掉 context、四次 `tape`、`tape_together` 和 `_grad` 间接层，按实测的 Function
-机制成本（7.1 us 一次，三入一出的 layer_norm 更高些）值约 72-128 us 一步。不够补满
-500 us，但它是目前能定位到的最大一块，而且**对推理同样有效**（no_grad 的 layer_norm
-也比 torch 慢 2.5 倍）。
+在真实训练步里量过这两条的上限（把它们换成一次乘法，答案是错的，只为定尺寸；
+基准取「开/关/再开」里稳定的那两次，不取第一次）：
+
+    as shipped                    3.525 / 3.528 ms
+    layer_norm -> 一次乘法         3.204      => layer_norm 整个值 0.322 ms
+    softmax    -> 一次乘法         3.350      => softmax    整个值 0.175 ms
+
+两条合起来 0.497 ms，正好是缺口的大小——**但那是它们的全部成本，不是可省的部分**。
+按上表 2.5-4.2 倍的差距，追平 torch 能省其中约 60-75%，即 0.33-0.38 ms，把 3.53
+带到 3.15-3.20，对 torch 的 3.03 是 **1.04-1.06**。也就是说：**即使把 layer_norm 和
+softmax 做到和 torch 一样快，这一条仍然翻不过来。**
+
+修法本身是清楚的——把训练版 layer_norm 的 `jt.Function` 换成 code op 上的
+`cuda_grad_src`，省掉 context、四次 `tape`、`tape_together` 和 `_grad` 间接层，按
+实测的 Function 机制成本值约 72-128 us 一步；softmax 同理。**它值得做**，因为
+`no_grad` 的 layer_norm 也比 torch 慢 2.5 倍，那是每个 transformer 推理都在付的。
+但它不是这一条 case 的答案，而把一个三输出算子的反向从 python `grad()` 改写成
+`cuda_grad_src` 需要完整的验证周期。
 
 唯一的结构性出路是让图回放覆盖训练，而那需要参数原地更新——在惰性图里，优化器写 p
 的时候前向/反向可能还没执行，jittor 每次新建 Var 正是为了避开这个读写冲突。那是另
