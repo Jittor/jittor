@@ -96,6 +96,29 @@ class TestDeviceApi(_Case):
     def test_default_device_reports_the_current_one(self):
         self.assertEqual(torch.get_default_device(), torch.device("cuda", 0))
 
+    def test_host_resident_pow_compiles_while_cuda_is_enabled(self):
+        """A host-side op must not be handed a CUDA-only code fragment.
+
+        With CUDA enabled, ``CommonOpType::expand_op`` still selects the CUDA
+        op-type table for a translation unit that is compiled for the host
+        (``#define JIT_cpu``) -- the choice is made from the *runtime*
+        ``use_cuda`` flag, not from the unit's backend. The CUDA table spells
+        ``pow`` as ``jittor::_signed_pow``, and ``type/pow_compute.h`` used to
+        define that symbol only under ``#ifdef JIT_cuda``, so every host-side
+        ``pow`` failed to compile with "'_signed_pow' is not a member of
+        'jittor'". vLLM-Omni's CPU-offloaded pipeline hits it while building
+        its schedules on the host.
+        """
+        with torch.device("cpu"):
+            base = torch.tensor([-2.0, 3.0, 4.0], dtype=torch.float32)
+            exponent = torch.tensor([3.0, 2.0, 1.0], dtype=torch.float32)
+        self.assertEqual(base.device.type, "cpu")
+        np.testing.assert_allclose(
+            (base ** exponent).numpy(),
+            np.array([-8.0, 9.0, 4.0], dtype=np.float32),
+            rtol=1e-6,
+        )
+
 
 class TestMultiDeviceFacade(_Case):
     min_devices = 2
