@@ -80,7 +80,9 @@ class _PySafeOpen:
             n = struct.unpack("<Q", fh.read(8))[0]
             self._header = json.loads(fh.read(n).decode("utf-8"))
             self._data_offset = 8 + n
-        self._meta = self._header.pop("__metadata__", {})
+        # safetensors.safe_open.metadata() returns None when the optional metadata section is absent.
+        # Accelerate relies on that distinction to default a plain archive to {"format": "pt"}.
+        self._meta = self._header.pop("__metadata__", None)
 
     def keys(self):
         return list(self._header.keys())
