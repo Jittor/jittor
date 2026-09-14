@@ -1,7 +1,8 @@
 # MiniMax-H3 through jittor + torch-compat + vLLM-Omni: the shim gaps
 
-- Status: Engine construction now completes (`ENGINE-CONSTRUCTED`, 10.0 GiB peak
-  during load, clean shutdown); end-to-end generation still being brought up
+- Status: Engine construction completes (`ENGINE-CONSTRUCTED`, 10.0 GiB peak
+  during load); generation reaches the model forward; validation of speed /
+  results / memory in progress
 - Date: 2026-09-14
 - Owner: Jittor compatibility maintainers
 - Review when: the offload path, `torch.device` placement, the conv/pow op-type
@@ -154,36 +155,29 @@ out of bounds for dimension 0 with size 5376" on
 contiguously -- jittor cannot honor `stride`, and a non-strided `layout` is
 refused -- which is all the caller needs before its element-wise `copy_`.
 
-## Open blocker: the encoder's `load_to_device()` guard
+## 9. Cross-device `copy_` moved the destination to the source's device
 
-Generation now reaches the DiT/encoder forward (`pipeline.forward` ->
-`_prepare_request_inputs` -> `encode_prompt` -> `text_encoder.encode_ids`) and stops
-there:
+`_ip` (behind every `x.foo_()`) uses jittor's `assign`, which writes x's values
+into *y's* storage and then aliases the two. For `copy_` that is the wrong
+shape: torch's `copy_` is an in-place write, so the destination keeps its own
+device and a cross-device copy is a transfer. A cuda tensor filled from a CPU
+one reported `cpu` afterwards.
 
-    RuntimeError: call load_to_device() before encode_ids()
+That was the encoder's `load_to_device()` guard:
+`PinnedModuleStager._load_once` builds `device_storages` with
+`torch.empty_like(group.master, device=cuda)` (correct -- measured `cuda:0`),
+fills them with `device_storage.copy_(group.master)` (CPU master), and every
+storage silently became a host tensor again. The stager then bound all
+non-block parameters to host views, and `encode_ids` raised
+`call load_to_device() before encode_ids()` because
+`next(self.parameters()).device.type != device_target.type`.
 
-`encoder.py:1415` raises when
-`next(self.parameters()).device.type != self.device_target.type`. Measured with a
-diagnostic wrapper around the residency manager (lab script only; vLLM-Omni source
-untouched):
+Fix: in `_copy_`, materialize the source on the destination's device first when
+they differ. Values are unchanged; same-device copies keep the existing path.
 
-- `encoder.load_to_device` runs with `device_target=cuda:0`, `is_loaded=True`,
-  `_omni_layerwise_enabled=True`;
-- `PinnedModuleStager._load_once` runs with `self.device=cuda:0`, 28 groups, and the
-  first `master` is `cpu`/`bfloat16`;
-- inside that call `torch.empty_like(master, device=self.device)` returns `cuda:0`
-  (so the device storages are built on the right device);
-- yet the encoder's first parameters still report `cpu` after `load_to_device`,
-  with full (not placeholder) shapes, e.g. `(1152, 3, 2, 16, 16)`.
-
-In isolation every step preserves placement (`empty_like(master, device=cuda)`,
-`set_` over a device storage, `as_strided`, and `param.data = <device view>` all
-report `cuda:0`), so the divergence is specific to the engine's state. The next
-thing to check is which parameter `next(self.parameters())` actually yields there and
-whether it is one the stager binds at all (the stager covers
-`_omni_non_block_modules()` -- vision/text_model children except `blocks`/`layers` --
-while the blocks are handled by the layerwise hooks), plus whether the gather inside
-`Tensor.as_strided` runs on the device when the ambient default is not CUDA.
+Reproduced and verified with a two-minute standalone harness (a two-layer
+`Sequential` plus the real `PinnedModuleStager`, no engine): parameters were
+`cpu` after `load()` before the fix and `cuda:0` after.
 
 ## Verification
 
