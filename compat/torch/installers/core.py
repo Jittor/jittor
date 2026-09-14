@@ -666,10 +666,15 @@ def as_strided(input, size, stride, storage_offset=None):
     packed host buffer through this entry point. ``Tensor.as_strided``
     materializes the window with a gather, so reads are exact; the result does
     not alias ``input`` the way a real strided view does.
+
+    The default offset is 0, not ``input.storage_offset()`` as in torch: jittor
+    materializes slices, so ``input``'s own data already starts at its first
+    element. Torch's default would apply the parent-relative storage offset a
+    second time -- the offload passes ``gpu_weight[offset:offset+numel]`` and
+    then indexed past the end of it ("index 10751 is out of bounds for
+    dimension 0 with size 5376").
     """
-    if storage_offset is None:
-        storage_offset = int(input.storage_offset())
-    return input.as_strided(size, stride, storage_offset)
+    return input.as_strided(size, stride, 0 if storage_offset is None else storage_offset)
 
 
 def set_default_device(device=None):
