@@ -1302,6 +1302,18 @@ def _api_sqrt_(self):
 def _api_abs_(self):
     return _ip(self, _owner.jt.abs(self))
 
+def _api_round_(self):
+    return _ip(self, _owner.jt.round(self))
+
+
+def _api_floor_(self):
+    return _ip(self, _owner.jt.floor(self))
+
+
+def _api_ceil_(self):
+    return _ip(self, _owner.jt.ceil(self))
+
+
 def _api_sigmoid_(self):
     return _ip(self, _owner.jt.sigmoid(self))
 
@@ -1315,4 +1327,7 @@ _UNARY_INPLACE_APIS.update({
     'abs_': _api_abs_,
     'sigmoid_': _api_sigmoid_,
     'tanh_': _api_tanh_,
+    'round_': _api_round_,
+    'floor_': _api_floor_,
+    'ceil_': _api_ceil_,
 })

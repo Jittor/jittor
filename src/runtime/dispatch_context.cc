@@ -46,8 +46,16 @@ DispatchContext query_dispatch_context(const vector<Var*>& inputs) {
         USER_CHECK(value) << "dispatch_context requires non-null tensor inputs";
         if (!value->placement.explicit_backend || pending_scalar(value)) continue;
         if (value->placement.device.backend == BackendId::Cpu && value->shape.size() == 0) continue;
+        // Name both placements: "different devices" is unactionable without
+        // them, and the mixed case is reachable from compatibility layers that
+        // place individual inputs explicitly.
         USER_CHECK(!target.explicit_backend || target == value->placement)
-            << "Expected all tensor inputs on the same backend and device in dispatch_context";
+            << "Expected all tensor inputs on the same backend and device in dispatch_context"
+            << ", first input backend=" << (int)target.device.backend
+            << " index=" << target.device.index
+            << " but another input has backend=" << (int)value->placement.device.backend
+            << " index=" << value->placement.device.index
+            << " shape=" << value->shape << " dtype=" << value->dtype();
         target = value->placement;
     }
     if (!target.explicit_backend)

@@ -179,6 +179,58 @@ Reproduced and verified with a two-minute standalone harness (a two-layer
 `Sequential` plus the real `PinnedModuleStager`, no engine): parameters were
 `cpu` after `load()` before the fix and `cuda:0` after.
 
+## 10. Core helpers allocated on the ambient placement, not the inputs'
+
+MiniMax-H3 builds its sigma schedule with `device="cpu"` while the process is on
+CUDA, and then calls `unique_consecutive` on it. `jt.ones`/`jt.zeros`/`jt.empty`
+follow the *ambient* placement, so the helper tensors landed on the device:
+`dispatch_context` then rejected the op with "Expected all tensor inputs on the
+same backend and device" (the message now names both placements -- that is how
+this was found).
+
+Fix: a small `jittor._core.var.placement_scope_like(x)` context manager, used by
+`concatenation._concat_direct` for its output and by `unique_consecutive` for its
+leading `True`, its `counts` and its scatter `ones`. (In `_core/var.py` the name
+`int` is shadowed by jittor's integer dtype constructor, so the helper uses
+`ori_int`.)
+
+Two more shim/core mismatches on the same path:
+
+- `torch.backends.cuda` had the four `enable_*_sdp` setters but none of the
+  matching `*_sdp_enabled` getters; the encoder saves and restores
+  `cudnn_sdp_enabled()`. The four getters now report the recorded state
+  (`cudnn` defaults to False -- there is no cuDNN fused SDPA here).
+- `dtype.is_complex` / `is_floating_point` are torch-style *attributes* but
+  jittor core calls them as *methods* (`advanced_indexing._indexing_index`).
+  They now return a `_CallableBool`, so both readings work.
+
+## Result: a full request now completes
+
+With every fix above in the working tree, one `fl2va` request runs end to end
+(`vllmomni-gen10.log`, single H20, `diffusion_offload_config` = layer mode over
+`dit`+`text_encoder`):
+
+    Model loading took 10.0312 GiB and 280.8 seconds
+    [gen] ENGINE-CONSTRUCTED in 304.9s
+    MiniMax H3 t2va Qwen presentation: 13 tokens
+    100%|##########| 1/1 [00:13<00:00, 13.00s/it]        <- denoise, warm JIT cache
+    [gen] frames: (124, 256, 256, 3) dtype: uint8
+    [gen] audio: (1, 2, 165600)
+    [gen] peak_memory_mb: 24302.0
+    [gen] GENERATE-OK
+
+124 frames at 24 FPS is the requested 5 s, and 165600 samples per channel is
+5.175 s at 32 kHz -- both shapes match the request. Peak device memory 24.3 GiB
+on a 96 GiB card.
+
+**Speed is not normal yet.** The same run reports `GENERATE took 720.5s` with
+`stage_0_gen_ms=720503`: the denoise is 13 s (warm) while the video VAE decode
+is ~700 s. `py-spy` puts the decode in vLLM-Omni's `try_scaled_residual_exact`
+Triton kernel, i.e. inside jittor's Triton bridge, where every launch calls
+`device_raw_ptr` (which does `sync(true, false)`) once per pointer argument and
+bounces every operand through a guarded buffer (`GUARD_ENABLE = True` by
+default). That is the next thing to fix.
+
 ## Verification
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails
