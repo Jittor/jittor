@@ -783,7 +783,10 @@ Var.squeeze = squeeze
 
 def _clamp_cpu(x, min_v=None, max_v=None):
     import jittor as jt
-    if x.shape[0]==0:
+    # Emptiness is `numel() == 0`, not a zero leading axis: a (2, 0, 3) var has
+    # shape[0] == 2 and nothing to clamp, and the old test walked straight into
+    # the kernel with it.
+    if x.numel() == 0:
         return x
     # Torch allows tensor bounds and reversed scalar bounds. Applying the lower
     # then upper bound also gives Torch's all-max result when min_v > max_v.
