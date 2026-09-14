@@ -780,6 +780,22 @@ torch.index_select(torch.arange(12).float(), 0, torch.tensor([3, 1, 2, 0]),
 ok(_sel_out.numpy()[0].tolist() == [3, 1, 2, 0],
    "index_select(out=slice) writes through to the parent")
 
+# `x.data = y` *replaces* x's storage, shape and dtype -- it is not an
+# element copy, unlike the `x.foo_()` in-place primitive. vLLM-Omni's
+# layerwise offload depends on it: it swaps a parameter for a zero-element
+# placeholder and later restores a full tensor.
+_replaced = torch.nn.Parameter(torch.ones(3, 4))
+_replaced.data = torch.empty((0,), dtype=torch.float32)
+ok(tuple(_replaced.shape) == (0,),
+   ".data = an empty tensor empties the tensor")
+_replaced.data = torch.full((3, 4), 7.0)
+ok(tuple(_replaced.shape) == (3, 4)
+   and float(_replaced.numpy().sum()) == 84.0,
+   ".data = restores a different shape")
+_dtyped = torch.nn.Linear(4, 3)
+_dtyped.weight.data = _dtyped.weight.data.bfloat16()
+ok(_dtyped.weight.dtype == torch.bfloat16, ".data = changes dtype")
+
 # vLLM's compilation backend imports the python dispatcher at module scope; the
 # tracing it belongs to never runs here, so the import must not be what fails.
 from torch._dispatch.python import enable_python_dispatcher as _epd

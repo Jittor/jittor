@@ -482,7 +482,15 @@ def _data_get(self):
 def _data_set(self, value):
     src = value if isinstance(value, _NativeVar) else _owner.jt.array(value)
     was_trainable = not self.is_stop_grad()
-    self.assign(src)
+    # torch's `x.data = y` *replaces* x's data, shape and dtype; it does not
+    # copy elements into x's existing buffer. `assign` is the in-place
+    # primitive used by `x.foo_()`: it writes x's values into y's storage and
+    # only then aliases the two, so it demands equal element counts and would
+    # clobber y. `_update` is the pure rebind. vLLM-Omni's layerwise offload
+    # depends on the replace semantics -- it swaps a parameter for a
+    # zero-element placeholder -- and `assign` rejected that with
+    # "reshape shape is invalid for input of size [x_items(0) == y_items(1152)]".
+    self._update(src)
     if was_trainable:
         self.start_grad()
 

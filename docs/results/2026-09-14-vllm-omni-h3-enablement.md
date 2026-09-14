@@ -98,6 +98,21 @@ construction raised `AttributeError: get_device_module`.
 Fix: implemented in `installers/core.py`; no argument means the current
 accelerator (`torch.cuda` when `use_cuda` is on), matching torch.
 
+## 6. `tensor.data = other` copied elements instead of replacing storage
+
+The shim's `data` setter ran `self.assign(src)`. That is the in-place
+primitive behind `x.foo_()`: it writes x's values into y's storage and only
+then aliases the two, so it requires equal element counts. Torch's
+`x.data = y` *replaces* x's data, shape and dtype. vLLM-Omni's layerwise
+offload swaps every block parameter for a zero-element placeholder and
+restores it later, so the copy path failed with
+`reshape shape is invalid for input of size [x_items(0) == y_items(1152)]`.
+
+Fix: rebind with `_update` (the pure "adopt this Var" primitive), keeping the
+existing `requires_grad` restoration. Equal-shape `x.data = y` now aliases
+`y` rather than copying into it, which is what torch does and why torch
+documents `.data` as unsafe.
+
 ## Verification
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails
@@ -113,6 +128,9 @@ accelerator (`torch.cuda` when `use_cuda` is on), matching torch.
   even with the header reverted.
 - 4: `compat/tests/torch/test_torch_compat_conv_pool.py` `padding_mode` test.
 - 5: probe only; the engine run is the integration check.
+- 6: `compat/tests/torch/_torch_compat_checks.py` (`x.data =` checks) and a
+  standalone probe: empty placeholder, shape restore, dtype change,
+  `requires_grad` preserved.
 
 Each fix was synced into the lab venv at
 `$JITTOR_LAB_ROOT/_state/h3/venv-jittor/lib/python3.12/site-packages/jittor/`,
