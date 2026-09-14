@@ -124,13 +124,19 @@ regression.
    it to 16 before the pipeline call; the framework-side question is why the
    environment spelling is ignored, and whether the compatibility layer should
    raise it by default for models this large.
-2. **Autocast asks for mixed-dtype convolutions.** H3's video decode runs under
-   `torch.autocast(float16)`; the shim's amp register changes the *result* dtype
-   only, so a float32 convolution is asked for a float16 output, which cuDNN
-   cannot serve and which trips `cudnn_conv3d`'s `best_algo_idx != -1`
-   invariant. The run harness works around it by loading the video VAE in
-   float16; the framework-side fix is to cast the operands the way torch's
-   autocast does.
+2. **Autocast asked for mixed-dtype convolutions. Fixed in `63fc1485`.** H3's
+   video decode runs under `torch.autocast(float16)`; the shim's amp register
+   changed the *result* dtype only, so a float32 convolution was asked for a
+   float16 output, which cuDNN cannot serve and which tripped `cudnn_conv3d`'s
+   `best_algo_idx != -1` invariant. The cuDNN convolution ops now cast their
+   floating operands to the dtype `dtype_infer` selected, mirroring torch's
+   autocast. See the [fix report](2026-09-14-autocast-conv-mixed-dtype.md).
+   The `--vae-dtype float16` harness setting is no longer required for this.
+   One consequence of that work: with the convolutions fixed, the same float32
+   VAE under autocast now reaches the video attention and fails there, because
+   the shim's decomposed `nn.Linear` lets a float32 bias promote a float16
+   matmul result back to float32 -- a separate autocast-fidelity gap in the
+   shim, recorded in the fix report's "Known boundary".
 3. **Soundtrack parity.** The video path matches the oracle to rounding on the
    reduced checkpoint; the audio VAE path does not correlate yet.
 4. **Attention dtype gate.** A float32 attention needs
