@@ -1428,6 +1428,32 @@ about whether to take it.
   `tests/structure/torch_api_manifest.json` in the same commit, and remove this
   entry when the manifest no longer records them.
 
+## KI-COMPAT-002: `torch.ops.aten` has no native op surface, so vLLM-Omni stops at import
+
+- Severity: Medium
+- Status: Open
+- Owner: Torch compatibility frontend maintainers
+- Evidence: `import vllm_omni` (vLLM 0.29.0 + `vllm-omni` main) on this shim.
+  Four earlier gaps are fixed in `784ba203` (`finfo`/`iinfo` of metadata-only
+  dtypes, operator overloads, `torch.nn.parameter.Uninitialized*`,
+  `torch._C._distributed_c10d.ReduceOp` and `torch.distributed.Work`).
+- Symptom: the next stop is
+  `torch.ops.aten._scaled_dot_product_flash_attention`, assigned at module scope
+  by `vllm_omni/diffusion/attention/backends/ring/ring_kernels.py`. `torch.ops.aten`
+  is created on demand and holds only operators this process registered; PyTorch's
+  native aten library is not synthesized. vLLM/vLLM-Omni reference 18 distinct
+  `torch.ops.aten.*` names -- `clone`, `copy`, `copy_`, `view`, `reshape`,
+  `permute`, `unsqueeze`, `slice`, `slice_scatter`, `split_with_sizes`,
+  `sym_size`, `mm`, `_scaled_mm`, `_scaled_dot_product_flash_attention`,
+  `_scaled_dot_product_efficient_attention`,
+  `_scaled_dot_product_attention_flash_musa`, `_dyn_quant_matmul_4bit`,
+  `_dyn_quant_pack_4bit_weight` -- several with no shim equivalent.
+- Workaround: none. `JITTOR_TORCH_SKIP_EXT_BUILD=1` only stops the shim's
+  extension scan from trying to `build_ext` the `vllm-omni` checkout.
+- Review/expiry condition: add an aten bridge (map the structural ops to Jittor
+  primitives; refuse the quantized and flash variants with a clear error), then
+  re-run the import and a real H3 generation before removing this entry.
+
 ## KI-OPS-009: fixed -- an index Var that is a strided view is now read through its strides
 
 - Severity: was Critical (out-of-bounds read *and write*, silent wrong answers)
