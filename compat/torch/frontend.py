@@ -31,7 +31,13 @@ def _placement_request(backend, device, like=None):
     if device is None:
         if isinstance(like, backend.Var) and like.placement_backend >= 0:
             return int(like.placement_backend), max(int(like.device_id), 0)
-        return None
+        # `with torch.device(d):` -- torch builds new tensors on `d`. `like`
+        # keeps priority above because `torch.empty_like(x)` inherits x's
+        # device rather than the ambient context's.
+        from .types import active_device_context
+        device = active_device_context()
+        if device is None:
+            return None
     numeric_index = isinstance(device, int) and not isinstance(device, bool)
     name = "cuda" if numeric_index else (getattr(device, "type", None) or str(device).split(":", 1)[0])
     if name == "cpu":

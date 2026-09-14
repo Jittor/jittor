@@ -1,6 +1,7 @@
 """Torch-compatible dtype, device, and residency primitives."""
 
 import os
+import threading
 import types as _python_types
 import typing
 from typing import cast
@@ -207,8 +208,9 @@ class device:
     def __hash__(self):
         return hash((self.type, self.index))
 
-    # torch allows `with torch.device(...):` as a device context manager.
-    # jittor has a single global backend, so for real devices this is a no-op.
+    # torch allows `with torch.device(...):` as a device context manager: new
+    # tensors built inside the block default to that device. The factory
+    # frontend reads `active_device_context()` to honor it.
     #
     # transformers' from_pretrained builds the model under `with
     # torch.device("meta")` and uses that context to SKIP weight inits (and the
@@ -221,7 +223,8 @@ class device:
     # meta tensors in jittor, but we can make the *meta* context observable: push
     # it on a thread-local stack so Var.device reports "meta" inside it. Tensors
     # are still really allocated (harmless -- real weights get loaded over them),
-    # but transformers correctly skips the eager init.
+    # but transformers correctly skips the eager init. A meta block therefore
+    # does not join the default-device stack.
     # An *indexed* CUDA device context is not a no-op any more: torch's
     # `with torch.device("cuda:1"):` makes device 1 the default new tensors
     # are built on, and jittor now has a current device that means exactly
@@ -229,7 +232,9 @@ class device:
     def __enter__(self):
         if self.type == "meta":
             _DEVICE_CTX_STACK.append(self)
-        elif self.type in ("cuda", "npu") and self.index is not None:
+            return self
+        _default_device_stack().append(self)
+        if self.type in ("cuda", "npu") and self.index is not None:
             try:
                 self._prev_index = int(jt.current_device())
                 if self._prev_index != int(self.index):
@@ -241,8 +246,13 @@ class device:
         return self
 
     def __exit__(self, *exc):
-        if self.type == "meta" and _DEVICE_CTX_STACK and _DEVICE_CTX_STACK[-1] is self:
-            _DEVICE_CTX_STACK.pop()
+        if self.type == "meta":
+            if _DEVICE_CTX_STACK and _DEVICE_CTX_STACK[-1] is self:
+                _DEVICE_CTX_STACK.pop()
+        else:
+            stack = _default_device_stack()
+            if stack and stack[-1] is self:
+                stack.pop()
         prev = getattr(self, "_prev_index", None)
         if prev is not None and prev >= 0:
             try:
@@ -260,6 +270,30 @@ class device:
 # Model construction in from_pretrained is single-threaded, so a plain list
 # is sufficient.
 _DEVICE_CTX_STACK: typing.List[device] = []
+
+# Per-thread stack of `with torch.device(...):` blocks that change where new
+# tensors are allocated. torch keeps this in a thread-local DeviceContext
+# (`torch.utils._device`), and so must we: a factory must not pick up a device
+# another thread's block is holding.
+_DEFAULT_DEVICE_CONTEXT = threading.local()
+
+
+def _default_device_stack() -> typing.List[device]:
+    stack = getattr(_DEFAULT_DEVICE_CONTEXT, "stack", None)
+    if stack is None:
+        stack = []
+        _DEFAULT_DEVICE_CONTEXT.stack = stack
+    return stack
+
+
+def active_device_context() -> typing.Optional[device]:
+    """The device an enclosing ``with torch.device(...):`` routes new tensors to.
+
+    ``None`` outside such a block, matching torch's "no context overrides the
+    default device" state.
+    """
+    stack = getattr(_DEFAULT_DEVICE_CONTEXT, "stack", None)
+    return stack[-1] if stack else None
 
 
 Number = typing.Union[int, float, bool]

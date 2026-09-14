@@ -22,6 +22,7 @@ from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
 
 from _helpers import capability as _test_capability
 import os
+import threading
 import unittest
 import warnings
 
@@ -694,6 +695,54 @@ class TestOverridesAndDefaults(StubPolicyBase):
     def test_set_default_device_unknown_backend_is_refused(self):
         self.assertRefuses(lambda: torch.set_default_device("mps"),
                            "set_default_device")
+
+    def test_device_context_is_recorded_by_the_frontend(self):
+        """`with torch.device(d):` was a no-op, so it could not move anything.
+
+        vLLM-Omni builds the whole diffusion pipeline inside `with
+        target_device:` (``"cpu"`` under offload) and relies on that block to
+        route every parameter allocation. While the block did nothing, the
+        factory default overrode it and a 134 GiB checkpoint OOM'd a 96 GiB
+        device. ``active_device_context()`` is what the factory frontend reads.
+        """
+        from jittor.compat.torch.types import active_device_context
+
+        self.assertIsNone(active_device_context())
+        with torch.device("cpu"):
+            self.assertEqual(active_device_context(), torch.device("cpu"))
+            with torch.device("cpu"):
+                self.assertEqual(active_device_context(), torch.device("cpu"))
+            self.assertEqual(active_device_context(), torch.device("cpu"))
+        # Restoration has to survive both normal exit and an exception.
+        with self.assertRaises(RuntimeError):
+            with torch.device("cpu"):
+                raise RuntimeError("boom")
+        self.assertIsNone(active_device_context())
+
+    def test_device_context_moves_the_allocation_default(self):
+        if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
+            self.skipTest("no accelerator on this box")
+        self.assertEqual(torch.ones(2).device.type, "cuda")
+        with torch.device("cpu"):
+            self.assertEqual(torch.ones(2).device.type, "cpu")
+            self.assertEqual(torch.empty(2).device.type, "cpu")
+            self.assertEqual(torch.tensor([1.0]).device.type, "cpu")
+            # `empty_like` follows its input, not the ambient context.
+            self.assertEqual(
+                torch.empty_like(torch.ones(2, device="cuda")).device.type,
+                "cuda")
+        self.assertEqual(torch.ones(2).device.type, "cuda")
+
+    def test_device_context_is_thread_local(self):
+        """One thread's `with torch.device(...)` must not move another's default."""
+        ambient = "cuda" if jt.flags.use_cuda else "cpu"
+        seen = {}
+        with torch.device("cpu"):
+            thread = threading.Thread(
+                target=lambda: seen.setdefault("device", torch.ones(2).device.type))
+            thread.start()
+            thread.join()
+        self.assertEqual(seen["device"], ambient)
 
 
 class TestCudaDeviceAndEvents(StubPolicyBase):
