@@ -751,7 +751,7 @@ def _api_dist_get_backend(group=None):
     _context = get_install_context(jt).state["distributed_api"]
     state = _context['state']
     world_group = _context['world_group']
-    if group is None and state.get("initialized") and state.get("backend"):
+    if (group is None or group is world_group) and state.get("initialized") and state.get("backend"):
         return state["backend"]
     return group._get_backend_name() if group is not None and hasattr(group, '_get_backend_name') else world_group._get_backend_name()
 

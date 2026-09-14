@@ -156,6 +156,7 @@ def test_init_destroy_store_and_backend_validation(distributed_state, monkeypatc
     owner._init_process_group(backend="gloo", rank=0, world_size=1, store=store)
     assert state == {"initialized": True, "store": store, "backend": "gloo"}
     assert owner._api_dist_get_backend() == "gloo"
+    assert owner._api_dist_get_backend(get_install_context(jt).state["distributed_api"]["world_group"]) == "gloo"
     assert owner._api_c10d_get_default_store() is store
     owner._destroy_process_group()
     assert store.closed == 1 and state == {"initialized": False, "store": None, "backend": None}
