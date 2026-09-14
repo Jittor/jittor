@@ -179,13 +179,26 @@ struct CommonOpType : OpByType {
             {"init_mean", "$1(0)"},
         };
 
+        // `find`, not `operator[]`: these are static lookup tables and a miss
+        // has to stay a miss. `operator[]` inserts on miss, so a key the table
+        // does not carry -- a mixed float16/float32 `equal`, for instance --
+        // *writes* to `common_op_type_cuda_map` from whichever compile worker
+        // reaches it first, and two workers doing that at once rehash the same
+        // bucket array. That is the textbook shape of the heap corruption the
+        // parallel compiler was producing, and it needs no lock to avoid: the
+        // tables are read-only once their static initialisers have run.
+        auto lookup = [](const unordered_map<string, string>& table,
+                         const string& key) -> string {
+            auto iter = table.find(key);
+            return iter == table.end() ? string() : iter->second;
+        };
         string ret;
         if (both_map.count(args.at(0)))
-            ret = both_map[args.at(0)];
+            ret = both_map.at(args.at(0));
         else if (runtime_flag_use_cuda())
-            ret = cuda_map[args.at(0)];
+            ret = lookup(cuda_map, args.at(0));
         else
-            ret = cpu_map[args.at(0)];
+            ret = lookup(cpu_map, args.at(0));
         // `~` on a C++ bool promotes to int first, so ~true is -2 and
         // ~false is -1 -- both non-zero, and the cast below turns either
         // back into true. NumPy and Torch define bitwise_not on bool as

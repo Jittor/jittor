@@ -155,16 +155,24 @@ struct FP16OpType : OpByType {
             {"init_mean", "$1(0)"},
         };
 
+        // `at`/`find`, never `operator[]` -- see the note in common_op_type.cc.
+        // These tables are shared by every compile worker, and `operator[]`
+        // writes to them on a miss.
+        auto lookup = [](const unordered_map<string, string>& table,
+                         const string& key) -> string {
+            auto iter = table.find(key);
+            return iter == table.end() ? string() : iter->second;
+        };
         string ret;
         if (both_map.count(args.at(0)))
-            ret = both_map[args.at(0)];
+            ret = both_map.at(args.at(0));
         else if (runtime_flag_use_cuda())
-            ret = cuda_map[args.at(0)];
+            ret = lookup(cuda_map, args.at(0));
         else
-            ret = cpu_map[args.at(0)];
+            ret = lookup(cpu_map, args.at(0));
         if (runtime_flag_use_cuda()) {
             if (args[1] == "float32" && !both_map.count(args.at(0))) {
-                ret = common_op_type_cuda_map[args.at(0)];
+                ret = lookup(common_op_type_cuda_map, args.at(0));
             }
             if (args[1] == "float16" || 
                 args[1] == "bfloat16" || 
