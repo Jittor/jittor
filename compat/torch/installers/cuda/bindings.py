@@ -31,6 +31,10 @@ from .api import (
     _api_cpu_get_cpu_capability,
     _api_cuda__is_in_bad_fork,
     _api_cuda_backend_enable_cudnn_sdp,
+    _api_cuda_backend_flash_sdp_enabled,
+    _api_cuda_backend_mem_efficient_sdp_enabled,
+    _api_cuda_backend_math_sdp_enabled,
+    _api_cuda_backend_cudnn_sdp_enabled,
     _api_cuda_backend_enable_flash_sdp,
     _api_cuda_backend_enable_math_sdp,
     _api_cuda_backend_enable_mem_efficient_sdp,
@@ -371,6 +375,10 @@ def _install_cuda(g, registry=None):
     # stack turns cuDNN's off during platform detection, and an AttributeError
     # there is swallowed into "no platform detected" rather than reported.
     cuda_backend.enable_cudnn_sdp = getattr(cuda_backend, "enable_cudnn_sdp", _api_cuda_backend_enable_cudnn_sdp)
+    cuda_backend.flash_sdp_enabled = getattr(cuda_backend, "flash_sdp_enabled", _api_cuda_backend_flash_sdp_enabled)
+    cuda_backend.mem_efficient_sdp_enabled = getattr(cuda_backend, "mem_efficient_sdp_enabled", _api_cuda_backend_mem_efficient_sdp_enabled)
+    cuda_backend.math_sdp_enabled = getattr(cuda_backend, "math_sdp_enabled", _api_cuda_backend_math_sdp_enabled)
+    cuda_backend.cudnn_sdp_enabled = getattr(cuda_backend, "cudnn_sdp_enabled", _api_cuda_backend_cudnn_sdp_enabled)
     if not hasattr(cuda_backend, "matmul") or not isinstance(cuda_backend.matmul, _MatmulBackend):
         cuda_backend.matmul = _MatmulBackend()
     cuda_backend._preferred_blas_library = getattr(

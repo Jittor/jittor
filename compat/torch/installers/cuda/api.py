@@ -1032,20 +1032,55 @@ def _api_cuda_backend_sdp_kernel(*a, **k):
     return _SDPKernel()
 
 
-def _api_cuda_backend_enable_flash_sdp(*a, **k):
+#: torch's four SDPA backend switches. Attention here picks its own kernel, so
+#: these only record the requested state -- but torch pairs every setter with a
+#: getter, and callers read it back (MiniMax-H3's encoder saves
+#: `cudnn_sdp_enabled()`, forces cuDNN SDPA on, and restores the saved value).
+#: There is no cuDNN fused SDPA here, so `cudnn_sdp_enabled()` defaults to False;
+#: the other three match torch's defaults.
+_SDP_BACKEND_FLAGS = {
+    "flash": True,
+    "mem_efficient": True,
+    "math": True,
+    "cudnn": False,
+}
+
+
+def _enable_sdp_backend(name, enabled=True):
+    _SDP_BACKEND_FLAGS[name] = bool(enabled)
     return None
 
 
-def _api_cuda_backend_enable_mem_efficient_sdp(*a, **k):
-    return None
+def _api_cuda_backend_enable_flash_sdp(enabled=True):
+    return _enable_sdp_backend("flash", enabled)
 
 
-def _api_cuda_backend_enable_math_sdp(*a, **k):
-    return None
+def _api_cuda_backend_flash_sdp_enabled():
+    return _SDP_BACKEND_FLAGS["flash"]
 
 
-def _api_cuda_backend_enable_cudnn_sdp(*a, **k):
-    return None
+def _api_cuda_backend_enable_mem_efficient_sdp(enabled=True):
+    return _enable_sdp_backend("mem_efficient", enabled)
+
+
+def _api_cuda_backend_mem_efficient_sdp_enabled():
+    return _SDP_BACKEND_FLAGS["mem_efficient"]
+
+
+def _api_cuda_backend_enable_math_sdp(enabled=True):
+    return _enable_sdp_backend("math", enabled)
+
+
+def _api_cuda_backend_math_sdp_enabled():
+    return _SDP_BACKEND_FLAGS["math"]
+
+
+def _api_cuda_backend_enable_cudnn_sdp(enabled=True):
+    return _enable_sdp_backend("cudnn", enabled)
+
+
+def _api_cuda_backend_cudnn_sdp_enabled():
+    return _SDP_BACKEND_FLAGS["cudnn"]
 
 
 def _api_mps_is_available():
