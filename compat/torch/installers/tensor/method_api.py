@@ -697,6 +697,39 @@ def _stride(self, dim=None):
     return st[dim]
 
 
+def _set_(self, source, storage_offset=0, size=None, stride=None):
+    """torch.Tensor.set_ -- re-point this tensor at `source`'s storage.
+
+    `source` is a tensor or an untyped-storage carrier. jittor has no
+    user-visible byte storage, so a whole-storage byte view (`size ==
+    (nbytes,)`, stride `(1,)`), which vLLM-Omni's residency manager takes to
+    snapshot a group, materializes the owning tensor's elements instead; every
+    other form is an element-level view built with the same gather as
+    `Tensor.as_strided`. Values are exact either way; the two tensors do not
+    share memory.
+    """
+    base = getattr(source, "_var", source)
+    if not isinstance(base, _NativeVar):
+        raise TypeError("Tensor.set_ expects a Tensor or a storage, got %s"
+                        % type(source).__name__)
+    if size is None:
+        size = tuple(int(s) for s in base.shape)
+    else:
+        size = tuple(int(s) for s in size)
+    if stride is None:
+        stride = tuple(int(s) for s in base.stride())
+    else:
+        stride = tuple(int(s) for s in stride)
+    nbytes = int(source.nbytes()) if hasattr(source, "nbytes") else None
+    if nbytes is not None and size == (nbytes,) and stride == (1,) and not int(storage_offset):
+        result = base.as_strided(tuple(int(s) for s in base.shape),
+                                 tuple(int(s) for s in base.stride()), 0)
+    else:
+        result = base.as_strided(size, stride, int(storage_offset))
+    self._update(result)
+    return self
+
+
 def _as_strided(self, size, stride, storage_offset=0):
     size = [int(s) for s in size]
     stride = [int(s) for s in stride]
