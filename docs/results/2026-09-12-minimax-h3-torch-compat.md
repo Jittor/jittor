@@ -1,9 +1,10 @@
 # MiniMax-H3 under the Torch compatibility layer
 
-- Status: Partial — pipeline runs end to end; the released 33B checkpoint is not yet
-  usable at a practical speed on CUDA
-- Date: 2026-09-12
-- Baseline commit: `89622bb3` (dirty tree; see "Changes" below)
+- Status: Runs end to end on the released checkpoint at parity speed; the scoring
+  items in "Open items" (soundtrack parity, first-run JIT cost) remain
+- Date: 2026-09-12, re-verified 2026-09-14
+- Baseline commit: `89622bb3` (the original run; see "Changes" below).
+  Re-verification at `a6b2c9c6`, on top of `5a084737`
 - Owner: Jittor compatibility maintainers
 - Review when: the blocked items in "Open items" land, or the JIT op compiler's
   per-shape cost changes
@@ -81,6 +82,41 @@ attempt:
   component is loaded into host memory and then moved, so the load path and the
   execution path disagree about the default device.
 
+### Re-verified on the released checkpoint (2026-09-14)
+
+The released 33B checkpoint now produces a video. `run-jittor-parity.sh`
+(512x512, 124 frames, 6 steps, `--vae-dtype float16`, flash VAE attention) ran
+twice at `a6b2c9c6`; both finished with **exit 0, no `best_algo_idx`, no
+`corrupted`**, and wrote a 512x512 H.264 mp4 with 124 frames and an AAC track.
+
+The two blockers behind the earlier failures are fixed, and both fixes are in
+jittor, not in the model: the autocast mixed-dtype request (`63fc1485`,
+`4c3ab0e4`) and the exit-time heap corruption plus its relay subgraph
+use-after-free (`f43b90d6`, `c6b56a61`). See
+[the exit-corruption report](2026-09-14-exit-heap-corruption.md) and
+[the autocast report](2026-09-14-autocast-conv-mixed-dtype.md).
+
+Speed, same request, `generate_seconds` (the comparable metric -- the oracle
+summary measures component loading lazily while this harness loads it eagerly):
+
+| run | dit | text_encoder | vae.video | vae.audio | generate |
+| --- | --- | --- | --- | --- | --- |
+| this harness, warm cache | 28.32 | 3.72 | 14.78 | 4.54 | **73.78 s** |
+| this harness, warm, prior session (`al-jittor`) | 25.85 | 3.79 | 14.14 | 5.26 | **73.17 s** |
+| PyTorch oracle, same window (`al-oracle`) | 21.47 | 10.53 | 6.42 | 0.19 | **74.90 s** |
+| PyTorch oracle (`fin-oracle-s6`) | 22.92 | 10.67 | 6.25 | 0.20 | 79.67 s |
+
+Totals are within a few percent; per phase the text encoder is about 2.8x
+faster here and the video/audio VAEs are 2.3x/24x slower, which cancels out.
+The **first** run after the fixes took 300.9 s because the convolution, matmul
+and relay changes invalidate those operators' JIT kernels; the steady state is
+the 73-74 s row.
+
+Two caveats: the machine was not idle (all GPUs reported 94-100% utilization
+from other tenants while these ran), so the absolute seconds move between
+windows and only the same-window pair above should be read as a ratio; and the
+eager component load (~270-340 s here) is not part of `generate_seconds`.
+
 ## Changes
 
 Fixed while bringing the pipeline up. Each is a real defect, not a workaround;
@@ -123,7 +159,11 @@ regression.
    15-30 per minute. The flag *is* settable at runtime, and the run harness sets
    it to 16 before the pipeline call; the framework-side question is why the
    environment spelling is ignored, and whether the compatibility layer should
-   raise it by default for models this large.
+   raise it by default for models this large. Measured on 2026-09-14: the first
+   512x512x124 run after a jittor source change took `generate_seconds` **300.9 s**
+   (that change invalidates the affected operators' kernels), against **73.8 s**
+   on the next run with the cache warm. The cold cost is real and per jit-key
+   set; it is not the steady-state throughput.
 2. **Autocast mixed dtypes. Fixed in `63fc1485` and `4c3ab0e4`.** H3's video
    decode runs under `torch.autocast(float16)`; the shim's amp register changed
    an operator's *result* dtype without casting its operands, which was applied
