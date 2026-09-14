@@ -56,7 +56,7 @@ def install():
     if _installed:
         return False
     import torch
-    from . import custom_ops, flash_attn
+    from . import aten_ops, custom_ops, flash_attn
 
     # vLLM decides what it may use from `torch.__version__`, and needs the
     # torch API level there rather than Jittor's own version.
@@ -77,6 +77,7 @@ def install():
         if name not in sys.modules:
             active_transaction().replace_module(sys.modules, name, types.ModuleType(name))
     custom_ops.register(torch)
+    aten_ops.register(torch)
     flash_attn.install()
     set_attr(sys.modules[__name__], "_installed", True)
     return True

@@ -212,6 +212,10 @@ class ProfilerActivity:
     XPU = "xpu"
     HPU = "hpu"
     MTIA = "mtia"
+    # torch's enum has it, and vLLM's profiler wrapper indexes its activity
+    # table by `torch.profiler.ProfilerActivity.PrivateUse1` at import; the
+    # attribute's absence aborted engine construction.
+    PrivateUse1 = "privateuse1"
 
 
 class _ProfilerAction:
