@@ -129,11 +129,18 @@ struct FP16OpType : OpByType {
             {"subtract", "(($2)-($4))"},
             {"multiply", "(($2)*($4))"},
             {"divide", "($1(($1($2))/($1($4))))"},
-            {"less", "(($2)<($4))"},
-            {"less_equal", "(($2)<=($4))"},
-            {"greater", "(($2)>($4))"},
-            {"greater_equal", "(($2)>=($4))"},
-            {"not_equal", "(($2)!=($4))"},
+            // Compare through float, matching the CPU table's `equal`. jittor's
+            // host half types have both a converting constructor and a
+            // conversion to float, so a *mixed* comparison such as
+            // `bfloat16 > int32` has two viable candidates (half-vs-half via
+            // int->float->half, and the built-in float comparison via
+            // half->float) and is rejected as ambiguous. Converting explicitly
+            // is lossless for both half formats.
+            {"less", "(float($2)<float($4))"},
+            {"less_equal", "(float($2)<=float($4))"},
+            {"greater", "(float($2)>float($4))"},
+            {"greater_equal", "(float($2)>=float($4))"},
+            {"not_equal", "(float($2)!=float($4))"},
             {"left_shift", "(($2)<<($4))"},
             {"right_shift", "(($2)>>($4))"},
             {"logical_and", "(($2)&&($4))"},

@@ -99,15 +99,14 @@ class TestDeviceApi(_Case):
     def test_host_resident_pow_compiles_while_cuda_is_enabled(self):
         """A host-side op must not be handed a CUDA-only code fragment.
 
-        With CUDA enabled, ``CommonOpType::expand_op`` still selects the CUDA
-        op-type table for a translation unit that is compiled for the host
-        (``#define JIT_cpu``) -- the choice is made from the *runtime*
-        ``use_cuda`` flag, not from the unit's backend. The CUDA table spells
-        ``pow`` as ``jittor::_signed_pow``, and ``type/pow_compute.h`` used to
-        define that symbol only under ``#ifdef JIT_cuda``, so every host-side
-        ``pow`` failed to compile with "'_signed_pow' is not a member of
-        'jittor'". vLLM-Omni's CPU-offloaded pipeline hits it while building
-        its schedules on the host.
+        The op-type tables are chosen from the translation unit's own backend
+        (``#define JIT_cpu``), not from the process-wide ``use_cuda`` flag: a
+        CUDA-enabled process still compiles host kernels for CPU-resident Vars.
+        When the choice was made from the runtime flag, a host unit received
+        the CUDA table's ``pow`` -> ``jittor::_signed_pow``, a symbol
+        ``type/pow_compute.h`` defines only under ``#ifdef JIT_cuda``, and
+        failed with "'_signed_pow' is not a member of 'jittor'". vLLM-Omni's
+        CPU-offloaded pipeline hits it while building its schedules on the host.
         """
         with torch.device("cpu"):
             base = torch.tensor([-2.0, 3.0, 4.0], dtype=torch.float32)
@@ -118,6 +117,27 @@ class TestDeviceApi(_Case):
             np.array([-8.0, 9.0, 4.0], dtype=np.float32),
             rtol=1e-6,
         )
+
+    def test_host_resident_half_ops_compile_while_cuda_is_enabled(self):
+        """The fp16 table has the same hazards as the common one.
+
+        Its CUDA `abs` is the intrinsic `::__habs` (undeclared off device), and
+        its comparisons have to go through `float`: jittor's host half types
+        convert both ways, so `bfloat16 > int32` spelled as a mixed comparison
+        has two viable candidates and is rejected as ambiguous.
+        """
+        with torch.device("cpu"):
+            base = torch.tensor([-1.5, 2.0, -3.0], dtype=torch.bfloat16)
+            other = torch.tensor([0.5, -1.0, 2.0], dtype=torch.bfloat16)
+            zero = torch.tensor([0, 0, 0], dtype=torch.int32)
+        self.assertEqual(base.device.type, "cpu")
+        np.testing.assert_allclose(
+            np.asarray((base - other).abs().numpy(), dtype=np.float32),
+            np.array([2.0, 3.0, 5.0], dtype=np.float32),
+            rtol=1e-2,
+        )
+        np.testing.assert_array_equal(
+            (base > zero).numpy(), np.array([False, True, False]))
 
 
 class TestMultiDeviceFacade(_Case):

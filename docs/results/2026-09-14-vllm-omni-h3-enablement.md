@@ -47,21 +47,34 @@ thread-local `DeviceContext` too) and have the factory frontend's
 no `_like` input. Outside any block the historical jittor default is untouched;
 `torch.empty_like(x)` still follows `x`, not the ambient context.
 
-## 3. A CPU translation unit could receive a CUDA-only `pow` template
+## 3. Op-type tables were chosen by the runtime flag, not the compile target
 
-With `use_cuda=1`, `CommonOpType::expand_op` picks the CUDA op-type table from
-the **runtime** flag, not from the unit's backend (`#define JIT_cpu`). The CUDA
-table spells `pow` as `jittor::_signed_pow`, and `type/pow_compute.h` defined
-that symbol only under `#ifdef JIT_cuda`. The include that `post_pass` adds was
-therefore visible but empty, and any host-side `pow` in a CUDA-enabled process
-failed to compile: `'_signed_pow' is not a member of 'jittor'`. Host-side
-schedules are exactly what the CPU-offloaded pipeline builds.
+`CommonOpType::expand_op` and `FP16OpType::expand_op` picked their CUDA table
+from `runtime_flag_use_cuda()` -- the *process-wide* flag -- rather than from
+the translation unit's own backend. With `use_cuda=1` a host unit
+(`#define JIT_cpu`, which a CUDA-enabled process compiles for every CPU-resident
+Var) therefore received CUDA-only entries. Three of them do not work off
+device:
 
-Fix: give `_signed_pow` a CPU spelling (`::pow`, which already signs an
-integral exponent correctly) so the symbol exists in every unit that can
-receive the template. The selection-by-runtime-flag remains the underlying
-design smell: any other op whose CPU and CUDA table entries diverge is still
-selected by the wrong key, and `fp16_op_type.cc` has the same shape.
+- `pow`: `jittor::_signed_pow`, defined in `type/pow_compute.h` only under
+  `#ifdef JIT_cuda` -> `'_signed_pow' is not a member of 'jittor'`;
+- half `abs`: `::__habs`, a CUDA intrinsic -> `'::__habs' has not been
+  declared`;
+- half comparisons: the CUDA table's `(($2)>($4))` is a mixed comparison once
+  the operands differ (e.g. `bfloat16` vs `int32`), and jittor's host half
+  types convert both ways, so it is rejected as an ambiguous `operator>`.
+
+Host-side schedules are exactly what the CPU-offloaded pipeline builds, so all
+three blocked engine construction.
+
+Fix: thread the unit's backend through `OpByType::expand_op(args, is_cuda)`.
+`OpCompiler` derives `is_cuda` from the `JIT_cuda`/`JIT_cpu` define already in
+`defs` at the `@expand_op(...)` expansion, falling back to the runtime flag only
+for a caller of `precompile()` that declares no backend (none currently expand
+`@expand_op`). The fp16 comparisons now convert through `float`, matching what
+that table's `equal` entry already did. `pow_compute.h` stays CUDA-only: a CPU
+unit gets the CPU table's `std::pow`, and giving the header a CPU spelling would
+make the regression test below pass even if this choice broke again.
 
 ## 4. `torch.nn.Conv3d` rejected `padding_mode`
 

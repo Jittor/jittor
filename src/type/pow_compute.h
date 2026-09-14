@@ -17,15 +17,10 @@
 // it computes pow(|x|, y) and re-applies the sign by exponent parity, leaving
 // a negative base with a non-integral exponent as NaN (matching std::pow).
 //
-// The CPU spelling exists because `CommonOpType::expand_op` chooses this
-// template from the *runtime* `use_cuda` flag rather than from the translation
-// unit's backend: a CPU-compiled op (`#define JIT_cpu`, e.g. any op on a
-// CPU-resident Var in a CUDA-enabled process) receives `jittor::_signed_pow`
-// too. Without this branch the include that `post_pass` adds is visible but
-// empty, and the op fails to compile with "'_signed_pow' is not a member of
-// 'jittor'". std::pow already signs an integral exponent correctly, so the CPU
-// branch is a plain delegation and matches the `std::pow` the CPU op-type
-// table would otherwise have emitted.
+// CUDA-only on purpose. `expand_op` chooses this table from the translation
+// unit's own `#define JIT_cuda`/`JIT_cpu`, so a host unit gets the CPU table's
+// `std::pow` and never sees this symbol; giving it a CPU spelling here would
+// hide a regression of that choice instead of failing to compile.
 
 namespace jittor {
 
@@ -36,10 +31,6 @@ inline __device__ double _signed_pow(double x, double y) {
         return ::pow(-x, y) * (::fmod(y, 2.0) != 0.0 ? -1.0 : 1.0);
     return ::pow(x, y);
 }
-
-#else
-
-inline double _signed_pow(double x, double y) { return ::pow(x, y); }
 
 #endif
 
