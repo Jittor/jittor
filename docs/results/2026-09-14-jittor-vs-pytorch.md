@@ -582,3 +582,77 @@ eager 的 1.44 ms，整步回放就是约 1.65 ms，对 torch 是 1.8x。** `exe
 1.19 us 一个纯粹是算子构造。但一步 12 次 Function 也只有约 0.10 ms，**不值得为它
 去动 tape 的图语义**——省掉输入侧的三次 tape 需要放弃「输入侧 stop_grad 边界」，
 而 `GradHooker` 那种直接返回入参的 Function 会因此被错误地 stop_grad。
+
+## 每算子地板：CUDA 上 7.9 us，而发射本身只要 2.6 us
+
+前一节说「奖金在 `run_exec_plan`」。量到底之后，它不是 `run_exec_plan` 的结构问题，
+而是**每个 CUDA 算子的固定开销**。用一条 200 个 `stop_fuse` 过的平凡算子的链，
+捕获后回放（所以测量里没有任何建图），每算子的主机时间：
+
+| | us/算子 |
+| --- | --- |
+| jittor，CUDA | **7.89** |
+| jittor，CPU 后端（同一条链） | **1.05** |
+| 裸 `cudaLaunchKernel`（本机实测） | **2.0–2.6** |
+
+**和图的大小无关**（N=50/200/400 分别是 8.11/7.90/7.75），**和算子种类无关**
+（python 标量操作数 7.37、Var 操作数 7.96、一元 7.36）。所以这是一条地板，不是
+某个算子的问题：d1024-L4 一步约 190 个算子，光这条地板就是 1.5 ms（整步 3.53）。
+
+拆到阶段（临时在 `run_exec_plan` 和 `execute_fused_prepared` 里加计数器，量完撤掉）：
+
+| | us/算子 |
+| --- | --- |
+| 5 个 RAII scope + LaunchRecord | 0.27 |
+| 输出 `alloc` | 0.17 |
+| `prepare_execution` | 0.16 |
+| JIT key `to_string` | 0.04 |
+| migrate 检查 + `record_active_launch` | 0.14 |
+| `jit_fused_ops` 查表 | 0.06 |
+| **生成代码 `entry(this)`**（四行加一次 `<<<>>>`） | **5.38** |
+
+真实模型里按算子类型分（d1024-L4 一步）：融合 JIT 核 81.8 个 × 13.94 us、
+cuBLAS 72 个 × 12.56 us、存储视图等 140 个 × 2.03 us。
+
+排除掉的几条（都实测过，都不是）：
+- **dlopen**：同一个 kernel 编进主程序 2.657 us，放进 dlopen 的 .so 也是 2.657 us。
+- **遗留默认流的隐式同步**：进程里另外开 8 条阻塞流，stream 0 的发射还是 2.590 us。
+- **队列打满导致发射阻塞**：一轮 30000 次发射也只是 2.588 → 2.978 us。
+- **python 标量常量**（`x * 1.000001` 的 array op）：换成 Var 操作数或一元算子，
+  每算子成本不变。
+- **profiler / trace 钩子**：`profiler_enable`、`trace_py_var` 都是 0，
+  `record_and_run` 在关闭时是直通。
+
+## 出路：CUDA Graph（已量过奖金，也定位了唯一的阻碍）
+
+既然整步的图已经验证可以捕获回放（上一节，30 步逐位相同），而它每次回放执行的是
+**同一串 kernel、打在同一批缓冲上**——那正是 CUDA Graph 的形状。本机实测：
+
+    200 次单独发射    334.7 us   (1.67 us 一个)
+    一次 cudaGraphLaunch  2.6 us   (0.013 us 一个)
+
+**发射开销塌缩 128 倍。** 而且捕获之后根本不走 `run_exec_plan`，上面那 7.89 us 的
+地板整个消失。按这一条 case 估：3.53 ms → 设备时间 0.455 ms 加上 python 外壳，
+**对 torch 的 3.03 是 4 倍以上**，并且对每一个主机受限的模型都成立。
+
+唯一的阻碍已经定位清楚，也测过了：
+
+    legacy default stream (0)       不可捕获
+    cudaStreamPerThread             可捕获
+    显式 non-blocking stream        可捕获
+
+jittor 生成的是 `func<<<p1,p2>>>`——没有流参数，落在**遗留默认流**上，而 jittor
+编译 CUDA 时没有加 `--default-stream per-thread`。所以要做的是：
+
+1. nvcc 加 `--default-stream per-thread`，一处改动就让每个生成 kernel 和每个手写
+   CUDA 算子都落到 `cudaStreamPerThread`（发射成本实测不变，2.574 对 2.588 us）；
+   cuBLAS/cuDNN 还要显式 `cublasSetStream(handle, cudaStreamPerThread)`。
+   这一条会去掉遗留流的隐式同步语义，**必须跑完整门禁对照 447 条基线**。
+2. 捕获期间不能有任何 `cudaMalloc`（实测：捕获中分配直接报
+   "operation not permitted when stream is capturing"）。保留图第二次回放时所有
+   var 都已持有内存，正好满足；但分配器必须确认不会在捕获期间向驱动要内存。
+3. 第二次回放时 `cudaStreamBeginCapture` / `EndCapture` / `Instantiate`，之后
+   `cudaGraphLaunch`。失效条件与现有回放相同，再加上「捕获期间发生过分配」。
+
+这一段**没有实现**。它是三处改动加一轮完整门禁，而上面每一条数字都是为了确认它
+值得做、以及唯一的阻碍是什么——不是猜的。
