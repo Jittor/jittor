@@ -671,6 +671,11 @@ void sync_all(bool device_sync) {
     vector<Var*> vars;
     vars.reserve(runtime_holder_state().holders().size());
     for (auto v : runtime_holder_state().holders()) {
+        // Same reason `top_weak_sync` skips these: a kept graph is run on
+        // purpose by whoever kept it. `sync_all` cannot finish one anyway --
+        // `keep_graph` is what leaves it pending -- so sweeping it up here
+        // only re-runs it, every time anyone asks for everything to complete.
+        if (v->var->flag(VarFlags::_kept)) continue;
         if (!v->var->_outputs.size())
             vars.push_back(v->var);
     }

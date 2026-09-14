@@ -81,6 +81,12 @@ void Executor::submit_pending(Var* target, bool force) {
         for (auto holder : runtime_holder_state().holders()) {
             auto var = holder->var;
             if (var->_outputs.size() || var->is_finished()) continue;
+            // The third place a kept graph must not be picked up as a
+            // bystander (see `top_weak_sync` and `sync_all`), and the easiest
+            // to miss: this fires in the middle of the NEXT call's
+            // construction, so the kept graph is re-executed while the caller
+            // is still building the work that was going to replace it.
+            if (var->flag(VarFlags::_kept)) continue;
             auto op = var->input();
             if (op && op->flag(OpFlags::_must_stay_pending)) continue;
             vars.push_back(var);
@@ -190,6 +196,23 @@ static void top_weak_sync(vector<Var*>& vars) {
         if (epoch.marked(v)) continue;
         if (v->_outputs.size()) continue;
         if (v->is_finished()) continue;
+        // A kept graph is run on purpose, by whoever kept it, and never as a
+        // bystander of somebody else's sync. Widening a batch with one costs a
+        // full re-execution of a graph nobody asked for -- traced on a
+        // step-sized capture, every one of these three paths ran the whole
+        // 316-operator graph again behind the caller's back.
+        //
+        // And re-execution is not always merely wasted. `share_with` lets an
+        // operator's output land in a buffer the same graph reads, which is
+        // how a replay advances state in place; for such a graph an
+        // unrequested run is a silent state change, with the operator counts
+        // and every statistic still looking right. So the rule is strict:
+        // only the owner runs it.
+        //
+        // Consumers are unaffected. This only widens the ROOTS, and phase 2
+        // still collects any unfinished input of what was actually requested,
+        // kept or not.
+        if (v->flag(VarFlags::_kept)) continue;
         vars.push_back(v);
     }
 }

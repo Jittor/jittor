@@ -441,7 +441,7 @@ def zeros_like(x, dtype=None) -> Var:
     if dtype is None: dtype = x.dtype
     return zeros(x.shape, dtype)
 
-def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
+def var(x, dim=None, dims=None, unbiased=False, keepdims=False, keepdim=None):
     """ return the sample variance. If unbiased is True, Bessel's correction will be used.
 
     :param x: the input jittor Var.
@@ -469,6 +469,9 @@ def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
     shape = x.shape
     new_shape = list(x.shape)
 
+    # `keepdim` is torch's spelling of `keepdims`; see jittor/ops/numerical.py:all.
+    if keepdim is not None:
+        keepdims = keepdim
     if dim is not None and dims is not None:
         raise ValueError("dim and dims can not be both set")
     if dim is None and dims is None:
@@ -496,8 +499,12 @@ def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
 
 Var.var = var
 
-def std(x, dim=None, keepdim=False):
+def std(x, dim=None, keepdim=False, keepdims=None):
     import jittor as jt
+    # This one took `keepdim` and rejected `keepdims` -- the opposite of `var`
+    # right above it. See jittor/ops/numerical.py:all.
+    if keepdims is not None:
+        keepdim = keepdims
     if dim is None:
         matsize=1
         for i in x.shape:
@@ -1115,7 +1122,7 @@ def _check_arg_reduce_is_answerable(op, x, dim):
             % (op, dim, list(shape), op))
 
 
-def argmax(x: Var, dim: int, keepdims:bool=False):
+def argmax(x: Var, dim: int, keepdims:bool=False, keepdim=None):
     ''' Returns the indices and values of the maximum elements along the specified dimension.
 
     :param x: the input Var.
@@ -1151,11 +1158,15 @@ def argmax(x: Var, dim: int, keepdims:bool=False):
         if dim < 0:
             dim += nd
         _check_arg_reduce_is_answerable("argmax", x, dim)
+    # `keepdim` is torch's spelling of `keepdims`; the native ops take either,
+    # so the python wrappers must too. See jittor/ops/numerical.py:all.
+    if keepdim is not None:
+        keepdims = keepdim
     return jt.arg_reduce(x, "max", dim, keepdims)
 
 Var.argmax = argmax
 
-def argmin(x, dim: int, keepdims:bool=False):
+def argmin(x, dim: int, keepdims:bool=False, keepdim=None):
     ''' Returns the indices and values of the minimum elements along the specified dimension.
 
     :param x: the input Var.
@@ -1185,6 +1196,10 @@ def argmin(x, dim: int, keepdims:bool=False):
         if dim < 0:
             dim += nd
         _check_arg_reduce_is_answerable("argmin", x, dim)
+    # `keepdim` is torch's spelling of `keepdims`; the native ops take either,
+    # so the python wrappers must too. See jittor/ops/numerical.py:all.
+    if keepdim is not None:
+        keepdims = keepdim
     return jt.arg_reduce(x, "min", dim, keepdims)
 
 Var.argmin = argmin

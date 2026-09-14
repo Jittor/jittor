@@ -28,9 +28,13 @@ from ..core import OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo
 # ------------------------------------------------------------------- numpy refs
 
 def _atleast1d(a):
-    """jittor has no 0-d scalar: a full reduction yields a (1,)-shaped Var, so the
-    reference's python/0-d scalar must be lifted to 1-D to match shapes exactly."""
-    return np.atleast_1d(a)
+    """Identity. It used to be ``np.atleast_1d``, "because jittor has no 0-d
+    scalar" -- jittor has one, and a full reduce returns shape () exactly as
+    numpy and torch do, so the lift only invented a shape disagreement that
+    failed every full-reduce sample before a single value was compared. Kept as
+    a named pass-through so the call sites still read as "the reference's own
+    shape", rather than being deleted one by one."""
+    return a
 
 
 def amax_ref(x, dim=None, keepdim=False):
@@ -82,6 +86,18 @@ def norm2_ref(x, p=2, dim=None, keepdim=False):
     if dim is None:
         return _atleast1d(np.sqrt(np.sum(np.square(x.reshape(-1)))))
     return np.sqrt(np.sum(np.square(x), axis=dim, keepdims=keepdim))
+
+
+# jittor's argmax/argmin return (indices, values) as a plain 2-tuple, which the
+# harness cannot unwrap (it only knows the namedtuple form), so the compare saw a
+# 2-tuple against one array. The reference computes the INDICES, so keep [0].
+
+def _argmax_indices(x, dim=None, keepdim=False):
+    return jt.argmax(x, dim, keepdim=keepdim)[0]
+
+
+def _argmin_indices(x, dim=None, keepdim=False):
+    return jt.argmin(x, dim, keepdim=keepdim)[0]
 
 
 def argmax_ref(x, dim=None, keepdim=False):
@@ -322,9 +338,9 @@ op_db = [
            variant_test_name="p2", supports_gradgrad=False),
 
     # ---- non-differentiable (integer / bool valued) ----------------------------
-    OpInfo("argmax", op=jt.argmax, ref=argmax_ref, sample_inputs_func=sample_argmax,
+    OpInfo("argmax", op=_argmax_indices, ref=argmax_ref, sample_inputs_func=sample_argmax,
            dtypes=cu.floating_types(), supports_autograd=False),
-    OpInfo("argmin", op=jt.argmin, ref=argmin_ref, sample_inputs_func=sample_argmin,
+    OpInfo("argmin", op=_argmin_indices, ref=argmin_ref, sample_inputs_func=sample_argmin,
            dtypes=cu.floating_types(), supports_autograd=False),
     OpInfo("all", op=jt.all, ref=all_ref, sample_inputs_func=sample_all,
            dtypes=cu.integral_types(), supports_autograd=False),

@@ -735,3 +735,135 @@ CUDA Graph、唯一阻碍是遗留默认流不可捕获。**做完了。** 三�
 （`opt.step()` 是天然的锚点），并解决上一节记下的那条危险：保留的训练图会改写
 自己的叶子，**不是幂等的**，任何无关的 weak sync 扫到它就是悄悄多走一个优化器步。
 推理那条没有这个问题（重跑只是重算同一个答案），所以先接了推理。
+
+## 更正：我报过的 "1615 failed" 是我自己的 harness 造的
+
+我的门禁把 `tests/backends/parity/test_device_parity.py` 和 `tests/ops/test_ops.py`
+写进**同一次 pytest 调用**。Torch 兼容模式是进程全局的——它改惰性执行、reduce 默认值
+和梯度语义——而前一个文件不会把它改过的状态放回去。于是后一个文件整片变红。
+
+量给自己看（同一个 31% 进度点，同一棵树）：
+
+| 命令里的文件顺序 | 失败 | 通过 | 失败率 |
+| --- | --- | --- | --- |
+| parity 在前（我的门禁） | 563 | 6 | **99%** |
+| ops 在前 | 117 | 459 | **20%** |
+
+`tests/ops/test_ops.py` 的文件头里写的运行方式就是单独跑；`refactor-dispatch.md`
+也早就写过「把它们混进一次选择，正是同一个测试会因为命令行里和它一起写了哪个目录
+而时过时败的原因」。两处我都没读。
+
+**我该早点起疑**：1818 条里 1615 条失败本身就不合常理，而我只盯着「两棵树的失败
+集合是否逐行相同」就放过去了。差集比较在那个口径下仍然成立（两条臂用的是同一个坏
+顺序），但绝对数字是我制造的。
+
+连带**收回一条结论**：先前记的「98 条 device-parity 由这批改动转绿」是在同一个坏
+顺序下量的，不算数。正确口径（一个文件一个进程，`metaop-perf/run_gate2.sh`）重测。
+
+## `tests/ops/test_ops.py` 不是「失败」，是**把进程打死**
+
+按正确口径（一个文件一个进程）跑，`test_ops.py` 在 **73%** 处停住：两棵树、两次运行，
+日志字节数完全相同，没有 pytest 汇总行——确定性崩溃，不是超时。崩溃前完成 1163 条，
+第 1164 条是：
+
+    tests/ops/test_ops.py::TestGradientsCPU::test_gradcheck_interpolate_bilinear
+
+**后面约 400 条从来没有跑过**，所以此前任何「N failed」都不是这个文件的真实数字。
+
+### 最小复现（12 行）
+
+    x = jt.array(...)                                   # (1,1,3,3) float64
+    y = nn.interpolate(x, size=(4,4), mode="bilinear", align_corners=False)
+    y.numpy()                                           # 执行前向
+    jt.grad(y.reshape(-1)[0], [x], retain_graph=True).numpy()   # 通过
+    jt.grad(y.reshape(-1)[1], [x], retain_graph=True).numpy()   # SIGSEGV
+
+三个条件缺一不可：**前向必须先被执行**（不执行则不崩）；必须是
+`bilinear + align_corners=False + 上采样`（nearest、align_corners=True、下采样都不崩，
+区别是这一支多了 `x.clamp(0, h-1)`）；必须是**第二次** `jt.grad`。
+`mul` / `relu` / `sum` / `matmul` 在同样的形状下都不崩。
+
+这是每一个 Jacobian / per-sample-gradient 循环的形状，不是边角。
+
+### 崩在哪：规划器假设「输入 var 一定有生产者」
+
+用 `cc_flags=" -g "` 重编取到行号（无符号构建会把内联归错地方，先前它一直指向
+`count_fuse`，是误导）。逐个补判空之后崩溃点会前移，得到一条链：
+
+    src/core/exec_plan.cc:343   opi = v->input(); opi->batch_index_at(tt)
+    src/core/fuser.cc:225       producer = var->input(); producer->batch_index_at(tt)
+    src/core/fuser.cc:133       func(var, var->input(), ...)   -> edge_fusable 解引用
+    src/core/exec_plan.cc:278   同上
+    src/core/exec_runner.cc:320 v->allocator->is_cuda()        -- var 没有内存
+
+前四处是同一个模式：**批次里存在生产者已经执行完并被释放的 var**，而规划器到处默认
+`v->input()` 非空。`exec_plan.cc:145` 那处已经写对了，注释就叫 `continue if is boundary`
+——其余几处只是忘了写。
+
+**但补完前四处之后冒出第五个**（`var->allocator` 为空），这说明逐点判空是在修症状：
+把这些 var 标成「已物化」会改变分配语义。正确的修法在更上游——批次收集阶段就该把
+这类 var 放进输入前缀（`start_var_num`），那里所有路径本来就处理妥当。
+
+**没有修完，也没有提交任何猜测性的补丁。** 手上有精确的最小复现和这条链，下一步是
+去看 `build_exec_plan` 的 BFS 为什么会把一个 `is_finished()` 的生产者的输出 var 收进
+批次（`retain_graph=True` 下的 liveness 语义），而不是继续往规划器里加判空。
+
+## 把 `test_ops.py` 的失败从 286 降到 56（其中 28 条是环境缺 cupy）
+
+先绕开那条会打死进程的 `interpolate_bilinear`（上一节），拿到这个文件**真实**的
+数字，再逐块查。三块，都不是「N 个独立的算子 bug」：
+
+| 修的东西 | 性质 | 消掉 |
+| --- | --- | --- |
+| 参考里的 `np.atleast_1d` | 测试侧：对一个**已经修好**的旧行为的迁就 | 189 |
+| `keepdim` / `keepdims` | **jittor 自己的 API 不一致** | 21 |
+| 多输出 reduce 的解包 | 测试侧：只认 namedtuple，不认普通元组 | 20 |
+
+    286 -> 97 -> 76 -> 56 failed        1150 -> 1363 passed
+
+### 一、`np.atleast_1d`：迁就一个已经不存在的限制
+
+参考被包在 `np.atleast_1d` 里，注释写着「jittor 没有 0-d 标量，全量 reduce 返回
+`(1,)`」。**那句话过时了**：实测 sum/mean/prod/max/min/std/var/median/all/any/
+count_nonzero 的全量 reduce 全部返回 `()`，和 numpy、torch 一致。于是这个 lift 不再
+是在掩盖 jittor 的限制，而是**凭空造出一个分歧**——参考说 `(1,)`，算子说 `()`，
+28 个算子的每一个全量 reduce 样本都在形状上失败，而且**失败发生在比较任何数值之前**，
+所以它还顺带藏住了这些算子里可能真正的错误。
+
+`tensordot` 和 `kthvalue` 那两处 `atleast_1d` 留着：jittor 在那里确实返回 `(1,)`，
+参考与之相符，本来就没失败。（那是另一个问题，不在这一轮。）
+
+### 二、`keepdim` / `keepdims`：六个算子六种口径
+
+`keepdims` 是 jittor 和 numpy 的拼法，`keepdim` 是 torch 的。原生算子两种都收
+（pyjt 的 `get_hash_condition` 把一个映到另一个），但 python 层的包装各写各的：
+
+| | `keepdims` | `keepdim` |
+| --- | --- | --- |
+| sum / mean / max / min / prod、all_ / any_ | 收 | 收 |
+| all / any | **都不收** | **都不收** |
+| argmax / argmin / var | 收 | 不收 |
+| std | 不收 | 收 |
+
+`std` 和它正上方的 `var` 正好相反。不管调用者选哪一个拼法，总有算子会拒绝。现在
+六个都两种都收。
+
+### 三、多输出 reduce：只认 namedtuple
+
+jittor 的 `argmax/argmin/argsort` 返回 `(indices, values)`，`sort/topk/kthvalue`
+返回 `(values, indices)`——都是**普通二元组**，而 harness 只会解 namedtuple
+（`hasattr(actual, "values")`）。于是拿一个二元组去和一个数组比，形状就差了一维。
+
+要比的那一半**每个算子不同**，所以判断写在 OpInfo 的 `op=` 上，`kthvalue` 本来就是
+这么做的。我第一次图省事在 harness 里写了「二元组就取 [0]」的通用规则，结果
+**把 76 改成了 108**——`split`、`chunk`、`slogdet` 的元组本身就是答案。撤回重做。
+
+### 剩下的 28 条（去掉 28 条 cupy 缺失）
+
+    16  reinterpret_view_op.cc:58 byte size mismatch      -- 真算子 bug
+    20  'float' object has no attribute 'astype'          -- 测试侧
+    10  cross_entropy_loss 不接受 label_smoothing          -- 缺功能
+     8  norm_p2 形状 (2,3) vs ()                           -- 默认 dim 不一致
+     8  median 形状 () vs (1,)                             -- 还有一处参考没改到
+     4  rms_norm gradcheck / gradgradcheck                 -- 真反向问题
+     2  exec_runner.cc:440 融合算子执行失败

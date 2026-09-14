@@ -72,7 +72,7 @@ def _arith_reduce_ref(npfn):
     int dtypes to the platform int, whereas jittor's reduce keeps the input dtype
     (reduce_dtype_infer -> no promotion), so we must narrow to compare exactly."""
     def ref(x, dim=None, keepdims=False):
-        out = np.atleast_1d(npfn(x, axis=dim, keepdims=keepdims))
+        out = npfn(x, axis=dim, keepdims=keepdims)
         return out.astype(x.dtype)
     return ref
 
@@ -86,11 +86,11 @@ min_ref = _arith_reduce_ref(np.min)
 def all_ref(x, dim=None, keepdims=False):
     """jittor ``all_`` over bool: reduce truthiness; output dtype is int32 (a bool
     input forces an int32 reduce output, reduce_op.cc L289), so emit int32 0/1."""
-    return np.atleast_1d(np.all(x != 0, axis=dim, keepdims=keepdims)).astype("int32")
+    return np.all(x != 0, axis=dim, keepdims=keepdims).astype("int32")
 
 
 def any_ref(x, dim=None, keepdims=False):
-    return np.atleast_1d(np.any(x != 0, axis=dim, keepdims=keepdims)).astype("int32")
+    return np.any(x != 0, axis=dim, keepdims=keepdims).astype("int32")
 
 
 # --------------------------------------------------------------- sample builders
