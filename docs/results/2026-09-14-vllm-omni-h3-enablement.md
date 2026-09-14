@@ -154,6 +154,37 @@ out of bounds for dimension 0 with size 5376" on
 contiguously -- jittor cannot honor `stride`, and a non-strided `layout` is
 refused -- which is all the caller needs before its element-wise `copy_`.
 
+## Open blocker: the encoder's `load_to_device()` guard
+
+Generation now reaches the DiT/encoder forward (`pipeline.forward` ->
+`_prepare_request_inputs` -> `encode_prompt` -> `text_encoder.encode_ids`) and stops
+there:
+
+    RuntimeError: call load_to_device() before encode_ids()
+
+`encoder.py:1415` raises when
+`next(self.parameters()).device.type != self.device_target.type`. Measured with a
+diagnostic wrapper around the residency manager (lab script only; vLLM-Omni source
+untouched):
+
+- `encoder.load_to_device` runs with `device_target=cuda:0`, `is_loaded=True`,
+  `_omni_layerwise_enabled=True`;
+- `PinnedModuleStager._load_once` runs with `self.device=cuda:0`, 28 groups, and the
+  first `master` is `cpu`/`bfloat16`;
+- inside that call `torch.empty_like(master, device=self.device)` returns `cuda:0`
+  (so the device storages are built on the right device);
+- yet the encoder's first parameters still report `cpu` after `load_to_device`,
+  with full (not placeholder) shapes, e.g. `(1152, 3, 2, 16, 16)`.
+
+In isolation every step preserves placement (`empty_like(master, device=cuda)`,
+`set_` over a device storage, `as_strided`, and `param.data = <device view>` all
+report `cuda:0`), so the divergence is specific to the engine's state. The next
+thing to check is which parameter `next(self.parameters())` actually yields there and
+whether it is one the stager binds at all (the stager covers
+`_omni_non_block_modules()` -- vision/text_model children except `blocks`/`layers` --
+while the blocks are handled by the layerwise hooks), plus whether the gather inside
+`Tensor.as_strided` runs on the device when the ambient default is not CUDA.
+
 ## Verification
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails
