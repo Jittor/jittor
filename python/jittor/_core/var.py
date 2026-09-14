@@ -1,4 +1,5 @@
 """Native tensor factories, operations and Var protocol bindings."""
+from contextlib import contextmanager
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from jittor._core.dtypes import dtype_for_compute as _dtype_for_compute
 from jittor._core.dtypes import is_dtype as _is_dtype
@@ -328,6 +329,31 @@ def ones(*shape, dtype="float32"):
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
     return _constant_scalar(1, dtype).broadcast(shape)
+
+@contextmanager
+def placement_scope_like(x):
+    """Run a block under `x`'s explicit tensor placement, if it has one.
+
+    Allocation helpers (`jt.empty`, `jt.ones`, ...) follow the *ambient*
+    placement rather than the inputs' device. When one input was placed
+    explicitly while the ambient is something else -- MiniMax-H3 builds its
+    sigma schedule with `device="cpu"` inside a CUDA process -- a helper that
+    allocates for that input then produces a tensor on the ambient device and
+    `dispatch_context` rejects the op for mixing two placements. Allocating
+    inside this scope keeps the result on `x`'s device.
+    """
+    import jittor as jt
+    # `int` is shadowed in this module by jittor's integer dtype constructor.
+    backend = ori_int(x.placement_backend)
+    if backend < 0:
+        yield
+        return
+    token = jt.core._set_tensor_placement(backend, max(ori_int(x.device_id), 0))
+    try:
+        yield
+    finally:
+        jt.core._reset_tensor_placement(token)
+
 
 def new_ones(x, size):
     return ones(size, x.dtype)

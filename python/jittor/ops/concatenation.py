@@ -21,7 +21,13 @@ def _concat_direct(arr, dim, dtype):
     import jittor as jt
     output_shape = list(arr[0].shape)
     output_shape[dim] = sum(value.shape[dim] for value in arr)
-    output = jt.empty(output_shape, dtype=dtype)
+    from .._core.var import placement_scope_like
+    # Allocate where the inputs are: `jt.empty` follows the ambient placement,
+    # so concatenating a tensor that was placed explicitly (CPU) inside a CUDA
+    # process put the destination on the other device and dispatch_context
+    # rejected every setitem below.
+    with placement_scope_like(arr[0]):
+        output = jt.empty(output_shape, dtype=dtype)
     slices = [slice(None)] * len(output_shape)
     offset = 0
     for value in arr:

@@ -9,6 +9,28 @@ from typing import cast
 import jittor as jt
 from ..diagnostics import EXPECTED, swallowed
 
+class _CallableBool(int):
+    """A bool that also answers a call, for the two APIs that read it.
+
+    torch's ``dtype.is_complex`` / ``dtype.is_floating_point`` are *attributes*;
+    jittor's dtype predicates are *methods*, and jittor core code calls them on
+    whatever dtype a tensor carries -- under the shim that is this object. Both
+    readings therefore have to work: ``if x.dtype.is_complex:`` and
+    ``if x.dtype.is_complex():``. (``is_float``/``is_int``/``is_bool`` do not
+    need it: torch has no such attribute, so those stay plain methods.)
+    """
+
+    __slots__ = ()
+
+    def __call__(self):
+        return bool(self)
+
+    def __repr__(self):
+        return repr(bool(self))
+
+    __str__ = __repr__
+
+
 class dtype:
     """Immutable Torch dtype identity, independent of Python strings."""
     __slots__ = ("name", "_is_fp")
@@ -40,11 +62,11 @@ class dtype:
 
     @property
     def is_floating_point(self):
-        return self._is_fp
+        return _CallableBool(self._is_fp)
 
     @property
     def is_complex(self):
-        return self.name.startswith("complex")
+        return _CallableBool(self.name.startswith("complex"))
 
     @property
     def itemsize(self):
