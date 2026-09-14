@@ -218,7 +218,20 @@ def _ip(self, value):
 
 def _copy_(self, other, non_blocking=False):
     src = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
-    return _ip(self, src.cast(_jittor_dtype_name(self.dtype)) if hasattr(self, "dtype") else src)
+    src = src.cast(_jittor_dtype_name(self.dtype)) if hasattr(self, "dtype") else src
+    # torch's `copy_` is in place: the destination keeps its own device, and a
+    # cross-device copy is a transfer. jittor's `assign` (what `_ip` uses for
+    # every `x.foo_()`) writes x's values into *y's* storage and then aliases
+    # the two, so `dst.copy_(host_src)` left `dst` reporting the host device.
+    # vLLM-Omni's PinnedModuleStager builds device storages and fills them from
+    # CPU masters that way; every parameter then came back as a host tensor and
+    # the encoder's `load_to_device()` guard fired. Materialize the source on
+    # the destination's device first.
+    destination = getattr(self, "device", None)
+    if destination is not None and str(destination).split(":")[0] in ("cpu", "cuda", "npu"):
+        if src.device != destination:
+            src = src.to(destination)
+    return _ip(self, src)
 
 
 def _norm_size(args):

@@ -780,6 +780,21 @@ torch.index_select(torch.arange(12).float(), 0, torch.tensor([3, 1, 2, 0]),
 ok(_sel_out.numpy()[0].tolist() == [3, 1, 2, 0],
    "index_select(out=slice) writes through to the parent")
 
+# `copy_` is in place: the destination keeps its own device, and a
+# cross-device copy is a transfer. jittor's `assign` copies into the *source's*
+# storage and aliases it, so this used to move the destination to the source's
+# device -- vLLM-Omni's PinnedModuleStager builds device storages and fills
+# them from CPU masters, and every parameter came back as a host tensor.
+_dst_dev = torch.zeros(4, device="cuda")
+_dst_dev.copy_(torch.ones(4, device="cpu"))
+ok(str(_dst_dev.device).startswith("cuda"),
+   "copy_ into a device tensor from a host tensor keeps the device")
+ok(_dst_dev.numpy().tolist() == [1, 1, 1, 1], "cross-device copy_ moves the values")
+_dst_host = torch.zeros(4, device="cpu")
+_dst_host.copy_(torch.ones(4, device="cuda"))
+ok(str(_dst_host.device).startswith("cpu"),
+   "copy_ into a host tensor from a device tensor keeps the host device")
+
 # `x.data = y` *replaces* x's storage, shape and dtype -- it is not an
 # element copy, unlike the `x.foo_()` in-place primitive. vLLM-Omni's
 # layerwise offload depends on it: it swaps a parameter for a zero-element
