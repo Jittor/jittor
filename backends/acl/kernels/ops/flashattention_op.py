@@ -125,6 +125,7 @@ class FlashAttentionACL:
             multi_grad_src=code_program(
                 [
                     "\n            // aclop\n            FlashAttentionBackwardOpRunner op;\n            op.add(in0, true);\n            op.add(in1, true);\n            op.add(in2, true);\n            op.add(dout, true);\n            op.add(in3, true);\n            op.add(in4, true);\n            op.add(in5, true);\n            op.add(in6, true);\n            op.add(pout0, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
+                    "\n            op.run();\n",
                 ]
             ),
             multi_grad_attributes=attributes,

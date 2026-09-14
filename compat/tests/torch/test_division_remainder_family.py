@@ -17,7 +17,6 @@ includes negative dividends and negative divisors for that reason.
 import unittest
 
 import numpy as np
-import pytest
 import torch
 
 
@@ -100,12 +99,12 @@ class _FamilyChecks(object):
                         np.floor_divide(values, divisor),
                         "int floor_divide({0})".format(divisor))
 
-    @pytest.mark.xfail(strict=True, reason="KI-OPS-003: float operands are truncated to integers")
     def test_float_floor_divide_matches_numpy(self):
-        """Float operands are cast to integers before dividing -- see KI-OPS-003.
+        """Float operands divide at full precision -- KI-OPS-003, fixed.
 
-        Strict, so that fixing the operator turns this red and the entry gets
-        retired rather than the expectation quietly outliving the defect.
+        This was a strict expected failure: `floor_divide` cast both operands
+        to the integer output dtype before dividing, so `-2.7 // 2.0` was
+        `int(-2.7) // 2 == -1` where numpy answers -2.
         """
         tensor = self._tensor(_DIVIDENDS)
         reference = _DIVIDENDS.astype("float64")
@@ -131,15 +130,26 @@ class _FamilyChecks(object):
         self._check(tensor.nanmean(1), np.nanmean(values, 1), "nanmean(dim=1)")
 
 
-    @pytest.mark.xfail(strict=True, reason="KI-OPS-004: rank-0 reduction aborts in expr.cc")
     def test_reducing_a_scalar_tensor(self):
-        """PyTorch returns the value; here it aborts on an internal invariant."""
+        """Reducing over no dimensions returns the value, as PyTorch does.
+
+        This was a strict expected failure until 2026-09-10 (KI-OPS-004). The
+        reduce kernel emitted `index_t ystride-1 = 1;` for a rank-0 input --
+        `@{DIM-1}` with `DIM` zero -- so the generated source did not compile
+        and `loss.sum()` on an already-scalar loss died on both devices.
+
+        The shape is asserted too. Returning `3.0` with shape `(1,)` would
+        satisfy the values above and still break every caller that reduces
+        without checking rank, which is the code this exists for.
+        """
         scalar = self._tensor(np.float32(3.0))
         self.assertEqual(scalar.ndim, 0)
-        self.assertAlmostEqual(float(scalar.sum().item()), 3.0, places=5)
-        self.assertAlmostEqual(float(scalar.mean().item()), 3.0, places=5)
-        self.assertAlmostEqual(float(scalar.max().item()), 3.0, places=5)
-        self.assertAlmostEqual(float(scalar.min().item()), 3.0, places=5)
+        for name in ("sum", "mean", "max", "min"):
+            with self.subTest(reduction=name):
+                result = getattr(scalar, name)()
+                self.assertAlmostEqual(float(result.item()), 3.0, places=5)
+                self.assertEqual(tuple(result.shape), (),
+                                 "%s of a rank-0 tensor should stay rank-0" % name)
 
 
 class TestDivisionRemainderFamilyCPU(_FamilyChecks, unittest.TestCase):

@@ -34,7 +34,7 @@
 namespace jittor
 {
     AdaptiveAvgPool2dOpRunner::AdaptiveAvgPool2dOpRunner()
-        : BaseOpRunner("AdaptiveAvgPool2d", Dispatch::Direct) { use_nchw = true; }
+        : BaseOpRunner("AdaptiveAvgPool2d") { use_nchw = true; }
 
     void AdaptiveAvgPool2dOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
@@ -48,7 +48,7 @@ namespace jittor
     }
 
     AdaptiveAvgPool2dBackwardOpRunner::AdaptiveAvgPool2dBackwardOpRunner()
-        : BaseOpRunner("AdaptiveAvgPool2dBackward", Dispatch::Direct) { use_nchw = true; }
+        : BaseOpRunner("AdaptiveAvgPool2dBackward") { use_nchw = true; }
 
     void AdaptiveAvgPool2dBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {

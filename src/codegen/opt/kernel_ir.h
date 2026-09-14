@@ -16,7 +16,7 @@ namespace jittor {
 // mistyped key used to insert an empty value and read back as "this node
 // does not have that attribute" -- no error anywhere, just a pass quietly
 // doing nothing. A name that is not in this namespace is now a compile
-// error, and tests/structure/test_kernel_ir_attr_names.py keeps string
+// error, and tests/structure/codegen/test_kernel_ir_attr_names.py keeps string
 // literals from coming back.
 namespace kir {
 // the name a node defines: the variable of a `define`, the induction

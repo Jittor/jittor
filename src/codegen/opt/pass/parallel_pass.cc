@@ -152,6 +152,16 @@ static void replace_with_atomic(KernelIR* ir, bool is_cuda, int parallel_depth, 
         if (try_atomic("a=a+b", {"a", "b"}, "cpu_atomic_add(&@a,@b)", "atomicAdd(&@a,@b)") ||
             try_atomic("a=a-b", {"a", "b"}, "cpu_atomic_sub(&@a,@b)", "atomicSub(&@a,@b)") ||
             try_atomic("a=a*b", {"a", "b"}, "cpu_atomic_mul(&@a,@b)", "cuda_atomic_mul(&@a,@b)") ||
+            // jittor::_max / jittor::_min are what the common expression
+            // table emits now (type/minmax_compute.h). The match is literal,
+            // so this list has to be kept in step with those rows: a spelling
+            // that is not here does not quietly lose the atomic, it reaches
+            // the `Expr not match` below, which is fatal. The `std::max` and
+            // `::max` forms stay because the float16 table still emits them.
+            try_atomic("a=jittor::_max(T(a),T(b))", {"a", "b", "T"},
+                "cpu_atomic_max(&@a,@T@@(@b))", "cuda_atomic_max(&@a,@T@@(@b))") ||
+            try_atomic("a=jittor::_min(T(a),T(b))", {"a", "b", "T"},
+                "cpu_atomic_min(&@a,@T@@(@b))", "cuda_atomic_min(&@a,@T@@(@b))") ||
             try_atomic("a=std::max(T(a),T(b))", {"a", "b", "T"},
                 "cpu_atomic_max(&@a,@T@@(@b))", "cuda_atomic_max(&@a,@T@@(@b))") ||
             try_atomic("a=::max(T(a),T(b))", {"a", "b", "T"},

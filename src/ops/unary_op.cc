@@ -875,6 +875,17 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
     set_type(OpType::element);
     ns = op;
     USER_CHECK(ns.is_unary() | ns.is_dtype());
+    // `bitwise_not` has no meaning for a float, and without this the mistake is
+    // only noticed by g++: the generated kernel reaches a raw `~x` and answers
+    // "wrong type argument to bit-complement", quoting a line of the template
+    // (`index_t xi = i;`) that has nothing to do with it, inside a 994-character
+    // compiler dump that never says "dtype". BinaryOp already guards the bitwise
+    // binaries this way; the unary one was missed.
+    if (ns == ns_bitwise_not)
+        USER_CHECK(x->dtype().is_int() || x->dtype().is_bool())
+            << "Unary op 'bitwise_not' requires an integer or boolean dtype, but got x:"
+            >> x->dtype().to_cstring()
+            << "(bitwise operations are not defined for floating-point or complex types).";
     NanoString dtype;
     if (ns == x->dtype()) {
         forward(x);

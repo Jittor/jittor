@@ -300,6 +300,17 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
         storage_inputs = []
         placement_inputs = []
         for argument in cc_make_args:
+            # The argument list is split off the C++ declaration, so every
+            # argument after the first still carries the space that followed
+            # the comma. `Var*`/`vector<Var*>` arguments are rebuilt from the
+            # parsed type and happen to arrive clean; a `VarSlices` argument is
+            # passed through verbatim, so matching it without stripping made
+            # the index-storage adaptation below unreachable -- it was never
+            # emitted for any op, and a non-contiguous index Var (a broadcast,
+            # a strided view) reached the getitem/setitem kernels, which read
+            # index Vars as if they were dense. Strip once, here, so the match
+            # does not depend on where the argument sits in the list.
+            argument = argument.strip()
             if argument.startswith("VarSlices"):
                 argument_name = argument.split()[-1].split("=")[0]
                 storage_inputs.append(f"adapt_index_storage({argument_name}, _storage_owners);")

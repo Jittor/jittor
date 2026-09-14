@@ -36,7 +36,11 @@ class ELU(jt.Module):
 class PReLU(jt.Module):
     def __init__(self, num_parameters=1, init_=0.25):
         self.num_parameters = num_parameters
-        self.weight = jt.init.constant((num_parameters,), "float32", init_)
+        # `contiguous()` because `init.constant` hands back a storage-less
+        # broadcast, which a parameter read on every forward has to
+        # materialise again each time. Same reason as
+        # `nn.modules.normalization._constant_parameter`.
+        self.weight = jt.init.constant((num_parameters,), "float32", init_).contiguous()
 
     def execute(self, x):
         return jt.nn.prelu(x, self.weight)

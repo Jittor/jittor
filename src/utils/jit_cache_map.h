@@ -47,7 +47,7 @@ DECLARE_FLAG(int, jit_cache_size);
 // Keys are owned `string`s now, and the table has a capacity.
 //
 // Deliberately dependent on nothing but `common.h` and the one flag above:
-// `tests/compiler/test_jit_cache_map_asan.py` compiles this header on its own
+// `tests/codegen/test_jit_cache_map_asan.py` compiles this header on its own
 // under `-fsanitize=address`, which is the only way "no dangling keys" is
 // actually checked rather than asserted in a comment. Keep it that way -- one
 // more include and that case stops building, silently.

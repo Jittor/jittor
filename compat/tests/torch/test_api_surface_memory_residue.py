@@ -14,12 +14,46 @@ comparison is baseline-after-collection against baseline-after-collection --
 comparing raw `nvidia-smi` numbers would only re-measure the caching allocator.
 """
 
+import functools
 import unittest
 
 import numpy as np
 import torch
 
-from _helpers.capability import require_accelerator
+
+def _cuda_available():
+    try:
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+def requires_cuda(target):
+    """Probe when the case runs, not when the file is imported.
+
+    ``unittest.skipUnless(_cuda_available(), ...)`` evaluated the probe in a
+    decorator argument, which runs at *collection* -- where this suite forbids
+    backend work -- and froze one answer for the whole process.
+    """
+    if isinstance(target, type):
+        setup = target.setUpClass.__func__
+
+        @classmethod
+        def checked_setup(cls):
+            if not _cuda_available():
+                raise unittest.SkipTest('cuda is required for device memory residue contracts')
+            setup(cls)
+
+        target.setUpClass = checked_setup
+        return target
+
+    @functools.wraps(target)
+    def checked(*args, **kwargs):
+        if not _cuda_available():
+            raise unittest.SkipTest('cuda is required for device memory residue contracts')
+        return target(*args, **kwargs)
+
+    return checked
 
 
 def _collect():

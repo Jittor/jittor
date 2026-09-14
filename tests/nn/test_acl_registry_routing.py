@@ -212,7 +212,7 @@ def test_matmul_bmm_and_transpose_reuse_existing_keys(routing):
     ):
         assert ns[name](a, b) is routing.marker
         assert routing.seen[-1][0] == key
-    with pytest.raises(AssertionError, match="dimension not match"):
+    with pytest.raises(RuntimeError, match="shapes cannot be multiplied"):
         ns["matmul"](Tensor((2, 3)), Tensor((4, 5)))
     assert len(routing.seen) == 4
 

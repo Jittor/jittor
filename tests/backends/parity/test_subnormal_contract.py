@@ -21,7 +21,7 @@ on CUDA, and ``count_nonzero`` disagrees on the same array.
 This file is not an argument that either behaviour is right. It states what the
 behaviour *is*, so that a change to it is visible. That includes a change for
 the better: if the default ever becomes ``strict``, this test goes red, and the
-thing to fix is this file and ``docs/notes/float32-precision-policy.md``, not
+thing to fix is this file and ``docs/notes/numerics-contract.md``, not
 to let them keep describing a world that no longer holds.
 
 The ``strict`` rows are the load-bearing ones. Without them the file would
@@ -92,7 +92,7 @@ class TestSubnormalContractCuda(unittest.TestCase):
                     _survives(value, 1, "default"), 0.0,
                     "CUDA kept %g. That is better than the documented "
                     "behaviour, not worse -- update this test and "
-                    "docs/notes/float32-precision-policy.md rather than "
+                    "docs/notes/numerics-contract.md rather than "
                     "reverting it." % value)
 
     def test_cuda_keeps_normals(self):

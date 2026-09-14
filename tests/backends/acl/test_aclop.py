@@ -1094,10 +1094,26 @@ class TestACL(unittest.TestCase):
         # These ACL providers explicitly support floating dtypes. Keep integer
         # rejection separate from the floating forward/gradient fixtures above.
         value = jt.int32([[1, -2, 3]])
-        for operation in (jt.nn.relu, jt.nn.leaky_relu, jt.nn.sigmoid, jt.nn.silu, jt.nn.softmax):
+        for operation in (jt.nn.relu, jt.nn.leaky_relu, jt.nn.softmax):
             with self.subTest(operation=operation.__name__):
                 with self.assertRaisesRegex(TypeError, "on ACL supports .*got int32"):
                     operation(value)
+
+    @jt.flag_scope(use_acl=1)
+    def test_integer_sigmoid_silu_promote_on_acl(self):
+        source = np.array([[1, -2, 3]], dtype=np.int32)
+        sigmoid = 1.0 / (1.0 + np.exp(-source.astype(np.float64)))
+        for operation, expected in ((jt.nn.sigmoid, sigmoid),
+                                    (jt.nn.silu, source * sigmoid)):
+            with self.subTest(operation=operation.__name__):
+                result = operation(jt.array(source))
+                result.sync()
+                self.assertEqual(str(result.dtype), "float32")
+                self.assertEqual(result.location(), "device")
+                self.assertGreaterEqual(result.device_id, 0)
+                self.assertIn(result.placement_backend, (-1, 2))
+                np.testing.assert_allclose(result.numpy(), expected,
+                                           rtol=1e-6, atol=1e-6)
     
     @jt.flag_scope(use_acl=1)
     def test_leakyrelu_grad(self):

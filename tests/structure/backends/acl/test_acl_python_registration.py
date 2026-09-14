@@ -2,6 +2,7 @@
 
 import ast
 from collections.abc import Sequence
+import numbers
 import importlib.util
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -257,16 +258,20 @@ def test_acl_pool_uses_canonical_output_geometry(
         return [_Tensor(shape, dtype) for shape, dtype in zip(output_shapes, output_dtypes)]
 
     pool_source = (KERNELS / "ops/pool_op.py").read_text(encoding="utf-8")
-    pool_class = next(
-        node
-        for node in ast.parse(pool_source).body
-        if isinstance(node, ast.ClassDef) and node.name == "PoolACL"
-    )
-    namespace = {"jt": providers.native, "pool_cmd": record_pool}
-    exec(
-        compile(ast.get_source_segment(pool_source, pool_class), "<actual_pool_acl>", "exec"),
-        namespace,
-    )
+    pool_tree = ast.parse(pool_source)
+    pool_tree.body = [node for node in pool_tree.body
+                      if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+                      and node.name in {"PoolACL", "_output_size_fn", "_pool_program"}]
+
+    def record_program(name, input_count, output_count, attributes):
+        return name, attributes
+
+    def record_emit(program, inputs, output_dtypes, output_shapes):
+        return record_pool(program[0], inputs, output_dtypes, output_shapes, program[1])
+
+    namespace = {"jt": providers.native, "acl_program": record_program,
+                 "acl_emit": record_emit, "_POOL_PROGRAMS": {}, "_pool_output_size": None}
+    exec(compile(pool_tree, "<actual_pool_acl>", "exec"), namespace)
     monkeypatch.setattr(providers.neural, "PoolACL", namespace["PoolACL"])
     value = _Tensor((1, 2, size, size))
     result = providers.neural.pool_acl(
@@ -278,98 +283,78 @@ def test_acl_pool_uses_canonical_output_geometry(
     assert launches[0][2]["countIncludePad"] is False
 
 
-@pytest.mark.parametrize("entry", ["provider", "public"])
 @pytest.mark.parametrize(
-    "shape,dims,expected,axes,inverse",
+    "shape,dims,expected,axes",
     [
-        ((2, 3, 4), (), (4, 3, 2), (2, 1, 0), (2, 1, 0)),
-        ((2, 3, 4), ((2, 0, 1),), (4, 2, 3), (2, 0, 1), (1, 2, 0)),
-        ((2, 3, 4), ([2, 0, 1],), (4, 2, 3), (2, 0, 1), (1, 2, 0)),
-        ((2, 3, 4), (2, 0, 1), (4, 2, 3), (2, 0, 1), (1, 2, 0)),
-        ((2, 3, 4), (0, 2), (4, 3, 2), (2, 1, 0), (2, 1, 0)),
-        ((2, 3, 4), (-1, -2), (2, 4, 3), (0, 2, 1), (0, 2, 1)),
-        ((2, 3, 4), ((-1, 0, 1),), (4, 2, 3), (-1, 0, 1), (1, 2, 0)),
-        ((2, 3), ((0, 1),), (2, 3), (0, 1), (0, 1)),
-        ((2, 3), (0, 1), (3, 2), (1, 0), (1, 0)),
-        ((2, 3), (-1, -2), (3, 2), (1, 0), (1, 0)),
+        ((2, 3, 4), (), (4, 3, 2), (2, 1, 0)),
+        ((2, 3, 4), ((2, 0, 1),), (4, 2, 3), (2, 0, 1)),
+        ((2, 3, 4), ([2, 0, 1],), (4, 2, 3), (2, 0, 1)),
+        ((2, 3, 4), (2, 0, 1), (4, 2, 3), (2, 0, 1)),
+        ((2, 3, 4), (0, 2), (4, 3, 2), (2, 1, 0)),
+        ((2, 3, 4), (-1, -2), (2, 4, 3), (0, 2, 1)),
+        ((2, 3, 4), ((-1, 0, 1),), (4, 2, 3), (2, 0, 1)),
+        ((2, 3), ((0, 1),), (2, 3), (0, 1)),
+        ((2, 3), (0, 1), (3, 2), (1, 0)),
+        ((2, 3), (-1, -2), (3, 2), (1, 0)),
     ],
 )
-def test_acl_transpose_preserves_argument_forms_with_real_shape_builder(
-    providers, monkeypatch, entry, shape, dims, expected, axes, inverse
+def test_acl_transpose_argument_forms_reach_the_core_op_normalised(
+    providers, shape, dims, expected, axes
 ):
+    """The public ``transpose`` entry owns every argument form on this backend.
+
+    ACL used to override ``tensor.transpose`` with a ``jt.code`` CodeOp. The
+    core ``transpose`` op is a single ``aclnnPermute`` here now (the
+    ``transpose`` row of ``acl_ops`` in ``backends/acl/src/acl_op_exec.cc``),
+    so the provider registers nothing and the adapter in ``_core/var.py`` is
+    the only thing between a caller's axes and the op. What has to hold is
+    that it reaches the op with a *normalised* permutation -- no negative
+    axes, no two-axis swap form, no empty tuple -- because the op's own
+    ``infer_shape`` rejects everything but a complete permutation, and that
+    the provider does not silently reclaim the entry.
+    """
+    assert "tensor.transpose" not in {
+        name for name, _ in providers.install.KERNELS
+    }
+    assert not hasattr(providers.tensor, "transpose_acl")
+
     launches = []
 
-    def record_transpose(name, inputs, output_dtypes, output_shapes, attr_code, cuda_grad_src):
-        launches.append((name, output_shapes, attr_code, cuda_grad_src))
-        return [
-            _Tensor(output_shape, dtype)
-            for output_shape, dtype in zip(output_shapes, output_dtypes)
-        ]
+    def record_transpose(value, dim):
+        launches.append((value, tuple(dim)))
+        return _Tensor([value.shape[axis] for axis in dim], value.dtype)
 
-    source = (KERNELS / "ops/transpose_op.py").read_text(encoding="utf-8")
-    implementation = next(
-        node
-        for node in ast.parse(source).body
-        if isinstance(node, ast.ClassDef) and node.name == "TransPoseACL"
-    )
-    # Load the production typed-data helpers, not their former C++ string API.
-    providers.load("jittor.backends.acl.kernels.ops.acl_data", KERNELS / "ops/acl_data.py")
-    attributes = providers.load("jittor.backends.acl.kernels.ops._attributes",
-                                KERNELS / "ops/_attributes.py")
-    namespace = {"Sequence": Sequence, "transpose_cmd": record_transpose,
-                 "attribute_program": attributes.attribute_program,
-                 "code_program": attributes.code_program}
-    exec(
-        compile(ast.get_source_segment(source, implementation), "<actual_transpose_acl>", "exec"),
-        namespace,
-    )
-    monkeypatch.setattr(providers.tensor, "TransPoseACL", namespace["TransPoseACL"])
-    providers.install.install()
-    call = providers.tensor.transpose_acl
-    if entry == "public":
-        source = (ROOT / "python/jittor/_core/var.py").read_text(encoding="utf-8")
-        adapter = next(
-            node
-            for node in ast.parse(source).body
-            if isinstance(node, ast.FunctionDef) and node.name == "transpose"
+    source = (ROOT / "python/jittor/_core/var.py").read_text(encoding="utf-8")
+    module = ast.parse(source)
+    namespace = {
+        "Sequence": Sequence,
+        "NanoVector": tuple,
+        "Var": _Tensor,
+        "numbers": numbers,
+        "ori_int": int,
+        "_try_dispatch": providers.dispatch.try_dispatch,
+        "origin_transpose": record_transpose,
+    }
+    for name in ("_transpose_axis", "_transpose_permutation", "transpose"):
+        definition = next(
+            node for node in module.body
+            if isinstance(node, ast.FunctionDef) and node.name == name
         )
-
-        def reject_fallback(*args):
-            raise AssertionError("expected the registered ACL transpose")
-
-        namespace = {
-            "Sequence": Sequence,
-            "NanoVector": tuple,
-            "Var": _Tensor,
-            "_try_dispatch": providers.dispatch.try_dispatch,
-            "origin_transpose": reject_fallback,
-        }
         exec(
-            compile(ast.get_source_segment(source, adapter), "<actual_transpose_entry>", "exec"),
+            compile(ast.get_source_segment(source, definition),
+                    "<actual_transpose_entry>", "exec"),
             namespace,
         )
-        call = namespace["transpose"]
+
+    providers.install.install()
     value = _Tensor(shape)
-    result = call(value, *dims)
+    result = namespace["transpose"](value, *dims)
+
     assert result.shape == expected
-    if entry == "public":
-        assert result.transpose_owner is value
-        assert result.transpose_axes == tuple(axes)
-    assert len(launches) == 1
-    name, output_shapes, forward_source, backward_source = launches[0]
-    assert name == "Transpose"
-    assert output_shapes == [list(expected)]
-    for program, expected_axes, slot in (
-        (forward_source, axes, "Transpose_op"),
-        (backward_source[0], inverse, "transpose_backward"),
-    ):
-        prefix = "acl_payload." + slot + "."
-        assert isinstance(program, attributes.AttributeCode)
-        assert program.data == attributes.attribute_data(
-            "Transpose", {"axes": list(expected_axes)}, prefix=prefix)
-        assert ('apply_acl_code_attributes(op, data, "' + prefix + '", "Transpose");') in program.source
-        assert "attr->axes" not in program.source
-    assert "op.run();" in backward_source[0].source
+    assert result.transpose_owner is value
+    assert result.transpose_axes == axes
+    #: One core op, reached with the normalised permutation and nothing else.
+    assert launches == [(value, axes)]
 
 
 def test_acl_compiler_no_longer_contains_python_replacement_installer():

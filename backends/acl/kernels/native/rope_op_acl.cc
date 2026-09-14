@@ -33,7 +33,7 @@
 namespace jittor
 {
     RotaryPositionEmbeddingOpRunner::RotaryPositionEmbeddingOpRunner()
-        : BaseOpRunner("RotaryPositionEmbedding", Dispatch::Direct)
+        : BaseOpRunner("RotaryPositionEmbedding")
     {
     }
 
@@ -47,7 +47,7 @@ namespace jittor
     }
 
     RotaryPositionEmbeddingGradOpRunner::RotaryPositionEmbeddingGradOpRunner()
-        : BaseOpRunner("RotaryPositionEmbeddingGrad", Dispatch::Direct)
+        : BaseOpRunner("RotaryPositionEmbeddingGrad")
     {
     }
 

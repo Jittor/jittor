@@ -7,6 +7,7 @@
 #pragma once
 #include <atomic>
 #include "core/common.h"
+#include "type/minmax_compute.h"
 
 namespace jittor {
 
@@ -45,11 +46,14 @@ T cpu_atomic_sub(T* a, T b) {
     return old;
 }
 
+// _min / _max rather than std::min / std::max: this is where the per-thread
+// partials of a parallel reduction meet, so a NaN that survived one thread's
+// loop would be dropped here instead (KI-BACKEND-004).
 template<class T>
 T cpu_atomic_min(T* a, T b) {
     spin_lock_guard _;
     auto old = *a;
-    a[0] = std::min(old, b);
+    a[0] = _min(old, b);
     return old;
 }
 
@@ -57,7 +61,7 @@ template<class T>
 T cpu_atomic_max(T* a, T b) {
     spin_lock_guard _;
     auto old = *a;
-    a[0] = std::max(old, b);
+    a[0] = _max(old, b);
     return old;
 }
 

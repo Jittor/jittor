@@ -17,7 +17,8 @@ RocprimScanType scan_type(NanoString dtype) {
 }
 
 void check_scan(hipError_t status) {
-    USER_CHECK(status == hipSuccess) << "rocPRIM cumsum: " << hipGetErrorString(status);
+    // A HIP runtime status is the library's outcome, not caller input.
+    CHECK(status == hipSuccess) << "rocPRIM cumsum: " << hipGetErrorString(status);
 }
 } // namespace
 

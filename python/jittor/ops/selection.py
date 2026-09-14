@@ -44,6 +44,18 @@ The returned var has the same number of dimensions as the original var (x). The 
             f"Dimension out of range (expected to be in range of "
             f"[{-ndim}, {ndim - 1}], but got {original_dim})"
         )
+    if not isinstance(indices, Var):
+        raise TypeError(
+            "index_select: index must be a jt.Var, got %s"
+            % type(indices).__name__)
+    if indices.ndim != 1:
+        # ``input[..., indices]`` happily takes an index of any rank and folds
+        # it into the output shape, so a 2-D index against a [3,4] input used
+        # to return a [2,2,4] var instead of being rejected. torch requires a
+        # vector here and raises IndexError; so does this.
+        raise IndexError(
+            "index_select: index is supposed to be a vector, but got a %d-D "
+            "index of shape %s" % (indices.ndim, list(indices.shape)))
     result = _index_select_acl(input, dim, indices)
     if result is not None:
         return result

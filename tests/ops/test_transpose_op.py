@@ -20,10 +20,113 @@ def gen_data(shape):
     a = np.arange(0, num)
     return a.reshape(shape)
 
+class TestTransposeAxisArguments(unittest.TestCase):
+    """What ``transpose``/``permute`` say about an axis argument they reject.
+
+    Every case here used to answer with a container's own error -- ``list index
+    out of range``, ``list indices must be integers or slices, not str`` -- or
+    with a C++ check whose text is the condition that failed. None of them named
+    the operation, the axis, the rank it was measured against, or the shape, so
+    the reader got the fact that something was wrong and nothing else.
+
+    The assertions are on the exception *type* and on the facts the message has
+    to carry (the rejected axis, the rank, the shape). They deliberately do not
+    pin the sentence.
+    """
+
+    def test_axis_past_the_end_names_the_axis_and_the_rank(self):
+        with self.assertRaises(IndexError) as caught:
+            jt.ones((3, 4)).transpose(0, 5)
+        text = str(caught.exception)
+        self.assertIn("transpose", text)
+        self.assertIn("5", text)
+        self.assertIn("2-D", text)
+        self.assertIn("[-2, 1]", text)
+        self.assertNotIn("list index out of range", text)
+
+    def test_negative_axis_past_the_end_is_the_same_report(self):
+        with self.assertRaises(IndexError) as caught:
+            jt.ones((3, 4)).transpose(0, -3)
+        text = str(caught.exception)
+        self.assertIn("transpose", text)
+        self.assertIn("-3", text)
+        self.assertIn("[-2, 1]", text)
+
+    def test_non_integer_axis_is_a_type_error_that_names_the_type(self):
+        with self.assertRaises(TypeError) as caught:
+            jt.ones((3, 4)).transpose("a", "b")
+        text = str(caught.exception)
+        self.assertIn("transpose", text)
+        self.assertIn("str", text)
+        self.assertNotIn("list indices", text)
+
+    def test_a_0d_var_says_it_has_no_dims(self):
+        # transpose_op.cc requires rank >= 1; before, the empty axes list
+        # answered for it with ``list index out of range``.
+        with self.assertRaises(IndexError) as caught:
+            jt.array(1.0).transpose(0, 0)
+        self.assertIn("0-D", str(caught.exception))
+
+    def test_a_repeated_axis_in_the_sequence_form_is_rejected(self):
+        # `permute` and `transpose` are the same callable, so the two-argument
+        # form is a swap and `(0, 0)` there is a legal no-op. The sequence form
+        # is a permutation, and a permutation cannot name a dim twice: it used
+        # to reach transpose_op.cc and come back as "Invalid axes [0,0,]".
+        for axes in ((0, 0), (1, 1)):
+            with self.assertRaises(RuntimeError) as caught:
+                jt.ones((2, 3)).permute(axes)
+            text = str(caught.exception)
+            self.assertIn("transpose", text)
+            self.assertIn("twice", text)
+            self.assertIn("[2, 3]", text)
+
+    def test_a_repeated_axis_given_as_separate_arguments_is_rejected(self):
+        with self.assertRaises(RuntimeError) as caught:
+            jt.ones((2, 3, 4)).permute(0, 1, 1)
+        self.assertIn("twice", str(caught.exception))
+
+    def test_the_wrong_number_of_axes_names_both_counts(self):
+        for axes in ((0,), (0, 1, 2)):
+            with self.assertRaises(RuntimeError) as caught:
+                jt.transpose(jt.ones((2, 3)), axes).sync()
+            text = str(caught.exception)
+            self.assertIn("transpose", text)
+            self.assertIn(str(len(axes)), text)
+            self.assertIn("2-D", text)
+            self.assertIn("[2, 3]", text)
+
+    def test_an_axis_out_of_range_inside_the_sequence_names_its_position(self):
+        with self.assertRaises(IndexError) as caught:
+            jt.ones((2, 3, 4)).permute(0, 1, 5)
+        text = str(caught.exception)
+        self.assertIn("dims[2]", text)
+        self.assertIn("[-3, 2]", text)
+
+    def test_the_legal_spellings_still_work(self):
+        a = jt.array(gen_data([2, 3, 4])).float()
+        reference = np.asarray(gen_data([2, 3, 4]), dtype="float32")
+        np.testing.assert_allclose(a.transpose(0, 2).data,
+                                   reference.transpose(2, 1, 0))
+        np.testing.assert_allclose(a.transpose(-1, -3).data,
+                                   reference.transpose(2, 1, 0))
+        np.testing.assert_allclose(a.permute(2, 0, 1).data,
+                                   reference.transpose(2, 0, 1))
+        np.testing.assert_allclose(a.permute([2, 0, 1]).data,
+                                   reference.transpose(2, 0, 1))
+        np.testing.assert_allclose(a.permute(list(np.array([2, 0, 1]))).data,
+                                   reference.transpose(2, 0, 1))
+        np.testing.assert_allclose(a.transpose().data, reference.transpose())
+        np.testing.assert_allclose(jt.ones((3,)).transpose(0, 0).data,
+                                   np.ones(3, dtype="float32"))
+
+
 class TestTransposeOp(unittest.TestCase):
     def test_invalid_axes_is_a_catchable_user_error(self):
+        # `jt.transpose` now rejects a repeated axis in the frontend (see
+        # TestTransposeAxisArguments); `fuse_transpose` is the remaining caller
+        # of the op's own check, so it is what keeps that check covered.
         with self.assertRaisesRegex(RuntimeError, "Invalid axes"):
-            jt.transpose(jt.ones((2, 3)), (0, 0))
+            jt.ones((2, 3)).fuse_transpose((0, 0)).sync()
 
     def test_axes_shorter_than_input_is_a_catchable_user_error(self):
         # `(0,)` counts up from 0, so it used to satisfy the constructor's
@@ -32,7 +135,7 @@ class TestTransposeOp(unittest.TestCase):
         # axes argument silently returned the untransposed input.
         for axes in ((0,), (0, 1, 2)):
             with self.assertRaisesRegex(RuntimeError, "axes.size"):
-                jt.transpose(jt.ones((2, 3)), axes).sync()
+                jt.ones((2, 3)).fuse_transpose(axes).sync()
 
     def test_fuse_transpose_axes_shorter_than_input_is_a_catchable_user_error(self):
         for axes in ((0,), (0, 1, 2)):

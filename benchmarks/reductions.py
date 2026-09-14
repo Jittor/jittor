@@ -1,15 +1,16 @@
 """Reduction throughput across working-set sizes, with an addition control.
 
-A NaN-propagating ``max`` was implemented, measured, and backed out: the bit
-test it needs is not a reduction pattern the compiler recognises, so the loop
-stops vectorising and costs 7.1-7.5x in-tree (KI-OPS-006). That measurement was
-made by hand because the suite had no reduction benchmark, which means the
-proposal in that ledger entry -- a second OR-folded NaN accumulator, which
-should stay recognisable -- cannot be checked against the same numbers by
-whoever implements it.
+A NaN-propagating ``max`` was implemented, measured, and backed out once: the
+bit test it needed was not a reduction pattern the compiler recognises, so the
+loop stopped vectorising and it was quoted at 7.1-7.5x in-tree. That
+measurement was made by hand because the suite had no reduction benchmark, and
+when this harness was used to re-take it the figure came out at 1.9-2.0x -- the
+baseline had moved to ``-O3`` and the expression had become a single branchless
+select. The NaN-correct ``max`` is now shipped at that price, and KI-OPS-006 is
+what remains of the cost.
 
-This is that harness. Three things make it answerable rather than merely a
-timing:
+So this file is the reason a claimed 7x turned out to be a 2x. Three things
+make it answerable rather than merely a timing:
 
 * **sizes that cross the cache.** The regression was 10-28x in cache and
   7.4-8.2x out of it; one working set would have reported whichever number the

@@ -19,9 +19,7 @@ from .ops.where_op import WhereACL, NonzeroACL
 from .ops.floor_op import FloorIntACL
 from .ops.getitem_op import GetItemACL, basic_slice_acl
 from .ops.setitem_op import SetItemACL
-from .ops.transpose_op import TransPoseACL
 from .ops.roll_op import RollACL
-from .ops.sigmoid_op import SigmoidACL
 
 
 def _clamp_acl(input, min_value, max_value):
@@ -224,10 +222,6 @@ def setitem_acl(x, slices, value, reduce=None):
     return SetItemACL()(x, slices, value)
 
 
-def transpose_acl(x, *dim):
-    return TransPoseACL()(x, *dim)
-
-
 def _roll_acl(x, shifts, dims=None):
     if not (
         isinstance(x, jt.Var)
@@ -297,6 +291,3 @@ def _split_acl(x, split_size, dim=0):
         return None
     return SplitWithSizeACL()(x, split_sizes, axis)
 
-
-def sigmoid_acl(x):
-    return SigmoidACL()(x)

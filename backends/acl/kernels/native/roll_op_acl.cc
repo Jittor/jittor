@@ -9,7 +9,7 @@
 
 namespace jittor
 {
-    RollOpRunner::RollOpRunner() : BaseOpRunner("Roll", Dispatch::Direct)
+    RollOpRunner::RollOpRunner() : BaseOpRunner("Roll")
     {
     }
 

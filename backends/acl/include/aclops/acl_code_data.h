@@ -2,7 +2,9 @@
 
 // Typed ACL attributes transported through CodeOp's string -> double DataMap.
 // No ACL/CANN or Python dependency; semantic validation stays in decode_acl_data.
+#include <cstring>
 #include <limits>
+#include <unordered_map>
 #include "acl_data_channel.h"
 
 namespace jittor {
@@ -120,6 +122,45 @@ public:
     }
 };
 
+// A CodeOp rebuilds an equal payload map on every execution, so decoding is
+// a pure function of the payload bytes, the owner name and the prefix. The
+// fingerprint spells out that triple: every entry of the map contributes its
+// key and the raw IEEE bytes of its value, each field length-prefixed so the
+// encoding is injective and no value byte can imitate a separator.
+//
+// Entries are taken in the map's own iteration order rather than sorted. That
+// order is stable for a payload rebuilt the same way, and two maps that only
+// differ in iteration order produce different fingerprints -- a memo miss,
+// never a wrong decode -- so the sort it would take to normalize them is not
+// worth paying on every execution.
+template<class Map>
+void build_payload_fingerprint(const Map& data, const std::string& expected_op,
+                               const std::string& prefix, std::string& out) {
+    auto append_size = [&out](size_t value) {
+        char bytes[4];
+        for (int i = 0; i < 4; i++) bytes[i] = char((value >> (8 * i)) & 0xff);
+        out.append(bytes, sizeof(bytes));
+    };
+    auto append_text = [&](const std::string& text) {
+        append_size(text.size());
+        out.append(text);
+    };
+    size_t reserved = prefix.size() + expected_op.size() + 12;
+    for (const auto& item : data)
+        reserved += item.first.size() + sizeof(double) + 4;
+    out.clear();
+    out.reserve(reserved);
+    append_text(prefix);
+    append_text(expected_op);
+    append_size(data.size());
+    char bytes[sizeof(double)];
+    for (const auto& item : data) {
+        append_text(item.first);
+        std::memcpy(bytes, &item.second, sizeof(bytes));
+        out.append(bytes, sizeof(bytes));
+    }
+}
+
 } // namespace code_data_detail
 
 template<class Map>
@@ -153,6 +194,36 @@ AclDecodedData decode_code_data(const Map& data, const std::string& expected_op,
     reader.finish();
     std::string canonical;
     return decode_acl_data(record, expected_op, schema, canonical);
+}
+
+// decode_code_data with the result memoized on the exact payload identity.
+// Re-parsing hex field names, rebuilding the field map and re-deriving the
+// canonical cache key costs several microseconds and produced an identical
+// record on every execution of the same kernel. The schema is built lazily so
+// a memo hit never pays for it either. The returned reference stays valid
+// until the next call that misses on this thread.
+//
+// Validation is unchanged: a rejected payload throws out of decode_code_data
+// before it can be memoized, so the same bad payload is rejected every time.
+template<class Map, class SchemaFor>
+const AclDecodedData& decode_code_data_memoized(const Map& data,
+                                                const std::string& expected_op,
+                                                SchemaFor&& schema_for,
+                                                const std::string& prefix = "acl_attr.") {
+    // Bounded so a payload that legitimately differs on every execution (a
+    // seeded dropout, for instance) cannot grow the memo without limit.
+    static constexpr size_t memo_limit = 4096;
+    static thread_local std::unordered_map<std::string, AclDecodedData> memo;
+    static thread_local std::string fingerprint;
+    code_data_detail::build_payload_fingerprint(data, expected_op, prefix, fingerprint);
+    auto found = memo.find(fingerprint);
+    if (found != memo.end())
+        return found->second;
+    std::string key = fingerprint;
+    AclDecodedData decoded = decode_code_data(data, expected_op, schema_for(), prefix);
+    if (memo.size() >= memo_limit)
+        memo.clear();
+    return memo.emplace(std::move(key), std::move(decoded)).first->second;
 }
 
 } // namespace acl_data

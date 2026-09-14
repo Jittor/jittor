@@ -14,6 +14,7 @@ from _helpers import capability as _test_capability
 import unittest
 import jittor as jt
 import numpy as np
+from _helpers.child_process import run_child_script
 from _helpers.logs import find_log_with_re
 from _helpers.onednn import requires_onednn
 f32 = jt.float32
@@ -420,6 +421,117 @@ class TestMatmul(unittest.TestCase):
     #     gflops = a.numel() * b.numel() * 2 / 1024 * 1000 / end / 10**9
     #     print(end, gflops)
     #     # 12T vs 30T
+
+
+class TestMatmulOperandShapes(unittest.TestCase):
+    """What a matrix product says when the two operands cannot form one.
+
+    The whole family -- ``matmul``, ``matmul_transpose``, ``bmm``,
+    ``bmm_transpose``, and ``nn.Linear`` through ``matmul_transpose`` -- shared
+    three bare ``assert`` statements. Two of them printed the same sentence,
+    ``dimension not match, a.shape:[3,4,], b.shape:[5,6,]``, for a contracted
+    dim and for a batch dim alike, so the reader had four numbers and no way to
+    tell which pair was the complaint or which op had raised.
+
+    ``AssertionError`` was also the wrong type twice over: ``python -O`` deletes
+    the statement, and it is the exception a broken invariant raises, not the one
+    a caller catches. torch raises ``RuntimeError`` for every case below, and so
+    does the C++ half of this frontend through ``USER_CHECK``.
+
+    Only the type and the load-bearing facts are asserted -- the op name, both
+    shapes, and the dims that disagree.
+    """
+
+    def test_inner_dims_name_the_two_contracted_dims(self):
+        with self.assertRaises(RuntimeError) as caught:
+            jt.matmul(jt.ones((3, 4)), jt.ones((5, 6)))
+        text = str(caught.exception)
+        self.assertIn("matmul", text)
+        self.assertIn("[3, 4]", text)
+        self.assertIn("[5, 6]", text)
+        self.assertIn("float32", text)
+        self.assertIn("dim -1 of a is 4", text)
+        self.assertIn("dim -2 of b is 5", text)
+
+    def test_batch_dims_are_reported_as_batch_dims(self):
+        with self.assertRaises(RuntimeError) as caught:
+            jt.matmul(jt.ones((2, 3, 4)), jt.ones((3, 4, 5)))
+        text = str(caught.exception)
+        self.assertIn("batch", text)
+        self.assertIn("dim -3", text)
+        self.assertIn("[2, 3, 4]", text)
+        self.assertIn("[3, 4, 5]", text)
+
+    def test_a_0d_operand_reports_both_ranks(self):
+        with self.assertRaises(RuntimeError) as caught:
+            jt.matmul(jt.array(1.0), jt.ones((3,)))
+        text = str(caught.exception)
+        self.assertIn("at least 1 dim", text)
+        self.assertIn("0-D", text)
+        self.assertIn("1-D", text)
+
+    def test_bmm_says_which_operand_is_not_batched(self):
+        with self.assertRaises(RuntimeError) as caught:
+            jt.nn.bmm(jt.ones((3, 4)), jt.ones((4, 5)))
+        text = str(caught.exception)
+        self.assertIn("bmm", text)
+        self.assertIn("[3, 4]", text)
+        self.assertIn("[4, 5]", text)
+
+    def test_bmm_transpose_says_which_operand_is_not_batched(self):
+        with self.assertRaises(RuntimeError) as caught:
+            jt.nn.bmm_transpose(jt.ones((3, 4)), jt.ones((5, 4)))
+        self.assertIn("bmm_transpose", str(caught.exception))
+
+    def test_a_transposed_product_names_itself_and_its_own_dim(self):
+        # nn.Linear reaches matmul_transpose, so the weight is [out, in] and the
+        # contracted dim of b is -1, not -2. Reporting it as "matmul" with dim
+        # -2 -- which is what the shared sentence did -- pointed at the wrong
+        # number of the wrong operand.
+        with self.assertRaises(RuntimeError) as caught:
+            jt.nn.Linear(4, 5)(jt.ones((3, 6)))
+        text = str(caught.exception)
+        self.assertIn("matmul_transpose", text)
+        self.assertIn("dim -1 of a is 6", text)
+        self.assertIn("dim -1 of b is 4", text)
+
+    def test_the_message_survives_python_optimize(self):
+        """``assert`` is compiled out under ``-O``; this report must not be.
+
+        The child is real rather than simulated: ``PYTHONOPTIMIZE=1`` is what
+        ``-O`` sets, and it is the mode in which the three ``assert`` statements
+        this replaced computed a wrong-shaped product in silence.
+        """
+        source = (
+            "import jittor as jt\n"
+            "assert not __debug__, 'PYTHONOPTIMIZE did not take'\n"
+            "try:\n"
+            "    jt.matmul(jt.ones((3, 4)), jt.ones((5, 6))).sync()\n"
+            "except RuntimeError as e:\n"
+            "    print('RAISED', 'dim -1 of a is 4' in str(e))\n"
+            "else:\n"
+            "    print('SILENT')\n")
+        result = run_child_script(source, env={"PYTHONOPTIMIZE": "1"},
+                                  text=True, merge_stderr=True, timeout=1200)
+        self.assertIn("RAISED True", result.stdout,
+                      "child output: %r" % (result.stdout[-3000:],))
+
+    def test_the_legal_products_still_compute(self):
+        rng = np.random.RandomState(0)
+        a = rng.randn(3, 4).astype("float32")
+        b = rng.randn(4, 5).astype("float32")
+        np.testing.assert_allclose(jt.matmul(jt.array(a), jt.array(b)).data,
+                                   a @ b, rtol=1e-5, atol=1e-5)
+        np.testing.assert_allclose(
+            jt.nn.matmul_transpose(jt.array(a), jt.array(b.T.copy())).data,
+            a @ b, rtol=1e-5, atol=1e-5)
+        ba = rng.randn(2, 3, 4).astype("float32")
+        bb = rng.randn(2, 4, 5).astype("float32")
+        np.testing.assert_allclose(jt.nn.bmm(jt.array(ba), jt.array(bb)).data,
+                                   ba @ bb, rtol=1e-5, atol=1e-5)
+        v = rng.randn(4).astype("float32")
+        np.testing.assert_allclose(jt.matmul(jt.array(a), jt.array(v)).data,
+                                   a @ v, rtol=1e-5, atol=1e-5)
 
 
 if __name__ == "__main__":

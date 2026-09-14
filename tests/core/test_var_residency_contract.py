@@ -34,6 +34,14 @@ import numpy as np
 import jittor as jt
 
 
+#: Probed when the case runs, not when the file is imported.
+#:
+#: ``unittest.skipUnless(_has_cuda(), ...)`` evaluated the probe in a decorator
+#: argument, which runs at *collection* -- where this suite forbids backend
+#: work -- and froze one answer for the whole process.
+requires_cuda = _test_capability.accelerator_required('cuda', backend=jt)
+
+
 class TestLazyResidency(unittest.TestCase):
     """A Var that has not been computed yet has nothing to be resident in."""
 

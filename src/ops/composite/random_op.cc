@@ -33,17 +33,12 @@ RandomOp::RandomOp(NanoVector shape, NanoString dtype, NanoString type) {
     this->type = type;
     USER_CHECK(type == ns_normal || type == ns_uniform);
     #ifdef HAS_ACCELERATOR
-    // Some providers execute the native RandomOp directly instead of replacing
-    // its constructor through a Random capability. The invocation must expose
-    // that real implementation to placement and execution before JIT selection.
-    if (backend != BackendId::Cpu) {
-        const auto& implementations = definition().implementations;
-        auto implementation = implementations.find(backend);
-        if (implementation != implementations.end()
-                && implementation->second.kernel.native
-                && !implementation->second.kernel.fallback_only)
-            set_flag(OpFlags::_cuda);
-    }
+    // No capability op, but the backend may run `random` itself -- ACL does,
+    // through its own launcher. Without this flag the executor treats the op
+    // as CPU-only and reports a backend fallback for every weight
+    // initialisation, dropout mask and sampled tensor.
+    if (backend != BackendId::Cpu && backend_runs_op_natively(backend, "random"))
+        set_flag(OpFlags::_cuda);
     #endif
 }
 

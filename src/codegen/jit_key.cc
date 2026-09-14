@@ -14,6 +14,18 @@
 
 namespace jittor {
 
+// C++14 needs an out-of-line definition for a `static constexpr` member that is
+// odr-used, and this one is: it is streamed into the log below and compared
+// against in `src/tests/test_jit_key.cc`, both of which bind it to a reference.
+// At `-O3` the compiler folds every use and the missing symbol never shows, so
+// the omission was invisible until someone built with `JT_BUILD_DEBUG=1` --
+// where it becomes `undefined symbol: jittor::JitKey::init_capacity` at import
+// and the debug build cannot start at all. Debug symbols are exactly what one
+// wants when chasing a segfault, so this made the hardest failures the hardest
+// to investigate.
+constexpr size_t JitKey::init_capacity;
+
+
 DEFINE_FLAG(int, jit_key_max_size, 2*1024*1024,
     "Largest jit key, in bytes. A key that would grow past this raises a "
     "catchable error instead of being truncated -- the key selects which "

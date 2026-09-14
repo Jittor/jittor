@@ -32,7 +32,8 @@ MpiAllReduceOp::MpiAllReduceOp(Var* x, NanoString op) : x(x), op(op) {
         forward(var);
         return;
     }
-    ASSERT(op == ns_add) << "Not supported MPI op" << op;
+    // `op` is the public `mpi_all_reduce(x, op="add")` argument.
+    USER_CHECK(op == ns_add) << "Not supported MPI op" << op;
     #ifdef HAS_CUDA
 
     if (use_device_mpi && runtime_use_cuda()) {

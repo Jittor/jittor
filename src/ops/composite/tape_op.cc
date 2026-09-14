@@ -56,6 +56,7 @@ Tapes::Tapes(
     set_flag(OpFlags::_cuda);
     set_flag(OpFlags::_grads);
     set_flag(OpFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_no_input_storage);
     callback = move(grad_callback);
     
 

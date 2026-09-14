@@ -60,52 +60,79 @@ static inline void propergate_needed_flags(FusedOp& fused_op) {
 }
 
 
-void check_op_async_error(Op* op, bool is_fused_op, const std::exception& e, jittor::Log& logf) {
+// A failed operator, reported so that the reason comes first.
+//
+// The previous order was: JIT source path (a ~260-character cache filename),
+// op type, inputs, outputs, backtrace, and only then `[Reason]`. On a plain
+// out-of-range index the sentence the user needed was the eighth line of
+// twelve, and it arrived carrying a second `[f <timestamp> <thread>
+// <file:line>]` prefix inside the outer one -- two timestamps and two source
+// locations for one error. Everything below the reason is still here; it is
+// just below it.
+static string describe_vars(const vector<Var*>& vars) {
+    string out;
+    for (auto v : vars) {
+        if (out.size()) out += ", ";
+        std::stringstream ss;
+        ss << v->dtype() << v->shape;
+        // `Var::name` is a `cstr`, not a `std::string`; stream it rather than
+        // concatenating.
+        if (v->name.size()) ss << ' ' << v->name;
+        out += ss.str();
+    }
+    return out.size() ? out : "(none)";
+}
+
+void check_op_async_error(Op* op, bool is_fused_op, const std::exception& e,
+                          jittor::Log& logf, const string& jit_src_path) {
     vector<Stack> stack;
+    string op_name;
+    vector<Var*> ins, outs;
     if (is_fused_op) {
         FusedOp& fused_op = *((FusedOp*)op);
-        logf >> "[OP TYPE]:" << "fused_op:(";
-        for (auto& op : fused_op.ops)
-            logf << op->name_ex() >> ",";
-        logf >> ")\n";
-        logf >> "[Input]:";
-        for (auto& vi : fused_op.vars)
-            if (vi.type == 0) logf << vi.var->dtype() >> vi.var->shape >> vi.var->name >> ",";
-        logf << "\n[Output]:";
-        Var* ov = nullptr;
-        for (auto& vi : fused_op.vars)
-            if (vi.type == 2) {
-                logf << vi.var->dtype() >> vi.var->shape >> vi.var->name >> ",";
-                ov = vi.var;
-            }
-        if (ov)
-            stack = get_node_trace(ov);
-    } else {
-        logf >> "[OP TYPE]:" << op->name_ex();
-        logf << "\n[Input]:";
-        for (auto v : op->inputs())
-            logf << v->dtype() >> v->shape >> v->name >> ",";
-        logf << "\n[Output]:";
-        Var* ov = nullptr;
-        for (auto v : op->outputs()) {
-            logf << v->dtype() >> v->shape >> v->name >> ",";
-            ov = v;
+        op_name = "fused_op(";
+        for (auto& sub : fused_op.ops) {
+            if (op_name.back() != '(') op_name += ", ";
+            op_name += sub->name_ex();
         }
-        if (ov)
-            stack = get_node_trace(ov);
+        op_name += ")";
+        for (auto& vi : fused_op.vars) {
+            if (vi.type == 0) ins.push_back(vi.var);
+            if (vi.type == 2) outs.push_back(vi.var);
+        }
+    } else {
+        op_name = op->name_ex();
+        for (auto v : op->inputs()) ins.push_back(v);
+        for (auto v : op->outputs()) outs.push_back(v);
     }
-    logf << "\n[Async Backtrace]:";
+    if (outs.size()) stack = get_node_trace(outs.back());
+
+    logf >> "\n" >> message_without_log_prefix(string(e.what())) >> "\n";
+
+    // The Python frames are the second thing a reader wants and the only part
+    // that names their own code.
     if (stack.size()) {
-        logf << "---";
+        logf >> "\n[Async Backtrace]: ---";
         for (auto& s : stack) {
             logf << "\n    " << s.file_path >> ":" >> s.lineno;
             if (s.module_type.size()) logf << '<' >> s.module_type >> '>';
             if (s.module_name.size() && s.module_name.find(":") == string::npos)
                 logf << '[' >> s.module_name >> ']';
         }
-    } else
-        logf << "not found, please set env JT_SYNC=1, trace_py_var=3";
-    logf << "\n[Reason]:" << e.what();
+        logf >> "\n";
+    } else {
+        // No instruction here. `jit_utils.cc` prints one banner saying how to
+        // get the backtrace; saying it twice was how this message used to end.
+        logf >> "\n[Async Backtrace]: unavailable\n";
+    }
+
+    logf >> "\nop: " >> op_name;
+    logf >> "\n  in:  " >> describe_vars(ins);
+    logf >> "\n  out: " >> describe_vars(outs);
+    // Last, because it is a ~260-character cache filename and it is where to
+    // look next rather than what happened.
+    if (jit_src_path.size()) logf >> "\n  jit source: " >> jit_src_path;
+    logf >> "\n";
     jittor::LogFatalVoidify() && logf;
 }
 
@@ -279,10 +306,11 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             }
         } else {
             for (Var* v : op->inputs()) {
+                if (op->flag(OpFlags::_no_input_storage)) break;
                 // device_copy deliberately accepts a host-resident input and
                 // owns its H2D transfer. Migrating it here first would mutate
                 // the source of x.cpu().cuda(), violating copy semantics.
-                if (!v->allocator->is_cuda()
+                if (v->allocator && !v->allocator->is_cuda()
                         && !op->flag(OpFlags::_manual_device))
                     migrate_to_gpu(v, var_allocator(v, allocator));
             }
@@ -299,7 +327,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             for (auto& vi : fused_op.vars)
                 if (vi.type == 0)
                     ASSERT(vi.var->mem_ptr || vi.var->size == 0) << vi.var;
-        } else {
+        } else if (!op->flag(OpFlags::_no_input_storage)) {
             for (auto* v : op->inputs())
                 ASSERT(v->mem_ptr || v->size == 0) << v;
         }
@@ -374,13 +402,13 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             jittor::Log logf(__FILELINE__, 'f', 0);
             logf << "\nExecute fused operator(" >> rid >> '/' >> queue.size() >> ")"
                 << "failed.";
+            string jit_src_path;
             if (prepared_jit_key.size()) {
-                string jit_src_path = Op::get_filename_from_jit_key(
+                auto candidate = Op::get_filename_from_jit_key(
                     prepared_jit_key, ".cc");
-                if (jit_compiler::file_exist(jit_src_path))
-                    logf << "\n[JIT Source]:" << jit_src_path << "\n";
+                if (jit_compiler::file_exist(candidate)) jit_src_path = candidate;
             }
-            check_op_async_error(op, is_fused_op, e, logf);
+            check_op_async_error(op, is_fused_op, e, logf, jit_src_path);
         }
     }
     // == phase 7: finish the batch ==

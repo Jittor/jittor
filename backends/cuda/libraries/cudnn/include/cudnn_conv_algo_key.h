@@ -22,7 +22,7 @@
 // bytes.
 //
 // Deliberately dependent on nothing -- no cuDNN, no jittor headers, only the
-// three standard ones below. `tests/compiler/test_cudnn_conv_algo_key.py`
+// three standard ones below. `tests/backends/cuda/test_cudnn_conv_algo_key.py`
 // compiles it on its own to check that different convolutions get different
 // keys, which is the only way that is checked rather than asserted in a
 // comment here. Keep it that way: one `#include "cudnn_wrapper.h"` and that

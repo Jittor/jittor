@@ -9,6 +9,10 @@ namespace jittor
         BinaryOpRunner();
 
     protected:
+        // Every CANN binary broadcasts its operands, so a one-element operand
+        // may be handed over as a one-element tensor.
+        bool collapsesScalarInputs() const override { return true; }
+
         void executeOp(AclOpRegistry::const_iterator &it) override;
     };
 }

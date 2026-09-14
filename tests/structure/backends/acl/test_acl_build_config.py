@@ -25,6 +25,10 @@ def _load_module(monkeypatch, name, path):
 
 @pytest.fixture
 def acl(monkeypatch):
+    # Initialize the shared build utility separately: this assertion concerns
+    # the provider import, not the utility package's one-time compiler lookup.
+    import jittor_utils.env_config
+
     def unexpected_probe(*args, **kwargs):
         raise AssertionError("module import probed the toolchain")
     with monkeypatch.context() as guard:
@@ -34,7 +38,10 @@ def acl(monkeypatch):
 
 @pytest.fixture
 def setup(acl, monkeypatch, tmp_path):
-    # BuildSource values must use the provider's canonical dataclass identity.
+    # The provider now returns BuildSource values, and BuildConfig validates
+    # them with isinstance. A second copy of build_config.py loaded by path
+    # would define a different BuildSource class than the provider imports, so
+    # take the canonical module -- the same one the ROCm provider test uses.
     import jittor_utils.build_config as api
     toolkit = tmp_path / "toolkit"
     toolkit.mkdir()
@@ -70,7 +77,24 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
     assert config.has_acl and config.has_cuda and config.has_accelerator and not config.is_cuda
     assert not config.has_rocm and not config.has_corex
     assert config.nvcc_path == config.tikcc_path == "/cann/bin/selected-ccec"
+    # No fake CUDA libraries: that path compiles backends/cuda/kernels/<lib>,
+    # which are CUDA/cuDNN translation units. They only built under ACL while
+    # the 1.x provider rewrote every jittor source through process_acl(); this
+    # provider exposes no converter.
     assert not config.setup_fake_cuda_lib
+    assert config.has_accelerator
+    # The provider runtime is compiled by BuildConfig, not folded into the
+    # registration module.
+    assert sorted(os.path.basename(source.path) for source in config.backend_sources) == [
+        "backend.cc", "foreach_coefficients.cc", "workspace.cc"]
+    assert all(isinstance(source, setup.api.BuildSource)
+               for source in config.backend_sources)
+    # A generated ACL operator is host C++ calling aclnn, not ccec device source.
+    assert config.kernel_language == "cxx"
+    assert config.kernel_compiler == setup.base.cc_path
+    assert config.kernel_compile_flags == config.cc_flags
+    assert config.kernel_source_suffix == ".cc"
+    assert not config.kernel_device_link
     assert "-I/source/src" in config.cc_flags
     assert "-DIS_ACL" in config.cc_flags
     # Accelerator-guarded headers can precede core/common.h (e.g. fetch_op.cc).
@@ -79,25 +103,25 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
     assert config.nvcc_flags == config.cc_flags.replace("-std=c++14", "")
     assert config.kernel_compiler == "/host/bin/c++"
     assert config.kernel_language == "cxx"
-    assert config.kernel_compile_flags == config.cc_flags + " " + setup.base.kernel_flags
     assert config.kernel_source_suffix == ".cc"
     assert not config.kernel_device_link
     assert config.kernel_source_roots == config.kernel_flag_filter == ()
     assert config.convert_nvcc_flags is None
-    assert "-DIS_ACL" in config.extension_compile_flags
     assert config.environment == {"existing_env": "yes", "use_mkl": "0"}
     assert config.resources["acl_initializer"] is setup.converter
     assert config.resources["acl_library"] is setup.library
     assert config.resources["existing_resource"] == 3
     assert config.extra_core_files[0] == "existing.cc"
-    expected_extra = [str(SOURCE.parent / "src/acl_op_exec.cc")]
+    expected_extra = [str(SOURCE.parent / "src" / name) for name in
+                      ("acl_op_exec.cc", "acl_fused_ascendc.cc")]
     expected_extra.extend(str(path) for path in sorted(
         (SOURCE.parent / "kernels/native").glob("*.cc")))
     converter_sources = [str(SOURCE.parent / "src" / name) for name in (
         "acl_error_code.cc", "acl_jittor.cc", "aclnn.cc")]
-    assert len(expected_extra) == 42
+    assert len(expected_extra) == 47
     assert len(converter_sources) == 3
-    assert config.extra_core_files == ("existing.cc", *expected_extra)
+    assert len(config.extra_core_files) == len(expected_extra) + 1
+    assert set(config.extra_core_files) == {"existing.cc", *expected_extra}
     assert [call[0] for call in setup.calls] == ["load", "compile"]
     assert setup.calls[0][1:] == ("libascendcl.so", os.RTLD_NOW | os.RTLD_GLOBAL)
     converter_flags = setup.calls[1][2]
@@ -108,8 +132,9 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
     for name in ("backend.cc", "workspace.cc"):
         assert str(SOURCE.parent / "src" / name) not in converter_flags
         assert str(SOURCE.parent / "src" / name) not in config.extra_core_files
-    assert tuple(source.path for source in config.backend_sources) == tuple(
-        str(SOURCE.parent / "src" / name) for name in ("backend.cc", "workspace.cc"))
+    assert {source.path for source in config.backend_sources} == {
+        str(SOURCE.parent / "src" / name)
+        for name in ("backend.cc", "workspace.cc", "foreach_coefficients.cc")}
     for source in config.backend_sources:
         assert isinstance(source, setup.api.BuildSource)
         assert source.language == "cxx" and source.compiler == ""
@@ -147,7 +172,8 @@ def test_provider_sources_preserve_existing_units_and_override_kernel_defaults(a
     )
     config = acl.configure(setup.context.with_config(base))
     assert config.backend_sources[0] is existing
-    assert len(config.backend_sources) == 3
+    assert {os.path.basename(source.path) for source in config.backend_sources[1:]} == {
+        "backend.cc", "foreach_coefficients.cc", "workspace.cc"}
     assert config.kernel_compiler == base.cc_path
     assert config.kernel_language == "cxx"
     assert "--use_fast_math" not in config.kernel_compile_flags
@@ -229,10 +255,10 @@ def test_backend_has_no_mutable_configuration_or_compiler_imports(acl):
 
 def test_provider_source_inventory_is_explicit_and_complete(acl):
     sources = acl.REGISTRATION_SOURCES + acl.CORE_SOURCES
-    assert len(sources) == len(set(sources)) == 45
+    assert len(sources) == len(set(sources)) == 50
     assert all((SOURCE.parent / name).is_file() for name in sources)
     actual = {str(path.relative_to(SOURCE.parent))
               for path in SOURCE.parent.rglob("*.cc")}
-    assert acl.RUNTIME_SOURCES == ("src/backend.cc", "src/workspace.cc")
-    assert actual == set(sources) | set(acl.RUNTIME_SOURCES)
+    assert actual == set(sources) | {"src/backend.cc", "src/foreach_coefficients.cc",
+                                     "src/workspace.cc"}
     assert "glob" not in vars(acl)

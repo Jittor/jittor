@@ -229,7 +229,7 @@ def unique_sort_header():
         #include <thrust/unique.h>
 
         #include <cub/cub.cuh>
-        #include <executor.h>
+        #include <core/executor.h>
         '''
     )
 
@@ -302,7 +302,7 @@ def unique_compact_header():
             #include <thrust/sort.h>
 
             #include <thrust/scan.h>
-            #include <executor.h>
+            #include <core/executor.h>
 
             @alias(input_sorted, in0)
             @alias(diff, in1)

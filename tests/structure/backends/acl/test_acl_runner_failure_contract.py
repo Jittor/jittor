@@ -137,7 +137,7 @@ def test_ascend_guide_states_the_launcher_migration_is_closed():
         assert required in guide
 
 
-def test_direct_owners_and_missing_registry_dispatch_compile_and_execute(tmp_path):
+def test_registry_owners_and_custom_copy_cleanup_compile_and_execute(tmp_path):
     """Execute the production base header/run and direct-owner constructors."""
     import os
     import shlex
@@ -148,6 +148,9 @@ def test_direct_owners_and_missing_registry_dispatch_compile_and_execute(tmp_pat
     base_source = BASE_OP.read_text()
     run = 'void BaseOpRunner::run() {' + _block_body(
         base_source, 'void BaseOpRunner::run()') + '}'
+    copy_source = (ACLOPS / "flashattention_op_acl.cc").read_text()
+    copy_run = "void KVCacheMemcpyOpRunner::run() {" + _block_body(
+        copy_source, "void KVCacheMemcpyOpRunner::run()") + "}"
     constructors = []
     for filename, marker in (
         ('truth_reduce_op_acl.cc', 'TruthReduceOpRunner::TruthReduceOpRunner('),
@@ -187,31 +190,49 @@ struct Fatal {
 };
 #define LOGf Fatal()
 vector<string> events;
+int failure = 0;
+aclrtStream aclstream = nullptr;
+int aclrtSynchronizeStream(aclrtStream) { events.push_back("sync"); return 0; }
+int aclDestroyTensor(aclTensor* tensor) { events.push_back("destroy"); delete tensor; return 0; }
 '''
     owners = r'''
 namespace jittor {
-void BaseOpRunner::setupInputDesc() { events.push_back("input"); }
-void BaseOpRunner::setupOutputDesc() { events.push_back("output"); }
-void BaseOpRunner::cleanupDesc() { events.push_back("cleanup"); }
+AclRunnerScratch *acl_scratch_acquire() { return new AclRunnerScratch; }
+void acl_scratch_release(AclRunnerScratch *scratch) noexcept { delete scratch; }
+void BaseOpRunner::setupInputDesc() {
+    events.push_back("input"); inputTensors.push_back(new aclTensor);
+    if (failure == 1) throw std::runtime_error("input failure");
+}
+void BaseOpRunner::setupOutputDesc() {
+    events.push_back("output"); outputTensors.push_back(new aclTensor);
+    if (failure == 2) throw std::runtime_error("output failure");
+}
+void BaseOpRunner::cleanupDesc() {
+    events.push_back("cleanup");
+    for (auto*& tensor : inputTensors) { delete tensor; tensor = nullptr; }
+    for (auto*& tensor : outputTensors) { delete tensor; tensor = nullptr; }
+}
 void BaseOpRunner::syncRun() {}
 struct TruthReduceOpRunner : BaseOpRunner {
     bool reduce_all;
     ReduceAttr* attr;
     explicit TruthReduceOpRunner(bool);
     void executeOp(AclOpRegistry::const_iterator& it) override {
-        assert(it == acl_op_registry().end()); events.push_back(name);
+        assert(it != acl_op_registry().end()); events.push_back(name);
     }
 };
 struct KVCacheMemcpyOpRunner : BaseOpRunner {
     KVCacheMemcpyOpRunner();
+    void run();
     void executeOp(AclOpRegistry::const_iterator& it) override {
         assert(it == acl_op_registry().end()); events.push_back(name);
+        if (failure == 3) throw std::runtime_error("copy failure");
     }
 };
 struct IncreFlashAttentionOpRunner : BaseOpRunner {
     IncreFlashAttentionOpRunner();
     void executeOp(AclOpRegistry::const_iterator& it) override {
-        assert(it == acl_op_registry().end()); events.push_back(name);
+        assert(it != acl_op_registry().end()); events.push_back(name);
     }
 };
 struct GenericRunner : BaseOpRunner {
@@ -225,6 +246,7 @@ struct GenericRunner : BaseOpRunner {
 }
 int main() {
     using namespace jittor;
+    registry["All"] = registry["Any"] = registry["IncreFlashAttention"] = 1;
     for (bool all : {false, true}) {
         events.clear(); TruthReduceOpRunner runner(all); runner.run();
         assert(events == vector<string>({"input", "output", all ? "All" : "Any", "cleanup"}));
@@ -233,6 +255,23 @@ int main() {
     assert(events == vector<string>({"input", "output", "KVCacheMemcpy", "cleanup"}));
     events.clear(); IncreFlashAttentionOpRunner attention; attention.run();
     assert(events == vector<string>({"input", "output", "IncreFlashAttention", "cleanup"}));
+    for (int phase : {1, 2, 3}) {
+        events.clear(); failure = phase; KVCacheMemcpyOpRunner failed;
+        bool caught = false;
+        try { failed.run(); }
+        catch (const std::runtime_error& error) {
+            caught = string(error.what()) == (phase == 1 ? "input failure" :
+                phase == 2 ? "output failure" : "copy failure");
+        }
+        assert(caught);
+        vector<string> expected{"input"};
+        if (phase >= 2) expected.push_back("output");
+        if (phase == 3) expected.push_back("KVCacheMemcpy");
+        expected.push_back("sync"); expected.push_back("destroy");
+        if (phase >= 2) expected.push_back("destroy");
+        assert(events == expected);
+    }
+    failure = 0;
     for (bool grouped : {false, true}) {
         events.clear(); GenericRunner missing("Missing", grouped);
         bool caught = false;
@@ -249,7 +288,7 @@ int main() {
 }
 '''
     unit = tmp_path / 'runner_dispatch.cc'
-    unit.write_text(preamble + header + owners + run + '\n'.join(constructors) + checks)
+    unit.write_text(preamble + header + owners + run + copy_run + '\n'.join(constructors) + checks)
     executable = tmp_path / 'runner_dispatch'
     result = subprocess.run(
         [*shlex.split(os.environ.get('CXX', 'g++')), '-std=c++14',
@@ -273,6 +312,8 @@ def test_all_runner_constructors_have_a_valid_registry_or_direct_owner():
     registered = set(re.findall(r'\{"([^"]+)"',
                                 (ACL_ROOT / 'src/acl_jittor.cc').read_text()))
     checked, direct, generic = set(), set(), set()
+    dynamic_names = {"ExpandOpRunner", "ReduceOpRunner", "TernaryOpRunner"}
+    dispatch = EXEC.read_text()
     for path in ACLOPS.glob('*.cc'):
         source = strip_comments(path.read_text())
         bodies = dict(execute_op_bodies(source))
@@ -282,14 +323,28 @@ def test_all_runner_constructors_have_a_valid_registry_or_direct_owner():
             assert owner in bodies, owner
             checked.add(owner)
             uses_registry = bool(re.search(r'\bit\s*->', bodies[owner]))
-            if 'Dispatch::Direct' in arguments:
+            if owner == 'KVCacheMemcpyOpRunner':
                 direct.add(owner)
                 assert not uses_registry, owner
+                assert "void KVCacheMemcpyOpRunner::run()" in source
                 continue
             if uses_registry:
                 generic.add(owner)
                 continue
+            if owner == "ArgReduceOpRunner":
+                # Native arg reduction is an explicit typed-query owner in the
+                # upstream dispatcher, never the generic CodeOp base run path.
+                assert "AclExecutionRunner<ArgReduceOpRunner, false>" in dispatch
+                assert not uses_registry
+                continue
+            if owner in dynamic_names:
+                # Fused execution assigns the preflight-checked public name
+                # before run; these constructor labels are placeholders.
+                assert re.search(
+                    r"AclExecutionRunner<" + owner + r"> op;\s*"
+                    r"op.name = fused_acl_name\(current_op\);", dispatch)
+                continue
             names = re.findall(r'"([^"]+)"', arguments)
             assert set(names) <= registered, (owner, set(names) - registered)
-    assert checked and direct
+    assert checked and direct == {"KVCacheMemcpyOpRunner"}
     assert generic == {'UnaryOpRunner', 'BinaryOpRunner'}

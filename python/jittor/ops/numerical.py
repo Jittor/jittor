@@ -120,6 +120,28 @@ def safe_log(x):
 
 
 def _simple_for(x, func):
+    """One elementwise C++ expression, compiled at ``-O2`` on purpose.
+
+    Its callers are the float class predicates -- ``isnan``, ``isinf``,
+    ``isfinite`` and the signed-infinity variants -- whose bodies are exactly
+    the expressions ``-ffinite-math-only`` is allowed to fold to a constant:
+    the compiler has been told no operand is ever NaN or infinite, so
+    ``x != x`` becomes false and ``|x| == inf`` becomes false, and every
+    hand-written NaN check silently stops checking.
+
+    This started as a workaround: CPU kernels were built with ``-Ofast``, which
+    implies that promise, so the predicate had to escape the fused kernel's
+    flags to work at all. KI-BACKEND-005 removed ``-Ofast`` (kernels build at
+    ``-O3``), which makes the escape **redundant on a default CPU build**.
+
+    It is kept as defence in depth rather than deleted, for two reasons that
+    are still true: the flags a kernel is compiled with are decided outside
+    this function and a user's ``cc_flags``/``kernel_flags`` can put ``-Ofast``
+    back; and CUDA kernels still carry nvcc's ``--use_fast_math``. Deleting it
+    would trade a kernel that is slightly slower for a predicate whose
+    correctness depends on build configuration -- and the failure mode is
+    silent, which is what makes it the wrong trade.
+    """
     import jittor as jt
     with jt.flag_scope(compile_options={"FLAGS: -O2 ":1}):
         src = f'''

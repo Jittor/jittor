@@ -11,6 +11,14 @@ TEST_SYSTEM = REPO_ROOT / "docs" / "development" / "test-system.md"
 MANUAL_SESSIONS = ("optional", "rocm", "mpi", "nccl")
 
 
+#: The two status words the CI matrix uses. They are vocabulary, not wording:
+#: the document defines "手动" in the prose directly under the table -- a
+#: maintainer has to run the named fail-closed session on a configured machine
+#: before the interface may be called verified.
+AUTOMATED = "自动"
+MANUAL = "手动"
+
+
 def _workflow_text():
     return "\n".join(
         path.read_text(encoding="utf-8")
@@ -18,12 +26,40 @@ def _workflow_text():
     )
 
 
+#: Header of the CI matrix. Named so the lookup below cannot drift onto the
+#: marker table further up, which also has a `cuda` row -- and whose second
+#: column says what the marker requires, not how it is scheduled.
+CI_MATRIX_HEADER = "| 会话 | CI 状态 | Runner 与触发 |"
+
+
+def _ci_matrix_rows():
+    lines = TEST_SYSTEM.read_text(encoding="utf-8").splitlines()
+    start = lines.index(CI_MATRIX_HEADER) + 2      # header, then the --- rule
+    for line in lines[start:]:
+        cells = [cell.strip() for cell in line.split("|")]
+        if len(cells) < 4:
+            return
+        yield cells[1], cells[2]
+
+
+def _documented_ci_status(session):
+    """The CI-status cell the matrix gives ``session``, or ``None``.
+
+    Reads the row rather than matching a whole rendered line: the status is
+    what this gate is about, and the third column (runner and trigger) is
+    prose expected to change without the schedule changing.
+    """
+    for name, status in _ci_matrix_rows():
+        if name == "`%s`" % session:
+            return status
+    return None
+
+
 def test_manual_hardware_sessions_are_documented_and_not_scheduled():
-    documentation = TEST_SYSTEM.read_text(encoding="utf-8")
     workflows = _workflow_text()
 
     for session in MANUAL_SESSIONS:
-        assert "| `%s` | 手动 |" % session in documentation
+        assert _documented_ci_status(session) == MANUAL, session
         assert "nox -s %s" % session not in workflows
 
 
@@ -34,7 +70,7 @@ def test_cuda_labeled_pull_requests_run_the_real_cuda_session():
     assert "types: [labeled, reopened, synchronize]" in workflow
     assert "contains(github.event.pull_request.labels.*.name, 'ci:cuda')" in workflow
     assert '"${JITTOR_CI_PYTHON}" -m nox -s cuda' in workflow
-    assert "| `cuda` | 自动 |" in TEST_SYSTEM.read_text(encoding="utf-8")
+    assert _documented_ci_status("cuda") == AUTOMATED
 
 
 def test_cuda_session_requires_real_device_and_an_executed_accelerator_case():

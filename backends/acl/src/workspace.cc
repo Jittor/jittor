@@ -31,6 +31,24 @@ std::map<int, Workspace>& workspaces() {
     return *state;
 }
 
+// Both entry points below run twice per ACL operator (mallocWorkSpace then the
+// workspaceAddr macro), so the per-device record is reached through a direct
+// index instead of an ordered-map lookup. std::map nodes never move and the
+// map is never cleared, so a cached pointer stays valid for the process.
+constexpr int kFastWorkspaceSlots = 64;
+Workspace* fast_workspace[kFastWorkspaceSlots] = {};
+
+Workspace& workspace_for(int device) {
+    if (unsigned(device) < unsigned(kFastWorkspaceSlots)) {
+        if (auto* cached = fast_workspace[device])
+            return *cached;
+        auto& created = workspaces()[device];
+        fast_workspace[device] = &created;
+        return created;
+    }
+    return workspaces()[device];
+}
+
 void release_workspace(Workspace& workspace) {
     if (!workspace.address)
         return;
@@ -48,14 +66,14 @@ void release_workspace(Workspace& workspace) {
 } // namespace
 
 void* acl_workspace_address() {
-    const auto found = workspaces().find(acl_runtime_current_device());
-    return found == workspaces().end() ? nullptr : found->second.address;
+    const int device = acl_runtime_current_device();
+    return device < 0 ? nullptr : workspace_for(device).address;
 }
 
 void releaseWorkSpace() {
-    const auto found = workspaces().find(acl_runtime_current_device());
-    if (found != workspaces().end())
-        release_workspace(found->second);
+    const int device = acl_runtime_current_device();
+    if (device >= 0)
+        release_workspace(workspace_for(device));
 }
 
 void* mallocWorkSpace(uint64_t size) {
@@ -66,7 +84,7 @@ void* mallocWorkSpace(uint64_t size) {
              << size << "overflow alignment";
     const size_t alloc_size = (size + 31) / 32 * 32;
     const int device = acl_runtime_current_device();
-    auto& workspace = workspaces()[device];
+    auto& workspace = workspace_for(device);
     if (alloc_size <= workspace.size)
         return workspace.address;
 

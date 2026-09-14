@@ -40,6 +40,17 @@ void CubCumsumOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype();
     jk << "«Ty:" << y->dtype();
     jk << "«reverse:" << reverse;
+    // The block size for the batch scan. It has to be a code-generation key
+    // rather than a C++ template parameter: the JIT source transform turns a
+    // template parameter into a single `#define`, so two instantiations of one
+    // template collapse into whichever argument was written last -- which
+    // silently gave 8-byte types the 1024-thread block reserved for 4-byte
+    // ones. See the launch comment below for why the two differ.
+    // `=` (JitKey::hex_val), not `:`: a `:` value is taken verbatim, and an
+    // integer written with `<<` is already hex-encoded, so `:512` reached the
+    // generated `#define` as "200" (0x200) and the kernel ran with a
+    // 200-thread block instead of 512. Only `=` runs hex_to_dec on the value.
+    jk << "«BLOCK_THREADS=" << JK::hex(x->dsize() >= 8 ? 512 : 1024);
 }
 
 VarPtr CubCumsumOp::grad(Var* out, Var* dout, Var* v, int v_index) {
@@ -51,8 +62,13 @@ VarPtr CubCumsumOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 #ifdef JIT_cuda
 
 #define ITEMS_PER_THREAD 4
-#define BLOCK_THREADS 1024
 
+// cub's BlockScan for an 8-byte Tx needs ~92 registers per thread on sm_90,
+// and a 1024-thread block would ask for 94k of the SM's 64k registers, so the
+// launch fails with cudaErrorLaunchOutOfResources (701) and writes no output.
+// 512 threads bring the same kernel in at 47k and launch; 4-byte types stay at
+// 1024. `BLOCK_THREADS` is the code-generation key set in `jit_prepare`, not a
+// template parameter -- see the comment there.
 __global__ void BlockScanKernel(Tx* __restrict__ xp, Ty* __restrict__ yp, int batch_num, int num_items) {
     typedef cub::BlockScan<Tx, BLOCK_THREADS> BlockScanT;
     __shared__ typename BlockScanT::TempStorage temp_storage;
@@ -122,6 +138,8 @@ void CubCumsumOp::jit_run() {
     } else {
         int batch_num = x->shape[0];
         int num_items = x->shape[1];
+        // BLOCK_THREADS is 512 for 8-byte types and 1024 otherwise; see
+        // BlockScanKernel.
         BlockScanKernel<<<batch_num, BLOCK_THREADS>>>(xp, yp, batch_num, num_items);
     }
 }

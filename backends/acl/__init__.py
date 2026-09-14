@@ -39,9 +39,14 @@ REGISTRATION_SOURCES = (
     "src/acl_jittor.cc",
     "src/aclnn.cc",
 )
-RUNTIME_SOURCES = ("src/backend.cc", "src/workspace.cc")
+PROVIDER_RUNTIME_SOURCES = (
+    "src/backend.cc",
+    "src/foreach_coefficients.cc",
+    "src/workspace.cc",
+)
 CORE_SOURCES = (
     "src/acl_op_exec.cc",
+    "src/acl_fused_ascendc.cc",
     "kernels/native/adamw_op_acl.cc",
     "kernels/native/arg_reduce_op_acl.cc",
     "kernels/native/base_op_acl.cc",
@@ -50,6 +55,7 @@ CORE_SOURCES = (
     "kernels/native/clamp_op_acl.cc",
     "kernels/native/concat_op_acl.cc",
     "kernels/native/conv_op_acl.cc",
+    "kernels/native/cross_entropy_loss_op_acl.cc",
     "kernels/native/cumsum_op_acl.cc",
     "kernels/native/dropout_op_acl.cc",
     "kernels/native/embedding_op_acl.cc",
@@ -58,6 +64,9 @@ CORE_SOURCES = (
     "kernels/native/flip_op_acl.cc",
     "kernels/native/floor_op_acl.cc",
     "kernels/native/gather_scatter_op_acl.cc",
+    "kernels/native/foreach_op_acl.cc",
+    "kernels/native/fused_sgd_op_acl.cc",
+    "kernels/native/gelu_op_acl.cc",
     "kernels/native/getitem_op_acl.cc",
     "kernels/native/index_op_acl.cc",
     "kernels/native/matmul_op_acl.cc",
@@ -137,27 +146,31 @@ namespace jittor {
 void init_acl_ops();
 }''', config.cc_flags + " " + " ".join(cc_files) + cc_flags)
     final_flags = config.cc_flags + cc_flags
+    provider_sources = tuple(
+        BuildSource(os.path.join(acl_compiler_home, name), flags=cc_flags)
+        for name in PROVIDER_RUNTIME_SOURCES
+    )
     return config.evolve(
         backend="acl", has_acl=True, has_cuda=True, is_cuda=False,
         has_accelerator=True, has_rocm=False, has_corex=False,
+        backend_sources=config.backend_sources + provider_sources,
         tikcc_path=tikcc_path, nvcc_path=tikcc_path,
         cc_flags=final_flags, nvcc_flags=final_flags.replace("-std=c++14", ""),
-        # ACL owns its CANN kernels; NVIDIA library sources require vendor
-        # headers and must not be compiled as historical fake CUDA libraries.
-        setup_fake_cuda_lib=False, extra_core_files=tuple(extra_core_files),
-        backend_sources=config.backend_sources + tuple(
-            BuildSource(os.path.join(acl_compiler_home, name), flags=cc_flags)
-            for name in RUNTIME_SOURCES
-        ),
-        # ACL operations emit host C++ CANN launchers. ccec remains the SDK
-        # discovery/legacy nvcc alias, not a CUDA source compiler. Explicitly
-        # override the CPU/CUDA bootstrap defaults consumed by the JIT.
+        # A generated ACL operator is host C++ that calls aclnn, not device
+        # source for ccec, so the JIT accelerator compiler is the host compiler
+        # carrying the full ACL flags. Without this the accelerator branch of
+        # jit_compiler::compile inherits the CPU defaults and emits a command
+        # with no include paths at all.
         kernel_compiler=config.cc_path, kernel_language="cxx",
-        kernel_compile_flags=final_flags + " " + config.kernel_flags,
-        kernel_flag_filter=(), kernel_source_roots=(),
-        kernel_source_suffix=".cc", kernel_device_link=False,
-        extension_compile_flags=config.extension_compile_flags + cc_flags,
-        convert_nvcc_flags=None,
+        kernel_compile_flags=final_flags, kernel_source_suffix=".cc",
+        kernel_device_link=False,
+        kernel_source_roots=(), kernel_flag_filter=(),
+        # No fake CUDA libraries: that path compiles backends/cuda/kernels/<lib>
+        # sources, which are real CUDA/cuDNN translation units. They only ever
+        # built under ACL because the 1.x provider rewrote every jittor source
+        # through process_acl(); this provider exposes no converter, and ACL
+        # publishes its own conv/matmul kernels from kernels/install.py.
+        setup_fake_cuda_lib=False, extra_core_files=tuple(extra_core_files),
         environment={**config.environment, "use_mkl": "0"},
         resources={**config.resources, "acl_initializer": mod, "acl_library": library},
     )

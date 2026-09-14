@@ -20,17 +20,19 @@ class ReduceOpCases:
 
     def test1(self):
         def check(a, op, dims):
-            if ("logical" in op) and jt.introspection.policy.runtime.use_cuda:
-                # TODO: atomic bool operation for cuda not 
-                # supported yet
-                return
+            # CUDA used to be skipped here: a narrow uint8/bool `logical_or`
+            # reduction lowered to `atomicOr(uint8*, bool)`, which has no CUDA
+            # overload, so the generated fused operator did not compile. The
+            # narrow atomicOr/atomicAnd/atomicXor now exist in cuda_atomic.h,
+            # so the CUDA side runs the same cases as the CPU side.
             np_dims = jt_dims = dims
             if dims == ():
                 np_dims = tuple(range(len(a.shape)))
             x = eval(f"np.{op}.reduce(a, {np_dims}, keepdims={self.keepdims})")
             y = eval(f"jt.reduce_{op}(a, {jt_dims}, keepdims={self.keepdims}).data")
-            if len(x.shape) == 0:
-                x = np.array([x]).astype(a.dtype)
+            # A reduction over every axis is a 0-d result on both sides now, so
+            # the old rewrite of numpy's scalar into a (1,) array is gone: it
+            # made the two shapes disagree (numpy (1,) vs jittor ()).
             x = x.astype(a.dtype)
             y = y.astype(a.dtype)
             assert x.dtype == y.dtype and x.shape == y.shape and (x==y).all(), \
@@ -66,17 +68,16 @@ class ReduceOpCases:
             return a.reshape(shape).astype("int32")
 
         def check(a, op, dims):
-            if ("logical" in op) and jt.introspection.policy.runtime.use_cuda:
-                # TODO: atomic bool operation for cuda not 
-                # supported yet
-                return
+            # See test1: the CUDA skip was the narrow-atomic gap in
+            # cuda_atomic.h, and it is closed.
             np_dims = jt_dims = dims
             if dims == ():
                 np_dims = tuple(range(len(a.shape)))
             x = eval(f"np.{op}.reduce(a, {np_dims}, keepdims={self.keepdims})")
             y = eval(f"jt.reduce_{op}(a, {jt_dims}, keepdims={self.keepdims}).data")
-            if len(x.shape) == 0:
-                x = np.array([x]).astype(a.dtype)
+            # A reduction over every axis is a 0-d result on both sides now, so
+            # the old rewrite of numpy's scalar into a (1,) array is gone: it
+            # made the two shapes disagree (numpy (1,) vs jittor ()).
             x = x.astype(a.dtype)
             y = y.astype(a.dtype)
             assert x.dtype == y.dtype and x.shape == y.shape and (x==y).all(), \

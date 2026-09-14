@@ -34,16 +34,39 @@ _NATIVE_TARGET = "tests/runtime/test_flags.py"
 _TORCH_TARGET = "compat/tests/torch/test_torch_compiler_fidelity.py"
 
 
-def _collect(targets, torch_mode=None):
+#: ``compiler.JIT_UTILS_UPDATED_EXIT_CODE``. Duplicated rather than imported
+#: because importing it means importing jittor, and this module is collected in
+#: Torch mode where that is the thing under test.
+_JIT_UTILS_UPDATED_EXIT_CODE = 3
+
+
+def _collect(targets, torch_mode=None, attempts=3):
+    """Collect ``targets`` in a child, re-running a child that rebuilt jit_utils.
+
+    The first ``import jittor`` against a cold cache rebuilds ``jit_utils``,
+    which cannot be reloaded in the process that built it, so the child exits 3
+    and says "rerun the same command". That is not this contract failing -- the
+    child never reached collection -- but the assertions below read the exit
+    code, so a cold cache made them fail with a message about process modes
+    that had nothing to do with the mode. ``tests/integration/test_notebooks.py``
+    already retries on this code; the same rule applies here.
+    """
     environment = {"JITTOR_TEST_DEVICES": "cpu", "nvcc_path": ""}
     if torch_mode is not None:
         environment["JITTOR_TORCH_SHIM"] = "1" if torch_mode else "0"
     else:
         environment["JITTOR_TORCH_SHIM"] = ""
-    return run_python_child(
-        ["-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"]
-        + list(targets),
-        cwd=REPO_ROOT, env=environment, merge_stderr=True, timeout=900)
+    for _attempt in range(attempts):
+        completed = run_python_child(
+            ["-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"]
+            + list(targets),
+            cwd=REPO_ROOT, env=environment, merge_stderr=True, timeout=900)
+        if completed.returncode != _JIT_UTILS_UPDATED_EXIT_CODE:
+            return completed
+    raise AssertionError(
+        "jit_utils reported a rebuild %d times in a row, so the cache never "
+        "became usable; the process-mode contract was never exercised:\n%s"
+        % (attempts, completed.stdout[-3000:]))
 
 
 def test_conftest_does_not_read_the_command_line_to_choose_a_mode():

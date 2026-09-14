@@ -248,8 +248,11 @@ static void tune_atomic(Pass* pass, KernelIR* func, bool is_cuda,
                 return true;
             };
 
-            // ::max / ::min on CUDA, std::max / std::min on CPU
-            string max_ns = is_cuda ? "" : "std";
+            // The accumulator this pass hoists out of the loop folds the
+            // same way the loop body did, so it goes through jittor::_max /
+            // jittor::_min (type/minmax_compute.h) as well. Leaving std::max
+            // here would drop a NaN in the per-thread accumulator and the
+            // atomic below would never see one.
             if (try_atomic(tmp_name + "=" + tmp_name + "+@b", {"a", "b"},
                     "cpu_atomic_add(&a,b)", "atomicAdd(&a,b)",
                     "cpu_atomic_add(&@a," + tmp_name + ")", "atomicAdd(&@a," + tmp_name + ")") ||
@@ -259,10 +262,10 @@ static void tune_atomic(Pass* pass, KernelIR* func, bool is_cuda,
                 try_atomic(tmp_name + "=" + tmp_name + "*@b", {"a", "b"},
                     "cpu_atomic_mul(&a,b)", "cuda_atomic_mul(&a,b)",
                     "cpu_atomic_mul(&@a," + tmp_name + ")", "cuda_atomic_mul(&@a," + tmp_name + ")") ||
-                try_atomic(tmp_name + "=" + max_ns + "::max(@T@@(" + tmp_name + "),@T@@(@b))", {"a", "b", "T"},
+                try_atomic(tmp_name + "=jittor::_max(@T@@(" + tmp_name + "),@T@@(@b))", {"a", "b", "T"},
                     "cpu_atomic_max(&a,T(b))", "cuda_atomic_max(&a,T(b))",
                     "cpu_atomic_max(&@a,@T@@(" + tmp_name + "))", "cuda_atomic_max(&@a,@T@@(" + tmp_name + "))") ||
-                try_atomic(tmp_name + "=" + max_ns + "::min(@T@@(" + tmp_name + "),@T@@(@b))", {"a", "b", "T"},
+                try_atomic(tmp_name + "=jittor::_min(@T@@(" + tmp_name + "),@T@@(@b))", {"a", "b", "T"},
                     "cpu_atomic_min(&a,T(b))", "cuda_atomic_min(&a,T(b))",
                     "cpu_atomic_min(&@a,@T@@(" + tmp_name + "))", "cuda_atomic_min(&@a,@T@@(" + tmp_name + "))") ||
                 try_atomic(tmp_name + "=" + tmp_name + "&@b", {"a", "b"},

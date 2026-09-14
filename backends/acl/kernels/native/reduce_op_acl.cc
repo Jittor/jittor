@@ -31,7 +31,7 @@
 
 namespace jittor
 {
-    ReduceOpRunner::ReduceOpRunner() : BaseOpRunner("reduce", Dispatch::Direct)
+    ReduceOpRunner::ReduceOpRunner() : BaseOpRunner("reduce")
     {
         use_nchw = false;
     }
@@ -100,6 +100,20 @@ namespace jittor
             keepdims = false;
         }
         dim = aclCreateIntArray(shifted_axes_.data(), shifted_axes_.size());
+
+        // Jittor's broadcast backward may keep only some reduced axes. CANN
+        // accepts one keepdims boolean, so describe its canonical result over
+        // the same flat output storage; retained singleton axes change no data.
+        outputShapes[0].clear();
+        for (size_t axis = 0; axis < inputShapes[0].size(); ++axis)
+        {
+            const bool reduced = std::find(shifted_axes_.begin(),
+                shifted_axes_.end(), axis) != shifted_axes_.end();
+            if (!reduced)
+                outputShapes[0].push_back(inputShapes[0][axis]);
+            else if (keepdims)
+                outputShapes[0].push_back(1);
+        }
 
         if (op_idx <= 13)
         {

@@ -32,7 +32,9 @@ MpiReduceOp::MpiReduceOp(Var* x, NanoString op, int root) : x(x), op(op), root(r
         forward(var);
         return;
     }
-    ASSERT(op == ns_add) << "Not supported MPI op" << op;
+    // `op` is the public `mpi_reduce(x, op="add", root=0)` argument, so an
+    // unsupported name is caller input and has to stay catchable.
+    USER_CHECK(op == ns_add) << "Not supported MPI op" << op;
     #ifdef HAS_CUDA
     if (use_device_mpi && runtime_use_cuda()) {
         static auto nccl_reduce = has_op("nccl_reduce")

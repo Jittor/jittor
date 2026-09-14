@@ -222,8 +222,9 @@ def test_encoded_values_reach_real_cpp_attribute_types(pipeline, tmp_path):
                     "convDilations": [1, 2],
                     "group": 3,
                     "convOutPads": [0, 0],
+                    "cube_math_type": 1,
                 },
-                "dynamic_cast<ConvAttr*>(runner.op_attr.get())->group == 3 && dynamic_cast<ConvAttr*>(runner.op_attr.get())->convStrides[0] == 2",
+                "dynamic_cast<ConvAttr*>(runner.op_attr.get())->group == 3 && dynamic_cast<ConvAttr*>(runner.op_attr.get())->convStrides[0] == 2 && runner.cube_math_type == 1",
             ),
             (
                 "LayerNormBackward",
@@ -321,7 +322,7 @@ def test_encoded_values_reach_real_cpp_attribute_types(pipeline, tmp_path):
     code = load("_code").acl_code
     code("Softmax", [Tensor((2, 3))], output_shapes=[(2, 3)],
          output_dtypes=["float32"], attributes={"dim": 0},
-         multi_grad_src="SoftmaxBackwardOpRunner op;",
+         multi_grad_src="SoftmaxBackwardOpRunner op; op.run();",
          multi_grad_attributes={"dim": 1})
     combined = calls[-1]
     entries = ",".join(
@@ -469,17 +470,31 @@ def test_complete_forward_backward_payloads_are_disjoint(pipeline):
     norms.GroupNormACL(3, 0.125)(x, weight, bias)
     first = calls[-1]
     assert "acl_attr.op" in " ".join(first["data"])
-    assert "apply_acl_code_attributes(op, data, \"acl_payload.GroupNormBackward_op.\", \"GroupNormBackward\")" in first["cuda_grad_src"][0]
+    assert "apply_acl_code_attributes(op, data, \"acl_grad_attr.\", \"GroupNormBackward\")" in first["cuda_grad_src"][0]
+    # Disjoint means disjoint: the two records share one CodeOp data map, so a
+    # shared prefix would have the gradient encode overwrite the forward
+    # record's version/fields/field.N lanes and leave a stray op marker behind.
+    forward = {key[len("acl_attr."):] for key in first["data"]
+               if key.startswith("acl_attr.")}
+    gradient = {key[len("acl_grad_attr."):] for key in first["data"]
+                if key.startswith("acl_grad_attr.")}
+    assert forward and gradient
+    # The overlap is the point: version, fields and field.N.* carry the same
+    # names in both records, so one shared prefix would let the gradient
+    # encode overwrite the forward lanes and leave a second op marker that the
+    # forward decoder then rejects as an unknown key.
+    assert forward & gradient
+    assert len([key for key in first["data"] if ".op." in key]) == 2
     assert first["data"]["multi_grad"] == 1
     assert len(first["cuda_grad_src"]) == 1
     norms.LayerNormACL((6, 4), eps=0.125)(x, weight, bias)
-    assert "apply_acl_code_attributes(op, data, \"acl_payload.LayerNormBackward_op.\", \"LayerNormBackward\")" in calls[-1]["cuda_grad_src"][0]
-    load("matmul_op").MatmulACL()(Tensor((2, 3)), Tensor((3, 4)))
-    assert len(calls[-1]["cuda_grad_src"]) == 2
-    assert "matmul_grad_x1" in " ".join(calls[-1]["data"])
-    assert "matmul_grad_x2" in " ".join(calls[-1]["data"])
-    load("transpose_op").TransPoseACL()(Tensor((2, 3, 4)), (1, 2, 0))
-    assert "transpose_backward" in " ".join(calls[-1]["data"])
+    assert "apply_acl_code_attributes(op, data, \"acl_grad_attr.\", \"LayerNormBackward\")" in calls[-1]["cuda_grad_src"][0]
+    # A product used to be the two-gradient CodeOp here, with its
+    # `matmul_grad_x1` / `matmul_grad_x2` payload slots, and a transpose used
+    # to follow it for the single-gradient shape. Both are core ops now --
+    # `mapped_matmul` and the `transpose` row of `acl_ops` -- and assemble no
+    # CodeOp payload at all, so the single-gradient case is carried by the
+    # upsample below.
     load("upsample_op").UpsampleNearest2dACL()(Tensor((1, 2, 3, 4)), (6, 8))
     assert "UpsampleNearest2dBackward_op" in " ".join(calls[-1]["data"])
     dropout = load("dropout_op").DropoutACL()
@@ -487,3 +502,32 @@ def test_complete_forward_backward_payloads_are_disjoint(pipeline):
     dropout.execute(x, 0.5, False)
     assert calls[-1]["cuda_src"] == calls[-2]["cuda_src"]
     assert calls[-1]["data"] != calls[-2]["data"]
+
+
+def test_flash_attention_backward_attributes_precede_single_launch(pipeline):
+    """Assemble the real attention CodeOp, including its multi-output gradient."""
+    load, Tensor, calls = pipeline
+    attention = load("flashattention_op").FlashAttentionACL(
+        headnum=2, scale=0.25, layout="BNSD")
+    q = Tensor((1, 2, 3, 8), "float16")
+    output = attention(q, q, q)
+    assert output.shape == q.shape
+    call = calls[-1]
+    assert call["data"]["multi_grad"] == 1
+    assert len(call["cuda_grad_src"]) == 1
+    backward = call["cuda_grad_src"][0]
+    application = 'apply_acl_code_attributes(op, data, "acl_grad_attr.", "FlashAttentionBackward");'
+    assert application in backward
+    assert backward.count("op.run();") == 1
+    assert backward.index(application) < backward.index("op.run();")
+    assert all("op.add(out{}, false);".format(i) in backward for i in range(3))
+    attribute_data = load("_attributes").attribute_data
+    expected = attribute_data("FlashAttentionBackward", {
+        "scale": 0.25, "keepProb": 1.0, "preToken": 2147483647,
+        "nextToken": 2147483647, "headNum": 2, "inputLayout": "BNSD",
+        "innerPrecise": 0, "sparseMode": 0, "psetype": 1,
+        "prefix": [0], "qStartIdx": [0], "kvStartIdx": [0],
+        "hasRealshift": False, "hasDropmask": False,
+        "hasPaddingmask": False, "hasAttentmask": False,
+    }, prefix="acl_grad_attr.")
+    assert all(call["data"][key] == value for key, value in expected.items())

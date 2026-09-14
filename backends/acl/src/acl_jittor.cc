@@ -6,6 +6,8 @@
 // ACL operator registry has one owner; query adapters erase only the four
 // live grouped query signatures. Direct runners retain their own SDK queries.
 #include "acl_op_registry.h"
+#include <aclnnop/aclnn_adaptive_avg_pool2d.h>
+#include <aclnnop/aclnn_adaptive_avg_pool2d_backward.h>
 
 namespace jittor {
 const AclOpRegistry& acl_op_registry() {
@@ -73,6 +75,8 @@ const AclOpRegistry& acl_op_registry() {
         {"Transpose", AclOpFunctions::direct(aclnnPermute)},
         {"Maxpool", AclOpFunctions::direct(aclnnMaxPool2dWithIndices)},
         {"MaxpoolBackward", AclOpFunctions::direct(aclnnMaxPool2dWithIndicesBackward)},
+        {"AdaptiveAvgPool2d", AclOpFunctions::direct(aclnnAdaptiveAvgPool2d)},
+        {"AdaptiveAvgPool2dBackward", AclOpFunctions::direct(aclnnAdaptiveAvgPool2dBackward)},
         {"Avgpool", AclOpFunctions::direct(aclnnAvgPool2d)},
         {"AvgpoolBackward", AclOpFunctions::direct(aclnnAvgPool2dBackward)},
         {"Flip", AclOpFunctions::direct(aclnnFlip)},
@@ -113,6 +117,33 @@ const AclOpRegistry& acl_op_registry() {
         {"RotaryPosEmb", AclOpFunctions::direct(aclnnApplyRotaryPosEmb)},
         {"Stack", AclOpFunctions::direct(aclnnStack)},
         {"NanToNum", AclOpFunctions::direct(aclnnNanToNum)},
+        // Runners that own their typed SDK query still need an availability
+        // entry here; BaseOpRunner::run refuses to launch a name the table
+        // does not carry. These launchers are already called from
+        // kernels/native, so the table was simply missing their names.
+        {"Gelu", AclOpFunctions::direct(aclnnGeluV2)},
+        {"GeluBackward", AclOpFunctions::direct(aclnnGeluBackwardV2)},
+        {"CrossEntropyLoss", AclOpFunctions::direct(aclnnCrossEntropyLoss)},
+        {"CrossEntropyLossGrad", AclOpFunctions::direct(aclnnCrossEntropyLossGrad)},
+        {"All", AclOpFunctions::direct(aclnnAll)},
+        {"Any", AclOpFunctions::direct(aclnnAny)},
+        {"AdamWList", AclOpFunctions::direct(aclnnApplyAdamWV2)},
+        {"FusedSgd", AclOpFunctions::direct(aclnnForeachAddList)},
+        {"ClampTensor", AclOpFunctions::direct(aclnnClampTensor)},
+        {"GroupNorm", AclOpFunctions::direct(aclnnGroupNorm)},
+        {"GroupNormBackward", AclOpFunctions::direct(aclnnGroupNormBackward)},
+        {"IncreFlashAttention", AclOpFunctions::direct(aclnnIncreFlashAttentionV4)},
+        {"LayerNormBackward", AclOpFunctions::direct(aclnnLayerNormBackward)},
+        {"RmsNorm", AclOpFunctions::direct(aclnnRmsNorm)},
+        {"RmsNormGrad", AclOpFunctions::direct(aclnnRmsNormGrad)},
+        {"Roll", AclOpFunctions::direct(aclnnRoll)},
+        {"RotaryPositionEmbedding", AclOpFunctions::direct(aclnnRotaryPositionEmbedding)},
+        {"RotaryPositionEmbeddingGrad", AclOpFunctions::direct(aclnnRotaryPositionEmbeddingGrad)},
+        {"SwiGlu", AclOpFunctions::direct(aclnnSwiGlu)},
+        {"Swish", AclOpFunctions::direct(aclnnSwish)},
+        {"SwishBackward", AclOpFunctions::direct(aclnnSwishBackward)},
+        {"UpsampleNearest2d", AclOpFunctions::direct(aclnnUpsampleNearest2d)},
+        {"UpsampleNearest2dBackward", AclOpFunctions::direct(aclnnUpsampleNearest2dBackward)},
     };
     return entries;
 }

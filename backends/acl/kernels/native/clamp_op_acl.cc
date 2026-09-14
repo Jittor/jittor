@@ -6,7 +6,7 @@
 
 namespace jittor
 {
-    ClampTensorOpRunner::ClampTensorOpRunner() : BaseOpRunner("ClampTensor", Dispatch::Direct)
+    ClampTensorOpRunner::ClampTensorOpRunner() : BaseOpRunner("ClampTensor")
     {
     }
 

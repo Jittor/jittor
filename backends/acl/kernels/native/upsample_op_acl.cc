@@ -3,7 +3,7 @@
 namespace jittor
 {
     UpsampleNearest2dOpRunner::UpsampleNearest2dOpRunner()
-        : BaseOpRunner("UpsampleNearest2d", Dispatch::Direct)
+        : BaseOpRunner("UpsampleNearest2d")
     {
         use_nchw = true;
     }
@@ -23,7 +23,7 @@ namespace jittor
     }
 
     UpsampleNearest2dBackwardOpRunner::UpsampleNearest2dBackwardOpRunner()
-        : BaseOpRunner("UpsampleNearest2dBackward", Dispatch::Direct)
+        : BaseOpRunner("UpsampleNearest2dBackward")
     {
         use_nchw = true;
     }

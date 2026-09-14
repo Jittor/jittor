@@ -126,6 +126,14 @@ EXTERN_LIB string& get_thread_name();
 
 struct Log {
     std::ostringstream out;
+    // Machine-generated detail, emitted after everything the caller wrote.
+    //
+    // A check used to open with its own condition -- `User check failed
+    // xshape(4) == yshape(6)` -- and only then say `Shape not match for binary
+    // op 'add'`. The first half restates in symbols what the second says in
+    // words, and it is the half a reader has to skip. It is still here,
+    // because it names the exact comparison, but it is last.
+    std::ostringstream tail;
     const char* color_end;
     int verbose;
     char level;
@@ -142,7 +150,24 @@ struct Log {
         out << fileline << ']';
     }
 
+    // The condition, recorded for the end of the message. Returns `*this` so
+    // the caller's `<<` continues to write the readable part.
+    inline Log& check_tail(const char* cond) {
+        tail << " [check failed: " << cond << "]";
+        return *this;
+    }
+    template <class A, class B>
+    inline Log& check_tail_op(const char* sa, const A& a, const char* sop,
+                              const char* sb, const B& b) {
+        tail << " [check failed: " << sa << '(' << a << ") " << sop
+             << ' ' << sb << '(' << b << ")]";
+        return *this;
+    }
+    inline Log& note_tail(const char* text) { tail << text; return *this; }
+    inline void seal() { auto t = tail.str(); if (t.size()) out << t; }
+
     inline void end() {
+        seal();
         if (g_supports_color) out << color_end;
         out << '\n';
         send_log(move(out), level, verbose);
@@ -159,6 +184,22 @@ struct LogVoidify {
     inline void operator&&(Log& log) { log.end(); }
 };
 
+// The text an exception should carry, given what the log line looks like.
+//
+// A log *line* is written for a terminal: it opens with `[f`, a timestamp, a
+// thread id and the C++ `file:line` that raised it, and it may be wrapped in
+// colour escapes. An exception is read somewhere else -- in a Python
+// traceback, a log file, a bug report -- where the timestamp and thread say
+// nothing and the escapes are line noise. Every user-facing error in Jittor is
+// one of these, so every one of them used to open with
+// `[f 0911 00:12:17.212067 84 binary_op.cc:426]` before the sentence that says
+// what went wrong.
+//
+// This keeps the `file:line`, which is the part worth having, and drops the
+// rest: `binary_op.cc:426: Shape not match ...`. Implemented in log.cc so the
+// escape stripping is shared with the compiler-diagnostic path.
+string message_without_log_prefix(const string& message);
+
 struct JittorError : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
@@ -174,17 +215,19 @@ struct InternalInvariantError : JittorError {
 template <class Error>
 struct LogErrorVoidify {
     inline void operator&&(Log& log) {
+        log.seal();
         log.flush();
         if (g_supports_color) log.out << log.color_end;
-        throw Error(log.out.str());
+        throw Error(message_without_log_prefix(log.out.str()));
     }
 };
 
 struct LogFatalVoidify {
     inline void operator&&(Log& log) {
+        log.seal();
         log.flush();
         if (g_supports_color) log.out << log.color_end;
-        throw std::runtime_error(log.out.str()); 
+        throw std::runtime_error(message_without_log_prefix(log.out.str()));
     }
 };
 
@@ -207,13 +250,17 @@ struct LogFatalVoidify {
 #define USER_ERROR \
     jittor::LogErrorVoidify<jittor::UserError>() && \
         jittor::Log(__FILELINE__, 'f', 0)
+// The condition goes to the tail so the caller's sentence comes first.
+#define _TYPED_ERROR_TAIL(error_type, cond, tail_call) \
+    !(cond) ? (void) 0 : \
+        jittor::LogErrorVoidify<error_type>() && \
+        jittor::Log(__FILELINE__, 'f', 0).tail_call
 #define USER_CHECK(cond) \
-    _TYPED_ERROR_IF(jittor::UserError, PREDICT_BRANCH_NOT_TAKEN(!(cond))) \
-        << "User check failed: " #cond " "
+    _TYPED_ERROR_TAIL(jittor::UserError, PREDICT_BRANCH_NOT_TAKEN(!(cond)), \
+        check_tail(#cond))
 #define USER_CHECKop(a, op, b) \
-    _TYPED_ERROR_IF(jittor::UserError, !((a) op (b))) \
-        << "User check failed" \
-        << #a "(" >> a >> ") " #op " " #b "(" >> b >> ")"
+    _TYPED_ERROR_TAIL(jittor::UserError, !((a) op (b)), \
+        check_tail_op(#a, (a), #op, #b, (b)))
 
 // The framework reached a state its own implementation says is impossible.
 // This remains a distinct exception while the legacy call sites are migrated,
@@ -223,20 +270,21 @@ struct LogFatalVoidify {
     jittor::LogErrorVoidify<jittor::InternalInvariantError>() && \
         jittor::Log(__FILELINE__, 'f', 0)
 #define INTERNAL_ASSERT(cond) \
-    _TYPED_ERROR_IF(jittor::InternalInvariantError, \
-        PREDICT_BRANCH_NOT_TAKEN(!(cond))) \
-        << "Internal invariant failed: " #cond " "
+    _TYPED_ERROR_TAIL(jittor::InternalInvariantError, \
+        PREDICT_BRANCH_NOT_TAKEN(!(cond)), check_tail(#cond))
 #define INTERNAL_ASSERTop(a, op, b) \
-    _TYPED_ERROR_IF(jittor::InternalInvariantError, !((a) op (b))) \
-        << "Internal invariant failed" \
-        << #a "(" >> a >> ") " #op " " #b "(" >> b >> ")"
+    _TYPED_ERROR_TAIL(jittor::InternalInvariantError, !((a) op (b)), \
+        check_tail_op(#a, (a), #op, #b, (b)))
 
 #define _LOG(level, v) _LOG ## level(v)
 #define LOG(level) _LOG(level, 0)
 
+#define _CHECK_TAIL(cond, tail_call) \
+    !(cond) ? (void) 0 : \
+        jittor::LogFatalVoidify() && \
+        jittor::Log(__FILELINE__, 'f', 0).tail_call
 #define CHECK(cond) \
-    LOG_IF(f, PREDICT_BRANCH_NOT_TAKEN(!(cond))) \
-        << "Check failed: " #cond " "
+    _CHECK_TAIL(PREDICT_BRANCH_NOT_TAKEN(!(cond)), check_tail(#cond))
 
 #define _LOG_IF(level, cond, v) \
     !(cond) ? (void) 0 : _LOG(level, v)
@@ -508,12 +556,25 @@ bool check_vlog(const char* fileline, int verbose);
 #define LOGvv LOGV(10)
 #define LOGvvv LOGV(100)
 #define LOGvvvv LOGV(1000)
-#define CHECKop(a, op, b) LOG_IF(f, !((a) op (b))) \
-    << "Check failed" \
-    << #a "(" >> a >> ") " #op " " #b"(" >> b >> ")"
+#define CHECKop(a, op, b) \
+    _CHECK_TAIL(!((a) op (b)), check_tail_op(#a, (a), #op, #b, (b)))
 
-#define ASSERT(s) CHECK(s) << "Something wrong... Could you please report this issue?\n"
-#define ASSERTop(a, op, b) CHECKop(a, op, b) << "Something wrong ... Could you please report this issue?\n"
+// An invariant the implementation says cannot fail. "Something wrong... Could
+// you please report this issue?" was the whole of what the reader got: it did
+// not say whose fault it was, which subsystem it belonged to, or what a useful
+// report would contain. The failing expression and the `file:line` are already
+// printed by `CHECK` on the same line -- what was missing is that *they are the
+// report*.
+#define _INTERNAL_INVARIANT_NOTE \
+    "\nThis is an internal Jittor invariant, not an error in your program. " \
+    "Please report it with the expression and source location above, and the " \
+    "smallest program that reaches it.\n"
+#define ASSERT(s) \
+    _CHECK_TAIL(PREDICT_BRANCH_NOT_TAKEN(!(s)), \
+        check_tail(#s).note_tail(_INTERNAL_INVARIANT_NOTE))
+#define ASSERTop(a, op, b) \
+    _CHECK_TAIL(!((a) op (b)), \
+        check_tail_op(#a, (a), #op, #b, (b)).note_tail(_INTERNAL_INVARIANT_NOTE))
 
 #define LOGg LOGv >> jittor::green
 #define LOGr LOGv >> jittor::red

@@ -1,8 +1,8 @@
 # 测试体系
 
 - 状态：已接受
-- 上次复查：2026-09-10
-- 基线：`6b8fb594` 加任务 10.03
+- 上次复查：2026-09-11
+- 基线：`2d716db31`
 - Owner：测试基础设施维护者
 - 复查触发：收集根目录、进程模式归属、marker、OpInfo 契约或后端门禁发生变化时
 
@@ -246,6 +246,127 @@ collected/executed 计数，于是「完成了但悄悄收集得更少」也可�
 确认变红，再恢复。没有做过负向验证的守卫，和不存在的守卫在报告里是同一个样子——
 本轮就修好过两个从未检查过任何东西的既存守卫（一个扫描布局迁移后已删除的目录，
 一个读陈旧路径而从未触及运行时行为）。
+
+## 四条被事故教会的纪律
+
+下面四条都不是从原则推出来的，是某一次「绿着的报告什么也没证明」之后补上的。每条
+注明是被哪件事教会的，问题总账
+[`agent/manuals/known-issues.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)
+里有完整记录。
+
+### 1. 子进程一律走 `_helpers.child_process`，并且要指定设备、自证落点
+
+`tests/conftest.py` 把**被测的这棵 checkout** 放在自己的 `sys.path` 上，但**不导出
+`PYTHONPATH`**。所以测试里一个裸的 `subprocess.run([sys.executable, ...])` 交给子进程
+的是解释器环境解析到的那个 `jittor`——在开发 checkout 里，往往是指向**另一棵树**的
+可编辑安装。
+
+**安静的失败最贵**：导入了别的树的子进程照样能跑，测试照样绿，而它对被测代码什么都
+没证明。吵闹的那一版在改名时才露出来：`[0.08]` 把 core 的 `set_lock_path` 改成
+`set_lock_fd`，子进程加载的是这个分支刚构建出来的 core、导入的却是主树的
+`compiler.py`（旧名字），死在一个哪棵树都对不上的 `AttributeError` 上。
+
+规则是机械的而不是启发式的：
+[`tests/structure/test_child_process_contract.py`](https://github.com/Jittor/jittor/blob/master/tests/structure/test_child_process_contract.py)
+用 AST 扫描 `tests/` 下每一处启动，**任何直接命名解释器的地方都让它红**。
+`tools/run_test_suite.py` 和 `tools/gate_conclusion_diff.py` 也在扫描范围内，因为它们
+启动同样的子进程。故意要**去掉** `PYTHONPATH` 的场景（"一个刚装完的人 `import jittor`
+会解析到哪里"）也走 helper，写成 `child_env(..., repo_paths=False)`——一个读起来像
+疏忽的例外无法和疏忽区分开。
+
+**光传对树还不够，设备也要传，而且要自证。** `tools/roundtrip_consistency_sweep.py`
+的子进程一直没设 `use_cuda`，靠默认值——而**全新进程里 `use_cuda` 默认是 0，即便机器上
+有八张卡**。于是 `--device cuda` 那一档比的是「CUDA 父进程」对「CPU 子进程」，把两个
+设备的差异当成了序列化缺陷。它一直报 OK，是因为在 `-Ofast` 下这个模型在两个设备上
+碰巧逐位相同；换成 `-O3` 之后 CPU 的结果动了 `1.49e-08`，运气用完了，缺陷才露出来。
+
+现在设备作为参数传给子进程，子进程用 `x.location()` 断言自己确实落在被要求的那一端：
+
+```python
+where = x.location()
+expected = "device" if device == "cuda" else "cpu"
+assert where == expected, "child asked for %s, tensor is on %s" % (device, where)
+```
+
+**传标志容易写对，也容易被静默忽略**——回退、缺驱动、标志读得太晚——一旦被忽略，这个
+检查就又变回在比两个设备而看上去像在比两个进程。
+
+（教会它的：子进程契约门禁长期红着并列着四个违规者，提交 `51cdefae2`；往返扫描的设备
+缺陷，提交 `fef56a211`。）
+
+### 2. 会崩溃的用例跑在自己的子进程里
+
+原生崩溃发生在测试里时**不会让那条测试失败**——它带走整个解释器：pytest 打印完即将
+执行的 nodeid，进程就没了，没有结果行、没有 traceback、没有汇总，**后面的测试从未
+运行**。日志里没有任何一处写着 failed。
+
+所以一个**已知会以信号死亡**的用例必须跑在自己的进程里，并且用
+`run_child_script(..., crash_isolated=True)` 声明这一点——没有它，信号致死会以一个裸
+的负返回码到达 pytest。两个现成的样板：
+
+- [`tests/backends/cuda/test_auto_flush_graph_split.py`](https://github.com/Jittor/jittor/blob/master/tests/backends/cuda/test_auto_flush_graph_split.py)：
+  `auto_flush_ops` 的每个取值跑在自己的进程里，因为失败形态是段错误。它断言 loss
+  逐位相同**并且**比较梯度——一个「止住崩溃但反向读了错字节」的修法能过「跑起来没有」
+  的检查，在这里过不去。
+- [`tests/ops/test_index_bounds.py`](https://github.com/Jittor/jittor/blob/master/tests/ops/test_index_bounds.py)：
+  设备端 trap 会带走 CUDA context，所以它不能和后面的任何东西共用进程。
+
+（教会它的：`KI-EXEC-001`，五个 bottleneck 块在 `auto_flush_ops` 的发布默认值 128 上
+确定性段错误；以及维护中的 CPU 门禁——CPU-only 构建上 `scatter_add` 段错误让 Torch
+会话在 **48% 处消失**，而在有 CUDA 的机器上同一会话跑得完，所以它一直没被发现。）
+
+### 3. 会读「files this session proved nothing about」这份报告
+
+每次运行结束时，`tests/_helpers/pytest_policy.py` 会打印一段：
+
+```text
+========== files this session proved nothing about ==========
+tests/.../test_x.py  collected 0 tests
+tests/.../test_y.py  12 skipped, 0 executed
+Reported only. Set JITTOR_TEST_REQUIRE_EXECUTION=1 (the gates do) to make an
+unexplained entry fail the run.
+```
+
+两类条目，含义不同：
+
+- **`collected 0 tests`**：这个文件连用例都没收集到。通常是收集期异常或整文件被过滤。
+- **`N skipped, 0 executed`**：收集到了，一条也没真的执行。
+
+条目后面可能带两种注记：`-- expected here: <理由>` 表示它列在
+`tests/_helpers/gate_scope.py` 的 `EXECUTES_NOTHING` 豁免表里；`-- explained: <skip 理由>`
+表示 skip 理由被识别为环境事实（没有加速器、缺可选依赖）。**没有注记的条目就是这份
+报告真正要你看的东西**，门禁开着 `JITTOR_TEST_REQUIRE_EXECUTION=1` 时它会让整轮变红。
+
+为什么单独写一节：这套机制**存在而且工作正常**，失效的是「有人读它」。
+`tests/structure/backends/acl/test_acl_python_registration.py` 收集了 40 条、执行了
+**0** 条，整整两天；报告每一轮都照实打印了那一行，而一片红的套件里多一行红是看不见的。
+所以——**看到套件是红的，先看这一段，再看失败列表**：失败的用例至少还在说话。
+
+（教会它的：`KI-TEST-004`。同一天用同一个问题——「如果它要检查的东西坏了，这个门禁会
+红吗？」——问出了另外两个：`KI-EXEC-002` 的剖析器空报告，和往返扫描的设备缺陷。）
+
+### 4. 跨越会改变显存驻留的 flag 做数值对照，先关掉 cuDNN 自动调优
+
+cuDNN 的卷积算法是**实测候选者**选出来的，结果按形状缓存。实测时显存里有什么，决定
+哪个算法赢；而 `auto_flush_ops` 这类调度 flag 改变的正是驻留。于是**跨着这类 flag 比较
+梯度，比的是两件事**：被测的改动，和被换掉的卷积算法（实测值 `3.8e-4` 相对差，
+确定性，而且前向 loss 一位不差）。
+
+所以这种对照的第一行是：
+
+```python
+import jittor as jt
+jt.cudnn.set_benchmark(0)     # 强制走确定性的启发式
+```
+
+关掉之后，`KI-EXEC-001` 跨设置的梯度残差是 `2e-6`——不同批边界带来的重结合。
+
+（教会它的：`KI-EXEC-001` 的第一次修复**被错误地否决**了。理由是它「把崩溃变成了个别
+元素上 40–60% 的梯度错误」，而两半都是审阅者的错：对照跑在自动调优**开着**的情况下，
+而自动调优依赖驻留、驻留正是被测 flag 改变的东西；「40–60%」则是拿最大绝对差除以梯度
+的 **RMS** 而不是除以它所属那个元素的大小。关掉调优重做，残差是 `2e-6`。教训不是
+「多测几次」，而是**跨越改变驻留的 flag 的对照必须先把调优器按住，相对误差要除以它相对
+的那个元素**。详见 `KI-EXEC-003` 与[数值契约](../notes/numerics-contract.md)。）
 
 ## 命令
 

@@ -60,7 +60,7 @@ namespace jittor
         return;
     }
 
-    SwishOpRunner::SwishOpRunner() : BaseOpRunner("Swish", Dispatch::Direct)
+    SwishOpRunner::SwishOpRunner() : BaseOpRunner("Swish")
     {
     }
 
@@ -74,7 +74,7 @@ namespace jittor
         return;
     }
 
-    SwishBackwardOpRunner::SwishBackwardOpRunner() : BaseOpRunner("SwishBackward", Dispatch::Direct)
+    SwishBackwardOpRunner::SwishBackwardOpRunner() : BaseOpRunner("SwishBackward")
     {
     }
 
@@ -89,7 +89,7 @@ namespace jittor
         return;
     }
 
-    SwiGluOpRunner::SwiGluOpRunner() : BaseOpRunner("SwiGlu", Dispatch::Direct)
+    SwiGluOpRunner::SwiGluOpRunner() : BaseOpRunner("SwiGlu")
     {
     }
 

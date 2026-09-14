@@ -177,7 +177,7 @@ backend_fallback=error sync_run=1 python -m pytest -q -s \
   2>&1 | tee "$TMPDIR/acl-sync-run.log"
 ```
 
-`sync_run=1` 让每个 `BaseOpRunner` 在发射后立刻等待 `aclstream`。同步失败时 Jittor 会
+`sync_run` 默认关闭，逐算子同步只是诊断手段：打开它（`sync_run=1`）让每个 `BaseOpRunner` 在发射后立刻等待 `aclstream`，代价是主机与设备之间不再有任何重叠（Ascend950PR 上四层 transformer 的训练步 5.05 ms -> 10.39 ms，结果逐位相同）。同步失败时 Jittor 会
 抛出包含算子名、数值返回码和解码后 ACL 错误的异常。保留完整日志，并提取归因行：
 
 ```bash

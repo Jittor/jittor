@@ -7,7 +7,7 @@
 
 namespace jittor
 {
-    AdamWListOpRunner::AdamWListOpRunner() : BaseOpRunner("AdamWList", Dispatch::Direct)
+    AdamWListOpRunner::AdamWListOpRunner() : BaseOpRunner("AdamWList")
     {
     }
 

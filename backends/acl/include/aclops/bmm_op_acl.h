@@ -9,6 +9,7 @@ namespace jittor
 
     protected:
         void setupInputDesc() override;
+        void setupOutputDesc() override;
         void executeOp(AclOpRegistry::const_iterator &it) override;
 
     public:

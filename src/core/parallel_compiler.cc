@@ -177,15 +177,21 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
             // here used to replace the original exception or repeat a
             // side-effect; the partial key is the only honest diagnostic.
             string prepared_key = jkl.to_string();
+            // The generated source path goes *after* the reason. It used to be
+            // emitted first, as its own `LOGe` line, so ~260 characters of
+            // cache directory stood between the reader and the sentence that
+            // says what went wrong. It is where to look next, not the answer.
+            string source_note;
             if (prepared_key.size())
-                LOGe << "[Error] source file location:"
-                    << Op::get_filename_from_jit_key(prepared_key, ".cc");
+                source_note = "\n\ngenerated source: " +
+                    Op::get_filename_from_jit_key(prepared_key, ".cc");
             if (is_fused_op) {
                 LOGf << "Compile fused operator(" >> rid >> '/' >> queue.size() >> ")"
-                    << "failed:" << fused_op.ops << "\n\nReason: " >> e.what();
+                    << "failed:" << fused_op.ops << "\n\nReason: " >> e.what()
+                    >> source_note;
             } else
                 LOGf << "Compile operator(" >> rid >> '/' >> queue.size() >> ")"
-                    << "failed:" << op << "\n\nReason: " >> e.what();
+                    << "failed:" << op << "\n\nReason: " >> e.what() >> source_note;
         }
     }
     if (tasks.empty()) return;
@@ -284,16 +290,18 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 cancelled.store(true, std::memory_order_release);
                 std::stringstream ss;
                 string prepared_key = jkl.to_string();
-                if (prepared_key.size())
-                    ss << "[Error] source file location:"
-                        << Op::get_filename_from_jit_key(prepared_key, ".cc") << '\n';
-
+                // Reason first, path after -- see the note at the sibling site
+                // above.
                 if (is_fused_op) {
                     ss << "Compile fused operator(" << i << '/' << n << ")"
-                        << "failed:" << ((FusedOp*)op)->ops << "\n\nReason: " << e.what() << '\n';
+                        << "failed:" << ((FusedOp*)op)->ops << "\n\nReason: " << e.what();
                 } else
                     ss << "Compile operator(" << i << '/' << n << ")"
-                        << "failed:" << op << "\n\nReason: " << e.what() << '\n';
+                        << "failed:" << op << "\n\nReason: " << e.what();
+                if (prepared_key.size())
+                    ss << "\n\ngenerated source: "
+                        << Op::get_filename_from_jit_key(prepared_key, ".cc");
+                ss << '\n';
                 throw std::runtime_error(ss.str());
             } catch (...) {
                 cancelled.store(true, std::memory_order_release);

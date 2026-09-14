@@ -77,7 +77,7 @@ namespace jittor
         return;
     }
 
-    IncreFlashAttentionOpRunner::IncreFlashAttentionOpRunner() : BaseOpRunner("IncreFlashAttention", Dispatch::Direct)
+    IncreFlashAttentionOpRunner::IncreFlashAttentionOpRunner() : BaseOpRunner("IncreFlashAttention")
     {
     }
 
@@ -147,8 +147,35 @@ namespace jittor
     }
 
     KVCacheMemcpyOpRunner::KVCacheMemcpyOpRunner()
-        : BaseOpRunner("KVCacheMemcpy", Dispatch::Direct)
+        : BaseOpRunner("KVCacheMemcpy")
     {
+    }
+
+    void KVCacheMemcpyOpRunner::run()
+    {
+        // Cache writes use aclrtMemcpyAsync and have no aclnn workspace or
+        // launcher. Keep this exception local to the concrete copy runner;
+        // BaseOpRunner still rejects every unregistered operator.
+        auto entry = acl_op_registry().end();
+        try
+        {
+            setupInputDesc();
+            setupOutputDesc();
+            executeOp(entry);
+            cleanupDesc();
+        }
+        catch (...)
+        {
+            // A failed setup may have constructed only part of either vector.
+            // Drain queued copies before releasing descriptors and preserve
+            // the original exception, including the original copy error.
+            aclrtSynchronizeStream(aclstream);
+            for (auto *&tensor : inputTensors)
+                if (tensor) { aclDestroyTensor(tensor); tensor = nullptr; }
+            for (auto *&tensor : outputTensors)
+                if (tensor) { aclDestroyTensor(tensor); tensor = nullptr; }
+            throw;
+        }
     }
 
     void KVCacheMemcpyOpRunner::executeOp(AclOpRegistry::const_iterator &it)

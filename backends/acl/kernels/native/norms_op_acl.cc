@@ -125,7 +125,7 @@ namespace jittor
         return;
     }
 
-    LayerNormBackwardOpRunner::LayerNormBackwardOpRunner() : BaseOpRunner("LayerNormBackward", Dispatch::Direct)
+    LayerNormBackwardOpRunner::LayerNormBackwardOpRunner() : BaseOpRunner("LayerNormBackward")
     {
     }
 
@@ -151,7 +151,7 @@ namespace jittor
         return;
     }
 
-    GroupNormOpRunner::GroupNormOpRunner() : BaseOpRunner("GroupNorm", Dispatch::Direct)
+    GroupNormOpRunner::GroupNormOpRunner() : BaseOpRunner("GroupNorm")
     {
     }
 
@@ -167,7 +167,7 @@ namespace jittor
     }
 
     GroupNormBackwardOpRunner::GroupNormBackwardOpRunner()
-        : BaseOpRunner("GroupNormBackward", Dispatch::Direct)
+        : BaseOpRunner("GroupNormBackward")
     {
     }
 
@@ -186,7 +186,7 @@ namespace jittor
         launch(ret, aclnnGroupNormBackward, true);
     }
 
-    RmsNormOpRunner::RmsNormOpRunner() : BaseOpRunner("RmsNorm", Dispatch::Direct)
+    RmsNormOpRunner::RmsNormOpRunner() : BaseOpRunner("RmsNorm")
     {
     }
 
@@ -202,7 +202,7 @@ namespace jittor
         return;
     }
 
-    RmsNormGradOpRunner::RmsNormGradOpRunner() : BaseOpRunner("RmsNormGrad", Dispatch::Direct)
+    RmsNormGradOpRunner::RmsNormGradOpRunner() : BaseOpRunner("RmsNormGrad")
     {
     }
 

@@ -166,6 +166,9 @@ def gelu(x, approximate='none'):
         >>> nn.gelu(a)
         jt.Var([-0.134547   0.9882567  6.128115 ], dtype=float32)
     '''
+    fast = try_dispatch("nn.gelu", x, approximate=approximate)
+    if fast is not None:
+        return fast
     if approximate == 'tanh':
         _sqrt_2_over_pi = 0.7978845608028654
         return 0.5*x*(1+jt.tanh(_sqrt_2_over_pi*(x+0.044715*(x*x*x))))

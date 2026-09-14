@@ -70,6 +70,15 @@ class profile_scope(_call_no_record_scope):
         print(report)
     """
     def __init__(self, warmup=0, rerun=0, **jt_flags):
+        # `auto_flush_ops` launches everything pending once that many operators
+        # have been built, without waiting for the device. Work built *inside*
+        # this scope would then be launched by the flush rather than by the
+        # caller's sync, and the report would be missing exactly the operators
+        # the caller opened the scope to see (KI-EXEC-002). Off for the
+        # duration unless the caller says otherwise -- profiling is a
+        # measurement, and the pipelining it would measure is not the thing
+        # being asked about.
+        jt_flags.setdefault("auto_flush_ops", 0)
         self.fs = flag_scope(**jt_flags)
         self.warmup = warmup
         self.rerun = rerun
@@ -89,6 +98,23 @@ class profile_scope(_call_no_record_scope):
         _core_profiler.stop()
         self.report.extend(_core_profiler.report())
         self.fs.__exit__(*exc)
+        # A report with a header and no operators is not "it ran fast"; it is
+        # "nothing was measured", and the two used to be indistinguishable.
+        # Anything dividing by the total then gets a zero -- which is how
+        # KI-EXEC-002 was found, as a ZeroDivisionError in a bandwidth
+        # calculation that named neither the profiler nor the cause.
+        if exc[0] is None and len(self.report) <= 1:
+            import warnings
+            warnings.warn(
+                "profile_scope recorded no operators. The work was most "
+                "likely executed before the scope opened: jittor builds its "
+                "graph lazily, but `auto_flush_ops` launches pending work "
+                "during construction, so a graph built before `with "
+                "jt.profile_scope()` may already have run by the time the "
+                "scope starts. Build the graph inside the scope, or set "
+                "jt.flags.auto_flush_ops = 0 around the construction as well "
+                "(KI-EXEC-002).",
+                RuntimeWarning, stacklevel=2)
 
 
 class profile_mark(_call_no_record_scope):

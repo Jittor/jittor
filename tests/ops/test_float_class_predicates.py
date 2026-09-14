@@ -17,11 +17,16 @@ predicates, and it is already a dependency. The ACL bodies are exercised
 directly (they are plain elementwise expressions and run anywhere) so this file
 pins the two implementations to each other without an NPU.
 
-Why the kernel is not simply replaced by those comparisons: Jittor compiles
-fused kernels with ``-Ofast``, which implies ``-ffinite-math-only``, under which
-``x != x`` and ``x >= 0`` are free to be folded. ``_simple_for`` exists to
-compile this one kernel at ``-O2`` instead. The ACL path gets away with the
-comparisons because aclnn evaluates them, not a JIT kernel.
+Why the kernel is not simply replaced by those comparisons: the optimisation
+level a fused kernel is built at is decided elsewhere, and under
+``-ffinite-math-only`` -- implied by ``-ffast-math``, implied in turn by the
+``-Ofast`` this project shipped until KI-BACKEND-005 -- ``x != x`` and
+``x >= 0`` are free to be folded to a constant. CPU kernels build at ``-O3``
+now, so that licence is gone from the default build; ``_simple_for`` still
+pins this one kernel to ``-O2``, because a predicate that answers "is this a
+NaN" is exactly the code that must not depend on which flags a build settled
+on. The ACL path gets away with the comparisons because aclnn evaluates them,
+not a JIT kernel.
 """
 
 from _helpers import capability as _test_capability
@@ -86,11 +91,12 @@ class _Predicates:
         * **float16 is left out**: ``jittor::float16 <= int`` is an ambiguous
           overload, so this expression does not even compile into a JIT kernel.
           aclnn evaluates it instead and never sees that.
-        * **nan and the infinities are left out**: Jittor compiles fused
-          kernels with ``-Ofast``, hence ``-ffinite-math-only``, under which the
-          compiler may assume they do not occur and fold the comparisons. That
-          is why the CPU/CUDA path keeps its own ``-O2`` kernel rather than
-          reusing these three lines.
+        * **nan and the infinities are left out**: a fused kernel built
+          under ``-ffinite-math-only`` may assume they do not occur and fold
+          the comparisons away. The CPU flags that granted that (``-Ofast``)
+          are gone since KI-BACKEND-005, but the flags are still decided
+          outside this expression, which is why the CPU/CUDA path keeps its
+          own ``-O2`` kernel rather than reusing these three lines.
 
         What is left -- the dtype policy, and the answers for ordinary values --
         has to be the same on every backend, and that is what is checked here.
