@@ -93,6 +93,7 @@ speedup is worse than none.
 """
 
 import time
+import weakref
 
 import jittor as jt
 
@@ -165,7 +166,7 @@ def _graph_has_nondeterministic_op():
 class GraphReplay:
     """A callable that re-runs `module`'s captured graph. See the module docstring."""
 
-    def __init__(self, module, *example_inputs, measure=False):
+    def __init__(self, module, *example_inputs, measure=False, weak=False):
         """`measure=True` times replay against eager once and refuses if it loses.
 
         Off by default, because the measurement does not leave the process as
@@ -177,13 +178,40 @@ class GraphReplay:
         30% of what it is protecting, it is opt-in and the caller is told to
         A/B their own model instead.
         """
-        self._module = module
+        # The automatic policy keeps its state on the module, so holding the
+        # module back would be a cycle -- and a captured graph is never
+        # finished by itself, so until something releases it the whole graph
+        # stays pending and later batches sweep it up. Measured: an inference
+        # phase left 417 Vars alive after its model was dropped, and the
+        # training phase that followed in the same process went 6.57 -> 7.35 ms.
+        # A weak reference lets the capture die with the module it belongs to.
+        if weak:
+            self._module_ref = weakref.ref(module)
+            self._module_held = None
+        else:
+            self._module_ref = None
+            self._module_held = module
         self._capture = None
         self._refused = None
         self._worth_it = None if measure else True
         self.stats = {"captured": 0, "replayed": 0, "rebuilt": 0}
         if example_inputs:
             self(*example_inputs)
+
+    @property
+    def _module(self):
+        """The wrapped module, or None once a weakly-held one has gone."""
+        if self._module_ref is not None:
+            return self._module_ref()
+        return self._module_held
+
+    def __del__(self):
+        # Without this a capture outlives everything: its nodes are marked so
+        # the executor never finishes them, and nobody else knows to ask.
+        try:
+            self.invalidate()
+        except Exception:
+            pass
 
     # -- capture -------------------------------------------------------
     def _params(self):
@@ -581,7 +609,7 @@ def auto_replay_for(module, args, kw):
         # `measure=False`: the timing check perturbs what it measures (see
         # `_measure`), and the eligibility rules above already restrict this to
         # the shape of step where replay wins.
-        state.replay = GraphReplay(module, measure=False)
+        state.replay = GraphReplay(module, measure=False, weak=True)
     if state.replay.refused is not None:
         state.give_up = True
         state.replay = None
