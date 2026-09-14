@@ -62,26 +62,29 @@ framework defects.
 - Review/expiry condition: remove only after sanitizer-backed root cause and
   repeated cold/warm stress, deadlock, multiprocess-cache, and performance gates
 
-## KI-COMPILER-005: a relayed subgraph's inputs are freed while the fused op still points at them
+## KI-COMPILER-005: fixed -- a relay group no longer frees inputs the fused op still points at
 
-- Severity: High
-- Status: Open
+- Severity: was High (use-after-free while a fused op is compiled; a key could be
+  built from freed memory)
+- Status: Fixed and verified 2026-09-14
 - Owner: compiler and tuner maintainers
-- Evidence: AddressSanitizer report from the MiniMax-H3 tiny run under
-  `cc_flags=-fsanitize=address`; the
-  [exit-corruption report](../../docs/results/2026-09-14-exit-heap-corruption.md)
-- Symptom: `VarRelayManager::add_relay_group` calls `op->set_inputs(new_inputs)`
-  to break the link between a relayed source and its target, and
-  `release_inputs` then frees inputs that `FusedOp::vars` and the relay op's own
-  Var members still reference. `ReindexOp::jit_prepare` reads `x->ns`
-  afterwards, and `FusedOp::prepare_fused_key` walks the same vars, so a fused
-  key can be built from freed memory (or Crash). The MiniMax-H3 video VAE
-  reaches it through `ConvTuner::forwardTune`.
-- Workaround: none known; `jt.flags.use_parallel_op_compiler = 0` does not close
-  the window, because the free and the read are on the same thread.
-- Review/expiry condition: make the removed inputs outlive key preparation
-  (keep them alive, or point the relay op's members at live vars before
-  `prepare_fused_key`), then re-run the tiny pipeline under ASAN with no report.
+- What it was: `VarRelayManager::add_relay_group` calls `op->set_inputs(new_inputs)`
+  to break the link between a relayed source and its target, and `release_inputs`
+  then freed inputs that `FusedOp::vars` and the relay op's own Var members still
+  referenced. `ReindexOp::jit_prepare` read `x->ns` afterwards, and
+  `FusedOp::prepare_fused_key` walked the same vars. The MiniMax-H3 video VAE
+  reached it through `ConvTuner::forwardTune`; ASAN reported the read
+  (`cc_flags=-fsanitize=address`). `use_parallel_op_compiler = 0` did not close
+  the window -- the free and the read are on the same thread.
+- The fix: `removed_input_vars`, the field that already collected those inputs,
+  now owns them (`vector<VarPtr>`) instead of borrowing them, the same way
+  `relayed_pairs` owns the relay source.
+- Evidence: the
+  [exit-corruption report](../../docs/results/2026-09-14-exit-heap-corruption.md);
+  the full tiny pipeline runs clean under ASAN, and its video/audio/conditioning
+  tensors are bit-identical to the pre-fix run.
+- Review/expiry condition: none outstanding; remove this entry when the fix is
+  part of a released baseline.
 
 ## KI-BACKEND-001: narrow integer sum/max/min lack NPU atomics
 

@@ -2,7 +2,7 @@
 
 - Status: Fixed; verified over repeated real runs
 - Date: 2026-09-14
-- Baseline commit: `f43b90d6` (the fix, on top of `7f7c8c0e`)
+- Baseline commit: `c6b56a61` (both fixes, on top of `7f7c8c0e`)
 - Owner: core runtime / compiler maintainers
 - Review when: the liveness queue, the free buffer, or the compiled-fused-op
   cache lifetime changes
@@ -92,13 +92,26 @@ Nothing is reclaimed at exit, so no exit-time write can land in freed storage.
   message where the code now says `ndim`, and several tests need optional
   libraries; each passes or fails independently of this change.)
 
-## Separate finding (not fixed here)
+## The second report: a compile-time relay use-after-free (fixed in `c6b56a61`)
 
 With the exit-time fault gone, ASAN's next report is a different, compile-time
-use-after-free in the relay path -- `add_relay_group` drops a relayed
-subgraph's fused-op inputs and `release_inputs` frees them while
-`FusedOp::vars` and the relay op's own Var members still point at them. It is
-recorded as `KI-COMPILER-005` in `agent/manuals/known-issues.md`.
+one. `VarRelayManager::add_relay_group` calls `op->set_inputs(new_inputs)` to
+break the link between a relayed source and its target, and `release_inputs`
+then frees inputs that `FusedOp::vars` and the relay op's own Var members still
+reference. `ReindexOp::jit_prepare` reads `x->ns` afterwards, so the fused key
+can be built from freed memory. The H3 video VAE reaches it through
+`ConvTuner::forwardTune`.
+
+`removed_input_vars` -- the field that already collected those inputs -- now
+owns them (`vector<VarPtr>`) instead of borrowing them, the same way
+`relayed_pairs` already owns the relay source.
+
+- The full tiny pipeline runs **clean under ASAN** (exit 0, no report files),
+  which also confirms the exit-time fix above on an instrumented build.
+- A non-ASAN tiny run with the fix exits 0 with no `corrupted`, and its
+  `video`/`audio`/`cond`/`latents` tensors are **bit-identical** to the run
+  without it -- the change is lifetime only, not results.
+- Recorded as `KI-COMPILER-005` in `agent/manuals/known-issues.md`, now fixed.
 
 Raw ASAN reports and run logs live under `$JITTOR_LAB_ROOT/_state/h3/` and
 `/tmp/asan-report.*` and are unversioned.
