@@ -32,7 +32,18 @@ struct OpRelayContext {
 struct VarRelayGroup {
     // pair<VarPtr, uint64>: VarPtr: relay source, uint64: relay target var id in fused_op
     vector<pair<VarPtr, uint64>> relayed_pairs;
-    vector<Var*> removed_input_vars;
+    // Inputs of the relay subgraph that lived inside the fused op and were
+    // removed from those ops' input lists (`add_relay_group`), so the generated
+    // relay code can install the fused op's own vars into them at run time.
+    //
+    // Owned, not borrowed: `set_inputs` releases the input edge, and without a
+    // holder the var is freed on the spot -- but the ops whose member pointed at
+    // it, and `FusedOp::vars`, read it again when the fused key is prepared.
+    // ASAN reported exactly that as a use-after-free read in
+    // `ReindexOp::jit_prepare`, after `ConvTuner` had built a relay group for the
+    // H3 video VAE. Holding them is the same trade `relayed_pairs` already makes
+    // for the relay source.
+    vector<VarPtr> removed_input_vars;
     // nodes of relay source
     vector<Node*> nodes;
     vector<OpRelayContext> oprcs;
