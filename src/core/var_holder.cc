@@ -4,6 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <unordered_set>
 #include <sstream>
 #include "core/var_holder.h"
 #include "core/var.h"
@@ -157,6 +158,26 @@ void VarHolder::copy_into(VarHolder* src) {
     };
     backend_copy(var->mem_ptr, device_of(var),
                  src->var->mem_ptr, device_of(src->var), var->size, true);
+}
+
+void VarHolder::release_kept() {
+    ExecutorEntryScope entry;
+    // Breadth is irrelevant, reaching everything is not: an intermediate is
+    // only reclaimable once nothing upstream of the output still carries the
+    // mark, and the graph is a DAG, so the visited set is what keeps a
+    // diamond from being walked twice.
+    vector<Var*> stack{var};
+    std::unordered_set<Var*> seen{var};
+    while (stack.size()) {
+        Var* v = stack.back();
+        stack.pop_back();
+        v->set_flag(VarFlags::_kept, 0);
+        Op* op = v->input();
+        if (!op) continue;
+        for (Var* in : op->inputs())
+            if (seen.insert(in).second)
+                stack.push_back(in);
+    }
 }
 
 void VarHolder::set_data(ArrayArgs&& array) {

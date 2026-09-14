@@ -105,9 +105,32 @@ from .. import flags
 _NONDETERMINISTIC_OPS = ("random", "curand_random")
 
 
+class _no_auto:
+    """Run a module call without the automatic policy looking at it.
+
+    Everything in here calls the module directly, and those calls re-enter
+    `Module.__call__` at depth 0 -- where the automatic policy engages. Left
+    alone, an explicit `jt.graph_replay(model)` would end up with a second,
+    automatic capture of the same module nested inside its own, and the two
+    would take turns answering with each other's buffers.
+    """
+
+    __slots__ = ("_module_cls", "_depth")
+
+    def __enter__(self):
+        from jittor._core.module import Module
+        self._module_cls = Module
+        self._depth = Module._call_depth
+        Module._call_depth = self._depth + 1
+        return self
+
+    def __exit__(self, *exc):
+        self._module_cls._call_depth = self._depth
+        return False
+
+
 class _Capture:
-    __slots__ = ("inputs", "output", "params", "training", "signature",
-                 "slots", "turn")
+    __slots__ = ("inputs", "output", "params", "training", "signature")
 
 
 def _spec(value):
@@ -176,11 +199,27 @@ class GraphReplay:
             if isinstance(leaf, jt.Var):
                 leaf.sync(True, False)
 
+        # The graph is built on private copies of the inputs, never on the
+        # caller's Vars. Otherwise an argument that *is* the Var the capture
+        # was taken with skips the input copy -- and with no input written the
+        # graph does not re-execute, so the call hands back whatever the
+        # previous input produced. Correct-looking, silently wrong, and it
+        # only shows when the same Var comes round again.
+        private = []
+        for value in args:
+            if not isinstance(value, jt.Var):
+                private.append(value)
+                continue
+            copy = jt.empty(value.shape, value.dtype)
+            copy.sync(False, False)
+            copy._copy_into(value)
+            private.append(copy)
+
         before = jt.flags.keep_graph
         jt.flags.keep_graph = 1
         try:
-            with jt.no_grad():
-                output = self._module(*args)
+            with _no_auto(), jt.no_grad():
+                output = self._module(*private)
                 if not isinstance(output, jt.Var):
                     self._refused = ("the module returned "
                                      f"{type(output).__name__}, not a single Var")
@@ -207,20 +246,8 @@ class GraphReplay:
             jt.flags.keep_graph = before
 
         cap = _Capture()
-        cap.inputs = [a for a in args if isinstance(a, jt.Var)]
+        cap.inputs = [v for v in private if isinstance(v, jt.Var)]
         cap.output = output
-        # Destinations allocated once, here, and rotated. Allocating one per
-        # call builds an op per call, and once enough ops have accumulated the
-        # runtime flushes them -- a batch outside `keep_graph` that collects
-        # the captured graph and finishes it. That showed up as a recapture
-        # every ~35 calls and left the whole wrapper slower than eager.
-        #
-        # Two of them, so a caller may hold the previous answer while asking
-        # for the next. The one before that is overwritten.
-        cap.slots = [jt.empty(output.shape, output.dtype) for _ in range(2)]
-        for slot in cap.slots:
-            slot.sync(True, False)
-        cap.turn = 0
         # Identity, not value: an optimizer step or a load rebinds the holder
         # to a new Var, and the captured graph would keep reading the old one.
         cap.params = [(p, p.var_ptr) for p in params]
@@ -279,37 +306,27 @@ class GraphReplay:
     def _measure(self, args):
         """Time replay against eager once, and refuse if replay does not win.
 
-        The replay side has to be fed a *different* Var than the captured one,
-        or it measures nothing: `_replay_once` skips the input copy when the
-        argument is already the captured Var, and with no input written the
-        graph does not re-execute -- the call collapses to copying the output
-        it already holds. Timed that way a b8s256 forward "replayed" in 6.8 ms
-        against 14.0 eager, and the wrapper happily concluded replay was worth
-        it. Fed a changing input it is 15.7 ms, i.e. slower.
-
-        The stand-in carries the captured input's own bytes, so feeding it
-        writes the same values back and the caller's Var is not disturbed.
+        Both arms have to do the same work. That used to need a stand-in Var,
+        because `_replay_once` skipped the input copy when handed the very Var
+        the capture was taken with -- and with no input written the graph does
+        not re-execute, so the call collapsed to copying the output it already
+        held. Timed that way a b8s256 forward "replayed" in 6.8 ms against 14.0
+        eager. The capture reads private buffers now, so the copy always
+        happens and there is nothing left to fake.
         """
         def eager():
-            with jt.no_grad():
+            with _no_auto(), jt.no_grad():
                 self._module(*args).sync(False)
         try:
-            cap = self._capture
-            stand_in = []
-            for captured in cap.inputs:
-                copy = jt.empty(captured.shape, captured.dtype)
-                copy.sync(True, False)
-                copy._copy_into(captured)
-                stand_in.append(copy)
-            probe = list(args)
-            for slot, (captured, copy) in enumerate(zip(cap.inputs, stand_in)):
-                probe[probe.index(captured)] = copy
+            # No stand-in is needed: the capture reads private buffers, so
+            # `_replay_once` copies the input on every call and the graph
+            # re-executes whatever Var it is handed.
             # Alternate the two rather than running one and then the other:
             # whichever goes second starts warm, and that bias is worth more
             # than the difference being measured. With prefill refused -- both
             # arms running the very same eager code -- the second measured
             # 1.57 ms against the first's 2.74.
-            replay_once = lambda: self._replay_once(self._capture, tuple(probe))
+            replay_once = lambda: self._replay_once(self._capture, args)
             replayed = rebuilt = float("inf")
             for _ in range(2):
                 # The eager arm runs with keep_graph off, which means its final
@@ -358,12 +375,28 @@ class GraphReplay:
 
     # -- call ----------------------------------------------------------
     def _replay_once(self, cap, args):
+        # Always, not "unless it is the same Var": the copy is what the graph
+        # re-executes for, and the capture reads buffers no caller holds.
         for captured, given in zip(cap.inputs,
                                    [a for a in args if isinstance(a, jt.Var)]):
-            if given is not captured:
-                captured._copy_into(given)
-        out = cap.slots[cap.turn]
-        cap.turn ^= 1
+            captured._copy_into(given)
+        # A fresh Var, so the answer is the caller's to keep. Allocating one
+        # per call is free as long as it is not synced: `_copy_into`
+        # materializes its own destination, whereas a device wait here drains
+        # the device every call -- that alone cost 1.76 ms a call. Rotating a
+        # fixed pair of buffers instead measures exactly the same (1.183 vs
+        # 1.182 ms) and would make the result alias after two calls, which is
+        # not a contract worth accepting for nothing.
+        out = jt.empty(cap.output.shape, cap.output.dtype)
+        # Finish it here, with `keep_graph` still off and without a device
+        # wait. That matters for what the *caller* then does: a var that is
+        # still pending makes the caller's own `out.sync()` a weak sync, which
+        # sweeps in every other pending holder -- the capture among them -- and
+        # finishes it. `model(x).sync(False)`, which is how an inference loop
+        # is written, then destroyed the capture on every single call: 13
+        # captures for 14 replays, and the whole thing 3.5x slower than eager.
+        # A finished var leaves `top_weak_sync` with nothing to walk.
+        out.sync(False, False)
         before = jt.flags.keep_graph
         jt.flags.keep_graph = 1
         try:
@@ -377,7 +410,7 @@ class GraphReplay:
     def __call__(self, *args):
         if self._refused is not None:
             self.stats["rebuilt"] += 1
-            with jt.no_grad():
+            with _no_auto(), jt.no_grad():
                 return self._module(*args)
 
         cap = self._capture
@@ -391,26 +424,26 @@ class GraphReplay:
             # One eager call first: it materializes the parameters and any
             # buffer the module builds lazily, so the capture that follows has
             # nothing pending underneath it.
-            with jt.no_grad():
+            with _no_auto(), jt.no_grad():
                 self._module(*args).sync()
             cap = self._capture = self._capture_now(args)
             self.stats["captured"] += 1
             if cap is None:
                 self.stats["rebuilt"] += 1
-                with jt.no_grad():
+                with _no_auto(), jt.no_grad():
                     return self._module(*args)
             if self._worth_it is None:
                 self._measure(args)
                 if self._refused is not None:
                     self.stats["rebuilt"] += 1
-                    with jt.no_grad():
+                    with _no_auto(), jt.no_grad():
                         return self._module(*args)
                 # `_measure` dropped the capture it timed; take a fresh one.
                 cap = self._capture = self._capture_now(args)
                 self.stats["captured"] += 1
                 if cap is None:
                     self.stats["rebuilt"] += 1
-                    with jt.no_grad():
+                    with _no_auto(), jt.no_grad():
                         return self._module(*args)
 
         # The result is a copy, not the captured Var: reading the captured
@@ -440,6 +473,10 @@ class GraphReplay:
         before = jt.flags.keep_graph
         jt.flags.keep_graph = 0
         try:
+            # Take the mark off first: a marked node is never finished, by
+            # design, so the sync below would otherwise run the graph and
+            # leave it exactly as it was.
+            cap.output._release_kept()
             cap.output.sync(False)
         except Exception:
             # Releasing is best effort: a graph that cannot run any more (its
@@ -458,3 +495,95 @@ class GraphReplay:
 def graph_replay(module, *example_inputs, measure=False):
     """Wrap `module` so repeated inference re-runs its graph. See the module docstring."""
     return GraphReplay(module, *example_inputs, measure=measure)
+
+
+# ---------------------------------------------------------------------------
+# The automatic policy
+#
+# `jt.graph_replay(...)` is the explicit form and says exactly what it does.
+# This is the same machinery applied without being asked, and it is deliberately
+# narrow: the speedup is in not rebuilding a graph, which only dominates when
+# the step is small, and a capture holds its intermediates for as long as it
+# lives. So it engages only for a call that is
+#
+#   - under `no_grad`, because a replay carries no gradient;
+#   - the outermost module call, not a submodule of one already running;
+#   - all-positional, all-Var, with inputs totalling less than
+#     `auto_graph_replay_bytes` -- which bounds what can be retained and is
+#     also exactly the regime where rebuilding is the cost;
+#   - repeating: the same shapes twice in a row, so a one-off call is never
+#     captured.
+#
+# Everything the capture cannot serve (a graph that draws random numbers, a
+# traced call that read a value back, a module that returns something other
+# than one Var) falls back and is not tried again for that module. So does a
+# module whose shapes keep changing, after enough re-captures to show it.
+
+
+#: Re-captures tolerated for one module before the policy leaves it alone. A
+#: capture costs an eager forward, so a caller whose shapes change every call
+#: would otherwise pay for a capture it never uses.
+_GIVE_UP_AFTER = 8
+
+
+class _AutoState:
+    __slots__ = ("signature", "seen", "replay", "recaptures", "give_up")
+
+    def __init__(self):
+        self.signature = None
+        self.seen = 0
+        self.replay = None
+        self.recaptures = 0
+        self.give_up = False
+
+
+def _input_bytes(args):
+    total = 0
+    for a in args:
+        total += a.numel() * a.dtype.dsize()
+    return total
+
+
+def auto_replay_for(module, args, kw):
+    """The GraphReplay to use for this call, or None to run normally."""
+    if kw or not args:
+        return None
+    flags = jt.flags
+    if not flags.auto_graph_replay or not flags.no_grad:
+        return None
+    for a in args:
+        if not isinstance(a, jt.Var):
+            return None
+    state = module.__dict__.get("_auto_graph_replay")
+    if state is None:
+        # Written through __dict__: Module.__setattr__ classifies assignments
+        # into parameters and buffers, and this is neither.
+        state = module.__dict__["_auto_graph_replay"] = _AutoState()
+    if state.give_up:
+        return None
+    if _input_bytes(args) > flags.auto_graph_replay_bytes:
+        return None
+    signature = _signature(args)
+    if signature != state.signature:
+        state.signature = signature
+        state.seen = 1
+        if state.replay is not None:
+            state.replay.invalidate()
+            state.replay = None
+            state.recaptures += 1
+            if state.recaptures >= _GIVE_UP_AFTER:
+                state.give_up = True
+        return None
+    state.seen += 1
+    if state.seen < 2:
+        return None
+    if state.replay is None:
+        # `measure=False`: the timing check perturbs what it measures (see
+        # `_measure`), and the eligibility rules above already restrict this to
+        # the shape of step where replay wins.
+        state.replay = GraphReplay(module, measure=False)
+    if state.replay.refused is not None:
+        state.give_up = True
+        state.replay = None
+        return None
+    return state.replay

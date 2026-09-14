@@ -541,6 +541,21 @@ struct VarHolder {
     // @pyjt(_copy_into)
     void copy_into(VarHolder* src);
 
+    /**
+        Give back a graph that was kept with `keep_graph`.
+
+        `keep_graph` marks every node it leaves unfinished, and a marked node
+        is never finished -- not by the batch that built it and not by any
+        later batch that collects it, which is what lets a kept graph survive
+        an ordinary `sync_all`. The mark therefore has to be taken off
+        deliberately: this walks back from the Var through everything that
+        produced it and clears it, after which a normal sync finishes them and
+        the memory is reclaimed. Without it a kept graph leaks for the life of
+        the process.
+     */
+    // @pyjt(_release_kept)
+    void release_kept();
+
     // @pyjt(share_with)
     // @attrs(return_self)
     inline VarHolder* share_with(VarHolder* other) {

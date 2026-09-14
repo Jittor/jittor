@@ -41,7 +41,7 @@ class _Random(nn.Module):
         return x + jt.rand(x.shape)
 
 
-@_test_preserve_policy(jt, 'keep_graph')
+@_test_preserve_policy(jt, 'keep_graph', 'auto_graph_replay')
 class TestGraphReplay(unittest.TestCase):
 
     def setUp(self):
@@ -53,8 +53,15 @@ class TestGraphReplay(unittest.TestCase):
             f.sync(True, False)
 
     def _eager(self, x):
-        with jt.no_grad():
-            return self.model(x).numpy().copy()
+        # Genuinely eager: the automatic policy would otherwise replay the
+        # reference too, and then this compares a replay against a replay.
+        before = jt.flags.auto_graph_replay
+        jt.flags.auto_graph_replay = 0
+        try:
+            with jt.no_grad():
+                return self.model(x).numpy().copy()
+        finally:
+            jt.flags.auto_graph_replay = before
 
     def test_it_answers_for_each_input_not_just_the_captured_one(self):
         want = [self._eager(f) for f in self.feed]
@@ -145,7 +152,7 @@ class TestGraphReplay(unittest.TestCase):
 
 @unittest.skipIf(not _test_capability.machine_has_accelerator("cuda"),
                  "no CUDA device")
-@_test_preserve_policy(jt, 'keep_graph')
+@_test_preserve_policy(jt, 'keep_graph', 'auto_graph_replay')
 class TestGraphReplayCuda(TestGraphReplay):
 
     def setUp(self):
