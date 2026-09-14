@@ -179,6 +179,31 @@ Reproduced and verified with a two-minute standalone harness (a two-layer
 `Sequential` plus the real `PinnedModuleStager`, no engine): parameters were
 `cpu` after `load()` before the fix and `cuda:0` after.
 
+## 10. Core helpers allocated on the ambient placement, not the inputs'
+
+MiniMax-H3 builds its sigma schedule with `device="cpu"` while the process is on
+CUDA, and then calls `unique_consecutive` on it. `jt.ones`/`jt.zeros`/`jt.empty`
+follow the *ambient* placement, so the helper tensors landed on the device:
+`dispatch_context` then rejected the op with "Expected all tensor inputs on the
+same backend and device" (the message now names both placements -- that is how
+this was found).
+
+Fix: a small `jittor._core.var.placement_scope_like(x)` context manager, used by
+`concatenation._concat_direct` for its output and by `unique_consecutive` for its
+leading `True`, its `counts` and its scatter `ones`. (In `_core/var.py` the name
+`int` is shadowed by jittor's integer dtype constructor, so the helper uses
+`ori_int`.)
+
+Two more shim/core mismatches on the same path:
+
+- `torch.backends.cuda` had the four `enable_*_sdp` setters but none of the
+  matching `*_sdp_enabled` getters; the encoder saves and restores
+  `cudnn_sdp_enabled()`. The four getters now report the recorded state
+  (`cudnn` defaults to False -- there is no cuDNN fused SDPA here).
+- `dtype.is_complex` / `is_floating_point` are torch-style *attributes* but
+  jittor core calls them as *methods* (`advanced_indexing._indexing_index`).
+  They now return a `_CallableBool`, so both readings work.
+
 ## Verification
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails
