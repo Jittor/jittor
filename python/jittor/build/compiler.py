@@ -535,13 +535,25 @@ def check_save_mem_flags():
 cc_flags = " "
 # os.RTLD_NOW | os.RTLD_GLOBAL cause segfault when import torch first
 import_flags = os.RTLD_NOW | os.RTLD_GLOBAL
-if platform.system() == 'Linux':
+# RTLD_DEEPBIND makes a library resolve its symbols to its own definitions
+# first, which is what keeps one jittor build from binding to another's. The
+# sanitizer runtime refuses to load anything with it -- "incompatible with
+# sanitizer runtime", sanitizers#611 -- so an instrumented run has to turn it
+# off. JITTOR_NO_DEEPBIND=1, not an automatic detection: the flag also decides
+# which copy of a symbol the process binds to, and that should not change
+# silently.
+if platform.system() == 'Linux' and not os.environ.get("JITTOR_NO_DEEPBIND"):
     import_flags |= os.RTLD_DEEPBIND
 # if cc_type=="icc":
 #     # weird link problem, icc omp library may conflict and cause segfault
 #     import_flags = os.RTLD_NOW | os.RTLD_GLOBAL
 dlopen_flags = os.RTLD_NOW | os.RTLD_GLOBAL
-if platform.system() == 'Linux':
+# This block assigns to `import_flags`, not `dlopen_flags` -- it has since it was
+# written, and the effect is that the first block's decision is taken back here.
+# Left as it is (the binding it produces is the one every existing build has),
+# but it has to honour the sanitizer opt-out too, or JITTOR_NO_DEEPBIND=1 above
+# changes nothing.
+if platform.system() == 'Linux' and not os.environ.get("JITTOR_NO_DEEPBIND"):
     import_flags |= os.RTLD_DEEPBIND
 
 with jit_utils.import_scope(import_flags):
@@ -930,6 +942,14 @@ if has_cuda:
         nvcc_flags = nvcc_flags.replace("-Werror", "")
         nvcc_flags = nvcc_flags.replace("-fPIC", "-Xcompiler -fPIC")
         nvcc_flags = nvcc_flags.replace("-fdiagnostics", "-Xcompiler -fdiagnostics")
+        # Host-side instrumentation, forwarded to the compiler nvcc drives.
+        # Without this an AddressSanitizer build of an operator library fails
+        # outright -- "nvcc fatal : Unknown option '-fsanitize=address'" -- and
+        # the host half of every kernel stays uninstrumented, which is the half
+        # where the heap lives.
+        nvcc_flags = nvcc_flags.replace("-fsanitize", "-Xcompiler -fsanitize")
+        nvcc_flags = nvcc_flags.replace("-fno-omit-frame-pointer",
+                                        "-Xcompiler -fno-omit-frame-pointer")
         nvcc_flags += f" -x cu --cudart=shared -ccbin=\"{cc_path}\" --use_fast_math "
         # nvcc warning is noise
         nvcc_flags += " -w "

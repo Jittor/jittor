@@ -875,7 +875,15 @@ int system_popen(const char* cmd, const char* cwd) {
 int system_popen(const char* cmd, const char* cwd, string* captured) {
     char buf[BUFSIZ];
     string cmd2;
-    cmd2 = cmd;
+    // A sanitizer runtime preloaded into this process is inherited by every
+    // child, and nvcc segfaults under one: it dlopens its own components, and
+    // the interception breaks that. The compilers are not what is being
+    // checked, so the preload is dropped for the child by prefixing `env -u`
+    // rather than by editing this process's environment -- the compile workers
+    // call this concurrently, where setenv is not safe. Only when the variable
+    // is set, so an ordinary run spawns exactly the command it always did.
+    if (getenv("LD_PRELOAD")) cmd2 = "env -u LD_PRELOAD ";
+    cmd2 += cmd;
     cmd2 += " 2>&1 ";
     FILE *ptr = popen(cmd2.c_str(), "r");
     if (!ptr) return -1;

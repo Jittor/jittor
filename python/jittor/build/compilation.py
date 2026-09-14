@@ -172,7 +172,10 @@ def compile_custom_ops(
     if dlopen_flags is None:
         dlopen_flags = _compiler_state.os.RTLD_GLOBAL | _compiler_state.os.RTLD_NOW
         if _compiler_state.platform.system() == 'Linux':
-            dlopen_flags |= _compiler_state.os.RTLD_DEEPBIND
+            # Sanitizer runtimes refuse to load a library opened with
+            # RTLD_DEEPBIND (sanitizers#611): JITTOR_NO_DEEPBIND=1 turns it off.
+            if not _compiler_state.os.environ.get("JITTOR_NO_DEEPBIND"):
+                dlopen_flags |= _compiler_state.os.RTLD_DEEPBIND
 
     srcs = {}
     headers = {}
