@@ -748,7 +748,14 @@ def _set_(self, source, storage_offset=0, size=None, stride=None):
         stride = tuple(int(s) for s in base.stride())
     else:
         stride = tuple(int(s) for s in stride)
-    nbytes = int(source.nbytes()) if hasattr(source, "nbytes") else None
+    # A storage exposes `nbytes` as a method, a Tensor as a property: the
+    # native VarHolder binds it with @pyjt(__get__nbytes). Calling it
+    # unconditionally made `set_` raise "'int' object is not callable" for
+    # every Tensor source, which is half the sources the signature accepts.
+    raw_nbytes = getattr(source, "nbytes", None)
+    if callable(raw_nbytes):
+        raw_nbytes = raw_nbytes()
+    nbytes = int(raw_nbytes) if raw_nbytes is not None else None
     if nbytes is not None and size == (nbytes,) and stride == (1,) and not int(storage_offset):
         result = base.as_strided(tuple(int(s) for s in base.shape),
                                  tuple(int(s) for s in base.stride()), 0)
