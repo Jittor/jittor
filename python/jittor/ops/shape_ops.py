@@ -269,9 +269,16 @@ def meshgrid(*tensors, indexing=None):
 
 
 def _split_slice(d, selection, is_last, gopt_disable):
-    if gopt_disable:
-        return d.getitem(selection), d
-    return d.getitem(selection, int(is_last))
+    # The multi-output getitem hands the caller a piece that reads the source's
+    # storage linearly. That is only the same thing as the requested slice when
+    # the source is dense and the slice names a single axis: on a strided source
+    # -- anything that came out of a slicing view, a transpose or an expand --
+    # it silently returns the wrong elements. `jt.split(jt.array(a)[:, 1:], 2)`
+    # returned rows [[1,2],[3,4]] where numpy gives [[1,2],[4,5]].
+    if (not gopt_disable and len(selection) == 1
+            and d._storage_is_contiguous()):
+        return d.getitem(selection, int(is_last))
+    return d.getitem(selection), d
 
 
 def _split_slice_acl(d, selection, is_last, gopt_disable):

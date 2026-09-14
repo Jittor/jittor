@@ -1001,7 +1001,15 @@ Returns a handle that removes both halves.
     def __getattr__(self, key):
         return object.__getattribute__(self, key)
 
-    def register_buffer(self, key, value, persistent=True):
+    def register_buffer(self, key, value=None, persistent=True, **kwargs):
+        # Torch spells the payload keyword ``tensor``; accept it alongside
+        # Jittor's historical positional ``value`` without swallowing other
+        # misspelled arguments.
+        if value is None and "tensor" in kwargs:
+            value = kwargs.pop("tensor")
+        if kwargs:
+            unexpected = next(iter(kwargs))
+            raise TypeError("register_buffer() got an unexpected keyword argument '%s'" % unexpected)
         # torch allows registering a None buffer as a placeholder (e.g. vLLM's
         # FusedMoE expert_map when there is no expert parallelism). Don't try to
         # tag attributes on None.
