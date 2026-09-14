@@ -56,7 +56,10 @@ op_db = [
     UnaryUfuncInfo("cos", ref=np.cos, op=jt.cos),
     UnaryUfuncInfo("tanh", ref=np.tanh, op=jt.tanh),
     UnaryUfuncInfo("sqrt", ref=np.sqrt, domain=(0.1, 4.0), op=jt.sqrt),
-    UnaryUfuncInfo("abs", ref=np.abs, op=jt.abs),
+    # ACL Abs executes these input dtypes; float64 is explicitly rejected by
+    # the provider. Keep CPU/CUDA float64 coverage and the NPU rejection test.
+    UnaryUfuncInfo("abs", ref=np.abs, op=jt.abs,
+                   dtypesIfNPU=("float16", "float32")),
     UnaryUfuncInfo("negative", ref=np.negative, op=lambda x: -x),
     UnaryUfuncInfo("sigmoid", ref=sigmoid_ref, op=jt.sigmoid),
     UnaryUfuncInfo("relu", ref=lambda x: np.maximum(x, 0), op=nn.relu),

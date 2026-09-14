@@ -410,7 +410,12 @@ class JittorTestCase(unittest.TestCase):
                              msg=f"dtype {gx.dtype} != {gy.dtype}; {msg or ''}")
 
         if atol is None or rtol is None:
-            datol, drtol = default_tolerances(str(gx.dtype), str(gy.dtype))
+            # NumPy stages bfloat16 tensors as float32. Select precision from
+            # the original values so that staging does not tighten the existing
+            # bfloat16 policy to float32 tolerances.
+            dx = str(getattr(x, "dtype", gx.dtype))
+            dy = str(getattr(y, "dtype", gy.dtype))
+            datol, drtol = default_tolerances(dx, dy)
             if self.precision_override is not None:
                 datol = max(datol, self.precision_override)
             atol = datol if atol is None else atol

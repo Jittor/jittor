@@ -1,6 +1,7 @@
 """Host-only contracts for optional ACL routing and native indexing ownership."""
 
 import ast
+import numbers
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +14,9 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def definitions(relative, names=None, **namespace):
+    from jittor._core.dtypes import dtype_name
+    namespace.setdefault("_jittor_dtype_name", dtype_name)
+    namespace.setdefault("_numbers", numbers)
     path = ROOT / "python" / "jittor" / relative
     tree = ast.parse(path.read_text(encoding="utf8"))
     tree.body = [node for node in tree.body if isinstance(node, ast.FunctionDef)
@@ -132,16 +136,18 @@ class IndexingRouting(unittest.TestCase):
             view = getter()
             self.assertEqual(view.source, "native_getitem")
             view[:, :] = 3
-        # No getter may let the optional provider produce the result a writeback
-        # consumes; that guard is still `_needs_cascade_setitem` alone, so which
-        # results a backend is allowed to produce did not change with 5.02.
-        self.assertEqual(self.calls, [])
-        # The first two are the raw op, which deliberately does not create a
-        # view -- a gather is a computation, not a claim about two names -- so
-        # they still go through the ancestry walk. `x[0]` is the tensor-level
-        # index, which records the view, and a recorded view writes back through
-        # `assign` instead.
-        self.assertEqual(len(self.cascades), 2)
+        # Integer getters keep the native producer. Writes are now provider
+        # results published through assign; native holder/view ownership handles
+        # propagation, rather than this Python layer walking ancestors.
+        self.assertEqual([name for name, _ in self.calls], ["tensor.setitem"] * 3)
+        for _, args in self.calls:
+            target, slices, value, reduce = args
+            self.assertEqual(target.source, "native_getitem")
+            self.assertEqual(target.assignments, [self.provider_result])
+            self.assertEqual(slices, (slice(None), slice(None)))
+            self.assertEqual(value, 3)
+            self.assertIsNone(reduce)
+        self.assertEqual(self.cascades, [])
         self.assertIsNone(self.jt.getitem(x, 0).view)
         self.assertEqual(x[0].view, (x, 0))
 
@@ -213,13 +219,16 @@ class DomainRouting(unittest.TestCase):
 
         class Var:
             ndim = 2
+            shape = [2, 2]
+            dtype = SimpleNamespace(is_float=lambda: False, is_complex=lambda: False)
 
         jt = SimpleNamespace(Var=Var, misc=SimpleNamespace(_cumsum_dim=lambda dim, ndim: dim % ndim))
         owners = {
             "numerical": {"all", "any"},
             "shape_ops": {"flip", "split", "roll", "triu"},
             "scan": {"cumsum", "cub_cumsum"},
-            "advanced_indexing": {"nonzero", "gather", "_scatter_into"},
+            "advanced_indexing": {"nonzero", "gather", "_scatter_into",
+                                  "_indexing_dim", "_indexing_index"},
         }
         owner = SimpleNamespace()
         for module, names in owners.items():

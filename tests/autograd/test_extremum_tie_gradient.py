@@ -106,9 +106,11 @@ class TestExtremumTieGradientCpu(_TieContract, unittest.TestCase):
     device_flag = 0
 
 
-@requires_cuda
 class TestExtremumTieGradientCuda(_TieContract, unittest.TestCase):
     device_flag = 1
+
+    def setUp(self):
+        _test_capability.require_accelerator("cuda")
 
 
 if __name__ == "__main__":

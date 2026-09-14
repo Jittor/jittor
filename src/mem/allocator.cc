@@ -11,6 +11,7 @@
 #ifdef HAS_ACCELERATOR
 #include "mem/allocator/cuda_dual_allocator.h"
 #endif
+#include "mem/allocator/shared_allocator.h"
 #include "mem/allocator/stat_allocator.h"
 #include "mem/allocator/sfrl_allocator.h"
 #include "mem/allocator/nfef_allocator.h"
@@ -147,7 +148,7 @@ Allocator* get_allocator(Device device, bool temp_allocator) {
     if (use_nfef_allocator) {
         LOGvv << "Using use_nfef_allocator";
         allocator = setup_allocator<NFEFAllocator>(allocator);
-        return allocator;
+        return setup_allocator<SharedAllocator>(allocator);
     }
     if (temp_allocator && use_temp_allocator) {
         LOGvv << "Using temp_allocator";
@@ -160,6 +161,10 @@ Allocator* get_allocator(Device device, bool temp_allocator) {
         LOGvv << "Using stat_allocator at last";
         allocator = setup_allocator<StatAllocator>(allocator);
     }
+    // Storage views require shared ownership even when caching is disabled.
+    // Keep the selected allocation policy and add only ownership bookkeeping.
+    if (!allocator->can_share())
+        allocator = setup_allocator<SharedAllocator>(allocator);
     return allocator;
 }
 

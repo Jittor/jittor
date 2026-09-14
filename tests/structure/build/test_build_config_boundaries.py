@@ -202,7 +202,8 @@ def test_default_cache_config_stays_unchanged_and_explicit_backend_isolated(monk
     namespace = {"os": os, "BUILD_CONFIG_VARS": names, "build_env": build_env,
                  "build_flag": build_flag}
     exec(compile(ast.Module(body=selected, type_ignores=[]), str(path), "exec"), namespace)
-    for name in names + ("disable_lock", "JT_SAVE_MEM", "JT_BACKEND", "ASCEND_TOOLKIT_HOME",
+    canonical_names = tuple("JT_BUILD_" + name.upper() for name in names)
+    for name in names + canonical_names + ("disable_lock", "JT_SAVE_MEM", "JT_BACKEND", "ASCEND_TOOLKIT_HOME",
                          "ASCEND_HOME_PATH", "tikcc_path", "ROCM_HOME", "ROCM_PATH", "HIP_PATH",
                          "hipcc_path", "COREX_HOME"):
         monkeypatch.delenv(name, raising=False)

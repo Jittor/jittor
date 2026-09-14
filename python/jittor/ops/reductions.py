@@ -8,7 +8,7 @@ def amax(input, dim=None, keepdim=False, keepdims=None):
     if keepdims is not None:
         keepdim = keepdims
     if dim is None:
-        return input.max()
+        return input.max(keepdims=keepdim)
     return jt.max(input, dim, keepdims=keepdim)
 
 
@@ -18,7 +18,7 @@ def amin(input, dim=None, keepdim=False, keepdims=None):
     if keepdims is not None:
         keepdim = keepdims
     if dim is None:
-        return input.min()
+        return input.min(keepdims=keepdim)
     return jt.min(input, dim, keepdims=keepdim)
 
 

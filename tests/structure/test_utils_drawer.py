@@ -26,11 +26,8 @@ import ast
 import unittest
 from pathlib import Path
 
-import jittor
-
-
-PACKAGE = Path(jittor.__file__).resolve().parent
 REPO_ROOT = Path(__file__).resolve().parents[2]
+PACKAGE = REPO_ROOT / "python" / "jittor"
 DRAWER = PACKAGE / "utils"
 
 

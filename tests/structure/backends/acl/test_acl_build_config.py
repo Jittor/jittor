@@ -25,6 +25,10 @@ def _load_module(monkeypatch, name, path):
 
 @pytest.fixture
 def acl(monkeypatch):
+    # Initialize the shared build utility separately: this assertion concerns
+    # the provider import, not the utility package's one-time compiler lookup.
+    import jittor_utils.env_config
+
     def unexpected_probe(*args, **kwargs):
         raise AssertionError("module import probed the toolchain")
     with monkeypatch.context() as guard:
@@ -50,6 +54,7 @@ def setup(acl, monkeypatch, tmp_path):
     converter = SimpleNamespace(process=lambda *args: "converted",
                                 init_acl_ops=lambda: calls.append(("init",)))
     base = api.BuildConfig(
+        cc_path="/host/bin/c++", kernel_flags=" -O2 ",
         cc_flags="-std=c++14 -I/source/src", jittor_path="/source",
         cache_path="/cache", extra_core_files=("existing.cc",),
         environment={"existing_env": "yes"}, resources={"existing_resource": 3},
@@ -69,7 +74,7 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
     before_environment = dict(os.environ)
     config = acl.configure(setup.context)
     assert config.backend == "acl"
-    assert config.has_acl and config.has_cuda and not config.is_cuda
+    assert config.has_acl and config.has_cuda and config.has_accelerator and not config.is_cuda
     assert not config.has_rocm and not config.has_corex
     assert config.nvcc_path == config.tikcc_path == "/cann/bin/selected-ccec"
     # No fake CUDA libraries: that path compiles backends/cuda/kernels/<lib>,
@@ -80,8 +85,8 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
     assert config.has_accelerator
     # The provider runtime is compiled by BuildConfig, not folded into the
     # registration module.
-    assert [os.path.basename(source.path) for source in config.backend_sources] == [
-        "backend.cc", "workspace.cc", "foreach_coefficients.cc"]
+    assert sorted(os.path.basename(source.path) for source in config.backend_sources) == [
+        "backend.cc", "foreach_coefficients.cc", "workspace.cc"]
     assert all(isinstance(source, setup.api.BuildSource)
                for source in config.backend_sources)
     # A generated ACL operator is host C++ calling aclnn, not ccec device source.
@@ -92,29 +97,50 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
     assert not config.kernel_device_link
     assert "-I/source/src" in config.cc_flags
     assert "-DIS_ACL" in config.cc_flags
+    # Accelerator-guarded headers can precede core/common.h (e.g. fetch_op.cc).
+    # The macro must therefore exist from the start of every translation unit.
+    assert "-DHAS_ACCELERATOR" in config.cc_flags.split()
     assert config.nvcc_flags == config.cc_flags.replace("-std=c++14", "")
+    assert config.kernel_compiler == "/host/bin/c++"
+    assert config.kernel_language == "cxx"
+    assert config.kernel_source_suffix == ".cc"
+    assert not config.kernel_device_link
+    assert config.kernel_source_roots == config.kernel_flag_filter == ()
+    assert config.convert_nvcc_flags is None
     assert config.environment == {"existing_env": "yes", "use_mkl": "0"}
     assert config.resources["acl_initializer"] is setup.converter
     assert config.resources["acl_library"] is setup.library
     assert config.resources["existing_resource"] == 3
     assert config.extra_core_files[0] == "existing.cc"
-    expected_extra = [str(SOURCE.parent / "src/acl_op_exec.cc")]
+    expected_extra = [str(SOURCE.parent / "src" / name) for name in
+                      ("acl_op_exec.cc", "acl_fused_ascendc.cc")]
     expected_extra.extend(str(path) for path in sorted(
         (SOURCE.parent / "kernels/native").glob("*.cc")))
     converter_sources = [str(SOURCE.parent / "src" / name) for name in (
         "acl_error_code.cc", "acl_jittor.cc", "aclnn.cc")]
-    assert len(expected_extra) == 46
+    assert len(expected_extra) == 47
     assert len(converter_sources) == 3
-    assert config.extra_core_files == ("existing.cc", *expected_extra)
+    assert len(config.extra_core_files) == len(expected_extra) + 1
+    assert set(config.extra_core_files) == {"existing.cc", *expected_extra}
     assert [call[0] for call in setup.calls] == ["load", "compile"]
     assert setup.calls[0][1:] == ("libascendcl.so", os.RTLD_NOW | os.RTLD_GLOBAL)
     converter_flags = setup.calls[1][2]
+    assert "-DHAS_ACCELERATOR" in converter_flags.split()
     assert "-I/source/src" in converter_flags
     assert all(name in converter_flags for name in converter_sources)
     assert all(name not in converter_flags for name in expected_extra)
     for name in ("backend.cc", "workspace.cc"):
         assert str(SOURCE.parent / "src" / name) not in converter_flags
         assert str(SOURCE.parent / "src" / name) not in config.extra_core_files
+    assert {source.path for source in config.backend_sources} == {
+        str(SOURCE.parent / "src" / name)
+        for name in ("backend.cc", "workspace.cc", "foreach_coefficients.cc")}
+    for source in config.backend_sources:
+        assert isinstance(source, setup.api.BuildSource)
+        assert source.language == "cxx" and source.compiler == ""
+        assert "-DHAS_ACCELERATOR" in source.flags.split()
+        assert "-DIS_ACL" in source.flags.split()
+    assert setup.base.backend_sources == ()
     for directory in ("include", "include/aclnn", "include/aclops"):
         assert "-I" + str(SOURCE.parent / directory) in config.cc_flags
     assert setup.base.extra_core_files == ("existing.cc",)
@@ -131,8 +157,28 @@ def test_configuration_declares_accelerator_independently_of_nvcc(acl, setup, in
     from dataclasses import replace
     base = setup.base.evolve(has_cuda=initial_cuda)
     context = replace(setup.context, config=base)
-    assert acl.configure(context).has_cuda
+    config = acl.configure(context)
+    assert config.has_cuda and config.has_accelerator
     assert acl.install_extern(context) is False
+
+
+def test_provider_sources_preserve_existing_units_and_override_kernel_defaults(acl, setup):
+    existing = setup.api.BuildSource("existing-runtime.cc")
+    base = setup.base.evolve(
+        backend_sources=(existing,), kernel_compiler="old-nvcc",
+        kernel_language="cuda", kernel_compile_flags="--use_fast_math",
+        kernel_source_roots=("old-cuda-kernels",), kernel_source_suffix=".cu",
+        kernel_device_link=True, kernel_flag_filter=("old-filter",),
+    )
+    config = acl.configure(setup.context.with_config(base))
+    assert config.backend_sources[0] is existing
+    assert {os.path.basename(source.path) for source in config.backend_sources[1:]} == {
+        "backend.cc", "foreach_coefficients.cc", "workspace.cc"}
+    assert config.kernel_compiler == base.cc_path
+    assert config.kernel_language == "cxx"
+    assert "--use_fast_math" not in config.kernel_compile_flags
+    assert config.kernel_source_roots == config.kernel_flag_filter == ()
+    assert config.kernel_source_suffix == ".cc" and not config.kernel_device_link
 
 
 @pytest.mark.parametrize("compiler", ["", "missing-ccec"])

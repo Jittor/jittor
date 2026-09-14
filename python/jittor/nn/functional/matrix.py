@@ -155,6 +155,11 @@ def matmul_transpose(a, b):
     returns a * b^T
     """
     _check_matmul_shapes(a, b, trans_b=True, op="matmul_transpose")
+    if b.ndim > 2:
+        # Preserve batch axes and let the shared matmul route broadcast them.
+        axes = list(range(b.ndim))
+        axes[-1], axes[-2] = axes[-2], axes[-1]
+        return jt.nn.matmul(a, b.transpose(axes))
     if len(a.shape) != 2:
         aa = a.reshape((-1, a.shape[-1]))
         cc = jt.nn.matmul_transpose(aa, b)
