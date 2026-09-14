@@ -23,6 +23,7 @@ namespace jittor {
 #ifndef JIT
 
 static auto make_cublas_batched_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool>("cublas_batched_matmul");
+static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
 
 CublasBatchedMatmulOp::CublasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
@@ -46,13 +47,20 @@ CublasBatchedMatmulOp::CublasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool 
 VarPtr CublasBatchedMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // a [b,n,m] b [b,m,k], c[b,n,k]
     // c = a*b
+    // Under autocast the saved operands can be fp32 while the GEMM output and
+    // incoming gradient are fp16. Normalize ``dout`` to the other operand's
+    // dtype before building a cuBLAS gradient node, which requires matching
+    // operand dtypes and still returns the input's expected gradient dtype.
     if (v_index == 0) {
-        if (trans_a)
+        if (trans_a) {
+            if (dout->dtype() != b->dtype()) dout = make_unary(dout, b->dtype());
             return make_cublas_batched_matmul(b, dout, trans_b, 1);
-        else
-            // da = dc*b^T
-            return make_cublas_batched_matmul(dout, b, 0, trans_b^1);
+        }
+        if (dout->dtype() != b->dtype()) dout = make_unary(dout, b->dtype());
+        // da = dc*b^T
+        return make_cublas_batched_matmul(dout, b, 0, trans_b^1);
     } else {
+        if (dout->dtype() != a->dtype()) dout = make_unary(dout, a->dtype());
         if (trans_b)
             return make_cublas_batched_matmul(dout, a, 1, trans_a);
         else

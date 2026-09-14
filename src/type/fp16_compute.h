@@ -151,6 +151,10 @@ namespace jittor {
 struct float16 {
     uint16 x;
 
+    // Reduction kernels initialize an output slot before accumulating into it.
+    // Keep the storage value-initializable just like the built-in scalar types.
+    inline float16() : x(0) {}
+
     inline float16(float32 f) {
         unsigned x = *((int*)(void*)(&f));
         unsigned u = (x & 0x7fffffff), remainder, shift, lsb, lsb_s1, lsb_m1;
@@ -244,6 +248,8 @@ bool operator!=(float16 x, float16 y) { return float32(x)!=float32(y); }
 
 struct bfloat16 {
     uint16 x;
+
+    inline bfloat16() : x(0) {}
 
     inline bfloat16(float32 f) {
         unsigned x = *((int*)(void*)(&f));
