@@ -318,20 +318,36 @@ VarHolder* VarHolder::transpose_view_base() {
 // already only ever recorded against a compatible shape.
 static bool view_step_fits(Var* value, const VarViewStep& step) {
     if (step.kind == VarViewStep::Slice) return true;
-    if ((int)step.axes.size() != value->shape.size()) return false;
     // A transpose step stores the axes permutation, not a shape: it applies to
     // any value of the same rank.
-    if (step.kind == VarViewStep::Transpose) return true;
-    // Reshape and Expand both record the *target* shape in `axes`.
-    int64 target = 1;
-    for (int i = 0; i < step.axes.size(); i++) {
-        // Expand may only widen size-1 axes; anything else breaks the view.
-        if (step.kind == VarViewStep::Expand &&
-            value->shape[i] != step.axes[i] && value->shape[i] != 1)
-            return false;
-        target *= step.axes[i];
+    if (step.kind == VarViewStep::Transpose)
+        return (int)step.axes.size() == value->shape.size();
+    // Reshape and Expand both record the *target* shape in `axes`, and each has
+    // to be tested against what it actually constrains. Neither constrains the
+    // base's rank, and only one constrains the element count.
+    //
+    // Testing both against both is what this did before, and it rejected the
+    // ordinary cases rather than the broken ones: a reshape's target rank is
+    // unrelated to its base's by definition, so `x.view(-1)` on anything of
+    // rank > 1 failed the rank comparison; and an expand's target holds MORE
+    // elements than its source by construction, so every widening expand failed
+    // the element-count comparison. A rejected step drops the view, which
+    // freezes it at whatever data it last saw and silently stops write-through
+    // from ever reaching the base again -- no error, no warning.
+    if (step.kind == VarViewStep::Reshape) {
+        int64 target = 1;
+        for (int i = 0; i < (int)step.axes.size(); i++) target *= step.axes[i];
+        return target == value->num;
     }
-    return target == value->num;
+    // Expand: the target is still usable when, aligned from the right, every
+    // source axis either already matches it or is 1 and can be widened to it.
+    // Extra leading target axes are exactly what broadcasting introduces.
+    int extra = (int)step.axes.size() - (int)value->shape.size();
+    if (extra < 0) return false;
+    for (int i = 0; i < (int)value->shape.size(); i++)
+        if (value->shape[i] != step.axes[i + extra] && value->shape[i] != 1)
+            return false;
+    return true;
 }
 
 void VarHolder::refresh_transpose_views() {
