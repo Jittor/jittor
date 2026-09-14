@@ -19,7 +19,9 @@ EXTERN_LIB unordered_map<int64, Node*> lived_nodes_id;
 // workers that read the same value hand out the same id.
 EXTERN_LIB std::atomic<int64> total_node;
 EXTERN_LIB int free_buffer_depth;
-EXTERN_LIB vector<Node*> free_buffer;
+// A function, not an object: it must outlive the static destructors that append
+// to it. See the definition in node.cc.
+EXTERN_LIB vector<Node*>& free_buffer();
 EXTERN_LIB uint8 node_order;
 // Non-zero while lived_nodes is being maintained in a build without
 // NODE_MEMCHECK; set by check_graph's setter (graph.cc).
@@ -499,9 +501,9 @@ inline ~SetupFreeBuffer() {
         // node that this round is destroying, nor appending to the buffer
         // while it is being drained.
         std::lock_guard<std::recursive_mutex> guard(graph_mutation_mutex());
-        for (int i=0; i<free_buffer.size(); i++)
-            delete free_buffer[i];
-        free_buffer.clear();
+        for (int i=0; i<free_buffer().size(); i++)
+            delete free_buffer()[i];
+        free_buffer().clear();
     }
     free_buffer_depth--;
 }

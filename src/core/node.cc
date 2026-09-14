@@ -20,8 +20,20 @@ int node_track_lived = 0;
 unordered_map<void*, int64> lived_nodes;
 unordered_map<int64, Node*> lived_nodes_id;
 std::atomic<int64> total_node{0};
-vector<Node*> free_buffer;
 NodeLifecycleObserver* node_lifecycle_observer = nullptr;
+
+// Kept alive for the whole process, like graph_mutation_mutex below: it is
+// appended to from static destructors. `Node::free` runs from the liveness
+// drain, and that drain is reached at exit through the compiled-fused-op
+// cache's destructor (`~VarRelayGroup` -> `~VarPtr` -> `release_both_liveness`),
+// which runs in whatever order the linker picked relative to a namespace-scope
+// vector. ASAN caught the append into the already-destroyed buffer; glibc
+// reported the same event later as a "corrupted double-linked list". The
+// process is exiting, so there is nothing to reclaim.
+vector<Node*>& free_buffer() {
+    static auto* buffer = new vector<Node*>();
+    return *buffer;
+}
 
 NodeLifecycleObserver* set_node_lifecycle_observer(NodeLifecycleObserver* observer) {
     NodeLifecycleObserver* previous = node_lifecycle_observer;
@@ -65,7 +77,14 @@ extern void free_var_mem(Var* v);
 // pointer to member expresses the same thing and `(node->*op)()` compiles to the
 // same call. No symbol changes: the queue is a file static.
 typedef void (Node::*liveness_op_t)();
-static vector<pair<Node*, liveness_op_t>> liveness_queue;
+// Never destroyed, for the same reason as free_buffer above: an exit-time
+// static destructor (the compiled-fused-op cache's) reaches
+// release_both_liveness, which appends here. A namespace-scope vector would
+// already be gone by then. ASAN named this exact write as a heap-use-after-free
+// in Node::release_both_liveness <- ~VarRelayGroup; that is the corruption
+// glibc surfaced afterwards as "corrupted double-linked list".
+static vector<pair<Node*, liveness_op_t>>& liveness_queue =
+    *new vector<pair<Node*, liveness_op_t>>();
 static size_t liveness_queue_front = 0;
 
 // Leaked on purpose: this is taken from an atexit handler and from static
@@ -141,7 +160,7 @@ void Node::free() {
         return;
     }
     flags.set(NodeFlags::_queued_for_free);
-    free_buffer.push_back(this);
+    free_buffer().push_back(this);
     for (auto in : _inputs) {
         in.node->erase_output(in.back_index);
         if (liveness.backward.active()) {
