@@ -780,6 +780,30 @@ torch.index_select(torch.arange(12).float(), 0, torch.tensor([3, 1, 2, 0]),
 ok(_sel_out.numpy()[0].tolist() == [3, 1, 2, 0],
    "index_select(out=slice) writes through to the parent")
 
+# A tensor built with an explicit `device="cpu"` keeps that placement, and the
+# core helpers that combine it must allocate where it lives. `jt.ones`/`jt.zeros`
+# follow the *ambient* placement instead, which used to mix placements inside
+# `unique_consecutive`/`concat` and make dispatch_context reject the op
+# ("Expected all tensor inputs on the same backend and device"). MiniMax-H3
+# builds its sigma schedule with device="cpu" and then runs
+# unique_consecutive on it.
+_sched = torch.linspace(1.0, 0.0, 4, device="cpu", dtype=torch.float32)
+_sched = 12.0 * _sched / (1 + 11.0 * _sched)
+_u, _c = torch.unique_consecutive(_sched, return_counts=True)
+ok(str(_u.device).startswith("cpu") and str(_c.device).startswith("cpu"),
+   "unique_consecutive over a host-placed tensor stays on the host")
+ok(_c.numpy().tolist() == [1, 1, 1, 1],
+   "unique_consecutive counts are correct for a host-placed tensor")
+_cat_host = torch.cat([torch.ones(2, device="cpu"), torch.zeros(2, device="cpu")])
+ok(str(_cat_host.device).startswith("cpu"),
+   "concat of host-placed tensors stays on the host")
+ok(torch.float32.is_complex is not None and not torch.float32.is_complex,
+   "dtype.is_complex is a falsy attribute")
+ok(bool(torch.complex64.is_complex) is True,
+   "dtype.is_complex is truthy for a complex dtype")
+ok(torch.float32.is_floating_point() is True,
+   "dtype.is_floating_point is callable (jittor core reads it as a method)")
+
 # `copy_` is in place: the destination keeps its own device, and a
 # cross-device copy is a transfer. jittor's `assign` copies into the *source's*
 # storage and aliases it, so this used to move the destination to the source's
