@@ -306,12 +306,55 @@ VarHolder* VarHolder::transpose_view_base() {
     return new VarHolder(move(value));
 }
 
+// Whether one recorded view step still applies to `value`.
+//
+// A view is a lazy expression over its base's data, so it can only be
+// re-derived while that data has the shape the steps were recorded against.
+// A rebind can change the number of elements -- `x.data = y` allows it, and
+// vLLM-Omni's layerwise offload swaps a parameter for a zero-element
+// placeholder -- and re-applying a reshape or expand step to the new data then
+// aborts the process (reshape_op.cc: "reshape shape is invalid for input of
+// size [x_items(0) == y_items(1152)]"). Slices are left alone: they were
+// already only ever recorded against a compatible shape.
+static bool view_step_fits(Var* value, const VarViewStep& step) {
+    if (step.kind == VarViewStep::Slice) return true;
+    if ((int)step.axes.size() != value->shape.size()) return false;
+    // A transpose step stores the axes permutation, not a shape: it applies to
+    // any value of the same rank.
+    if (step.kind == VarViewStep::Transpose) return true;
+    // Reshape and Expand both record the *target* shape in `axes`.
+    int64 target = 1;
+    for (int i = 0; i < step.axes.size(); i++) {
+        // Expand may only widen size-1 axes; anything else breaks the view.
+        if (step.kind == VarViewStep::Expand &&
+            value->shape[i] != step.axes[i] && value->shape[i] != 1)
+            return false;
+        target *= step.axes[i];
+    }
+    return target == value->num;
+}
+
 void VarHolder::refresh_transpose_views() {
-    for (auto* record = views; record; record = record->next) {
+    for (auto* record = views; record; ) {
+        // drop_view() below unlinks and frees `record`, so step off it first.
+        auto* next = record->next;
         VarPtr value(var);
-        for (const auto& step : record->steps)
+        bool fits = true;
+        for (const auto& step : record->steps) {
+            if (!view_step_fits(value.ptr, step)) {
+                fits = false;
+                break;
+            }
             value = apply_view_step(value.ptr, step);
-        *record->owner = move(value);
+        }
+        if (fits) {
+            *record->owner = move(value);
+        } else if (record->owner) {
+            // The view keeps the data it was taken from, which is what torch's
+            // views do after `x.data = y` replaces the storage under them.
+            record->owner->drop_view();
+        }
+        record = next;
     }
 }
 
