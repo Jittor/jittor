@@ -17,7 +17,7 @@
 
 namespace jittor {
 
-int64 Var::number_of_lived_vars = 0;
+std::atomic<int64> Var::number_of_lived_vars{0};
 
 VarPtr contiguous_storage(Var* value) {
     if (value->is_contiguous()) return value;

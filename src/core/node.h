@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include <atomic>
 #include "core/common.h"
 #include "type/nano_string.h"
 #include "type/nano_vector.h"
@@ -13,9 +14,15 @@ namespace jittor {
 
 EXTERN_LIB unordered_map<void*, int64> lived_nodes;
 EXTERN_LIB unordered_map<int64, Node*> lived_nodes_id;
-EXTERN_LIB int64 total_node;
-EXTERN_LIB int free_buffer_depth;
-EXTERN_LIB vector<Node*> free_buffer;
+// Atomic: Node ids are handed out from the compile workers as well, and two
+// workers that read the same value hand out the same id.
+EXTERN_LIB std::atomic<int64> total_node;
+// Per-thread. The deferred-free round is a scope on one thread's stack
+// (`SetupFreeBuffer`), and the compile workers each run their own; sharing one
+// list meant a thread deleting nodes another thread had queued, and a depth
+// counter that two threads incremented and decremented under each other.
+EXTERN_LIB thread_local int free_buffer_depth;
+EXTERN_LIB thread_local vector<Node*> free_buffer;
 EXTERN_LIB uint8 node_order;
 // Non-zero while lived_nodes is being maintained in a build without
 // NODE_MEMCHECK; set by check_graph's setter (graph.cc).

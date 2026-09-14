@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include <atomic>
 #include "core/common.h"
 #include "core/node.h"
 #include "codegen/jit_key.h"
@@ -38,10 +39,12 @@ struct Op : Node {
     virtual bool is_storage_view() const { return false; }
     static constexpr uint32 backend_mask = OpBackendAny;
     vector<VarPtr> outputs_holder;
-    static int64 number_of_lived_ops;
+    // Atomic: the parallel compiler constructs and destroys ops on its
+    // worker threads, and these are read from the main thread.
+    static std::atomic<int64> number_of_lived_ops;
     // Monotone count of every operator ever constructed; the auto-flush
     // pipeline measures how much graph was built since it last launched.
-    static int64 number_of_created_ops;
+    static std::atomic<int64> number_of_created_ops;
     mutable OpId registered_op_id = 0;
     mutable shared_ptr<const OpDef> registered_definition;
     

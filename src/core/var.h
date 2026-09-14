@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include <atomic>
 #include "runtime/tensor_placement.h"
 #include "core/common.h"
 #include "core/node.h"
@@ -29,7 +30,8 @@ struct Var : Node {
     void set_storage_strides(const vector<int64>& strides);
     cstr name;
     fast_shared_ptr<loop_options_t> loop_options;
-    static int64 number_of_lived_vars;
+    // Atomic: constructed and released from the compile workers too.
+    static std::atomic<int64> number_of_lived_vars;
 
     // this var will be generated after alloc.
     void* mem_ptr = nullptr;
