@@ -204,6 +204,33 @@ Two more shim/core mismatches on the same path:
   jittor core calls them as *methods* (`advanced_indexing._indexing_index`).
   They now return a `_CallableBool`, so both readings work.
 
+## Result: a full request now completes
+
+With every fix above in the working tree, one `fl2va` request runs end to end
+(`vllmomni-gen10.log`, single H20, `diffusion_offload_config` = layer mode over
+`dit`+`text_encoder`):
+
+    Model loading took 10.0312 GiB and 280.8 seconds
+    [gen] ENGINE-CONSTRUCTED in 304.9s
+    MiniMax H3 t2va Qwen presentation: 13 tokens
+    100%|##########| 1/1 [00:13<00:00, 13.00s/it]        <- denoise, warm JIT cache
+    [gen] frames: (124, 256, 256, 3) dtype: uint8
+    [gen] audio: (1, 2, 165600)
+    [gen] peak_memory_mb: 24302.0
+    [gen] GENERATE-OK
+
+124 frames at 24 FPS is the requested 5 s, and 165600 samples per channel is
+5.175 s at 32 kHz -- both shapes match the request. Peak device memory 24.3 GiB
+on a 96 GiB card.
+
+**Speed is not normal yet.** The same run reports `GENERATE took 720.5s` with
+`stage_0_gen_ms=720503`: the denoise is 13 s (warm) while the video VAE decode
+is ~700 s. `py-spy` puts the decode in vLLM-Omni's `try_scaled_residual_exact`
+Triton kernel, i.e. inside jittor's Triton bridge, where every launch calls
+`device_raw_ptr` (which does `sync(true, false)`) once per pointer argument and
+bounces every operand through a guarded buffer (`GUARD_ENABLE = True` by
+default). That is the next thing to fix.
+
 ## Verification
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails
