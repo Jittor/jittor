@@ -659,6 +659,19 @@ def get_device_module(device=None):
         "torch.get_device_module(%r): unsupported device type %r" % (device, name))
 
 
+def as_strided(input, size, stride, storage_offset=None):
+    """torch.as_strided -- a tensor with the requested size and strides.
+
+    vLLM-Omni's CPU offload rebuilds a possibly strided parameter from its
+    packed host buffer through this entry point. ``Tensor.as_strided``
+    materializes the window with a gather, so reads are exact; the result does
+    not alias ``input`` the way a real strided view does.
+    """
+    if storage_offset is None:
+        storage_offset = int(input.storage_offset())
+    return input.as_strided(size, stride, storage_offset)
+
+
 def set_default_device(device=None):
     """torch.set_default_device -- now actually moves the default.
 
@@ -879,6 +892,7 @@ _MISC_BINDINGS = {
     "get_default_device": get_default_device,
     "set_default_device": set_default_device,
     "get_device_module": get_device_module,
+    "as_strided": as_strided,
 }
 _MISC_DETAILS = {
     "PyTorchFileReader": "raises NotImplementedError; use torch.load instead",
@@ -894,6 +908,7 @@ _MISC_DETAILS = {
     "iinfo": "NumPy integer-limit metadata for supported dtype names",
     "is_autocast_available": "legacy True capability answer; does not verify a requested device",
     "are_deterministic_algorithms_enabled": "legacy False answer; deterministic algorithms are not configurable",
+    "as_strided": "gather-based view; reads are exact but the result does not alias the input storage",
 }
 for _name, _implementation in _MISC_BINDINGS.items():
     _level = (
