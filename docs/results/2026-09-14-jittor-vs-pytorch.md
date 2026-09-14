@@ -110,8 +110,44 @@ Function 机制的单次成本是量出来的：`x.tape()` 1.10 us、`_new_call_
 0.36 us、整个 `f(x)` 10.81 us 而它的 `execute` 只是一个 3.69 us 的算子——机制本身
 7.1 us 一次。d1024-L4 一步 12 次（LayerNormCUDA 8 + CodeSoftmax 4），合计约 0.10 ms。
 
-剩下约 0.33 ms 是**每个算子在 grad 开着时的 autodiff 记账**，72 个算子摊下来约
-4.6 us 一个，不集中在任何一处。要拿到它得让记账本身便宜下来。
+**先前写「剩下是每算子的 autodiff 记账」，那是错的。** 直接量：一个普通算子在
+grad 开和关下的成本差约等于零（`x * 2` 是 3.96 us 对 no_grad 的 5.66 减去 0.92 的
+scope，即 -0.79 us，在噪声里）。记账本身不花钱。
+
+真正的去处是**grad 开着时 layer_norm 和 softmax 换成了训练版内核**，而这两条的主机
+成本比 torch 高得多：
+
+| 算子（主机时间） | jittor | torch | 倍数 |
+| --- | --- | --- | --- |
+| layer_norm (1,1,1024) grad on | 46.4 us | 11.0 us | **4.2x** |
+| layer_norm (1,128,512) grad on | 45.7 | 10.8 | **4.2x** |
+| softmax (1,8,1,1) grad on | 30.8 | 5.5 | **5.6x** |
+| layer_norm no_grad | 23.2 | 9.4 | 2.5x |
+
+d1024-L4 一步 8 个 layer_norm + 4 个 softmax，按这个差距就是约 380 us——正是那 500 us
+缺口的主体。
+
+层层拆开 jittor 的 layer_norm（这一组不带 `.sync`，量的是纯主机时间）：
+
+| | us |
+| --- | --- |
+| `nn.layer_norm` 整个 | 28.3 |
+| `_layer_norm_cuda`（relay + 派发 + Function + code op） | 24.9 |
+| &nbsp;&nbsp;其中 `cls.apply(x, w, b)` | 17.6 |
+| 外层的形状校验与 `fp32_guard` | 3.3 |
+| `_output_requires_grad` | 0.24 |
+| `_supports_layer_norm_training` | 0.86 |
+| Function 类的 `lru_cache` 命中 / 实例化 / `_new_call_context` | 0.10 / 0.16 / 0.35 |
+| `jt.code` 三入三出（对照，含 sync） | 14.1 |
+
+所以外层的校验和派发都不是问题（3.3 + 0.9），**成本在 `jt.Function` 的机制加上三输出
+的 code op**。torch 的整个 layer_norm 是 11 us。
+
+看得见的修法是把训练版 layer_norm 的 `jt.Function` 换成 code op 上的 `cuda_grad_src`
+——省掉 context、四次 `tape`、`tape_together` 和 `_grad` 间接层，按实测的 Function
+机制成本（7.1 us 一次，三入一出的 layer_norm 更高些）值约 72-128 us 一步。不够补满
+500 us，但它是目前能定位到的最大一块，而且**对推理同样有效**（no_grad 的 layer_norm
+也比 torch 慢 2.5 倍）。
 
 唯一的结构性出路是让图回放覆盖训练，而那需要参数原地更新——在惰性图里，优化器写 p
 的时候前向/反向可能还没执行，jittor 每次新建 Var 正是为了避开这个读写冲突。那是另
