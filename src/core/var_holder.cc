@@ -137,13 +137,19 @@ void VarHolder::write_inplace(ArrayArgs&& array) {
     backend_copy(var->mem_ptr, dst, array.ptr, {}, size, true);
 }
 
-void VarHolder::copy_into(VarHolder* src) {
+void VarHolder::copy_into(VarHolder* src, bool sync_src) {
     ExecutorEntryScope entry;
     // Neither sync waits on the device; both only resolve what the Var is
     // still pending on. The copy itself is stream-ordered against the work
     // already queued, which is what makes this usable once per step.
     sync(false, false);
-    src->sync(false, false);
+    // A kept graph re-executes whenever its output is synced, so a reader
+    // that already has the bytes -- the caller of a replayed graph -- must be
+    // able to say so instead of paying for the whole graph again.
+    if (sync_src) src->sync(false, false);
+    USER_CHECK(src->var->mem_ptr)
+        << "_copy_into(sync_src=False) needs a source that already holds its "
+           "bytes; this one has never been executed";
     check_inplace_target(var, "_copy_into");
     check_inplace_target(src->var, "_copy_into source");
     USER_CHECK(src->var->dtype() == var->dtype())

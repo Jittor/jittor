@@ -71,7 +71,7 @@ void CurandRandomOp::jit_run() {
             T* tail = (T*)runtime_executor().temp_allocator->alloc(2*sizeof(T), tail_allocation);
             checkCudaErrors(curandGenerateNormal@TT (generator, tail, 2, 0, 1));
             checkCudaErrors(cudaMemcpyAsync(x+num-1, tail, sizeof(T),
-                cudaMemcpyDeviceToDevice, 0));
+                cudaMemcpyDeviceToDevice, cudaStreamPerThread));
             runtime_executor().temp_allocator->free(tail, 2*sizeof(T), tail_allocation);
         } else {
             checkCudaErrors(curandGenerateNormal@TT (generator, x, num, 0, 1));

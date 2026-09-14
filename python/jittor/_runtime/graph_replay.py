@@ -96,6 +96,7 @@ import time
 import weakref
 
 import jittor as jt
+import jittor_core as _core
 
 from .. import flags
 
@@ -194,7 +195,16 @@ class GraphReplay:
         self._capture = None
         self._refused = None
         self._worth_it = None if measure else True
-        self.stats = {"captured": 0, "replayed": 0, "rebuilt": 0}
+        # The device-side recording of a replay, once there is one. Replaying
+        # through the executor still costs about 4 us of host time per
+        # operator -- the plan walk, the per-operator scopes, the allocation
+        # check, the launch -- and a decode step has of the order of a hundred
+        # operators. A recorded graph pays that once, at capture, and every
+        # later call is a single launch: measured 2.24 us for a whole step.
+        self._cuda_graph = 0
+        self._graph_out = None
+        self._graph_refused = None
+        self.stats = {"captured": 0, "replayed": 0, "rebuilt": 0, "graph": 0}
         if example_inputs:
             self(*example_inputs)
 
@@ -402,12 +412,80 @@ class GraphReplay:
             jt.flags.keep_graph = before
 
     # -- call ----------------------------------------------------------
+    # -- device-side recording ------------------------------------------
+    def _record_cuda_graph(self, cap):
+        """Record one replay as a device graph, so later calls are one launch.
+
+        Taken on a LATER call, never the first: a first execution allocates,
+        compiles and asks the driver questions, and a recording allows none of
+        those. By the time this runs the same graph has already executed at
+        least twice, so every buffer is in place and every kernel is built.
+
+        The result lands in a buffer of this wrapper's own (`_graph_out`),
+        outside the captured graph, because a recording re-issues fixed
+        pointers: the call still hands the caller a fresh Var, copied from
+        that buffer without re-running anything.
+
+        Refusal is not an error. Anything the recording cannot contain leaves
+        `_graph_refused` set and every later call replays through the executor,
+        which is what it did before.
+        """
+        if not _core.graph_capture_supported():
+            self._graph_refused = "this build cannot record device graphs"
+            return False
+        out = jt.empty(cap.output.shape, cap.output.dtype)
+        out.sync(False, False)
+        before = jt.flags.keep_graph
+        jt.flags.keep_graph = 1
+        handle = 0
+        try:
+            # Drain first: the recording must contain the step, not the
+            # backlog in front of it.
+            jt.sync([cap.output], True, False)
+            if not _core.graph_capture_begin():
+                self._graph_refused = "the device refused to start recording"
+                return False
+            try:
+                jt.sync([cap.output], False, False)
+                # Inside the recording, so a launch leaves the answer here.
+                out._copy_into(cap.output, False)
+            finally:
+                handle = _core.graph_capture_end()
+        except Exception as exc:            # a capture poisons its stream
+            self._graph_refused = f"recording raised {type(exc).__name__}: {exc}"
+            if handle:
+                _core.graph_release(handle)
+            return False
+        finally:
+            jt.flags.keep_graph = before
+        if not handle:
+            self._graph_refused = "the recording contained no device work"
+            return False
+        self._cuda_graph = handle
+        self._graph_out = out
+        return True
+
     def _replay_once(self, cap, args):
         # Always, not "unless it is the same Var": the copy is what the graph
         # re-executes for, and the capture reads buffers no caller holds.
         for captured, given in zip(cap.inputs,
                                    [a for a in args if isinstance(a, jt.Var)]):
             captured._copy_into(given)
+
+        # A recorded device graph re-issues the whole step with one call. The
+        # input copies above are on the same stream, so they are ordered ahead
+        # of it without a wait.
+        if self._cuda_graph:
+            _core.graph_launch(self._cuda_graph)
+            out = jt.empty(cap.output.shape, cap.output.dtype)
+            out.sync(False, False)
+            # `sync_src=False`: the launch already produced the bytes, and
+            # syncing the captured output would run the whole graph again
+            # through the executor -- which is exactly what the recording is
+            # there to avoid.
+            out._copy_into(self._graph_out, False)
+            self.stats["graph"] += 1
+            return out
         # A fresh Var, so the answer is the caller's to keep. Allocating one
         # per call is free as long as it is not synced: `_copy_into`
         # materializes its own destination, whereas a device wait here drains
@@ -480,6 +558,12 @@ class GraphReplay:
         # answering with the first input's result, in 0.08 ms.
         out = self._replay_once(cap, args)
         self.stats["replayed"] += 1
+        # Try to record only once per capture, and only after the graph has
+        # run a few times: the first executions are the ones that allocate and
+        # compile, and a recording tolerates neither.
+        if (not self._cuda_graph and self._graph_refused is None
+                and self.stats["replayed"] == 3):
+            self._record_cuda_graph(cap)
         return out
 
     def invalidate(self):
@@ -495,6 +579,12 @@ class GraphReplay:
         extra execution per invalidation, which is the price of not leaving a
         zombie behind.
         """
+        # The recording points into this graph's buffers, so it dies with it.
+        if self._cuda_graph:
+            _core.graph_release(self._cuda_graph)
+            self._cuda_graph = 0
+        self._graph_out = None
+        self._graph_refused = None
         cap, self._capture = self._capture, None
         if cap is None or cap.output.is_finished:
             return

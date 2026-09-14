@@ -27,6 +27,11 @@ static void cublas_switch_device(int device) {
     if ((int)cublas_handles.size() <= device) cublas_handles.resize(device+1, nullptr);
     if (!cublas_handles[device]) {
         checkCudaErrors(cublasCreate(&cublas_handles[device]));
+        // Every library handle must agree with jittor's own launches on the
+        // stream; see `compute_stream` in backends/cuda/runtime/driver.cc.
+        // `cudaStreamPerThread` does not synchronise with the legacy stream,
+        // so a handle left on the default would race with no error.
+        checkCudaErrors(cublasSetStream(cublas_handles[device], cudaStreamPerThread));
         LOGv << "cublasCreate finished for device" << device << (void*)cublas_handles[device];
     }
     cublas_handle = cublas_handles[device];

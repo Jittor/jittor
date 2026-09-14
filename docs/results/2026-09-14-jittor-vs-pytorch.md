@@ -656,3 +656,82 @@ jittor 生成的是 `func<<<p1,p2>>>`——没有流参数，落在**遗留默�
 
 这一段**没有实现**。它是三处改动加一轮完整门禁，而上面每一条数字都是为了确认它
 值得做、以及唯一的阻碍是什么——不是猜的。
+
+## CUDA Graph：把每算子的主机成本从 7.9 us 变成整步一次 2.24 us
+
+上一节定位到每算子地板 7.9 us（裸发射 2.6，CPU 后端 1.05），并写了出路是
+CUDA Graph、唯一阻碍是遗留默认流不可捕获。**做完了。** 三段改动，每段单独验证。
+
+### 一、所有 CUDA 工作挪到 `cudaStreamPerThread`
+
+`compute_stream()` 原来返回 `nullptr`（遗留默认流），整个流抽象就这一处定义。
+改成 `cudaStreamPerThread`，配上 nvcc 的 `--default-stream per-thread`（把全部
+104 个 `<<<>>>` 一次性映射过去）和主机侧的
+`-D__CUDA_API_PER_THREAD_DEFAULT_STREAM=1`，再把少数显式写出遗留流的地方补上：
+4 个库句柄（cuBLAS/cuDNN/cuRAND/cuSPARSE，cuFFT 本来就绑流）、cuBLASLt 的两次
+`cublasLtMatmul`、以及 driver/setitem/cutt/curand 里的几处 `cudaMemcpyAsync`。
+
+**这一条必须做全**：`cudaStreamPerThread` 与遗留流**互不同步**，漏一个就是无序
+并发，不报错也不打印。`grep cudaStreamPerThread` 就是这个集合的审计清单。
+
+意外的是它本身就是一笔通用收益——遗留流每次发射都要和上下文里其它阻塞流做隐式
+排序：
+
+| | 之前 | 之后 |
+| --- | --- | --- |
+| 每算子地板（200 个算子的链，回放） | 7.89 us | **4.25 us** |
+| d1024-L4 整步回放 | 3.235 ms | 2.769 ms |
+
+### 二、捕获原语
+
+`BackendOps` 加四个函数指针（begin/end/launch/release），CUDA 后端实现，
+`graph_capture.h` 暴露给 python。空的捕获**被拒绝而不是返回一个什么都不做的
+图**——那种图会一直答上一次的结果，是静默的错。
+
+捕获中途踩到一个必须修的：**array 算子每次执行都用同步 `cudaMemcpy` 把主机端的
+标量常量搬上去**（每个 `x * 2` 都建一个 array op，保留图每次重跑都会重搬），而
+捕获期间同步拷贝非法，报 `cudaErrorStreamCaptureImplicit`。改成捕获中走流序拷贝。
+
+### 三、结果
+
+**整个训练步捕获成回放**（前向+反向+更新），一进程一臂对着 eager 跑 30 步：
+
+    worst |graph - eager| after 30 steps = 0.000e+00   BIT-IDENTICAL
+
+| tf-d1024-L4 decode b1s1 train | ms/step |
+| --- | --- |
+| jittor eager | 3.527 |
+| jittor 整步回放（执行器） | 2.781 |
+| **jittor CUDA Graph** | **2.186** |
+| *torch eager* | *3.01–3.05* |
+
+**1.39x，最后那条输的变成了赢。** 拆开看：
+
+    一次 graph_launch（主机）        2.24 us
+    单次启动 + 等设备                3.344 ms
+    流水化                           2.186 ms/step
+
+**主机成本从 3.5 ms 降到 2.24 us**，这一步现在完全是设备墙钟（0.455 ms 是核函数
+执行时间，其余是设备侧逐核的调度间隔）。torch 在同样的核函数上是 3.03 ms 主机、
+0.963 ms 设备——两边原本都卡在主机上，jittor 现在落到了设备地板上。
+
+### 已经接进自动路径的部分
+
+现有的推理 `GraphReplay`（`auto_graph_replay`，已带全部守卫）第三次回放时录一张
+设备图，之后每次调用是一次 launch。输出落进本 wrapper 自己的缓冲（录进图里），
+调用方仍然拿到新建的 Var——`_copy_into(src, sync_src=False)` 是为此加的：录好的
+图已经产出了字节，再 sync 捕获输出就等于把整张图又跑一遍。
+
+    tf-d1024-L4 decode b1s1 infer   0.852（旧回放） -> 0.684（换流） -> 0.538
+    tf-d512-L8  decode b1s1 infer                                   -> 0.575
+
+门禁：`tests/backends/parity/test_device_parity.py` + `tests/ops/test_ops.py`，
+改动树与改动前那个提交**失败集合逐行相同**（各 1615 failed / 52 passed），
+零新增、零修复。新增 `tests/core/test_graph_capture.py` 8 条。
+
+### 还没做的：训练步的自动化
+
+训练那 1.39x 是**验证过但还没自动化**的。自动化需要在 core 里定出「一步」的边界
+（`opt.step()` 是天然的锚点），并解决上一节记下的那条危险：保留的训练图会改写
+自己的叶子，**不是幂等的**，任何无关的 weak sync 扫到它就是悄悄多走一个优化器步。
+推理那条没有这个问题（重跑只是重算同一个答案），所以先接了推理。

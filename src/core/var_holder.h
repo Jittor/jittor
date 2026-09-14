@@ -538,8 +538,19 @@ struct VarHolder {
 
         Same refusals as `_write_inplace`, on both Vars.
      */
+    /**
+        `sync_src=false` copies the source's bytes WITHOUT resolving it first.
+
+        That is the difference between reading a kept graph's answer and
+        re-running the kept graph to produce it again. After the graph has
+        been replayed -- through the executor or as a recorded device graph --
+        its output buffer already holds the current bytes, and syncing it
+        would execute the whole thing a second time. The caller is then
+        promising that the bytes are current and that the copy is ordered
+        behind whatever produced them, which stream order gives.
+     */
     // @pyjt(_copy_into)
-    void copy_into(VarHolder* src);
+    void copy_into(VarHolder* src, bool sync_src=true);
 
     /**
         Give back a graph that was kept with `keep_graph`.

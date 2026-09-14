@@ -160,15 +160,17 @@ def _source(rows, cin, cout):
         float best = 1e30f;
         for (int c = 0; c < found; c++) {{
             auto once = [&]() {{
+                // Explicit stream: jittor runs on `cudaStreamPerThread`, which
+                // does not synchronise with the legacy default stream.
                 return cublasLtMatmul(lt, op, &alpha, in1_p, la, in0_p, lb, &beta,
                                       out0_p, lc, out0_p, lc, &cand[c].algo,
-                                      ws, wsize, 0);
+                                      ws, wsize, cudaStreamPerThread);
             }};
             if (once() != CUBLAS_STATUS_SUCCESS) continue;
             cudaDeviceSynchronize();
-            cudaEventRecord(beg, 0);
+            cudaEventRecord(beg, cudaStreamPerThread);
             for (int r = 0; r < 3; r++) once();
-            cudaEventRecord(end, 0);
+            cudaEventRecord(end, cudaStreamPerThread);
             if (cudaEventSynchronize(end) != cudaSuccess) continue;
             float ms = 0.0f;
             cudaEventElapsedTime(&ms, beg, end);
@@ -184,7 +186,8 @@ def _source(rows, cin, cout):
 
     if (choice.usable) {{
         cublasLtMatmul(lt, op, &alpha, in1_p, la, in0_p, lb, &beta,
-                       out0_p, lc, out0_p, lc, &choice.algo, ws, wsize, 0);
+                       out0_p, lc, out0_p, lc, &choice.algo, ws, wsize,
+                       cudaStreamPerThread);
     }} else {{
         // Nothing cuBLASLt offered was usable. The portable GEMM plus a bias
         // add is still correct, so do that rather than answer with garbage.

@@ -261,6 +261,16 @@ def check_cuda():
     ))
     cuda_include2 = os.path.join(backend_root(jittor_path, "cuda"), "include")
     cc_flags += " -DHAS_ACCELERATOR -DHAS_CUDA -DIS_CUDA "
+    # Put every CUDA runtime call this tree makes on `cudaStreamPerThread`
+    # rather than the legacy default stream. The reason is graph capture: the
+    # legacy stream cannot be captured, and capturing a repeated step is what
+    # collapses its per-launch host cost (7.9 us an operator, against 2.6 us
+    # for the launch itself). The host side needs the macro; the device side
+    # needs nvcc's `--default-stream per-thread`, added in convert_nvcc_flags
+    # below, which is what maps a bare `<<<>>>` onto the same stream.
+    # See `compute_stream` in backends/cuda/runtime/driver.cc for why the two
+    # halves must not disagree.
+    cc_flags += " -D__CUDA_API_PER_THREAD_DEFAULT_STREAM=1 "
     cuda_sdk_flags = "".join(f' -I"{path}"' for path in cuda_include_dirs)
     cuda_sdk_flags += f" -I\"{cuda_include2}\" "
     if os.name == 'nt':
@@ -931,6 +941,8 @@ if has_cuda:
         nvcc_flags = nvcc_flags.replace("-fPIC", "-Xcompiler -fPIC")
         nvcc_flags = nvcc_flags.replace("-fdiagnostics", "-Xcompiler -fdiagnostics")
         nvcc_flags += f" -x cu --cudart=shared -ccbin=\"{cc_path}\" --use_fast_math "
+        # The device half of the per-thread default stream; see cc_flags above.
+        nvcc_flags += " --default-stream per-thread "
         # nvcc warning is noise
         nvcc_flags += " -w "
         nvcc_flags += f" -I\"{os.path.join(backend_root(jittor_path, 'cuda'), 'include')}\" "

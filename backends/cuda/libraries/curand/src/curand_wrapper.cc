@@ -53,6 +53,11 @@ static void curand_switch_device(int device) {
     if ((int)gens.size() <= device) gens.resize(device+1, nullptr);
     if (!gens[device]) {
         checkCudaErrors( curandCreateGenerator(&gens[device], CURAND_RNG_PSEUDO_DEFAULT) );
+        // Every library handle must agree with jittor's own launches on the
+        // stream; see `compute_stream` in backends/cuda/runtime/driver.cc.
+        // `cudaStreamPerThread` does not synchronise with the legacy stream,
+        // so a handle left on the default would race with no error.
+        checkCudaErrors(curandSetStream(gens[device], cudaStreamPerThread));
         if (curand_last_seed >= 0) curand_seed_generator(gens[device], curand_last_seed);
     }
     gen = gens[device];
