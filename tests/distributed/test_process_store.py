@@ -1,5 +1,6 @@
 """Cross-process rendezvous stores used by torch.distributed compatibility."""
 
+import importlib.util
 import os
 from pathlib import Path
 import signal
@@ -12,10 +13,18 @@ from _helpers.child_process import (
     PYTHON,
     child_env,
     run_python_child,
+    source_python_dir,
 )
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# ``jittor/distributed/store.py`` imports only the standard library, so the
+# rendezvous tests can load it straight off disk. That keeps them free of a
+# JIT core build, which would otherwise dominate their runtime.
+STORE_SOURCE = (
+    Path(source_python_dir() or str(REPO_ROOT / "python"))
+    / "jittor" / "distributed" / "store.py"
+)
 _BASE_ENV = {
     "JITTOR_TORCH_SHIM": "1",
     "JITTOR_TEST_DEVICES": "cpu",
@@ -211,6 +220,53 @@ class TestCrossProcessStores(unittest.TestCase):
                     )
                     rank_envs.append(env)
                 self._run_pair(_INIT_METHOD_STORE, rank_envs)
+
+
+class TestHostnameRendezvous(unittest.TestCase):
+    """A store must be reachable at the hostname the caller passes.
+
+    ``localhost`` is not always one address. On the host this was found,
+    ``/etc/hosts`` maps it to ``::1`` and to the machine's own IPv4 address,
+    and to no loopback IPv4 at all. The server used to bind whatever
+    ``socket.bind`` resolved first (``127.0.0.1``) while every client dialled
+    ``::1`` first, so the rendezvous could never complete: it surfaced as a
+    multi-minute connect timeout in a traceback that named neither address.
+    """
+
+    @staticmethod
+    def _store_module():
+        spec = importlib.util.spec_from_file_location(
+            "jittor_store_under_test", STORE_SOURCE)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    @staticmethod
+    def _free_port():
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            return sock.getsockname()[1]
+
+    def test_server_binds_an_address_the_client_dials(self):
+        module = self._store_module()
+        port = self._free_port()
+        store = module.TCPStore("localhost", port, 1, True, timeout=10)
+        try:
+            bound = store._server.socket.getsockname()
+            # Exactly the list ``socket.create_connection`` walks, in order.
+            dialled = [
+                sockaddr for _family, _socktype, _proto, _canonname, sockaddr
+                in socket.getaddrinfo("localhost", port, 0, socket.SOCK_STREAM)
+            ]
+            self.assertIn(
+                bound, dialled,
+                "TCPStore bound {} but a client only dials {}".format(
+                    bound, dialled),
+            )
+            store.set("payload", b"reachable")
+            self.assertEqual(store.get("payload"), b"reachable")
+        finally:
+            store.close()
 
 
 if __name__ == "__main__":

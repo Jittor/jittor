@@ -49,6 +49,21 @@ def _value_bytes(value):
     return str(value).encode("ascii")
 
 
+def _client_dial_addresses(host, port):
+    """The sockaddrs ``socket.create_connection`` will try, in order.
+
+    The listening socket has to be bound to one of *these*, not to whatever
+    ``socket.bind`` resolves the host to on its own. The two disagree: ``bind``
+    looks the name up as ``AF_INET`` and takes the first answer, while
+    ``create_connection`` walks an ``AF_UNSPEC`` list. On a host whose
+    ``/etc/hosts`` maps a name such as ``localhost`` to several addresses,
+    ``bind`` picks ``127.0.0.1`` while the client only ever dials ``::1`` and
+    the machine's own address, so every attempt is refused until the store
+    times out.
+    """
+    return socket.getaddrinfo(host, int(port), 0, socket.SOCK_STREAM)
+
+
 class Store:
     """Thread-safe single-process Store base implementation."""
 
@@ -115,16 +130,38 @@ class _TCPStoreServer:
     def __init__(self, host, port, timeout):
         self.store = Store(timeout)
         self.timeout = _timeout_seconds(timeout)
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.socket.bind((host, int(port)))
-        self.socket.listen()
+        self.socket = self._listen(host, port)
         self._workers = 0
         self._workers_condition = threading.Condition()
         self._closed = False
         self._accept_thread = threading.Thread(target=self._accept_loop)
         self._accept_thread.daemon = True
         self._accept_thread.start()
+
+    @staticmethod
+    def _listen(host, port):
+        """Bind the first address a client would dial, skipping unusable ones."""
+        try:
+            addresses = _client_dial_addresses(host, port)
+        except socket.gaierror as error:
+            raise OSError(
+                "cannot resolve TCPStore host {}:{}: {}".format(host, port, error)
+            ) from error
+        last_error = None
+        for family, socktype, proto, _canonname, sockaddr in addresses:
+            listener = socket.socket(family, socktype, proto)
+            try:
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                listener.bind(sockaddr)
+                listener.listen()
+                return listener
+            except OSError as error:
+                last_error = error
+                listener.close()
+        raise OSError(
+            "cannot bind TCPStore server to {}:{}: {}".format(
+                host, port, last_error)
+        )
 
     def _accept_loop(self):
         while not self._closed:
