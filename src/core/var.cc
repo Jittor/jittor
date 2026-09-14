@@ -105,7 +105,7 @@ void free_var_mem(Var* v) {
         v->mem_ptr = nullptr;
         v->allocator = nullptr;
         v->allocation = 0;
-        allocator->free(mem_ptr, v->size, allocation);
+        allocator->free(mem_ptr, v->storage_span_bytes(), allocation);
     }
 }
 
