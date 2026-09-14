@@ -35,7 +35,22 @@ CublasMatmulOp::CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     // TODO: support diffrent input type
     USER_CHECK(a->dtype().dsize() == b->dtype().dsize())
         << "matmul inputs must have the same dtype, but got a:" << a->dtype() << "b:" << b->dtype();
-    c = create_output(nullptr, a->dtype());
+    // cuBLAS gets one dtype for both operands and the result. The output used
+    // to be the operands' dtype, which ignored the auto-mixed-precision
+    // register: a float32 product under ``amp_prefer16`` stayed float32 here
+    // while the generic (CPU and mixed-dtype) path returned float16, so one
+    // model had matmuls in two precisions depending on the backend. Take the
+    // dtype from the same inference every other op uses and cast the operands
+    // to it, mirroring the cuDNN convolution ops.
+    auto dtype = dtype_infer(a->ns, b->ns);
+    auto at = cast_operand_to_compute_dtype(a, dtype);
+    auto bt = cast_operand_to_compute_dtype(b, dtype);
+    if (at || bt) {
+        auto cp = make_cublas_matmul(at ? at.ptr : a, bt ? bt.ptr : b, trans_a, trans_b);
+        forward(cp);
+        return;
+    }
+    c = create_output(nullptr, dtype);
 }
 
 VarPtr CublasMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
