@@ -77,6 +77,9 @@ int VarRelayManager::add_relay_group(FusedOp* fop, const vector<pair<Var*, Var*>
                 new_inputs.push_back(v->node());
             else {
                 removed++;
+                // Takes ownership (vector<VarPtr>): set_inputs below releases
+                // the input edge, and the fused key is prepared afterwards from
+                // a member that still names this var. See the field comment.
                 relay_group.removed_input_vars.push_back(v);
             }
         if (removed) {

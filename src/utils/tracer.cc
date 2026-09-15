@@ -386,7 +386,7 @@ void stop_trace_helper() {
     }
 }
 
-EXTERN_LIB vector<void(*)()> cleanup_callback;
+EXTERN_LIB void register_cleanup_callback(void (*cb)());
 
 void start_trace_helper() {
     if (trace_helper_pid > 0) return;
@@ -423,7 +423,7 @@ void start_trace_helper() {
     // So the helper may attach gdb to us when gdb_path is configured.
     prctl(PR_SET_PTRACER, pid, 0, 0, 0);
 #endif
-    cleanup_callback.push_back(&stop_trace_helper);
+    register_cleanup_callback(&stop_trace_helper);
 }
 
 // Called from the signal handler. Does only what is allowed there.

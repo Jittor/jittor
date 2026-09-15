@@ -172,13 +172,18 @@ struct CommonOpType : OpByType {
             {"init_mean", "$1(0)"},
         };
 
+        auto lookup = [](const unordered_map<string, string>& table,
+                         const string& key) -> string {
+            auto iter = table.find(key);
+            return iter == table.end() ? string() : iter->second;
+        };
         string ret;
         if (both_map.count(args.at(0)))
-            ret = both_map[args.at(0)];
+            ret = both_map.at(args.at(0));
         else if (execution_target_backend() != BackendId::Cpu)
-            ret = cuda_map[args.at(0)];
+            ret = lookup(cuda_map, args.at(0));
         else
-            ret = cpu_map[args.at(0)];
+            ret = lookup(cpu_map, args.at(0));
         // `~` on a C++ bool promotes to int first, so ~true is -2 and
         // ~false is -1 -- both non-zero, and the cast below turns either
         // back into true. NumPy and Torch define bitwise_not on bool as

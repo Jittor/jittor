@@ -218,6 +218,11 @@ def _torch_setitem(self, slices, value):
                 "torch/installers/tensor.py _torch_setitem: differentiable masked assignment",
                 exc,
             )
+    if isinstance(value, _NativeVar):
+        if _var_is_cpu_resident(value) and not _var_is_cpu_resident(self):
+            value = _make_cuda_resident(value)
+        elif not _var_is_cpu_resident(value) and _var_is_cpu_resident(self):
+            value = _make_cpu_resident(value)
     if _set_data_owner(self, slices, value):
         return self
     try:
@@ -1233,7 +1238,7 @@ def _api_tolist(self):
     return self.item() if getattr(self, '_torch_0d', False) else self.numpy().tolist()
 
 
-def _api_contiguous(self):
+def _api_contiguous(self, memory_format=None):
     if self._storage_is_contiguous():
         return self
     from ...frontend import tensor_frontend

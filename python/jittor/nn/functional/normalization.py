@@ -247,12 +247,12 @@ def group_norm(x,
         output_shape = (N, C)
     assert C % num_groups == 0
     backend = _backend_hooks.group_norm_cuda or _group_norm_cuda
-    fast = backend(x, num_groups, weight, bias, eps)
+    fast = _restore_half_dtype(backend(x, num_groups, weight, bias, eps), x)
     if fast is not None:
         return fast
     xg = x.reshape((N, num_groups, C//num_groups, -1))
     xhat = _ln_normalize(xg, [2,3], eps).reshape(output_shape)  # stable custom backward
-    return _affine(xhat, weight, bias, C, len(output_shape))
+    return _restore_half_dtype(_affine(xhat, weight, bias, C, len(output_shape)), x)
 
 
 def fp32_guard(func):
@@ -280,6 +280,25 @@ def fp32_guard(func):
 
 
 @fp32_guard
+def _restore_half_dtype(result, x):
+    """Return a fast-path result at the input's dtype for half types.
+
+    ATen's normalisation kernels accumulate in float32 and hand back the input's
+    dtype, so `bfloat16` in means `bfloat16` out. The CUDA fast paths here
+    return the accumulator's dtype instead, which silently widened every
+    bfloat16 model that normalises with them to float32 -- matmuls leave the
+    tensor cores and attention leaves the flash backend. Only half types are
+    narrowed: a float64 input must not be truncated to the kernel's float32.
+    """
+    if result is None:
+        return None
+    name = str(x.dtype).replace("torch.", "")
+    if name in ("float16", "bfloat16") and \
+            str(result.dtype).replace("torch.", "") != name:
+        return result.cast(name)
+    return result
+
+
 def layer_norm(
     x,
     normalized_shape,
@@ -299,15 +318,15 @@ def layer_norm(
     dims = [-i for i in range(len(normalized_shape), 0, -1)]
     weight = 1.0 if weight is None else weight
     bias = 0.0 if bias is None else bias
-    fast = _layer_norm_cuda(
+    fast = _restore_half_dtype(_layer_norm_cuda(
         x, tuple(normalized_shape), weight, bias, eps
-    )
+    ), x)
     if fast is not None:
         return fast
-    fast = _layer_norm_no_grad_cuda(
+    fast = _restore_half_dtype(_layer_norm_no_grad_cuda(
         x, tuple(normalized_shape), weight, bias, eps
-    )
+    ), x)
     if fast is not None:
         return fast
     xhat = _ln_normalize(x, dims, eps)
-    return xhat * weight + bias
+    return _restore_half_dtype(xhat * weight + bias, x)

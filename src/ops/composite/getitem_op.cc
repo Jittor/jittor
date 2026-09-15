@@ -211,6 +211,14 @@ void GetitemOp::infer_shape() {
         }
     }
     
+    // A strided view has to carry its strides, and the packed NanoVector holds
+    // 64 bits: slicing dim 2 of a `[1, 3, 28, 288, 1024]` video tensor (what the
+    // H3 VAE decodes into) needs 80, and the overflow check rejects that rather
+    // than truncating. Falling back to a copy keeps the values and costs one
+    // materialization; failing here made the decode impossible. It has to be
+    // decided before the loop below, which reads it.
+    if (storage_view && !NanoVector::fits(storage_steps)) storage_view = false;
+
     // this will cause save checkpoint failed.
     // if (out_shape.n == 0)
     //     out->set_flag(VarFlags::_is_scalar);
@@ -222,7 +230,15 @@ void GetitemOp::infer_shape() {
         auto& oid = i_to_o[i];
         auto os = out_shape[oid];
         if (oid>=0) {
-            if (vid==-1 && i && i_to_vs[i-1]<0) {
+            // Consecutive implicit dims collapse into a single loop, which then
+            // walks the *flattened* extent while the index expansion still uses
+            // the group's first stride (`iid@d = i_loop`, `+ iid@d*istride@d`).
+            // That is only the right address for a group whose members are
+            // contiguous in memory, so a copy -- the case where the loop
+            // actually runs -- has to keep its dims apart: `[1,3,16,64,128]`
+            // sliced on dim 2 walked to roughly 1M elements of a 393216-element
+            // tensor and faulted the context.
+            if (storage_view && vid==-1 && i && i_to_vs[i-1]<0) {
                 vid = -2;
                 o_shape.back() *= os;
             } else
@@ -241,7 +257,7 @@ void GetitemOp::infer_shape() {
 
     out->set_shape(out_shape.to_nano_vector());
     if (storage_view) {
-        out->set_storage_strides(NanoVector::make(storage_steps.data(), storage_steps.size()));
+        out->set_storage_strides(storage_steps);
         out->share_with(in, storage_offset * in->dsize());
     }
     if (!out_shape.size()) out->set_flag(VarFlags::_is_scalar);

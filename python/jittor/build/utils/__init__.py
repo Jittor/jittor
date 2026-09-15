@@ -1193,8 +1193,11 @@ def dirty_fix_pytorch_runtime_error():
 
     if platform.system() == 'Linux':
         import jittor_utils
-        flags = os.RTLD_GLOBAL | os.RTLD_NOW | \
-            getattr(os, "RTLD_DEEPBIND", 0)
+        # RTLD_DEEPBIND is incompatible with sanitizer runtimes
+        # (sanitizers#611); JITTOR_NO_DEEPBIND=1 drops it for an ASan run.
+        flags = os.RTLD_GLOBAL | os.RTLD_NOW
+        if not os.environ.get("JITTOR_NO_DEEPBIND"):
+            flags |= getattr(os, "RTLD_DEEPBIND", 0)
         with jittor_utils.import_scope(flags):
             __import__("torch")
 

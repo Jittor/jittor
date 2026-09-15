@@ -40,7 +40,17 @@ def scaled_dot_product_attention(
     query_length = int(query.shape[-2])
     source_length = int(key.shape[-2])
     scale_factor = 1.0 / math.sqrt(int(query.shape[-1])) if scale is None else scale
-    scores = jt.nn.matmul(query, key.transpose(-2, -1)) * scale_factor
+    if scale_factor != 1.0:
+        # Fold the softmax scale into Q rather than into the N x N scores.
+        # `(q*s) @ k^T` equals `s * (q @ k^T)` exactly, but the multiply then
+        # touches batch*heads*Lq*head_dim elements instead of
+        # batch*heads*Lq*Lk. On the MiniMax-H3 video VAE's 32-head, 1797-token
+        # decoder blocks that is 3.7M elements instead of 103M, and the scores
+        # multiply was the largest single non-GEMM kernel in its profile. The
+        # usual 1/sqrt(head_dim) is a power of two for the 64-wide heads here,
+        # so the fold is exact in float16 as well.
+        query = query * scale_factor
+    scores = jt.nn.matmul(query, key.transpose(-2, -1))
     softmax_options = dict(log=False, zero_all_neg_inf=attn_mask is not None, dim=-1)
     fast_softmax = select_kernel("nn.softmax", scores, **softmax_options)
     zero_fully_masked = fast_softmax is not None and attn_mask is not None

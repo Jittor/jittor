@@ -90,8 +90,17 @@ class WeightNorm:
         normalized_dim = _normalize_dim(weight, dim)
         function = WeightNorm(name, normalized_dim)
         delattr(module, name)
-        setattr(module, name + "_g", _norm_except_dim(weight, normalized_dim).clone())
-        setattr(module, name + "_v", weight.clone())
+        # The two halves are parameters: the checkpoint stores them, the
+        # optimizer trains them, `.to()` has to move them. A plain `setattr`
+        # only gets that when the assigned Var carries no tag, and these are
+        # clones of the weight -- a tagged weight puts them in
+        # `_non_parameter_names`, after which `load_state_dict` skips the
+        # checkpoint's `weight_g`/`weight_v` and the model silently runs on
+        # whatever the clones happened to hold. `register_parameter` says so
+        # explicitly, which is what torch's `weight_norm` does by assigning
+        # `nn.Parameter` objects.
+        _set_parameter(module, name + "_g", _norm_except_dim(weight, normalized_dim).clone())
+        _set_parameter(module, name + "_v", weight.clone())
         functions.append(function)
         function(module)
         return function
@@ -102,12 +111,25 @@ class WeightNorm:
         delattr(module, self.name)
         delattr(module, self.name + "_g")
         delattr(module, self.name + "_v")
-        setattr(module, self.name, weight)
+        _set_parameter(module, self.name, weight)
 
     def __call__(self, module, inputs=None):
         weight = self.compute_weight(module)
         weight.persistent = False
         setattr(module, self.name, weight)
+
+
+def _set_parameter(module, name, value):
+    """Assign a Var as a parameter, however the module supports that.
+
+    `register_parameter` is the explicit form; a module that predates it (or a
+    plain object) falls back to the attribute assignment.
+    """
+    register = getattr(module, "register_parameter", None)
+    if register is None:
+        setattr(module, name, value)
+    else:
+        register(name, value)
 
 
 def weight_norm(module, name, dim):

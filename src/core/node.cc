@@ -19,9 +19,21 @@ int free_buffer_depth = 0;
 int node_track_lived = 0;
 unordered_map<void*, int64> lived_nodes;
 unordered_map<int64, Node*> lived_nodes_id;
-int64 total_node = 0;
-vector<Node*> free_buffer;
+std::atomic<int64> total_node{0};
 NodeLifecycleObserver* node_lifecycle_observer = nullptr;
+
+// Kept alive for the whole process, like graph_mutation_mutex below: it is
+// appended to from static destructors. `Node::free` runs from the liveness
+// drain, and that drain is reached at exit through the compiled-fused-op
+// cache's destructor (`~VarRelayGroup` -> `~VarPtr` -> `release_both_liveness`),
+// which runs in whatever order the linker picked relative to a namespace-scope
+// vector. ASAN caught the append into the already-destroyed buffer; glibc
+// reported the same event later as a "corrupted double-linked list". The
+// process is exiting, so there is nothing to reclaim.
+vector<Node*>& free_buffer() {
+    static auto* buffer = new vector<Node*>();
+    return *buffer;
+}
 
 NodeLifecycleObserver* set_node_lifecycle_observer(NodeLifecycleObserver* observer) {
     NodeLifecycleObserver* previous = node_lifecycle_observer;
@@ -65,8 +77,22 @@ extern void free_var_mem(Var* v);
 // pointer to member expresses the same thing and `(node->*op)()` compiles to the
 // same call. No symbol changes: the queue is a file static.
 typedef void (Node::*liveness_op_t)();
-static vector<pair<Node*, liveness_op_t>> liveness_queue;
+// Never destroyed, for the same reason as free_buffer above: an exit-time
+// static destructor (the compiled-fused-op cache's) reaches
+// release_both_liveness, which appends here. A namespace-scope vector would
+// already be gone by then. ASAN named this exact write as a heap-use-after-free
+// in Node::release_both_liveness <- ~VarRelayGroup; that is the corruption
+// glibc surfaced afterwards as "corrupted double-linked list".
+static vector<pair<Node*, liveness_op_t>>& liveness_queue =
+    *new vector<pair<Node*, liveness_op_t>>();
 static size_t liveness_queue_front = 0;
+
+// Leaked on purpose: this is taken from an atexit handler and from static
+// destructors, where a function-local static may already be gone.
+std::recursive_mutex& graph_mutation_mutex() {
+    static std::recursive_mutex* mutex = new std::recursive_mutex();
+    return *mutex;
+}
 
 // Only used for logging: turns one of the six propagation steps back into a
 // readable name.
@@ -83,6 +109,10 @@ static const char* liveness_op_name(liveness_op_t func) {
 // Run every pending propagation step, including the ones the steps themselves
 // append. `caller` only names the entry point in the log.
 static void run_liveness_queue(const char* caller) {
+    // The drain owns the queue -- it clears it on the way out -- so two threads
+    // draining at once would empty each other's work and run each other's
+    // callbacks on nodes neither of them owns.
+    std::lock_guard<std::recursive_mutex> guard(graph_mutation_mutex());
     LOGvvvv << "run liveness queue from" << caller << "size" << liveness_queue.size();
     // A step can throw: the counters assert their own invariants and `free`
     // reaches the allocator. Leaving the queue half-drained would make the
@@ -118,6 +148,10 @@ void Node::batch_index_mismatch(int64 stamp) const {
 
 void Node::free() {
     CHECK_EXIST;
+    // Same lock as the drain: this appends to `liveness_queue` and erases this
+    // node from its neighbours' edge lists, and those neighbours may belong to
+    // another worker's relay.
+    std::lock_guard<std::recursive_mutex> guard(graph_mutation_mutex());
     // already scheduled for deletion in this free_buffer round
     if (flags.get(NodeFlags::_queued_for_free)) return;
     // A var that still has an input op and is either alive forward or not yet
@@ -126,7 +160,7 @@ void Node::free() {
         return;
     }
     flags.set(NodeFlags::_queued_for_free);
-    free_buffer.push_back(this);
+    free_buffer().push_back(this);
     for (auto in : _inputs) {
         in.node->erase_output(in.back_index);
         if (liveness.backward.active()) {

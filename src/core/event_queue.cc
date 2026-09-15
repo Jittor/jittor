@@ -49,10 +49,13 @@ void EventQueue::Worker::stop() {
     event_queue.worker.thread.join();
 }
 
-EXTERN_LIB vector<void(*)()> cleanup_callback;
+EXTERN_LIB void register_cleanup_callback(void (*cb)());
 
 EventQueue::Worker::Worker() : thread(EventQueue::Worker::start) {
-    cleanup_callback.push_back(&EventQueue::Worker::stop);
+    // Registered through the locked accessor: this runs during static
+    // initialisation, where a namespace-scope callback vector may not be
+    // constructed yet.
+    register_cleanup_callback(&EventQueue::Worker::stop);
 }
 
 EventQueue::Worker::~Worker() {

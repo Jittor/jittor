@@ -35,7 +35,18 @@ CublasBatchedMatmulOp::CublasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool 
     // TODO: support diffrent input type
     USER_CHECK(a->dtype().dsize() == b->dtype().dsize())
         << "matmul inputs must have the same dtype, but got a:" << a->dtype() << "b:" << b->dtype();
-    c = create_output(nullptr, a->dtype());
+    // Same as the 2-D cuBLAS op: the output takes the dtype the shared
+    // inference selects (which honours the amp register) and the operands are
+    // cast to it, rather than the operands' dtype ignoring amplification.
+    auto dtype = dtype_infer(a->ns, b->ns);
+    auto at = cast_operand_to_compute_dtype(a, dtype);
+    auto bt = cast_operand_to_compute_dtype(b, dtype);
+    if (at || bt) {
+        auto cp = make_cublas_batched_matmul(at ? at.ptr : a, bt ? bt.ptr : b, trans_a, trans_b);
+        forward(cp);
+        return;
+    }
+    c = create_output(nullptr, dtype);
     set_flag(OpFlags::_cpu, 0);
     set_flag(OpFlags::_cuda, 1);
     set_flag(OpFlags::_manual_set_vnbb);

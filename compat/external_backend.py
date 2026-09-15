@@ -687,6 +687,23 @@ class ExternalBackend:
             return self.import_installed()
         return None
 
+    def load_root(self, raw_root: str, capability_key: object = None) -> Optional[ModuleType]:
+        """Load one already-resolved source root through the transactional entry.
+
+        `load()` searches every configured root; a caller that resolves its own
+        root -- the flash-attention backend probes its own candidate list --
+        still has to come through here, because the sys.path and sys.modules
+        edits a source load makes are captured and rolled back inside
+        `_load_candidate`. Calling `load_source_root` directly skips that and
+        dies on the first path it tries to add with "source paths require the
+        transactional load() entry".
+        """
+        with InstallTransaction._lock, self._lock:
+            backend, miss = self._load_candidate(str(raw_root), capability_key)
+        if backend is None or miss is not None:
+            return None
+        return backend
+
     def configuration_key(self, capability_key: object = None) -> Tuple[object, ...]:
         return (
             self.environment_key(),

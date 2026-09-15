@@ -42,8 +42,8 @@ DEFINE_FLAG(int, jit_cache_size, 4096,
 jit_cache_map<jit_op_entry_t> jit_ops;
 jit_cache_map<string> jit_key_mapper;
 
-int64 Op::number_of_lived_ops = 0;
-int64 Op::number_of_created_ops = 0;
+std::atomic<int64> Op::number_of_lived_ops{0};
+std::atomic<int64> Op::number_of_created_ops{0};
 
 // Only Ops with disabled inputs have an entry. Node flag bits record whether
 // an Op has already snapshotted and provide the common no-map-lookup fast path.

@@ -27,7 +27,7 @@ _NATIVE_NAMES = (
     "logical_xor", "matmul", "maximum", "mean", "meshgrid", "minimum",
     "mul", "multiply", "negative", "permute", "pow", "prod", "rad2deg",
     "reshape", "roll", "round", "rsqrt", "scatter", "scatter_add",
-    "scatter_reduce", "searchsorted", "sigmoid", "sin", "sinh", "split",
+    "scatter_reduce", "searchsorted", "sigmoid", "sin", "sinc", "sinh", "split",
     "sqrt", "squeeze", "sub", "subtract", "t", "tan", "tanh", "transpose",
     "unbind", "unique", "unique_consecutive", "unsqueeze",
 )

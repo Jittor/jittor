@@ -316,8 +316,48 @@ void log_exiting();
 volatile sig_atomic_t exited = 0;
 volatile sig_atomic_t segfault_happen = 0;
 static int _pid = getpid();
-vector<void(*)()> cleanup_callback;
 vector<void(*)()> sigquit_callback;
+
+// The cleanup callbacks are registered from three places that do not share a
+// thread and do not share a lifetime:
+//
+//  - the event queue worker's constructor, which runs during static
+//    initialisation, before `main`;
+//  - `get_resources`, on whichever thread first touches a side stream;
+//  - `start_trace_helper`.
+//
+// and drained by `core.cleanup()` from the main thread at exit. That rules out
+// a namespace-scope vector and mutex: a static constructor can push before
+// either is constructed, which is undefined behaviour on uninitialised storage
+// and corrupts the heap rather than failing. Function-local statics are
+// constructed on first use (thread-safely, C++11) and destroyed in reverse
+// order of use, which is what this needs. The lock also keeps a registration
+// from reallocating the vector under the exit walk's iterators.
+static vector<void(*)()>& cleanup_callbacks() {
+    // Deliberately never destroyed. Two independent exit paths drain this list
+    // -- `core.cleanup()` from python's atexit and `log_exiting` from a
+    // std::atexit in this file -- and a static object is destroyed in an order
+    // that only the linker knows, relative to both. Leaking it means whichever
+    // drain runs last still finds a live, empty vector instead of freed
+    // storage; the process is exiting, so there is nothing to reclaim.
+    static vector<void(*)()>* callbacks = new vector<void(*)()>();
+    return *callbacks;
+}
+
+static std::mutex& cleanup_callback_mutex() {
+    static std::mutex* mutex = new std::mutex();
+    return *mutex;
+}
+
+void register_cleanup_callback(void (*cb)()) {
+    std::lock_guard<std::mutex> guard(cleanup_callback_mutex());
+    cleanup_callbacks().push_back(cb);
+}
+
+vector<void(*)()> take_cleanup_callbacks() {
+    std::lock_guard<std::mutex> guard(cleanup_callback_mutex());
+    return move(cleanup_callbacks());
+}
 int64 last_q_time;
 
 string& get_thread_name() {
@@ -835,7 +875,15 @@ int system_popen(const char* cmd, const char* cwd) {
 int system_popen(const char* cmd, const char* cwd, string* captured) {
     char buf[BUFSIZ];
     string cmd2;
-    cmd2 = cmd;
+    // A sanitizer runtime preloaded into this process is inherited by every
+    // child, and nvcc segfaults under one: it dlopens its own components, and
+    // the interception breaks that. The compilers are not what is being
+    // checked, so the preload is dropped for the child by prefixing `env -u`
+    // rather than by editing this process's environment -- the compile workers
+    // call this concurrently, where setenv is not safe. Only when the variable
+    // is set, so an ordinary run spawns exactly the command it always did.
+    if (getenv("LD_PRELOAD")) cmd2 = "env -u LD_PRELOAD ";
+    cmd2 += cmd;
     cmd2 += " 2>&1 ";
     FILE *ptr = popen(cmd2.c_str(), "r");
     if (!ptr) return -1;
@@ -1020,9 +1068,11 @@ int log_exit = 0;
 void log_exiting() {
     if (log_exit) return;
     log_exit = true;
-    for (auto cb : cleanup_callback)
+    // Same drain as `core.cleanup()`, through the same accessor: taking the
+    // list empties it, so whichever of the two exits runs second does nothing
+    // instead of walking storage the other has already released.
+    for (auto cb : take_cleanup_callbacks())
         cb();
-    cleanup_callback.clear();
 #ifdef LOG_ASYNC
     mwsr_list_log::stop();
     log_thread.join();

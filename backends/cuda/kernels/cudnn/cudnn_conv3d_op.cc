@@ -23,6 +23,8 @@ namespace jittor {
 
 #ifndef JIT
 
+static auto make_conv3d = op_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, int, string>("cudnn_conv3d");
+
 CudnnConv3dOp::CudnnConv3dOp(Var* x, Var* w, int strided, int strideh, int stridew, int paddingd, int paddingh, int paddingw, int dilationd, int dilationh, int dilationw, int groups, string xformat)
     : x(x), w(w), strided(strided), strideh(strideh), stridew(stridew), paddingd(paddingd), paddingh(paddingh), paddingw(paddingw), dilationd(dilationd), dilationh(dilationh), dilationw(dilationw), groups(groups),
       xformat(move(xformat)) {
@@ -36,7 +38,20 @@ CudnnConv3dOp::CudnnConv3dOp(Var* x, Var* w, int strided, int strideh, int strid
     set_flag(OpFlags::_manual_set_vnbb);
     x->set_flag(VarFlags::_needed_by_backward);
     w->set_flag(VarFlags::_needed_by_backward);
-    y = create_output(nullptr, dtype_infer(x->ns, w->ns));
+    // cuDNN needs one dtype for input, filter and output. dtype_infer can pick
+    // a narrower one (amp_prefer16 over float32 operands); hand it operands of
+    // that dtype rather than a request no algorithm satisfies.
+    auto ytype = dtype_infer(x->ns, w->ns);
+    auto xt = cast_operand_to_compute_dtype(x, ytype);
+    auto wt = cast_operand_to_compute_dtype(w, ytype);
+    if (xt || wt) {
+        auto yp = make_conv3d(xt ? xt.ptr : x, wt ? wt.ptr : w,
+            strided, strideh, stridew, paddingd, paddingh, paddingw,
+            dilationd, dilationh, dilationw, groups, this->xformat);
+        forward(yp);
+        return;
+    }
+    y = create_output(nullptr, ytype);
 }
 
 void CudnnConv3dOp::infer_shape() {

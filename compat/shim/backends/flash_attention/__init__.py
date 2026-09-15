@@ -308,7 +308,12 @@ def _default_build_root(*parts: str) -> str:
     return path
 
 
-_OFFICIAL_FLASH_ATTN_HEAD_DIMS = ["32", "64", "96", "128", "192", "256"]
+# Every head dimension upstream flash-attention v2 ships kernels for. 160 is
+# easy to drop -- it is the one dimension that is neither a power of two nor
+# 192 -- and leaving it out is not a missing optimization: `flash_api.cpp`
+# references the 160-wide split-kv dispatch, so the module fails to import with
+# an undefined symbol for it and the whole native backend is unavailable.
+_OFFICIAL_FLASH_ATTN_HEAD_DIMS = ["32", "64", "96", "128", "160", "192", "256"]
 _OFFICIAL_FLASH_ATTN_DTYPES = ["fp16", "bf16"]
 
 
@@ -391,7 +396,9 @@ def _build_setup_py(root: pathlib.Path) -> bool:
 
 
 def _load_from_source_root(raw_root: str) -> Optional[ModuleType]:
-    return _EXTERNAL_BACKEND.load_source_root(raw_root)
+    # Through the transactional entry: a source load edits sys.path and
+    # sys.modules, and only `load_root` captures those edits for rollback.
+    return _EXTERNAL_BACKEND.load_root(raw_root)
 
 
 def _remember_error(message: str) -> None:

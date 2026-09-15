@@ -219,9 +219,15 @@ jit_op_entry_t load_jit_lib(
         LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
         LOAD_LIBRARY_SEARCH_USER_DIRS);
     #elif defined(__linux__)
-    auto flags = RTLD_LAZY | RTLD_DEEPBIND | RTLD_LOCAL;
+    // The sanitizer runtime refuses to load a library opened with
+    // RTLD_DEEPBIND ("incompatible with sanitizer runtime", sanitizers#611), so
+    // an instrumented run needs it off: JITTOR_NO_DEEPBIND=1. Off by default,
+    // because the flag also decides which definition of a symbol the operator
+    // library binds to.
+    int deepbind = getenv("JITTOR_NO_DEEPBIND") ? 0 : RTLD_DEEPBIND;
+    auto flags = RTLD_LAZY | deepbind | RTLD_LOCAL;
     if (extra_flags.find("GLOBAL_VAR") != string::npos)
-        flags = RTLD_LAZY | RTLD_DEEPBIND | RTLD_GLOBAL;
+        flags = RTLD_LAZY | deepbind | RTLD_GLOBAL;
     void* handle = dlopen(name.c_str(), flags);
     msg = dlerror();
     #else

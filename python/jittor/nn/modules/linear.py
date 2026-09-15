@@ -22,10 +22,10 @@ class Linear(Module):
         )
 
     def execute(self, x):
-        x = jt.nn.matmul_transpose(x, self.weight)
-        if self.bias is not None:
-            return x + self.bias
-        return x
+        # One definition with the functional: this used to transcribe it, so
+        # the amp-register bias handling added to ``linear`` would not have
+        # reached ``nn.Linear`` -- which is what the H3 decoder uses.
+        return linear(x, self.weight, self.bias)
 
     def reset_parameters(self):
         self.weight.update(

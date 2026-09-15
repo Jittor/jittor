@@ -491,9 +491,30 @@ class RMSNorm(nn.Module):
         self.weight = _jt2.ones(normalized_shape) if elementwise_affine else None
     def execute(self, x):
         import jittor as _jt2
-        v = (x.float32() ** 2).mean(-1, keepdims=True)
-        x = x * _jt2.rsqrt(v + self.eps)
-        return x * self.weight if self.weight is not None else x
+        # ATen accumulates the statistic in float32 for half and bfloat16 and
+        # casts the result back, so bfloat16 in means bfloat16 out. Returning
+        # the promoted dtype instead widened every model whose norms are
+        # RMSNorm -- MiniMax-H3's block stack is bfloat16 throughout -- to
+        # float32, which takes the matmuls off the tensor cores and the
+        # attention off the flash backend. The reduction also covers all of
+        # `normalized_shape`, not just the trailing dim.
+        name = _dtype_to_str(x.dtype)
+        wide = "float32" if name in ("float16", "bfloat16") else name
+        ndn = len(self.normalized_shape)
+        dims = tuple(range(x.ndim - ndn, x.ndim))
+        y = x.cast(wide)
+        v = (y ** 2).mean(dims, keepdims=True)
+        y = y * _jt2.rsqrt(v + self.eps)
+        if self.weight is not None:
+            # Cast only when the parameter's dtype actually differs: `cast` is
+            # dispatched with an explicit backend, and calling it on a parameter
+            # that lives on another device than the activation (which the plain
+            # binary op tolerates) turns a promotion into a hard failure.
+            weight = self.weight
+            if _dtype_to_str(weight.dtype) != wide:
+                weight = weight.cast(wide)
+            y = y * weight
+        return y.cast(name)
 
 
 def _act_fn(activation):

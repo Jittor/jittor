@@ -50,6 +50,8 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
         shape[0], shape[1], shape[2], shape[3]));
 }
 
+static auto make_backwardw = op_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>("cudnn_conv_backward_w");
+
 CudnnConvBackwardWOp::CudnnConvBackwardWOp(Var* x, Var* dy, int kh, int kw, int strideh, int stridew, int paddingh, int paddingw, int dilationh, int dilationw, int groups, string xformat, string wformat, string yformat)
         : x(x), dy(dy), kh(kh), kw(kw), strideh(strideh), stridew(stridew), paddingh(paddingh), paddingw(paddingw), dilationh(dilationh), dilationw(dilationw), groups(groups),
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
@@ -65,7 +67,20 @@ CudnnConvBackwardWOp::CudnnConvBackwardWOp(Var* x, Var* dy, int kh, int kw, int 
     set_flag(OpFlags::_manual_set_vnbb);
     x->set_flag(VarFlags::_needed_by_backward);
     dy->set_flag(VarFlags::_needed_by_backward);
-    dw = create_output(nullptr, dtype_infer(dy->ns, x->ns));
+    // cuDNN needs one dtype for input, output gradient and weight gradient;
+    // dtype_infer may pick a narrower one under amp_prefer16. See
+    // cast_operand_to_compute_dtype.
+    auto wtype = dtype_infer(dy->ns, x->ns);
+    auto xt = cast_operand_to_compute_dtype(x, wtype);
+    auto dyt = cast_operand_to_compute_dtype(dy, wtype);
+    if (xt || dyt) {
+        auto dwp = make_backwardw(xt ? xt.ptr : x, dyt ? dyt.ptr : dy,
+            kh, kw, strideh, stridew, paddingh, paddingw, dilationh, dilationw,
+            groups, this->xformat, this->wformat, this->yformat);
+        forward(dwp);
+        return;
+    }
+    dw = create_output(nullptr, wtype);
 }
 
 void CudnnConvBackwardWOp::infer_shape() {

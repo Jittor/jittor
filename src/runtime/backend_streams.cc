@@ -4,7 +4,7 @@
 #include "mem/allocator.h"
 
 namespace jittor {
-EXTERN_LIB vector<void(*)()> cleanup_callback;
+EXTERN_LIB void register_cleanup_callback(void (*cb)());
 
 namespace {
 struct SideStreams {
@@ -58,7 +58,7 @@ SideStreams& get_resources(int device) {
         }
         resources[device] = move(item);
         if (!cleanup_registered) {
-            cleanup_callback.push_back(&cleanup_streams);
+            register_cleanup_callback(&cleanup_streams);
             cleanup_registered = true;
         }
     }

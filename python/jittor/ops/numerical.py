@@ -254,6 +254,18 @@ def rsqrt(x):
     return 1/jt.sqrt(x)
 
 
+def sinc(x):
+    """Normalized sinc: ``sin(pi*x) / (pi*x)``, taken as ``1`` at ``x == 0``.
+
+    The origin is a removable singularity, so the division is guarded rather
+    than left to evaluate 0/0: both the value and the gradient there are the
+    limit, which is what the mathematical definition and ``torch.sinc`` use.
+    """
+    angle = x * np.pi
+    nonzero = angle != 0
+    return nonzero.ternary(angle.sin() / nonzero.ternary(angle, 1.0), 1.0)
+
+
 def all_equal(a: Var, b: Var) -> bool:
     return (a == b).all().item()
 

@@ -70,6 +70,30 @@ struct jit_cache_map {
     };
     typedef std::unordered_map<string, Entry> map_t;
 
+    // Guards `entries`.
+    //
+    // `find` and `size` are reached from the compile workers -- see
+    // `parallel_compiler.cc`, which looks keys up while another thread inserts
+    // through `operator[]` and evicts through `evict_down_to`. An unordered_map
+    // mutated under a concurrent lookup corrupts its node chain, and the damage
+    // does not surface there: it surfaces at static destruction, when the table
+    // frees nodes whose links a race already overwrote ("corrupted
+    // double-linked list", from glibc, inside ~jit_cache_map).
+    //
+    // A spinlock, not std::mutex: this header is compiled standalone under ASan
+    // (tests/codegen/test_jit_cache_map_asan.py) and must not grow an include
+    // that needs -pthread. The sections are one hash lookup, one insertion, or
+    // a short scan of a bounded table.
+    mutable std::atomic_flag lock = ATOMIC_FLAG_INIT;
+
+    struct Guard {
+        std::atomic_flag& flag;
+        explicit Guard(std::atomic_flag& f) : flag(f) {
+            while (flag.test_and_set(std::memory_order_acquire)) {}
+        }
+        ~Guard() { flag.clear(std::memory_order_release); }
+    };
+
     map_t entries;
     std::atomic<uint64> clock{0};
     // Per-table override; 0 means "whatever `jit_cache_size` says". Set
@@ -82,11 +106,15 @@ struct jit_cache_map {
         return jit_cache_size > 0 ? (size_t)jit_cache_size : 1;
     }
 
-    inline size_t size() const { return entries.size(); }
+    inline size_t size() const {
+        Guard guard(lock);
+        return entries.size();
+    }
 
     /* The cached value, or nullptr if this key is not in the table.
        The pointer is valid until the next insertion. */
     inline T* find(const string& key) {
+        Guard guard(lock);
         auto iter = entries.find(key);
         if (iter == entries.end()) return nullptr;
         touch(iter->second);
@@ -102,6 +130,7 @@ struct jit_cache_map {
        one is about to read from. The call sites spell out the two assignments
        instead. */
     T& operator[](const string& key) {
+        Guard guard(lock);
         auto iter = entries.find(key);
         if (iter == entries.end()) {
             size_t limit = max_entries();
@@ -116,7 +145,10 @@ struct jit_cache_map {
         return iter->second.value;
     }
 
-    inline void clear() { entries.clear(); }
+    inline void clear() {
+        Guard guard(lock);
+        entries.clear();
+    }
 
     inline void touch(Entry& entry) {
         entry.used.store(clock.fetch_add(1, std::memory_order_relaxed) + 1,
@@ -128,7 +160,9 @@ struct jit_cache_map {
        The victim is found by a scan. That only happens when the table is full,
        which is next to a compile -- so a scan of a few thousand entries is
        nothing beside what it accompanies, and it buys the entry layout above,
-       which is what makes lookups safe from the compile workers. */
+       which is what makes lookups safe from the compile workers.
+
+       Caller holds `lock` (only `operator[]` calls this). */
     void evict_down_to(size_t keep) {
         while (entries.size() > keep) {
             auto oldest = entries.begin();

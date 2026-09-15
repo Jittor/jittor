@@ -172,7 +172,7 @@ void BroadcastToOp::infer_shape() {
             strides[i] = x->storage_stride(xi--);
         }
     }
-    z->set_storage_strides(NanoVector::make(strides.data(), strides.size()));
+    z->set_storage_strides(strides);
     z->share_with(x);
     set_type(OpType::other);
     z->set_flag(VarFlags::_is_scalar, x->flag(VarFlags::_is_scalar));

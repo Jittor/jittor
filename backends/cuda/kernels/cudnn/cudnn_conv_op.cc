@@ -48,6 +48,8 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
         shape[0], shape[1], shape[2], shape[3]));
 }
 
+static auto make_conv = op_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, string, string, string>("cudnn_conv");
+
 CudnnConvOp::CudnnConvOp(Var* x, Var* w, int strideh, int stridew, int paddingh, int paddingw, int dilationh, int dilationw, int groups, string xformat, string wformat, string yformat)
     : x(x), w(w), strideh(strideh), stridew(stridew), paddingh(paddingh), paddingw(paddingw), dilationh(dilationh), dilationw(dilationw), groups(groups),
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
@@ -63,7 +65,20 @@ CudnnConvOp::CudnnConvOp(Var* x, Var* w, int strideh, int stridew, int paddingh,
     set_flag(OpFlags::_manual_set_vnbb);
     x->set_flag(VarFlags::_needed_by_backward);
     w->set_flag(VarFlags::_needed_by_backward);
-    y = create_output(nullptr, dtype_infer(x->ns, w->ns));
+    // cuDNN needs one dtype for input, filter and output. dtype_infer can pick
+    // a narrower one (amp_prefer16 over float32 operands); hand it operands of
+    // that dtype rather than a request no algorithm satisfies.
+    auto ytype = dtype_infer(x->ns, w->ns);
+    auto xt = cast_operand_to_compute_dtype(x, ytype);
+    auto wt = cast_operand_to_compute_dtype(w, ytype);
+    if (xt || wt) {
+        auto yp = make_conv(xt ? xt.ptr : x, wt ? wt.ptr : w,
+            strideh, stridew, paddingh, paddingw, dilationh, dilationw,
+            groups, this->xformat, this->wformat, this->yformat);
+        forward(yp);
+        return;
+    }
+    y = create_output(nullptr, ytype);
     if (!this->yformat.size())
         this->yformat = this->xformat;
 }
