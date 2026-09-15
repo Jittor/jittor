@@ -1,8 +1,31 @@
 """Native process-group identity and backend communicator ownership."""
 
 import os
+import re
 
 import jittor as jt
+
+
+def _ensure_nccl_rootinfo_env():
+    """Restore the env/file rendezvous path for later subgroup creation.
+
+    The torch shim's bootstrap records ``JT_NCCL_ROOTINFO_FILE`` in its
+    install transaction.  That transaction intentionally rolls environment
+    changes back after installation, while NCCL's world communicator remains
+    alive.  MPI-free ``nccl_create_process_group`` still needs the same path
+    to exchange the subgroup unique id, so derive it from the launcher inputs
+    when the transactional value is no longer present.
+    """
+    if os.environ.get("JT_NCCL_ROOTINFO_FILE", "").strip():
+        return
+    rendezvous_dir = os.environ.get("JITTOR_DIST_RENDEZVOUS_DIR", "").strip()
+    if not rendezvous_dir:
+        return
+    address = os.environ.get("MASTER_ADDR", "localhost")
+    port = os.environ.get("MASTER_PORT", "default")
+    key = re.sub(r"[^A-Za-z0-9_.-]", "_", "{}-{}".format(address, port))
+    os.environ["JT_NCCL_ROOTINFO_FILE"] = os.path.join(
+        rendezvous_dir, "jittor-nccl-{}.bin".format(key))
 
 
 def is_initialized():
@@ -57,6 +80,8 @@ class ProcessGroup:
             if module is None or ops is None or not callable(create):
                 continue
             from jittor_utils import lock as _jit_lock
+            if kind == "nccl":
+                _ensure_nccl_rootinfo_env()
             with _jit_lock.unlock_scope():
                 handle = create(list(self.ranks))
             self._backend_kind = kind
