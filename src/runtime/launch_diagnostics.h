@@ -10,14 +10,6 @@ struct LaunchOrigin {
     int line = 0;
     bool truncated = false;
 };
-// One of these is built, copied and stored for EVERY operator the runner
-// executes, so its size is a per-operator cost paid by every model. The
-// resolved `LaunchOrigin` (392 bytes of file path) used to live here, which
-// made the struct ~560 bytes and meant each operator paid four copies of it
-// plus a global mutex acquisition to fill it in. `origin` is the interned id;
-// `report` resolves it, and `report` already holds the mutex that owns the
-// origin table. Nothing is lost from the diagnostic, and the hot path keeps
-// only what it actually writes.
 struct LaunchRecord {
     uint64 sequence = 0;
     uint64 origin = 0;
@@ -27,6 +19,7 @@ struct LaunchRecord {
     char name[96] = {};
     uint32 fused_ids[8] = {};
     uint32 fused_count = 0;
+    LaunchOrigin location;
 };
 
 class LaunchHistory {
@@ -41,7 +34,7 @@ public:
     LaunchHistory(const LaunchHistory&) = delete;
     LaunchHistory& operator=(const LaunchHistory&) = delete;
     uint64 intern_origin(const char* file, int line);
-    void record(const LaunchRecord& record);
+    void record(LaunchRecord record);
     string report(Device device, bool exact_stream=false, uintptr_t stream=0);
 };
 
@@ -60,7 +53,7 @@ struct LaunchOriginScope {
 struct LaunchOperationScope {
     const LaunchRecord* previous;
     LaunchRecord record;
-    explicit LaunchOperationScope(const LaunchRecord& value);
+    explicit LaunchOperationScope(LaunchRecord value);
     ~LaunchOperationScope();
 };
 EXTERN_LIB void record_active_launch(BackendStream stream);

@@ -1,6 +1,5 @@
 #include "runtime/launch_diagnostics.h"
 #include "runtime/device_state.h"
-#include "utils/log.h"
 #include <array>
 #include <atomic>
 #include <cstring>
@@ -81,7 +80,7 @@ uint64 LaunchHistory::intern_origin(const char* file, int line) {
     return id;
 }
 
-void LaunchHistory::record(const LaunchRecord& value) {
+void LaunchHistory::record(LaunchRecord record) {
     auto& lease = Impl::lease;
     if (lease.owner.get() != impl.get()) {
         lease.release();
@@ -97,15 +96,15 @@ void LaunchHistory::record(const LaunchRecord& value) {
         if (!lease.slot) ++impl->unavailable_threads;
     }
     if (!lease.slot) return;
-    // No `impl->mutex` here any more: resolving the origin id to its path was
-    // the only reason this ran under the global lock, and `report` -- which
-    // holds that lock anyway -- can do it when something actually fails.
-    // `sequence` is atomic. This is on the per-operator path of every model.
+    {
+        std::lock_guard<std::mutex> guard(impl->mutex);
+        if (record.origin < impl->origins.size())
+            record.location = impl->origins[record.origin];
+    }
+    record.sequence = ++impl->sequence;
     auto& ring = *lease.slot;
     std::lock_guard<std::mutex> guard(ring.mutex);
-    auto& slot = ring.records[ring.written++ % capacity];
-    slot = value;
-    slot.sequence = ++impl->sequence;
+    ring.records[ring.written++ % capacity] = record;
 }
 
 string LaunchHistory::report(Device device, bool exact_stream, uintptr_t stream) {
@@ -147,35 +146,24 @@ string LaunchHistory::report(Device device, bool exact_stream, uintptr_t stream)
             out << ']';
         }
         out << " python=";
-        // Resolved here rather than at record time; this function already
-        // holds `impl->mutex`, which is what owns `origins`.
-        const LaunchOrigin* location = record.origin < impl->origins.size()
-            ? &impl->origins[record.origin] : nullptr;
-        if (location && location->line)
-            out << location->file << ':' << location->line
-                << (location->truncated ? " (path truncated)" : "");
+        if (record.location.line)
+            out << record.location.file << ':' << record.location.line
+                << (record.location.truncated ? " (path truncated)" : "");
         else out << "not-found";
     }
     if (matching.size() > 16) out << "\n  older matching candidates omitted=" << matching.size()-16;
     return out.str();
 }
 
-DEFINE_FLAG(int, launch_origin_capture, 1,
-    "Record the Python line that created each operator, so an asynchronous device "
-    "error can name it. Every Op constructor pays for it: the capture walks the "
-    "Python stack out to the first frame outside jittor. 0 turns it off, and a "
-    "device error then reports `python=not-found` for every candidate launch.");
-
 void set_launch_origin_capture(LaunchOriginCapture capture) { origin_capture.store(capture); }
 uint64 capture_launch_origin() {
     if (active_origin != ~uint64(0)) return active_origin;
-    if (!launch_origin_capture) return 0;
     auto capture = origin_capture.load();
     return capture ? capture() : 0;
 }
 LaunchOriginScope::LaunchOriginScope(uint64 origin) : previous(active_origin) { active_origin = origin; }
 LaunchOriginScope::~LaunchOriginScope() { active_origin = previous; }
-LaunchOperationScope::LaunchOperationScope(const LaunchRecord& value) : previous(active_launch), record(value) {
+LaunchOperationScope::LaunchOperationScope(LaunchRecord value) : previous(active_launch), record(value) {
     active_launch = &record;
 }
 LaunchOperationScope::~LaunchOperationScope() { active_launch = previous; }
