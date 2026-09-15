@@ -107,9 +107,19 @@ def find_jittor_path():
     return os.path.dirname(os.path.dirname(__file__))
 
 def make_cache_dir(cache_path):
+    """Create a cache directory, tolerating a process that got there first.
+
+    This was ``if not isdir: mkdir``, which two ranks sharing one JITTOR_HOME
+    both pass -- the loser then died with ``FileExistsError``. Sharing the cache
+    root across ranks is the normal case for a multi-process launch (Jittor's
+    own dynamic NCCL bootstrap creates ``.cache/jittor/nccl`` from every rank),
+    so the loser-kills-the-worker race was the ordinary path, not an edge one.
+    ``makedirs(exist_ok=True)`` also creates a missing parent, which the bare
+    ``mkdir`` did not.
+    """
     if not os.path.isdir(cache_path):
         LOG.i(f"Create cache dir: {cache_path}")
-        os.mkdir(cache_path)
+        os.makedirs(cache_path, exist_ok=True)
 
 def moveback_flags(flags, rm_flags):
     flags = shsplit(flags)

@@ -284,6 +284,90 @@ Triton kernel, i.e. inside jittor's Triton bridge, where every launch calls
 bounces every operand through a guarded buffer (`GUARD_ENABLE = True` by
 default). That is the next thing to fix.
 
+## 12. Serving it: the OpenAI server needed one more stub fix
+
+The offline `Omni(...)` path and the `vllm-omni serve ... --omni` path do not
+import the same code. The server pulls in `vllm.entrypoints.serve` and
+vLLM-Omni's `entrypoints/openai/`, which the offline path never touches, so the
+server needs (a) the deps only the serving stack declares and (b) one more shim
+stub fix.
+
+The stub fix: `vllm_omni/utils/audio.py` does
+
+    from torchaudio.functional import melscale_fbanks
+
+at module level, and `serving_chat` imports that module, so the whole server
+import chain died on it. The packaged `torchaudio` stub
+(`compat/shim/resources/stubs/torchaudio/__init__.py`) answered
+`from torchaudio import functional` -- its `__getattr__` fabricates a module for
+any name -- but not the submodule spelling: a module with no `__path__` offers
+the import system no submodule to find, so the import failed before it reached
+the name lookup `__getattr__` would have answered. The stub now registers a
+`_AnyFinder` for anything under `torchaudio.`, and the fabricated modules carry
+`__path__` so a deeper name resolves too. Attributes are still the same
+loudly-failing classes -- the shim ships no audio DSP, and `melscale_fbanks(...)`
+raises rather than returning a plausible number. The H3 video path never calls
+it; the import only has to succeed.
+
+One trap worth knowing about the deployment: the shim materialises its runtime
+site-packages under `$XDG_CACHE_HOME/jittor/torch-shim/<project>-<hash>/`, keyed
+by the *project path*, and re-deploys the stubs into it on every activation from
+the **installed** `jittor/compat/shim/resources/stubs/`. Editing only
+`site-packages/torchaudio/__init__.py` therefore gets overwritten on the next
+run; the resource copy has to be updated too.
+
+Verified with `vllm-omni serve ... --omni --num-gpus 1` on one H20
+(`serve1.log`): `GET /v1/models` 200, and `POST /v1/videos/sync` returned a
+256x256 `video/mp4` with both a video and an audio stream, **39.5 s** against
+39.6 s for the same request offline. Serving is at parity with the offline path.
+
+## 13. Multi-GPU: two jittor defects, then an unresolved rendezvous
+
+`--tensor-parallel-size` / `--text-encoder-tp-size` / `--vae-patch-parallel-size`
+above 1 all need multi-rank collectives, and that path had never been run here.
+Three things stand between the recipe and a working TP2 server, in the order
+they surface:
+
+1. **The launcher does not enable the shim's multi-rank bootstrap.** The shim
+   implements a dynamic NCCL bootstrap for `init_process_group(world_size>1)`,
+   but it is gated behind `JITTOR_TORCH_DISTRIBUTED_AUTO_INIT`, which nothing
+   sets. Unset, every diffusion worker dies with "multi-rank torch.distributed
+   requires launching Jittor with jittor.distributed.launch or explicit dynamic
+   bootstrap". Fixed by exporting it -- an undocumented prerequisite.
+
+2. **`make_cache_dir` raced, and lost.** With the bootstrap on, both ranks call
+   `setup_nccl`, both create `.cache/jittor/nccl` through
+
+       if not os.path.isdir(cache_path): os.mkdir(cache_path)
+
+   and the loser died with `FileExistsError: .../.cache/jittor/nccl`. Sharing a
+   JITTOR_HOME across ranks is *the* case where two processes create this
+   directory at once, so the race was the ordinary path. Now
+   `os.makedirs(..., exist_ok=True)` (which also creates a missing parent, as
+   the bare `mkdir` did not).
+
+3. **NCCL is not found without mpirun, and the store rendezvous then times out.**
+   `setup_nccl` will use a system NCCL if given
+   `JT_BUILD_NCCL_INCLUDE_PATH` / `JT_BUILD_NCCL_LIB_PATH`, otherwise it goes to
+   `install_nccl`, whose `if not inside_mpi(): return` still sits under the
+   comment saying the mpirun-free path is meant to build too -- so on this box
+   (system NCCL 2.27.3 in `/lib64`, `nccl.h` in `/usr/include`) the no-mpirun
+   path can never find it. With the two variables set, the NCCL ops compile and
+   publish (the earlier "did not publish collective ops" goes away), and the
+   run then stops at
+
+       RuntimeError: NCCL store rendezvous timeout: rank 1 waited 120 s and
+       timed out using the provided Store
+
+   i.e. rank 1's `store.get("jittor/nccl/world/unique_id")` never sees rank 0's
+   `set`. vLLM-Omni passes `init_method="tcp://..."` (not a `store`), so the
+   store comes from the shim's own `_store_rendezvous`; whether both ranks end
+   up on one store is where to look next.
+
+So: **single-GPU serving is done; TP2 is not, and the remaining work is a
+two-rank repro of the store rendezvous**, not more H3 or vLLM-Omni work. Until
+that lands, `--num-gpus 1` is the only configuration this shim has run.
+
 ## Verification
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails
