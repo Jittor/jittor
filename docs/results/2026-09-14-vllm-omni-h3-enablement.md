@@ -574,6 +574,12 @@ higher resolutions needed:
 - 256x256 still works on both backends, and at 2 steps the two agree
   pixel-for-pixel in character, which is the control that says the FLASH_ATTN
   path did not change the small case.
+- The control that decides attribution: at 256x256 / 50 steps / seed 11223 the
+  long structured pottery prompt produces the same dotted-tile texture on
+  **both** backends -- the TORCH_SDPA run and the FLASH_ATTN run are the same
+  picture. That texture is therefore a prompt-and-seed property of the model at
+  256, not a backend defect, and it is why the conclusion above rests on 512,
+  where the two backends genuinely differ.
 
 **Not chased here.** `TORCH_SDPA` above 256x256 remains wrong by design: the
 CUDA row's guarantee is what FLASH_ATTN provides, so the serving profile now
