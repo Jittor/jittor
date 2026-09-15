@@ -288,6 +288,22 @@ struct VarHolder {
         return (int32)(var->flags.flags);
     }
 
+    /**
+     * Whether the executor has finished this Var's node.
+     *
+     * A finished node has released its pending liveness and will not be
+     * executed again. That is the normal end of a graph's single use, but it
+     * is exactly what a `keep_graph` caller must not let happen behind its
+     * back: reading a value out of a kept graph finishes it, and so does any
+     * other work that finishes a node the kept graph shares. The graph then
+     * still answers -- with the values it last computed -- so a replay has to
+     * be able to ask.
+     */
+    // @pyjt(__get__is_finished)
+    inline bool is_finished() {
+        return var->is_finished();
+    }
+
     /** 
      * disable the gradient calculation for the Var.
      */
@@ -514,6 +530,61 @@ struct VarHolder {
 
     // @pyjt(__set__data)
     void set_data(ArrayArgs&& array);
+
+    /** Overwrite this Var's existing buffer, leaving it where it already is.
+
+        `set_data` migrates the Var to the host first, so feeding a
+        device-resident input costs a device-to-host move and then a move back
+        on the next kernel that reads it. That is the wrong shape for the one
+        case this exists for: re-running a kept graph (`keep_graph`) with new
+        input each step, where the buffer is already on the device and only its
+        contents change.
+
+        Requires an allocated, dense Var of matching dtype and size: this
+        writes bytes into a buffer a graph may already point at, so it refuses
+        anything it cannot describe rather than writing somewhere wrong.
+     */
+    // @pyjt(_write_inplace)
+    void write_inplace(ArrayArgs&& array);
+
+    /**
+        Overwrite this Var's buffer with another Var's contents, in place.
+
+        The device-resident twin of `_write_inplace`: the source stays where
+        it is and the bytes move straight across, so feeding a kept graph
+        from a Var that is already on the accelerator costs one ordered
+        device-to-device copy rather than a round trip through the host.
+
+        Same refusals as `_write_inplace`, on both Vars.
+     */
+    /**
+        `sync_src=false` copies the source's bytes WITHOUT resolving it first.
+
+        That is the difference between reading a kept graph's answer and
+        re-running the kept graph to produce it again. After the graph has
+        been replayed -- through the executor or as a recorded device graph --
+        its output buffer already holds the current bytes, and syncing it
+        would execute the whole thing a second time. The caller is then
+        promising that the bytes are current and that the copy is ordered
+        behind whatever produced them, which stream order gives.
+     */
+    // @pyjt(_copy_into)
+    void copy_into(VarHolder* src, bool sync_src=true);
+
+    /**
+        Give back a graph that was kept with `keep_graph`.
+
+        `keep_graph` marks every node it leaves unfinished, and a marked node
+        is never finished -- not by the batch that built it and not by any
+        later batch that collects it, which is what lets a kept graph survive
+        an ordinary `sync_all`. The mark therefore has to be taken off
+        deliberately: this walks back from the Var through everything that
+        produced it and clears it, after which a normal sync finishes them and
+        the memory is reclaimed. Without it a kept graph leaks for the life of
+        the process.
+     */
+    // @pyjt(_release_kept)
+    void release_kept();
 
     // @pyjt(share_with)
     // @attrs(return_self)

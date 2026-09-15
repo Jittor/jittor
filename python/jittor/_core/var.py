@@ -467,7 +467,7 @@ def zeros_like(x, dtype=None) -> Var:
     if dtype is None: dtype = x.dtype
     return zeros(x.shape, dtype)
 
-def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
+def var(x, dim=None, dims=None, unbiased=False, keepdims=False, keepdim=None):
     """ return the sample variance. If unbiased is True, Bessel's correction will be used.
 
     :param x: the input jittor Var.
@@ -495,6 +495,9 @@ def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
     shape = x.shape
     new_shape = list(x.shape)
 
+    # `keepdim` is torch's spelling of `keepdims`; see jittor/ops/numerical.py:all.
+    if keepdim is not None:
+        keepdims = keepdim
     if dim is not None and dims is not None:
         raise ValueError("dim and dims can not be both set")
     if dim is None and dims is None:
@@ -522,8 +525,12 @@ def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
 
 Var.var = var
 
-def std(x, dim=None, keepdim=False):
+def std(x, dim=None, keepdim=False, keepdims=None):
     import jittor as jt
+    # This one took `keepdim` and rejected `keepdims` -- the opposite of `var`
+    # right above it. See jittor/ops/numerical.py:all.
+    if keepdims is not None:
+        keepdim = keepdims
     if dim is None:
         matsize=1
         for i in x.shape:
@@ -555,23 +562,36 @@ Var.norm = norm
 
 origin_reshape = reshape
 
+#: The genuine builtin `int`, and the two concrete sequence types a shape
+#: arrives as. In this namespace `int`/`all`/`any` are shadowed by jittor's
+#: dtype and reductions, so the builtin has to be reached through an instance;
+#: hoisting it out of `view` keeps that lookup off a path every reshape takes.
+_pyint = (0).__class__
+
+
 def view(x, *shape):
-    if len(shape) == 1 and isinstance(shape[0], (Sequence, NanoVector)):
-        shape = shape[0]
+    # `type(...) is tuple or list` before the abstract check: `Sequence` is an
+    # ABC, and an `isinstance` against an ABC goes through `_abc_instancecheck`
+    # -- an order of magnitude dearer than an identity test, on a path every
+    # `reshape`, `view` and internal flatten takes. Measured at ~5 us per pure
+    # view, which a `matmul_transpose` pays twice. The ABC branch is kept for
+    # the shapes that really are some other sequence.
+    if len(shape) == 1:
+        first = shape[0]
+        tf = type(first)
+        if tf is tuple or tf is list or isinstance(first, (Sequence, NanoVector)):
+            shape = first
     # torch accepts 0-d int tensors / numpy ints as shape elements (e.g. longformer's
     # `_chunk` passes torch.div(size, n) into .view); jittor's core reshape needs plain
     # int64. Coerce only when a non-int element is present — plain-int shapes (the hot
     # path) are untouched, so this can't change existing behavior, only un-break it.
-    # (NB: in this namespace `int`/`all`/`any` are shadowed by jittor's dtype/reductions,
-    # so use an explicit loop and grab the genuine builtin int via `(0).__class__`.)
-    pyint = (0).__class__
     coerce = False
     for s in shape:
-        if type(s) is not pyint:
+        if type(s) is not _pyint:
             coerce = True
             break
     if coerce:
-        shape = tuple(pyint(s.item()) if isinstance(s, Var) else pyint(s) for s in shape)
+        shape = tuple(_pyint(s.item()) if isinstance(s, Var) else _pyint(s) for s in shape)
     result = origin_reshape(x, shape)
     result._set_storage_view_of(x, False)
     return result
@@ -601,11 +621,14 @@ def _load_accelerator_transpose():
     Failing to build cuTT is not fatal -- TransposeOp has its own kernel -- so
     it is reported once and not retried.
     """
-    from jittor.compiler import LOG
     global _accelerator_transpose_tried
     if _accelerator_transpose_tried:
         return
     _accelerator_transpose_tried = True
+    # The import is inside the guard: it walks `sys.modules` and does an
+    # attribute lookup, and it used to run on every transpose in every model
+    # rather than on the one call that actually builds cuTT.
+    from jittor.compiler import LOG
     try:
         _get_library("cutt", load=True)
     except Exception as e:
@@ -674,6 +697,27 @@ def _transpose_permutation(dim, ndim, shape):
     caller mistakes, so they are reported here, where the argument still has a
     name and the var still has a shape to print.
     """
+    # A permutation of exact, in-range, distinct python ints -- which is what
+    # `x.transpose(0, 2, 1, 3)` and every framework-generated permutation is --
+    # is accepted here. `numbers.Integral` is an ABC, so the isinstance below
+    # reaches `ABCMeta.__instancecheck__` for every axis of every transpose;
+    # the loop after it then builds a dict to find repeats. Anything this does
+    # not accept (a negative axis, a numpy integer, a Var, a wrong count, a
+    # repeat) falls through to the checks below, which own every diagnostic.
+    if len(dim) == ndim:
+        fast = []
+        seen_mask = 0
+        for value in dim:
+            if type(value) is not _pyint or not 0 <= value < ndim:
+                break
+            bit = 1 << value
+            if seen_mask & bit:
+                break
+            seen_mask |= bit
+            fast.append(value)
+        else:
+            return tuple(fast)
+
     axes = []
     for position, value in enumerate(dim):
         if isinstance(value, Var):
@@ -728,14 +772,13 @@ def transpose(x, *dim):
     # NumPy helpers such as np.argsort return numpy.integer axis values.  The
     # C++ transpose binding requires exact Python ints, while torch accepts any
     # integral sequence in Tensor.permute().
-    pyint = (0).__class__
     coerce = False
     for d in dim:
-        if type(d) is not pyint:
+        if type(d) is not _pyint:
             coerce = True
             break
     if coerce:
-        dim = tuple(pyint(d.item()) if isinstance(d, Var) else pyint(d) for d in dim)
+        dim = tuple(_pyint(d.item()) if isinstance(d, Var) else _pyint(d) for d in dim)
     out = _try_dispatch("tensor.transpose", x, dim)
     if out is None:
         out = origin_transpose(x, dim)
@@ -1105,7 +1148,7 @@ def _check_arg_reduce_is_answerable(op, x, dim):
             % (op, dim, list(shape), op))
 
 
-def argmax(x: Var, dim: int, keepdims:bool=False):
+def argmax(x: Var, dim: int, keepdims:bool=False, keepdim=None):
     ''' Returns the indices and values of the maximum elements along the specified dimension.
 
     :param x: the input Var.
@@ -1141,11 +1184,15 @@ def argmax(x: Var, dim: int, keepdims:bool=False):
         if dim < 0:
             dim += nd
         _check_arg_reduce_is_answerable("argmax", x, dim)
+    # `keepdim` is torch's spelling of `keepdims`; the native ops take either,
+    # so the python wrappers must too. See jittor/ops/numerical.py:all.
+    if keepdim is not None:
+        keepdims = keepdim
     return jt.arg_reduce(x, "max", dim, keepdims)
 
 Var.argmax = argmax
 
-def argmin(x, dim: int, keepdims:bool=False):
+def argmin(x, dim: int, keepdims:bool=False, keepdim=None):
     ''' Returns the indices and values of the minimum elements along the specified dimension.
 
     :param x: the input Var.
@@ -1175,6 +1222,10 @@ def argmin(x, dim: int, keepdims:bool=False):
         if dim < 0:
             dim += nd
         _check_arg_reduce_is_answerable("argmin", x, dim)
+    # `keepdim` is torch's spelling of `keepdims`; the native ops take either,
+    # so the python wrappers must too. See jittor/ops/numerical.py:all.
+    if keepdim is not None:
+        keepdims = keepdim
     return jt.arg_reduce(x, "min", dim, keepdims)
 
 Var.argmin = argmin

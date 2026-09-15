@@ -99,6 +99,44 @@ BackendEvent backend_event(Device device, bool timing) {
     return {device, backend_ops(device.backend).event_create(device.index, timing)};
 }
 
+// -- graph capture ---------------------------------------------------------
+// All four answer for the accelerator's current device. They are deliberately
+// total: a backend with no capture support, or no accelerator at all, gets a
+// false/nullptr rather than an error, because the caller's fallback (launch
+// the kernels one by one, as always) is always available and always correct.
+static const BackendOps* graph_backend() {
+    const auto id = accelerator_backend_id();
+    if (id == BackendId::Cpu) return nullptr;
+    const auto& ops = backend_ops(id);
+    return ops.graph_capture_begin ? &ops : nullptr;
+}
+
+bool backend_graph_supported() { return graph_backend() != nullptr; }
+
+bool backend_graph_capture_begin() {
+    const auto* ops = graph_backend();
+    if (!ops) return false;
+    return ops->graph_capture_begin(ops->current_device());
+}
+
+void* backend_graph_capture_end() {
+    const auto* ops = graph_backend();
+    if (!ops) return nullptr;
+    return ops->graph_capture_end(ops->current_device());
+}
+
+void backend_graph_launch(void* graph) {
+    const auto* ops = graph_backend();
+    if (!ops || !graph) return;
+    ops->graph_launch(graph, ops->current_device());
+}
+
+void backend_graph_release(void* graph) {
+    const auto* ops = graph_backend();
+    if (!ops || !graph) return;
+    ops->graph_release(graph, ops->current_device());
+}
+
 const char* backend_name(BackendId id) {
     switch (id) {
     case BackendId::Cpu: return "cpu";

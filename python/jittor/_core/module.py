@@ -7,6 +7,12 @@ from builtins import int as ori_int
 from jittor_core import Var, ops
 from .hooks import _RemovableHandle, grad_hooker
 
+#: jittor's flags object and the automatic-replay policy, bound on first use.
+#: This module is imported while jittor is still being built up, so neither
+#: can be imported at the top.
+_FLAGS = None
+_auto_replay_for = None
+
 # This annotation historically refers to the native cast, not builtin bool.
 bool = ops.bool
 
@@ -92,7 +98,31 @@ class Module:
         # longer rewrites the class. See ``_hooks``.
         if self._has_hooks():
             return self.__hooked_call__(*args, **kw)
-        return self._dispatch_call(*args, **kw)
+        # A submodule of a call already running is part of that call's graph,
+        # not a graph of its own, so only the outermost call consults the
+        # policy. Ordering matters for cost: this branch is taken by every
+        # submodule -- 56 of the 57 module calls in an 8-layer transformer
+        # forward -- and it has to stay one attribute read and a jump.
+        if Module._call_depth:
+            return self._dispatch_call(*args, **kw)
+        flags = _FLAGS
+        if flags is None:
+            # Bound on first use, not imported at the top: this module is
+            # imported while jittor itself is still being built up.
+            import jittor
+            flags = globals()["_FLAGS"] = jittor.flags
+            globals()["_auto_replay_for"] = \
+                __import__("jittor._runtime.graph_replay", fromlist=["x"]).auto_replay_for
+        if not flags.auto_graph_replay:
+            return self._dispatch_call(*args, **kw)
+        replay = _auto_replay_for(self, args, kw)
+        Module._call_depth = 1
+        try:
+            if replay is not None:
+                return replay(*args)
+            return self._dispatch_call(*args, **kw)
+        finally:
+            Module._call_depth = 0
 
     def _dispatch_call(self, *args, **kw):
         """What ``__call__`` runs once the hooks have had their say.
@@ -520,9 +550,30 @@ class Module:
         if d is None and create:
             d = OrderedDict()
             self.__dict__[name] = d
+            # Every hook table is created here and only here, so this is the
+            # one place that has to remember a module ever had one. Written
+            # through __dict__ because Module.__setattr__ classifies
+            # assignments into parameters and buffers, and this is neither.
+            self.__dict__["_hook_table_created"] = True
         return d
 
+    #: Set once, on the module that first creates a hook table. Never cleared:
+    #: removing a hook leaves it True, which only costs that module the four
+    #: lookups below. Clearing it would be the unsafe direction -- a module
+    #: that still has hooks would stop running them.
+    _hook_table_created = False
+
+    #: How many module calls are on the stack. Class-level, not per instance:
+    #: it is a property of the call stack, not of any module.
+    _call_depth = 0
+
     def _has_hooks(self):
+        # `__call__` asks this for every module of every forward, and almost no
+        # module has ever had a hook: four dict lookups each, 228 a step on an
+        # 8-layer transformer. The flag answers that case with one attribute
+        # read that falls through to the class.
+        if not self._hook_table_created:
+            return False
         # NB: no bool() -- ``from jittor import *`` at the top of this module
         # rebinds the name to jittor's `bool` CAST OP, which raises on a dict.
         # The `or` chain already returns something falsy when every table is

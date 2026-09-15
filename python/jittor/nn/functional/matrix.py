@@ -126,31 +126,39 @@ def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul"):
     loads the routing functions of this file by name through the AST, so a
     private function called from here would have to be named there too.
     """
-    def describe(name, var):
-        return "%s:%s%s" % (name, var.dtype, list(var.shape))
-
-    if a.ndim == 0 or b.ndim == 0:
+    # The message formatter used to be a nested `describe`, i.e. a closure built
+    # on every call -- including the successful ones, which are all of them in a
+    # model. It is now inlined into the two error paths; the text is unchanged.
+    a_ndim = a.ndim
+    b_ndim = b.ndim
+    if a_ndim == 0 or b_ndim == 0:
         raise RuntimeError(
-            "%s: both operands need at least 1 dim, but got %s (%d-D) and "
-            "%s (%d-D)" % (op, describe("a", a), a.ndim,
-                           describe("b", b), b.ndim))
-    a_axis = 0 if a.ndim == 1 else (-2 if trans_a else -1)
-    b_axis = 0 if b.ndim == 1 else (-1 if trans_b else -2)
+            "%s: both operands need at least 1 dim, but got a:%s%s (%d-D) and "
+            "b:%s%s (%d-D)" % (op, a.dtype, list(a.shape), a_ndim,
+                               b.dtype, list(b.shape), b_ndim))
+    a_axis = 0 if a_ndim == 1 else (-2 if trans_a else -1)
+    b_axis = 0 if b_ndim == 1 else (-1 if trans_b else -2)
     inner_a = a.shape[a_axis]
     inner_b = b.shape[b_axis]
     if inner_a != inner_b:
         raise RuntimeError(
-            "%s: shapes cannot be multiplied, %s and %s: dim %d of a is %d but "
-            "dim %d of b is %d, and the two contracted dims must be equal"
-            % (op, describe("a", a), describe("b", b),
+            "%s: shapes cannot be multiplied, a:%s%s and b:%s%s: dim %d of a is "
+            "%d but dim %d of b is %d, and the two contracted dims must be equal"
+            % (op, a.dtype, list(a.shape), b.dtype, list(b.shape),
                a_axis, inner_a, b_axis, inner_b))
+    # `shape[:-2]` is empty as soon as either operand has 2 dims or fewer, so
+    # the loop below cannot run then -- but it still built two slices, two
+    # reversed views, a zip and an enumerate to discover that, on every matrix
+    # product in every model. `nn.Linear` is exactly that shape.
+    if a_ndim <= 2 or b_ndim <= 2:
+        return
     for offset, (left, right) in enumerate(
             zip(reversed(a.shape[:-2]), reversed(b.shape[:-2]))):
         if left != right and left != 1 and right != 1:
             raise RuntimeError(
-                "%s: batch dims do not broadcast, %s and %s: dim %d is %d in a "
-                "and %d in b, which must be equal or 1 in one of them"
-                % (op, describe("a", a), describe("b", b),
+                "%s: batch dims do not broadcast, a:%s%s and b:%s%s: dim %d is "
+                "%d in a and %d in b, which must be equal or 1 in one of them"
+                % (op, a.dtype, list(a.shape), b.dtype, list(b.shape),
                    -3 - offset, left, right))
 
 
@@ -173,16 +181,39 @@ def matmul_transpose(a, b):
             "matmul_transpose: b must be 2-D once a is, but got "
             "a:%s%s and b:%s%s" % (a.dtype, list(a.shape),
                                    b.dtype, list(b.shape)))
+    # A batched `a` is flattened and the result un-flattened, but by falling
+    # through rather than recursing into this function: the recursion paid
+    # `_check_matmul_shapes` a second time on operands derived from ones it had
+    # just checked, and this is the shape every `nn.Linear` on a batched input
+    # arrives with. The flattening is the same reshape as before.
+    restore = None
+    if len(a.shape) != 2:
+        # The 2-D kernel reads `a` as its flattened `(prod(leading), m)`, which
+        # for a dense row-major buffer is the same pointer and the same leading
+        # dimension -- so hand it the rank it already has instead of reshaping
+        # into rank 2 and back out. Those two reshapes are pure views that
+        # generate no code, but a graph node each, and measured 5.8 of the 7.9
+        # us this function costs per call. `> 2`, not `!= 2`: a rank-1 `a`
+        # reaches here too and its flattening is `(1, m)` -- a row the reshape
+        # has to add, not a rank the kernel can read off the buffer. A strided
+        # `a` is not described by the flattening and keeps the reshape.
+        if len(a.shape) > 2 and a._storage_is_contiguous():
+            fast = _matmul_2d_cublas(a, b, 0, 1)
+            if fast is not None:
+                return fast
+        restore = a.shape[:-1] + (-1,)
+        a = a.reshape((-1, a.shape[-1]))
     fast = _matmul_2d_cublas(a, b, 0, 1)
     if fast is not None:
-        return fast
+        return fast if restore is None else fast.reshape(restore)
 
     shape = list(a.shape)[:-1] + list(b.shape)
     with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce
                       | jt.amp_flags.reduce16_no_fp32_acc):
         a = a.broadcast(shape, [len(shape) - 2])
         b = b.broadcast(shape)
-        return (a * b).sum(len(shape) - 1)
+        out = (a * b).sum(len(shape) - 1)
+    return out if restore is None else out.reshape(restore)
 
 
 def bmm_transpose(a, b):
@@ -417,6 +448,20 @@ def matmul(a, b):
         #     -->
         #     012
         if len_b == 2 and len_a > 2:
+            # The 2-D kernel reads `a` as its flattened `(prod(leading), m)`,
+            # which for a dense row-major buffer is the same pointer and the
+            # same leading dimension -- so hand it the higher rank directly
+            # rather than reshaping into rank 2 and back out. Those two reshapes
+            # are pure views that generate no code, but a graph node each:
+            # measured at 64 of the 408 nodes a transformer decode step builds,
+            # and 34% of a stack of Linears. `a` must actually be dense for the
+            # flattening to describe it, so a strided view keeps the old route.
+            if a._storage_is_contiguous():
+                b_base = _transpose_base_last2(b)
+                bb = b_base if b_base is not None else b
+                fast = _matmul_2d_cublas(a, bb, 0, 1 if b_base is not None else 0)
+                if fast is not None:
+                    return fast
             # TODO:ugly implementation for tuner
             aa = a.reshape((-1, m))
             cc = jt.nn.matmul(aa, b)

@@ -44,7 +44,8 @@ namespace jittor {
 
 EXTERN_LIB MemoryProfiler memory_profiler;
 DEFINE_FLAG(int, lazy_execution, 1, "Default enabled, if disable, use immediately eager execution rather than lazy execution, This flag makes error message and traceback infomation better. But this flag will raise memory consumption and lower the performance.");
-DEFINE_FLAG(int, auto_flush_ops, 128, "Pipeline graph construction with device execution on CUDA. Once this many operators have been created since the executor last ran, launch everything pending without waiting for the device, so the device computes while Python keeps building the rest of the step. 0 keeps fully lazy execution. Fusion and dead-code elimination still apply within each launched segment; CPU execution is synchronous and never flushes early.");
+DEFINE_FLAG(int, auto_flush_ops, 128, "Pipeline graph construction with device execution on CUDA. Once this many operators have been created since the executor last ran, launch everything pending -- IF that pending work is also worth at least `auto_flush_bytes` (see there). 0 keeps fully lazy execution. Fusion and dead-code elimination still apply within each launched segment; CPU execution is synchronous and never flushes early.");
+DEFINE_FLAG(int64, auto_flush_bytes, 8<<20, "How much pending output a flush must be carrying before it is worth taking. A flush CUTS the step's graph into two batches, and fusion is decided within a batch -- so an elementwise chain that straddles the cut becomes two kernels and the second batch pays planning again. That is only worth paying when there is real device work to overlap with. Counting operators cannot tell the two apart: a batch-1 decode step and a batch-8 sequence-256 step build the SAME ~100 operators, but the first has 200 KB of pending output and the second has tens of MB. Measured: gating on operators alone cost 1.09-1.16x on every host-bound case, while removing the flush entirely cost 1.11x on Resnet50 training and 1.16x on a batched transformer. 0 disables the size gate.");
 DECLARE_FLAG(int, profile_memory_enable);
 DEFINE_FLAG(int, gopt_disable, 0, "Disable graph optimizer.");
 DEFINE_FLAG(int, use_threading, 0, "Allow to use python threading with jittor.");
@@ -76,14 +77,27 @@ void Executor::submit_pending(Var* target, bool force) {
             && backend_ops(accelerator_backend_id()).execution.supports_auto_flush
             && Op::number_of_created_ops - pipeline.last_run_ops >= auto_flush_ops) {
         vector<Var*> vars;
+        int64 pending_bytes = 0;
         for (auto holder : runtime_holder_state().holders()) {
             auto var = holder->var;
             if (var->_outputs.size() || var->is_finished()) continue;
+            // The third place a kept graph must not be picked up as a
+            // bystander (see `top_weak_sync` and `sync_all`), and the easiest
+            // to miss: this fires in the middle of the NEXT call's
+            // construction, so the kept graph is re-executed while the caller
+            // is still building the work that was going to replace it.
+            if (var->flag(VarFlags::_kept)) continue;
             auto op = var->input();
             if (op && op->flag(OpFlags::_must_stay_pending)) continue;
             vars.push_back(var);
+            pending_bytes += var->size;
         }
-        if (vars.size()) {
+        // Enough operators, but is there enough work? Cutting the graph costs
+        // a fusion boundary and a second planning pass; that only pays for
+        // itself when the device has something substantial to chew on
+        // meanwhile. Re-arm rather than flush when it does not, so the next
+        // decision is another `auto_flush_ops` away instead of every op.
+        if (vars.size() && (auto_flush_bytes <= 0 || pending_bytes >= auto_flush_bytes)) {
             PendingSubmissionScope scope(pipeline);
             run_sync(vars, false, false);
         } else {
@@ -182,6 +196,23 @@ static void top_weak_sync(vector<Var*>& vars) {
         if (epoch.marked(v)) continue;
         if (v->_outputs.size()) continue;
         if (v->is_finished()) continue;
+        // A kept graph is run on purpose, by whoever kept it, and never as a
+        // bystander of somebody else's sync. Widening a batch with one costs a
+        // full re-execution of a graph nobody asked for -- traced on a
+        // step-sized capture, every one of these three paths ran the whole
+        // 316-operator graph again behind the caller's back.
+        //
+        // And re-execution is not always merely wasted. `share_with` lets an
+        // operator's output land in a buffer the same graph reads, which is
+        // how a replay advances state in place; for such a graph an
+        // unrequested run is a silent state change, with the operator counts
+        // and every statistic still looking right. So the rule is strict:
+        // only the owner runs it.
+        //
+        // Consumers are unaffected. This only widens the ROOTS, and phase 2
+        // still collects any unfinished input of what was actually requested,
+        // kept or not.
+        if (v->flag(VarFlags::_kept)) continue;
         vars.push_back(v);
     }
 }

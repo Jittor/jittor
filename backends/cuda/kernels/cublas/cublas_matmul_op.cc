@@ -66,21 +66,65 @@ VarPtr CublasMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     return make_cublas_matmul(a, dout, trans_a^1, 0);
 }
 
+// An operand of rank > 2 is the same buffer as its rank-2 flattening: a dense
+// row-major `(d0, .., dn-1, m)` is `(d0*..*dn-1, m)`, same pointer, same leading
+// dimension. cuBLAS only ever sees the flattened extents, so accepting the
+// higher rank here costs nothing at the kernel and saves the caller two pure
+// view nodes per call -- `matmul` used to reshape into rank 2 and back out,
+// which was 64 of the 408 graph nodes in a transformer decode step.
+static void flatten_2d(const NanoVector& shape, int64& rows, int64& cols) {
+    rows = 1;
+    for (uint i = 0; i + 1 < shape.size(); ++i) rows *= shape[i];
+    cols = shape[shape.size() - 1];
+}
+
 void CublasMatmulOp::infer_shape() {
-    USER_CHECKop(a->shape.size(),==,2);
-    USER_CHECKop(b->shape.size(),==,2)
-        << "cublas matmul requires rank-2 input b, got rank " << b->shape.size();
-    int n = a->shape[0], m = a->shape[1];
-    int m_ = b->shape[0], k = b->shape[1];
-    if (trans_a) {
-        swap(n, m);
-    }
-    if (trans_b) {
-        swap(m_, k);
-    }
+    USER_CHECKop(a->shape.size(),>=,2)
+        << "cublas matmul requires rank-2 or higher input a, got rank " << a->shape.size();
+    USER_CHECKop(b->shape.size(),>=,2)
+        << "cublas matmul requires rank-2 or higher input b, got rank " << b->shape.size();
+    // The flattening below is only a description of the buffer when the buffer
+    // is dense: a strided rank>2 operand would be read at addresses that are
+    // not its own. The callers that build a rank>2 operand check this, but the
+    // gradients build one too (`matmul(dout, b, ..)` and `matmul(a, dout, ..)`),
+    // and a cotangent can arrive as a view -- so the contract is enforced here,
+    // where every route passes, rather than at each route.
+    USER_CHECK(a->shape.size() == 2 || a->is_contiguous())
+        << "cublas matmul needs a dense rank>2 input a; got strides"
+        << a->storage_strides << "for shape" << a->shape
+        << "(call contiguous() first, or pass rank 2)";
+    USER_CHECK(b->shape.size() == 2 || b->is_contiguous())
+        << "cublas matmul needs a dense rank>2 input b; got strides"
+        << b->storage_strides << "for shape" << b->shape
+        << "(call contiguous() first, or pass rank 2)";
+    int64 an, am, bn, bm;
+    flatten_2d(a->shape, an, am);
+    flatten_2d(b->shape, bn, bm);
+    // after op(): n x m times m_ x k
+    int64 n = an, m = am, m_ = bn, k = bm;
+    if (trans_a) swap(n, m);
+    if (trans_b) swap(m_, k);
     USER_CHECKop(m,==,m_)
         << "cublas matmul inner dimensions must match, but got " << m << " and " << m_;
-    c->set_shape({n, k});
+    // Without a transpose the result's rows are a's leading axes, so they keep
+    // their individual extents; with one they are a's last axis and the result
+    // is rank 2. Either way the row count is `n`, which is what the kernel and
+    // the allocation see.
+    if (!trans_a && a->shape.size() > 2) {
+        // `push_back_check_overflow`, not `push_back`: NanoVector packs every
+        // dimension into one 64-bit word and the bare push_back does not check
+        // that budget. `set_shape({n, k})` below reaches the checked one through
+        // the initializer-list constructor, so using the unchecked one here
+        // would be the one place a shape past the budget is written silently --
+        // and a wrong shape is a wrong allocation and an out-of-bounds write.
+        NanoVector cshape;
+        for (uint i = 0; i + 1 < a->shape.size(); ++i)
+            cshape.push_back_check_overflow(a->shape[i]);
+        cshape.push_back_check_overflow(k);
+        c->set_shape(cshape);
+    } else {
+        c->set_shape({n, k});
+    }
 }
 
 void CublasMatmulOp::jit_prepare(JK& jk) {
@@ -102,17 +146,24 @@ void CublasMatmulOp::jit_run() {
     void* alpha_p = (void*)&alpha_f;
     void* beta_p = (void*)&beta_f;
 
+    // The flattened extents, not shape[0]/shape[1]: an operand of rank > 2 is
+    // the same dense buffer as its rank-2 flattening (see infer_shape).
     const auto& as = a->shape;
     const auto& bs = b->shape;
-    auto n = as[0];
-    auto m = as[1];
-    auto k = bs[1];
+    int64 an = 1, bn = 1;
+    for (uint i = 0; i + 1 < as.size(); ++i) an *= as[i];
+    for (uint i = 0; i + 1 < bs.size(); ++i) bn *= bs[i];
+    auto am = as[as.size()-1];
+    auto bm = bs[bs.size()-1];
+    auto n = an;
+    auto m = am;
+    auto k = bm;
     if ('@Trans_a'=='T') {
-        n = as[1];
-        m = as[0];
+        n = am;
+        m = an;
     }
     if ('@Trans_b'=='T') {
-        k = bs[0];
+        k = bn;
     }
     bool has_fp16 = a->dtype() == ns_float16
         || b->dtype() == ns_float16 || c->dtype() == ns_float16;

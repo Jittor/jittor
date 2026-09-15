@@ -4,6 +4,10 @@ from threading import RLock
 from types import ModuleType
 from typing import Dict
 
+#: A memo miss. `None` is a real answer ("switched off", "not loaded"), so it
+#: cannot double as the sentinel.
+_MISS = object()
+
 
 class BackendLibraries:
     """One publication point for modules, their ops, and build resources."""
@@ -15,6 +19,20 @@ class BackendLibraries:
         self._resources = {}
         self._loading = set()
         self._lock = RLock()
+        #: Answers already given for names that have no `enabled` policy, so a
+        #: settled lookup costs one dict read instead of three frames, an RLock
+        #: and three dict reads. Every matrix product asks for "cublas" twice
+        #: (once to decide it can be dispatched, once to call it), and the
+        #: dispatch layer asks again per kernel entry, so this is on the hot
+        #: path of every model. A name WITH an `enabled` policy is never
+        #: memoized: `use_mkl` is read from a module global and an environment
+        #: variable, both of which a test may flip between calls.
+        self._memo = {}
+
+    def _forget(self):
+        # Any registration can change what a lookup answers -- including one
+        # for a different name, because a loader may register several.
+        self._memo = {}
 
     def register_loader(self, name, loader, *, enabled=None):
         if not callable(loader):
@@ -25,6 +43,7 @@ class BackendLibraries:
             self._loaders[name] = loader
             if enabled is not None:
                 self._enabled[name] = enabled
+            self._forget()
 
     def register(self, name, module):
         with self._lock:
@@ -32,12 +51,20 @@ class BackendLibraries:
                 self._modules.pop(name, None)
             else:
                 self._modules[name] = module
+            self._forget()
 
     def register_resources(self, name, **resources):
         with self._lock:
             self._resources.setdefault(name, {}).update(resources)
+            self._forget()
 
     def get_library(self, name, *, load=False):
+        memo = self._memo.get((name, load, False), _MISS)
+        if memo is not _MISS:
+            return memo
+        return self._get_library_uncached(name, load, False)
+
+    def _get_library_uncached(self, name, load, want_ops):
         with self._lock:
             enabled = self._enabled.get(name)
             if enabled is not None and not enabled():
@@ -45,22 +72,39 @@ class BackendLibraries:
             module = self._modules.get(name)
             loader = self._loaders.get(name)
             if module is not None or not load or loader is None:
-                return module
+                return self._settle(name, load, want_ops, enabled, module)
             if name in self._loading:
                 raise RuntimeError("recursive backend library load: " + name)
             self._loading.add(name)
             try:
                 loader()
-                return self._modules.get(name)
+                return self._settle(name, load, want_ops, enabled,
+                                    self._modules.get(name))
             except BaseException:
                 self._modules.pop(name, None)
                 raise
             finally:
                 self._loading.remove(name)
 
+    def _settle(self, name, load, want_ops, enabled, module):
+        """The answer, memoized unless an `enabled` policy can change it.
+
+        Called with `self._lock` held, and `loader()` above may have registered
+        -- which clears the memo -- so the entry is written after that, not
+        before.
+        """
+        answer = module
+        if want_ops:
+            answer = getattr(module, "ops", None) if module is not None else None
+        if enabled is None:
+            self._memo[(name, load, want_ops)] = answer
+        return answer
+
     def get_library_ops(self, name, *, load=False):
-        module = self.get_library(name, load=load)
-        return getattr(module, "ops", None) if module is not None else None
+        memo = self._memo.get((name, load, True), _MISS)
+        if memo is not _MISS:
+            return memo
+        return self._get_library_uncached(name, load, True)
 
     def library_resource(self, name, key):
         with self._lock:

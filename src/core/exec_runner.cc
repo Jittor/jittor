@@ -173,6 +173,27 @@ static inline int op_target_device(Op* op) {
 #endif
 
 
+// Opt-in: leave the batch's nodes unfinished so the same graph can be run
+// again. Normally the Runner ends each op with `finish_pending_liveness()`,
+// which sets `_finished` and releases the pending liveness of that op's inputs
+// -- that release is how intermediates are reclaimed, and it is also what makes
+// a graph single-use.
+//
+// Undoing it afterwards is NOT an option: `finish_pending_liveness` opens with
+// `if (is_finished()) return;`, so clearing the flag and running again would
+// release the same inputs a second time -- a refcount underflow and then a
+// use-after-free. The only safe form is to never finish in the first place,
+// which is what this does. The caller is then responsible for holding the
+// graph's vars; nothing is reclaimed while it is set.
+DEFINE_FLAG(int, keep_graph, 0, "Leave a batch's nodes unfinished so the same graph can be executed again. The caller must hold the graph: nothing it builds is reclaimed while this is on. Every leaf the graph reads must already be materialized before the graph is built, because a re-run re-executes whatever is still pending -- including a leaf's own producer, whose host staging is gone by then. 0 is the normal single-use behaviour.");
+
+// Read from python (`jittor/_runtime/graph_replay.py`), not from here: it is
+// the policy switch for re-running a repeated inference graph instead of
+// rebuilding it. It lives beside `keep_graph` because that is the mechanism it
+// drives.
+DEFINE_FLAG(int, auto_graph_replay, 1, "Re-run a repeated inference graph instead of rebuilding it every call. Applies only under no_grad, only to a call whose inputs are Vars whose total size is under `auto_graph_replay_bytes`, and only after the same shapes have been seen twice in a row; anything else, and anything the capture cannot serve, runs normally. 0 disables it.");
+DEFINE_FLAG(int64, auto_graph_replay_bytes, 64<<10, "How large the inputs of a call may be before it is left to run normally. Replay removes graph construction, which costs the same whatever the tensors weigh -- so it wins exactly when the device work per operator is small, and loses when the step was never host-bound to begin with. Input size is the cheap proxy for that, and it also bounds what a capture can retain. Measured on the comparison shapes: at 1 MB the policy engaged for a 256x1024 mlp forward (about a dozen operators, nothing to rebuild) and made it 0.39 -> 0.93 ms, and for a 128-token prefill, 2.88 -> 3.26. At 64 KB it engages for the decode steps, where it is 1.97 -> 0.86 against PyTorch, and leaves the rest alone.");
+
 void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                    vector<Var*>& vars, bool device_sync, int entry_device) {
     ExecutionBackendScope backend_scope(plan.backend);
@@ -368,9 +389,26 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             "/" >> queue.size() >> ") output:" << op->outputs();
         if (is_fused_op) {
             propergate_needed_flags(fused_op);
-            for (Var* var : op->outputs())
+            for (Var* var : op->outputs()) {
+                if (keep_graph) { var->set_flag(VarFlags::_kept); continue; }
+                if (var->flag(VarFlags::_kept)) continue;
                 var->finish_pending_liveness();
+            }
             continue;
+        }
+        // Leave everything alive and re-runnable; see the `keep_graph` flag
+        // and the `_kept` bit it sets, which is what makes a kept graph
+        // survive a batch that runs without the flag.
+        if (keep_graph) {
+            for (Var* var : op->outputs())
+                var->set_flag(VarFlags::_kept);
+            continue;
+        }
+        {
+            bool kept = false;
+            for (Var* var : op->outputs())
+                if (var->flag(VarFlags::_kept)) { kept = true; break; }
+            if (kept) continue;
         }
         // release liveness when op is finished
         // outputs may change during free, we need to backup it;

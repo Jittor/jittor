@@ -1082,11 +1082,14 @@ void UnaryOp::infer_shape() {
 }
 
 void UnaryOp::jit_prepare(JK& jk) {
+    bool strided = !x->is_contiguous();
     jk << "«Tx:" << x->dtype()
         << "«Ty:" << y->dtype()
         << "«OP:" << ns
         << "«DIM=" << JK::hex1(x->shape.size())
-        << "«XSTRIDED=" << JK::hex1(!x->is_contiguous());
+        << "«XSTRIDED=" << JK::hex1(strided);
+    // Only when it is read, so a contiguous operand keeps the key it had.
+    if (strided) jk << "«XSMASK=" << JK::hex(x->stride_pattern());
 }
 
 #else // JIT
@@ -1099,10 +1102,22 @@ void UnaryOp::jit_run() {
         @for(d, 0, DIM, index_t xstride@d = x->storage_stride(@d);)
     )
     for (index_t i=0; i<num; i++) {
-        index_t xi = i;
+        // Unflattening `i` costs a division and a modulo per axis, and both are
+        // dead for most of the axes most operands have. XSMASK says which axes
+        // move the physical index at all, and `i` is already below the extent of
+        // axis 0 by the time that axis is reached, so: an axis outside the mask
+        // contributes no term, its division survives only while a lower axis
+        // still reads `rem`, and axis 0 needs no modulo. A row broadcast keeps
+        // one modulo, a column broadcast one division, a rank-1 view neither.
         @if(XSTRIDED,
-            index_t rem = i; xi = 0;
-            @for(d, DIM-1, -1, -1, xi += (rem % xshape@d) * xstride@d; rem /= xshape@d;)
+            index_t xi = 0;
+            @if(XSMASK, index_t rem = i;)
+            @for(d, DIM-1, -1, -1,
+                @if(XSMASK>>d&1, xi += @if(d, (rem % xshape@d), rem) * xstride@d;)
+                @if(XSMASK&((1<<d)-1), rem /= xshape@d;)
+            )
+        ,
+            index_t xi = i;
         )
         yp[i] = @expand_op(@OP, @Ty, xp[xi], @Tx);
     }

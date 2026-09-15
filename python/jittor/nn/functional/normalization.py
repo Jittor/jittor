@@ -4,6 +4,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from functools import lru_cache, wraps
 
 import jittor as jt
+from jittor._runtime.core_api import _output_requires_grad
 
 from ... import _arg_policy
 from ..backends import hooks as _backend_hooks
@@ -308,25 +309,32 @@ def layer_norm(
     elementwise_affine: bool = True,
 ):
     normalized_shape = tuple(normalized_shape)
-    if not normalized_shape or len(normalized_shape) > x.ndim:
+    rank = len(normalized_shape)
+    if not rank or rank > x.ndim:
         raise ValueError("layer_norm normalized_shape must match trailing input dimensions")
-    if tuple(x.shape[-len(normalized_shape):]) != normalized_shape:
+    if tuple(x.shape[-rank:]) != normalized_shape:
         raise ValueError("layer_norm normalized_shape must match trailing input dimensions")
     for name, value in (("weight", weight), ("bias", bias)):
         if isinstance(value, jt.Var) and tuple(value.shape) != normalized_shape:
             raise ValueError("layer_norm {} must match normalized_shape".format(name))
-    dims = [-i for i in range(len(normalized_shape), 0, -1)]
     weight = 1.0 if weight is None else weight
     bias = 0.0 if bias is None else bias
-    fast = _restore_half_dtype(_layer_norm_cuda(
-        x, tuple(normalized_shape), weight, bias, eps
-    ), x)
+    # The two relays are mutually exclusive by construction: the training one
+    # requires `_output_requires_grad(x, weight, bias)` and the inference one
+    # requires its negation. Trying both meant every layer_norm paid two full
+    # dispatch rounds -- argument walk, placement, candidate list, dtype names,
+    # predicate -- to discover that one of them could never match. Ask the
+    # question once and try only the relay that can answer it. The half-dtype
+    # restore still wraps whichever relay ran: both return in the accumulation
+    # dtype and the caller expects the input's.
+    if _output_requires_grad(x, weight, bias):
+        fast = _restore_half_dtype(_layer_norm_cuda(
+            x, normalized_shape, weight, bias, eps), x)
+    else:
+        fast = _restore_half_dtype(_layer_norm_no_grad_cuda(
+            x, normalized_shape, weight, bias, eps), x)
     if fast is not None:
         return fast
-    fast = _restore_half_dtype(_layer_norm_no_grad_cuda(
-        x, tuple(normalized_shape), weight, bias, eps
-    ), x)
-    if fast is not None:
-        return fast
+    dims = [-i for i in range(rank, 0, -1)]
     xhat = _ln_normalize(x, dims, eps)
     return _restore_half_dtype(xhat * weight + bias, x)

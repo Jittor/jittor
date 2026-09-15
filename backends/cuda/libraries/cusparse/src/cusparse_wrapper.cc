@@ -21,6 +21,11 @@ static void cusparse_switch_device(int device) {
     if ((int)cusparse_handles.size() <= device) cusparse_handles.resize(device+1, nullptr);
     if (!cusparse_handles[device]) {
         checkCudaErrors(cusparseCreate(&cusparse_handles[device]));
+        // Every library handle must agree with jittor's own launches on the
+        // stream; see `compute_stream` in backends/cuda/runtime/driver.cc.
+        // `cudaStreamPerThread` does not synchronise with the legacy stream,
+        // so a handle left on the default would race with no error.
+        checkCudaErrors(cusparseSetStream(cusparse_handles[device], cudaStreamPerThread));
         LOGv << "cusparseCreate finished for device" << device << (void*)cusparse_handles[device];
     }
     cusparse_handle = cusparse_handles[device];

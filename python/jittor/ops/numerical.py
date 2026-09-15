@@ -6,20 +6,26 @@ import math
 from jittor_core import Var
 from .._runtime.dispatch import select_kernel, try_dispatch
 
-def all(x, dim=()):
+def all(x, dim=(), keepdims=False, keepdim=None):
+    """Reduce with logical AND. Takes `keepdims` or torch's `keepdim`."""
     import jittor as jt
-    result = try_dispatch("tensor.all", x, dim)
+    if keepdim is not None:
+        keepdims = keepdim
+    result = try_dispatch("tensor.all", x, dim, keepdims)
     if result is not None:
         return result
-    return jt.ops.all_(x, dim).bool()
+    return jt.ops.all_(x, dim, keepdims=keepdims).bool()
 
 
-def any(x,dim=()):
+def any(x, dim=(), keepdims=False, keepdim=None):
+    """Reduce with logical OR. Takes `keepdims` or torch's `keepdim`."""
     import jittor as jt
-    result = try_dispatch("tensor.any", x, dim)
+    if keepdim is not None:
+        keepdims = keepdim
+    result = try_dispatch("tensor.any", x, dim, keepdims)
     if result is not None:
         return result
-    return jt.ops.any_(x, dim).bool()
+    return jt.ops.any_(x, dim, keepdims=keepdims).bool()
 
 
 def normalize(input, p=2, dim=1, eps=1e-12):

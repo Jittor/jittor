@@ -4,6 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <unordered_set>
 #include <sstream>
 #include "core/var_holder.h"
 #include "core/var.h"
@@ -98,6 +99,91 @@ uint64 VarHolder::raw_ptr() {
     migrate_to_cpu(var, runtime_executor().allocator);
 #endif
     return (uint64)var->mem_ptr;
+}
+
+// Both Vars, described the same way, so the two entry points refuse the same
+// things in the same words.
+static void check_inplace_target(Var* var, const char* what) {
+    USER_CHECK(var->mem_ptr) << what << "needs an allocated tensor";
+    USER_CHECK(var->is_contiguous())
+        << what << "needs a dense tensor; got strides"
+        << var->storage_strides << "for shape" << var->shape;
+}
+
+void VarHolder::write_inplace(ArrayArgs&& array) {
+    ExecutorEntryScope entry;
+    // Not a device sync. The copy below goes to the same device as the
+    // buffer and is ordered against the work already queued on it, so the
+    // host does not have to stand and wait for the previous step to drain --
+    // which is the whole point when this is feeding a kept graph once per
+    // step. `sync(false, ...)` still resolves anything this Var is waiting on.
+    sync(false, false);
+    check_inplace_target(var, "_write_inplace");
+    USER_CHECK(array.dtype.dsize() == var->dtype().dsize()
+        && array.dtype.is_int() == var->dtype().is_int())
+        << "_write_inplace dtype mismatch:" << array.dtype << "into" << var->dtype();
+    int64 size = array.dtype.dsize();
+    for (int i=0; i<array.shape.size(); i++)
+        size *= array.shape[i];
+    USER_CHECK(size == var->size)
+        << "_write_inplace size mismatch:" << size << "bytes into" << var->size;
+    // Wherever the buffer already lives; no migration either way.
+    Device dst{};
+    if (var->allocator && var->allocator->is_cuda())
+        dst = Device{accelerator_backend_id(), var->device_id < 0 ? 0 : var->device_id};
+    // Ordered, not blocking: the bytes have to land before the kernels that
+    // read them, which is stream order, not a host-side wait. See the H2D
+    // branch in the CUDA backend's copy() for why the difference is 1000x.
+    backend_copy(var->mem_ptr, dst, array.ptr, {}, size, true);
+}
+
+void VarHolder::copy_into(VarHolder* src, bool sync_src) {
+    ExecutorEntryScope entry;
+    // Neither sync waits on the device; both only resolve what the Var is
+    // still pending on. The copy itself is stream-ordered against the work
+    // already queued, which is what makes this usable once per step.
+    sync(false, false);
+    // A kept graph re-executes whenever its output is synced, so a reader
+    // that already has the bytes -- the caller of a replayed graph -- must be
+    // able to say so instead of paying for the whole graph again.
+    if (sync_src) src->sync(false, false);
+    USER_CHECK(src->var->mem_ptr)
+        << "_copy_into(sync_src=False) needs a source that already holds its "
+           "bytes; this one has never been executed";
+    check_inplace_target(var, "_copy_into");
+    check_inplace_target(src->var, "_copy_into source");
+    USER_CHECK(src->var->dtype() == var->dtype())
+        << "_copy_into dtype mismatch:" << src->var->dtype() << "into" << var->dtype();
+    USER_CHECK(src->var->size == var->size)
+        << "_copy_into size mismatch:" << src->var->size << "bytes into" << var->size;
+    auto device_of = [](Var* v) {
+        Device d{};
+        if (v->allocator && v->allocator->is_cuda())
+            d = Device{accelerator_backend_id(), v->device_id < 0 ? 0 : v->device_id};
+        return d;
+    };
+    backend_copy(var->mem_ptr, device_of(var),
+                 src->var->mem_ptr, device_of(src->var), var->size, true);
+}
+
+void VarHolder::release_kept() {
+    ExecutorEntryScope entry;
+    // Breadth is irrelevant, reaching everything is not: an intermediate is
+    // only reclaimable once nothing upstream of the output still carries the
+    // mark, and the graph is a DAG, so the visited set is what keeps a
+    // diamond from being walked twice.
+    vector<Var*> stack{var};
+    std::unordered_set<Var*> seen{var};
+    while (stack.size()) {
+        Var* v = stack.back();
+        stack.pop_back();
+        v->set_flag(VarFlags::_kept, 0);
+        Op* op = v->input();
+        if (!op) continue;
+        for (Var* in : op->inputs())
+            if (seen.insert(in).second)
+                stack.push_back(in);
+    }
 }
 
 void VarHolder::set_data(ArrayArgs&& array) {
@@ -644,6 +730,11 @@ void sync_all(bool device_sync) {
     vector<Var*> vars;
     vars.reserve(runtime_holder_state().holders().size());
     for (auto v : runtime_holder_state().holders()) {
+        // Same reason `top_weak_sync` skips these: a kept graph is run on
+        // purpose by whoever kept it. `sync_all` cannot finish one anyway --
+        // `keep_graph` is what leaves it pending -- so sweeping it up here
+        // only re-runs it, every time anyone asks for everything to complete.
+        if (v->var->flag(VarFlags::_kept)) continue;
         if (!v->var->_outputs.size())
             vars.push_back(v->var);
     }

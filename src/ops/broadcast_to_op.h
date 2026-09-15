@@ -12,7 +12,13 @@ namespace jittor {
 
 struct BroadcastToOp : Op {
     static constexpr bool accepts_storage_strides = true;
-    bool is_storage_view() const override { return true; }
+    // An expand is normally a storage descriptor, but a one-element source
+    // keeps the computed form so the constant can fuse into its consumer;
+    // infer_shape decides which, the way GetitemOp decides `storage_view`.
+    // False until then, so an op asked before its shape is inferred is
+    // executed rather than skipped.
+    bool expand_is_view = false;
+    bool is_storage_view() const override { return expand_is_view; }
     void run() override;
     Var* x, * y, * z;
     NanoVector shape;
@@ -92,7 +98,9 @@ struct BroadcastToOp : Op {
     // @pybind(None)
     BroadcastToOp(Var* x, NanoVector shape, uint dims_mask, uint keepdims_mask);
 
-    bool need_broadcast(const Var* x, const NanoVector& shape);
+    // Static: a pure predicate on a shape pair, and BinaryOp asks it
+    // before deciding whether an operand needs a BroadcastToOp at all.
+    static bool need_broadcast(const Var* x, const NanoVector& shape);
     
     const char* name() const override { return "broadcast_to"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;

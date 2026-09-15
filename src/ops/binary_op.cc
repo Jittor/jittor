@@ -428,8 +428,25 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
             << "(broadcasting requires matching dims or one of them to be 1).";
     }
     if (need_broadcast) {
-        auto xp = make_broadcast_to(x, y, {});
-        auto yp = make_broadcast_to(y, x, {});
+        // Only the side that is actually short of the result shape gets a
+        // BroadcastToOp. `BroadcastToOp(x, y, {})` answers `need_broadcast`
+        // itself and forwards its input when the answer is no -- and when the
+        // other operand's shape is known, a dynamic one still needing the op.
+        // So building it for an operand that already has the result shape
+        // constructs an op purely to throw it away, and one operand is always
+        // in that position for the commonest broadcasts there are: `x * 0.5`,
+        // `x + bias`, `x * mask`.
+        VarPtr xh, yh;
+        Var* xp = x;
+        Var* yp = y;
+        if (y->num < 0 || BroadcastToOp::need_broadcast(x, y->shape)) {
+            xh = make_broadcast_to(x, y, {});
+            xp = xh;
+        }
+        if (x->num < 0 || BroadcastToOp::need_broadcast(y, x->shape)) {
+            yh = make_broadcast_to(y, x, {});
+            yp = yh;
+        }
         auto zp = make_binary(xp, yp, op);
         forward(zp);
         return;
@@ -636,13 +653,17 @@ void BinaryOp::infer_shape() {
 }
 
 void BinaryOp::jit_prepare(JK& jk) {
+    bool xs = !x->is_contiguous(), ys = !y->is_contiguous();
     jk << "«Tx:" << x->dtype()
         << "«Ty:" << y->dtype()
         << "«Tz:" << z->dtype()
         << "«OP:" << ns
         << "«DIM=" << JK::hex1(z->shape.size())
-        << "«XSTRIDED=" << JK::hex1(!x->is_contiguous())
-        << "«YSTRIDED=" << JK::hex1(!y->is_contiguous());
+        << "«XSTRIDED=" << JK::hex1(xs)
+        << "«YSTRIDED=" << JK::hex1(ys);
+    // Only when read, so a contiguous operand keeps the key it had.
+    if (xs) jk << "«XSMASK=" << JK::hex(x->stride_pattern());
+    if (ys) jk << "«YSMASK=" << JK::hex(y->stride_pattern());
 }
 
 #else // JIT
@@ -657,15 +678,32 @@ void BinaryOp::jit_run() {
     @if(XSTRIDED, @for(d, 0, DIM, index_t xstride@d = x->storage_stride(@d);))
     @if(YSTRIDED, @for(d, 0, DIM, index_t ystride@d = y->storage_stride(@d);))
     for (index_t i=0; i<num; i++) {
-        index_t xi = i;
-        index_t yi = i;
+        // Unflattening `i` costs a division and a modulo per axis, and both are
+        // dead for most of the axes most operands have. X/YSMASK say which axes
+        // move the physical index at all, and `i` is already below the extent of
+        // axis 0 by the time that axis is reached, so: an axis outside the mask
+        // contributes no term, its division survives only while a lower axis
+        // still reads `rem`, and axis 0 needs no modulo. A row broadcast keeps
+        // one modulo, a column broadcast one division, a rank-1 view neither.
         @if(XSTRIDED,
-            index_t xrem = i; xi = 0;
-            @for(d, DIM-1, -1, -1, xi += (xrem % zstorage_shape@d) * xstride@d; xrem /= zstorage_shape@d;)
+            index_t xi = 0;
+            @if(XSMASK, index_t xrem = i;)
+            @for(d, DIM-1, -1, -1,
+                @if(XSMASK>>d&1, xi += @if(d, (xrem % zstorage_shape@d), xrem) * xstride@d;)
+                @if(XSMASK&((1<<d)-1), xrem /= zstorage_shape@d;)
+            )
+        ,
+            index_t xi = i;
         )
         @if(YSTRIDED,
-            index_t yrem = i; yi = 0;
-            @for(d, DIM-1, -1, -1, yi += (yrem % zstorage_shape@d) * ystride@d; yrem /= zstorage_shape@d;)
+            index_t yi = 0;
+            @if(YSMASK, index_t yrem = i;)
+            @for(d, DIM-1, -1, -1,
+                @if(YSMASK>>d&1, yi += @if(d, (yrem % zstorage_shape@d), yrem) * ystride@d;)
+                @if(YSMASK&((1<<d)-1), yrem /= zstorage_shape@d;)
+            )
+        ,
+            index_t yi = i;
         )
         zp[i] = @expand_op(@OP, @Tz, xp[xi], @Tx, yp[yi], @Ty);
     }

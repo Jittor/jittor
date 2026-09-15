@@ -65,7 +65,8 @@ class TestMissingGradIsAlwaysReported(unittest.TestCase):
 for _ in range(3):
     loss, target = unrelated_pair()
     g = jt.grad(loss, target)
-    assert float(g.sum().numpy()[0]) == 0.0
+    # A full reduction is 0-d here, so there is no element to index.
+    assert float(g.sum().numpy()) == 0.0
 print("DONE")
 """)
         self.assertEqual(code, 0, output[-4000:])

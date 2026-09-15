@@ -57,6 +57,10 @@ def _acl_fused_sgd_updates(entries, lr, momentum, weight_decay, dampening, neste
 register_kernel("optim.sgd_fused", "acl", _acl_fused_sgd_updates,
                 dtypes=("float32",))
 
+# Registers the CUDA entry for the same operator. Imported for its side effect
+# and last, so that a build without the CUDA kernels still gets the ACL one.
+from jittor.backends.cuda.kernels.optim import fused_sgd_cuda as _fused_sgd_cuda  # noqa: E402,F401
+
 
 class SGD(Optimizer):
     """ SGD Optimizer.
@@ -118,14 +122,23 @@ class SGD(Optimizer):
             if not active:
                 continue
             fused = None
-            if momentum != 0 and pg.get("fused", getattr(self, "fused", None)) is not False:
-                # The fused kernel keeps a velocity buffer; the momentum-free
-                # shortcut below is already a single pass and stays generic.
+            if pg.get("fused", getattr(self, "fused", None)) is not False:
+                # Momentum-free is considered too. That shortcut is a single
+                # pass, but it is a single pass *per parameter*: two elementwise
+                # ops and a holder rebind, 96 times for an 8-layer transformer,
+                # which measured 1.11 ms of a 7.41 ms training step. A fused
+                # kernel does the whole list in one launch, which is what
+                # PyTorch's `foreach` SGD does.
                 fused = select_kernel("optim.sgd_fused", [item[0] for item in active])
             if fused is not None:
                 updates = fused(active, lr, momentum, weight_decay, dampening, nesterov)
                 for (p, _, v), (new_p, new_v) in zip(active, updates):
-                    _update_preserve_dtype(v, new_v)
+                    # Without momentum the velocity buffer holds nothing the
+                    # step needs, and a kernel that keeps it updates it in
+                    # place, so it is handed back as the same Var: rebinding it
+                    # would be a holder write per parameter for no reason.
+                    if new_v is not v:
+                        _update_preserve_dtype(v, new_v)
                     _update_preserve_dtype(p, new_p)
                 continue
             for p, g, v in active:

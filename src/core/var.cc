@@ -189,6 +189,13 @@ bool Var::is_contiguous() const {
     return true;
 }
 
+int Var::stride_pattern() const {
+    int mask = 0;
+    for (uint i=0; i<shape.size(); ++i)
+        if (storage_stride(i) != 0) mask |= 1 << i;
+    return mask;
+}
+
 // A view whose strides are exactly the contiguous ones needs no vector:
 // `storage_stride` derives those from the shape, and the empty vector is
 // already the "contiguous" sentinel every reader tests for. Storing them anyway

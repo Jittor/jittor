@@ -62,10 +62,20 @@ def log_softmax_ref(x, dim=-1):
 
 
 def reduce_ref(npfn):
-    """Wrap a numpy reduction so it matches jittor's (dim, keepdims) kwargs and
-    its (1,)-shaped full-reduce result (jittor has no 0-d scalar)."""
+    """Wrap a numpy reduction so it matches jittor's (dim, keepdims) kwargs.
+
+    This used to also wrap the result in ``np.atleast_1d`` "because jittor has
+    no 0-d scalar". It has one: a full reduce returns shape ``()``, the same as
+    numpy and torch -- checked across sum/mean/prod/max/min/std/var/median/
+    all/any/count_nonzero. The wrap therefore no longer papered over a jittor
+    limitation, it INVENTED a disagreement: the reference said ``(1,)``, the op
+    said ``()``, and every full-reduce sample of every one of those operators
+    failed on the shape. That is ~180 of the file's failures, from one stale
+    line -- and they hid whatever else is wrong in those operators, because a
+    shape mismatch fails before any value is compared.
+    """
     def ref(x, dim=None, keepdims=False):
-        return np.atleast_1d(npfn(x, axis=dim, keepdims=keepdims))
+        return npfn(x, axis=dim, keepdims=keepdims)
     return ref
 
 

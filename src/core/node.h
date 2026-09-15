@@ -96,6 +96,14 @@ struct VarFlags {
         // whose whole purpose is to take those bytes off the device, so a
         // tensor larger than half the card could not be moved off it at all.
         _host_resident,
+        // This var belongs to a graph someone is keeping to run again, so the
+        // executor must not finish it -- not in the batch that built it, and
+        // not in any later batch that happens to collect it. `keep_graph`
+        // alone cannot express that: it is read at execution time, so a graph
+        // kept under it survives only until the next batch runs without it,
+        // and an ordinary `jt.sync_all()` is such a batch. Cleared by
+        // `Var::release_kept`, which is what gives the graph back.
+        _kept,
         _end,
     };
 };

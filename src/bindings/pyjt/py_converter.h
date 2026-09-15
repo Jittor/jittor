@@ -464,6 +464,11 @@ DEF_IS(ArrayArgs, bool) is_type(PyObject* obj) {
         PyFloat_CheckExact(obj) ||
         PyLong_CheckExact(obj) ||
         PyBool_Check(obj) ||
+        // Not CheckExact: numpy's complex128 scalar is a subclass of python
+        // complex, and it is the one complex numpy scalar the type table
+        // cannot serve (NPY_CDOUBLE maps to ns_void). complex64 scalars are
+        // not a subclass and go down the numpy path, which handles them.
+        PyComplex_Check(obj) ||
         PyList_CheckExact(obj) ||
         PyObject_TypeCheck(obj, PyNumberArrType_Type);
 }
@@ -541,6 +546,22 @@ DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
         _fill_scalar_array_args(args, (int8)(obj == Py_True), ns_bool);
         return args;
     }
+    // A complex scalar. jittor's complex support is complex64 throughout --
+    // binary_dtype_infer returns ns_complex64 for every complex combination --
+    // so narrow here the same way a python float becomes float32 above.
+    // This has to precede the numpy scalar path: numpy's complex128 is a
+    // subclass of python complex, and NPY_CDOUBLE has no NanoString.
+    if (PyComplex_Check(obj)) {
+        T args;
+        args.buffer.reset(new char[sizeof(float32) * 2]);
+        auto* p = (float32*)args.buffer.get();
+        p[0] = (float32)PyComplex_RealAsDouble(obj);
+        p[1] = (float32)PyComplex_ImagAsDouble(obj);
+        args.ptr = args.buffer.get();
+        args.shape.push_back(1);
+        args.dtype = ns_complex64;
+        return args;
+    }
     if (PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type)) {
         auto ptr = GET_RAW_PTR(VarHolder, obj);
         return move(fetch_sync({ptr}).at(0));
@@ -616,8 +637,15 @@ DEF_IS(VarHolder*, PyObject*) to_py_object(T a) {
     auto vh_type = reinterpret_cast<PyTypeObject*>(frontend_type.obj);
     PyObjHolder obj(vh_type->tp_alloc(vh_type, 0));
     auto ptr = GET_RAW_PTR(T, obj.obj);
-    ((PyObject**)(((char*)obj.obj) + sizeof(PyObject) + sizeof(typename std::remove_pointer<T>::type)))[0] = PyDict_New();
-    // new attr_dict
+    // The instance dict is left NULL and created on demand. `tp_alloc` zeroes
+    // the slot; `tp_dictoffset` is set, so `PyObject_GenericSetAttr` builds it
+    // on the first attribute write and `PyObject_GenericGetDict` (the
+    // `__dict__` descriptor) builds it on the first read. `tp_traverse` and
+    // `tp_clear` use Py_VISIT/Py_CLEAR and `tp_dealloc` uses Py_XDECREF, all
+    // of which already accept NULL -- the dealloc path even documents it, for
+    // the failed-tp_init case. Eagerly allocating one cost a dict per Var
+    // *created*, and a graph step creates hundreds of intermediates that never
+    // carry an attribute.
     // will move and delete a
     new (ptr) typename std::remove_pointer<T>::type (a);
     GET_INITED_FLAG(typename std::remove_pointer<T>::type, 1, obj.obj) = 1;
