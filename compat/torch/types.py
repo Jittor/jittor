@@ -426,6 +426,26 @@ def _cuda_index_of(dev):
     return None
 
 
+def _var_is_host_parked(v):
+    """True for a Var that belongs on an accelerator device but currently sits
+    in host memory.
+
+    ``device_id`` names the device a Var *belongs* to; ``location()`` says where
+    its bytes *are*. jittor parks a device Var on the host whenever a CPU op
+    consumes it (``exec_runner.cc`` migrates a CPU op's inputs to the host and
+    keeps ``device_id``), and the executor moves it back when a device op
+    consumes it again. A tensor handed straight to an extension never passes
+    through that per-op migration, so the shim must not report a parked Var as
+    already being on its device: the extension reads a raw device pointer and
+    sees ``is_cuda() == False``.
+    """
+    try:
+        return v.location() == "cpu"
+    except EXPECTED as exc:
+        swallowed("torch/types.py _var_is_host_parked: return v.location() == 'cpu'", exc)
+        return False
+
+
 def _move_to_cuda_index(v, dev, default_index=None):
     """Return ``v`` on the CUDA device ``dev`` names, copying when it is
     somewhere else.
@@ -447,7 +467,11 @@ def _move_to_cuda_index(v, dev, default_index=None):
         swallowed("types.py _move_to_cuda_index: current = int(v.device_id)", exc,
                   "the Var is left where it is instead of being moved")
         return v
-    if current < 0 or current == idx:
+    # Matching ``device_id`` alone would accept a Var the executor has parked on
+    # the host, leaving ``x.cpu()``-style storage in place while the caller
+    # asked for the device. Native ``Var.to_device`` already tests residency
+    # (`location() == "device"`) for exactly this reason.
+    if current < 0 or (current == idx and not _var_is_host_parked(v)):
         return v
     return v.to_device(idx)
 
@@ -561,7 +585,11 @@ def _make_cuda_resident(v, force=False, inplace=False, device=None):
         if request is None:
             request = "cuda:%d" % v.device_id if v.placement_backend else "cuda"
         backend, index = _placement_request(jt, request)
-        if v.placement_backend == backend and v.device_id == index:
+        # The placement and the device index agreeing means the Var *belongs*
+        # there, not that its bytes are there: the executor parks a device Var
+        # in host memory when a CPU op consumes it and keeps both fields. Asking
+        # for the device must still move such a Var (see _var_is_host_parked).
+        if v.placement_backend == backend and v.device_id == index and not _var_is_host_parked(v):
             return v
         moved = v.to_device(index)
         if inplace:

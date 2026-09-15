@@ -465,9 +465,10 @@ exactly what that step is for, and the flash-attn routing above is the kind of
 thing it would own. Implementing it is the next real piece of work in this area
 -- it is not a one-line change, and it should not be guessed at.
 
-## 16. Open, and now diagnosed: every resolution above 256x256 loses the scene
+## 16. Every resolution above 256x256 lost the scene: a device Var parked on the host
 
-Not fixed, but the cause is identified and it is the same one as the speed.
+Fixed. The cause was the attention backend *and* the reason it could not be
+selected, and the two were one defect in the shim.
 
 **It is not a resolution problem.** 256x256 at 50 steps denoises to a real scene
 (hands pouring beans onto a white surface, coherent motion). 512x512 and the
@@ -498,17 +499,19 @@ survives and 512x512 / 832x480 do not.
 
 That is also the whole speed story: without a varlen kernel, `TORCH_SDPA`
 materialises the score matrix, and 832x480 runs at **25 s/step** (1236 s for 50
-steps) against the recipe's 0.73 s/step. The two open items are one item.
+steps) against the recipe's 0.73 s/step. The two open items were one item, and
+selecting FLASH_ATTN closed both -- see the numbers at the end of this section.
 
-**Why `FLASH_ATTN` cannot be selected yet.** It fails with
+**Why `FLASH_ATTN` could not be selected.** It failed with
 
     TORCH_CHECK failed: x.is_cuda() cu_seqlens_q must be on CUDA
 
 from `flash-attention/csrc/flash_attn/flash_api.cpp:20` -- a check in the real
-libtorch extension. Two candidate causes were chased and one is ruled out.
+libtorch extension. Three things were wrong, and all three are now fixed or
+accounted for.
 
-The import *was* wrong and *is* now fixed in the lab: `vllm_omni/diffusion/
-attention/backends/utils/fa.py` does
+The import *was* wrong and *is* fixed in the lab:
+`vllm_omni/diffusion/attention/backends/utils/fa.py` does
 
     from flash_attn_interface import flash_attn_varlen_func
 
@@ -524,41 +527,72 @@ in the repo yet because it is a deploy-surface change: the stub lists in
 `compat/tests/structure/test_torch_shim_structure.py` and
 `test_torch_shim_deploy.py` would have to carry it.
 
-**With the alias in place the same assert still fires**, so the import was not
-the whole story, and a run with `JITTOR_FLASH_ATTN_DIRECT_PACKED=0` fails the
-same way through the non-packed entry (`cu_seqlens_q.is_cuda()` instead of
-`x.is_cuda()` -- two macro instantiations). The failing frame is
-`compat/shim/backends/flash_attention/adapter.py:355` /
-`packed_low_level.varlen_fwd(...)`, the officially built extension.
+**The real cause is a parked Var.** jittor distinguishes *belonging* from
+*being*: `device_id` names the device a Var belongs to, `Var.location()` says
+where its bytes are, and the executor parks a device Var in host memory whenever
+a CPU op consumes it (`src/core/exec_runner.cc:319-322` migrates a CPU op's
+inputs to the host and deliberately keeps `device_id`), moving it back when a
+device op consumes it again (`:334-336`). A tensor handed straight to an
+extension never passes through that per-op migration.
 
-A trace added at that call site (in the deployed copy) shows the tensor is
-`device=cuda:0, is_cuda=True` **as Python sees it**, while the extension's
-`Tensor::is_cuda()` says otherwise. That predicate is
-`compat/shim/cpp_extension/include/torch/extension.h:232`, and it reads
-`vh_device_type`, whose own body calls `sync_for_data_ptr` before answering -- so
-by the time it returns 0 the Var has been materialised and its **allocator is a
-CPU one**. The data really is on the host, and the mechanism is
-"a host-allocated `cu_seqlens` Var reaching a CUDA-only extension entry", not
-"an unmaterialised Var".
+The pipeline parks `cu_seqlens` on its own, with one host read:
 
-I tried the fix that reasoning suggests -- materialise the incoming Var in the
-extension's pybind caster (`jtorch_aten.cu`, mirroring what `var_from_host_dev`
-already does for host-built tensors), rebuilt the extension, and **it did not
-help**; the change is reverted rather than left in unverified, because its guard
-(`mem_ptr` unset) was the wrong premise when `vh_device_type` already
-materialises. The next instrument is the same trace printing the *allocator*
-residency, and the question it answers is which frame builds a CPU-allocated
-`cu_seqlens`: `packed_sequence.py:223` creates one without `device=` (which real
-torch makes a CPU tensor, so the model must move it, and under the shim
-`.to(cuda)` does move it), while `denoise_loop.py:93-96` describes a *per-step
-rebuild* from Python ints "without a device sync per step" -- that rebuild is the
-prime suspect.
+    cu = packed["cu_seqlens"].to(torch.int32)   # denoise_loop.py:87
+    used = int(cu[1])                           # denoise_loop.py:92 -- parks it
+    cu.to(device)                               # denoise_loop.py:115
+
+`int(cu[1])` takes the `item()` path, which ends in `migrate_to_cpu` when
+`save_mem || _HAS_ACCELERATOR` (`src/core/var_holder.cc:709`), and views migrate
+with their group, so the base `cu` is parked too. The next line asks for the
+device and got the *metadata* answer instead: `_make_cuda_resident` returned
+early on `v.placement_backend == backend and v.device_id == index`
+(`compat/torch/types.py:564`) and `_move_to_cuda_index` on `current == idx`
+(`:450`), both of which are true for a parked Var because parking keeps both
+fields. The shim reported the tensor as already being on `cuda:0` while its
+bytes were on the host, so the extension correctly refused a host pointer.
+
+Reproduced standalone in six lines (`probe_cu_parking.py`), which is also the
+regression test: after `int(cu[1])` the Var reads `device=cuda:0, loc=cpu`, and
+`.to("cuda:0")` used to leave it that way.
+
+**The fix** is for both shortcuts to require real residence, which is what the
+native move already does -- `Var.to_device` refuses to skip unless
+`location() == "device"` (`python/jittor/_core/var.py:194`, with a comment
+describing this exact failure mode for `x.cpu().cuda()`). A parked Var now takes
+the device copy instead of the shortcut.
+
+**What it bought.** FLASH_ATTN runs, and the packed CUDA varlen path is what the
+higher resolutions needed:
+
+- 512x512, 50 steps -> a real, sharp scene. Previously the same request was the
+  16-px mosaic, and so was 832x480.
+- 512x512 per-step cost: **6.69 s/it** against TORCH_SDPA's **11.76 s/it**
+  (same request, same seed, layer-offloaded `dit`+`text_encoder`), and 380 s for
+  the whole 50-step request. TORCH_SDPA's number is not a correct-output
+  baseline: it still loses the packed multi-document boundaries, so at 512 it
+  is faster-per-step than nothing only in the sense of finishing.
+- 256x256 still works on both backends, and at 2 steps the two agree
+  pixel-for-pixel in character, which is the control that says the FLASH_ATTN
+  path did not change the small case.
+
+**Not chased here.** `TORCH_SDPA` above 256x256 remains wrong by design: the
+CUDA row's guarantee is what FLASH_ATTN provides, so the serving profile now
+selects FLASH_ATTN.
 
 One trap worth fixing while in there: `_official_import_identity` keys the built
 extension on the **build directory name and a generation counter, not on the
 source**. A changed `.cu` or `.h` is therefore silently ignored and the old
 kernel keeps running -- `JITTOR_FLASH_ATTN_FORCE_BUILD=1` is the only way to get
-a rebuild, which is how the assertion above was reproduced after the edit.
+a rebuild.
+
+**A pre-existing failure found on the way, left alone.**
+`compat/tests/torch/test_multi_device.py::TestMultiDeviceFacade::test_to_and_cuda_with_an_index`
+asserts that a bare `.to("cuda")` leaves a `cuda:1` tensor on `cuda:1`, and
+fails identically before and after this change. The bare-name path resolves the
+index from `torch.cuda.current_device()` (`compat/torch/frontend.py:55`), so it
+only holds when the ambient device happens to be 1 -- which a full file-order
+run arranges and an isolated run does not. It is a separate bug from this one
+and is not touched here.
 
 ## Verification
 
@@ -584,6 +618,13 @@ a rebuild, which is how the assertion above was reproduced after the edit.
   also dropped Transpose views.
 - 8: standalone probes: `as_strided` over a plain and over a slice of a larger
   flat buffer, and `empty_strided` + `copy_` matching the source.
+- 16: `compat/tests/torch/test_native_tensor_placement.py::test_a_device_var_parked_on_the_host_is_moved_back_by_to_device`
+  -- the new case, which fails pre-fix on `assert back.device_id == 0 and
+  back.location() == "device"` and passes after. The whole file passes (8/8),
+  as does `test_multi_device.py` (15/16, the one failure pre-existing and
+  isolated-run-only, see section 16). End-to-end: the 512x512 50-step request
+  that used to be the 16-px mosaic now renders a real scene, on a server whose
+  log carries zero `cu_seqlens_q must be on CUDA`.
 - Integration: with every fix above in the working tree, engine construction
   reached `[try] ENGINE-CONSTRUCTED` at 10.0 GiB peak during load and shut
   down cleanly (`vllmomni-try18.log`).
