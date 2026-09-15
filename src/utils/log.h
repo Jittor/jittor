@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cerrno>
 #include <cctype>
+#include <atomic>
 #include "core/types.h"
 
 namespace jittor {
@@ -156,11 +157,18 @@ struct Log {
         tail << " [check failed: " << cond << "]";
         return *this;
     }
+
+    template <class T>
+    static const T& _check_value(const T& value) { return value; }
+
+    template <class T>
+    static T _check_value(const std::atomic<T>& value) { return value.load(); }
+
     template <class A, class B>
     inline Log& check_tail_op(const char* sa, const A& a, const char* sop,
                               const char* sb, const B& b) {
-        tail << " [check failed: " << sa << '(' << a << ") " << sop
-             << ' ' << sb << '(' << b << ")]";
+        tail << " [check failed: " << sa << '(' << _check_value(a) << ") " << sop
+             << ' ' << sb << '(' << _check_value(b) << ")]";
         return *this;
     }
     inline Log& note_tail(const char* text) { tail << text; return *this; }
