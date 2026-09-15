@@ -368,6 +368,127 @@ So: **single-GPU serving is done; TP2 is not, and the remaining work is a
 two-rank repro of the store rendezvous**, not more H3 or vLLM-Omni work. Until
 that lands, `--num-gpus 1` is the only configuration this shim has run.
 
+## 14. `linspace` did not land on `end`, and every >= 4-step request died
+
+Found by serving the model and asking why the picture looked wrong. Two separate
+things were wrong, and only one of them was jittor.
+
+**The jittor defect.** `linspace` built its series as
+`i * (end - start) / (steps - 1) + start`, so the last point was a rounding
+result rather than `end`. On the **CPU placement**:
+
+| n | last value of `linspace(1.0, 0.0, n)` |
+| --- | --- |
+| 2 | `0` |
+| 4 | `-2.98e-08` |
+| 6 | `-1.49e-08` |
+| 8 | `-4.47e-08` |
+| 50 | `+2.05e-08` |
+
+numpy and torch both guarantee the endpoint exactly, and callers compare it.
+MiniMax-H3 builds its sigma schedule from `linspace(1.0, 0.0, num_inference_steps)`
+and validates `sigma_next >= 0`, so **every request with 4 or more denoise steps
+failed** with `ValueError: sigma_next must be non-negative`; 2 steps happened to
+round to exactly 0 and escaped. The CUDA placement also rounded to 0, which is
+why only the CPU one showed it. Fixed by pinning the endpoint
+(`jt.cat([res[:-1], jt.array([end], dtype=res.dtype)])`), with tests in
+`tests/ops/test_random_op.py`.
+
+**The configuration defect, and it was ours.** The lab workflow set
+`num_inference_steps = 2`. The sanctioned value is **50** -- every curl example
+and the benchmark table in `recipes/MiniMaxAI/MiniMax-H3.md`, and
+`tests/e2e/accuracy/minimax_h3` (`NUM_INFERENCE_STEPS = 50`, `FLOW_SHIFT = 12.0`,
+`AUDIO_FLOW_SHIFT = 3.0`, SSIM >= 0.97 against a reference). 2/4/8 steps produce
+undenoised output that looks like texture; 50 steps produce a real scene, and the
+audio tells the same story (rms 0.57 with peaks above 1.0 at 2 steps -- clipped
+noise -- versus rms 0.06 at 50).
+
+**Two corrections to earlier sections of this page.** The sub-second diagnosis
+that followed the "wrong picture" report was wrong twice over, and both are worth
+recording because the reasoning was tempting:
+
+* Section 11's table and the `_same_floating_dtype` analysis stand, but the
+  "671 s of outer product" attribution was measured before the sigma bug was
+  fixed, so the slow run and the crash were **different** faults, not one.
+* More importantly: several intermediate conclusions drawn while investigating
+  the wrong picture -- "the remote VAE decode is broken", "it is the tiling",
+  "it is the two Triton kernels" -- **were void**. They came from decoding
+  `real512.latents.npy` standalone, and that array is not in the space
+  `decode_latent` expects. Decoding the same array on **real PyTorch** produces
+  the *same* 16-px mosaic (mean 85.7 / std 63.7 / hf 13.41 against the shim's
+  85.7 / 63.7 / 13.40). A probe whose input has not been validated cannot be
+  evidence; the control has to come first.
+
+The decode was then checked the right way -- on the latent the pipeline itself
+produced -- by capturing `decode_latent`'s input in-process and decoding it under
+real PyTorch. The shim and torch agree to **0.30/255 at 256x256 and 0.31/255 at
+512x512**, so **jittor's VAE decode is correct** and nothing in the decode path
+is implicated.
+
+## 15. Speed: what 180 s is made of, and the two levers
+
+256x256, 50 steps, one H20:
+
+| profile | denoise | total |
+| --- | --- | --- |
+| offload `dit` + `text_encoder` (layer mode) | 3.35 s/step | 179 s |
+| offload `text_encoder` only, DiT resident | **1.68 s/step** | **145 s** |
+| 512x512, offload `dit` (resident OOMs: 91.65 of 95 GiB) | ~12 s/step | 627 s |
+
+The reference in the recipe is **0.73 s/step at 832x480** -- six times these
+pixels -- with `FLASH_ATTN`. So per pixel this is roughly 10-15x slow, and the
+first lever is the one already taken: with the DiT offloaded, every denoise step
+streams all 50 blocks over PCIe, which costs about the same as the step itself.
+Keeping the DiT resident halved it. The second lever is the attention backend:
+`TORCH_SDPA` is what this shim has been run with, because `FLASH_ATTN`
+
+    RuntimeError: TORCH_CHECK failed: x.is_cuda() cu_seqlens_q must be on CUDA
+
+from `flash-attention/csrc/flash_attn/flash_api.cpp:20` -- the **real torch CUDA
+extension** is being called with tensors it does not accept. The mask/varlen
+helper that builds `cu_seqlens` keeps the CUDA placement at every step
+(`sum(dtype=int32)` -> `nonzero` -> `cumsum(dtype=int32)` -> `F.pad` all stay on
+`cuda:0`, verified), and so do `torch.arange(device=...)`, `.to(cuda)`,
+`.cuda()` and the bool factories, so the placement is not lost in Python --
+which points at the extension resolving to the un-bridged module.
+
+That leads to the real blocker, and it is a **missing shim module**:
+
+    [w] integrations.py:10 external runtime patch vllm skipped:
+        cannot import name 'vllm' from 'jittor.compat'
+
+`compat/integrations.py` tries `from jittor.compat import vllm` and calls
+`_vllm_compat.register()`, and `compat/torch/__init__.py` lists an optional
+`jittor_vllm` step with the same expectation. **`compat/vllm.py` does not
+exist**, so the integration is skipped on every run. A vLLM-Omni deployment is
+exactly what that step is for, and the flash-attn routing above is the kind of
+thing it would own. Implementing it is the next real piece of work in this area
+-- it is not a one-line change, and it should not be guessed at.
+
+## 16. Open: 512x512 stops denoising
+
+Not fixed, and the reason it is written down rather than left as a hunch:
+
+* The decode is proven correct at 512 (section 14), so the bad picture is the
+  **latent**.
+* 512x512 output barely changes between 6 and 50 steps (mean 77.1 / std 51.9
+  versus mean 74.3 / std 51.3, same prompt and seed). That is not
+  under-denoising, which improves with steps; it is a sampler that is not
+  advancing.
+* 512 cannot use the fast profile: with the DiT resident it OOMs at 91.65 of
+  95 GiB, so it needs the offload profile at ~12 s/step.
+
+Eliminated by measurement, so they are not worth re-testing: `linspace` (fixed),
+VAE tiling on/off, the two H3 VAE Triton kernels on/off, autocast on/off,
+`F.pad` in all four modes, the unpatchify `permute`+`reshape` (exact against
+numpy), bool-mask semantics, and `device=`/`.to(cuda)`.
+
+The one measurement that would name it: print `update_mask_dev.mean()` from
+`denoise_loop.py` at 256 and at 512. That mask decides which video rows get the
+denoise timestep and which get the conditioning timestep
+(`batched_packing.py:92`), so an all-False mask reproduces "the latent never
+moves" exactly.
+
 ## Verification
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails
