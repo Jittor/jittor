@@ -204,10 +204,62 @@ Two more shim/core mismatches on the same path:
   jittor core calls them as *methods* (`advanced_indexing._indexing_index`).
   They now return a `_CallableBool`, so both readings work.
 
-## Result: a full request now completes
+## 11. A mixed fp32/fp16 product fell back to the outer product
+
+This is the one that made the request slow, and the last one needed for it to be
+*normal* rather than merely correct.
+
+The H3 video VAE's decoder blocks are explicitly an autocast workload.
+`install_h3_vae_optimizations` casts the decoder `nn.Linear` weights to float16
+so it does not rebuild the same cast on every tile, its comment says so
+("The H3 decode path always uses FP16 CUDA autocast"), and
+`pipeline_minimax_h3.decode` wraps the call in
+`create_autocast_context(dtype=torch.float16)`. The activations stay float32 --
+`_optimized_transformer_block` only takes its fast path when they are, and under
+real torch they are float32 *as tensors* too; casting them is autocast's job.
+
+Under real torch that is a float16 product. Under the shim, autocast sets
+`jt.flags.amp_reg` and the cast never happened, so every decoder `Linear`
+reached the cuBLAS row as a **mixed** pair. That row is selected on the
+operands' own dtypes (`_same_floating_dtype` requires `a.dtype == b.dtype`), so
+a mixed pair matched no kernel, and `matmul`/`matmul_transpose` fell through to
+their generic form:
+
+    shape = list(a.shape)[:-1] + list(b.shape)
+    return (a.broadcast(shape) * b.broadcast(shape)).sum(-1)
+
+which *materializes* `[B, out, in]`. At the decoder's real shape that is
+`1797 * 6144 * 2048 = 22.6e9` elements -- 45 GiB in float16, 86 GiB the moment
+anything promotes it to float32, which is how the standalone decode died
+(`could not allocate 86256 MiB`, `op: fused_op(unary.cast)
+in: float16[1797,6144,2048,] out: float32[1797,6144,2048,]`). In the run that
+did fit, this was the whole `sync` column: the Triton bridge's per-launch
+`jt.sync_all(True)` was waiting for ~1.3 s of outer product per decoder block,
+and `py-spy` put the wait there because that is where the pump was.
+
+Measured at `512x2048x6144`, on the same device:
+
+| `linear(x, w)` | kernel chosen | time |
+| --- | --- | --- |
+| float32 x float32 | `cublas_matmul` | 0.57 ms |
+| float16 x float16 | `cublas_matmul` | 0.49 ms |
+| float32 x float16 | *none* -> outer product | **53.6 ms** |
+| bfloat16 x float16 | *none* -> outer product | **51.7 ms** |
+
+Fix: `_mixed_float_compute_dtype` resolves a mixed floating pair to a single
+dtype and `_matmul_kernel_dispatch` retries the relay with both operands cast.
+The resolved dtype is the one the active autocast/AMP region asks for (float16,
+or bfloat16 when an operand already is -- what `amp_prefer16` means in
+`src/type/nano_string.h`), so the product comes back float16 exactly as it does
+under real torch, which is also what the VAE's bit-exact residual kernel
+(`try_scaled_residual_exact`) requires of its `branch` operand. Outside such a
+region the pair is promoted, widest first. A pair that already shares a dtype,
+or that involves a non-float operand, is left on its previous route.
+
+## Result: a full request now completes, at normal speed
 
 With every fix above in the working tree, one `fl2va` request runs end to end
-(`vllmomni-gen10.log`, single H20, `diffusion_offload_config` = layer mode over
+(`vllmomni-stats4.log`, single H20, `diffusion_offload_config` = layer mode over
 `dit`+`text_encoder`):
 
     Model loading took 10.0312 GiB and 280.8 seconds

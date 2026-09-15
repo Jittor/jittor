@@ -50,7 +50,8 @@ def routing(monkeypatch):
         core=SimpleNamespace(Var=Tensor, dispatch_context=lambda tensors: ("acl", 0)),
         flag_scope=lambda **kwargs: nullcontext(),
         flags=SimpleNamespace(amp_reg=0),
-        amp_flags=SimpleNamespace(keep_reduce=1, reduce16_no_fp32_acc=2),
+        amp_flags=SimpleNamespace(keep_reduce=1, reduce16_no_fp32_acc=2,
+                                  prefer16=4, prefer32=8),
     )
     monkeypatch.setitem(sys.modules, "jittor", native)
     path = ROOT / "python/jittor/_runtime/dispatch.py"
@@ -73,6 +74,9 @@ def routing(monkeypatch):
     namespace = {
         "jt": native, "Module": Module,
         "try_dispatch": dispatch.try_dispatch, "select_kernel": dispatch.select_kernel,
+        # matrix.py's own import; the extracted routing functions only reach it
+        # for a pair whose two dtypes differ, which these Tensors never are.
+        "_jittor_dtype_name": lambda dtype: str(dtype).split(".")[-1],
         "_pair": lambda value: tuple(value) if isinstance(value, (tuple, list)) else (value, value),
         "_arg_policy": SimpleNamespace(ignored=ignored),
         "_INPLACE_CONSEQUENCE": "not performed in place",
@@ -180,7 +184,8 @@ def test_layer_norm_keeps_affine_parameters_and_validates_before_dispatch(routin
     ns = routing.namespace
     ns["_layer_norm_cuda"] = lambda *args: routing.dispatch.try_dispatch("nn.layer_norm.training", *args)
     ns["_layer_norm_no_grad_cuda"] = lambda *args: None
-    _definitions("nn/functional/normalization.py", ["layer_norm"], ns)
+    _definitions("nn/functional/normalization.py",
+                 ["_restore_half_dtype", "layer_norm"], ns)
     routing.jt.nn.layer_norm = ns["layer_norm"]
     _definitions("nn/modules/normalization.py", ["LayerNorm"], ns)
     cls = ns["LayerNorm"]
@@ -199,6 +204,7 @@ def test_layer_norm_keeps_affine_parameters_and_validates_before_dispatch(routin
 
 def test_matmul_bmm_and_transpose_reuse_existing_keys(routing):
     names = ["_check_matmul_shapes", "_transpose_base_last2", "_matmul_2d_cublas",
+             "_mixed_float_compute_dtype", "_matmul_kernel_dispatch",
              "matmul", "matmul_transpose", "bmm", "bmm_transpose"]
     ns = _definitions("nn/functional/matrix.py", names, routing.namespace)
     routing.jt.nn.matmul = ns["matmul"]

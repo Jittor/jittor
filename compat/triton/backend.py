@@ -39,6 +39,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import ctypes
 import os
 import threading
+import time
 from ..diagnostics import EXPECTED, swallowed
 
 __all__ = ["is_available", "run", "make_do_bench", "JittorTritonError"]
@@ -376,9 +377,19 @@ class _Driver:
             cap <<= 1
         pool = self._guard_pool()
         free = pool.get(cap)
-        base = free.pop() if free else self.alloc(cap)
+        if free:
+            base = free.pop()
+        else:
+            _t_alloc = time.perf_counter()
+            base = self.alloc(cap)
+            if _stats_on():
+                _STATS["alloc_t"] += time.perf_counter() - _t_alloc
+                _STATS["alloc_n"] += 1
         # zero the guard region right after the payload (payload is overwritten)
+        _t_zero = time.perf_counter()
         self.memset0(base + int(payload_bytes), cap - int(payload_bytes))
+        if _stats_on():
+            _STATS["memset_t"] += time.perf_counter() - _t_zero
         return base, cap
 
     def guard_release(self, base, cap):
@@ -475,12 +486,35 @@ def _tensor_ptr(v):
     CUDA device pointer, so prefer the torch-shim-only ``device_raw_ptr`` when a
     Jittor build provides it.
     """
-    if _is_var(v):
-        ptr = getattr(v, "device_raw_ptr", None)
-        if ptr is not None:
-            return int(ptr)
-        return int(v.raw_ptr)
-    return int(v.data_ptr())
+    def _resolve():
+        if _is_var(v):
+            # The launch already syncs the graph once; reading the pointer per
+            # operand through `device_raw_ptr` repeated that sync for every
+            # argument (measured: the pack phase was ~99% of a 674 s decode).
+            # The launch materialises the graph once above; `device_raw_ptr`
+            # syncs the device on every read, and in the fast path
+            # (`JITTOR_TORCH_SHIM`) that per-argument sync was the *only*
+            # materialisation point -- so it flushed a larger and larger
+            # pending graph (3.6 ms per pointer early in a VAE decode, ~1.3 s
+            # later: 673 s of a 710 s request). `device_ptr_ready` reads the
+            # device pointer and still migrates a host-resident operand.
+            ready = getattr(v, "device_ptr_ready", None)
+            if ready is not None:
+                return int(ready)
+            ptr = getattr(v, "device_raw_ptr", None)
+            if ptr is not None:
+                return int(ptr)
+            return int(v.raw_ptr)
+        return int(v.data_ptr())
+
+    if not _stats_on():
+        return _resolve()
+    _t = time.perf_counter()
+    _STATS["ptr_n"] += 1
+    try:
+        return _resolve()
+    finally:
+        _STATS["ptr_t"] += time.perf_counter() - _t
 
 
 #: bytes per element, by triton type code (the value side of ``_DT``)
@@ -594,6 +628,48 @@ GUARD_BYTES = 256 * 1024
 GUARD_MAX_PAYLOAD = 64 * 1024 * 1024
 #: opt-out hook (set False to disable bounce buffers entirely, e.g. for A/B tests)
 GUARD_ENABLE = True
+
+
+#: Per-launch timing, printed under ``JITTOR_TRITON_STATS=1``. The bridge does
+#: a device sync, a per-argument pointer lookup and (with the guard on) a
+#: bounce copy for every launch, so "the decode is slow" is not actionable
+#: without knowing which of them dominates.
+_STATS = {"n": 0, "total": 0.0, "sync": 0.0, "pack": 0.0, "launch": 0.0,
+          "final": 0.0, "ptr_t": 0.0, "ptr_n": 0, "alloc_t": 0.0, "alloc_n": 0,
+          "memset_t": 0.0, "dtod_t": 0.0}
+_STATS_ON = None
+_STATS_EVERY = 50
+
+
+def _stats_on():
+    global _STATS_ON
+    if _STATS_ON is None:
+        _STATS_ON = _truthy_env("JITTOR_TRITON_STATS")
+    return _STATS_ON
+
+
+def _stats_atexit():
+    if _stats_on():
+        _stats_report(final=True)
+
+
+import atexit as _atexit
+
+_atexit.register(_stats_atexit)
+
+
+def _stats_report(final=False):
+    n = _STATS["n"]
+    if not n:
+        return
+    print("[triton-stats]%s launches=%d total=%.1fs sync=%.1fs pack=%.1fs "
+          "launch=%.1fs final=%.1fs avg=%.4fs | ptr=%.1fs/%d alloc=%.1fs/%d "
+          "memset=%.1fs dtod=%.1fs"
+          % (" final" if final else "", n, _STATS["total"], _STATS["sync"],
+             _STATS["pack"], _STATS["launch"], _STATS["final"],
+             _STATS["total"] / n, _STATS["ptr_t"], _STATS["ptr_n"],
+             _STATS["alloc_t"], _STATS["alloc_n"], _STATS["memset_t"],
+             _STATS["dtod_t"]), flush=True)
 
 
 def _truthy_env(name):
@@ -997,6 +1073,7 @@ def run(jitfn, args, kwargs, grid):
             info["name"], info["n_ptx_params"], info["num_warps"], info["shared"],
             info["scratch"]), file=_sys.stderr)
 
+    _stats_t0 = time.perf_counter() if _stats_on() else 0.0
     # -- resolve grid (tuple or callable(meta)) ----------------------------- #
     if callable(grid):
         meta = dict(constants)
@@ -1018,8 +1095,14 @@ def run(jitfn, args, kwargs, grid):
             return {n: (_tensor_ptr(v) if _is_tensor(v) else -1)
                     for (n, s, v) in runtime_vals if _is_tensor(v)}
         print("  PTRTRACE before materialize: %r" % {k: hex(x) for k, x in _ptd().items()}, file=_sys.stderr)
+    # Materialise the graph exactly once, then every operand's device pointer is
+    # read without syncing again. Leaving that to the per-argument accessor is
+    # what made a 710 s VAE decode: see `_tensor_ptr`.
+    if any(_is_tensor(v) for (_, _, v) in runtime_vals):
+        jt.sync_all(True)
     if _sync_before_launch_enabled():
         jt.sync_all(True)
+    _stats_t1 = time.perf_counter() if _stats_on() else 0.0
     if _ptrtrace:
         import sys as _sys
         print("  PTRTRACE after  materialize: %r" % {k: hex(x) for k, x in _ptd().items()}, file=_sys.stderr)
@@ -1043,7 +1126,10 @@ def run(jitfn, args, kwargs, grid):
                     # operand's end hits zeroed slack instead of an unmapped page.
                     try:
                         bbase, bcap = drv.guard_acquire(nbytes, _guard_bytes())
+                        _t_dtod = time.perf_counter()
                         drv.copy_dtod(bbase, ptr, nbytes)
+                        if _stats_on():
+                            _STATS["dtod_t"] += time.perf_counter() - _t_dtod
                         bounced.append((ptr, bbase, nbytes, bcap))
                         cv = ctypes.c_uint64(bbase)
                     except EXPECTED as exc:
@@ -1101,7 +1187,9 @@ def run(jitfn, args, kwargs, grid):
         print("  grid=%r block=%r shared=%d n_cvals=%d bounced=%d" % (
             g, block, info["shared"], len(cvals), len(bounced)), file=_sys.stderr)
         _sys.stderr.flush()
+    _stats_t2 = time.perf_counter() if _stats_on() else 0.0
     drv.launch(func, g, block, info["shared"], params)
+    _stats_t3 = time.perf_counter() if _stats_on() else 0.0
     need_sync_after_launch = (
         _sync_after_launch_enabled()
         or bool(scratch_bases)
@@ -1144,6 +1232,17 @@ def run(jitfn, args, kwargs, grid):
     if _ptrtrace:
         import sys as _sys
         print("  PTRTRACE after  final   : %r" % {k: hex(x) for k, x in _ptd().items()}, file=_sys.stderr)
+
+    if _stats_on():
+        _stats_t4 = time.perf_counter()
+        _STATS["n"] += 1
+        _STATS["sync"] += _stats_t1 - _stats_t0
+        _STATS["pack"] += _stats_t2 - _stats_t1
+        _STATS["launch"] += _stats_t3 - _stats_t2
+        _STATS["final"] += _stats_t4 - _stats_t3
+        _STATS["total"] += _stats_t4 - _stats_t0
+        if _STATS["n"] % _STATS_EVERY == 0:
+            _stats_report()
 
     # keep Vars alive until the (synchronous) launch is done
     del keepalive, out_vars

@@ -43,6 +43,10 @@ def _broadcast_batch_dims(a, b):
 #:
 #: Four call sites used to spell the cuBLAS row four different ways -- see
 #: ``_cublas_can_take``.
+#:
+#: "Same float dtype" is the *relay's* requirement, not the caller's: a pair
+#: that differs is resolved to one dtype before the relay is asked again, so it
+#: does not drop to the generic row. See ``_mixed_float_compute_dtype``.
 
 
 def _same_floating_dtype(a, b):
@@ -239,11 +243,81 @@ def baddbmm(input, batch1, batch2, beta=1, alpha=1):
     return beta * input + res
 
 
+def _mixed_float_compute_dtype(a, b):
+    """Single dtype to compute a *mixed* floating pair in, or ``None``.
+
+    cuBLAS takes both operands in one dtype, and the registered rows are
+    selected on the operands' own dtypes (``_same_floating_dtype``), so a pair
+    with two different floating dtypes matched no kernel and fell through to a
+    caller's fallback. For the two matrix routes that fallback is the
+    outer-product form -- ``matmul_transpose`` builds ``a.shape[:-1] +
+    b.shape`` and reduces it, which is ``[B, out, in]`` *materialized*.
+
+    That is not a corner case. ``torch.autocast`` hands exactly this pair to
+    every ``nn.Linear`` whose weights were pre-cast to float16, which is what
+    vLLM-Omni's H3 video VAE does to its decoder blocks: float32 activations
+    against float16 weights. The measured cost at 512x2048x6144 was 53.6 ms
+    against cuBLAS's 0.5 ms (107x), and at the VAE's real 1797 rows the
+    temporary is 86 GiB -- the encode/decode died there with an accelerator
+    out-of-memory it could not recover from, and the run that did fit spent
+    671 s of its 710 s inside it.
+
+    Which dtype to resolve to:
+
+    * inside an autocast/AMP region, the precision that region asked for --
+      float16, or bfloat16 when an operand already is (that is what
+      ``amp_prefer16`` means in ``src/type/nano_string.h``). This reproduces
+      torch: autocast casts a float32 activation to the autocast dtype before
+      the product, so a float16 result is what the model expects to get back,
+      and the H3 VAE's bit-exact residual kernel requires it;
+    * outside one, the pair's promoted type, widest first. Real torch raises
+      for a mixed float product, so any single dtype is an improvement on an
+      86 GiB temporary.
+
+    Returns ``None`` when the two already share a dtype or either is not
+    floating, leaving every existing route exactly as it was.
+    """
+    if a.dtype == b.dtype:
+        return None
+    if not (a.dtype.is_float() and b.dtype.is_float()):
+        return None
+    names = (_jittor_dtype_name(a.dtype), _jittor_dtype_name(b.dtype))
+    amp_reg = int(jt.flags.amp_reg)
+    if amp_reg & jt.amp_flags.prefer16:
+        return "bfloat16" if "bfloat16" in names else "float16"
+    if amp_reg & jt.amp_flags.prefer32:
+        return "float32"
+    for wider in ("float64", "float32"):
+        if wider in names:
+            return wider
+    return "float32"  # float16 x bfloat16
+
+
 def _matmul_2d_cublas(a, b, trans_a=0, trans_b=0):
-    kernel = select_kernel("matmul", a, b, trans_a, trans_b)
+    return _matmul_kernel_dispatch("matmul", a, b, trans_a, trans_b)
+
+
+def _matmul_kernel_dispatch(op, a, b, trans_a, trans_b):
+    """Run a product on the accelerated relay registered for ``op``.
+
+    cuBLAS on CUDA, oneDNN's batched relay on CPU -- whichever `select_kernel`
+    would have chosen, plus a retry with a resolved dtype so that a mixed
+    floating pair never reaches a caller's outer-product fallback; see
+    :func:`_mixed_float_compute_dtype`. The cast is applied to both operands,
+    so the transpose flags, which describe the layout of the operands handed
+    in, stay valid for the cast copies.
+    """
+    kernel = select_kernel(op, a, b, trans_a, trans_b)
     if kernel is not None:
         return kernel(a, b, trans_a, trans_b)
-    return None
+    dtype = _mixed_float_compute_dtype(a, b)
+    if dtype is None:
+        return None
+    a, b = a.cast(dtype), b.cast(dtype)
+    kernel = select_kernel(op, a, b, trans_a, trans_b)
+    if kernel is None:
+        return None
+    return kernel(a, b, trans_a, trans_b)
 
 
 def _transpose_base_last2(x):
@@ -330,9 +404,9 @@ def matmul(a, b):
             aa = a_base if a_base is not None else a
             bb = b_base if b_base is not None else b
             trans_a, trans_b = a_base is not None, b_base is not None
-            kernel = select_kernel("batched_matmul", aa, bb, trans_a, trans_b)
-            if kernel is not None:
-                return kernel(aa, bb, trans_a, trans_b)
+            fast = _matmul_kernel_dispatch("batched_matmul", aa, bb, trans_a, trans_b)
+            if fast is not None:
+                return fast
         shape = []
         len_c = max(len_a, len_b)
         (n, m), (m_, k) = a.shape[-2:], b.shape[-2:]
