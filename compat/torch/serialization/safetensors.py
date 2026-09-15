@@ -1,9 +1,15 @@
 """SafeTensor codecs, readers and transactional optional frontend bindings."""
 import json
 import struct
+import os
 from types import MappingProxyType
 import numpy as np
 import jittor as jt
+try:
+    from safetensors_rust import SafetensorError as _SafetensorError
+except ImportError:
+    class _SafetensorError(ValueError):
+        pass
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ..context import get_install_context, registry_for
 from ..fidelity import Fidelity, register_api_bindings
@@ -77,11 +83,23 @@ class _PySafeOpen:
         self._filename = filename
         self._device = device
         with open(filename, "rb") as fh:
-            n = struct.unpack("<Q", fh.read(8))[0]
-            self._header = json.loads(fh.read(n).decode("utf-8"))
+            prefix = fh.read(8)
+            if len(prefix) != 8:
+                raise _SafetensorError("Error while deserializing header: header too small")
+            n = struct.unpack("<Q", prefix)[0]
+            size = os.fstat(fh.fileno()).st_size
+            if n > size - 8:
+                raise _SafetensorError("Error while deserializing header: header too large")
+            try:
+                self._header = json.loads(fh.read(n).decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise _SafetensorError("Error while deserializing header: invalid JSON") from exc
+            if not isinstance(self._header, dict):
+                raise _SafetensorError("Error while deserializing header: expected object")
             self._data_offset = 8 + n
-        # safetensors.safe_open.metadata() returns None when the optional metadata section is absent.
-        # Accelerate relies on that distinction to default a plain archive to {"format": "pt"}.
+        # safetensors.safe_open.metadata() returns None when the optional
+        # metadata section is absent. Accelerate relies on that distinction
+        # to default a plain archive to ``{"format": "pt"}``.
         self._meta = self._header.pop("__metadata__", None)
 
     def keys(self):
@@ -140,6 +158,25 @@ def _load_file(filename, device="cpu"):
 
 
 def _save_dict(tensors, metadata=None):
+    # Match safetensors.torch's dense/unique storage contract before flattening
+    # Jittor variables to NumPy (which would otherwise erase stride/alias data).
+    seen = {}
+    for key, value in tensors.items():
+        if hasattr(value, "untyped_storage"):
+            try:
+                storage = value.untyped_storage()
+                ptr = storage.data_ptr()
+                if ptr in seen:
+                    raise RuntimeError("Some tensors share memory: {!r} and {!r}".format(seen[ptr], key))
+                seen[ptr] = key
+            except AttributeError:
+                # Jittor-backed shim storage exposes the canonical address on
+                # the tensor, while older storage wrappers may omit data_ptr.
+                ptr = getattr(value, "_storage_address", None)
+                if ptr is not None:
+                    if ptr in seen:
+                        raise RuntimeError("Some tensors share memory: {!r} and {!r}".format(seen[ptr], key))
+                    seen[ptr] = key
     header = {}
     blobs = []
     offset = 0
