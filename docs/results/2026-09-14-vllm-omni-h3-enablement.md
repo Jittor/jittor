@@ -377,23 +377,25 @@ The first three are fixed; the fourth is new work, described at the end:
    run. Deriving the path is independent of whether a store arrived; dropping
    `and store is None` fixes it. Single-GPU never enters this function.
 
-   Two red herrings worth recording. The first TP2 attempt died even earlier, on
-   `Orchestrator initialization failed: ipc path "..." is longer than 107
-   characters` -- the shim sets `TMPDIR` to `<runtime>/tmp`, which is 90
-   characters under this box's `XDG_CACHE_HOME`, and vLLM-Omni appends an
-   `ipc://` socket name. `JITTOR_TORCH_KEEP_TMPDIR=1` (the shim's own escape
-   hatch, otherwise undocumented here) is the fix. And the rendezvous *timeout*
-   above reproduced only while an earlier killed attempt's processes were still
-   alive; a clean start rendezvoused without complaint. Treat the timeout as a
-   stale-port artifact of the previous failure, not a defect of its own.
+   Two operational traps, both of which look like code defects and are not.
 
-   Related, and the reason to keep the file path in mind: those per-group files
-   are named after `MASTER_ADDR`-`MASTER_PORT` **alone**, so rerunning on the
-   same port finds the previous run's `.pg*` files and reads their unique ids.
-   That does not error -- it stalls inside the distributed init with the workers
-   idle (observed: last log line `diffusion_worker.py:327`, 90 s of silence,
-   ~14 s of CPU). `rm -f /tmp/jittor-nccl-*` before a multi-rank start is the
-   workaround; a run-scoped name would be the real fix.
+   The first TP2 attempt died even earlier, on `Orchestrator initialization
+   failed: ipc path "..." is longer than 107 characters` -- the shim sets
+   `TMPDIR` to `<runtime>/tmp`, which is 90 characters under this box's
+   `XDG_CACHE_HOME`, and vLLM-Omni appends an `ipc://` socket name.
+   `JITTOR_TORCH_KEEP_TMPDIR=1` (the shim's own escape hatch, otherwise
+   undocumented here) is the fix.
+
+   The rendezvous timeout above is **orphaned workers, not the store**. Killing
+   a server by matching the port string reaches only the parent -- the
+   `DiffusionWorker` children do not carry `--port` in their argv -- so they
+   survive holding `MASTER_PORT`, and the next run's rank 1 rendezvouses with
+   the orphan's store and waits for a `set` that will never come. It is
+   intermittent precisely because it depends on whether the previous run was
+   cleaned up properly. `stop-vllmomni.sh` (walk the process tree from the
+   parent, then clear `/tmp/jittor-nccl-*`) is the fix; the per-group files are
+   named after `MASTER_ADDR`-`MASTER_PORT` alone, so a rerun on the same port
+   must not inherit them either.
 
 **Where TP2 stands.** With all four addressed, a `--num-gpus 2 --tensor-parallel-size 2`
 server **starts and serves**: both ranks create their groups with no NCCL error,
@@ -411,25 +413,6 @@ with this stack, which is about as precise as the error gets:
     -> flash_attn_varlen_func          flash_attn/__init__.py:199
     -> packed_low_level.varlen_fwd     adapter.py:370
 
-The most likely reading is that **one root cause shows up as two symptoms**, and
-the wrong one is the tempting one. A *host-resident* tensor reaching the packed
-CUDA kernel produces either
-
-- `TORCH_CHECK failed: x.is_cuda() cu_seqlens_q must be on CUDA` -- when the
-  extension's own guard catches it first, which is what section 16 fixed for the
-  `.to(device)` path; or
-- `cudaErrorIllegalAddress` / `TORCH_CHECK failed: _jt_cuda_err == cudaSuccess an
-  illegal memory access was encountered` -- when the guard is satisfied by some
-  other argument and the kernel dereferences a host pointer.
-
-Both appear on the same request, and which one you get depends on *which* tensor
-is host-resident when the call is made. Adding a trace at the call site flipped
-a run from the second symptom to the first: the trace's own `is_contiguous()` /
-`stride()` / `current_device()` calls materialise something, changing the set of
-host-resident arguments. That is why the shape trace below is trustworthy about
-what it measured and why re-running with more instrumentation is not a neutral
-act.
-
 The trace also rules out the obvious suspects. At the failing call, on both
 ranks, with `H3_FA_SHAPE_TRACE=1`:
 
@@ -441,16 +424,29 @@ ranks, with `H3_FA_SHAPE_TRACE=1`:
 
 So the packed plan matches the tensor (`cu_q[-1] == q.shape[0] == 289`), the
 devices agree on each rank, and the tensors are contiguous with the expected
-stride. It is *not* a sharded-token / `cu_seqlens` mismatch, which was the first
-hypothesis, and it is not a device-selection mistake.
+stride. Ruled out, in order of how much they were suspected:
 
-The direction that follows is the section 16 fix generalised: a CUDA Var the
-executor has parked on the host must be moved back at the **extension boundary**,
-not only where someone happens to call `.to(device)`. jittor already does exactly
-that for a device op's inputs (`exec_runner.cc:334-336`); the boundary in
-`compat/shim/cpp_extension/src/jtorch_aten.cu` is the place that needs the same
-rule, with `device_id >= 0` plus "not deliberately `_host_resident`" as the
-discriminator so `x.cpu()` keeps handing out a real host pointer.
+- a sharded-token / `cu_seqlens` mismatch;
+- a device-selection mistake (each rank's current device equals its tensors');
+- a non-contiguous view reaching the kernel.
+
+**A host-resident argument at that call is ruled out too, and by experiment
+rather than by argument.** A helper that moves any `device_id >= 0` Var whose
+`location()` is `cpu` back to its device, installed immediately before
+`packed_low_level.varlen_fwd` and enabled for the run, **never fired** -- and the
+run still died with `cudaErrorIllegalAddress`. That also disposes of the
+"one root cause, two symptoms" reading this section previously carried: the
+`is_cuda` symptom appeared only in the run whose trace called
+`cu_q.data.tolist()`, which is itself the host-read path that parks a Var. The
+instrument changed the system it was measuring. The correct statement is that
+`cu_seqlens_q must be on CUDA` is what section 16 fixed, and the TP2 illegal
+address is a *different* fault with well-formed inputs.
+
+What is left is something below the arguments: the illegal access is raised on
+rank 1 with `device=1` and surfaces device-wide (sticky, at the next
+`cudaMemGetInfo`), so the recorded stack is a candidate list, not proof. The
+next tool for it is `compute-sanitizer` on a TP2 run, which is decisive about
+*which* launch faults and is where this stops for now.
 
 **Do not reuse a per-step number for TP2.** The loop's progress bar reached
 `0/7` before the fault, so there is no measured TP2 step time. An earlier
