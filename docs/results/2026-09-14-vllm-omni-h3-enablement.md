@@ -465,29 +465,77 @@ exactly what that step is for, and the flash-attn routing above is the kind of
 thing it would own. Implementing it is the next real piece of work in this area
 -- it is not a one-line change, and it should not be guessed at.
 
-## 16. Open: 512x512 stops denoising
+## 16. Open, and now diagnosed: every resolution above 256x256 loses the scene
 
-Not fixed, and the reason it is written down rather than left as a hunch:
+Not fixed, but the cause is identified and it is the same one as the speed.
 
-* The decode is proven correct at 512 (section 14), so the bad picture is the
-  **latent**.
-* 512x512 output barely changes between 6 and 50 steps (mean 77.1 / std 51.9
-  versus mean 74.3 / std 51.3, same prompt and seed). That is not
-  under-denoising, which improves with steps; it is a sampler that is not
-  advancing.
-* 512 cannot use the fast profile: with the DiT resident it OOMs at 91.65 of
-  95 GiB, so it needs the offload profile at ~12 s/step.
+**It is not a resolution problem.** 256x256 at 50 steps denoises to a real scene
+(hands pouring beans onto a white surface, coherent motion). 512x512 and the
+recipe's own **832x480** at the same 50 steps both come out as the 16-px mosaic
+(mean 82.5 / std 54.5 for 832x480, against 209.3 / 80.4 for the working 256).
+So the model fails as the answer gets *bigger*, which is where the packed
+sequence gets longer -- 2816 tokens at 256x256, 9920 at 512x512.
 
-Eliminated by measurement, so they are not worth re-testing: `linspace` (fixed),
-VAE tiling on/off, the two H3 VAE Triton kernels on/off, autocast on/off,
-`F.pad` in all four modes, the unpatchify `permute`+`reshape` (exact against
-numpy), bool-mask semantics, and `device=`/`.to(cuda)`.
+The loop itself is fine at 512: `update_mask` is all-True, `cu_seqlens` is on
+device, the initial latent has std 1.0008 -- but the latent moves **0.30** over
+two steps where the 256 run moves **1.21**, and leaves with std 1.0620 (still
+noise) against 0.9433. The denoiser is producing a much weaker update, not none.
 
-The one measurement that would name it: print `update_mask_dev.mean()` from
-`denoise_loop.py` at 256 and at 512. That mask decides which video rows get the
-denoise timestep and which get the conditioning timestep
-(`batched_packing.py:92`), so an all-False mask reproduces "the latent never
-moves" exactly.
+**The cause is the attention backend.** `FlashAttentionBackend` declares
+
+    supports_multi_doc_packed_varlen(): True for CUDA
+    supports_packed_mask_free():        True for CUDA
+
+with a comment spelling out why: the CUDA row dispatches
+`_forward_varlen_packed -> flash_attn_varlen_func` **over the caller's
+`cu_seqlens` without a mask**, "so an arbitrary N-document packing keeps its
+boundaries", and the NPU row only accepts a `[real, pad]` two-document layout
+and otherwise "silently attends across request boundaries". Running with
+`TORCH_SDPA` gives up exactly that guarantee: the packed row holds separate
+text, audio and video documents, and the fallback mask does not keep them
+apart. The more tokens, the more cross-document mixing, which is why 256x256
+survives and 512x512 / 832x480 do not.
+
+That is also the whole speed story: without a varlen kernel, `TORCH_SDPA`
+materialises the score matrix, and 832x480 runs at **25 s/step** (1236 s for 50
+steps) against the recipe's 0.73 s/step. The two open items are one item.
+
+**Why `FLASH_ATTN` cannot be selected yet.** It fails with
+
+    TORCH_CHECK failed: x.is_cuda() cu_seqlens_q must be on CUDA
+
+from `flash-attention/csrc/flash_attn/flash_api.cpp:20` -- a check in the real
+libtorch extension. Two candidate causes were chased and one is ruled out.
+
+The import *was* wrong and *is* now fixed in the lab: `vllm_omni/diffusion/
+attention/backends/utils/fa.py` does
+
+    from flash_attn_interface import flash_attn_varlen_func
+
+-- the **top-level** name, which is how the upstream package spells it -- while
+the shim ships the bridged implementation only as
+`flash_attn.flash_attn_interface`. With the flash-attention checkout on
+`PYTHONPATH` the top-level import therefore resolved to the unbridged extension.
+A two-line top-level alias that re-exports the bridged functions fixes the
+resolution (verified: `flash_attn_varlen_func.__module__ == "flash_attn"`,
+`is_flashattn_jittor_available() == True`, backend
+`flashattn_jittor_official:/root/jittor-lab/flash-attention`). It is not landed
+in the repo yet because it is a deploy-surface change: the stub lists in
+`compat/tests/structure/test_torch_shim_structure.py` and
+`test_torch_shim_deploy.py` would have to carry it.
+
+**With the alias in place the same assert still fires**, so the import was not
+the whole story. The Python side is not at fault either: `denoise_loop.py:115`
+passes `cu.to(device)`, every step of the mask/varlen chain keeps the CUDA
+placement, and `torch.arange(device=)`, `.to(cuda)`, bool factories and
+H3-style slice assignments all check out, including
+`torch.nn.functional.scaled_dot_product_attention` with a block-causal mask
+against a float32 reference at 512, 2816 and 9920 tokens (maxdiff <= 0.0011).
+That leaves the bridge that hands Jittor `Var`s to the upstream extension: it
+loses the device on `cu_seqlens_q`, while q/k/v arrive fine. That bridge is not
+in this repository -- it comes from `JITTOR_FLASH_ATTN_JITTOR_SRC`
+(`/root/jittor-lab/flash-attention`), so fixing it is work in that checkout, not
+here.
 
 ## Verification
 
