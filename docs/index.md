@@ -22,6 +22,7 @@ api/index
 compatibility/index
 notes/index
 performance/index
+results/index
 ```
 
 ```{toctree}
@@ -44,6 +45,7 @@ contributing
 | 在昇腾、天数或多卡上运行 | [使用指南](guides/index.md) |
 | 弄清显存、精度或异步执行的行为 | [机制说明](notes/index.md) |
 | 调查一个报错或性能问题 | [调试指南](guides/debugging.md)、[性能](performance/index.md) |
+| 看别人已经查过的现象和结论 | [验证结论](results/index.md) |
 | 给 Jittor 提交代码 | [贡献指南](contributing.md)、[开发文档](development/index.md) |
 
 ## 项目链接

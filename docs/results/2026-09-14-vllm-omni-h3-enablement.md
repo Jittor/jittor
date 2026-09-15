@@ -1,12 +1,13 @@
 # MiniMax-H3 through jittor + torch-compat + vLLM-Omni: the shim gaps
 
-- Status: Engine construction completes (`ENGINE-CONSTRUCTED`, 10.0 GiB peak
-  during load); generation reaches the model forward; validation of speed /
-  results / memory in progress
-- Date: 2026-09-14
+- Status: A full `fl2va` request runs end to end at normal speed
+  (`GENERATE` 39.6 s, down from 710.7 s); frames, audio and peak memory match the
+  earlier correct-but-slow run
+- Date: 2026-09-14, speed resolved 2026-09-15
 - Owner: Jittor compatibility maintainers
 - Review when: the offload path, `torch.device` placement, the conv/pow op-type
-  tables, `.data`/view handling, or `torch.as_strided`/`empty_strided` change
+  tables, `.data`/view handling, `torch.as_strided`/`empty_strided`, or the
+  matmul dtype routing changes
 
 ## Question
 
