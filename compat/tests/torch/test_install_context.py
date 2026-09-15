@@ -549,6 +549,54 @@ assert compat._NAMESPACE_TRANSACTION not in target._torch_compat_install_context
             resources_root() / "stubs" / "flash_attn" / "__init__.py",
         )
 
+    def test_packaged_torchaudio_stub_answers_submodule_imports(self):
+        """``from torchaudio.<sub> import x`` is a second import spelling.
+
+        vLLM-Omni's ``vllm_omni/utils/audio.py`` imports
+        ``melscale_fbanks`` that way at module level. A module with no
+        ``__path__`` offers the import system no submodule to find, so this
+        raised ``No module named 'torchaudio.functional'`` even though
+        ``from torchaudio import functional`` worked -- and it took the whole
+        OpenAI server import chain down, because ``serving_chat`` imports that
+        module. The fabricated attribute must still fail loudly when called:
+        the shim ships no audio DSP, and a call site that wants it should not
+        get a plausible number instead.
+        """
+        import importlib.util
+        from jittor.compat.shim.preflight import resources_root
+
+        stub = resources_root() / "stubs" / "torchaudio" / "__init__.py"
+        saved = {name: sys.modules[name] for name in list(sys.modules)
+                 if name == "torchaudio" or name.startswith("torchaudio.")}
+
+        def restore():
+            for name in [n for n in sys.modules
+                         if n == "torchaudio" or n.startswith("torchaudio.")]:
+                del sys.modules[name]
+            sys.modules.update(saved)
+
+        restore()  # start from no torchaudio at all
+        self.addCleanup(restore)
+
+        spec = importlib.util.spec_from_file_location("torchaudio", stub)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["torchaudio"] = module
+        spec.loader.exec_module(module)
+
+        from torchaudio import functional  # noqa: F401  (attribute spelling)
+        from torchaudio.functional import melscale_fbanks  # the failing one
+        import torchaudio.io  # noqa: F401
+        import torchaudio.transforms  # noqa: F401
+
+        self.assertIs(module.functional, sys.modules["torchaudio.functional"])
+        for name in ("torchaudio.functional", "torchaudio.io",
+                     "torchaudio.transforms"):
+            with self.subTest(name=name):
+                self.assertIsInstance(sys.modules[name], type(module))
+        with self.assertRaises(TypeError):
+            melscale_fbanks(16000, 400, 80)
+        self.assertEqual(module.__version__, "2.11.0")
+
     def test_public_install_propagates_required_step_failure(self):
         def fail(_context):
             raise RuntimeError("required graph missing")

@@ -479,6 +479,25 @@ struct VarHolder {
     }
 
     /**
+     * Device pointer without the synchronisation ``device_raw_ptr`` performs.
+     *
+     * Only meaningful once the caller has materialised the graph (``sync`` /
+     * ``sync_all``) and this Var's memory is on the accelerator; the migration
+     * below still happens, because a host-resident Var must never be handed to
+     * a device kernel. Triton's bridge syncs once per launch and then reads one
+     * pointer per operand, so the syncing accessor repeated that sync for every
+     * argument of every launch.
+     */
+    // @pyjt(__get__device_ptr_ready)
+    inline uint64 device_ptr_ready() {
+        #ifdef HAS_ACCELERATOR
+        if (!var->allocator->is_cuda())
+            migrate_to_gpu(var, get_allocator());
+        #endif
+        return (uint64)var->mem_ptr;
+    }
+
+    /**
      * returns the Python number if the Var contains only one element.
      * For other cases, see data().
      */

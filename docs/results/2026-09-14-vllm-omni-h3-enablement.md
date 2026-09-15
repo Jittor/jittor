@@ -1,12 +1,13 @@
 # MiniMax-H3 through jittor + torch-compat + vLLM-Omni: the shim gaps
 
-- Status: Engine construction completes (`ENGINE-CONSTRUCTED`, 10.0 GiB peak
-  during load); generation reaches the model forward; validation of speed /
-  results / memory in progress
-- Date: 2026-09-14
+- Status: A full `fl2va` request runs end to end at normal speed
+  (`GENERATE` 39.6 s, down from 710.7 s); frames, audio and peak memory match the
+  earlier correct-but-slow run
+- Date: 2026-09-14, speed resolved 2026-09-15
 - Owner: Jittor compatibility maintainers
 - Review when: the offload path, `torch.device` placement, the conv/pow op-type
-  tables, `.data`/view handling, or `torch.as_strided`/`empty_strided` change
+  tables, `.data`/view handling, `torch.as_strided`/`empty_strided`, or the
+  matmul dtype routing changes
 
 ## Question
 
@@ -204,10 +205,62 @@ Two more shim/core mismatches on the same path:
   jittor core calls them as *methods* (`advanced_indexing._indexing_index`).
   They now return a `_CallableBool`, so both readings work.
 
-## Result: a full request now completes
+## 11. A mixed fp32/fp16 product fell back to the outer product
+
+This is the one that made the request slow, and the last one needed for it to be
+*normal* rather than merely correct.
+
+The H3 video VAE's decoder blocks are explicitly an autocast workload.
+`install_h3_vae_optimizations` casts the decoder `nn.Linear` weights to float16
+so it does not rebuild the same cast on every tile, its comment says so
+("The H3 decode path always uses FP16 CUDA autocast"), and
+`pipeline_minimax_h3.decode` wraps the call in
+`create_autocast_context(dtype=torch.float16)`. The activations stay float32 --
+`_optimized_transformer_block` only takes its fast path when they are, and under
+real torch they are float32 *as tensors* too; casting them is autocast's job.
+
+Under real torch that is a float16 product. Under the shim, autocast sets
+`jt.flags.amp_reg` and the cast never happened, so every decoder `Linear`
+reached the cuBLAS row as a **mixed** pair. That row is selected on the
+operands' own dtypes (`_same_floating_dtype` requires `a.dtype == b.dtype`), so
+a mixed pair matched no kernel, and `matmul`/`matmul_transpose` fell through to
+their generic form:
+
+    shape = list(a.shape)[:-1] + list(b.shape)
+    return (a.broadcast(shape) * b.broadcast(shape)).sum(-1)
+
+which *materializes* `[B, out, in]`. At the decoder's real shape that is
+`1797 * 6144 * 2048 = 22.6e9` elements -- 45 GiB in float16, 86 GiB the moment
+anything promotes it to float32, which is how the standalone decode died
+(`could not allocate 86256 MiB`, `op: fused_op(unary.cast)
+in: float16[1797,6144,2048,] out: float32[1797,6144,2048,]`). In the run that
+did fit, this was the whole `sync` column: the Triton bridge's per-launch
+`jt.sync_all(True)` was waiting for ~1.3 s of outer product per decoder block,
+and `py-spy` put the wait there because that is where the pump was.
+
+Measured at `512x2048x6144`, on the same device:
+
+| `linear(x, w)` | kernel chosen | time |
+| --- | --- | --- |
+| float32 x float32 | `cublas_matmul` | 0.57 ms |
+| float16 x float16 | `cublas_matmul` | 0.49 ms |
+| float32 x float16 | *none* -> outer product | **53.6 ms** |
+| bfloat16 x float16 | *none* -> outer product | **51.7 ms** |
+
+Fix: `_mixed_float_compute_dtype` resolves a mixed floating pair to a single
+dtype and `_matmul_kernel_dispatch` retries the relay with both operands cast.
+The resolved dtype is the one the active autocast/AMP region asks for (float16,
+or bfloat16 when an operand already is -- what `amp_prefer16` means in
+`src/type/nano_string.h`), so the product comes back float16 exactly as it does
+under real torch, which is also what the VAE's bit-exact residual kernel
+(`try_scaled_residual_exact`) requires of its `branch` operand. Outside such a
+region the pair is promoted, widest first. A pair that already shares a dtype,
+or that involves a non-float operand, is left on its previous route.
+
+## Result: a full request now completes, at normal speed
 
 With every fix above in the working tree, one `fl2va` request runs end to end
-(`vllmomni-gen10.log`, single H20, `diffusion_offload_config` = layer mode over
+(`vllmomni-stats4.log`, single H20, `diffusion_offload_config` = layer mode over
 `dit`+`text_encoder`):
 
     Model loading took 10.0312 GiB and 280.8 seconds
@@ -230,6 +283,90 @@ Triton kernel, i.e. inside jittor's Triton bridge, where every launch calls
 `device_raw_ptr` (which does `sync(true, false)`) once per pointer argument and
 bounces every operand through a guarded buffer (`GUARD_ENABLE = True` by
 default). That is the next thing to fix.
+
+## 12. Serving it: the OpenAI server needed one more stub fix
+
+The offline `Omni(...)` path and the `vllm-omni serve ... --omni` path do not
+import the same code. The server pulls in `vllm.entrypoints.serve` and
+vLLM-Omni's `entrypoints/openai/`, which the offline path never touches, so the
+server needs (a) the deps only the serving stack declares and (b) one more shim
+stub fix.
+
+The stub fix: `vllm_omni/utils/audio.py` does
+
+    from torchaudio.functional import melscale_fbanks
+
+at module level, and `serving_chat` imports that module, so the whole server
+import chain died on it. The packaged `torchaudio` stub
+(`compat/shim/resources/stubs/torchaudio/__init__.py`) answered
+`from torchaudio import functional` -- its `__getattr__` fabricates a module for
+any name -- but not the submodule spelling: a module with no `__path__` offers
+the import system no submodule to find, so the import failed before it reached
+the name lookup `__getattr__` would have answered. The stub now registers a
+`_AnyFinder` for anything under `torchaudio.`, and the fabricated modules carry
+`__path__` so a deeper name resolves too. Attributes are still the same
+loudly-failing classes -- the shim ships no audio DSP, and `melscale_fbanks(...)`
+raises rather than returning a plausible number. The H3 video path never calls
+it; the import only has to succeed.
+
+One trap worth knowing about the deployment: the shim materialises its runtime
+site-packages under `$XDG_CACHE_HOME/jittor/torch-shim/<project>-<hash>/`, keyed
+by the *project path*, and re-deploys the stubs into it on every activation from
+the **installed** `jittor/compat/shim/resources/stubs/`. Editing only
+`site-packages/torchaudio/__init__.py` therefore gets overwritten on the next
+run; the resource copy has to be updated too.
+
+Verified with `vllm-omni serve ... --omni --num-gpus 1` on one H20
+(`serve1.log`): `GET /v1/models` 200, and `POST /v1/videos/sync` returned a
+256x256 `video/mp4` with both a video and an audio stream, **39.5 s** against
+39.6 s for the same request offline. Serving is at parity with the offline path.
+
+## 13. Multi-GPU: two jittor defects, then an unresolved rendezvous
+
+`--tensor-parallel-size` / `--text-encoder-tp-size` / `--vae-patch-parallel-size`
+above 1 all need multi-rank collectives, and that path had never been run here.
+Three things stand between the recipe and a working TP2 server, in the order
+they surface:
+
+1. **The launcher does not enable the shim's multi-rank bootstrap.** The shim
+   implements a dynamic NCCL bootstrap for `init_process_group(world_size>1)`,
+   but it is gated behind `JITTOR_TORCH_DISTRIBUTED_AUTO_INIT`, which nothing
+   sets. Unset, every diffusion worker dies with "multi-rank torch.distributed
+   requires launching Jittor with jittor.distributed.launch or explicit dynamic
+   bootstrap". Fixed by exporting it -- an undocumented prerequisite.
+
+2. **`make_cache_dir` raced, and lost.** With the bootstrap on, both ranks call
+   `setup_nccl`, both create `.cache/jittor/nccl` through
+
+       if not os.path.isdir(cache_path): os.mkdir(cache_path)
+
+   and the loser died with `FileExistsError: .../.cache/jittor/nccl`. Sharing a
+   JITTOR_HOME across ranks is *the* case where two processes create this
+   directory at once, so the race was the ordinary path. Now
+   `os.makedirs(..., exist_ok=True)` (which also creates a missing parent, as
+   the bare `mkdir` did not).
+
+3. **NCCL is not found without mpirun, and the store rendezvous then times out.**
+   `setup_nccl` will use a system NCCL if given
+   `JT_BUILD_NCCL_INCLUDE_PATH` / `JT_BUILD_NCCL_LIB_PATH`, otherwise it goes to
+   `install_nccl`, whose `if not inside_mpi(): return` still sits under the
+   comment saying the mpirun-free path is meant to build too -- so on this box
+   (system NCCL 2.27.3 in `/lib64`, `nccl.h` in `/usr/include`) the no-mpirun
+   path can never find it. With the two variables set, the NCCL ops compile and
+   publish (the earlier "did not publish collective ops" goes away), and the
+   run then stops at
+
+       RuntimeError: NCCL store rendezvous timeout: rank 1 waited 120 s and
+       timed out using the provided Store
+
+   i.e. rank 1's `store.get("jittor/nccl/world/unique_id")` never sees rank 0's
+   `set`. vLLM-Omni passes `init_method="tcp://..."` (not a `store`), so the
+   store comes from the shim's own `_store_rendezvous`; whether both ranks end
+   up on one store is where to look next.
+
+So: **single-GPU serving is done; TP2 is not, and the remaining work is a
+two-rank repro of the store rendezvous**, not more H3 or vLLM-Omni work. Until
+that lands, `--num-gpus 1` is the only configuration this shim has run.
 
 ## Verification
 
