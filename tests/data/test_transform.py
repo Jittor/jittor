@@ -36,8 +36,8 @@ class Tester(unittest.TestCase):
     def test_crop(self):
         height = random.randint(10, 32) * 2
         width = random.randint(10, 32) * 2
-        oheight = random.randint(5, (height - 2) / 2) * 2
-        owidth = random.randint(5, (width - 2) / 2) * 2
+        oheight = random.randint(5, (height - 2) // 2) * 2
+        owidth = random.randint(5, (width - 2) // 2) * 2
 
         img = np.ones([height, width, 3])
         oh1 = (height - oheight) // 2
@@ -124,8 +124,8 @@ class Tester(unittest.TestCase):
     def test_random_crop(self):
         height = random.randint(10, 32) * 2
         width = random.randint(10, 32) * 2
-        oheight = random.randint(5, (height - 2) / 2) * 2
-        owidth = random.randint(5, (width - 2) / 2) * 2
+        oheight = random.randint(5, (height - 2) // 2) * 2
+        owidth = random.randint(5, (width - 2) // 2) * 2
         img = np.ones((height, width, 3))
         result = transform.Compose([
             transform.ToPILImage(),
@@ -152,7 +152,10 @@ class Tester(unittest.TestCase):
         self.assertEqual(result.shape[2], width)
         self.assertTrue(np.allclose(img, result.transpose(1,2,0)))
 
-        with self.assertRaises(AssertionError):
+        # RandomCrop reports an oversized crop with ValueError and the actual
+        # sizes, not a bare assert: an assert carries no diagnostic and is
+        # removed entirely under `python -O`.
+        with self.assertRaises(ValueError):
             result = transform.Compose([
                 transform.ToPILImage(),
                 transform.RandomCrop((height + 1, width + 1)),

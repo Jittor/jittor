@@ -52,7 +52,18 @@ def routing(monkeypatch):
         flags=SimpleNamespace(amp_reg=0),
         amp_flags=SimpleNamespace(keep_reduce=1, reduce16_no_fp32_acc=2),
     )
+    # `dispatch.py` imports `jittor._core.dtypes` at module scope. A
+    # SimpleNamespace is not a package, so once "jittor" is replaced below the
+    # submodule import fails with "'jittor' is not a package". Resolve the real
+    # module FIRST, while the genuine package is still importable, then publish
+    # it alongside the stub. Both names only canonicalise dtype spellings, so
+    # the real implementations are reused rather than faked.
+    import importlib
+    real_dtypes = importlib.import_module("jittor._core.dtypes")
     monkeypatch.setitem(sys.modules, "jittor", native)
+    monkeypatch.setitem(sys.modules, "jittor._core",
+                        SimpleNamespace(dtypes=real_dtypes))
+    monkeypatch.setitem(sys.modules, "jittor._core.dtypes", real_dtypes)
     path = ROOT / "python/jittor/_runtime/dispatch.py"
     spec = importlib.util.spec_from_file_location("_acl_native_routing_table", path)
     dispatch = importlib.util.module_from_spec(spec)

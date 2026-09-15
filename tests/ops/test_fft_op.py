@@ -10,6 +10,7 @@ from _helpers import capability as _test_capability
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import jittor as jt
+from jittor import nn
 import unittest
 from _helpers.logs import find_log_with_re
 from _helpers.torch_runtime import import_torch_modules, modules_available
