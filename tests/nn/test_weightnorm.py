@@ -33,12 +33,15 @@ class TestWeightNorm(unittest.TestCase):
     def test_parameter_shapes_match_legacy_torch_contract(self):
         expected = {
             -2: (3, 1),
-            # Jittor has no native 0-D Var; Torch's scalar gain is represented
-            # by the established one-element shape.
-            -1: (1,),
+            # dim=-1 and dim=None both normalise over the whole tensor, so
+            # torch keeps no axis and the gain is 0-d. The old expectation of
+            # (1,) came from the days when Jittor had no native 0-D Var; it
+            # does now, and both spellings were checked against
+            # torch.nn.utils.weight_norm.
+            -1: (),
             0: (3, 1),
             1: (1, 4),
-            None: (1,),
+            None: (),
         }
         for dim, gain_shape in expected.items():
             with self.subTest(dim=dim):
