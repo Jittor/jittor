@@ -1689,14 +1689,28 @@ about whether to take it.
   test_backward,test_forward_nhwc_hwio,test_backward_nhwc_hwio}`, whose
   `assert logs[0][0] == '20'` reads the conv tuner's confidence and gets `'0'`.
 - What it cost before the routing change, measured on this machine, float32:
-  a 1024-cube product 3.5182 s against NumPy's 0.0355 s (99x), and an
-  `8x64x56x56` convolution against a `64x64x3x3` filter 0.1079 s against
-  torch's 0.0031 s (35x).
-- Workaround (in tree): the CPU rows of the `matmul` and `conv2d` kernel
-  tables now call `mkl_matmul` / `mkl_conv` directly, the way the CUDA rows
-  call cuBLAS and cuDNN, so nothing depends on the pattern match. A product
-  or convolution written out of meta-ops by hand still gets the generic
-  kernel.
+
+  | operation | jittor | reference | ratio |
+  | --- | --- | --- | --- |
+  | 1024-cube product | 3.5182 s | NumPy 0.0355 s | 99x |
+  | `8x64x56x56` * `64x64x3x3` | 0.1079 s | torch 0.0031 s | 35x |
+  | the same transposed, stride 2 | 2.4364 s | torch 0.0013 s | 1874x |
+
+  The transpose is the worst because the generic path's
+  `broadcast * broadcast -> reindex_reduce` is a scatter, not a gather.
+- Workaround (in tree): the CPU rows of the `matmul`, `conv2d` and
+  `conv_transpose2d` kernel tables now call `mkl_matmul` / `mkl_conv` /
+  `mkl_conv_backward_x` directly, the way the CUDA rows call cuBLAS and cuDNN,
+  so nothing depends on the pattern match. After: 0.0020 s, 0.0022 s and
+  0.0003 s. A product or convolution written out of meta-ops by hand still
+  gets the generic kernel.
+- A trap each of those three rows had to clear first: a library op that was
+  only ever reachable *as a relay* carries no gradient, because autograd ran
+  on the meta-op subgraph the relay stood in for. Put one in a forward graph
+  and it does not fail -- it silently returns a wrong gradient (measured:
+  `gx` relative error 1.0 on a batched `nn.Linear`). `MklMatmulOp`,
+  `MklConvOp` and `MklConvBackwardXOp` all needed `grad()` and the
+  `_needed_by_backward` flags added.
 - Why reviving the relay is not a one-line change: the relay substitutes a
   fused-op var into the relay op's members at run time
   (`OpRelayContext::set_var_member`). The fused op's vars are now the expanded
