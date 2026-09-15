@@ -368,6 +368,175 @@ So: **single-GPU serving is done; TP2 is not, and the remaining work is a
 two-rank repro of the store rendezvous**, not more H3 or vLLM-Omni work. Until
 that lands, `--num-gpus 1` is the only configuration this shim has run.
 
+## 14. `linspace` did not land on `end`, and every >= 4-step request died
+
+Found by serving the model and asking why the picture looked wrong. Two separate
+things were wrong, and only one of them was jittor.
+
+**The jittor defect.** `linspace` built its series as
+`i * (end - start) / (steps - 1) + start`, so the last point was a rounding
+result rather than `end`. On the **CPU placement**:
+
+| n | last value of `linspace(1.0, 0.0, n)` |
+| --- | --- |
+| 2 | `0` |
+| 4 | `-2.98e-08` |
+| 6 | `-1.49e-08` |
+| 8 | `-4.47e-08` |
+| 50 | `+2.05e-08` |
+
+numpy and torch both guarantee the endpoint exactly, and callers compare it.
+MiniMax-H3 builds its sigma schedule from `linspace(1.0, 0.0, num_inference_steps)`
+and validates `sigma_next >= 0`, so **every request with 4 or more denoise steps
+failed** with `ValueError: sigma_next must be non-negative`; 2 steps happened to
+round to exactly 0 and escaped. The CUDA placement also rounded to 0, which is
+why only the CPU one showed it. Fixed by pinning the endpoint
+(`jt.cat([res[:-1], jt.array([end], dtype=res.dtype)])`), with tests in
+`tests/ops/test_random_op.py`.
+
+**The configuration defect, and it was ours.** The lab workflow set
+`num_inference_steps = 2`. The sanctioned value is **50** -- every curl example
+and the benchmark table in `recipes/MiniMaxAI/MiniMax-H3.md`, and
+`tests/e2e/accuracy/minimax_h3` (`NUM_INFERENCE_STEPS = 50`, `FLOW_SHIFT = 12.0`,
+`AUDIO_FLOW_SHIFT = 3.0`, SSIM >= 0.97 against a reference). 2/4/8 steps produce
+undenoised output that looks like texture; 50 steps produce a real scene, and the
+audio tells the same story (rms 0.57 with peaks above 1.0 at 2 steps -- clipped
+noise -- versus rms 0.06 at 50).
+
+**Two corrections to earlier sections of this page.** The sub-second diagnosis
+that followed the "wrong picture" report was wrong twice over, and both are worth
+recording because the reasoning was tempting:
+
+* Section 11's table and the `_same_floating_dtype` analysis stand, but the
+  "671 s of outer product" attribution was measured before the sigma bug was
+  fixed, so the slow run and the crash were **different** faults, not one.
+* More importantly: several intermediate conclusions drawn while investigating
+  the wrong picture -- "the remote VAE decode is broken", "it is the tiling",
+  "it is the two Triton kernels" -- **were void**. They came from decoding
+  `real512.latents.npy` standalone, and that array is not in the space
+  `decode_latent` expects. Decoding the same array on **real PyTorch** produces
+  the *same* 16-px mosaic (mean 85.7 / std 63.7 / hf 13.41 against the shim's
+  85.7 / 63.7 / 13.40). A probe whose input has not been validated cannot be
+  evidence; the control has to come first.
+
+The decode was then checked the right way -- on the latent the pipeline itself
+produced -- by capturing `decode_latent`'s input in-process and decoding it under
+real PyTorch. The shim and torch agree to **0.30/255 at 256x256 and 0.31/255 at
+512x512**, so **jittor's VAE decode is correct** and nothing in the decode path
+is implicated.
+
+## 15. Speed: what 180 s is made of, and the two levers
+
+256x256, 50 steps, one H20:
+
+| profile | denoise | total |
+| --- | --- | --- |
+| offload `dit` + `text_encoder` (layer mode) | 3.35 s/step | 179 s |
+| offload `text_encoder` only, DiT resident | **1.68 s/step** | **145 s** |
+| 512x512, offload `dit` (resident OOMs: 91.65 of 95 GiB) | ~12 s/step | 627 s |
+
+The reference in the recipe is **0.73 s/step at 832x480** -- six times these
+pixels -- with `FLASH_ATTN`. So per pixel this is roughly 10-15x slow, and the
+first lever is the one already taken: with the DiT offloaded, every denoise step
+streams all 50 blocks over PCIe, which costs about the same as the step itself.
+Keeping the DiT resident halved it. The second lever is the attention backend:
+`TORCH_SDPA` is what this shim has been run with, because `FLASH_ATTN`
+
+    RuntimeError: TORCH_CHECK failed: x.is_cuda() cu_seqlens_q must be on CUDA
+
+from `flash-attention/csrc/flash_attn/flash_api.cpp:20` -- the **real torch CUDA
+extension** is being called with tensors it does not accept. The mask/varlen
+helper that builds `cu_seqlens` keeps the CUDA placement at every step
+(`sum(dtype=int32)` -> `nonzero` -> `cumsum(dtype=int32)` -> `F.pad` all stay on
+`cuda:0`, verified), and so do `torch.arange(device=...)`, `.to(cuda)`,
+`.cuda()` and the bool factories, so the placement is not lost in Python --
+which points at the extension resolving to the un-bridged module.
+
+That leads to the real blocker, and it is a **missing shim module**:
+
+    [w] integrations.py:10 external runtime patch vllm skipped:
+        cannot import name 'vllm' from 'jittor.compat'
+
+`compat/integrations.py` tries `from jittor.compat import vllm` and calls
+`_vllm_compat.register()`, and `compat/torch/__init__.py` lists an optional
+`jittor_vllm` step with the same expectation. **`compat/vllm.py` does not
+exist**, so the integration is skipped on every run. A vLLM-Omni deployment is
+exactly what that step is for, and the flash-attn routing above is the kind of
+thing it would own. Implementing it is the next real piece of work in this area
+-- it is not a one-line change, and it should not be guessed at.
+
+## 16. Open, and now diagnosed: every resolution above 256x256 loses the scene
+
+Not fixed, but the cause is identified and it is the same one as the speed.
+
+**It is not a resolution problem.** 256x256 at 50 steps denoises to a real scene
+(hands pouring beans onto a white surface, coherent motion). 512x512 and the
+recipe's own **832x480** at the same 50 steps both come out as the 16-px mosaic
+(mean 82.5 / std 54.5 for 832x480, against 209.3 / 80.4 for the working 256).
+So the model fails as the answer gets *bigger*, which is where the packed
+sequence gets longer -- 2816 tokens at 256x256, 9920 at 512x512.
+
+The loop itself is fine at 512: `update_mask` is all-True, `cu_seqlens` is on
+device, the initial latent has std 1.0008 -- but the latent moves **0.30** over
+two steps where the 256 run moves **1.21**, and leaves with std 1.0620 (still
+noise) against 0.9433. The denoiser is producing a much weaker update, not none.
+
+**The cause is the attention backend.** `FlashAttentionBackend` declares
+
+    supports_multi_doc_packed_varlen(): True for CUDA
+    supports_packed_mask_free():        True for CUDA
+
+with a comment spelling out why: the CUDA row dispatches
+`_forward_varlen_packed -> flash_attn_varlen_func` **over the caller's
+`cu_seqlens` without a mask**, "so an arbitrary N-document packing keeps its
+boundaries", and the NPU row only accepts a `[real, pad]` two-document layout
+and otherwise "silently attends across request boundaries". Running with
+`TORCH_SDPA` gives up exactly that guarantee: the packed row holds separate
+text, audio and video documents, and the fallback mask does not keep them
+apart. The more tokens, the more cross-document mixing, which is why 256x256
+survives and 512x512 / 832x480 do not.
+
+That is also the whole speed story: without a varlen kernel, `TORCH_SDPA`
+materialises the score matrix, and 832x480 runs at **25 s/step** (1236 s for 50
+steps) against the recipe's 0.73 s/step. The two open items are one item.
+
+**Why `FLASH_ATTN` cannot be selected yet.** It fails with
+
+    TORCH_CHECK failed: x.is_cuda() cu_seqlens_q must be on CUDA
+
+from `flash-attention/csrc/flash_attn/flash_api.cpp:20` -- a check in the real
+libtorch extension. Two candidate causes were chased and one is ruled out.
+
+The import *was* wrong and *is* now fixed in the lab: `vllm_omni/diffusion/
+attention/backends/utils/fa.py` does
+
+    from flash_attn_interface import flash_attn_varlen_func
+
+-- the **top-level** name, which is how the upstream package spells it -- while
+the shim ships the bridged implementation only as
+`flash_attn.flash_attn_interface`. With the flash-attention checkout on
+`PYTHONPATH` the top-level import therefore resolved to the unbridged extension.
+A two-line top-level alias that re-exports the bridged functions fixes the
+resolution (verified: `flash_attn_varlen_func.__module__ == "flash_attn"`,
+`is_flashattn_jittor_available() == True`, backend
+`flashattn_jittor_official:/root/jittor-lab/flash-attention`). It is not landed
+in the repo yet because it is a deploy-surface change: the stub lists in
+`compat/tests/structure/test_torch_shim_structure.py` and
+`test_torch_shim_deploy.py` would have to carry it.
+
+**With the alias in place the same assert still fires**, so the import was not
+the whole story. The Python side is not at fault either: `denoise_loop.py:115`
+passes `cu.to(device)`, every step of the mask/varlen chain keeps the CUDA
+placement, and `torch.arange(device=)`, `.to(cuda)`, bool factories and
+H3-style slice assignments all check out, including
+`torch.nn.functional.scaled_dot_product_attention` with a block-causal mask
+against a float32 reference at 512, 2816 and 9920 tokens (maxdiff <= 0.0011).
+That leaves the bridge that hands Jittor `Var`s to the upstream extension: it
+loses the device on `cu_seqlens_q`, while q/k/v arrive fine. That bridge is not
+in this repository -- it comes from `JITTOR_FLASH_ATTN_JITTOR_SRC`
+(`/root/jittor-lab/flash-attention`), so fixing it is work in that checkout, not
+here.
+
 ## Verification
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails

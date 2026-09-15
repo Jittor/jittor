@@ -27,10 +27,26 @@ def arange(start=0, end=None, step=1,dtype=None):
 
 
 def linspace(start, end, steps):
+    """``steps`` values evenly spaced from ``start`` to ``end``, endpoint included.
+
+    The last value is ``end`` exactly, which is what numpy's and torch's
+    ``linspace`` promise and what callers compare against. The arithmetic
+    series alone does not give it: ``i * (end - start) / (steps - 1) + start``
+    accumulates one rounding step on the final point, and on the CPU placement
+    ``linspace(1, 0, 4)`` ended at ``-2.98e-08`` -- *below* ``end``.
+
+    MiniMax-H3 builds its sigma schedule as
+    ``linspace(1.0, 0.0, num_inference_steps)`` and validates that no sigma is
+    negative, so every step count from 4 up died with ``sigma_next must be
+    non-negative``. It only showed on the CPU placement because the CUDA path
+    happened to round that point to exactly 0.
+    """
     import jittor as jt
     if steps > 1:
         res = jt.index((steps,))[0]
         res = res*float((end-start)/(steps-1))+start
+        # Pin the endpoint instead of trusting the accumulated rounding.
+        res = jt.cat([res[:-1], jt.array([end], dtype=res.dtype)])
     else:
         res = jt.array([start])
     return res
