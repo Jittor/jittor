@@ -321,12 +321,12 @@ Verified with `vllm-omni serve ... --omni --num-gpus 1` on one H20
 256x256 `video/mp4` with both a video and an audio stream, **39.5 s** against
 39.6 s for the same request offline. Serving is at parity with the offline path.
 
-## 13. Multi-GPU: two jittor defects, then an unresolved rendezvous
+## 13. Multi-GPU: three jittor defects, then a TP2 server that runs
 
 `--tensor-parallel-size` / `--text-encoder-tp-size` / `--vae-patch-parallel-size`
 above 1 all need multi-rank collectives, and that path had never been run here.
-Three things stand between the recipe and a working TP2 server, in the order
-they surface:
+Four things stood between the recipe and a TP2 server, in the order they surface.
+The first three are fixed; the fourth is new work, described at the end:
 
 1. **The launcher does not enable the shim's multi-rank bootstrap.** The shim
    implements a dynamic NCCL bootstrap for `init_process_group(world_size>1)`,
@@ -346,27 +346,64 @@ they surface:
    `os.makedirs(..., exist_ok=True)` (which also creates a missing parent, as
    the bare `mkdir` did not).
 
-3. **NCCL is not found without mpirun, and the store rendezvous then times out.**
-   `setup_nccl` will use a system NCCL if given
-   `JT_BUILD_NCCL_INCLUDE_PATH` / `JT_BUILD_NCCL_LIB_PATH`, otherwise it goes to
-   `install_nccl`, whose `if not inside_mpi(): return` still sits under the
-   comment saying the mpirun-free path is meant to build too -- so on this box
-   (system NCCL 2.27.3 in `/lib64`, `nccl.h` in `/usr/include`) the no-mpirun
-   path can never find it. With the two variables set, the NCCL ops compile and
-   publish (the earlier "did not publish collective ops" goes away), and the
-   run then stops at
+3. **NCCL is not found without mpirun.** `setup_nccl` will use a system NCCL if
+   given `JT_BUILD_NCCL_INCLUDE_PATH` / `JT_BUILD_NCCL_LIB_PATH`, otherwise it
+   goes to `install_nccl`, whose `if not inside_mpi(): return` still sits under
+   the comment saying the mpirun-free path is meant to build too -- so on this
+   box (system NCCL 2.27.3 in `/lib64`, `nccl.h` in `/usr/include`) the
+   no-mpirun path can never find it. With the two variables set, the NCCL ops
+   compile and publish (the earlier "did not publish collective ops" goes away).
+
+4. **The shim does not derive `JT_NCCL_ROOTINFO_FILE` when a store is in hand,
+   so `new_group` cannot work at all.** This was the real blocker, and it is the
+   one that looked like a rendezvous problem:
 
        RuntimeError: NCCL store rendezvous timeout: rank 1 waited 120 s and
        timed out using the provided Store
 
-   i.e. rank 1's `store.get("jittor/nccl/world/unique_id")` never sees rank 0's
-   `set`. vLLM-Omni passes `init_method="tcp://..."` (not a `store`), so the
-   store comes from the shim's own `_store_rendezvous`; whether both ranks end
-   up on one store is where to look next.
+   The store path itself is fine. `nccl_create_process_group` exchanges every
+   *sub-group's* unique id through a file named after `JT_NCCL_ROOTINFO_FILE`
+   (`<rootinfo>.pg<group_id>`, `backends/comm/nccl/src/nccl_wrapper.cc:531`),
+   and the shim only derived that path in its store-less branch
+   (`compat/torch/installers/distributed.py:97`, `if not rootinfo and store is
+   None:`). A store carries the *world* communicator's id only, so with a store
+   present the file path stayed unset and the next `new_group` died with
 
-So: **single-GPU serving is done; TP2 is not, and the remaining work is a
-two-rank repro of the store rendezvous**, not more H3 or vLLM-Omni work. Until
-that lands, `--num-gpus 1` is the only configuration this shim has run.
+       RuntimeError: nccl_wrapper.cc:531: NCCL process groups require
+       JT_NCCL_ROOTINFO_FILE in MPI-free mode
+
+   vLLM-Omni's `GroupCoordinator` calls `new_group` to build the world group
+   (`group_coordinator.py:110`), so this fires immediately on every multi-rank
+   run. Deriving the path is independent of whether a store arrived; dropping
+   `and store is None` fixes it. Single-GPU never enters this function.
+
+   Two red herrings worth recording. The first TP2 attempt died even earlier, on
+   `Orchestrator initialization failed: ipc path "..." is longer than 107
+   characters` -- the shim sets `TMPDIR` to `<runtime>/tmp`, which is 90
+   characters under this box's `XDG_CACHE_HOME`, and vLLM-Omni appends an
+   `ipc://` socket name. `JITTOR_TORCH_KEEP_TMPDIR=1` (the shim's own escape
+   hatch, otherwise undocumented here) is the fix. And the rendezvous *timeout*
+   above reproduced only while an earlier killed attempt's processes were still
+   alive; a clean start rendezvoused without complaint. Treat the timeout as a
+   stale-port artifact of the previous failure, not a defect of its own.
+
+**Where TP2 stands.** With all four addressed, a `--num-gpus 2 --tensor-parallel-size 2`
+server **starts and serves**: both ranks create their groups, both load the
+model with layer-wise offload (`DiffusionWorker_TP0` / `TP1`), and the denoise
+loop runs at **6.4 s/it at 832x480** against 10.1 s/it single-GPU. It then dies
+partway through with
+
+    cudaErrorIllegalAddress ... cudaMemGetInfo
+
+on `device=1`, with the launch candidates pointing into the flash-attn packed
+path (`flash_attn/__init__.py:123` `empty`, `flash_attn.py:234-245` reshapes,
+`minimax_h3_transformer.py:550-551` the `cu_seqlens[:2]` getitem). That is the
+next thing to chase, and it is a fresh question rather than a continuation of
+the rendezvous: the collectives work, the failure is inside the attention path
+on the sharded rank.
+
+So: **single-GPU serving is done and verified; TP2 boots and runs but is not yet
+correct.** `--num-gpus 1` remains the profile the frontend is served on.
 
 ## 14. `linspace` did not land on `end`, and every >= 4-step request died
 
