@@ -388,22 +388,38 @@ The first three are fixed; the fourth is new work, described at the end:
    stale-port artifact of the previous failure, not a defect of its own.
 
 **Where TP2 stands.** With all four addressed, a `--num-gpus 2 --tensor-parallel-size 2`
-server **starts and serves**: both ranks create their groups, both load the
-model with layer-wise offload (`DiffusionWorker_TP0` / `TP1`), and the denoise
-loop runs at **6.4 s/it at 832x480** against 10.1 s/it single-GPU. It then dies
-partway through with
+server **starts and serves**: both ranks create their groups with no NCCL error,
+both load the model with layer-wise offload (`DiffusionWorker_TP0` / `TP1`) at
+**10.07 GiB per rank** (304.6 s to load, against 62 GB for the whole DiT
+single-GPU), and a request gets as far as the denoise loop. It then dies on the
+**first** denoise step, on rank 1 (`device=1`):
 
-    cudaErrorIllegalAddress ... cudaMemGetInfo
+    cudaErrorIllegalAddress (sticky: it surfaces at the next cudaMemGetInfo)
 
-on `device=1`, with the launch candidates pointing into the flash-attn packed
-path (`flash_attn/__init__.py:123` `empty`, `flash_attn.py:234-245` reshapes,
-`minimax_h3_transformer.py:550-551` the `cu_seqlens[:2]` getitem). That is the
-next thing to chase, and it is a fresh question rather than a continuation of
-the rendezvous: the collectives work, the failure is inside the attention path
-on the sharded rank.
+with this stack, which is about as precise as the error gets:
 
-So: **single-GPU serving is done and verified; TP2 boots and runs but is not yet
-correct.** `--num-gpus 1` remains the profile the frontend is served on.
+    minimax_h3_denoise_loop            denoise_loop.py:335
+    -> _forward_varlen_packed          minimax_h3/flash_attn.py:233
+    -> flash_attn_varlen_func          flash_attn/__init__.py:199
+    -> packed_low_level.varlen_fwd     adapter.py:370
+
+The most likely reading is a token-layout mismatch rather than a collective
+problem: the packed varlen call is given `cu_seqlens` for the whole packed
+sequence while the rank holds a shard, and the kernel walks off the end of it.
+That has to be established, not assumed -- the control is the same TP2 +
+FLASH_ATTN configuration under real PyTorch.
+
+**Do not reuse a per-step number for TP2.** The loop's progress bar reached
+`0/7` before the fault, so there is no measured TP2 step time. An earlier
+version of this section recorded 6.4 s/it as the TP2 denoise rate; that figure
+came from a *VAE shard-loading* bar in the same log (denominators `/13`, `/14`,
+which the single-GPU log carries too) and is withdrawn here rather than left for
+someone to quote. The single-GPU 10.14 s/it at 832x480 is from the real denoise
+bar (`/49`).
+
+So: **single-GPU serving is done and verified; TP2 boots, shards and starts
+denoising, but is not yet correct.** `--num-gpus 1` remains the profile the
+frontend is served on.
 
 ## 14. `linspace` did not land on `end`, and every >= 4-step request died
 
