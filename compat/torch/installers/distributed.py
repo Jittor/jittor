@@ -6,6 +6,9 @@ changing the compatibility semantics.
 
 import os
 import pickle
+import argparse
+import subprocess
+import sys
 
 import numpy as np
 
@@ -1020,6 +1023,79 @@ def _install_distributed(g, registry=None):
     rpc.init_rpc = _api_rpc_init_rpc
     rpc.shutdown = _api_rpc_shutdown
     dist.rpc = rpc
+
+    # Accelerate's multi-GPU launcher imports ``torch.distributed.run`` and
+    # calls its parser/runner instead of spawning ranks itself.  The shim has
+    # no PyTorch elastic runtime, but a deterministic single-node runner is
+    # enough to expose the same rank environment to Jittor's NCCL bootstrap.
+    run_mod = _modules.get("torch.distributed.run")
+    if run_mod is None:
+        run_mod = _types.ModuleType("torch.distributed.run")
+        _modules["torch.distributed.run"] = run_mod
+
+    def _run_args_parser():
+        parser = argparse.ArgumentParser(add_help=False)
+        parser.add_argument("--nproc_per_node", default="1")
+        parser.add_argument("--nnodes", default="1")
+        parser.add_argument("--node_rank", default="0", type=int)
+        parser.add_argument("--master_addr", default="127.0.0.1")
+        parser.add_argument("--master_port", default="29500")
+        parser.add_argument("--standalone", action="store_true")
+        parser.add_argument("--role", default="default")
+        parser.add_argument("--rdzv_backend", default="static")
+        parser.add_argument("--rdzv_endpoint", default=None)
+        parser.add_argument("--start_method", default="spawn")
+        parser.add_argument("--log_dir", default=None)
+        parser.add_argument("--redirects", default="0")
+        parser.add_argument("--tee", default="0")
+        parser.add_argument("--local_ranks_filter", default=None)
+        parser.add_argument("--max_restarts", default=0, type=int)
+        parser.add_argument("--monitor_interval", default=0.1, type=float)
+        parser.add_argument("--training_script", default=None)
+        parser.add_argument("--training_script_args", nargs="*", default=[])
+        return parser
+
+    def _run(args):
+        nproc = getattr(args, "nproc_per_node", "1")
+        if str(nproc).lower() in ("gpu", "auto"):
+            nproc = int(os.environ.get("CUDA_VISIBLE_DEVICES", "").count(",")) + 1
+        nproc = int(nproc)
+        nnodes = int(getattr(args, "nnodes", "1"))
+        if nnodes != 1:
+            raise NotImplementedError("Jittor torch.distributed.run supports one node")
+        script = getattr(args, "training_script", None)
+        if not script:
+            raise ValueError("torch.distributed.run requires training_script")
+        script_args = list(getattr(args, "training_script_args", ()) or ())
+        base_env = os.environ.copy()
+        base_env["MASTER_ADDR"] = str(getattr(args, "master_addr", "127.0.0.1"))
+        base_env["MASTER_PORT"] = str(getattr(args, "master_port", "29500"))
+        base_env["WORLD_SIZE"] = str(nproc)
+        base_env["LOCAL_WORLD_SIZE"] = str(nproc)
+        base_env["JITTOR_TORCH_DISTRIBUTED_AUTO_INIT"] = "1"
+        processes = []
+        try:
+            for rank in range(nproc):
+                env = base_env.copy()
+                env["RANK"] = str(rank)
+                env["LOCAL_RANK"] = str(rank)
+                env["GROUP_RANK"] = "0"
+                process = subprocess.Popen(
+                    [sys.executable, script, *script_args], env=env)
+                processes.append(process)
+            statuses = [process.wait() for process in processes]
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.terminate()
+        failed = next((status for status in statuses if status), 0)
+        if failed:
+            raise subprocess.CalledProcessError(failed, [script, *script_args])
+        return None
+
+    run_mod.get_args_parser = _run_args_parser
+    run_mod.run = _run
+    dist.run = run_mod
 
     optim = _modules.get("torch.distributed.optim")
     if optim is None:
