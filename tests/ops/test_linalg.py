@@ -2,6 +2,8 @@
 from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
 
 from _helpers import capability as _test_capability
+from _helpers.cupy_bridge import (cuda_numpy_code_available,
+                                   requires_cuda_numpy_code)
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved.
 # Maintainers:
@@ -315,6 +317,8 @@ class TestBUG4_2Op(unittest.TestCase):
     # different backend. 0.12.
     @jt.flag_scope(use_cuda=1)
     def test(self):
+        # jt.linalg.inv is a numpy-code operator: on CUDA it needs CuPy.
+        requires_cuda_numpy_code()
         x = jt.randn(32, 50, 2)
         y = jt.rand(32, 1, 2)
 
@@ -490,7 +494,13 @@ class TestEighCrossDevice(unittest.TestCase):
         return vectors @ (f * (vectors.T @ dout)) @ vectors.T
 
     def _devices(self):
-        return (0, 1) if _test_capability.check_accelerator('cuda', backend=jt).enabled else (0,)
+        # eigh is a numpy-code operator, so its CUDA half needs the CuPy
+        # bridge; without it the operator raises from inside execution and
+        # leaves CUDA work pending for the next test to trip over.
+        if not (_test_capability.check_accelerator('cuda', backend=jt).enabled
+                and cuda_numpy_code_available()):
+            return (0,)
+        return (0, 1)
 
     def test_eigenvalues_and_reconstruction_match_on_every_device(self):
         from contextlib import ExitStack as _TestPolicyStack
