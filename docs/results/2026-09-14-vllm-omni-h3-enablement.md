@@ -525,17 +525,40 @@ in the repo yet because it is a deploy-surface change: the stub lists in
 `test_torch_shim_deploy.py` would have to carry it.
 
 **With the alias in place the same assert still fires**, so the import was not
-the whole story. The Python side is not at fault either: `denoise_loop.py:115`
-passes `cu.to(device)`, every step of the mask/varlen chain keeps the CUDA
-placement, and `torch.arange(device=)`, `.to(cuda)`, bool factories and
-H3-style slice assignments all check out, including
-`torch.nn.functional.scaled_dot_product_attention` with a block-causal mask
-against a float32 reference at 512, 2816 and 9920 tokens (maxdiff <= 0.0011).
-That leaves the bridge that hands Jittor `Var`s to the upstream extension: it
-loses the device on `cu_seqlens_q`, while q/k/v arrive fine. That bridge is not
-in this repository -- it comes from `JITTOR_FLASH_ATTN_JITTOR_SRC`
-(`/root/jittor-lab/flash-attention`), so fixing it is work in that checkout, not
-here.
+the whole story, and a run with `JITTOR_FLASH_ATTN_DIRECT_PACKED=0` fails the
+same way through the non-packed entry (`cu_seqlens_q.is_cuda()` instead of
+`x.is_cuda()` -- two macro instantiations). The failing frame is
+`compat/shim/backends/flash_attention/adapter.py:355` /
+`packed_low_level.varlen_fwd(...)`, the officially built extension.
+
+A trace added at that call site (in the deployed copy) shows the tensor is
+`device=cuda:0, is_cuda=True` **as Python sees it**, while the extension's
+`Tensor::is_cuda()` says otherwise. That predicate is
+`compat/shim/cpp_extension/include/torch/extension.h:232`, and it reads
+`vh_device_type`, whose own body calls `sync_for_data_ptr` before answering -- so
+by the time it returns 0 the Var has been materialised and its **allocator is a
+CPU one**. The data really is on the host, and the mechanism is
+"a host-allocated `cu_seqlens` Var reaching a CUDA-only extension entry", not
+"an unmaterialised Var".
+
+I tried the fix that reasoning suggests -- materialise the incoming Var in the
+extension's pybind caster (`jtorch_aten.cu`, mirroring what `var_from_host_dev`
+already does for host-built tensors), rebuilt the extension, and **it did not
+help**; the change is reverted rather than left in unverified, because its guard
+(`mem_ptr` unset) was the wrong premise when `vh_device_type` already
+materialises. The next instrument is the same trace printing the *allocator*
+residency, and the question it answers is which frame builds a CPU-allocated
+`cu_seqlens`: `packed_sequence.py:223` creates one without `device=` (which real
+torch makes a CPU tensor, so the model must move it, and under the shim
+`.to(cuda)` does move it), while `denoise_loop.py:93-96` describes a *per-step
+rebuild* from Python ints "without a device sync per step" -- that rebuild is the
+prime suspect.
+
+One trap worth fixing while in there: `_official_import_identity` keys the built
+extension on the **build directory name and a generation counter, not on the
+source**. A changed `.cu` or `.h` is therefore silently ignored and the old
+kernel keeps running -- `JITTOR_FLASH_ATTN_FORCE_BUILD=1` is the only way to get
+a rebuild, which is how the assertion above was reproduced after the edit.
 
 ## Verification
 
