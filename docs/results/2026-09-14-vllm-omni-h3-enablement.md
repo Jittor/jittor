@@ -387,6 +387,14 @@ The first three are fixed; the fourth is new work, described at the end:
    alive; a clean start rendezvoused without complaint. Treat the timeout as a
    stale-port artifact of the previous failure, not a defect of its own.
 
+   Related, and the reason to keep the file path in mind: those per-group files
+   are named after `MASTER_ADDR`-`MASTER_PORT` **alone**, so rerunning on the
+   same port finds the previous run's `.pg*` files and reads their unique ids.
+   That does not error -- it stalls inside the distributed init with the workers
+   idle (observed: last log line `diffusion_worker.py:327`, 90 s of silence,
+   ~14 s of CPU). `rm -f /tmp/jittor-nccl-*` before a multi-rank start is the
+   workaround; a run-scoped name would be the real fix.
+
 **Where TP2 stands.** With all four addressed, a `--num-gpus 2 --tensor-parallel-size 2`
 server **starts and serves**: both ranks create their groups with no NCCL error,
 both load the model with layer-wise offload (`DiffusionWorker_TP0` / `TP1`) at
@@ -403,11 +411,46 @@ with this stack, which is about as precise as the error gets:
     -> flash_attn_varlen_func          flash_attn/__init__.py:199
     -> packed_low_level.varlen_fwd     adapter.py:370
 
-The most likely reading is a token-layout mismatch rather than a collective
-problem: the packed varlen call is given `cu_seqlens` for the whole packed
-sequence while the rank holds a shard, and the kernel walks off the end of it.
-That has to be established, not assumed -- the control is the same TP2 +
-FLASH_ATTN configuration under real PyTorch.
+The most likely reading is that **one root cause shows up as two symptoms**, and
+the wrong one is the tempting one. A *host-resident* tensor reaching the packed
+CUDA kernel produces either
+
+- `TORCH_CHECK failed: x.is_cuda() cu_seqlens_q must be on CUDA` -- when the
+  extension's own guard catches it first, which is what section 16 fixed for the
+  `.to(device)` path; or
+- `cudaErrorIllegalAddress` / `TORCH_CHECK failed: _jt_cuda_err == cudaSuccess an
+  illegal memory access was encountered` -- when the guard is satisfied by some
+  other argument and the kernel dereferences a host pointer.
+
+Both appear on the same request, and which one you get depends on *which* tensor
+is host-resident when the call is made. Adding a trace at the call site flipped
+a run from the second symptom to the first: the trace's own `is_contiguous()` /
+`stride()` / `current_device()` calls materialise something, changing the set of
+host-resident arguments. That is why the shape trace below is trustworthy about
+what it measured and why re-running with more instrumentation is not a neutral
+act.
+
+The trace also rules out the obvious suspects. At the failing call, on both
+ranks, with `H3_FA_SHAPE_TRACE=1`:
+
+    TP0: q.dev=0 cu.dev=0 jt_dev=0 torch_cur=0 q_contig=True q_stride=[3584, 128, 1]
+         q=[289, 28, 128] k=[289, 28, 128] v=[289, 28, 128]
+         cu_q=[0, 289, 289] cu_k=[0, 289, 289] max_q=289 max_k=289
+    TP1: q.dev=1 cu.dev=1 jt_dev=1 torch_cur=1 q_contig=True q_stride=[3584, 128, 1]
+         (identical shapes and cu_seqlens)
+
+So the packed plan matches the tensor (`cu_q[-1] == q.shape[0] == 289`), the
+devices agree on each rank, and the tensors are contiguous with the expected
+stride. It is *not* a sharded-token / `cu_seqlens` mismatch, which was the first
+hypothesis, and it is not a device-selection mistake.
+
+The direction that follows is the section 16 fix generalised: a CUDA Var the
+executor has parked on the host must be moved back at the **extension boundary**,
+not only where someone happens to call `.to(device)`. jittor already does exactly
+that for a device op's inputs (`exec_runner.cc:334-336`); the boundary in
+`compat/shim/cpp_extension/src/jtorch_aten.cu` is the place that needs the same
+rule, with `device_id >= 0` plus "not deliberately `_host_resident`" as the
+discriminator so `x.cpu()` keeps handing out a real host pointer.
 
 **Do not reuse a per-step number for TP2.** The loop's progress bar reached
 `0/7` before the fault, so there is no measured TP2 step time. An earlier
