@@ -321,12 +321,12 @@ Verified with `vllm-omni serve ... --omni --num-gpus 1` on one H20
 256x256 `video/mp4` with both a video and an audio stream, **39.5 s** against
 39.6 s for the same request offline. Serving is at parity with the offline path.
 
-## 13. Multi-GPU: two jittor defects, then an unresolved rendezvous
+## 13. Multi-GPU: three jittor defects, then a TP2 server that runs
 
 `--tensor-parallel-size` / `--text-encoder-tp-size` / `--vae-patch-parallel-size`
 above 1 all need multi-rank collectives, and that path had never been run here.
-Three things stand between the recipe and a working TP2 server, in the order
-they surface:
+Four things stood between the recipe and a TP2 server, in the order they surface.
+The first three are fixed; the fourth is new work, described at the end:
 
 1. **The launcher does not enable the shim's multi-rank bootstrap.** The shim
    implements a dynamic NCCL bootstrap for `init_process_group(world_size>1)`,
@@ -346,27 +346,119 @@ they surface:
    `os.makedirs(..., exist_ok=True)` (which also creates a missing parent, as
    the bare `mkdir` did not).
 
-3. **NCCL is not found without mpirun, and the store rendezvous then times out.**
-   `setup_nccl` will use a system NCCL if given
-   `JT_BUILD_NCCL_INCLUDE_PATH` / `JT_BUILD_NCCL_LIB_PATH`, otherwise it goes to
-   `install_nccl`, whose `if not inside_mpi(): return` still sits under the
-   comment saying the mpirun-free path is meant to build too -- so on this box
-   (system NCCL 2.27.3 in `/lib64`, `nccl.h` in `/usr/include`) the no-mpirun
-   path can never find it. With the two variables set, the NCCL ops compile and
-   publish (the earlier "did not publish collective ops" goes away), and the
-   run then stops at
+3. **NCCL is not found without mpirun.** `setup_nccl` will use a system NCCL if
+   given `JT_BUILD_NCCL_INCLUDE_PATH` / `JT_BUILD_NCCL_LIB_PATH`, otherwise it
+   goes to `install_nccl`, whose `if not inside_mpi(): return` still sits under
+   the comment saying the mpirun-free path is meant to build too -- so on this
+   box (system NCCL 2.27.3 in `/lib64`, `nccl.h` in `/usr/include`) the
+   no-mpirun path can never find it. With the two variables set, the NCCL ops
+   compile and publish (the earlier "did not publish collective ops" goes away).
+
+4. **The shim does not derive `JT_NCCL_ROOTINFO_FILE` when a store is in hand,
+   so `new_group` cannot work at all.** This was the real blocker, and it is the
+   one that looked like a rendezvous problem:
 
        RuntimeError: NCCL store rendezvous timeout: rank 1 waited 120 s and
        timed out using the provided Store
 
-   i.e. rank 1's `store.get("jittor/nccl/world/unique_id")` never sees rank 0's
-   `set`. vLLM-Omni passes `init_method="tcp://..."` (not a `store`), so the
-   store comes from the shim's own `_store_rendezvous`; whether both ranks end
-   up on one store is where to look next.
+   The store path itself is fine. `nccl_create_process_group` exchanges every
+   *sub-group's* unique id through a file named after `JT_NCCL_ROOTINFO_FILE`
+   (`<rootinfo>.pg<group_id>`, `backends/comm/nccl/src/nccl_wrapper.cc:531`),
+   and the shim only derived that path in its store-less branch
+   (`compat/torch/installers/distributed.py:97`, `if not rootinfo and store is
+   None:`). A store carries the *world* communicator's id only, so with a store
+   present the file path stayed unset and the next `new_group` died with
 
-So: **single-GPU serving is done; TP2 is not, and the remaining work is a
-two-rank repro of the store rendezvous**, not more H3 or vLLM-Omni work. Until
-that lands, `--num-gpus 1` is the only configuration this shim has run.
+       RuntimeError: nccl_wrapper.cc:531: NCCL process groups require
+       JT_NCCL_ROOTINFO_FILE in MPI-free mode
+
+   vLLM-Omni's `GroupCoordinator` calls `new_group` to build the world group
+   (`group_coordinator.py:110`), so this fires immediately on every multi-rank
+   run. Deriving the path is independent of whether a store arrived; dropping
+   `and store is None` fixes it. Single-GPU never enters this function.
+
+   Two operational traps, both of which look like code defects and are not.
+
+   The first TP2 attempt died even earlier, on `Orchestrator initialization
+   failed: ipc path "..." is longer than 107 characters` -- the shim sets
+   `TMPDIR` to `<runtime>/tmp`, which is 90 characters under this box's
+   `XDG_CACHE_HOME`, and vLLM-Omni appends an `ipc://` socket name.
+   `JITTOR_TORCH_KEEP_TMPDIR=1` (the shim's own escape hatch, otherwise
+   undocumented here) is the fix.
+
+   The rendezvous timeout above is **orphaned workers, not the store**. Killing
+   a server by matching the port string reaches only the parent -- the
+   `DiffusionWorker` children do not carry `--port` in their argv -- so they
+   survive holding `MASTER_PORT`, and the next run's rank 1 rendezvouses with
+   the orphan's store and waits for a `set` that will never come. It is
+   intermittent precisely because it depends on whether the previous run was
+   cleaned up properly. `stop-vllmomni.sh` (walk the process tree from the
+   parent, then clear `/tmp/jittor-nccl-*`) is the fix; the per-group files are
+   named after `MASTER_ADDR`-`MASTER_PORT` alone, so a rerun on the same port
+   must not inherit them either.
+
+**Where TP2 stands.** With all four addressed, a `--num-gpus 2 --tensor-parallel-size 2`
+server **starts and serves**: both ranks create their groups with no NCCL error,
+both load the model with layer-wise offload (`DiffusionWorker_TP0` / `TP1`) at
+**10.07 GiB per rank** (304.6 s to load, against 62 GB for the whole DiT
+single-GPU), and a request gets as far as the denoise loop. It then dies on the
+**first** denoise step, on rank 1 (`device=1`):
+
+    cudaErrorIllegalAddress (sticky: it surfaces at the next cudaMemGetInfo)
+
+with this stack, which is about as precise as the error gets:
+
+    minimax_h3_denoise_loop            denoise_loop.py:335
+    -> _forward_varlen_packed          minimax_h3/flash_attn.py:233
+    -> flash_attn_varlen_func          flash_attn/__init__.py:199
+    -> packed_low_level.varlen_fwd     adapter.py:370
+
+The trace also rules out the obvious suspects. At the failing call, on both
+ranks, with `H3_FA_SHAPE_TRACE=1`:
+
+    TP0: q.dev=0 cu.dev=0 jt_dev=0 torch_cur=0 q_contig=True q_stride=[3584, 128, 1]
+         q=[289, 28, 128] k=[289, 28, 128] v=[289, 28, 128]
+         cu_q=[0, 289, 289] cu_k=[0, 289, 289] max_q=289 max_k=289
+    TP1: q.dev=1 cu.dev=1 jt_dev=1 torch_cur=1 q_contig=True q_stride=[3584, 128, 1]
+         (identical shapes and cu_seqlens)
+
+So the packed plan matches the tensor (`cu_q[-1] == q.shape[0] == 289`), the
+devices agree on each rank, and the tensors are contiguous with the expected
+stride. Ruled out, in order of how much they were suspected:
+
+- a sharded-token / `cu_seqlens` mismatch;
+- a device-selection mistake (each rank's current device equals its tensors');
+- a non-contiguous view reaching the kernel.
+
+**A host-resident argument at that call is ruled out too, and by experiment
+rather than by argument.** A helper that moves any `device_id >= 0` Var whose
+`location()` is `cpu` back to its device, installed immediately before
+`packed_low_level.varlen_fwd` and enabled for the run, **never fired** -- and the
+run still died with `cudaErrorIllegalAddress`. That also disposes of the
+"one root cause, two symptoms" reading this section previously carried: the
+`is_cuda` symptom appeared only in the run whose trace called
+`cu_q.data.tolist()`, which is itself the host-read path that parks a Var. The
+instrument changed the system it was measuring. The correct statement is that
+`cu_seqlens_q must be on CUDA` is what section 16 fixed, and the TP2 illegal
+address is a *different* fault with well-formed inputs.
+
+What is left is something below the arguments: the illegal access is raised on
+rank 1 with `device=1` and surfaces device-wide (sticky, at the next
+`cudaMemGetInfo`), so the recorded stack is a candidate list, not proof. The
+next tool for it is `compute-sanitizer` on a TP2 run, which is decisive about
+*which* launch faults and is where this stops for now.
+
+**Do not reuse a per-step number for TP2.** The loop's progress bar reached
+`0/7` before the fault, so there is no measured TP2 step time. An earlier
+version of this section recorded 6.4 s/it as the TP2 denoise rate; that figure
+came from a *VAE shard-loading* bar in the same log (denominators `/13`, `/14`,
+which the single-GPU log carries too) and is withdrawn here rather than left for
+someone to quote. The single-GPU 10.14 s/it at 832x480 is from the real denoise
+bar (`/49`).
+
+So: **single-GPU serving is done and verified; TP2 boots, shards and starts
+denoising, but is not yet correct.** `--num-gpus 1` remains the profile the
+frontend is served on.
 
 ## 14. `linspace` did not land on `end`, and every >= 4-step request died
 
@@ -465,9 +557,10 @@ exactly what that step is for, and the flash-attn routing above is the kind of
 thing it would own. Implementing it is the next real piece of work in this area
 -- it is not a one-line change, and it should not be guessed at.
 
-## 16. Open, and now diagnosed: every resolution above 256x256 loses the scene
+## 16. Every resolution above 256x256 lost the scene: a device Var parked on the host
 
-Not fixed, but the cause is identified and it is the same one as the speed.
+Fixed. The cause was the attention backend *and* the reason it could not be
+selected, and the two were one defect in the shim.
 
 **It is not a resolution problem.** 256x256 at 50 steps denoises to a real scene
 (hands pouring beans onto a white surface, coherent motion). 512x512 and the
@@ -498,17 +591,19 @@ survives and 512x512 / 832x480 do not.
 
 That is also the whole speed story: without a varlen kernel, `TORCH_SDPA`
 materialises the score matrix, and 832x480 runs at **25 s/step** (1236 s for 50
-steps) against the recipe's 0.73 s/step. The two open items are one item.
+steps) against the recipe's 0.73 s/step. The two open items were one item, and
+selecting FLASH_ATTN closed both -- see the numbers at the end of this section.
 
-**Why `FLASH_ATTN` cannot be selected yet.** It fails with
+**Why `FLASH_ATTN` could not be selected.** It failed with
 
     TORCH_CHECK failed: x.is_cuda() cu_seqlens_q must be on CUDA
 
 from `flash-attention/csrc/flash_attn/flash_api.cpp:20` -- a check in the real
-libtorch extension. Two candidate causes were chased and one is ruled out.
+libtorch extension. Three things were wrong, and all three are now fixed or
+accounted for.
 
-The import *was* wrong and *is* now fixed in the lab: `vllm_omni/diffusion/
-attention/backends/utils/fa.py` does
+The import *was* wrong and *is* fixed in the lab:
+`vllm_omni/diffusion/attention/backends/utils/fa.py` does
 
     from flash_attn_interface import flash_attn_varlen_func
 
@@ -524,18 +619,81 @@ in the repo yet because it is a deploy-surface change: the stub lists in
 `compat/tests/structure/test_torch_shim_structure.py` and
 `test_torch_shim_deploy.py` would have to carry it.
 
-**With the alias in place the same assert still fires**, so the import was not
-the whole story. The Python side is not at fault either: `denoise_loop.py:115`
-passes `cu.to(device)`, every step of the mask/varlen chain keeps the CUDA
-placement, and `torch.arange(device=)`, `.to(cuda)`, bool factories and
-H3-style slice assignments all check out, including
-`torch.nn.functional.scaled_dot_product_attention` with a block-causal mask
-against a float32 reference at 512, 2816 and 9920 tokens (maxdiff <= 0.0011).
-That leaves the bridge that hands Jittor `Var`s to the upstream extension: it
-loses the device on `cu_seqlens_q`, while q/k/v arrive fine. That bridge is not
-in this repository -- it comes from `JITTOR_FLASH_ATTN_JITTOR_SRC`
-(`/root/jittor-lab/flash-attention`), so fixing it is work in that checkout, not
-here.
+**The real cause is a parked Var.** jittor distinguishes *belonging* from
+*being*: `device_id` names the device a Var belongs to, `Var.location()` says
+where its bytes are, and the executor parks a device Var in host memory whenever
+a CPU op consumes it (`src/core/exec_runner.cc:319-322` migrates a CPU op's
+inputs to the host and deliberately keeps `device_id`), moving it back when a
+device op consumes it again (`:334-336`). A tensor handed straight to an
+extension never passes through that per-op migration.
+
+The pipeline parks `cu_seqlens` on its own, with one host read:
+
+    cu = packed["cu_seqlens"].to(torch.int32)   # denoise_loop.py:87
+    used = int(cu[1])                           # denoise_loop.py:92 -- parks it
+    cu.to(device)                               # denoise_loop.py:115
+
+`int(cu[1])` takes the `item()` path, which ends in `migrate_to_cpu` when
+`save_mem || _HAS_ACCELERATOR` (`src/core/var_holder.cc:709`), and views migrate
+with their group, so the base `cu` is parked too. The next line asks for the
+device and got the *metadata* answer instead: `_make_cuda_resident` returned
+early on `v.placement_backend == backend and v.device_id == index`
+(`compat/torch/types.py:564`) and `_move_to_cuda_index` on `current == idx`
+(`:450`), both of which are true for a parked Var because parking keeps both
+fields. The shim reported the tensor as already being on `cuda:0` while its
+bytes were on the host, so the extension correctly refused a host pointer.
+
+Reproduced standalone in six lines (`probe_cu_parking.py`), which is also the
+regression test: after `int(cu[1])` the Var reads `device=cuda:0, loc=cpu`, and
+`.to("cuda:0")` used to leave it that way.
+
+**The fix** is for both shortcuts to require real residence, which is what the
+native move already does -- `Var.to_device` refuses to skip unless
+`location() == "device"` (`python/jittor/_core/var.py:194`, with a comment
+describing this exact failure mode for `x.cpu().cuda()`). A parked Var now takes
+the device copy instead of the shortcut.
+
+**What it bought.** FLASH_ATTN runs, and the packed CUDA varlen path is what the
+higher resolutions needed:
+
+- 512x512, 50 steps -> a real, sharp scene. Previously the same request was the
+  16-px mosaic, and so was 832x480.
+- 832x480, 50 steps -> a photorealistic, coherent scene; 560 s end to end, and
+  **10.09 s/it** in the denoise loop against TORCH_SDPA's 25.2 s/it on the same
+  resolution (2.5x). The mosaic this resolution used to produce is gone.
+- 512x512 per-step cost: **6.69 s/it** against TORCH_SDPA's **11.76 s/it**
+  (same request, same seed, layer-offloaded `dit`+`text_encoder`), and 380 s for
+  the whole 50-step request. TORCH_SDPA's number is not a correct-output
+  baseline: it still loses the packed multi-document boundaries, so at 512 it
+  is faster-per-step than nothing only in the sense of finishing.
+- 256x256 still works on both backends, and at 2 steps the two agree
+  pixel-for-pixel in character, which is the control that says the FLASH_ATTN
+  path did not change the small case.
+- The control that decides attribution: at 256x256 / 50 steps / seed 11223 the
+  long structured pottery prompt produces the same dotted-tile texture on
+  **both** backends -- the TORCH_SDPA run and the FLASH_ATTN run are the same
+  picture. That texture is therefore a prompt-and-seed property of the model at
+  256, not a backend defect, and it is why the conclusion above rests on 512,
+  where the two backends genuinely differ.
+
+**Not chased here.** `TORCH_SDPA` above 256x256 remains wrong by design: the
+CUDA row's guarantee is what FLASH_ATTN provides, so the serving profile now
+selects FLASH_ATTN.
+
+One trap worth fixing while in there: `_official_import_identity` keys the built
+extension on the **build directory name and a generation counter, not on the
+source**. A changed `.cu` or `.h` is therefore silently ignored and the old
+kernel keeps running -- `JITTOR_FLASH_ATTN_FORCE_BUILD=1` is the only way to get
+a rebuild.
+
+**A pre-existing failure found on the way, left alone.**
+`compat/tests/torch/test_multi_device.py::TestMultiDeviceFacade::test_to_and_cuda_with_an_index`
+asserts that a bare `.to("cuda")` leaves a `cuda:1` tensor on `cuda:1`, and
+fails identically before and after this change. The bare-name path resolves the
+index from `torch.cuda.current_device()` (`compat/torch/frontend.py:55`), so it
+only holds when the ambient device happens to be 1 -- which a full file-order
+run arranges and an isolated run does not. It is a separate bug from this one
+and is not touched here.
 
 ## Verification
 
@@ -561,6 +719,13 @@ here.
   also dropped Transpose views.
 - 8: standalone probes: `as_strided` over a plain and over a slice of a larger
   flat buffer, and `empty_strided` + `copy_` matching the source.
+- 16: `compat/tests/torch/test_native_tensor_placement.py::test_a_device_var_parked_on_the_host_is_moved_back_by_to_device`
+  -- the new case, which fails pre-fix on `assert back.device_id == 0 and
+  back.location() == "device"` and passes after. The whole file passes (8/8),
+  as does `test_multi_device.py` (15/16, the one failure pre-existing and
+  isolated-run-only, see section 16). End-to-end: the 512x512 50-step request
+  that used to be the 16-px mosaic now renders a real scene, on a server whose
+  log carries zero `cu_seqlens_q must be on CUDA`.
 - Integration: with every fix above in the working tree, engine construction
   reached `[try] ENGINE-CONSTRUCTED` at 10.0 GiB peak during load and shut
   down cleanly (`vllmomni-try18.log`).

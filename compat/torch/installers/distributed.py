@@ -94,7 +94,15 @@ def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
     local_world_size = int(os.environ.get(
         "LOCAL_WORLD_SIZE", os.environ.get("RAY_LOCAL_WORLD_SIZE", world_size)))
     rootinfo = os.environ.get("JT_NCCL_ROOTINFO_FILE", "").strip()
-    if not rootinfo and store is None:
+    # Derived even when a store is in hand. The store carries the *world*
+    # communicator's unique id, but `nccl_create_process_group` exchanges every
+    # sub-group's id through a file named after this path
+    # (`<rootinfo>.pg<group_id>`), and `torch.distributed.new_group` -- which
+    # vLLM-Omni's GroupCoordinator calls for the world group itself -- dies with
+    # "NCCL process groups require JT_NCCL_ROOTINFO_FILE in MPI-free mode"
+    # without it. A caller-supplied store therefore does not make the path
+    # unnecessary.
+    if not rootinfo:
         explicit_rendezvous_dir = os.environ.get(
             "JITTOR_DIST_RENDEZVOUS_DIR", "").strip()
         if local_world_size != world_size and not explicit_rendezvous_dir:
