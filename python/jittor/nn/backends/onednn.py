@@ -76,3 +76,52 @@ def _try_onednn_conv2d(x, weight, bias, stride, padding, dilation, groups,
     if bias is not None:
         y = y + bias.broadcast(y.shape, [0, 2, 3])
     return y
+
+
+# Same story one row down: conv_transpose's *forward* is the conv-backward-x
+# op, and the CPU had no row for it either. Measured, `8x64x28x28` through a
+# `64x64x3x3` filter at stride 2: 2.4364 s against torch's 0.0013 s, 1874x --
+# worse than the forward convolution because the generic path's
+# `broadcast * broadcast -> reindex_reduce` is a scatter, not a gather.
+
+
+def _supports_conv_transpose2d(x, weight, bias, stride, padding, output_padding,
+                               dilation, groups):
+    if _jittor_dtype_name(x.dtype) != "float32":
+        return False
+    if x.dtype != weight.dtype:
+        return False
+    if bias is not None and bias.dtype != x.dtype:
+        return False
+    if groups != 1:
+        return False
+    if not (x._storage_is_contiguous() and weight._storage_is_contiguous()):
+        return False
+    ops = get_library_ops("mkl", load=True)
+    return ops is not None and hasattr(ops, "mkl_conv_backward_x")
+
+
+@optional_kernel("conv_transpose2d", "cpu", dtypes={"float32"},
+                 supports=_supports_conv_transpose2d)
+def _try_onednn_conv_transpose2d(x, weight, bias, stride, padding,
+                                 output_padding, dilation, groups):
+    """A oneDNN-backed conv_transpose2d result, or None to fall back."""
+    ops = get_library_ops("mkl", load=True)
+    if ops is None or not hasattr(ops, "mkl_conv_backward_x"):
+        return None
+    sh, sw = _pair(stride)
+    ph, pw = _pair(padding)
+    oph, opw = _pair(output_padding)
+    dh, dw = _pair(dilation)
+    H, W = x.shape[2], x.shape[3]
+    kh, kw = weight.shape[2], weight.shape[3]
+    # The size the *forward* convolution would have consumed. output_padding is
+    # smaller than the stride, so this stays the size the op's own consistency
+    # check derives back.
+    oh = (H - 1) * sh - 2 * ph + dh * (kh - 1) + oph + 1
+    ow = (W - 1) * sw - 2 * pw + dw * (kw - 1) + opw + 1
+    y = ops.mkl_conv_backward_x(weight, x, oh, ow, sh, sw, ph, pw, dh, dw,
+                                groups, "abcd", "oihw", "abcd")
+    if bias is not None:
+        y = y + bias.broadcast(y.shape, [0, 2, 3])
+    return y

@@ -106,3 +106,52 @@ def test_the_cpu_row_agrees_with_the_generic_path_gradients_included():
         np.testing.assert_allclose(
             got, want, rtol=2e-5, atol=2e-5,
             err_msg="the oneDNN row and the generic path disagree on " + name)
+
+
+#: conv_transpose's forward is the conv-backward-x op, and the CPU had no row
+#: for it either. It was the worst of the three: 2.4364 s against torch's
+#: 0.0013 s for `8x64x28x28` through `64x64x3x3` at stride 2, because the
+#: generic path's `broadcast * broadcast -> reindex_reduce` is a scatter.
+TRANSPOSE_GEOMETRIES = [
+    ((2, 4, 6, 6), (4, 6, 3, 3), 1, 0, 0, 1),
+    ((2, 4, 6, 6), (4, 6, 3, 3), 2, 1, 1, 1),
+    ((1, 3, 5, 7), (3, 5, 3, 3), 2, 1, 0, 1),
+    ((1, 4, 5, 5), (4, 4, 2, 2), 1, 0, 0, 2),
+    ((2, 4, 7, 7), (4, 4, 3, 3), 1, 1, 0, 1),
+]
+
+
+@pytest.mark.parametrize("xshape,wshape,stride,padding,output_padding,dilation",
+                         TRANSPOSE_GEOMETRIES)
+def test_the_transpose_row_agrees_with_the_generic_path(
+        xshape, wshape, stride, padding, output_padding, dilation):
+    """Same inputs, both rows, gradients included."""
+    requires_onednn()
+    from jittor._runtime.dispatch import override_kernel
+
+    rs = np.random.RandomState(abs(hash((xshape, wshape, stride, padding,
+                                         output_padding, dilation))) % 2**31)
+    xn = rs.rand(*xshape).astype("float32")
+    wn = rs.rand(*wshape).astype("float32")
+
+    def run():
+        x = jt.array(xn)
+        w = jt.array(wn)
+        y = nn.conv_transpose2d(x, w, None, stride, padding, output_padding,
+                                dilation, 1)
+        cotangent = jt.array(np.full(y.shape, 0.5, dtype="float32"))
+        gx, gw = jt.grad((y*cotangent).sum(), [x, w])
+        return y.data.copy(), gx.data.copy(), gw.data.copy()
+
+    with jt.flag_scope(use_cuda=0):
+        library = run()
+        with override_kernel("conv_transpose2d", "cpu", lambda *a, **k: None,
+                             supports=lambda *a, **k: False):
+            generic = run()
+
+    for got, want, name in zip(library, generic, ("output", "grad_x", "grad_w")):
+        assert got.shape == want.shape, (name, got.shape, want.shape)
+        np.testing.assert_allclose(
+            got, want, rtol=2e-5, atol=2e-5,
+            err_msg="the oneDNN transpose row and the generic path disagree on "
+                    + name)
