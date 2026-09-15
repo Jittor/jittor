@@ -39,6 +39,15 @@ struct TapeOp final : Op {
     TapeOp(Var* x);
     
     const char* name() const override { return "tape"; }
+    // A tape marks a gradient boundary; it computes nothing, and `infer_shape`
+    // gives its output the input's storage. Saying so is what every other
+    // aliasing op here already does (clone, reshape, reinterpret_view), and it
+    // skips the two things the runner would otherwise do for it: build a JIT
+    // key for a kernel that does not exist, and call an empty `run`. Every
+    // Python `Function` puts one tape on each differentiable input and each
+    // output, so a transformer whose layer_norm and softmax take the fused
+    // fast path runs 82 of these per forward pass.
+    bool is_storage_view() const override { return true; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     void infer_shape() override;
 };
