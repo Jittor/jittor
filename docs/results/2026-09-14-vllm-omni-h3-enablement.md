@@ -566,6 +566,9 @@ higher resolutions needed:
 
 - 512x512, 50 steps -> a real, sharp scene. Previously the same request was the
   16-px mosaic, and so was 832x480.
+- 832x480, 50 steps -> a photorealistic, coherent scene; 560 s end to end, and
+  **10.09 s/it** in the denoise loop against TORCH_SDPA's 25.2 s/it on the same
+  resolution (2.5x). The mosaic this resolution used to produce is gone.
 - 512x512 per-step cost: **6.69 s/it** against TORCH_SDPA's **11.76 s/it**
   (same request, same seed, layer-offloaded `dit`+`text_encoder`), and 380 s for
   the whole 50-step request. TORCH_SDPA's number is not a correct-output
