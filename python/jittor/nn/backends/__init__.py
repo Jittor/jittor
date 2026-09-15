@@ -5,6 +5,7 @@ from .cudnn import (
     _cudnn_conv3d_fp16_safe, _try_cudnn_conv2d,
     _try_cudnn_conv_transpose2d,
 )
+from .onednn import _try_onednn_conv2d
 from jittor.backends.cuda.kernels.nn.batch_norm_training_cuda import _batch_norm_cuda, _batch_norm_eval_cuda
 from jittor.backends.cuda.kernels.nn.channel_bias_cuda import _channel_bias_add_cuda
 from jittor.backends.cuda.kernels.nn.layer_norm_cuda import _layer_norm_no_grad_cuda

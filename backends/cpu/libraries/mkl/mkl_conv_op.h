@@ -20,6 +20,7 @@ struct MklConvOp : Op {
     MklConvOp(Var* x, Var* w, int strideh, int stridew, int paddingh, int paddingw, int dilationh=1, int dilationw=1, int groups=1, string xformat="abcd", string wformat="oihw", string yformat="");
     
     const char* name() const override { return "mkl_conv"; }
+    VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     void infer_shape() override;
     DECLARE_jit_run;
 };
