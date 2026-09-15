@@ -332,12 +332,15 @@ def layer_norm(
     else:
         fast = _layer_norm_no_grad_cuda(x, normalized_shape, weight, bias, eps)
     if fast is not None:
-        # The restore exists for one case: a half input whose relay handed back
-        # the accumulator's dtype. Comparing the two dtypes is the cheapest
-        # question that can rule it out, and it rules it out for every call
-        # that is not in half -- where `_restore_half_dtype` would otherwise
-        # run two `str(dtype).replace(...)` per layer_norm.
-        if fast.dtype != x.dtype:
+        # The restore only ever changes a half-typed result, so ask that
+        # question first and keep `_restore_half_dtype` off every call that is
+        # not in half. It has to be asked on the normalised spelling: a torch
+        # frontend tensor reports `torch.bfloat16` where the native Var reports
+        # `bfloat16`, which is why `_restore_half_dtype` itself strips the
+        # prefix before comparing. Comparing the dtype objects directly -- by
+        # `!=` or by identity -- calls that pair different and sends a float32
+        # result into the restore, where it dies on `.dsize`.
+        if str(x.dtype).replace("torch.", "") in ("float16", "bfloat16"):
             return _restore_half_dtype(fast, x)
         return fast
     dims = [-i for i in range(rank, 0, -1)]

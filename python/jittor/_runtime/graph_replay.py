@@ -655,10 +655,32 @@ class _AutoState:
         self.give_up = False
 
 
+def _element_size(dtype):
+    """Bytes per element, for a native dtype or a frontend one.
+
+    The native NanoString spells this `dsize()`; a torch frontend tensor
+    reports a `torch.dtype`, which spells it `itemsize` and has no `dsize` at
+    all. Reading only the native spelling made every module call through the
+    torch frontend die here with "'dtype' object has no attribute 'dsize'" --
+    the replay policy runs for every outermost module call, so it took down
+    plain `nn.LayerNorm(x)` under the shim.
+    """
+    size = getattr(dtype, "dsize", None)
+    if size is not None:
+        return size() if callable(size) else size
+    size = getattr(dtype, "itemsize", None)
+    if size is not None:
+        return size() if callable(size) else size
+    # Unknown spelling: report one byte rather than raising. The caller only
+    # compares the total against a byte threshold, so under-reporting merely
+    # lets a call through to the normal path.
+    return 1
+
+
 def _input_bytes(args):
     total = 0
     for a in args:
-        total += a.numel() * a.dtype.dsize()
+        total += a.numel() * _element_size(a.dtype)
     return total
 
 
