@@ -11,7 +11,7 @@ from _helpers.assertions import expect_error
 
 header ="""
 #pragma once
-#include "op.h"
+#include "core/op.h"
 
 namespace jittor {
 
@@ -27,7 +27,7 @@ struct CustomOp : Op {
 """
 
 src = """
-#include "var.h"
+#include "core/var.h"
 #include "custom_op.h"
 
 namespace jittor {

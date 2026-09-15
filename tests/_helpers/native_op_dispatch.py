@@ -5,8 +5,8 @@ import numpy as np
 
 _PROBE_SOURCE = r"""
 #pragma once
-#include "op.h"
-#include "var.h"
+#include "core/op.h"
+#include "core/var.h"
 #include "ops/op_register.h"
 #include <stdexcept>
 namespace jittor {

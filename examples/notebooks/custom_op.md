@@ -47,7 +47,7 @@ assert callable(jt.compile_custom_op)
 
 header ="""
 #pragma once
-#include "op.h"
+#include "core/op.h"
 
 namespace jittor {
 
@@ -63,7 +63,7 @@ struct CustomOp : Op {
 """
 
 src = """
-#include "var.h"
+#include "core/var.h"
 #include "custom_op.h"
 
 namespace jittor {

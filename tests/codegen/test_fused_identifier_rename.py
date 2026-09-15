@@ -20,7 +20,7 @@ import jittor as jt
 
 HEADER = """
 #pragma once
-#include "op.h"
+#include "core/op.h"
 namespace jittor {
 %(extra)s
 struct %(cls)sOp : Op {
@@ -33,7 +33,7 @@ struct %(cls)sOp : Op {
 """
 
 SRC = """
-#include "var.h"
+#include "core/var.h"
 #include "%(name)s_op.h"
 namespace jittor {
 #ifndef JIT

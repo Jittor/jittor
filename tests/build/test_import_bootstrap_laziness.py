@@ -283,7 +283,7 @@ class TestCoreBuildStamp(unittest.TestCase):
         signature = self.compiler.core_source_signature()
         self.assertTrue(
             self.compiler.core_build_is_current(signature=signature))
-        name = os.path.join("src", "executor.cc")
+        name = os.path.join("src", "core", "executor.cc")
         self.assertIn(name, signature)
         edited = dict(signature)
         edited[name] = [signature[name][0] + 1, signature[name][1]]
@@ -379,7 +379,7 @@ _STAMP_HELPER_H = """
 
 _STAMP_OP_H = """
 #pragma once
-#include "op.h"
+#include "core/op.h"
 
 namespace jittor {
 
@@ -395,7 +395,7 @@ struct StampProbeOp : Op {
 """
 
 _STAMP_OP_CC = """
-#include "var.h"
+#include "core/var.h"
 #include "stamp_probe_op.h"
 #include "stamp_probe_helper.h"
 
@@ -889,6 +889,9 @@ class TestBootstrapEntryPoint(unittest.TestCase):
         import jittor as jt
 
         self.compiler = jt.compiler
+        # What bootstrap reports as JITTOR_SRC: the package directory, which is
+        # not the directory compiler.py lives in any more.
+        self.jittor_src = os.path.dirname(jt.__file__)
 
     def test_bootstrap_builds_even_when_the_gate_is_set(self):
         """The environment that needs bootstrap most is the one that sets it.
@@ -936,8 +939,7 @@ class TestBootstrapEntryPoint(unittest.TestCase):
         result = run_python_child(["-m", "jittor_utils.bootstrap"],
                                   cwd=_REPO_ROOT, merge_stderr=True)
         self.assertEqual(result.returncode, 0, result.stdout[-4000:])
-        self.assertIn("jittor:     %s" % os.path.dirname(self.compiler.__file__),
-                      result.stdout)
+        self.assertIn("jittor:     %s" % self.jittor_src, result.stdout)
 
 
 if __name__ == "__main__":
