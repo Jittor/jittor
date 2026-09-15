@@ -18,6 +18,10 @@ def _ensure_nccl_rootinfo_env():
     """
     if os.environ.get("JT_NCCL_ROOTINFO_FILE", "").strip():
         return
+    # MPI rendezvous broadcasts subgroup ids in-process; it does not use the
+    # env/file path and may expose WORLD_SIZE without a local rendezvous dir.
+    if os.environ.get("OMPI_COMM_WORLD_SIZE", "").strip():
+        return
     rendezvous_dir = os.environ.get("JITTOR_DIST_RENDEZVOUS_DIR", "").strip()
     if not rendezvous_dir:
         local_world_size = int(os.environ.get(
