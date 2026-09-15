@@ -38,6 +38,7 @@ def _broadcast_batch_dims(a, b):
 #: | ------------------------- | ------ | ---------------------------------- |
 #: | cublas_matmul (2-D)       | CUDA   | both operands the same float dtype |
 #: | cublas_batched_matmul     | CUDA   | both operands the same float dtype |
+#: | mkl_matmul (2-D)          | CPU    | both operands float32, both dense  |
 #: | mkl_batched_matmul        | CPU    | both operands float32              |
 #: | broadcast * mul + reduce  | any    | everything else, complex included  |
 #:
@@ -90,6 +91,45 @@ def _cublas_matmul(a, b, trans_a=False, trans_b=False):
 def _cublas_batched_matmul(a, b, trans_a=False, trans_b=False):
     a, b = _broadcast_batch_dims(a, b)
     return get_library_ops("cublas").cublas_batched_matmul(a, b, trans_a, trans_b)
+
+
+def _supports_mkl(a, b, trans_a=False, trans_b=False):
+    """oneDNN's 2-D relay: float32, and both operands actually dense.
+
+    The generic row this stands in front of is not a fallback in name only --
+    measured on this machine, a 1024-cube float32 product runs 3.52 s through
+    ``broadcast * mul + reduce`` against 0.036 s for the same product in NumPy,
+    99x. The CPU row used to be reached by ``MatmulTuner`` relaying the fused
+    ``broadcast * mul + reduce`` subgraph to ``mkl_matmul`` instead, which is
+    why no kernel was registered here; that relay has been dead since expand
+    became a storage descriptor (``BroadcastToOp`` is ``OpType::other`` now, so
+    the tuner's ``is_op(broadcast_to())`` pattern never matches inside a fused
+    op). Registering the row makes the CPU reach oneDNN the same way CUDA
+    reaches cuBLAS, without depending on a pattern match over the fused graph.
+
+    Rank and density are this predicate's own requirements, not the dtype
+    rule's. ``CublasMatmulOp`` takes a rank>2 operand and flattens it, so the
+    callers that hand one to ``_matmul_2d_cublas`` -- ``matmul``'s
+    ``len_b == 2 and len_a > 2`` branch and ``matmul_transpose``'s reshape
+    branch -- are written for that; ``MklMatmulOp::infer_shape`` asserts rank 2
+    instead, and the assert aborts rather than declining. Answering no here
+    sends those callers down their own reshape path, which arrives back as a
+    rank-2 product. Likewise ``MklMatmulOp::jit_run`` hands ``a->mem_ptr`` to
+    ``onednn_matmul_execute`` with the shape alone, so a strided view would be
+    read as though it were dense and silently give a wrong product.
+    """
+    if a.dtype != b.dtype or _jittor_dtype_name(a.dtype) != "float32":
+        return False
+    if len(a.shape) != 2 or len(b.shape) != 2:
+        return False
+    if not (a._storage_is_contiguous() and b._storage_is_contiguous()):
+        return False
+    ops = get_library_ops("mkl", load=True)
+    return ops is not None and hasattr(ops, "mkl_matmul")
+
+
+def _mkl_matmul(a, b, trans_a=False, trans_b=False):
+    return get_library_ops("mkl").mkl_matmul(a, b, trans_a, trans_b)
 
 
 def _supports_mkl_batched(a, b, trans_a=False, trans_b=False):
@@ -506,6 +546,8 @@ for _backend in ("cuda", "rocm_legacy", "corex_legacy"):
                     dtypes=_FLOAT_DTYPES, supports=_supports_cublas)
     register_kernel("batched_matmul", _backend, _cublas_batched_matmul,
                     dtypes=_FLOAT_DTYPES, supports=_supports_cublas)
+register_kernel("matmul", "cpu", _mkl_matmul,
+                dtypes={"float32"}, supports=_supports_mkl)
 register_kernel("batched_matmul", "cpu", _mkl_batched_matmul,
                 dtypes={"float32"}, supports=_supports_mkl_batched)
 del _backend
