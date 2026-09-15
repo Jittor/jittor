@@ -85,7 +85,7 @@ def _sgd_hparams(opt, pg):
 def _sgd_update_for_param(opt, pg, state, entry, param, grad, value):
     lr, momentum, weight_decay, dampening, nesterov = _sgd_hparams(opt, pg)
     if not isinstance(value, jt.Var) or list(value.shape) != list(param.shape):
-        value = jt.zeros(param.shape, param.dtype).stop_grad()
+        value = jt.zeros_like(param).stop_grad()
     updated = sgd_update(
         param, grad, value, lr=lr, momentum=momentum, weight_decay=weight_decay,
         dampening=dampening, nesterov=nesterov)
@@ -105,9 +105,9 @@ def _adam_update_for_param(opt, pg, param, grad, value, momentum, *,
                            decoupled_weight_decay, n_step):
     lr, eps, weight_decay, betas = _adam_hparams(opt, pg)
     if not isinstance(value, jt.Var) or list(value.shape) != list(param.shape):
-        value = jt.zeros(param.shape, param.dtype).stop_grad()
+        value = jt.zeros_like(param).stop_grad()
     if not isinstance(momentum, jt.Var) or list(momentum.shape) != list(param.shape):
-        momentum = jt.zeros(param.shape, param.dtype).stop_grad()
+        momentum = jt.zeros_like(param).stop_grad()
     updated = adam_update(
         param, grad, value, momentum, lr=lr, eps=eps, weight_decay=weight_decay,
         betas=betas, step=n_step, decoupled_weight_decay=decoupled_weight_decay,

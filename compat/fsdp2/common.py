@@ -8,6 +8,9 @@ import types
 import numpy as np
 
 import jittor as jt
+# The branch already has this under its own name (see ffaf65d0); the PR shipped
+# a second copy called _factory_scope_like, which would be a duplicate.
+from jittor._core.var import placement_scope_like as _factory_scope_like
 from ..diagnostics import EXPECTED, swallowed
 # Rank/world queries and the two collectives moved down to jittor/compat/
 # collectives.py: compat/torch/installers/distributed.py needs
@@ -99,12 +102,119 @@ def _pad_flat(flat, padded_numel):
     n = int(flat.numel()) if callable(getattr(flat, "numel", None)) else int(np.prod(flat.shape))
     if n == int(padded_numel):
         return flat
-    pad = jt.zeros((int(padded_numel) - n,), dtype=flat.dtype)
+    pad = _zeros_like_shape(flat, (int(padded_numel) - n,))
     return jt.concat([flat, pad], dim=0)
+
+
+def _zeros_like_shape(reference, shape, dtype=None):
+    with _factory_scope_like(reference):
+        return jt.zeros(shape, dtype=reference.dtype if dtype is None else dtype)
 
 
 def _param_numel(v):
     return int(np.prod(tuple(int(x) for x in v.shape)))
+
+
+def _value_requires_grad(value):
+    if isinstance(value, jt.Var):
+        try:
+            return bool(value.requires_grad)
+        except (AttributeError, TypeError):
+            return not value.is_stop_grad()
+    if isinstance(value, dict):
+        return any(_value_requires_grad(item) for item in value.values())
+    if isinstance(value, (tuple, list)):
+        return any(_value_requires_grad(item) for item in value)
+    return False
+
+
+def _primary_input_requires_grad(args, kwargs):
+    """Whether a module must retain its forward graph for an input gradient."""
+    return (any(_value_requires_grad(value) for value in args)
+            or any(_value_requires_grad(value) for value in kwargs.values()))
+
+
+def _materialize_frozen_output(value):
+    """Sever a completed frozen forward graph while preserving its structure."""
+    if isinstance(value, jt.Var):
+        return jt.Var.copy(value).stop_grad()
+    if isinstance(value, tuple):
+        values = tuple(_materialize_frozen_output(item) for item in value)
+        if hasattr(value, "_fields"):
+            return type(value)(*values)
+        if type(value) is tuple:
+            return values
+        try:
+            return type(value)(values)
+        except TypeError:
+            return values
+    if isinstance(value, list):
+        values = [_materialize_frozen_output(item) for item in value]
+        if type(value) is list:
+            return values
+        try:
+            return type(value)(values)
+        except TypeError:
+            return values
+    if isinstance(value, dict):
+        values = {
+            key: _materialize_frozen_output(item)
+            for key, item in value.items()
+        }
+        if type(value) is dict:
+            return values
+        try:
+            return type(value)(values)
+        except TypeError:
+            return values
+    return value
+
+
+def _tensor_values(value):
+    if isinstance(value, jt.Var):
+        return [value]
+    if isinstance(value, dict):
+        return [
+            tensor for item in value.values() for tensor in _tensor_values(item)
+        ]
+    if isinstance(value, (tuple, list)):
+        return [tensor for item in value for tensor in _tensor_values(item)]
+    return []
+
+
+def _full_gradient_from_shard(gradient, state, entry):
+    """Reconstruct one public DTensor gradient from its rank-local shard."""
+    group = getattr(state, "shard_group", None)
+    if getattr(state, "true_fsdp_flat", False):
+        stored = [
+            getattr(current.shard, "_torch_grad", None)
+            for current in state.true_fsdp_params
+        ]
+        if any(isinstance(value, jt.Var) for value in stored):
+            parts = []
+            real_numel = 0
+            for current, value in zip(state.true_fsdp_params, stored):
+                if current is entry:
+                    value = gradient
+                if not isinstance(value, jt.Var):
+                    value = jt.zeros_like(current.shard)
+                part_numel = _param_numel(value)
+                if part_numel:
+                    parts.append(_flatten_var(value))
+                    real_numel += part_numel
+            if real_numel < int(state.true_fsdp_flat_shard_numel):
+                parts.append(_zeros_like_shape(
+                    state.true_fsdp_flat_shard,
+                    (int(state.true_fsdp_flat_shard_numel) - real_numel,),
+                    dtype=state.true_fsdp_flat_shard.dtype))
+            local_flat = parts[0] if len(parts) == 1 else jt.concat(parts, dim=0)
+        else:
+            local_flat = state.true_fsdp_last_flat_grad
+        full_flat = _all_gather_shards(local_flat, group)
+        return _slice_flat(
+            full_flat, entry.flat_offset, entry.numel).reshape(entry.shape)
+    gathered = _all_gather_shards(_flatten_var(gradient), group)
+    return _slice_flat(gathered, 0, entry.numel).reshape(entry.shape)
 
 
 #: Where "auto" switches flat sharding off, and how to move it.
@@ -162,5 +272,9 @@ _EXPORTS = (
     "_ceil_div",
     "_pad_flat",
     "_param_numel",
+    "_primary_input_requires_grad",
+    "_materialize_frozen_output",
+    "_tensor_values",
+    "_full_gradient_from_shard",
     "_fsdp2_flat_enabled",
 )

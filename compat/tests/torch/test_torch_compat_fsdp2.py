@@ -4,18 +4,22 @@ Run:
     python -m pytest compat/tests/torch/test_torch_compat_fsdp2.py
 """
 import abc
+import textwrap
 import unittest
 import types
+import weakref
 from unittest import mock
 import numpy as np
 import pytest
 import torch
 import jittor as jt
 from _helpers import capability as _test_capability
+from _helpers.child_process import run_python_child
 from jittor.compat import fsdp2 as canonical_fsdp
 from jittor.compat.fsdp2 import grad_sync as fsdp_grad_sync
 from jittor.compat.fsdp2 import shard as fsdp_shard
 from jittor.compat.torch.installers.distributed import _backend_matches_active
+from jittor.compat.torch.tensor_state import get_tensor_state
 
 #: Keep this module on one xdist worker.
 #:
@@ -40,6 +44,325 @@ pytestmark = pytest.mark.xdist_group("fsdp2_compat_module_state")
 
 
 class TestFSDP2Compat(unittest.TestCase):
+    def test_parameter_trainability_uses_torch_requires_grad(self):
+        parameter = torch.nn.Parameter(torch.ones(4))
+        parameter.requires_grad_(False)
+
+        self.assertFalse(parameter.requires_grad)
+        self.assertFalse(parameter.is_stop_grad())
+        self.assertFalse(fsdp_shard._parameter_requires_grad(parameter))
+
+    def test_initial_shard_materialization_releases_full_parent(self):
+        # Switching allocators while earlier tests still own Vars can corrupt
+        # their storage during jt.gc(). A fresh process is part of this memory
+        # test's contract, not merely test-order isolation.
+        code = textwrap.dedent(
+            """
+            import gc
+            import numpy as np
+            import jittor as jt
+            from jittor.compat.fsdp2 import shard as fsdp_shard
+
+            with jt.flag_scope(
+                    use_cuda=0, use_stat_allocator=1, use_sfrl_allocator=0):
+                jt.sync_all(True)
+                gc.collect()
+                baseline = (
+                    jt.flags.stat_allocator_total_alloc_byte
+                    - jt.flags.stat_allocator_total_free_byte)
+                full = jt.array(np.ones(
+                    (4 * 1024 * 1024,), dtype=np.float32))
+                full.sync()
+                shard = fsdp_shard._materialize_initial_shard(
+                    full[: full.shape[0] // 4])
+                del full
+                gc.collect()
+                jt.gc()
+                jt.sync_all(True)
+                live_delta = (
+                    jt.flags.stat_allocator_total_alloc_byte
+                    - jt.flags.stat_allocator_total_free_byte
+                    - baseline)
+                assert tuple(shard.shape) == (1024 * 1024,)
+                np.testing.assert_array_equal(
+                    shard.numpy(), np.ones((1024 * 1024,), dtype="float32"))
+                assert live_delta < 8 * 1024 * 1024, live_delta
+                print("MATERIALIZATION_OK", live_delta)
+            """
+        )
+        completed = run_python_child(
+            ["-c", code], text=True, merge_stderr=True)
+        self.assertEqual(completed.returncode, 0, completed.stdout)
+        self.assertIn("MATERIALIZATION_OK", completed.stdout)
+
+    def test_fsdp_var_methods_do_not_retain_temporary_full_parameter(self):
+        code = textwrap.dedent(
+            """
+            import gc
+            import types
+            import numpy as np
+            import jittor as jt
+            import jittor.compat.torch
+            from jittor.compat.fsdp2 import shard as fsdp_shard
+
+            with jt.flag_scope(
+                    use_cuda=0, use_stat_allocator=1, use_sfrl_allocator=0):
+                jt.sync_all(True)
+                gc.collect()
+                baseline = (
+                    jt.flags.stat_allocator_total_alloc_byte
+                    - jt.flags.stat_allocator_total_free_byte)
+                shard = jt.array(np.ones((1,), dtype=np.float32)).stop_grad()
+                owner = types.SimpleNamespace(weight=shard)
+                entry = fsdp_shard.common.StateRecord(
+                    owner=owner, attr="weight", shard=shard, full_param=None,
+                    requires_grad=False)
+                state = fsdp_shard.common.StateRecord(
+                    true_fsdp_initialized=True, true_fsdp_flat=False,
+                    true_fsdp_unsharded=True, true_fsdp_params=(entry,))
+                fsdp_shard._mark_fsdp_param_var(
+                    shard, state, entry, "shard")
+                full = jt.array(np.ones(
+                    (4 * 1024 * 1024,), dtype=np.float32))
+                full.sync()
+                fsdp_shard._mark_fsdp_param_var(full, state, entry, "full")
+                entry.full_param = full
+                owner.weight = full
+                assert full.to_local() is shard
+                assert full.full_tensor() is full
+                assert type(full.to_local).__name__ == "_ShardTensorMethod"
+                assert "_local_tensor" not in getattr(full, "__dict__", {})
+                fsdp_shard._reshard_module_params(
+                    types.SimpleNamespace(_fsdp_state=state))
+                del full
+                gc.collect()
+                jt.gc()
+                jt.sync_all(True)
+                live_delta = (
+                    jt.flags.stat_allocator_total_alloc_byte
+                    - jt.flags.stat_allocator_total_free_byte
+                    - baseline)
+                assert entry.full_param is None
+                assert owner.weight is shard
+                assert live_delta < 8 * 1024 * 1024, live_delta
+                assert type(shard.to_local).__name__ == "_ShardTensorMethod"
+                assert "_local_tensor" not in getattr(shard, "__dict__", {})
+                print("FSDP_TEMP_FULL_RELEASE_OK", live_delta)
+            """
+        )
+        completed = run_python_child(
+            ["-c", code], text=True, merge_stderr=True)
+        self.assertEqual(completed.returncode, 0, completed.stdout)
+        self.assertIn("FSDP_TEMP_FULL_RELEASE_OK", completed.stdout)
+
+    def test_fsdp_var_metadata_does_not_accumulate_replaced_vars(self):
+        # Replacing a full/shard/gradient triple models one FSDP reshard cycle.
+        # Keep the state alive while replacing its entries, just as the runtime
+        # does, so stale Var metadata is the only possible retention root.
+        code = textwrap.dedent(
+            """
+            import gc
+            import types
+            import numpy as np
+            import jittor as jt
+            import jittor.compat.torch
+            from jittor.compat.fsdp2 import shard as fsdp_shard
+
+            with jt.flag_scope(
+                    use_cuda=0, use_stat_allocator=1, use_sfrl_allocator=0):
+                owner = types.SimpleNamespace()
+                entry = fsdp_shard.common.StateRecord(
+                    owner=owner, attr="weight", shard=None, full_param=None,
+                    requires_grad=True)
+                state = fsdp_shard.common.StateRecord(
+                    true_fsdp_initialized=True, true_fsdp_flat=False,
+                    true_fsdp_unsharded=True, true_fsdp_params=(entry,),
+                    true_fsdp_module=None)
+                live = []
+                for _ in range(12):
+                    current = jt.array(
+                        np.ones((128,), dtype=np.float32)).stop_grad()
+                    entry.shard = current
+                    owner.weight = current
+                    fsdp_shard._mark_fsdp_param_var(
+                        current, state, entry, "shard")
+                    full = jt.array(
+                        np.ones((128,), dtype=np.float32)).stop_grad()
+                    entry.full_param = full
+                    owner.weight = full
+                    fsdp_shard._mark_fsdp_param_var(
+                        full, state, entry, "full")
+                    gradient = jt.array(
+                        np.ones((128,), dtype=np.float32)).stop_grad()
+                    fsdp_shard._mark_fsdp_param_var(
+                        gradient, state, entry, "grad_shard")
+                    entry.full_param = None
+                    owner.weight = entry.shard
+                    del current, full, gradient
+                    gc.collect()
+                    jt.gc()
+                    jt.sync_all(True)
+                    live.append(jt.liveness_info()["lived_vars"])
+                assert len(set(live[4:])) == 1, live
+                assert "_local_tensor" not in getattr(
+                    entry.shard, "__dict__", {})
+                print("FSDP_METADATA_REPLACEMENT_OK", live)
+            """
+        )
+        completed = run_python_child(
+            ["-c", code], text=True, merge_stderr=True)
+        self.assertEqual(completed.returncode, 0, completed.stdout)
+        self.assertIn("FSDP_METADATA_REPLACEMENT_OK", completed.stdout)
+
+    def test_stale_gradient_method_resolves_only_a_current_gradient(self):
+        _, state, entries, _ = self._fake_fsdp_state(([1.0, 2.0],))
+        entry = entries[0]
+        stale = fsdp_shard._mark_fsdp_param_var(
+            jt.ones_like(entry.shard).stop_grad(), state, entry, "grad_shard")
+        current = fsdp_shard._mark_fsdp_param_var(
+            jt.zeros_like(entry.shard).stop_grad(), state, entry, "grad_shard")
+        state.true_fsdp_last_grads = (current,)
+
+        self.assertIs(stale.to_local(), current)
+        state.true_fsdp_last_grads = ()
+        with self.assertRaisesRegex(ReferenceError, "gradient has been released"):
+            stale.to_local()
+
+    def test_reshard_releases_only_frozen_full_parameters(self):
+        _, state, entries, full = self._fake_fsdp_state(
+            ([1.0, 2.0], [3.0, 4.0]))
+        state.true_fsdp_unsharded = True
+        entries[0].requires_grad = False
+        entries[0].full_param = full[0]
+        entries[1].requires_grad = True
+        entries[1].full_param = full[1]
+        for entry in entries:
+            setattr(entry.owner, entry.attr, entry.full_param)
+
+        fsdp_shard._reshard_module_params(
+            types.SimpleNamespace(_fsdp_state=state))
+
+        self.assertIs(getattr(entries[0].owner, entries[0].attr), entries[0].shard)
+        self.assertIs(getattr(entries[1].owner, entries[1].attr), entries[1].shard)
+        self.assertIsNone(entries[0].full_param)
+        self.assertIs(entries[1].full_param, full[1])
+
+    def test_flat_reshard_releases_frozen_full_buffer(self):
+        _, state, entries, full = self._fake_flat_fsdp_state(
+            ([1.0, 2.0], [3.0, 4.0]))
+        state.true_fsdp_unsharded = True
+        state.true_fsdp_flat_full_param = jt.concat(full)
+        for entry, value in zip(entries, full):
+            entry.requires_grad = False
+            entry.full_param = value
+            setattr(entry.owner, entry.attr, value)
+
+        fsdp_shard._reshard_module_params(
+            types.SimpleNamespace(_fsdp_state=state))
+
+        self.assertTrue(all(entry.full_param is None for entry in entries))
+        self.assertIsNone(state.true_fsdp_flat_full_param)
+
+    def test_frozen_execute_syncs_before_reshard_and_gc(self):
+        events = []
+        state = types.SimpleNamespace(
+            true_fsdp_initialized=True,
+            true_fsdp_params=(types.SimpleNamespace(requires_grad=False),),
+            reshard_after_forward=True,
+        )
+        module = types.SimpleNamespace(_fsdp_state=state)
+
+        with mock.patch.object(
+                fsdp_shard, "_unshard_module_params",
+                side_effect=lambda value: events.append("unshard")), mock.patch.object(
+                    fsdp_shard, "_reshard_module_params",
+                    side_effect=lambda value: events.append("reshard")), mock.patch.object(
+                        fsdp_shard.jt, "submit_pending",
+                        side_effect=lambda *values, **kwargs: events.append("submit")), mock.patch.object(
+                            fsdp_shard.jt, "gc",
+                            side_effect=lambda: events.append("gc")):
+            result = fsdp_shard._execute_with_true_fsdp(
+                module, lambda: events.append("execute") or jt.ones(1))
+
+        self.assertIsInstance(result, jt.Var)
+        self.assertEqual(
+            events, ["unshard", "execute", "submit", "reshard", "gc"])
+
+    def test_frozen_execute_materializes_nested_output_without_input_grad(self):
+        state = types.SimpleNamespace(
+            true_fsdp_initialized=True,
+            true_fsdp_params=(types.SimpleNamespace(requires_grad=False),),
+            reshard_after_forward=True,
+        )
+        module = types.SimpleNamespace(_fsdp_state=state)
+        inputs = jt.array([1.0, 2.0]).stop_grad()
+        original = inputs * 3
+
+        with mock.patch.object(
+                fsdp_shard, "_unshard_module_params"), mock.patch.object(
+                    fsdp_shard, "_reshard_module_params"), mock.patch.object(
+                        fsdp_shard.jt, "gc"):
+            result = fsdp_shard._execute_with_true_fsdp(
+                module,
+                lambda value: {
+                    "tensor": original,
+                    "nested": (original + 1, [original + 2]),
+                },
+                inputs,
+            )
+
+        np.testing.assert_allclose(result["tensor"].numpy(), [3.0, 6.0])
+        np.testing.assert_allclose(result["nested"][0].numpy(), [4.0, 7.0])
+        np.testing.assert_allclose(result["nested"][1][0].numpy(), [5.0, 8.0])
+        self.assertFalse(result["tensor"].requires_grad)
+        self.assertTrue(result["tensor"].is_stop_grad())
+        self.assertIsNot(result["tensor"], original)
+
+    def test_frozen_execute_preserves_graph_for_trainable_input(self):
+        state = types.SimpleNamespace(
+            true_fsdp_initialized=True,
+            true_fsdp_params=(types.SimpleNamespace(requires_grad=False),),
+            reshard_after_forward=True,
+        )
+        module = types.SimpleNamespace(_fsdp_state=state)
+        inputs = jt.array([1.0, 2.0])
+        original = inputs * 3
+
+        with mock.patch.object(
+                fsdp_shard, "_unshard_module_params"), mock.patch.object(
+                    fsdp_shard, "_reshard_module_params"), mock.patch.object(
+                        fsdp_shard.jt, "gc"):
+            result = fsdp_shard._execute_with_true_fsdp(
+                module, lambda value: original, inputs)
+
+        self.assertIs(result, original)
+        self.assertTrue(result.requires_grad)
+        self.assertFalse(result.is_stop_grad())
+
+    def test_trainable_execute_does_not_force_forward_sync(self):
+        events = []
+        state = types.SimpleNamespace(
+            true_fsdp_initialized=True,
+            true_fsdp_params=(types.SimpleNamespace(requires_grad=True),),
+            reshard_after_forward=True,
+        )
+        module = types.SimpleNamespace(_fsdp_state=state)
+
+        with mock.patch.object(
+                fsdp_shard, "_unshard_module_params",
+                side_effect=lambda value: events.append("unshard")), mock.patch.object(
+                    fsdp_shard, "_reshard_module_params",
+                    side_effect=lambda value: events.append("reshard")), mock.patch.object(
+                        fsdp_shard.jt, "submit_pending") as submit, mock.patch.object(
+                            fsdp_shard.jt, "gc") as collect:
+            result = fsdp_shard._execute_with_true_fsdp(
+                module, lambda: events.append("execute") or "output")
+
+        self.assertEqual(result, "output")
+        self.assertEqual(events, ["unshard", "execute", "reshard"])
+        submit.assert_not_called()
+        collect.assert_not_called()
+
     def _fake_fsdp_state(self, values):
         fsdp = canonical_fsdp
 
@@ -53,10 +376,13 @@ class TestFSDP2Compat(unittest.TestCase):
             true_fsdp_world_size=1,
             true_fsdp_unsharded=False,
             true_fsdp_module=None,
+            frontend_type=torch.Tensor,
         )
         for i, value in enumerate(values):
-            full = jt.array(np.asarray(value, dtype="float32"))
-            shard = jt.array(np.asarray(value, dtype="float32"))
+            full = torch.tensor(
+                np.asarray(value, dtype="float32"), requires_grad=True)
+            shard = torch.tensor(
+                np.asarray(value, dtype="float32"), requires_grad=True)
             attr = f"param_{i}"
             entry = fsdp._common.StateRecord(
                 name=attr,
@@ -85,7 +411,10 @@ class TestFSDP2Compat(unittest.TestCase):
 
         owner = types.SimpleNamespace()
         arrays = [np.asarray(value, dtype="float32") for value in values]
-        flat = jt.array(np.concatenate([value.reshape(-1) for value in arrays]))
+        flat = torch.tensor(
+            np.concatenate([value.reshape(-1) for value in arrays]),
+            requires_grad=True,
+        )
         state = fsdp._common.StateRecord(
             true_fsdp_initialized=True,
             true_fsdp_flat=True,
@@ -93,6 +422,7 @@ class TestFSDP2Compat(unittest.TestCase):
             true_fsdp_world_size=1,
             true_fsdp_unsharded=False,
             true_fsdp_module=None,
+            frontend_type=torch.Tensor,
             true_fsdp_flat_total_numel=int(flat.numel()),
             true_fsdp_flat_padded_numel=int(flat.numel()),
             true_fsdp_flat_shard_numel=int(flat.numel()),
@@ -102,7 +432,7 @@ class TestFSDP2Compat(unittest.TestCase):
         full_params = []
         offset = 0
         for i, value in enumerate(arrays):
-            full = jt.array(value)
+            full = torch.tensor(value, requires_grad=True)
             attr = f"param_{i}"
             entry = fsdp._common.StateRecord(
                 name=attr,
@@ -142,6 +472,9 @@ class TestFSDP2Compat(unittest.TestCase):
             self.assertEqual(len(sharded), len(entries))
             for entry, grad in zip(entries, sharded):
                 self.assertEqual(tuple(grad.shape), tuple(entry.shard.shape))
+                self.assertIs(grad.to_local(), grad)
+                self.assertEqual(tuple(grad.full_tensor().shape), entry.shape)
+                self.assertNotIn("_local_tensor", getattr(grad, "__dict__", {}))
                 np.testing.assert_array_equal(
                     grad.numpy(), np.ones(entry.shard.shape, dtype="float32"))
 
@@ -425,6 +758,54 @@ class TestFSDP2Compat(unittest.TestCase):
         self.assertFalse(state.true_fsdp_flat_shard.is_stop_grad())
         jt.sync_all(True)
 
+    def test_fsdp_freeze_registry_keeps_only_weak_holders(self):
+        fsdp, state, entries, full = self._fake_flat_fsdp_state(
+            ([1.0, 2.0], [3.0, 4.0]))
+        state.true_fsdp_unsharded = True
+        for entry, param in zip(entries, full):
+            entry.full_param = param
+            fsdp._mark_fsdp_param_var(param, state, entry, "full")
+            setattr(entry.owner, entry.attr, param)
+            param.requires_grad_(True)
+
+        registry = get_tensor_state(jt).leaf_params
+        self.assertIn(id(state.true_fsdp_flat_shard), registry)
+        for entry, param in zip(entries, full):
+            self.assertIn(id(param), registry)
+            self.assertNotIn(id(entry.shard), registry)
+            self.assertTrue(registry.is_weak(id(param)))
+        self.assertTrue(registry.is_weak(id(state.true_fsdp_flat_shard)))
+
+        full[0].requires_grad_(False)
+        self.assertFalse(entries[0].requires_grad)
+        self.assertFalse(full[0].requires_grad)
+        self.assertFalse(entries[0].shard.requires_grad)
+        self.assertTrue(state.true_fsdp_flat_shard.requires_grad)
+
+        full[1].requires_grad_(False)
+        self.assertFalse(entries[1].requires_grad)
+        self.assertFalse(full[1].requires_grad)
+        self.assertFalse(entries[1].shard.requires_grad)
+        self.assertFalse(state.true_fsdp_flat_shard.requires_grad)
+
+        full[1].requires_grad_(True)
+        self.assertTrue(entries[1].requires_grad)
+        self.assertTrue(full[1].requires_grad)
+        self.assertTrue(entries[1].shard.requires_grad)
+        self.assertTrue(state.true_fsdp_flat_shard.requires_grad)
+        full[1].requires_grad_(False)
+
+        full_ids = [id(param) for param in full]
+        full_refs = [weakref.ref(param) for param in full]
+        for entry in entries:
+            entry.full_param = None
+            setattr(entry.owner, entry.attr, entry.shard)
+        del param, full
+        jt.gc()
+        self.assertTrue(all(reference() is None for reference in full_refs))
+        self.assertTrue(all(holder_id not in registry for holder_id in full_ids))
+        jt.sync_all(True)
+
     def test_shared_flat_fsdp_refreshes_every_optimizer_parameter(self):
         fsdp, state, entries, full = self._fake_flat_fsdp_state(([1.0, 2.0],))
         first = torch.optim.AdamW([entries[0].shard], lr=0.01)
@@ -462,7 +843,8 @@ class TestFSDP2Compat(unittest.TestCase):
 
     def test_mixed_fsdp_and_plain_adamw_advances_once(self):
         fsdp, _, entries, full = self._fake_fsdp_state(([1.0, 2.0],))
-        plain = jt.array(np.array([3.0, 4.0], dtype="float32"))
+        plain = torch.tensor(
+            np.array([3.0, 4.0], dtype="float32"), requires_grad=True)
         optimizer = torch.optim.AdamW(
             [entries[0].shard, plain], lr=0.01, weight_decay=0.1)
 
@@ -488,7 +870,8 @@ class TestFSDP2Compat(unittest.TestCase):
         self.assertEqual(optimizer.n_step, 1)
 
         fsdp, _, entries, full = self._fake_fsdp_state(([1.0, 2.0],))
-        plain = jt.array(np.array([3.0, 4.0], dtype="float32"))
+        plain = torch.tensor(
+            np.array([3.0, 4.0], dtype="float32"), requires_grad=True)
         native_optimizer = torch.optim.AdamW(
             [entries[0].shard, plain], lr=0.01, weight_decay=0.1)
         native_loss = (full[0] * full[0]).sum() + (plain * plain).sum()

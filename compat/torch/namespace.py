@@ -11,6 +11,11 @@ import types
 from typing import Any, cast
 
 
+_PARENT_BINDING_EXCEPTIONS = frozenset((
+    "torch.distributed._composable.fsdp.fully_shard",
+))
+
+
 def native_module_facade(source, name):
     """Copy materialized public values without triggering native lazy imports."""
     facade = types.ModuleType(name, source.__doc__)

@@ -69,8 +69,11 @@ def _sync_sharded_grads_from_full_grads(state, full_grads, *, divide_by_world_si
         flat_shard_grad = flat_shard_grad.stop_grad()
         state.true_fsdp_last_flat_grad = flat_shard_grad
         sharded = [
-            grad.stop_grad()
-            for grad in shard._flat_entry_slices(state, flat_shard_grad)
+            shard._mark_fsdp_param_var(
+                grad.stop_grad(), state, entry, "grad_shard")
+            for entry, grad in zip(
+                state.true_fsdp_params,
+                shard._flat_entry_slices(state, flat_shard_grad))
         ]
         for grad in sharded:
             object.__setattr__(grad, "_fsdp_norm_group", getattr(state, "shard_group", None))
@@ -82,7 +85,8 @@ def _sync_sharded_grads_from_full_grads(state, full_grads, *, divide_by_world_si
         shard_grad = common._reduce_scatter_padded(flat, getattr(state, "shard_group", None))
         if divide_by_world_size:
             shard_grad = shard_grad / max(int(state.true_fsdp_world_size), 1)
-        shard_grad = shard_grad.stop_grad()
+        shard_grad = shard._mark_fsdp_param_var(
+            shard_grad.stop_grad(), state, entry, "grad_shard")
         sharded.append(shard_grad)
     for grad in sharded:
         object.__setattr__(grad, "_fsdp_norm_group", getattr(state, "shard_group", None))
@@ -125,7 +129,8 @@ def _visible_full_grads_from_shards(state):
                 parts.append(common._flatten_var(part))
                 real_numel += part_numel
         if real_numel < int(state.true_fsdp_flat_shard_numel):
-            parts.append(jt.zeros(
+            parts.append(common._zeros_like_shape(
+                state.true_fsdp_flat_shard,
                 (int(state.true_fsdp_flat_shard_numel) - real_numel,),
                 dtype=state.true_fsdp_flat_shard.dtype))
         local_flat = parts[0] if len(parts) == 1 else jt.concat(parts, dim=0)
@@ -293,7 +298,9 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
             grad = grad_by_id.get(full_id) if full_id is not None else None
             local_used.append(grad is not None)
             if grad is None:
-                grad = jt.zeros(entry.shape, dtype=entry.dtype)
+                reference = full if full is not None else entry.shard
+                grad = common._zeros_like_shape(
+                    reference, entry.shape, dtype=entry.dtype)
             full_grads.append(grad)
         if not any(local_used) and common._world_size() <= 1:
             # This backward pass never reached the state's parameters -- a second
