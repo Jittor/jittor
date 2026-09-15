@@ -326,7 +326,10 @@ class TestVjpJvpStrict(_PolicyCase):
         y = jt.array(np.array([3.0, 4.0], dtype="float32"))
         x.start_grad(); y.start_grad()
         f = lambda a, b: (a * 2).sum()      # b is never used
-        v = jt.array(np.array([1.0], dtype="float32"))
+        # `f` ends in `.sum()`, whose result is 0-d -- same as torch. `v` is
+        # the cotangent of that output, so it has to be 0-d too; a shape-(1,)
+        # `v` is what the size check rejects with "should be [] but got [1,]".
+        v = jt.array(np.array(1.0, dtype="float32"))
         return vjp, jvp, f, (x, y), v
 
     def test_vjp_strict_raises(self):
