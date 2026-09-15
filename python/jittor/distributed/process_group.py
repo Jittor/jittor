@@ -20,7 +20,15 @@ def _ensure_nccl_rootinfo_env():
         return
     rendezvous_dir = os.environ.get("JITTOR_DIST_RENDEZVOUS_DIR", "").strip()
     if not rendezvous_dir:
-        return
+        local_world_size = int(os.environ.get(
+            "LOCAL_WORLD_SIZE", os.environ.get("RAY_LOCAL_WORLD_SIZE", "1")))
+        world_size = int(os.environ.get(
+            "JT_NCCL_WORLD_SIZE", os.environ.get("WORLD_SIZE", "1")))
+        if local_world_size != world_size:
+            raise RuntimeError(
+                "multi-node NCCL process groups require "
+                "JITTOR_DIST_RENDEZVOUS_DIR or JT_NCCL_ROOTINFO_FILE")
+        rendezvous_dir = "/tmp"
     address = os.environ.get("MASTER_ADDR", "localhost")
     port = os.environ.get("MASTER_PORT", "default")
     key = re.sub(r"[^A-Za-z0-9_.-]", "_", "{}-{}".format(address, port))
