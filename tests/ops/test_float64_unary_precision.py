@@ -29,7 +29,6 @@ from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
-import pytest
 
 import jittor as jt
 
@@ -84,9 +83,12 @@ class TestFloat64UnaryPrecisionCpu(_Float64UnaryPrecision, unittest.TestCase):
 class TestFloat64UnaryPrecisionCuda(_Float64UnaryPrecision, unittest.TestCase):
     device_flag = 1
 
-    @pytest.mark.xfail(strict=True,
-                       reason="KI-OPS-007: CUDA table uses float-only libm spellings")
     def test_unary_family_keeps_float64_precision(self):
+        # KI-OPS-007 was fixed in 2d716db31 (the CUDA unary math table now
+        # dispatches on dtype); known-issues.md and the numerics contract both
+        # record it as closed. The xfail(strict=True) that outlived the fix is
+        # what made this file report a failure -- a strict xfail that passes
+        # counts as one.
         self._check_family()
 
 
