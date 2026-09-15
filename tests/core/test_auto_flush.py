@@ -67,7 +67,13 @@ class TestAutoFlush(unittest.TestCase):
             _test_policy_stack.enter_context(jt.runtime.scope(auto_flush_ops=0))
             lazy = [jt.numpy_code([4], "float32", [x], forward) for _ in range(20)]
             self.assertEqual(seen, [])
-            _test_policy_stack.enter_context(jt.runtime.scope(auto_flush_ops=8))
+            # `auto_flush_bytes` is the second condition and it defaults to
+            # 8 MiB: both it and `auto_flush_ops` have to be satisfied before
+            # anything is launched early. These vars are four elements, so the
+            # size criterion alone would hold the graph back forever and this
+            # test would be asserting that pipelining never happens. Set both.
+            _test_policy_stack.enter_context(
+                jt.runtime.scope(auto_flush_ops=8, auto_flush_bytes=0))
             pipelined = [jt.numpy_code([4], "float32", [x], forward) for _ in range(20)]
             # Some of the graph ran before anyone asked for a value.
             self.assertGreater(len(seen), 0)
