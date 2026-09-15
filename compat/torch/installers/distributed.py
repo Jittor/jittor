@@ -882,6 +882,91 @@ _api_checkpoint_load._jittor_unimplemented = 'torch.distributed.checkpoint.load'
 _api_checkpoint_save._jittor_unimplemented = 'torch.distributed.checkpoint.save'
 _api_checkpoint_fs_write_item._jittor_unimplemented = 'torch.distributed.checkpoint.filesystem._write_item'
 
+def _run_args_parser():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--nproc_per_node", default="1")
+    parser.add_argument("--nnodes", default="1")
+    parser.add_argument("--node_rank", default="0", type=int)
+    parser.add_argument("--master_addr", default="127.0.0.1")
+    parser.add_argument("--master_port", default="29500")
+    parser.add_argument("--standalone", action="store_true")
+    parser.add_argument("--role", default="default")
+    parser.add_argument("--rdzv_backend", default="static")
+    parser.add_argument("--rdzv_endpoint", default=None)
+    parser.add_argument("--start_method", default="spawn")
+    parser.add_argument("--log_dir", default=None)
+    parser.add_argument("--redirects", default="0")
+    parser.add_argument("--tee", default="0")
+    parser.add_argument("--local_ranks_filter", default=None)
+    parser.add_argument("--max_restarts", default=0, type=int)
+    parser.add_argument("--monitor_interval", default=0.1, type=float)
+    parser.add_argument("--training_script", default=None)
+    parser.add_argument("--training_script_args", nargs="*", default=[])
+    return parser
+
+
+def _run(args):
+    nproc = getattr(args, "nproc_per_node", "1")
+    if str(nproc).lower() in ("gpu", "auto"):
+        nproc = int(os.environ.get("CUDA_VISIBLE_DEVICES", "").count(",")) + 1
+    nproc = int(nproc)
+    nnodes = int(getattr(args, "nnodes", "1"))
+    if nnodes != 1:
+        raise NotImplementedError("Jittor torch.distributed.run supports one node")
+    script = getattr(args, "training_script", None)
+    if not script:
+        raise ValueError("torch.distributed.run requires training_script")
+    script_args = list(getattr(args, "training_script_args", ()) or ())
+    base_env = os.environ.copy()
+    base_env["MASTER_ADDR"] = str(getattr(args, "master_addr", "127.0.0.1"))
+    base_env["MASTER_PORT"] = str(getattr(args, "master_port", "29500"))
+    base_env["WORLD_SIZE"] = str(nproc)
+    base_env["LOCAL_WORLD_SIZE"] = str(nproc)
+    base_env["JITTOR_TORCH_DISTRIBUTED_AUTO_INIT"] = "1"
+
+    # Warm a shared Jittor cache before spawning ranks. Concurrent imports can
+    # otherwise rebuild jit_utils in one child while another maps the old ABI.
+    shared_cache = base_env.get("ACCELERATE_NCCL_SHARED_CACHE", "").strip()
+    if shared_cache:
+        warm_env = base_env.copy()
+        warm_env["JITTOR_HOME"] = os.path.join(shared_cache, "jittor-home")
+        warm_env["cache_name"] = base_env.get(
+            "ACCELERATE_NCCL_CACHE_NAME", "accelerate_nccl_warm")
+        warm_env["JITTOR_TORCH_RUNTIME_ROOT"] = os.path.join(
+            shared_cache, "torch-shim")
+        warm_env["JITTOR_NO_BUILD"] = "0"
+        warm = subprocess.run(
+            [sys.executable, "-m", "jittor_utils.bootstrap"],
+            env=warm_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        if warm.returncode:
+            raise RuntimeError(
+                "Jittor shared-cache bootstrap failed with exit code {}:\n{}"
+                .format(warm.returncode, warm.stdout[-4000:]))
+    processes = []
+    try:
+        for rank in range(nproc):
+            env = base_env.copy()
+            env["RANK"] = str(rank)
+            env["LOCAL_RANK"] = str(rank)
+            env["GROUP_RANK"] = "0"
+            process = subprocess.Popen(
+                [sys.executable, script, *script_args], env=env)
+            processes.append(process)
+        statuses = [process.wait() for process in processes]
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.terminate()
+    failed = next((status for status in statuses if status), 0)
+    if failed:
+        raise subprocess.CalledProcessError(failed, [script, *script_args])
+    return None
+
+
 def _install_distributed(g, registry=None):
     """Install Torch distributed compatibility over Jittor collectives.
 
@@ -1032,96 +1117,6 @@ def _install_distributed(g, registry=None):
     if run_mod is None:
         run_mod = _types.ModuleType("torch.distributed.run")
         _modules["torch.distributed.run"] = run_mod
-
-    def _run_args_parser():
-        parser = argparse.ArgumentParser(add_help=False)
-        parser.add_argument("--nproc_per_node", default="1")
-        parser.add_argument("--nnodes", default="1")
-        parser.add_argument("--node_rank", default="0", type=int)
-        parser.add_argument("--master_addr", default="127.0.0.1")
-        parser.add_argument("--master_port", default="29500")
-        parser.add_argument("--standalone", action="store_true")
-        parser.add_argument("--role", default="default")
-        parser.add_argument("--rdzv_backend", default="static")
-        parser.add_argument("--rdzv_endpoint", default=None)
-        parser.add_argument("--start_method", default="spawn")
-        parser.add_argument("--log_dir", default=None)
-        parser.add_argument("--redirects", default="0")
-        parser.add_argument("--tee", default="0")
-        parser.add_argument("--local_ranks_filter", default=None)
-        parser.add_argument("--max_restarts", default=0, type=int)
-        parser.add_argument("--monitor_interval", default=0.1, type=float)
-        parser.add_argument("--training_script", default=None)
-        parser.add_argument("--training_script_args", nargs="*", default=[])
-        return parser
-
-    def _run(args):
-        nproc = getattr(args, "nproc_per_node", "1")
-        if str(nproc).lower() in ("gpu", "auto"):
-            nproc = int(os.environ.get("CUDA_VISIBLE_DEVICES", "").count(",")) + 1
-        nproc = int(nproc)
-        nnodes = int(getattr(args, "nnodes", "1"))
-        if nnodes != 1:
-            raise NotImplementedError("Jittor torch.distributed.run supports one node")
-        script = getattr(args, "training_script", None)
-        if not script:
-            raise ValueError("torch.distributed.run requires training_script")
-        script_args = list(getattr(args, "training_script_args", ()) or ())
-        base_env = os.environ.copy()
-        base_env["MASTER_ADDR"] = str(getattr(args, "master_addr", "127.0.0.1"))
-        base_env["MASTER_PORT"] = str(getattr(args, "master_port", "29500"))
-        base_env["WORLD_SIZE"] = str(nproc)
-        base_env["LOCAL_WORLD_SIZE"] = str(nproc)
-        base_env["JITTOR_TORCH_DISTRIBUTED_AUTO_INIT"] = "1"
-
-        # A multi-rank launch imports Jittor independently in every child. If
-        # the shared cache is stale, the first child that reaches import may
-        # rebuild ``jit_utils`` while the other children have already mapped
-        # the old inode; Jittor deliberately exits those processes with code
-        # 3 because reloading that library in place is unsafe.  Accelerate's
-        # launcher does not have a serial bootstrap phase, so do it here when
-        # the caller opted into a shared cache.  The training script uses the
-        # same convention (see ``nccl_accelerate_smoke.py``), making the cache
-        # path and slot deterministic before any rank is spawned.
-        shared_cache = base_env.get("ACCELERATE_NCCL_SHARED_CACHE", "").strip()
-        if shared_cache:
-            warm_env = base_env.copy()
-            warm_env["JITTOR_HOME"] = os.path.join(shared_cache, "jittor-home")
-            warm_env["cache_name"] = base_env.get(
-                "ACCELERATE_NCCL_CACHE_NAME", "accelerate_nccl_warm")
-            warm_env["JITTOR_TORCH_RUNTIME_ROOT"] = os.path.join(
-                shared_cache, "torch-shim")
-            warm_env["JITTOR_NO_BUILD"] = "0"
-            warm = subprocess.run(
-                [sys.executable, "-m", "jittor_utils.bootstrap"],
-                env=warm_env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            if warm.returncode:
-                raise RuntimeError(
-                    "Jittor shared-cache bootstrap failed with exit code {}:\n{}"
-                    .format(warm.returncode, warm.stdout[-4000:]))
-        processes = []
-        try:
-            for rank in range(nproc):
-                env = base_env.copy()
-                env["RANK"] = str(rank)
-                env["LOCAL_RANK"] = str(rank)
-                env["GROUP_RANK"] = "0"
-                process = subprocess.Popen(
-                    [sys.executable, script, *script_args], env=env)
-                processes.append(process)
-            statuses = [process.wait() for process in processes]
-        finally:
-            for process in processes:
-                if process.poll() is None:
-                    process.terminate()
-        failed = next((status for status in statuses if status), 0)
-        if failed:
-            raise subprocess.CalledProcessError(failed, [script, *script_args])
-        return None
 
     run_mod.get_args_parser = _run_args_parser
     run_mod.run = _run
