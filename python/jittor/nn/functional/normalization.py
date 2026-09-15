@@ -281,6 +281,18 @@ def fp32_guard(func):
 
 
 @fp32_guard
+def _is_half(x):
+    """Whether `x` is float16/bfloat16, without building a string.
+
+    `_restore_half_dtype` is a no-op for everything else and sits on the hot
+    path of every layer_norm, so the question is answered by comparing the
+    dtype objects rather than with two `str(...).replace(...)` calls. A set
+    would be cheaper still, but a native NanoString is not hashable.
+    """
+    dtype = x.dtype
+    return dtype == jt.float16 or dtype == jt.bfloat16
+
+
 def _restore_half_dtype(result, x):
     """Return a fast-path result at the input's dtype for half types.
 
@@ -328,13 +340,15 @@ def layer_norm(
     # restore still wraps whichever relay ran: both return in the accumulation
     # dtype and the caller expects the input's.
     if _output_requires_grad(x, weight, bias):
-        fast = _restore_half_dtype(_layer_norm_cuda(
-            x, normalized_shape, weight, bias, eps), x)
+        fast = _layer_norm_cuda(x, normalized_shape, weight, bias, eps)
     else:
-        fast = _restore_half_dtype(_layer_norm_no_grad_cuda(
-            x, normalized_shape, weight, bias, eps), x)
+        fast = _layer_norm_no_grad_cuda(x, normalized_shape, weight, bias, eps)
     if fast is not None:
-        return fast
+        # The restore only ever changes a half-typed result, and it costs two
+        # `str(dtype).replace(...)` per call. Asking the cheap question first
+        # keeps it off the float32 path, which is every call of a model that
+        # does not run in half.
+        return _restore_half_dtype(fast, x) if _is_half(x) else fast
     dims = [-i for i in range(rank, 0, -1)]
     xhat = _ln_normalize(x, dims, eps)
     return _restore_half_dtype(xhat * weight + bias, x)
