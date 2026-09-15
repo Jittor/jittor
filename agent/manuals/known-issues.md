@@ -1663,3 +1663,49 @@ about whether to take it.
   CUDA build is still the one imported.
 - Effect: `tests/structure` went from 3 failed / 209 passed to 212 passed.
 - Guard: [cache path precedence](../../tests/build/test_cache_path_precedence.py)
+
+## KI-TUNER-001: the matmul and conv relays never fire, so a hand-written meta-op product runs as a generic kernel
+
+- Severity: High (a supported operation runs orders of magnitude slower than
+  the library kernel that exists for it, with no error and no log)
+- Status: Open for the hand-written form; the paths users actually reach
+  (`jt.nn.matmul`, `nn.Linear`, `nn.Conv2d`) were routed around it on
+  2026-09-15 by registering the CPU rows of the kernel tables
+- Owner: compiler/tuner maintainers
+- Symptom: `MatmulTuner` and `ConvTuner` recognise a fused subgraph by asking
+  whether an operand's producer `is_op(broadcast_to())` *and* is a member of
+  the fused op. Neither holds any more. `BroadcastToOp` became a storage
+  descriptor -- `share_with` on the base, stride 0 on the broadcast axes,
+  `set_type(OpType::other)` -- so it no longer enters a fused op at all, and
+  the broadcast is expressed as strides on the binary op instead. Measured:
+  the fused key for a 2-D product is
+  `binary«…«DIM=3«XSTRIDED=1«YSTRIDED=1«XSMASK=3«YSMASK=6` plus `reduce«…`,
+  with no broadcast member, and the tuner reports
+  `Run tuner matmul: confidence(0) candidates({})`.
+- Evidence: `tests/ops/test_matmul.py::TestMatmul::{test_matmul,
+  test_matmul_type,test_matmul_cuda,test_matmul_type_cuda}` (their
+  `check_matmul2` builds the product by hand out of `broadcast`/`*`/`sum`) and
+  `tests/backends/cpu/test_mkl_conv_op.py::TestMklConvOp::{test_forward,
+  test_backward,test_forward_nhwc_hwio,test_backward_nhwc_hwio}`, whose
+  `assert logs[0][0] == '20'` reads the conv tuner's confidence and gets `'0'`.
+- What it cost before the routing change, measured on this machine, float32:
+  a 1024-cube product 3.5182 s against NumPy's 0.0355 s (99x), and an
+  `8x64x56x56` convolution against a `64x64x3x3` filter 0.1079 s against
+  torch's 0.0031 s (35x).
+- Workaround (in tree): the CPU rows of the `matmul` and `conv2d` kernel
+  tables now call `mkl_matmul` / `mkl_conv` directly, the way the CUDA rows
+  call cuBLAS and cuDNN, so nothing depends on the pattern match. A product
+  or convolution written out of meta-ops by hand still gets the generic
+  kernel.
+- Why reviving the relay is not a one-line change: the relay substitutes a
+  fused-op var into the relay op's members at run time
+  (`OpRelayContext::set_var_member`). The fused op's vars are now the expanded
+  *views*, whose `mem_ptr` is right but whose shape is the broadcast shape, so
+  a library op that reads `a->shape` in `jit_run` would be handed rank 3 where
+  it needs rank 2. Matching the new form means teaching the tuner to read the
+  stride-0 axes and giving the relay a way to name the base rather than the
+  view.
+- Exit condition: with `enable_tuner=1`, a hand-written `broadcast * broadcast
+  -> reduce` product on CPU emits a `mkl_matmul` jit op key and the conv
+  tuner's confidence is 20 again, with `tests/ops/test_matmul.py` and
+  `tests/backends/cpu/test_mkl_conv_op.py` green and no numerical change.
