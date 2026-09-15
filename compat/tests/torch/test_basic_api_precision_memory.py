@@ -19,6 +19,8 @@ contract here.
 import functools
 import unittest
 
+from _helpers.capability import require_accelerator
+
 import numpy as np
 import torch
 

@@ -17,6 +17,8 @@ comparing raw `nvidia-smi` numbers would only re-measure the caching allocator.
 import functools
 import unittest
 
+from _helpers.capability import require_accelerator
+
 import numpy as np
 import torch
 
