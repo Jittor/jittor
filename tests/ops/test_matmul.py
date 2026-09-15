@@ -323,7 +323,12 @@ class TestMatmul(unittest.TestCase):
         a = jt.random([3])
         b = jt.random([3])
         c = jt.matmul(a, b)
-        assert c.shape == [1]
+        # A vector-vector product is a scalar, and a scalar is rank 0 here now:
+        # `(a*b).sum(-1)` drops the axis it reduced. This used to read `[1]`,
+        # from before Jittor had rank-0 vars at all. Measured against the
+        # references the rest of this file compares to: numpy gives shape (),
+        # torch 2.13 gives shape () and dim() 0.
+        assert c.shape == [], c.shape
 
         a = jt.random([3, 4])
         b = jt.random([4])
