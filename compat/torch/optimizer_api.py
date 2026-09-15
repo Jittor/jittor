@@ -658,19 +658,35 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
         # unused parameters. loss.backward() then leaves the group
         # without gradients and step() must be a no-op, not KeyError.
         grads = pg.get("grads") or [None] * len(pg["params"])
-        fused = (decoupled_weight_decay and jt.flags.use_acl and
-                 pg.get("fused", getattr(self, "fused", None)) is True)
-        if fused:
-            active = []
+        # `use_acl` is an alias of `use_cuda` (see FLAG_ALIASES), so it is true
+        # on a CUDA build as well and cannot say which backend is actually in
+        # use. Asking the dispatcher does: `optim.adamw_fused` is registered
+        # for "acl" only, so it answers None everywhere else. Keying off the
+        # alias sent CUDA into the Ascend-only path, where the native
+        # `fused_adamw` operator aborts with "only available through a mapped
+        # backend" -- reachable from plain `torch.optim.AdamW(..., fused=True)`.
+        fused_impl = None
+        want_fused = (decoupled_weight_decay and
+                      pg.get("fused", getattr(self, "fused", None)) is True)
+        active = []
+        if want_fused:
+            for i, (p, g, v, m) in enumerate(zip(
+                    pg["params"], grads, pg["values"], pg["m"])):
+                if not p.requires_grad or not isinstance(g, jt.Var) \
+                        or list(g.shape) != list(p.shape):
+                    continue
+                active.append((p, m, v, g, int(param_steps[i])))
+            if active:
+                from jittor._runtime.dispatch import select_kernel
+                fused_impl = select_kernel("optim.adamw_fused", active)
+        if fused_impl is not None:
             for i, (p, g, v, m) in enumerate(zip(
                     pg["params"], grads, pg["values"], pg["m"])):
                 if not p.requires_grad or not isinstance(g, jt.Var) \
                         or list(g.shape) != list(p.shape):
                     continue
                 param_steps[i] = int(param_steps[i]) + 1
-                active.append((p, m, v, g, param_steps[i] - 1))
-            from jittor.optim.algorithms.adam import _acl_fused_adamw_updates
-            updates = _acl_fused_adamw_updates(
+            updates = fused_impl(
                 active, lr, b0, b1, weight_decay, eps)
             for (p, m, v, _, _), (new_p, new_m, new_v) in zip(
                     active, updates):
