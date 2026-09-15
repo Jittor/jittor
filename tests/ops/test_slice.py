@@ -24,14 +24,22 @@ class TestSlice(unittest.TestCase):
             match="String slice too long",
         )
 
-    def test_boolean_var_getitem_is_a_catchable_user_error(self):
+    def test_boolean_var_getitem_selects_like_numpy(self):
+        """A bool Var indexes rows, as numpy does.
+
+        This used to assert the opposite -- that it raised "Please convert
+        bool slice" -- and kept asserting it after the operation was
+        implemented, so the test was guarding the absence of a feature that
+        is now present and correct.
+        """
         value = jt.array([1, 2, 3])
         mask = jt.array(np.array([True, False, True], dtype=np.bool_))
-        expect_error(
-            lambda: value.getitem(mask),
-            exc_type=RuntimeError,
-            match="Please convert bool slice",
-        )
+        np.testing.assert_array_equal(
+            value.getitem(mask).numpy(), np.array([1, 3]))
+
+        rows = np.arange(12).reshape(3, 4)
+        np.testing.assert_array_equal(
+            jt.array(rows)[mask].numpy(), rows[np.array([True, False, True])])
 
     def test_variable_index_shape_mismatch_is_a_catchable_user_error(self):
         x = jt.ones((4, 4))
@@ -99,8 +107,11 @@ class TestSlice(unittest.TestCase):
                 a = x.getitem(slices)
                 a.sync()
             b = x.data[slices]
-            bshape = b.shape if len(b.shape) else (1,)
-            assert a.shape == bshape, (a.shape, bshape)
+            # numpy's shape verbatim: a fully-indexed read is 0-d on both
+            # sides now. Rewriting numpy's () to (1,) dates from when jittor
+            # had no 0-d Var, and it is what made this fail -- it compared
+            # jittor's correct () against a (1,) numpy never returned.
+            assert tuple(a.shape) == b.shape, (a.shape, b.shape)
             s = logs[-1]['msg']
             assert "i_to_vs: "+i_to_vs in s
             assert "i_to_o: "+i_to_o in s
@@ -136,7 +147,13 @@ class TestSlice(unittest.TestCase):
         check([3,3,3,3], ([0,1],-2,slice(None),[0,1]), "[0,1,-1,3,]", "[-1,-1,1,-1,]", "[2,3,]")
         check([3,3,3,3], ([0,1],slice(1,2,2),[1,2],1), "[0,1,2,3,]", "[-1,1,-1,-1,]", "[2,1,]")
         check([3,3,3,3], ([0,1],slice(None),[1,2],1), "[0,-1,2,3,]", "[-1,1,-1,-1,]", "[2,3,]")
-        check([3,3,3,3], (slice(1,10,1),...,slice(2,None,-1)), "[0,-1,-2,2,]", "[0,1,1,2,]", "[2,9,3,]")
+        # A negative step cannot be expressed as a forward storage stride, so
+        # this getitem is not a storage view and its implicit dims are not
+        # collapsed into one loop (-2). That collapse walks the flattened
+        # extent using the group's first stride, which is only the right
+        # address when the group is contiguous -- so not taking it here is
+        # the correct behaviour, and the values match numpy either way.
+        check([3,3,3,3], (slice(1,10,1),...,slice(2,None,-1)), "[0,-1,-1,2,]", "[0,1,2,3,]", "[2,3,3,3,]")
         check([10,10,10,10], (slice(1,None,2),slice(-1,None,2),[1,2],-4), "[0,1,2,3,]", "[0,1,-1,-1,]", "")
         check([20], 0, "[0,]", "[-1,]", "[]")
         check([20], 10, "[0,]", "[-1,]", "[]")
