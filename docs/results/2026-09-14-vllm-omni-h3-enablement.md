@@ -719,6 +719,26 @@ independent-allocation path instead of aliasing it -- which is the use-after-fre
 behind the illegal address. Verify with `probe_split_alias.py` (seconds, no
 server) and then one `run_tp2_probe.sh` cycle.
 
+**Fix 3 landed: the allocator invariant, verified at the repro.** `share_with`
+now takes the request's `offset` and `SFRLAllocator` refuses a request whose range
+no longer fits the block the allocation id names (`offset + size > block->size`),
+falling through to the independent-allocation path `Var::alloc` already has.
+Landing it meant widening the virtual *and* all five overrides across four
+headers, the `DelayFree` internal forwarding call, the `Var::alloc` call site and
+the C++ tests that call the two-argument form directly -- three failed builds
+along the way, each stopping on one of those. Verified where it matters: 
+`probe_split_alias.py` went from tripping
+`sfrl_allocator.cc:305 mem_ptr does not belong to allocation` twice per cycle to
+passing silently (`ALIAS RELEASE OK`).
+
+**But it is not the only source of the illegal address.** The same TP2 request
+that used to die at 20-25 s now runs **145 s** before failing with
+`cudaErrorIllegalAddress` again -- much further in, but not through. So the
+allocator defect was real and is fixed; at least one more cause of the same
+CUDA error remains, and the run's new length is the evidence that the two are
+distinct. The next instrument is the same handle/allocator trace on this longer
+run, now that the run survives far enough to make the trace readable.
+
 **Next instrument, prepared but not yet run.** The event-handle defect needs the
 handle's provenance: log device + handle at `create_event`, `destroy_event` and
 `record_event` (`backends/cuda/runtime/driver.cc`, `record_event` is where the
