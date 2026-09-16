@@ -758,6 +758,13 @@ in `ncclInitKernelsForDevice`), or the packed path's own `cu_seqlens`/output
 buffers on that device. `instrument_store_and_triton.py` plus the `H3_FA_*`
 traces are the instruments; the run is long enough now to make them readable.
 
+Two candidates for it are now *disproved by experiment*, both of which made the
+run fail earlier than the 145 s baseline: binding the device from the shim's
+packed branch (`torch.cuda.set_device(rank)` before `varlen_fwd`) -> 25 s, and
+routing the packed path through the non-packed entry
+(`JITTOR_FLASH_ATTN_DIRECT_PACKED=0`) -> 25 s. Do not retry either; the next
+session should start from a fresh hypothesis about the packed call on rank 1.
+
 **Next instrument, prepared but not yet run.** The event-handle defect needs the
 handle's provenance: log device + handle at `create_event`, `destroy_event` and
 `record_event` (`backends/cuda/runtime/driver.cc`, `record_event` is where the
