@@ -16,6 +16,20 @@ namespace jittor {
 static auto make_transpose = op_constructor<VarPtr, Var*, NanoVector>("transpose");
 
 TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
+    // A rank-0 var has no axes to permute, and the empty permutation of
+    // nothing is itself. Both references agree: NumPy's `transpose` returns
+    // shape `()`, and torch's `.T` says so outright -- "This function is the
+    // identity in these cases". Falling through instead reached
+    // `infer_shape`'s `USER_CHECK(xdim)` and made every scalar-shaped
+    // `einops.rearrange` die with `transpose_op.cc:61: [check failed: xdim]`.
+    // It also read `axes[xdim-1]` below, which is `axes[-1]` when xdim is 0.
+    //
+    // Only the *empty* permutation forwards: torch rejects `permute((0,))` on
+    // a rank-0 tensor, and so should the rank check further down.
+    if (!x->shape.size() && !axes.size()) {
+        forward(x);
+        return;
+    }
     int i=0;
     for (; i<axes.size(); i++)
         if (i!=axes[i]) break;
