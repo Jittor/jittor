@@ -622,6 +622,38 @@ TP2 configuration has produced illegal address, unhandled CUDA error, invalid
 resource handle and allocator-invariant failures across attempts, and why every
 stack recorded before the last one was a candidate rather than the cause.
 
+**Fix 1 landed, and what it did and did not change.** The sub-group device
+selection is fixed in `backends/comm/nccl/src/nccl_wrapper.cc`: the path now does
+`set_current_device(nccl_device_id)` + `cudaSetDevice(nccl_device_id)` before
+`ncclCommInitRank`, mirroring `nccl_init`, and a failed `ncclCommInitRank` now
+reports `ncclGetErrorString(result)` instead of handing an `ncclResult_t` to
+`checkCudaErrors`. Verified: the NCCL extension rebuilds
+(`Compiling jittor_nccl_core(9/9)`), the server starts, both ranks load 66.4 GiB —
+and the request **still fails** with the same `cudaErrorInvalidResourceHandle` on
+rank 1. So that fix is correct on its own terms and is *not* this symptom's cause;
+the event-handle defect (item 3) is what this configuration trips.
+
+**Two traps hit while landing it, both worth knowing.** First: the deployed tree
+(`site-packages/jittor/`) is an older, self-consistent snapshot, so copying a
+single repo file into it can break the build — the repo's `driver.cc` assigns
+`ops.graph_capture_end`/`graph_launch`/`graph_release`, which the deployed
+`backend.h` does not declare. The matching variant is the previous successful
+build's snapshot in the repo's `build/lib/jittor/…`; restoring from there and
+re-running a two-device probe confirmed the core rebuilds and runs. Second: the
+NCCL extension compiles from the *deployed* sources and is cached under
+`JITTOR_HOME/.cache/.../custom_ops/`, so a fix must be copied there and that
+cache invalidated before a rebuild picks it up.
+
+**Next instrument, prepared but not yet run.** The event-handle defect needs the
+handle's provenance: log device + handle at `create_event`, `destroy_event` and
+`record_event` (`backends/cuda/runtime/driver.cc`, `record_event` is where the
+400 comes from) plus every `get_resources`/`cleanup_streams` in
+`src/runtime/backend_streams.cc`. Apply that trace to the *deployed-matching*
+`driver.cc` variant, not the repo's newer one, or the build breaks as above. That
+one run distinguishes "the handle was destroyed by `cleanup_streams` while an op
+still referenced it" from "the handle belongs to another device's context", which
+are different fixes.
+
 **Do not reuse a per-step number for TP2.** The loop's progress bar reached
 `0/7` before the fault, so there is no measured TP2 step time. An earlier
 version of this section recorded 6.4 s/it as the TP2 denoise rate; that figure
