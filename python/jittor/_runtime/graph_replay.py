@@ -92,6 +92,7 @@ many fell back and why -- because a silent fallback that quietly costs the
 speedup is worse than none.
 """
 
+from contextlib import nullcontext as _nullcontext
 import time
 import weakref
 
@@ -146,6 +147,14 @@ def _spec(value):
 
 def _signature(args):
     return tuple(_spec(a) for a in args)
+
+
+def _device_scope_like(var):
+    """Allocate inside this block on ``var``'s device, not the ambient one."""
+    device = int(var.device_id) if isinstance(var, jt.Var) else -1
+    if device < 0:
+        return _nullcontext()
+    return jt.flag_scope(device_id=device)
 
 
 def _sync_result(output):
@@ -270,7 +279,15 @@ class GraphReplay:
             if not isinstance(value, jt.Var):
                 private.append(value)
                 continue
-            copy = jt.empty(value.shape, value.dtype)
+            # On the argument's device, not the ambient one. `jt.empty`
+            # follows the ambient `device_id`, so a module whose tensors live
+            # anywhere else -- which is how a multi-device server drives one --
+            # got a device-0 copy of a device-1 input, and the very first op
+            # inside the module was handed a mix that `dispatch_context`
+            # refuses: "Expected all inputs to be on the same device, but
+            # found 0 and 1".
+            with _device_scope_like(value):
+                copy = jt.empty(value.shape, value.dtype)
             copy.sync(False, False)
             copy._copy_into(value)
             private.append(copy)
