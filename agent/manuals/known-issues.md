@@ -1816,3 +1816,33 @@ about whether to take it.
   tuner's confidence is 20 again, with `tests/ops/test_matmul.py` and
   `tests/backends/cpu/test_mkl_conv_op.py` green and no numerical change; and
   a broadcast elementwise add costs about what its dense counterpart does.
+
+
+## KI-BACKEND-006: cublas_test / cudnn_test are dispatched to the host and have no kernel there
+
+- Severity: Medium (two library self-test ops cannot run; the libraries
+  themselves are fine)
+- Status: Open, reproduced, two repair attempts refuted -- see below
+- Symptom: `tests/backends/cuda/test_cublas_test_op.py` fails two of its three
+  classes with `op.cc:148: No kernel registered for cublas_test on cpu`
+  (likewise `cudnn_test`). The third class, `TestCubTestOp`, passes.
+- What distinguishes the one that works: `CubTestOp`'s constructor declares
+  `set_flag(OpFlags::_cpu, 0); set_flag(OpFlags::_cuda, 1);` and guards its
+  body with `#ifdef JIT_cuda`. `CublasTestOp` and `CudnnTestOp` declare no
+  backend at all and guard their bodies with `#ifdef JIT_cpu`, so they default
+  to the host, where `Op::implementation()` then finds nothing registered.
+- Two attempts, both measured and both reverted:
+  1. Adding only the two `set_flag` lines moves the op onto the accelerator,
+     and the CUDA build then produces a library with no `jit_run` in it:
+     `undefined symbol: _ZN6jittor12CublasTestOp7jit_runEv`. Consistent --
+     the body is still behind `#ifdef JIT_cpu`.
+  2. Adding the flags *and* switching the guard to `#ifdef JIT_cuda` made
+     things **worse**: 3 failed instead of 2, taking `TestCubTestOp` -- which
+     had been passing -- down with it. So the three ops are coupled through
+     something not visible in these three files (a shared generated OpInfo
+     unit is the obvious candidate) and the fix is not local to them.
+- Note: both entries (`cublas_test_entry`, `cudnn_test_entry`) are host
+  functions that drive the libraries through the CUDA runtime, so "host code"
+  does not by itself settle which backend the op belongs to.
+- Exit condition: all three classes in that file pass, with the mechanism
+  behind attempt 2's collateral damage understood rather than worked around.
