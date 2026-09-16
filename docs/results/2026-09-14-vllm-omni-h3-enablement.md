@@ -817,6 +817,19 @@ seconds-long bisection on this probe -- dense entry vs packed, and shim bridge v
 extension -- which is what the "five hypotheses measured away" list above could
 not offer at 7 minutes per cycle.
 
+One more observation from that probe, and it points *back into jittor* rather
+than at the extension: with the tensors materialised first, the failure's launch
+list names a **`device_copy`** -- `probe_packed_devices.py:35`, the `.to_device(1)`
+line -- and the recent candidates are all `device_copy` (id=16) ops. So the
+seconds-long repro suggests the illegal address may arise in jittor's own
+cross-device copy to a non-zero index, before or around the extension call, which
+would make it fixable in `src/ops/composite/device_copy_op.cc` /
+`src/runtime/backend_streams.cc` rather than in the flash-attn bridge. Worth
+establishing before touching the extension: bisect the probe to the copy alone
+(`jt.ones(...).to_device(1)` in a fresh process) and see whether that faults by
+itself. `probe_side_streams.py` copied across devices without faulting, so the
+difference between the two scripts is the thing to pin down.
+
 **Next instrument, prepared but not yet run.** The event-handle defect needs the
 handle's provenance: log device + handle at `create_event`, `destroy_event` and
 `record_event` (`backends/cuda/runtime/driver.cc`, `record_event` is where the
