@@ -239,12 +239,17 @@ static ncclComm_t init_nccl_comm(int world_size, int world_rank,
     auto result = ncclCommInitRank(
         &communicator, world_size, unique_id, world_rank);
     if (result == ncclSuccess) return communicator;
+    // `result` is an ncclResult_t. Feeding it to checkCudaErrors reported it as
+    // a *CUDA* error ("unhandled cuda error") and dropped NCCL's own string, so
+    // the one piece of information that names the failure never reached the log.
     LOGe << "ncclCommInitRank failed:" << ncclGetErrorString(result)
          << "\n  If NCCL reports that peer access is unsupported, this machine"
             " cannot do direct GPU-to-GPU transfers. Set NCCL_P2P_DISABLE=1 to"
             " route the collectives through shared memory instead."
          << "\n  Set NCCL_DEBUG=INFO for NCCL's own account of the failure.";
-    checkCudaErrors(result);
+    // No communicator means the group cannot be used at all; carry NCCL's string
+    // rather than a CUDA code that points at the wrong subsystem.
+    LOGf << "ncclCommInitRank failed:" << ncclGetErrorString(result);
     return nullptr;
 }
 
@@ -556,6 +561,17 @@ int nccl_create_process_group(vector<int> ranks) {
     group.ranks = ranks;
     group.local_rank = local_rank;
     if (local_rank >= 0) {
+        // `ncclCommInitRank` builds the communicator on the *current* device.
+        // The world path selects this rank's device explicitly (see nccl_init,
+        // where `nccl_device_id` is derived from the local rank); this path used
+        // to inherit whatever the process last set. Rank 0 was right by accident
+        // because its device is already 0, and every other rank created its
+        // group communicator against the wrong device -- the first collective on
+        // it then failed on that rank alone (illegal address, unhandled CUDA
+        // error, invalid resource handle, depending on what the broken launch
+        // hit). Match the world path.
+        set_current_device(nccl_device_id);
+        checkCudaErrors(cudaSetDevice(nccl_device_id));
         group.communicator = init_nccl_comm(
             (int)ranks.size(), local_rank, group_unique_id);
         group.owns_communicator = true;
