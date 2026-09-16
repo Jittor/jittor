@@ -47,20 +47,54 @@ framework defects.
 
 ## KI-COMPILER-001: parallel compiler can corrupt process state
 
+This id covers two different failures that share the name "parallel compile".
+The **file-level** one (`run_cmds`, `multiprocessing.Pool`, deadlock) is fixed;
+the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
+
 - Severity: High
-- Status: Open for non-Jupyter workloads; Jupyter SIGCHLD path fixed
+- Status: File-level compile-pool deadlock fixed 2026-09-16; op-level state
+  corruption open for non-Jupyter workloads; Jupyter SIGCHLD path fixed
 - Owner: compiler/executor maintainers
 - Evidence: [investigation and reproduction](../../docs/development/known-issues/parallel-compiler-segfault.md)
 - Workaround: set `jt.flags.use_parallel_op_compiler = 0` for deterministic
-  validation workloads
+  validation workloads. That flag reaches **only** the op-level compiler; it
+  never reached the deadlock, which lived in `run_cmds()` and needed
+  `DISABLE_MULTIPROCESSING=1`. Measured, same cold cache, pre-fix code: with
+  `use_parallel_op_compiler=0` the script still hung; with
+  `DISABLE_MULTIPROCESSING=1` it completed.
+- Resolved subcase: the file-level compile pool deadlocked any bare
+  `python3 script.py` that had to compile. `run_cmds()` builds its
+  `multiprocessing.Pool` while `import jittor` holds `jittor.lock`; Python 3.14
+  made `forkserver` the default start method on Linux, and a fork server
+  preloads `__main__` by **re-running the script** when it has no `__spec__`.
+  The re-run blocks on that same lock, so the fork server never serves the
+  request the parent is blocked waiting for -- a closed cycle, with zero
+  `cc1plus` processes alive. The same compile succeeded under
+  `python3 -m pytest`, whose `__main__` has a `__spec__`. `run_cmds()` now
+  keeps the children from re-executing `__main__` at all, which is what the
+  Windows-only branch next to it had always done. Regression test:
+  `tests/build/test_compile_pool_main_reexec.py`.
 - Resolved subcase: Jittor's process-wide `SIGCHLD` handler quick-exited a
   Jupyter kernel when any child was killed. Jupyter now retains SIGCHLD
   ownership. A later complete notebook smoke still reproduced a separate death
   with eight compile workers, including with Jittor's signal handler disabled,
   so the maintained notebook gate remains serial. See the
   [SIGCHLD verification and addendum](../../refactor-wip/results/2026-08-21-jupyter-sigchld.md).
-- Review/expiry condition: remove only after sanitizer-backed root cause and
-  repeated cold/warm stress, deadlock, multiprocess-cache, and performance gates
+- Measured, do not re-litigate from intuition: inside one process the op-level
+  parallel compiler is worth about 6x (50 distinct CPU kernels, 7s at the
+  default against 42s at `use_parallel_op_compiler=0`, two trials), so turning
+  the default off is not on the table. Between two processes sharing a cache it
+  is worth nothing: two processes compiling disjoint kernel sets take the *sum*
+  of their times, not the max, at either setting, because `lock_guard` in
+  `parallel_compile_all_ops` holds the process-level `jittor.lock` for the whole
+  batch. That is the first thing to check for "xdist with 8 workers is only 7%
+  faster than serial"; the fix there is cross-process lock granularity, not the
+  flag.
+- Review/expiry condition: remove only after sanitizer-backed root cause of the
+  op-level corruption and repeated cold/warm stress, multiprocess-cache, and
+  performance gates. The deadlock gate is closed. A/B timings for the op-level
+  flag must restore the same cache snapshot before each variant; running
+  parallel first and serial second measures cache warming, not the flag.
 
 ## KI-COMPILER-005: fixed -- a relay group no longer frees inputs the fused op still points at
 
