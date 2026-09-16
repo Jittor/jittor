@@ -2135,6 +2135,26 @@ instrument prints the attention *result*'s device and the ambient device, not
 just the inputs': correct inputs on cuda:1 with a result buffer labelled cuda:0
 would send the next jittor op to device 0 with device-1 pointers.
 
+**Correction, later the same session: that pair of controls was under-powered and
+the "needs the extension" half is wrong.** Every one of those runs is n=1, and the
+fault is intermittent, so a single pass says very little. The counter-example
+arrived when the same `TORCH_SDPA` request was re-run on the recovered core: it
+failed after **465.3 s** with the *identical* rank-1 `cudaErrorIllegalAddress` at
+`cudaMemGetInfo`, and the run is confirmed to be a real SDPA run (the log says
+`Resolved diffusion attention backend 'SDPA' for role='self'` twice, and
+`flashattn_jittor` never appears). The launch candidates at the failure are
+`denoise_loop.py:189/190/207` (`copy`, `getitem`, `setitem`) rather than the
+encoder, and the sticky error again surfaces inside the emulated modulation
+kernel's sync.
+
+So the residual is: a **late, intermittent, rank-1/device-1 illegal address in a
+TP2 request, independent of the attention backend**. What it is *not* is
+established: the request-preparation failure (sections 27, 30) *was* flash-attn
+specific and is fixed; this one is downstream of attention. The next step is the
+denoise loop's own op stream on device 1 -- the `copy`/`setitem`/`getitem` burst
+around `denoise_loop.py:189-207`, which is where the candidates now point -- not
+the attention path.
+
 `CUDA_LAUNCH_BLOCKING=1` is the other half of the picture. It fails *earlier*
 (30.1 s) with the same rank-1 `cudaErrorIllegalAddress` at `cudaMemGetInfo`.
 Making kernel launches synchronous did not move the error to a launch, and
