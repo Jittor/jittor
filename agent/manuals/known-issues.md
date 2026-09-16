@@ -24,49 +24,112 @@ framework defects.
 - **Research:** an intentionally unsupported capability requiring architectural
   work.
 
-## KI-TORCH-AMP-001: half-precision weak scalars can overflow before arithmetic
+## KI-TORCH-RNG-001: complete CUDA generator snapshots are not representable
 
-- Severity: Medium
-- Status: Open; reviewed 2026-09-16 with a CUDA causal reproduction and independent Torch CPU/CUDA oracle
-- Owner: Torch dtype-promotion and AMP maintainers
-- Evidence: the unversioned `Accelerate/perf_repair/amp_scale_probe.py` in
-  `${JITTOR_LAB_ROOT}` without ablation flags, compared in the isolated Jittor
-  and real-Torch environments. `amp_scale_shim_cuda.json` and
-  `amp_scale_oracle_cuda.json` record the mismatch; CPU and CUDA typed-zero-dim
-  scaling behavior must use separate independent oracle results.
-- Symptom: the bridge first casts a Python scalar to half precision, so
-  `float16([0.25, -0.125]) * 65536.0` becomes infinities, whereas real Torch
-  CPU/CUDA returns finite half values `[16384, -8192]`. A typed zero-dim scale
-  is a different promotion path and must not be assumed equivalent to a
-  Python scalar across CPU/CUDA.
-- Workaround: for the Python-scalar expression, compute in explicit FP32 and
-  cast the result back to half. The current shim GradScaler uses a Python
-  float scale, whereas independent Torch uses a typed zero-dimensional scale;
-  this repair does not modify the scaler. Fixing weak-scalar promotion must
-  also validate the shim scaler's overflow detection, skipped updates and
-  backoff against Torch's distinct CPU/CUDA typed-scale paths.
-- Review/expiry condition: verify Python int/float and reflected arithmetic,
-  typed zero-dim operands, dtype, value, backward and genuine overflow against
-  independent real Torch on CPU and CUDA, preserving GradScaler skip/backoff.
+- Severity: Research (C5)
+- Status: Explicit limitation; reviewed 2026-09-17 against large Host cuRAND
+  XORWOW/Philox continuation counterexamples
+- Owner: native CUDA RNG and state-storage maintainers
+- Evidence: `${JITTOR_LAB_ROOT}/Accelerate/maturity_repair/` contains
+  `curand_large_offset_probe.py`, `curand_philox_offset_probe.py` and the
+  strict-uniform subset probe. The
+  [Accelerate capability report](../../refactor-wip/results/2026-09-17-accelerate-maturity-repair.md)
+  separates full CPU snapshots from the restricted CUDA format.
+- Symptom: interleaved normal/float64 calls cannot be captured by one Host
+  cuRAND seed/offset. Normal initialization or Gaussian/float64 sampling can
+  therefore make ordinary `Accelerator.save_state()` explicitly fail.
+  `JITTOR_CURAND_XORWOW_U32_V1` capture permits only FP32 uniform history since
+  seed or safe restore; an earlier safe snapshot remains restorable. Sampling
+  operations themselves still compute normally.
+- Workaround: use only the documented safe-uniform capture domain, or perform
+  checkpoint work without claiming exact CUDA RNG continuation. A small-seed
+  reset is not a general exact-resume workaround. Legacy native int seed
+  getters also explicitly reject uint64 seeds they cannot represent.
+- Review/expiry condition: a runtime-owned complete state representation or a
+  reviewed canonical RNG transition passes mixed normal/uniform/float64, odd
+  and large sizes, device isolation, pending work, malformed state and fresh
+  process continuation, followed by generation/checkpoint throughput checks.
 
-## KI-TORCH-AMP-002: public sqrt retains native autocast demotion
+## KI-TORCH-SAMPLER-001: replacement sampling lacks an explicit-generator owner
 
-- Severity: Medium
-- Status: Open for the public sqrt path; reviewed 2026-09-16 with a CUDA public-path reproduction
-- Owner: Torch operation-binding and AMP maintainers
-- Evidence: unversioned `Accelerate/perf_repair/amp_scale_probe.py` and
-  `amp_scale_shim_cuda_math_public.json` versus
-  `amp_scale_oracle_cuda_math_public.json`, under `${JITTOR_LAB_ROOT}`; the
-  [scoped repair report](../../refactor-wip/results/2026-09-16-accelerate-wrapper-performance-repair.md)
-  distinguishes canonical optimizer math from the public operation.
-- Symptom: native sqrt can demote an FP32 variance to FP16 under compatibility
-  autocast, while real Torch keeps its FP32 input/output policy. Correcting
-  elementwise arithmetic alone does not close this public-operation mismatch.
-- Workaround: disable autocast locally around explicit FP32 sqrt computation.
-  The canonical Adam update has a local AMP-disabled math scope; that does not
-  establish that the general public sqrt path is fixed.
-- Review/expiry condition: public sqrt dtype/value/backward matches independent
-  real Torch on CPU/CUDA, while raw native AMP behavior remains unchanged.
+- Severity: Medium (C4)
+- Status: Explicit unsupported combination; reviewed 2026-09-17
+- Owner: native generator-aware integer sampling maintainers
+- Evidence: `compat/torch/installers/data.py::RandomSampler.__iter__` and
+  `compat/tests/torch/test_torch_sampler_rng.py`; the current implementation
+  rejects explicit Generator plus replacement without advancing the generator.
+- Symptom: nonreplacement sampling reuses canonical generator-aware randperm,
+  but replacement sampling has no corresponding native Generator.randint
+  owner. Ignoring the supplied generator would silently violate continuation.
+- Workaround: use nonreplacement with the explicit generator, or default RNG
+  replacement when that is the intended randomness contract.
+- Review/expiry condition: implement a reusable native generator-aware integer
+  sampling owner and verify replacement values, continuation, isolation,
+  malformed arguments and DataLoader behavior against an independent reference.
+
+## KI-TORCH-JOIN-001: uneven-input Join lacks reducer collective hooks
+
+- Severity: Research (C5)
+- Status: Explicit limitation; reviewed 2026-09-17
+- Owner: native distributed reducer maintainers
+- Evidence: `compat/torch/installers/distributed.py::Join.__enter__` and the
+  maintained `test_checkpoint_state_dict.py` guard regression, executed in the
+  nine-case actual CPU suite and the final required CPU gate. Final integration
+  is recorded in the capability report.
+- Symptom: the reducer lacks join notification and shadow-collective hooks
+  needed to match exhausted ranks' backward communication. Enabled Join with
+  multiple ranks rejects before entering training; silent entry would risk
+  mismatched collectives. Single-rank and disabled Join remain usable.
+- Workaround: use balanced per-rank update counts, including Accelerate's
+  default `even_batches=True`, instead of uneven enabled Join.
+- Review/expiry condition: implement canonical reducer notify/shadow hooks;
+  unequal real rank inputs must complete and match independent model/optimizer
+  updates, with both normal completion and early-termination behavior.
+
+## KI-TORCH-DCP-001: SHARDED checkpoints lack the canonical storage protocol
+
+- Severity: Research (C5)
+- Status: Explicit limitation; reviewed 2026-09-17 against the baseline DCP API
+- Owner: distributed checkpoint planner/storage and FSDP maintainers
+- Evidence: `compat/torch/installers/distributed.py` DCP storage entrypoints,
+  `compat/fsdp2/_state_dict.py` and maintained
+  `test_checkpoint_state_dict.py::test_sharded_dcp_storage_remains_explicitly_unsupported`.
+  The baseline and nine-case actual CPU suite execute the refusal; final
+  integration also covers import-compatible names with rejecting construction.
+- Symptom: planner, DTensor chunk metadata and storage reader/writer protocols
+  are missing. SHARDED DCP raises before creating a checkpoint rather than
+  emitting a private or silently incomplete format. Named FULL transforms
+  are a distinct path; actual local two-rank FULL save/load/next-step passes
+  independently compared complete numerical/behavioral records.
+- Workaround: use FULL only within that separately verified local scope; do not
+  infer SHARDED, FSDP1 or multinode support from FULL tensor transformations.
+- Review/expiry condition: extend the canonical DCP/FSDP owners with an
+  independently Torch-readable storage format, then verify local multi-rank
+  model/optimizer sharded resume. Cross-machine resharding remains separately
+  hardware-gated by the existing refactor board's checkpoint work item.
+
+## KI-TORCH-META-001: meta metadata does not release native storage
+
+- Severity: Research (C5)
+- Status: Confirmed native storage limitation; reviewed 2026-09-17 on actual CUDA
+- Owner: native meta/no-storage and tensor storage-lifecycle maintainers
+- Evidence: `compat/torch/types.py:398` records a meta marker on a real Var;
+  `compat/torch/installers/tensor/method_api.py:706` retains that representation
+  for `to(meta)`. The actual six-case suite and storage observations are in
+  `${JITTOR_LAB_ROOT}/_state/Accelerate/maturity_repair/meta_final_cuda/`, and
+  the [capability report](../../refactor-wip/results/2026-09-17-accelerate-maturity-repair.md)
+  separates functional passes from storage support.
+- Symptom: `init_empty_weights` and post-forward CPU/disk offload report
+  `is_meta=True` while native placement remains CUDA with a nonzero pointer.
+  Mixed dispatch and checkpoint loading retain the offloaded weight's storage.
+  Six forward/numeric/tied-weight/hook-removal cases pass, but this does not
+  prove allocation-free construction or loading models larger than VRAM.
+- Workaround: use a resident small model that fits available VRAM and do not
+  claim memory-capacity offload from meta metadata or successful forwards.
+- Review/expiry condition: implement genuinely allocation-free native meta and
+  post-forward GPU weight release, then preserve repeated forward, tied-weight,
+  plain-bin checkpoint, dispatch and hook-removal numerical contracts. Faking
+  a zero pointer or changing only frontend metadata does not satisfy this condition.
 
 ## KI-TEST-001: formerly silent test cases expose unresolved contracts
 
