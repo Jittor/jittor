@@ -1946,6 +1946,26 @@ So the two halves of the conclusion are: the *plan* must stop reading live edges
 (snapshot), or the *release handlers* must learn about a pinned batch (floor).
 The first is smaller and matches what this code did for `custom_data`.
 
+Why "floor" is not the ten-line alternative it sounds like, so nobody starts it
+blind:
+
+* it needs a new shared `NodeFlags` bit, and that region carries an explicit
+  warning that its layout is derived from two `_end`s precisely because a hand
+  picked bit had already broken it once;
+* it needs the floor in all three release handlers *and* on the direct
+  `out.node->free()` recursion inside `free()`, which is the one free call that
+  does not go through a release handler;
+* and making `need_free()` false for a pinned var is observable:
+  `exec_runner.cc` uses `!var->need_free()` to decide whether an output var goes
+  into `outputs_bk` (kept) or is merely marked finished, so flooring changes what
+  a batch retains.
+
+A snapshot of the *outputs* alone is not enough either, which is worth writing
+down: `update_ops` reads `op->outputs()`, but `load_fused_op`'s `edges` loop reads
+`op->_inputs` and `v->_inputs.front()` as well. Snapshot the first and not the
+rest and a freed op yields *incomplete* edges -- wrong kernels rather than an
+assert, which is worse. It has to be the whole tuple.
+
 The probe for any candidate is
 `H3_FUSE_DUMP=1 probe_loader_race.py threads 4 6` -- 15-20 runs, because the rate
 is roughly one in four -- and the per-run timeout should be short (~120 s), since
