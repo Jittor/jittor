@@ -33,4 +33,4 @@ known-issues/parallel-compiler-segfault
 | [错误分级](error-categories.md) | 用户错误与内部不变量各走哪个入口 |
 | [异步错误诊断契约](async-error-diagnostics.md) | 有界发射记录环，与图元数据的区别 |
 | [测试体系](test-system.md) | 测试分层、门禁与验证口径 |
-| [并行编译器段错误](known-issues/parallel-compiler-segfault.md) | `KI-COMPILER-001` 的调查记录：症状、复现协议与验收门槛 |
+| [并行编译器：文件级死锁与算子级段错误](known-issues/parallel-compiler-segfault.md) | `KI-COMPILER-001` 的调查记录：两个同名不同因的失败、复现协议与验收门槛 |
