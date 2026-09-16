@@ -1890,6 +1890,30 @@ that `free()` is re-entered from several liveness paths and the erasures are
 index-based (`back_index`), so the drain has to erase by identity and run exactly
 once per node.
 
+### The design that avoids both problems: snapshot the edges in the plan
+
+Both rejected candidates are trying to keep the *live* graph alive for the
+planner. But the planner is the *only* reader that needs those edges, and it
+already walks them once, during collection. `build_exec_plan` BFSes from the
+batch's roots over `_inputs` and numbers every node it reaches in
+`Node::batch_index`; if it also recorded, per collected op, the input and output
+var pointers it saw, then `load_fused_op` and `FusedOp::update_ops` would read
+that snapshot instead of `op->_inputs` / `op->outputs()`.
+
+That is the same move this code already made once, for the same reason: the
+comment above `set_batch_index` says the numbering used to live in
+`Node::custom_data`, "so a traversal starting while these were live renumbered
+the graph under the executor" -- the fix was to give the batch its own
+immutable-per-batch record instead of reading shared state. The edges are the
+last thing the planner still reads live. A snapshot would make the batch
+independent of any concurrent `free()`, with no lock and no deferral, and it
+removes the whole class rather than one instance.
+
+It is a larger change than the two that were measured -- `load_fused_op`'s
+`edges` construction and the codegen numbering are delicate, and the vars'
+producers (`v->_inputs.front()`) have to be captured too -- which is why the two
+five-line candidates were tried first.
+
 The probe for any candidate is
 `H3_FUSE_DUMP=1 probe_loader_race.py threads 4 6` -- 15-20 runs, because the rate
 is roughly one in four -- and the per-run timeout should be short (~120 s), since
@@ -2145,7 +2169,32 @@ each is correct in the tree as it now stands:
 What is left is the long-running context itself. The two things to point
 `compute-sanitizer` at, when a run can be afforded, are the TP collectives'
 driver-API launches (which `CUDA_LAUNCH_BLOCKING` does not serialise) and the
-`cudaMemcpyAsync` on the copy side stream.
+`cudaMemcpyAsync` on the copy side stream. NCCL is the weaker of the two now:
+`NCCL_DEBUG=WARN,NCCL_DEBUG_SUBSYS=INIT,COLL` on a failing run prints nothing at
+all -- NCCL initialises on the right device per rank and never reports an error.
+
+### The generated packed entry is not the cause
+
+`JITTOR_FLASH_ATTN_DIRECT_PACKED=0` turns off the direct/packed adapter, so the
+model's attention goes through the *classic* dense low-level entry
+(`flash_attn_2_cuda_jittor.so`'s `mha_fwd`) instead of the five-hundred-line
+generated `flashattn_jittor_packed_fwd.cu`. That entry was worth suspecting: it
+is generated, it was the seat of the section-20 device-guard bug, and its
+`jt_fill_params` is a hand-port of upstream's `set_params_fprop` (it checks out
+against upstream, including `seqlen_q_rounded = round_multiple(seqlen_q, 128)`
+with `softmax_lse` sized `[batch, heads, seqlen_q]`).
+
+The request fails **identically** with it disabled: 20.1 s, rank-1
+`cudaErrorIllegalAddress` at `cudaMemGetInfo`, same signature. So both entry
+paths fail, which is what they have in common -- `run_mha_fwd` and the extension's
+kernels -- and the generated adapter is out.
+
+That leaves the extension's kernels themselves against buffers whose contents
+come from a long-running request, or an unchecked extension launch reading a
+buffer jittor recycled. The measurement that would separate them is
+`compute-sanitizer --tool memcheck` over one request; at roughly 10-50x, on a load
+that already takes six minutes, that is a hours-long run and it was not
+attempted here.
 
 The extension itself was re-checked as a suspect and cleared: of the four
 `getCurrentCUDAStream()` launch sites and every `flash_api.cpp` runtime call,
