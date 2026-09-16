@@ -2213,6 +2213,24 @@ NCCL's driver-API work. `compute-sanitizer` cannot separate them here (NCCL fail
 under it, above), and single-run controls cannot either. That is the state bug 1
 is left in.
 
+Three more components were excluded after that paragraph was written, each by
+measurement on the failing request:
+
+* **NCCL's P2P transport**: `NCCL_P2P_DISABLE=1` fails identically (20.1 s).
+* **jittor's copy path metadata**: an instrumented `copy_async` (gated on
+  `JITTOR_COPY_CHECK`) compares each copy's declared `Device` pair against what
+  `cudaPointerGetAttributes` says about the two pointers -- residency *and*
+  device index -- and shouts on a disagreement. Across the whole failing request
+  it never fired. So `copy_kind` is not choosing a wrong direction and `copy()`
+  is not picking a wrong device or peer mapping; if the fault is in the copy
+  engine, the pointers really were as declared and the memory behind them had
+  been recycled.
+* **a disagreement between the ranks about a collective's size**: `ncclAllGather`
+  takes the count from `x->num` on each rank, so a mismatch would make one rank
+  mis-transfer; the instrumented trace of a failing run has every `num=` value an
+  even number of times (113 collective lines, 2 per line counted once), i.e. both
+  ranks called the same sequence of counts.
+
 `CUDA_LAUNCH_BLOCKING=1` is the other half of the picture. It fails *earlier*
 (30.1 s) with the same rank-1 `cudaErrorIllegalAddress` at `cudaMemGetInfo`.
 Making kernel launches synchronous did not move the error to a launch, and
