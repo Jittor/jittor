@@ -162,7 +162,19 @@ def unique(
     need_inverse = return_inverse or return_counts
 
     diff = jt.logical_not(jt.all(input_sorted[1:] == input_sorted[: -1], 1))
-    diff = jt.concat([Var([False]), diff], 0)
+    # The prepended element's *value* is never read -- both kernels below
+    # short-circuit on `i == 0` -- but its *device* is: `Var([False])` is built
+    # on the ambient device, so this concat raised
+    #   dispatch_context.cc:52: Expected all tensor inputs on the same backend
+    #   and device ... first input backend=1 index=0 but another input has
+    #   backend=1 index=1
+    # for any `input` that does not live on the ambient device, which is every
+    # worker whose device is not the process default. Build the element out of
+    # `input_sorted` instead, so it carries that tensor's device by
+    # construction. (The shape follows `diff` too: an empty input yields an
+    # empty `diff`, not a one-element one.)
+    head = jt.logical_not(jt.all(input_sorted[0:1] == input_sorted[0:1], 1))
+    diff = jt.concat([head, diff], 0)
     diff = jt.array(diff, dtype = jt.int32)
 
     # `output` holds *positions* in input_sorted, so it is an index var --

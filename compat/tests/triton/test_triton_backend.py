@@ -19,8 +19,11 @@ Run:  python -m pytest compat/tests/triton/test_triton_backend.py
 """
 
 from _helpers import capability as _test_capability
+import ctypes
 import importlib.util
+import os
 import unittest
+from unittest import mock
 import numpy as np
 
 import jittor as jt
@@ -349,6 +352,58 @@ class TestTritonBackend(unittest.TestCase):
         BLOCK = triton.next_power_of_2(N)
         layernorm_kernel[(M,)](X, Y, W, B, N, N, eps, BLOCK=BLOCK)
         self.ac(Y.numpy(), ref, atol=1e-3, rtol=1e-3, msg="layernorm")
+
+
+@unittest.skipUnless(_HAVE, "real upstream triton + CUDA not available")
+class TestBridgeLaunchStream(unittest.TestCase):
+    """The bridge has to launch inside jittor's own stream order.
+
+    jittor runs its kernels, its copies and its library calls on
+    ``cudaStreamPerThread`` (``compute_stream`` in
+    ``backends/cuda/runtime/driver.cc``). The legacy default stream does not
+    order against it, so a bridge kernel left on the legacy stream is an
+    unordered race with jittor's scheduler *and* its allocator: jittor can hand
+    an operand or output block to something else while the kernel is still
+    reading it, which surfaces as a racy ``cudaErrorIllegalAddress``.
+
+    That is not hypothetical -- it is the hazard the ``jt.sync_all(True)`` after
+    every launch in ``run`` exists to paper over, and the fast-sync path (on by
+    default whenever ``JITTOR_TORCH_SHIM`` is set) skips it.
+    """
+
+    def _recorded_stream(self):
+        """The stream value handed to cuLaunchKernel, without launching."""
+        from jittor.compat.triton import backend as tb
+
+        driver = tb._Driver.instance()
+        seen = []
+
+        class _Recorder:
+            def __call__(self, func, gx, gy, gz, bx, by, bz, shared,
+                         stream, params, extra):
+                seen.append(stream.value)
+                # Stop here: the point is the argument, not a real launch.
+                raise RuntimeError("recorded")
+
+        original = driver.lib.cuLaunchKernel
+        driver.lib.cuLaunchKernel = _Recorder()
+        try:
+            with self.assertRaises(RuntimeError):
+                driver.launch(ctypes.c_void_p(1), (1, 1, 1), (1, 1, 1), 0,
+                              ctypes.c_void_p(0))
+        finally:
+            driver.lib.cuLaunchKernel = original
+        return seen
+
+    def test_launch_targets_the_per_thread_stream(self):
+        # 0x2 is `cudaStreamPerThread`, what `compute_stream` returns, and the
+        # same value as the driver API's `CU_STREAM_PER_THREAD`.
+        self.assertEqual(self._recorded_stream(), [0x2])
+
+    def test_the_legacy_stream_is_still_reachable_by_env(self):
+        with mock.patch.dict(os.environ,
+                             {"JITTOR_TRITON_LEGACY_STREAM": "1"}):
+            self.assertEqual(self._recorded_stream(), [None])
 
 
 if __name__ == "__main__":

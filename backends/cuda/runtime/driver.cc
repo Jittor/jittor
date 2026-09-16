@@ -16,6 +16,31 @@ int accelerator_count() {
     return count;
 }
 
+// The device the calling thread is actually bound to, or -1 when unknown.
+//
+// CUDA's current device is per-host-thread and starts at 0 on every new thread;
+// jittor's is a single value for the whole process
+// (RuntimeDeviceState::current_device). A worker thread that has never called
+// cudaSetDevice therefore sits on device 0 while the process device is 1, and
+// everything that resolves a device through jittor and then issues a call on
+// *this thread's* context -- an allocation, a memory query, a copy, an event,
+// a library handle -- silently works on device 0 under device-1 bookkeeping.
+// That is a cross-device mismatch, and its signature is a Xid 31 MMU fault and
+// a context-sticky cudaErrorIllegalAddress that surfaces later, on a call like
+// cudaMemGetInfo that only reports that the context is gone. It is invariant
+// for rank 1 of a multi-process run and never happens on rank 0, whose threads
+// default to the device it uses anyway.
+//
+// record_event() already works around this by calling cudaSetDevice itself
+// ("a thread whose CUDA context is still the process default"). Do it once
+// here instead, so "the device jittor reports" and "the device this thread is
+// bound to" cannot disagree for anything that goes through this entry point.
+//
+// Only the first call on a thread (or the first after the process device moves)
+// pays for cudaSetDevice; until then `accelerator_current` consults this cache
+// with one thread-local read.
+static thread_local int tls_bound_device = -1;
+
 int accelerator_current() {
     auto& state = runtime_device_state();
     if (state.current_device < 0) {
@@ -26,6 +51,22 @@ int accelerator_current() {
             return -1;
         }
         state.current_device = state.device_id = device;
+        tls_bound_device = device;
+        return device;
+    }
+    if (tls_bound_device != state.current_device) {
+        int device = state.current_device;
+        if (cudaSetDevice(device) != cudaSuccess) {
+            // Leave the cache unset rather than claim a binding that is not
+            // there; the next call retries, and the caller still gets the
+            // device jittor is configured for.
+            cudaGetLastError();
+            return device;
+        }
+        tls_bound_device = device;
+        // Set before the hooks: a hook may ask for the current device, and
+        // re-entering the branch above would switch device a second time.
+        for (auto hook : state.switch_hooks) hook(device);
     }
     return state.current_device;
 }
@@ -39,6 +80,7 @@ void accelerator_set(int device) {
     state.device_id = device;
     if (device == previous) return;
     checkCudaErrors(cudaSetDevice(device));
+    tls_bound_device = device;
     state.current_device = device;
     for (auto hook : state.switch_hooks) hook(device);
 }

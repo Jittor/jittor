@@ -11,8 +11,11 @@
 #include "utils/fast_shared_ptr.h"
 #include "runtime/device.h"
 #include "runtime/jit_policy.h"
+#include "runtime/traversal_state.h"
 #include "ops/op_register.h"
 #include "utils/graph_build_profile.h"
+#include <cstdlib>
+#include <sstream>
 
 namespace jittor {
 
@@ -86,6 +89,45 @@ void FusedOp::update_ops() {
     }
     loop_options = loop_options_origin;
 
+    if (outputs().size() == 0 && getenv("H3_FUSE_DUMP")) {
+        // TEMP DIAGNOSTIC: this segment was classified with no output that has
+        // to stay in memory, so the assertion below is about to fire. Dump the
+        // batch verdict and the marks the planner read it out of: an op or var
+        // whose tflag is not this batch's stamp means the traversal that built
+        // the verdict was looking at a different one.
+        auto& tstate = runtime_traversal_state();
+        std::ostringstream os;
+        os << "fused segment with no in-memory output: ops=" << ops.size()
+           << " batch_stamp_wanted=" << batch_stamp_wanted
+           << " batch_var_fused=" << (batch_var_fused ? "set" : "null")
+           << " stamp_count=" << tstate.stamp_count()
+           << " active_epochs=" << tstate.active_epochs();
+        for (Op* op : ops) {
+            // `addr` is what the H3FUSE erase-output log prints for its
+            // producer, so the two lines can be matched up; `holder` is the
+            // op's strong list of its own outputs. Zero `outputs` with a
+            // non-empty `holder` means the edge was erased while the var is
+            // still alive -- somebody detached the producer, not the var.
+            os << "\n  op " << op->name() << " addr=" << (void*)op
+               << " tflag=" << op->tflag
+               << " batch_stamp=" << op->batch_stamp
+               << " outputs=" << op->outputs().size()
+               << " holder=" << op->outputs_holder.size()
+               << " inputs=" << op->inputs().size();
+            for (Var* o : op->outputs()) {
+                os << "\n     out tflag=" << o->tflag
+                   << " batch_stamp=" << o->batch_stamp
+                   << " stays=" << (int)var_stays_in_memory((Node*)o);
+                if (batch_var_fused && o->batch_stamp == batch_stamp_wanted) {
+                    int idx = o->batch_index_at(batch_stamp_wanted);
+                    os << " batch_index=" << idx;
+                    if (idx >= 0 && (uint)idx < batch_var_fused->size())
+                        os << " var_fused=" << (*batch_var_fused)[idx];
+                }
+            }
+        }
+        LOGw << os.str();
+    }
     ASSERT(outputs().size());
     LOGvvvv << "set fused output" << outputs();
     

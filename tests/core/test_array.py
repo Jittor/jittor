@@ -314,5 +314,62 @@ class TestArrayOpDoesNotAssumeAnOutputAllocator(unittest.TestCase):
             self.assertEqual(int(out.numel()), int(np.asarray(value).size))
 
 
+class TestLikeConstructorsKeepTheDevice(unittest.TestCase):
+    """`*_like` and `new_*` preserve the reference tensor's device, like torch.
+
+    jittor's constructors take their device from the ambient one, and `to_device`
+    does not move the ambient -- it belongs to the caller, and `run_sync`
+    restores it -- so on a rank whose device is not the process default
+    `ones_like(x)` came back on the wrong device:
+
+        probe_ambient_ops.py:  idx(device 1) -> jt.ones_like(idx) device_id=0
+
+    jittor's own ops reject that mixture in `dispatch_context`, but a kernel the
+    flash-attn extension launches does not check, and there the mixture is a
+    kernel on one device reading another device's pointers.
+    """
+
+    def _produced_off_the_ambient_device(self, x):
+        """Build the family with the ambient device moved away from `x`'s."""
+        saved = jt.flags.device_id
+        try:
+            jt.flags.device_id = 0
+            produced = {
+                "ones_like": jt.ones_like(x),
+                "zeros_like": jt.zeros_like(x),
+                "full_like": jt.full_like(x, 3),
+                "new_zeros": x.new_zeros((2,)),
+                "new_ones": x.new_ones((2,)),
+                "new_full": x.new_full((2,), 3),
+            }
+            if "float" in str(x.dtype):
+                produced["rand_like"] = jt.rand_like(x)
+                produced["randn_like"] = jt.randn_like(x)
+            else:
+                produced["randint_like"] = jt.randint_like(x, 5)
+            return produced
+        finally:
+            jt.flags.device_id = saved
+
+    def _check(self, dtype):
+        if jt.get_device_count() < 2:
+            self.skipTest("needs a second device to differ from the ambient one")
+        x = jt.arange(6).astype(dtype).to_device(1)
+        x.sync()
+        produced = self._produced_off_the_ambient_device(x)
+        wrong = {name: int(value.device_id) for name, value in produced.items()
+                 if int(value.device_id) != 1}
+        self.assertEqual(wrong, {},
+                         "these did not follow the reference tensor's device")
+        np.testing.assert_array_equal(jt.zeros_like(x).numpy(),
+                                      np.zeros(6, dtype=dtype))
+
+    def test_deterministic_constructors_follow_the_device(self):
+        self._check("int32")
+
+    def test_random_constructors_follow_the_device(self):
+        self._check("float32")
+
+
 if __name__ == "__main__":
     unittest.main()

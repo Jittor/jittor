@@ -146,9 +146,24 @@ def is_flashattn_jittor_available():
 
 
 def _to_int_list(cu_seqlens):
-    """cu_seqlens [B+1] (prefix-sums) -> python int segment-length list [B]."""
+    """cu_seqlens [B+1] (prefix-sums) -> python int segment-length list [B].
+
+    Read through a *copy*. The shim's ``.tolist()`` moves the tensor it is called
+    on into host memory and leaves it there: ``location()`` becomes "cpu" while
+    ``device_id`` keeps claiming the accelerator, and ``dispatch_context``
+    compares that metadata, so nothing rejects the host pointer that a later
+    device op is then handed. On the caller's own ``cu_seqlens`` that parks it
+    under every later consumer -- a latent illegal address, observed on the rank
+    whose device is not the process default. The copy is what gets parked.
+    """
     if isinstance(cu_seqlens, torch.Tensor):
-        vals = [int(x) for x in cu_seqlens.reshape(-1).tolist()]
+        source = cu_seqlens
+        try:
+            if not bool(source.is_cpu):
+                source = source.clone()
+        except BaseException:  # noqa: BLE001
+            pass
+        vals = [int(x) for x in source.reshape(-1).tolist()]
     else:
         vals = [int(x) for x in cu_seqlens]
     return [vals[i + 1] - vals[i] for i in range(len(vals) - 1)]

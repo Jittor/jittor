@@ -109,6 +109,44 @@ def is_available():
 # --------------------------------------------------------------------------- #
 #  ctypes CUDA driver wrapper (libcuda.so.1)
 # --------------------------------------------------------------------------- #
+# The stream bridge kernels are launched on.
+#
+# jittor puts every one of its own launches, copies and library calls on
+# `cudaStreamPerThread` -- `compute_stream` in
+# `backends/cuda/runtime/driver.cc`, which also says why: `cudaStreamPerThread`
+# and the legacy default stream do NOT synchronise with each other, so work left
+# on the legacy stream is "an unordered race that raises no error and produces
+# no message".
+#
+# This bridge used to launch with a NULL stream, i.e. the legacy default stream,
+# which made every triton kernel exactly that straggler: jittor scheduled its
+# own ops -- and its allocator's frees -- with no ordering against the kernel.
+# The observable result was a racy `cudaErrorIllegalAddress` when bridge
+# launches were packed, which is the hazard the trailing `jt.sync_all(True)` in
+# `run` exists to paper over and which the fast-sync path deliberately skips.
+# Handing `cuLaunchKernel` the per-thread default stream instead puts the kernel
+# inside jittor's own order.
+#
+# `cudaStreamPerThread` is the constant 0x2 -- `CU_STREAM_PER_THREAD` in the
+# driver API, which is what `cuLaunchKernel` accepts here; neither API has a
+# call that returns it. Set `JITTOR_TRITON_LEGACY_STREAM=1` to launch on the old
+# NULL stream.
+#
+# Note this does not by itself make the bridge usable during CUDA graph
+# capture: `run` still calls `drv.synchronize()` (a full-device sync, illegal
+# inside a capture) after the launch when `need_sync_after_launch` holds. That
+# predates this change and is what the "moves the launch onto jittor's own
+# stream as a graph node" plan in the module docstring has to fix as well.
+_CUDA_STREAM_PER_THREAD = 0x2
+
+
+def _launch_stream():
+    """The stream to hand `cuLaunchKernel`, or None for the legacy default."""
+    if _truthy_env("JITTOR_TRITON_LEGACY_STREAM"):
+        return None
+    return _CUDA_STREAM_PER_THREAD
+
+
 class _Driver:
     """Minimal, error-checked CUDA *driver* API surface over ``libcuda.so.1``.
 
@@ -424,7 +462,7 @@ class _Driver:
             func,
             ctypes.c_uint(gx), ctypes.c_uint(gy), ctypes.c_uint(gz),
             ctypes.c_uint(bx), ctypes.c_uint(by), ctypes.c_uint(bz),
-            ctypes.c_uint(shared), ctypes.c_void_p(0),
+            ctypes.c_uint(shared), ctypes.c_void_p(_launch_stream()),
             ctypes.cast(params, ctypes.POINTER(ctypes.c_void_p)),
             ctypes.cast(None, ctypes.POINTER(ctypes.c_void_p))),
             "cuLaunchKernel")
