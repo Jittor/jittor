@@ -2284,6 +2284,45 @@ device, contiguity and pointers immediately before each `packed_low_level.fwd(..
 and the last one before the fault is where a device-1 geometry or pointer
 mismatch would show up.
 
+## 31. `Tensor.to(1)` dropped the device index
+
+Found while chasing the corrected residual of section 30 into the denoise loop,
+whose `Recent launch candidates` are `copy`/`getitem`/`setitem` bursts around
+`denoise_loop.py:189-207`. That code builds its per-step kwargs with in-place
+scattered writes driven by precomputed tensors, with `x[0].index_copy_(0,
+self.img_pos_dev, video_rows)` and `timesteps[self.img_pos_dev[mask]] = t` in the
+middle of it. A repro of the same shape was written
+(`probe_denoise_scatter.py`) and it failed immediately -- but on the *index*
+tensor's device, not on the write:
+
+```
+tensors: img_pos=cuda:0 mask=cuda:1 x_base=cuda:1
+dispatch_context.cc:52: Expected all tensor inputs on the same backend and device
+```
+
+`img_pos` was built as `torch.arange(ROWS, dtype=torch.int64).to(dev)` with
+`dev=1`. The shim's `_to` classifies each argument as a dtype, a `torch.device`,
+another tensor or a string, and a bare **int matches none of those branches**, so
+it was dropped: `dev` stayed `None`, `dev = self.device` fell back to the tensor's
+own device, and the tensor never moved. Isolated:
+
+    .to(1)                        device=cuda:0   <- asked for 1
+    .to("cuda:1")                 device=cuda:1
+    .to(torch.device("cuda", 1))  device=cuda:1
+    torch.arange(8, device=1)     device=cuda:1
+
+torch itself raises on an int here (`TypeError: to() received an invalid
+combination of arguments`), so the silent-drop is the one behaviour that cannot
+be right: on a rank whose ambient device is not the tensor's, a caller that asks
+for cuda:1 gets whatever it already had. Fixed by reading a bare int (excluding
+`bool`, which is an `int`) as a device index.
+
+**This is not the cause of the section-30 residual**, and saying so matters:
+the model passes `device=self.device` and `self.device` comes from
+`get_local_device()`, which returns a `torch.device`, and every `torch.device`
+form was already correct. So the fix closes a real silent-misplacement hole in
+the same family as sections 26/27, but the fault that survives is still open.
+
 ## Verification
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails
@@ -2387,6 +2426,19 @@ mismatch would show up.
   `site-packages/flash_attn/__init__.py`, byte-identical to the shim's stub before
   the instrument, and `flashattn_jittor_last_error()` is `import
   flash_attn_jittor_cuda failed: No module named 'flash_attn_jittor_cuda'`.
+
+- 31: standalone, before/after, on a rank whose ambient device is not the
+  tensor's (`CUDA_VISIBLE_DEVICES=1,2`, device 1 requested): `.to(1)` reports
+  `cuda:0` before the fix and `cuda:1` after, while `.to(0)`, `.to("cuda:1")`,
+  `.to(torch.long)` and `torch.arange(..., device=1)` are unchanged.
+  `compat/tests/torch/test_multi_device.py::TestMultiDeviceFacade::test_to_and_cuda_with_an_index`
+  gained the int cases. Note the shim's own test files cannot be collected from
+  the repo root (`compat/__init__.py` does `from .._runtime import ...`, so
+  pytest importing `compat` as a top-level package fails with "attempted
+  relative import beyond top-level package"); they have to go through the
+  installed package (`--pyargs jittor.compat.tests...` from `site-packages`), and
+  the untouched sibling `test_device_contexts` errors the same way from the repo
+  root, which is how that was shown to be a harness matter and not this change.
 
 Each fix was synced into the lab venv at
 `$JITTOR_LAB_ROOT/_state/h3/venv-jittor/lib/python3.12/site-packages/jittor/`,

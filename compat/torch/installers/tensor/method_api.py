@@ -550,6 +550,19 @@ def _to(self, *args, **kwargs):
             # .to(other) copies other's dtype AND device.
             ds = _jittor_dtype_name(a.dtype)
             dev = a.device
+        elif isinstance(a, int) and not isinstance(a, bool):
+            # A bare int can only mean a device index, and it used to match none
+            # of these branches and be **dropped**: `.to(1)` returned the tensor
+            # unchanged, so a fresh tensor stayed wherever it was built -- the
+            # ambient device -- and a caller that asked for cuda:1 got cuda:0
+            # with no error. That is the same silent misplacement this shim has
+            # been fixing one entry point at a time (`*_like`, `new_*`,
+            # `torch.arange(..., device=...)`), and on a rank whose ambient
+            # device is not the tensor's it is an illegal address waiting for a
+            # consumer that indexes with it. torch raises on an int here; being
+            # more useful than the reference is fine, silently ignoring the
+            # argument is not.
+            dev = "cuda:%d" % a
         elif isinstance(a, str):
             bare = a.replace("torch.", "")
             if bare in _owner.dtype._registry:
