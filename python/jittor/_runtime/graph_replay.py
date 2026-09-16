@@ -148,6 +148,28 @@ def _signature(args):
     return tuple(_spec(a) for a in args)
 
 
+def _sync_result(output):
+    """Finish whatever a module returned, whether or not it is a single Var.
+
+    ``_capture_now`` is where a module that does not return exactly one Var is
+    refused and sent down the eager path -- that decision already exists. This
+    warm-up call runs before it and only has to survive until then. Calling
+    ``.sync()`` on the return value directly assumed the decision had already
+    gone the other way, so every multi-output module raised
+    ``AttributeError: 'tuple' object has no attribute 'sync'`` from inside
+    auto-replay instead: ``nn.RNN``, ``nn.LSTM`` and ``nn.GRU`` all return
+    ``(output, hidden)``.
+    """
+    if isinstance(output, jt.Var):
+        output.sync()
+        return
+    if isinstance(output, dict):
+        output = tuple(output.values())
+    if isinstance(output, (list, tuple)):
+        for value in output:
+            _sync_result(value)
+
+
 def _graph_has_nondeterministic_op():
     """True if anything still pending draws random numbers."""
     try:
@@ -531,7 +553,7 @@ class GraphReplay:
             # buffer the module builds lazily, so the capture that follows has
             # nothing pending underneath it.
             with _no_auto(), jt.no_grad():
-                self._module(*args).sync()
+                _sync_result(self._module(*args))
             cap = self._capture = self._capture_now(args)
             self.stats["captured"] += 1
             if cap is None:
