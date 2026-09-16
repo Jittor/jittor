@@ -739,6 +739,25 @@ CUDA error remains, and the run's new length is the evidence that the two are
 distinct. The next instrument is the same handle/allocator trace on this longer
 run, now that the run survives far enough to make the trace readable.
 
+**Where the remaining fault now sits** (read off the 145 s run, so this is the
+front line, not the older lists): the innermost frames are
+
+    flash_attn/__init__.py:199 flash_attn_varlen_func
+      -> _call_native :123
+        -> adapter.py:355 flash_attn_varlen_func
+          -> packed_low_level.varlen_fwd(...)
+            -> sticky cudaErrorIllegalAddress, device=1
+
+i.e. the packed varlen call in the DiT denoise loop, on **rank 1 only** -- the same
+"second device only" signature as the record_event fault, and now reached after
+145 s of work (text encoder and earlier steps all succeed) instead of at 20 s.
+Two candidates follow from the shape of it, in order: the officially-built
+flash-attn extension's per-device state on a non-default device (the sanitizer
+already caught exactly that class inside NCCL, `cudaErrorNoKernelImageForDevice`
+in `ncclInitKernelsForDevice`), or the packed path's own `cu_seqlens`/output
+buffers on that device. `instrument_store_and_triton.py` plus the `H3_FA_*`
+traces are the instruments; the run is long enough now to make them readable.
+
 **Next instrument, prepared but not yet run.** The event-handle defect needs the
 handle's provenance: log device + handle at `create_event`, `destroy_event` and
 `record_event` (`backends/cuda/runtime/driver.cc`, `record_event` is where the
