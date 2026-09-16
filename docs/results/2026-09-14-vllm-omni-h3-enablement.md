@@ -701,8 +701,12 @@ across four headers, plus one call site:
     src/mem/allocator/cuda_dual_allocator.h:97        DelayFree
     src/mem/allocator/foreign_allocator.h:17          ForeignAllocator (+ .cc)
     src/mem/allocator/shared_allocator.h:50           SharedAllocator
-    src/core/var.cc                                   Var::alloc passes share_offset Widening only
-`allocator.h` + `sfrl_allocator.h` leaves the rest marked `override` without a
+    src/core/var.cc                                   Var::alloc passes share_offset Two more mechanical traps, both hit while trying to land it: the base virtual
+must gain the default (`size_t offset = 0`) or every override is "marked
+`override`, but does not override" -- the trailing `;` after the inline body makes
+the obvious text replacement miss; and `cuda_dual_allocator.h:98` *calls*
+`share_with(size_t, size_t)` internally, so it needs the extra argument too.
+Widening only part of the set leaves the rest marked `override` without a
 matching base, and the build stops with
 
     error: 'bool jittor::CudaDualAllocator::share_with(size_t, size_t)'
