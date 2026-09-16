@@ -663,6 +663,12 @@ reached the denoise loop. Committed as its own change.
 **What is still open, after that fix** (so the next session starts from the real
 front line, not from this section's earlier lists):
 
+   Confirmed as the *sole* blocker across every memory-adequate configuration:
+   flash-attn + DiT/text-encoder offload (`acc-2`) and DiT-resident +
+   text-encoder offload (`best-2`, `RESULT failed in 25.1 s`) both now reach the
+   denoise loop after fix 2 and both die here; the no-flash/no-offload config
+   instead runs out of memory. The fix-2 verification and this verdict come from
+   the same runs, so the front line is unambiguous.
 1. `cudaErrorIllegalAddress` on rank 1 in the flash-attn + layer-offload config,
    now that the run gets into the denoise loop. This is the class the earliest
    TP2 attempts hit; with the event fault gone it is the first thing the request
