@@ -36,17 +36,34 @@ bool lock_is_held();
 
 EXTERN_LIB int _has_lock;
 
+// Take the build lock for a scope, from any thread.
+//
+// lock_guard used to be "if nobody holds it, flock; on the way out, unflock",
+// with the "does anybody hold it" question answered by reading the plain int
+// _has_lock. That is only safe while exactly one thread ever builds a guard:
+// two compile workers both reading _has_lock==0 would both flock (harmless,
+// the descriptor already holds it) and then the *first* one to finish would
+// unflock while the second was still writing into the cache. The parallel
+// compiler worked around this by taking one guard on the main thread around
+// the whole batch, which is also why a batch of pure cache hits paid for the
+// lock.
+//
+// These two keep a depth count under a mutex instead, so the flock is taken by
+// whichever thread arrives first and released only when the last one leaves.
+// Nested guards on one thread still cost nothing, and a lock already held by
+// the Python side is still left alone -- returning false means "not ours".
+bool build_lock_enter();
+void build_lock_leave();
+
 struct lock_guard {
-    int has_lock = 0;
-    inline lock_guard() { 
-        if (_has_lock) return;
-        has_lock = 1;
-        lock(); 
-    }
+    bool has_lock;
+    inline lock_guard() : has_lock(build_lock_enter()) {}
     inline ~lock_guard() {
         if (!has_lock) return;
-        unlock();
+        build_lock_leave();
     }
+    lock_guard(const lock_guard&) = delete;
+    lock_guard& operator=(const lock_guard&) = delete;
 };
 
 } // jittor

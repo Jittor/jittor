@@ -207,7 +207,14 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
     LOGvv << "Total number of op needs compile" << tasks.size()
         << "thread_num:" << thread_num;
 
-    jittor::lock_guard lg;
+    // No batch-wide build lock here any more. It used to wrap every worker
+    // for the whole batch, which meant a batch of pure cache hits -- the
+    // normal case once the cache is warm -- serialized against every other
+    // process on the machine, and a batch with one miss held the lock for the
+    // hits too. Each worker now takes the lock inside jit_compiler::compile(),
+    // and only when it has something to build; lock_guard counts holders, so
+    // several workers building at once share one flock and the last one out
+    // releases it.
     std::atomic<int> next_task(0);
     std::atomic<bool> cancelled(false);
     std::mutex entry_lock;

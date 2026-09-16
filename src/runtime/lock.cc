@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <chrono>
 #include <thread>
+#include <mutex>
 
 #include "runtime/lock.h"
 
@@ -172,6 +173,36 @@ void unlock() {
 #endif
     _has_lock = 0;
     LOGvv << "UNLOCK Pid:" << getpid();
+}
+
+// Guarded by guard_mutex; see the comment on lock_guard in lock.h.
+static std::mutex guard_mutex;
+static int guard_depth = 0;
+
+bool build_lock_enter() {
+    std::lock_guard<std::mutex> hold(guard_mutex);
+    // Another guard in this process already took it: join that hold rather
+    // than flock() a second time, so that the release is the last one out.
+    if (guard_depth) {
+        guard_depth++;
+        return true;
+    }
+    // Held by the Python side (import runs inside lock_scope). Not ours to
+    // release, so do not count it and do not unlock on the way out.
+    if (_has_lock) return false;
+    // lock() can wait for minutes on a cold build in another process. Holding
+    // guard_mutex across that wait is deliberate: a second thread that wants
+    // the lock has to wait for it anyway, and waiting on the mutex means it
+    // joins the hold the moment the first thread gets it instead of queueing
+    // behind it on flock.
+    lock();
+    guard_depth = 1;
+    return true;
+}
+
+void build_lock_leave() {
+    std::lock_guard<std::mutex> hold(guard_mutex);
+    if (--guard_depth == 0) unlock();
 }
 
 void lock_acquire() {

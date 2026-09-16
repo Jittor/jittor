@@ -1358,10 +1358,19 @@ jit_op_entry_t do_compile_inner(Op* op) {
 jit_op_entry_t compile_registered_source(Op* op) { return do_compile_inner(op); }
 
 jit_op_entry_t OpCompiler::do_compile(Op* op) {
-    jittor::lock_guard lg;
     auto compile = op->implementation().kernel.compile;
-    if (compile) return compile(op);
-    return do_compile_inner(op);
+    // The build lock used to be taken here, around everything, so a cache hit
+    // waited for it exactly as long as a compile would have. Code generation
+    // and tuning touch no shared file at all, and the cache decision itself is
+    // a read; jit_compiler::compile() now takes the lock only when it actually
+    // has to build. See the fast path there for why an unlocked read is safe.
+    if (!compile || compile == compile_registered_source)
+        return do_compile_inner(op);
+    // A backend-supplied compiler (ACL today) writes into the cache by its own
+    // rules, with no published-key protocol to lean on, so it keeps the old
+    // whole-call lock.
+    jittor::lock_guard lg;
+    return compile(op);
 }
 
 }

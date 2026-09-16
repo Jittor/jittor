@@ -20,6 +20,7 @@
 #include "runtime/configuration.h"
 #include "core/op.h"
 #include "utils/cache_compile.h"
+#include "runtime/lock.h"
 #include "utils/flags.h"
 #include "core/fused_op.h"
 #include "utils/str_utils.h"
@@ -292,8 +293,7 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
     string& jit_src_path2 = jit_src_path;
     #endif
     LOGvvv << "Generate" << jit_src_path >> "\n" >> src;
-    if (rewrite_op || !file_exist(jit_src_path2))
-        write(jit_src_path2, src);
+    const bool would_write_source = rewrite_op || !file_exist(jit_src_path2);
     string cmd;
     // The preparation key captures policy before asynchronous compilation.
     // Extension-local flags remain explicit per-op overrides.
@@ -330,6 +330,54 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
             + symbol_name + "\"";
     }
 #endif
+    // A warm cache is a read, and a read does not need the build lock.
+    //
+    // Everything a hit does is compare the key this command would produce
+    // against the key recorded next to the product, then dlopen the product.
+    // That is safe to do unlocked because of the order in which a build
+    // commits: cache_compile() renames the finished product into place first
+    // and the .key second, and rename() is atomic within a directory. So a
+    // reader that sees the matching key is looking at a directory entry that
+    // already points at the complete product of that very build -- there is no
+    // state in which the key has been published and the product has not.
+    //
+    // The generated source is the one input that only exists in memory here.
+    // Writing it is a build step, not a read, so the fast path does not do it;
+    // it hashes the string instead, which is exactly what hashing the file
+    // that string would become gives. If the recorded key agrees with that,
+    // the product on disk was built from this very source.
+    //
+    // Two things can still change under a reader: another process can publish
+    // a *newer* build between the key check and the dlopen, and a product can
+    // be unreadable for reasons the key cannot see. The first is closed by
+    // re-reading the key after the library is mapped -- an unchanged key means
+    // no build committed in between, because a build always republishes it.
+    // The second is why the whole attempt is inside a try: any failure just
+    // falls through to the locked path, which rebuilds and reports properly.
+    try {
+        auto probe = jit_compiler::cache_compile_probe(
+            cmd, would_write_source ? jit_src_path : string(), src);
+        if (probe.up_to_date) {
+            auto jit_entry = load_jit_lib(jit_lib_path, symbol_name, extra_flags);
+            if (read_all(probe.key_name) == probe.cache_key) {
+                LOGvv << "Cached op, no build lock taken:" << jit_key;
+                return jit_entry;
+            }
+            LOGvv << "Cache key of" << jit_lib_path
+                << "changed while loading it, rebuilding under the lock";
+        }
+    } catch (const std::exception& e) {
+        LOGvv << "Unlocked cache hit for" << jit_lib_path
+            << "did not hold, falling back to the locked path:" << e.what();
+    }
+
+    // Something has to be built. Take the lock, and let cache_compile() decide
+    // again now that it holds it: another process may have published this very
+    // product while we waited, in which case it does nothing but the key
+    // comparison.
+    jittor::lock_guard lg;
+    if (would_write_source)
+        write(jit_src_path2, src);
     cache_compile(cmd, cache_path, jittor_path);
     auto jit_entry = load_jit_lib(jit_lib_path, symbol_name, extra_flags);
     return jit_entry;
