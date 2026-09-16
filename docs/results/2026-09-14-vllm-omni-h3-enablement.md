@@ -2432,13 +2432,21 @@ the same family as sections 26/27, but the fault that survives is still open.
   `cuda:0` before the fix and `cuda:1` after, while `.to(0)`, `.to("cuda:1")`,
   `.to(torch.long)` and `torch.arange(..., device=1)` are unchanged.
   `compat/tests/torch/test_multi_device.py::TestMultiDeviceFacade::test_to_and_cuda_with_an_index`
-  gained the int cases. Note the shim's own test files cannot be collected from
-  the repo root (`compat/__init__.py` does `from .._runtime import ...`, so
-  pytest importing `compat` as a top-level package fails with "attempted
-  relative import beyond top-level package"); they have to go through the
-  installed package (`--pyargs jittor.compat.tests...` from `site-packages`), and
-  the untouched sibling `test_device_contexts` errors the same way from the repo
-  root, which is how that was shown to be a harness matter and not this change.
+  gained the int cases, placed *first* in that test: the file's bare-`"cuda"`
+  case at the end fails when the file runs alone (that is the pre-existing
+  "15/16, isolated-run-only" failure of section 16 -- a bare `"cuda"` resolves to
+  the ambient device, which in isolation is still 0), and an early abort would
+  hide anything added after it. Whole file, through the installed package:
+  `1 failed, 15 passed`, failing at the bare-`"cuda"` line; a sentinel print on
+  either side of the new block confirmed it executes and passes (it is what
+  located the failure at that later line rather than at the new assertions).
+  Note the shim's test files cannot be collected from the repo root
+  (`compat/__init__.py` does `from .._runtime import ...`, so pytest importing
+  `compat` as a top-level package dies with "attempted relative import beyond
+  top-level package" -- the untouched sibling `test_device_contexts` fails the
+  same way there); use
+  `PYTHONPATH=$REPO/python $VENV/bin/python -m pytest --pyargs jittor.compat.tests...`
+  from the lab's `env-jittor.sh` environment.
 
 Each fix was synced into the lab venv at
 `$JITTOR_LAB_ROOT/_state/h3/venv-jittor/lib/python3.12/site-packages/jittor/`,
