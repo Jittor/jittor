@@ -72,10 +72,17 @@ NO_DEVICE = "unverified:no-device"
 #: The backend declares the operator and this build can reach it, but no probe
 #: exists. Every one of these must appear in ``UNPROBED_REASONS``.
 UNPROBED = "unverified:no-probe"
+#: The probe and the backend are both there, but an optional python package
+#: they need is not installed on this machine. Nothing ran, so the cell says
+#: nothing about the operator -- and calling that a failure claims the backend
+#: computes the wrong answer, which is the same confusion this matrix exists
+#: to avoid, pointing the other way. In practice this is CuPy: `py_converter.h`
+#: hands a numpy-code callback `cupy` rather than `numpy` when use_cuda is on.
+MISSING_DEPENDENCY = "unverified:no-dependency"
 
 #: The statuses that mean "this cell was not verified here". Kept as a set so a
 #: report can count them without re-listing the spellings.
-UNVERIFIED = frozenset((NOT_BUILT, NO_DEVICE, UNPROBED))
+UNVERIFIED = frozenset((NOT_BUILT, NO_DEVICE, UNPROBED, MISSING_DEPENDENCY))
 
 
 def load_optional_libraries():
@@ -478,6 +485,17 @@ UNPROBED_REASONS = {
     "mpi_broadcast": "needs an MPI communicator; covered by the mpi/nccl gates",
     "mpi_reduce": "needs an MPI communicator; covered by the mpi/nccl gates",
     "mpi_test": "needs an MPI communicator; covered by the mpi/nccl gates",
+    # In-place and layout operators: the matrix compares the value a probe
+    # returns, and these three have nothing of that shape to return.
+    "contiguous": "a layout move, not a value: it forwards its input unchanged "
+                  "when the input is already contiguous, so there is no "
+                  "cross-backend number to compare",
+    "fused_sgd": "an in-place optimiser step over parameters, velocities and "
+                 "gradients -- stateful, so a single-shot probe has no result "
+                 "to hold against another backend; covered by tests/optim",
+    "mapped_matmul": "declared for the accelerator only "
+                     "(`backend_mask = OpBackendAccelerator`) and executed by "
+                     "the ACL backend's own op table; no ACL device here",
     # Library self-tests: these exist to prove a library links and are not
     # numerical contracts, so there is no cross-backend result to compare.
     "cub_test": "library link self-test, not a numerical contract",
@@ -527,6 +545,8 @@ def cell_status(row, op, evaluate):
     if op not in PROBES:
         return UNPROBED, UNPROBED_REASONS.get(op, "")
     ok, detail = evaluate(row, op)
+    if ok is MISSING_DEPENDENCY:
+        return MISSING_DEPENDENCY, detail
     return (PASSED if ok else FAILED), detail
 
 
