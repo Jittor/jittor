@@ -2198,6 +2198,21 @@ denoise loop's own op stream on device 1 -- the `copy`/`setitem`/`getitem` burst
 around `denoise_loop.py:189-207`, which is where the candidates now point -- not
 the attention path.
 
+**A third thing it is not: the batch-node lifetime hole of section 29.** That fix
+landed (see the end of section 29) and the same `TORCH_SDPA` request was re-run on
+the fixed core: it fails after 265.2 s with the identical rank-1
+`cudaErrorIllegalAddress`. So the plan-vs-`free()` race -- which is real, and is
+now fixed for what it *does* cause: the "no in-memory output" assert and the
+loader's segfaults -- is not what the server trips over.
+
+Given `CUDA_LAUNCH_BLOCKING=1` already showed the faulting operation is not one of
+jittor's kernel launches (jittor wraps those in `LaunchErrorScope`, and the error
+still surfaced at a memory query), what remains are the operations that
+`LAUNCH_BLOCKING` does not cover: `cudaMemcpyAsync` on the copy side stream and
+NCCL's driver-API work. `compute-sanitizer` cannot separate them here (NCCL fails
+under it, above), and single-run controls cannot either. That is the state bug 1
+is left in.
+
 `CUDA_LAUNCH_BLOCKING=1` is the other half of the picture. It fails *earlier*
 (30.1 s) with the same rank-1 `cudaErrorIllegalAddress` at `cudaMemGetInfo`.
 Making kernel launches synchronous did not move the error to a launch, and
