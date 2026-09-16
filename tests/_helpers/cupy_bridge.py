@@ -11,14 +11,26 @@ of the messages naming it.
 
 So: ask before running the CUDA half, and say which dependency is missing.
 """
+import importlib.util
+import sys
 import unittest
-
-from _helpers.torch_runtime import modules_available
 
 
 def cuda_numpy_code_available():
-    """Whether a numpy-code operator can execute on CUDA on this machine."""
-    return modules_available("cupy")
+    """Whether a numpy-code operator can execute on CUDA on this machine.
+
+    Asked with ``find_spec`` rather than through ``_helpers.torch_runtime``:
+    that module reaches for ``torch`` to decide what owns the name, and a
+    compatibility-mode test that imports it before ``import jittor`` makes the
+    shim refuse to install ("cannot install Jittor Torch compatibility over an
+    existing Torch module graph"). This question has nothing to do with Torch.
+    """
+    if "cupy" in sys.modules:
+        return True
+    try:
+        return importlib.util.find_spec("cupy") is not None
+    except (ImportError, ValueError):
+        return False
 
 
 def requires_cuda_numpy_code():

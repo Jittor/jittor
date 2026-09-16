@@ -29,6 +29,7 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_distrib_shape.py
 """
 
 from _helpers import capability as _test_capability
+from _helpers.cupy_bridge import cuda_numpy_code_available
 import unittest
 import numpy as np
 import torch
@@ -36,7 +37,13 @@ import jittor as jt
 from jittor import distributions as D
 
 # CPU always; CUDA when the build has it (NPU/ACL also reports has_cuda).
-_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if _test_capability.any_accelerator_enabled(backend=jt) else [])
+# These reach jt.numpy_code, whose CUDA half goes through the CuPy bridge
+# (py_converter hands the callback `cupy` when use_cuda is on). Without
+# CuPy the operator raises from inside execution and leaves the CUDA work
+# pending for an unrelated later test to trip over.
+_DEVICES = [("cpu", 0)] + ([("cuda", 1)]
+                           if _test_capability.any_accelerator_enabled(backend=jt)
+                           and cuda_numpy_code_available() else [])
 
 
 def both_devices(fn):
