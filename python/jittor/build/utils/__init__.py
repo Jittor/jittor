@@ -362,12 +362,33 @@ def try_import_jit_utils_core(silent=None):
         else:
             os.environ[silent_var] = prev
 
-def run_cmd(cmd, cwd=None, err_msg=None, print_error=True):
+def c_locale_environment():
+    """``os.environ`` with the *message* locale pinned to C.
+
+    Only for commands whose output text is parsed or hashed. A compiler's
+    diagnostics are translated, so the same probe on the same machine returns
+    different bytes to a Chinese shell than to an English one -- and
+    ``target_arch_key`` hashes exactly those bytes into the cache directory
+    name. Pinning the locale for the probe (rather than asking every caller to
+    export LC_ALL) keeps the answer a property of the toolchain.
+    """
+    env = dict(os.environ)
+    env["LC_ALL"] = "C"
+    env["LANG"] = "C"
+    # LANGUAGE overrides both above for message translation, and an empty
+    # value is not the same as an absent one to gettext.
+    env.pop("LANGUAGE", None)
+    env.pop("LC_MESSAGES", None)
+    return env
+
+
+def run_cmd(cmd, cwd=None, err_msg=None, print_error=True, env=None):
     LOG.v(f"Run cmd: {cmd}")
     if cwd:
-        r = sp.run(cmd, cwd=cwd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT)
+        r = sp.run(cmd, cwd=cwd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT,
+                   env=env)
     else:
-        r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT)
+        r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT, env=env)
     try:
         s = r.stdout.decode('utf8')
     except:
@@ -844,13 +865,19 @@ def _read_target_arch(cc):
     Asking the compiler removes the guesswork: this is the concrete
     ``-march=``/``-mtune=`` and the state of every target feature.
     """
-    out = run_cmd(f'"{cc}" -march=native -Q --help=target')
+    # In the C locale, always. The per-feature state is printed through
+    # gettext ("[enabled]" / "[\u542f\u7528]"), this text is hashed into the
+    # cache directory name, and hashing a translation made the same compiler
+    # on the same CPU own two caches. See
+    # tests/build/test_build_config_cache.py.
+    locale = c_locale_environment()
+    out = run_cmd(f'"{cc}" -march=native -Q --help=target', env=locale)
     lines = [line.strip() for line in out.splitlines()
              if line.strip().startswith("-m")]
     if lines:
         return "\n".join(lines)
     # clang has no -Q --help=target; its cc1 line carries the same facts.
-    out = run_cmd(f'"{cc}" -march=native -E -v - < /dev/null')
+    out = run_cmd(f'"{cc}" -march=native -E -v - < /dev/null', env=locale)
     for line in out.splitlines():
         if "-target-cpu" in line or "cc1" in line:
             return line.strip()
@@ -867,7 +894,15 @@ def target_arch_key(cc=None):
     if not cc or cc_type == "cl" or platform.machine() not in ("x86_64", "AMD64"):
         return short(get_cpu_version())
     try:
-        expansion = probe.cached("target_arch:" + resolve_exe(cc), [resolve_exe(cc)],
+        # The slot is named for *how* the answer is obtained, not just for the
+        # compiler. probe.json is keyed on the compiler alone, so a home that
+        # memoised a translated expansion would keep answering out of it --
+        # target_arch_key() and its own cache would disagree, and the machine
+        # would stay on whichever directory the first locale to ask picked.
+        # Renaming the slot re-probes once per home and lands every one of them
+        # on the same key.
+        expansion = probe.cached("target_arch:c-locale:" + resolve_exe(cc),
+                                 [resolve_exe(cc)],
                                  lambda: _read_target_arch(cc))
     except Exception as error:
         LOG.v(f"could not read the -march=native expansion: {error}")

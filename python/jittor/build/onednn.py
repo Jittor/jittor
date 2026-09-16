@@ -104,6 +104,41 @@ def _install_lock(path):
         os.close(descriptor)
 
 
+def build_jobs():
+    """How many compiler processes the oneDNN build may run at once.
+
+    This was a hard ``min(4, cpus)``. oneDNN is ~1200 translation units even
+    with the primitive list trimmed, so four of them is an eight-minute build
+    on a machine with hundreds of idle cores -- and because the library is
+    loaded lazily, that build lands *inside* whichever test first reaches a CPU
+    convolution or matmul, where it reads as a hang rather than as a build.
+
+    Bounded by cores and by memory, because cores are not the binding
+    constraint on a small runner: the same reasoning (and roughly the same
+    arithmetic) as the module compile pool in ``jittor_utils.run_cmds``.
+    ``JT_ONEDNN_BUILD_JOBS`` overrides it outright.
+    """
+    override = os.environ.get("JT_ONEDNN_BUILD_JOBS", "").strip()
+    if override:
+        try:
+            return max(1, int(override))
+        except ValueError:
+            pass
+    try:
+        cores = len(os.sched_getaffinity(0))
+    except AttributeError:
+        cores = os.cpu_count() or 1
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        pages = os.sysconf("SC_PHYS_PAGES")
+        by_memory = max(1, int((page_size * pages) / (1024. ** 3) // 2))
+    except (AttributeError, ValueError, OSError):
+        by_memory = 4
+    # The ceiling is not a resource limit, it is a diminishing-returns one:
+    # past this the build is bound by its own dependency graph and the link.
+    return max(1, min(cores, by_memory, 32))
+
+
 def install_source(root, asset, version, compiler, download, safe_extract, allow_build=True):
     """Return the exact installed prefix; never choose a sibling by directory order."""
     root = Path(root)
@@ -147,7 +182,7 @@ def install_source(root, asset, version, compiler, download, safe_extract, allow
         commands = [
             [cmake, "-S", str(source), "-B", str(build), *options],
             [cmake, "--build", str(build), "--config", "Release", "--parallel",
-             str(min(4, len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1))],
+             str(build_jobs())],
             [cmake, "--install", str(build), "--config", "Release", "--prefix", str(temporary)],
         ]
         with log.open("w", encoding="utf-8") as output:

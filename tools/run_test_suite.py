@@ -41,6 +41,16 @@ _COUNT = re.compile(r"(\d+) (passed|failed|skipped|error|errors|xfailed|xpassed)
 _WARMUP_MARKER = "JITTOR_TEST_SUITE_CPU_READY"
 _WARMUP_ATTEMPTS = 3
 
+#: Backend libraries the warm-up builds up front.
+#:
+#: Compute dependencies only. The communicators (``mpi``, ``nccl``, ``hccl``)
+#: are deliberately absent: their loaders initialise a communicator, which
+#: means waiting for the other ranks, and there are none here -- a warm-up
+#: that can block forever is worse than the stall it replaces.
+_WARMUP_LIBRARIES = (
+    "mkl", "cub", "cutt", "cudnn", "cublas", "curand", "cufft", "cusparse",
+)
+
 # Keep the standalone runner's worker split identical to nox.  The shared
 # policy owns both the pool list and the budget calculation.
 sys.path.insert(0, str(REPO_ROOT / "tests"))
@@ -163,9 +173,20 @@ if not valid:
         "assert not jt.compiler.has_cuda; "
         "assert not getattr(jt.compiler, 'has_acl', 0); "
         "jt.flags.use_parallel_op_compiler = 0; "
+        # Build the lazily-registered backend libraries here, where they are
+        # attributable, instead of leaving them to whichever test first
+        # reaches one. oneDNN is the reason: it is compiled from source on a
+        # cold cache, it is registered as a lazy loader, and nothing before
+        # this line touches it -- so a cold `tests/nn` spent eight minutes
+        # inside the first CPU convolution it collected, with no output, and
+        # the test that paid for it was picked by collection order.
+        # probe_library reports rather than raises, so a backend that is
+        # merely absent does not turn the warm-up into a failure.
+        "from jittor._runtime.backend_libraries import probe_library as _probe; "
+        "[ _probe(_name, load=True) for _name in %r ]; "
         "x = (jt.array([1.0, 2.0]) * 2).sum(); x.sync(); "
         "assert float(x.item()) == 6.0; "
-        "print(%r)" % _WARMUP_MARKER
+        "print(%r)" % (_WARMUP_LIBRARIES, _WARMUP_MARKER)
     )
     outputs = []
     for _attempt in range(_WARMUP_ATTEMPTS):

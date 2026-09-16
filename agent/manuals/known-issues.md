@@ -1664,6 +1664,36 @@ about whether to take it.
 - Effect: `tests/structure` went from 3 failed / 209 passed to 212 passed.
 - Guard: [cache path precedence](../../tests/build/test_cache_path_precedence.py)
 
+## KI-COMPILER-006: fixed -- the cache directory no longer depends on the compiler's message locale
+
+- Severity: was High (a warm cache silently presents as cold; a full rebuild of
+  the core, the bundled operators and every JIT kernel, for no change at all)
+- Status: Fixed 2026-09-16 in `python/jittor/build/utils/__init__.py`
+- Symptom it had: the `archXXXXXXXXXX` component of the cache path is a hash of
+  `cc -march=native -Q --help=target`, whose per-feature state is printed
+  through gettext. `LC_ALL=C` yields `[enabled]` and hashes to `arch0fe147db07`;
+  a Chinese locale yields `[启用]` and hashes to `arch6fe5b27f7d`. Same machine,
+  same compiler, same CPU, same flags, two unrelated cache trees. `noxfile.py`'s
+  `_session_env` sets `LC_ALL=C` and nothing else in the repository does, so the
+  gates used one tree and every manual run on a non-English host used the other.
+- Evidence: both trees were sitting side by side in `/root/.cache/jittor` when
+  this was found -- `arch0fe147db07` at 1.1 GB / 7801 kernels and
+  `arch6fe5b27f7d` at 113 MB / 196 kernels. With `JT_PROBE_CACHE=0` and an empty
+  home, `import jittor` cost 60s, then a second import differing only in
+  `LC_ALL` cost another 59s; after the fix the second import costs 2s.
+- Fix: probe in the C locale (`jittor_utils.c_locale_environment()`) rather than
+  asking callers to export it, **and** rename the memo slot to
+  `target_arch:c-locale:<cc>`. The rename is load-bearing: `probe.json` is keyed
+  on the compiler, not the locale, so a home that had memoised translated text
+  kept answering out of it and never converged.
+- Effect: the key collapses onto the one the nox gates already used, so their
+  caches stay warm and manual runs join them.
+- Guard: [build config cache](../../tests/build/test_build_config_cache.py)
+  `::test_the_instruction_set_key_does_not_depend_on_the_message_locale`, proven
+  red first (`{'C': 'arch0fe147db07', 'zh_CN.UTF-8': 'arch6fe5b27f7d'}`). It
+  skips with a reason when the toolchain has no translations installed, because
+  otherwise both locales print English and the assertion proves nothing.
+
 ## KI-TUNER-001: the matmul and conv relays never fire, so a hand-written meta-op product runs as a generic kernel
 
 - Severity: High (a supported operation runs orders of magnitude slower than

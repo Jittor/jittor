@@ -32,6 +32,56 @@ def _cache_path_for(env_overrides):
     return json.loads(out.stdout.decode())
 
 
+#: Locales the message-locale test uses. The second one only has to be a
+#: locale this machine's compiler translates into; the assertion is that the
+#: key is the *same* either way, not that a particular language wins.
+_MESSAGE_LOCALES = ("C", "zh_CN.UTF-8")
+
+
+def _locale_env(locale):
+    return {"LC_ALL": locale, "LANG": locale, "LANGUAGE": "",
+            # The probe cache is keyed on the compiler, not on the locale, so
+            # a warm probe.json answers both children out of whichever locale
+            # happened to fill it and hides the split being tested here.
+            "JT_PROBE_CACHE": "0"}
+
+
+def _target_arch_key_under(locale):
+    script = ("import jittor_utils, sys;"
+              "sys.stdout.write(jittor_utils.target_arch_key())")
+    out = run_python_child(["-c", script], env=_locale_env(locale), text=False)
+    assert out.returncode == 0, out.stderr.decode()
+    return out.stdout.decode()
+
+
+def _compiler_translates_target_help():
+    """Whether this toolchain translates ``--help=target`` at all.
+
+    Without this probe the test is one of the "looks like a pass" shapes: on a
+    machine with no translations installed both locales produce the same
+    English, the assertion holds, and nothing was exercised.
+    """
+    import subprocess
+    cc = jit_utils.cc_path
+    if not cc or jit_utils.cc_type == "cl":
+        return False
+    seen = set()
+    for locale in _MESSAGE_LOCALES:
+        env = dict(os.environ)
+        env.update({"LC_ALL": locale, "LANG": locale})
+        env.pop("LANGUAGE", None)
+        try:
+            result = subprocess.run([cc, "-march=native", "-Q", "--help=target"],
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, env=env)
+        except OSError:
+            return False
+        if result.returncode != 0:
+            return False
+        seen.add(result.stdout)
+    return len(seen) > 1
+
+
 class TestCachePathComponents(unittest.TestCase):
     """What the directory name is allowed to depend on.
 
@@ -63,6 +113,38 @@ class TestCachePathComponents(unittest.TestCase):
             import hashlib
             other = "arch" + hashlib.sha256(b"different").hexdigest()[:10]
             self.assertNotEqual(key, other)
+
+    def test_the_instruction_set_key_does_not_depend_on_the_message_locale(self):
+        """`-Q --help=target` prints its per-feature state through gettext.
+
+        The key is a hash of that text, so "[enabled]" under ``LC_ALL=C`` and
+        "[\u542f\u7528]" under a Chinese locale hashed to two different
+        ``arch*`` directories -- for the same compiler, on the same CPU, with
+        the same flags. Nothing about the compiled products differs between
+        them, so the second locale to run finds an empty cache and pays a full
+        cold build: the C++ core, the bundled operators, oneDNN from source,
+        and every JIT kernel.
+
+        It is not hypothetical and it is not rare. ``noxfile.py``'s
+        ``_session_env`` sets ``LC_ALL=C``; nothing else in the repository
+        does. So every nox gate used one tree and every manual ``pytest`` run
+        on a non-English machine used another, on one host, each paying a cold
+        build the other had already paid for. The probe cache hides it
+        intermittently rather than fixing it: ``probe.json`` is keyed on the
+        compiler, so whichever locale fills it first decides the directory for
+        every later process until the compiler's stamp changes -- at which
+        point the whole machine can silently migrate to the other tree.
+        """
+        if not _compiler_translates_target_help():
+            raise unittest.SkipTest(
+                "this toolchain prints the same --help=target under %s and %s, "
+                "so the locale split cannot be reproduced here"
+                % _MESSAGE_LOCALES)
+        keys = {locale: _target_arch_key_under(locale)
+                for locale in _MESSAGE_LOCALES}
+        self.assertEqual(
+            len(set(keys.values())), 1,
+            "the instruction-set key changed with the message locale: %r" % keys)
 
     def test_the_project_path_key_is_wide_enough_to_separate_checkouts(self):
         """Four hex digits is 65536 slots; two parallel worktrees colliding
