@@ -2,6 +2,7 @@
 // This file is subject to the terms and conditions in LICENSE.txt.
 #pragma once
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include "mem/allocator.h"
 
@@ -18,11 +19,25 @@ struct SharedAllocator final : Allocator {
     std::unordered_map<size_t, Block> blocks;
     size_t next_allocation = 0;
     std::recursive_mutex mutex;
+    mutable std::string wrapped_name;
 
     void setup(Allocator* allocator) { underlying = allocator; }
     uint64 flags() const override { return underlying->flags(); }
     int device() const override { return underlying->device(); }
-    const char* name() const override { return "shared"; }
+    // Report the policy this wraps, not just the wrapper. `flags()` and
+    // `device()` already delegate, because what a caller wants to know about
+    // an allocator is what it actually does -- and the same is true of its
+    // name. Reporting a bare "shared" hid the underlying policy from anything
+    // that reasons about it: `test_cusparse_dtype` checks that cuSPARSE's
+    // external buffer comes from the temp allocator rather than a
+    // cudaMalloc/cudaFree pair (cudaFree synchronises the whole device), and
+    // it could no longer see that it did.
+    const char* name() const override {
+        if (!underlying) return "shared";
+        if (wrapped_name.empty())
+            wrapped_name = std::string("shared:") + underlying->name();
+        return wrapped_name.c_str();
+    }
     bool can_share() const override { return true; }
 
     void* alloc(size_t size, size_t& allocation) override {

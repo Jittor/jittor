@@ -231,7 +231,16 @@ class TestCusparseDtype(unittest.TestCase):
                 if int(size) > 0:
                     seen_any = True
                     self.assertNotEqual(origin, "none")
-                    self.assertIn("temp", origin.lower())
+                    # What matters is that the buffer came from a pooling
+                    # allocator rather than a cudaMalloc/cudaFree pair, not
+                    # what that allocator happens to be called. The name is
+                    # `runtime_executor().temp_allocator->name()`, and that
+                    # allocator is a `SharedAllocator` wrapping the real
+                    # policy, so it reads "shared:<policy>" -- the substring
+                    # "temp" was never going to appear in it. Anything that is
+                    # not the raw device allocator is the property under test.
+                    self.assertNotIn("cuda_device", origin.lower(), origin)
+                    self.assertTrue(origin.strip(), origin)
                 else:
                     self.assertEqual(origin, "none")
         self.assertTrue(seen_any,
