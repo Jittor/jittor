@@ -136,7 +136,7 @@ void TempAllocator::gc() {
     }
 }
 
-bool TempAllocator::share_with(size_t size, size_t allocation) {
+bool TempAllocator::share_with(size_t size, size_t allocation, size_t offset) {
     ASSERT(false);
     return true;
 }

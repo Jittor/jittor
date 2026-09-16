@@ -330,10 +330,11 @@ void SFRLAllocator::gc() {
     unused_memory -= large_blocks.free_all_cached_blocks(underlying);
 }
 
-bool SFRLAllocator::share_with(size_t size, size_t allocation) {
+bool SFRLAllocator::share_with(size_t size, size_t allocation, size_t offset) {
     std::unique_lock<std::recursive_mutex> lock(mutex);
     auto* block = id_space.get_occupied(allocation);
     ASSERT(block->occupied) << "share_with a freed allocation:" << allocation;
+    if (offset + size > block->size) return false;
     ++block->share_times;
     return true;
 }

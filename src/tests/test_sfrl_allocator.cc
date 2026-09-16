@@ -47,7 +47,7 @@ JIT_TEST(sfrl_reuses_small_tail_of_large_segment) {
     // The small request must consume the tail, not a new underlying segment.
     ASSERTop(underlying.allocations, ==, 1);
     ASSERTop(pool.used_memory, ==, int64(large * 4 + 4096));
-    ASSERT(pool.share_with(4096, ids[4]));
+    ASSERT(pool.share_with(4096, ids[4], 0));
     pool.free(pointers[4], 4096, ids[4]);
     ASSERTop(pool.used_memory, ==, int64(large * 4 + 4096));
     // Exercise small->large and large->small neighboring coalesces, then
@@ -143,7 +143,7 @@ JIT_TEST(sfrl_allocator_share) {
                     std::swap(temp[j], temp[rand() % j]);
                 if (rand() % 10 != 0 && j > 0) {
                     id[j] = id[rand() % j];
-                    allocator->share_with(tasks[i].size, id[j]);
+                    allocator->share_with(tasks[i].size, id[j], 0);
                 } else {
                     allocator->alloc(tasks[i].size, id[j]);
                 }
@@ -177,7 +177,7 @@ JIT_TEST(sfrl_allocator_share_without_size_and_ptr) {
                     std::swap(temp[j], temp[rand() % j]);
                 if (rand() % 10 != 0 && j > 0) {
                     id[j] = id[rand() % j];
-                    allocator->share_with(0, id[j]);
+                    allocator->share_with(0, id[j], 0);
                 } else {
                     allocator->alloc(tasks[i].size, id[j]);
                 }
