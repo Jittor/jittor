@@ -1546,6 +1546,36 @@ kernel has launched yet when the context dies -- the `[trishape]` trace prints
 exactly once per rank, at the first denoise kernel, and that kernel already
 reports the poisoned context.
 
+## 25. `transpose`'s strides are *not* a lie, and "fixing" them breaks it
+
+The next hypothesis was that the shim misreports strides for views -- `x.transpose(0,1)`
+on a `(2,4,16)` tensor reports `stride=(32,16,1)`, `is_contiguous() == True`, where a
+lazy view would have `(16,64,1)` -- and that a consumer reading `.stride()` (a cublas
+leading dimension, an extension laying out a kernel) would walk out of bounds. The
+reasoning was wrong, and two cheap measurements show it:
+
+    x ptr=0x7ef989624200   t ptr=0x7ef989624400   same=False
+    t=[[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]]        # a (2,3) tensor transposed: correct
+    t stride=(2, 1) contig=True                   # correct for that materialized copy
+
+CUDA's transpose is **eager**: `cutt_transpose` (registered as `OpCapability::Transpose`)
+computes a fresh row-major buffer, so the output's contiguous strides are exactly right.
+No lying strides, no out-of-bounds read from this, hypothesis withdrawn.
+
+**And the attempted fix was reverted, because it broke the op.** Adding
+`y->set_storage_strides(<permuted strides>)` to `TransposeOp::infer_shape` (mirroring
+`reshape`/`getitem`) made the op declare a *transposed* layout for a buffer the
+execution path had written *contiguously*, and the values came back wrong:
+
+    before fix: t=[[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]]
+    with fix:   t=[[1.0, 5.0], [4.0, 3.0], [2.0, 6.0]]
+
+It is reverted in both trees and the core rebuilt; the roundtrip is exact again. The
+generalisable lesson, since this is easy to repeat: `set_storage_strides` describes how
+the *producer writes the bytes*, so it may only be used by an op whose execution really
+leaves the data strided. A materializing op that declares strided metadata hands every
+later consumer a wrong layout.
+
 ## Verification
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails
@@ -1606,6 +1636,9 @@ reports the poisoned context.
   `TestPackedEntryDeviceGuard`.
 
 - 21: the shape trace above, from a 4-step 256x256 request on two cards.
+- 25: pointer comparison + values + strides for `transpose` on CUDA (materialized
+  copy, correct contiguous strides), and the same check after the reverted attempt,
+  which is how the wrong-values regression was caught.
 - 24: `py-spy dump` on the rank-1 worker across the request window: three
   threads, only the main one in the graph.
 - 23: `probe_loader_migrate.py` with and without `SERIALISE=1` (fails / passes with
