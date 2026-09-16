@@ -868,6 +868,27 @@ not use that accessor, or the stream is not the mechanism. Next: check what the
 extension actually calls to obtain its stream (`grep -n 'CUDAStream\|cudaStream'
 csrc/` in the flash-attention checkout) before trying another fix on this axis.
 
+**A second candidate tried and disproved.** `torch::Tensor::device()` and
+`get_device()` hardcoded index 0 for CUDA tensors
+(`compat/shim/cpp_extension/include/torch/extension.h:228-231`), and the
+flash-attn extension guards every launch with
+`at::cuda::CUDAGuard device_guard{q.device()}` -- so a device-1 tensor would have
+bound device 0. That is the right *shape* of explanation, but reporting the Var's
+real `device_id` (`vh_device_index`, added in `jtorch_aten.cu`) **did not fix it**
+either: after a 30-minute forced rebuild, `device 0 packed/dense OK` and
+`device 1 FAILED cudaErrorIllegalAddress` are unchanged. Reverted in both trees,
+recorded so it is not retried.
+
+Two fixes tried, two disproved -- both were device-binding hypotheses, and both
+left the fault identical. That is evidence the fault is not "the launch happened
+on the wrong device": the extension works on index 0 and fails on any other index
+even though jittor's own device-1 work, a triton kernel on device 1, the
+materialised inputs, `cu_seqlens`, contiguity, strides and the ambient device have
+all been measured correct. The next session should stop guessing at device binding
+and read the extension's kernel-side setup for a per-device resource instead
+(`csrc/flash_attn/flash_api.cpp` around the launch, and `run_mha_fwd`), since the
+seconds-long repro makes each attempt cheap.
+
 **Next instrument, prepared but not yet run.** The event-handle defect needs the
 handle's provenance: log device + handle at `create_event`, `destroy_event` and
 `record_event` (`backends/cuda/runtime/driver.cc`, `record_event` is where the
