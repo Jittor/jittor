@@ -1479,6 +1479,45 @@ They are identical and device-resident, so the "garbage/stale index buffer" read
 is withdrawn for good -- the request-path fault is elsewhere in that block, after
 the all-gather whose arguments section 21 already verified.
 
+## 23. The threaded op-construction race is confirmed, and it is around `contiguous`
+
+Section 22 ended with the four-thread probe failing at
+`fused_op.cc:89: [check failed: outputs().size()]`. That is now pinned:
+
+    probe_loader_migrate.py, 4 threads, no serialisation
+      -> 4 threads FAILED: fused_op.cc:89: [check failed: outputs().size()]
+    probe_loader_migrate.py, 4 threads, SERIALISE=1 (an RLock around each worker)
+      -> 4 threads OK
+
+So concurrent op construction from several Python threads corrupts jittor's fused
+batch -- the graph is single-threaded by design and the shim is the layer that lets
+a multi-threaded host library (vLLM's four-thread safetensors loader) drive it.
+`fused_op.cc` builds the fused op's outputs from `var_stays_in_memory(...)`, a
+verdict that comes from executor/batch state, so another thread's construction
+inside that window leaves the batch with no outputs at all.
+
+**And the request-path fault is bracketed by the same op.** In the run right after
+the `ArrayOp` fix (loading clean, request reaching the denoise loop) the last
+launches before the device-1 fault are
+
+    cublas_matmul   vllm/model_executor/layers/utils.py:98      (a linear)
+    getitem x2      vllm/distributed/utils.py:119               (torch.split)
+    reshape         group_coordinator.py:244
+
+i.e. vLLM's TP `split_tensor_along_last_dim` -- `torch.split(...)` then
+`tuple(chunk.contiguous() ...)` -- feeding a linear. `contiguous` is exactly the op
+the four-thread probe corrupts, so the leading explanation for the remaining
+request-path fault is the same race, surfacing as a null/invalid storage that the
+next cublas read dereferences instead of as the clean `outputs().size()` check.
+
+**Next step, then:** serialise op construction at the shim's boundary. jittor
+already has the per-thread recursive lock that does this for executor entry
+(`ExecutorEntryScope`, `src/runtime/executor_entry.h`), but it is C++-only, so the
+shim needs its own lock on the entry points a weight load goes through --
+`torch.tensor`/the factories and `Tensor.copy_`/`narrow`/indexing -- and then the
+same probe plus a TP2 request to verify. Section 22's measurement stands: this is
+not the index buffers, whose metadata is identical on both ranks.
+
 ## Verification
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails
@@ -1539,6 +1578,9 @@ the all-gather whose arguments section 21 already verified.
   `TestPackedEntryDeviceGuard`.
 
 - 21: the shape trace above, from a 4-step 256x256 request on two cards.
+- 23: `probe_loader_migrate.py` with and without `SERIALISE=1` (fails / passes with
+  four threads), and the launch list of the post-`ArrayOp` TP2 run, which names
+  `torch.split` + `contiguous` immediately before the fault.
 - 22: `probe_loader_migrate.py` -- the single-threaded phase segfaults in
   `jittor::ArrayOp::run` before the fix and passes after; `tests/core/test_array.py`
   covers the guarded path; a TP2 run loaded both ranks with zero illegal addresses.
