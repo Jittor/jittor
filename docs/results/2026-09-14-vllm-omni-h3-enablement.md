@@ -850,6 +850,24 @@ the shim's own cpp_extension on device 1 is the comparison, and the fix is centr
 and probably small) versus something the flash-attn extension caches at load. That
 is a few seconds per run now, not seven minutes.
 
+**A candidate fix tried and disproved.** The obvious suspect was
+`compat/shim/cpp_extension/include/c10/cuda/CUDAStream.h`, which ignored the device
+and returned the legacy default stream:
+
+    inline CUDAStream getCurrentCUDAStream(int = -1) { return CUDAStream((cudaStream_t)0); }
+
+Handle 0 is the *current context's* legacy stream, so an extension running on
+device 1 would launch on a device-0-context stream while its pointers belong to
+device 1 -- and memcheck reports no invalid data access, which fits. It was
+changed to return `cudaStreamPerThread` for the device the caller names, binding
+that device first, and the flash-attn extension was force-rebuilt
+(`JITTOR_FLASH_ATTN_FORCE_BUILD=1`, ~30 min). **It did not fix it**: device 0 still
+passes and device 1 still fails with the same illegal address. The change is
+reverted in both trees rather than left in unverified. So either the extension does
+not use that accessor, or the stream is not the mechanism. Next: check what the
+extension actually calls to obtain its stream (`grep -n 'CUDAStream\|cudaStream'
+csrc/` in the flash-attention checkout) before trying another fix on this axis.
+
 **Next instrument, prepared but not yet run.** The event-handle defect needs the
 handle's provenance: log device + handle at `create_event`, `destroy_event` and
 `record_event` (`backends/cuda/runtime/driver.cc`, `record_event` is where the
