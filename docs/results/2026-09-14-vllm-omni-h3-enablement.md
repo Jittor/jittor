@@ -1303,6 +1303,48 @@ remaining difference is not the call itself but the state the server is in when 
 makes it: two ranks holding tens of GB each, after a multi-threaded sharded load,
 on device 1 only. That is the next thing to reproduce.
 
+## 20. The generated direct attention entries pinned the launch to device 0
+
+The request-path fault of section 13 has one more layer, and it was in jittor's own
+code generator rather than in the extension.
+
+Official flash-attn's dense entry guards its launch with the input's device
+(`at::cuda::CUDAGuard device_guard{q.device()}` in `csrc/flash_attn/flash_api.cpp`).
+The shim generates six direct entries of its own
+(`compat/shim/backends/flash_attention/official_codegen.py`: `fwd`, `varlen_fwd`,
+`varlen_qkvpacked_fwd`, `varlen_kvpacked_fwd`, `qkvpacked_fwd`, `kvpacked_fwd`) and
+every one of them emitted
+
+    at::cuda::CUDAGuard device_guard{0};
+
+so a call with device-1 tensors launched device 0's kernel against device 1's
+pointers. Index 0 worked; every non-zero index died with
+`cudaErrorIllegalAddress` -- rank 1's text encoder, ten seconds into the request.
+
+**Why the earlier probes missed it.** The direct entries are only used when
+`_grad_enabled()` is false, i.e. in inference. Every probe so far ran with grad
+enabled, so `--triton or native` attention took a *different* implementation and
+the packed entries were never called. Turning on `jt.flags.no_grad = 1` in
+`probe_encoder_sdpa.py` (same shapes, transposed views, GQA expansion, rotary,
+causal, head dim 128, 32/4 heads, fp16 and bf16) reproduced the server's fault on
+device 1 immediately, and the same command passes on devices 0 and 1 after the
+six guards were changed. `H3_FA_TRACE=1` in the adapter prints the tensors each
+direct call receives, which is how the two paths were told apart.
+
+**Verified.** `probe_encoder_sdpa.py` with `no_grad`: device 0 and device 1 both
+pass (before: device 0 passed, device 1 raised `cudaErrorIllegalAddress`).
+`compat/tests/torch/test_flash_attn_compat.py::TestPackedEntryDeviceGuard` asserts
+the generated source contains no `device_guard{0}` and that each of the six
+entries derives its guard from an input tensor.
+
+**Still intermittent, and separate.** Weight loading on rank 1 sometimes dies with
+the same `cudaErrorIllegalAddress` before the request: `safetensors.get_tensor` ->
+`jt.array` is where it surfaces, the launch list names the TP weight loaders, and
+it happens with and without `CUDA_LAUNCH_BLOCKING=1` (so it is a race, not a
+serialization artifact) and on cards with ~95 GB free (so it is not memory
+pressure). A single-threaded and an 8-thread replay of every loader pattern at the
+real sizes passes, so it needs the server's own multi-threaded load context.
+
 ## Verification
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails
@@ -1356,6 +1398,11 @@ on device 1 only. That is the next thing to reproduce.
   every rank has read the id) and a TP2 start that previously failed ~1 run in 3
   now came up, loaded the sharded weights and served a request. The request fault
   above is still open.
+
+- 20: `probe_encoder_sdpa.py` under `no_grad` -- the condition that reaches the
+  generated entries -- fails on device 1 before the six guards are fixed and
+  passes on devices 0 and 1 after; the generator's output is asserted directly by
+  `TestPackedEntryDeviceGuard`.
 
 Each fix was synced into the lab venv at
 `$JITTOR_LAB_ROOT/_state/h3/venv-jittor/lib/python3.12/site-packages/jittor/`,
