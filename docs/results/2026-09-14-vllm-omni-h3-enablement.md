@@ -692,12 +692,18 @@ was not is mechanical: widening the virtual to
 
     bool share_with(size_t size, size_t allocation, size_t offset = 0)
 
-requires **every** override to move with it in the same commit --
-`SFRLAllocator` (`sfrl_allocator.h/.cc`), `CudaDualAllocator` and `DelayFree`
-(`src/mem/allocator/cuda_dual_allocator.h`, both declaration and definition) --
-and the call site in `Var::alloc` must pass `share_offset`. Widening only
-`allocator.h` + `sfrl_allocator.h` leaves the other two marked `override` without
-a matching base, and the build stops with
+requires **every** override to move with it in the same commit. There are five,
+across four headers, plus one call site:
+
+    src/mem/allocator.h:55                            the virtual (add offset)
+    src/mem/allocator/sfrl_allocator.h:150            SFRLAllocator (+ .cc def)
+    src/mem/allocator/cuda_dual_allocator.h:67        CudaDualAllocator
+    src/mem/allocator/cuda_dual_allocator.h:97        DelayFree
+    src/mem/allocator/foreign_allocator.h:17          ForeignAllocator (+ .cc)
+    src/mem/allocator/shared_allocator.h:50           SharedAllocator
+    src/core/var.cc                                   Var::alloc passes share_offset Widening only
+`allocator.h` + `sfrl_allocator.h` leaves the rest marked `override` without a
+matching base, and the build stops with
 
     error: 'bool jittor::CudaDualAllocator::share_with(size_t, size_t)'
            marked 'override', but does not override
