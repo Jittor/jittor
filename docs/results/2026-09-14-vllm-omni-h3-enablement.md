@@ -669,6 +669,12 @@ front line, not from this section's earlier lists):
    denoise loop after fix 2 and both die here; the no-flash/no-offload config
    instead runs out of memory. The fix-2 verification and this verdict come from
    the same runs, so the front line is unambiguous.
+   **Not tied to the offload after all** -- a no-offload TP2 run at 512x512
+   (text encoder TP-sharded, `OFFLOAD=`) fails with it too, earlier in the
+   pipeline (~10 s, before the denoise loop, i.e. in prompt encoding). With the
+   offload on it was reached only later, in the denoise loop, which is what made
+   the offload look implicated; the earlier reasoning that the layer offload's
+   `param.data =` swap is the trigger is therefore withdrawn.
 1. `cudaErrorIllegalAddress` on rank 1 in the flash-attn + layer-offload config,
    now that the run gets into the denoise loop. This is the class the earliest
    TP2 attempts hit; with the event fault gone it is the first thing the request
