@@ -830,6 +830,26 @@ establishing before touching the extension: bisect the probe to the copy alone
 itself. `probe_side_streams.py` copied across devices without faulting, so the
 difference between the two scripts is the thing to pin down.
 
+**Two seconds-long bisections that finish the isolation.** First, the copy path
+is innocent -- `probe_dev1_copy.py` does only jittor's own work on device 1 and
+every step passes:
+
+    to_device(1) OK | op on device 1 OK | device 1 -> 0 OK | big fp16 to_device(1) OK
+
+so the launch list naming `device_copy` was just naming the most recent op.
+Second, it is not the packed path either -- the **dense** entry fails the same way:
+
+    DENSE dev=0 OK mean=1.0000
+    DENSE dev=1 FAILED cudaErrorIllegalAddress
+
+So the characterization is now: *jittor's own device-1 work is fine, and the
+bridged flash-attn boundary faults for both entries whenever the CUDA device index
+is non-zero, on either card.* The remaining bisection is which side of that
+boundary: the shim's generic extension machinery (in which case a triton kernel or
+the shim's own cpp_extension on device 1 is the comparison, and the fix is central
+and probably small) versus something the flash-attn extension caches at load. That
+is a few seconds per run now, not seven minutes.
+
 **Next instrument, prepared but not yet run.** The event-handle defect needs the
 handle's provenance: log device + handle at `create_event`, `destroy_event` and
 `record_event` (`backends/cuda/runtime/driver.cc`, `record_event` is where the
