@@ -644,6 +644,36 @@ NCCL extension compiles from the *deployed* sources and is cached under
 `JITTOR_HOME/.cache/.../custom_ops/`, so a fix must be copied there and that
 cache invalidated before a rebuild picks it up.
 
+**Fix 2 landed and verified: the event-handle fault is gone.** The handle trace
+settled it: the failing `cudaEventRecord` had a *valid* event (created on device 1,
+recorded successfully ten times before, destroyed only after the fault), so the
+invalid resource was not a stale handle; and substituting the device's compute
+stream for the null one still failed, so it was not only the stream either. The
+cause is that `on_device_void` drives jittor's own device switch
+(`ops.set_device = accelerator_set`) and not a raw `cudaSetDevice`, so a thread
+whose CUDA context is still the process default records a device-1 event on a
+device-0 context -- which CUDA rejects while jittor's own
+`CHECK(event.device.index == stream.device.index)` passes. `record_event` now
+resolves a null stream to the device's compute stream and calls `cudaSetDevice`
+explicitly, as `nccl_init` already did. Two independent verifications: the
+no-flash/no-offload config went from `fused operator(0/35)` to `(24/34)` with no
+`InvalidResourceHandle` (237 successful rebinds), and the flash+offload config
+reached the denoise loop. Committed as its own change.
+
+**What is still open, after that fix** (so the next session starts from the real
+front line, not from this section's earlier lists):
+
+1. `cudaErrorIllegalAddress` on rank 1 in the flash-attn + layer-offload config,
+   now that the run gets into the denoise loop. This is the class the earliest
+   TP2 attempts hit; with the event fault gone it is the first thing the request
+   trips.
+2. Out of memory in the no-offload + text-encoder-TP config at 832x480 (66.4 GiB
+   resident per rank of 97 GiB, so the DiT activations have no headroom). A
+   memory-budget question, not a correctness one.
+3. The two intermittent startup failures: the TCPStore rendezvous (~1 in 3 runs)
+   and the sub-group communicator init. `run_tp2_probe.sh` retries past them so
+   they do not block diagnosis, but they are unfixed.
+
 **Next instrument, prepared but not yet run.** The event-handle defect needs the
 handle's provenance: log device + handle at `create_event`, `destroy_event` and
 `record_event` (`backends/cuda/runtime/driver.cc`, `record_event` is where the
