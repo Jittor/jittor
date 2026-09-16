@@ -686,6 +686,29 @@ front line, not from this section's earlier lists):
    and the sub-group communicator init. `run_tp2_probe.sh` retries past them so
    they do not block diagnosis, but they are unfixed.
 
+**The remaining fix, spelled out so it is one step next time.** The range-checked
+variant of `share_with` is the one that should be landed, and the only reason it
+was not is mechanical: widening the virtual to
+
+    bool share_with(size_t size, size_t allocation, size_t offset = 0)
+
+requires **every** override to move with it in the same commit --
+`SFRLAllocator` (`sfrl_allocator.h/.cc`), `CudaDualAllocator` and `DelayFree`
+(`src/mem/allocator/cuda_dual_allocator.h`, both declaration and definition) --
+and the call site in `Var::alloc` must pass `share_offset`. Widening only
+`allocator.h` + `sfrl_allocator.h` leaves the other two marked `override` without
+a matching base, and the build stops with
+
+    error: 'bool jittor::CudaDualAllocator::share_with(size_t, size_t)'
+           marked 'override', but does not override
+
+which is what happened. With the whole set changed, the check
+`if (offset + size > block->size) return false;` makes a request whose range no
+longer fits the block the allocation id names fall through to the
+independent-allocation path instead of aliasing it -- which is the use-after-free
+behind the illegal address. Verify with `probe_split_alias.py` (seconds, no
+server) and then one `run_tp2_probe.sh` cycle.
+
 **Next instrument, prepared but not yet run.** The event-handle defect needs the
 handle's provenance: log device + handle at `create_event`, `destroy_event` and
 `record_event` (`backends/cuda/runtime/driver.cc`, `record_event` is where the
