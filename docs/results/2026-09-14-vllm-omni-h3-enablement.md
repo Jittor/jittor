@@ -386,16 +386,17 @@ The first three are fixed; the fourth is new work, described at the end:
    `JITTOR_TORCH_KEEP_TMPDIR=1` (the shim's own escape hatch, otherwise
    undocumented here) is the fix.
 
-   The rendezvous timeout above is **orphaned workers, not the store**. Killing
-   a server by matching the port string reaches only the parent -- the
-   `DiffusionWorker` children do not carry `--port` in their argv -- so they
-   survive holding `MASTER_PORT`, and the next run's rank 1 rendezvouses with
-   the orphan's store and waits for a `set` that will never come. It is
-   intermittent precisely because it depends on whether the previous run was
-   cleaned up properly. `stop-vllmomni.sh` (walk the process tree from the
-   parent, then clear `/tmp/jittor-nccl-*`) is the fix; the per-group files are
-   named after `MASTER_ADDR`-`MASTER_PORT` alone, so a rerun on the same port
-   must not inherit them either.
+   The rendezvous timeout above is **orphaned workers, not the store** -- at
+   least for the first occurrences. Killing a server by matching the port string
+   reaches only the parent -- the `DiffusionWorker` children do not carry
+   `--port` in their argv -- so they survive holding `MASTER_PORT`, and the next
+   run's rank 1 rendezvouses with the orphan's store and waits for a `set` that
+   will never come. `stop-vllmomni.sh` (walk the process tree from the parent,
+   then clear `/tmp/jittor-nccl-*`) is the fix; the per-group files are named
+   after `MASTER_ADDR`-`MASTER_PORT` alone, so a rerun on the same port must not
+   inherit them either. It kept happening after that fix, though, and the
+   thread-level evidence below is what the *remaining* cases look like -- a
+   different mechanism with the same message, so do not stop at this paragraph.
 
 **Where TP2 stands.** With all four addressed, a `--num-gpus 2 --tensor-parallel-size 2`
 server **starts and serves**: both ranks create their groups with no NCCL error,
@@ -446,7 +447,47 @@ What is left is something below the arguments: the illegal access is raised on
 rank 1 with `device=1` and surfaces device-wide (sticky, at the next
 `cudaMemGetInfo`), so the recorded stack is a candidate list, not proof. The
 next tool for it is `compute-sanitizer` on a TP2 run, which is decisive about
-*which* launch faults and is where this stops for now.
+*which* launch faults.
+
+**The illegal address is not the attention bridge.** `--tensor-parallel-size 2`
+with `TORCH_SDPA` -- no flash-attn involved at all -- fails the same way
+(`cudaErrorIllegalAddress`, rank 1, first denoise step). The stack moves with the
+backend, so both stacks are downstream of something shared; with SDPA it reads
+
+    denoise_loop.py:335 -> minimax_h3_transformer.py:1542 -> :899
+    -> attention/ops/minimax_h3_modulation.py:258 rms_norm_indexed_scale_shift
+    -> :21 _launch_row_chunks -> triton -> compat/triton/backend.py:1102
+
+and `backend.py:1102` is `jt.sync_all(True)`, i.e. where jittor *notices* the
+fault, not where it happened. Worth noting for whoever picks this up: the kernel
+that line launches, `_indexed_scale_shift_kernel`, masks columns but **not
+rows** (`row = tl.program_id(0)`, unmasked `indices_ptr + row * stride`), so any
+disagreement between the grid's `rows` (taken from `x.shape`) and the row count
+of `indices`/`shift`/`scale` is an unmasked out-of-bounds access. That is a
+hypothesis to test, not a finding -- the same caveat as above applies.
+
+**The rendezvous flake, from the threads rather than from the message.** A hung
+TP2 start (`py-spy dump`, both ranks) shows it is *not* an orphaned store and
+*not* a slow rank:
+
+    rank 0 (pid 1145000) MainThread:  _init_nccl_from_store (compile_extern.py:684)
+                                      -> nccl_init_with_unique_id(...)
+                        Thread-1: _accept_loop (accept)
+                        Thread-2: _serve_connection (socket write)
+                        Thread-3: _serve_connection (readline, idle)
+    rank 1 (pid 1145002) MainThread:  get (store.py:342) -> request (store.py:271)
+                                      -> readinto (socket.py:720)
+
+Rank 0 is already **past** its `store.get` and building the communicator, so the
+key *is* in the server's store; rank 1 has only a client thread and is waiting
+for the response. `ss` shows both connections ESTABLISHED with Send-Q and
+Recv-Q zero on both sides, and no server thread sits in `_dispatch`. So the
+bytes for that `get` are not in flight and no handler is running, which rules
+out "rank 0 never set the key" -- the earlier orphan-port story explained the
+*first* occurrences and does not explain this one. The remaining suspect is the
+request/response framing between `_TCPStoreClient.request` and
+`_serve_connection` (statically each pair looked balanced), and the way to settle
+it is a per-request trace in those two functions on a hung run.
 
 **Do not reuse a per-step number for TP2.** The loop's progress bar reached
 `0/7` before the fault, so there is no measured TP2 step time. An earlier
