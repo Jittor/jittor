@@ -6,17 +6,23 @@ from ..._runtime.dispatch import register_kernel, select_kernel
 
 from ..base import (
     Optimizer, _grad_matches_param, _param_requires_grad,
-    _update_preserve_dtype,
+    _update_preserve_dtype, _optimizer_arithmetic,
 )
 
 def sgd_update(param, grad, velocity, *, lr, momentum=0, weight_decay=0,
                dampening=0, nesterov=False):
     """Native SGD arithmetic shared by full parameters and FSDP shards."""
-    dp = grad if weight_decay == 0 else param * weight_decay + grad
-    if momentum == 0 and dampening == 0 and not nesterov:
-        return param - dp * lr
-    _update_preserve_dtype(velocity, momentum * velocity + dp * (1 - dampening))
-    return param - (dp + momentum * velocity if nesterov else velocity) * lr
+    without_velocity = momentum == 0 and dampening == 0 and not nesterov
+    tensors = (param, grad) if without_velocity else (param, grad, velocity)
+    add, multiply, _, subtract = _optimizer_arithmetic(
+        tensors, (lr, momentum, weight_decay, dampening))
+    dp = grad if weight_decay == 0 else add(multiply(param, weight_decay), grad)
+    if without_velocity:
+        return subtract(param, multiply(dp, lr))
+    _update_preserve_dtype(velocity, add(
+        multiply(momentum, velocity), multiply(dp, (1 - dampening))))
+    update = add(dp, multiply(momentum, velocity)) if nesterov else velocity
+    return subtract(param, multiply(update, lr))
 
 
 def _momentum_buffer(param):
@@ -113,7 +119,7 @@ class SGD(Optimizer):
             # than quietly changing that. `v` is then left at whatever it held;
             # turning momentum on later resumes from zeros, which is what this
             # optimizer has always started from.
-            active = [(p, g, v) for p, g, v in zip(pg["params"], pg["grads"], pg["values"])
+            active = [(p, g, v) for p, g, v in zip(pg["params"], pg.get("grads", ()), pg["values"])
                       if _param_requires_grad(p) and _grad_matches_param(p, g)]
             if not active:
                 continue

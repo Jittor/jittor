@@ -6,7 +6,7 @@ from ..._runtime.dispatch import register_kernel, select_kernel
 
 from ..base import (
     Optimizer, _grad_matches_param, _param_requires_grad,
-    _update_preserve_dtype,
+    _update_preserve_dtype, _optimizer_arithmetic,
 )
 
 
@@ -40,21 +40,28 @@ def adam_update(param, grad, value, momentum, *, lr, eps, weight_decay,
     AdamW put it after scaling; keep that policy explicit at the call site.
     """
     b0, b1 = betas
+    add, multiply, divide, subtract = _optimizer_arithmetic(
+        (param, grad, value, momentum), (lr, eps, weight_decay, b0, b1),
+        enabled=torch_math)
     if weight_decay != 0 and decoupled_weight_decay:
-        param = (param * (1 - lr * weight_decay)).cast(param.dtype)
+        param = multiply(param, (1 - lr * weight_decay)).cast(param.dtype)
     elif weight_decay != 0 or not torch_math and not decoupled_weight_decay:
-        grad = grad + param * weight_decay
-    _update_preserve_dtype(momentum, b0 * momentum + (1 - b0) * grad)
-    _update_preserve_dtype(value, b1 * value + (1 - b1) * grad * grad)
+        grad = add(grad, multiply(param, weight_decay))
+    _update_preserve_dtype(momentum, add(
+        multiply(b0, momentum), multiply((1 - b0), grad)))
+    _update_preserve_dtype(value, add(
+        multiply(b1, value), multiply(multiply((1 - b1), grad), grad)))
     if torch_math or decoupled_weight_decay:
         correction = (1 - b1 ** float(step)) ** 0.5
         scalar = (jt.array(correction, dtype="float32" if dtype_name(value.dtype) == "bfloat16"
                            else value.dtype).cast(value.dtype).stop_grad()
                   if torch_math else jt.sqrt(1 - b1 ** float(step)))
-        denom = jt.sqrt(value) / scalar + eps
-        return param - momentum * (lr / (1 - b0 ** float(step))) / denom
+        denom = add(divide(jt.sqrt(value), scalar), eps)
+        return subtract(param, divide(
+            multiply(momentum, (lr / (1 - b0 ** float(step)))), denom))
     step_size = lr * jt.sqrt(1 - b1 ** float(step)) / (1 - b0 ** float(step))
-    return param - momentum * step_size / (jt.sqrt(value) + eps)
+    return subtract(param, divide(
+        multiply(momentum, step_size), add(jt.sqrt(value), eps)))
 
 
 class Adam(Optimizer):

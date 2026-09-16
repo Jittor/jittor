@@ -8,6 +8,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import collections as _collections_data
 import concurrent.futures as _futures_data
 import itertools as _itertools_data
+import numbers as _numbers_data
 import threading as _threading_data
 
 import jittor as jt
@@ -242,7 +243,44 @@ class _SingleProcessDataLoaderIter(_BaseDataLoaderIter):
 
     def __next__(self):
         batch_indices = next(self._batch_iter)
-        return self._loader.collate_fn([self._loader.dataset[i] for i in batch_indices])
+        return _fetch_batch(self._loader, batch_indices)
+
+
+def _fetch_batch(loader, batch_indices):
+    dataset = loader.dataset
+    if (type(dataset) is _TensorDataset and loader.collate_fn is _default_collate
+            and isinstance(batch_indices, (list, tuple)) and batch_indices
+            and all(isinstance(index, _numbers_data.Integral)
+                    and not isinstance(index, bool) for index in batch_indices)):
+        from ..tensor_state import compatibility_owner
+        g = compatibility_owner(jt)
+        tensor_types = (g.Tensor, g.nn.Parameter)
+        size = len(dataset)
+        if all(type(tensor) in tensor_types and len(tensor) == size
+               and tensor.device.type != "meta"
+               and jt.core.dispatch_context([tensor])[0] in ("cpu", "cuda")
+               for tensor in dataset.tensors) and all(
+                   -size <= index < size for index in batch_indices):
+            from ..frontend import tensor_frontend
+            # One gather is equivalent to stacking individual rows, including
+            # repeated indices' scatter-add gradients, without the per-row
+            # view/unsqueeze/setitem graph built by default collation.
+            indices_by_device = {}
+            result = []
+            for tensor in dataset.tensors:
+                device = tensor.device
+                key = (device.type, device.index)
+                if key not in indices_by_device:
+                    indices_by_device[key] = g.tensor(
+                        batch_indices, dtype=g.int64, device=device)
+                index = indices_by_device[key]
+                if tensor._storage_is_contiguous():
+                    with tensor_frontend(g.Var, like=tensor):
+                        result.append(tensor.getitem(index))
+                else:
+                    result.append(tensor[index])
+            return result
+    return loader.collate_fn([dataset[index] for index in batch_indices])
 
 
 class _WorkerInfo:
@@ -305,8 +343,7 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
         self._fill()
 
     def _fetch(self, batch_indices):
-        loader = self._loader
-        return loader.collate_fn([loader.dataset[i] for i in batch_indices])
+        return _fetch_batch(self._loader, batch_indices)
 
     def _fill(self):
         want = self._num_workers * self._prefetch
