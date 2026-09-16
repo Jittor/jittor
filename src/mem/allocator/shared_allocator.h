@@ -62,7 +62,13 @@ struct SharedAllocator final : Allocator {
         return pointer;
     }
 
-    bool share_with(size_t size, size_t allocation, size_t offset) override {
+    // `offset` keeps the base class's default. An override does not inherit
+    // one, so without it this method had two calling conventions: three
+    // arguments through a `SharedAllocator` and two through an `Allocator*`.
+    // Code holding the concrete type -- a test, or any caller that knows what
+    // it built -- then failed to compile with "no matching function for call
+    // to share_with(int, size_t&)", naming a method that is right there.
+    bool share_with(size_t size, size_t allocation, size_t offset = 0) override {
         if (!allocation) return size == 0;
         std::lock_guard<std::recursive_mutex> lock(mutex);
         auto it = blocks.find(allocation);
