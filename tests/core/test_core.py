@@ -9,6 +9,7 @@ from _helpers import capability as _test_capability
 import unittest
 import jittor as jt
 import numpy as np
+import re
 import os
 from _helpers.assertions import expect_error
 
@@ -257,23 +258,42 @@ class TestCore(unittest.TestCase):
             y = a(x)
             sgd.step(y*y)
             jt.sync_all()
-        orders = []
+        # Find each layer's update by the *identity* of the Var it produced.
+        #
+        # This used to select the log lines containing "weight" and parse
+        # `fused N/M` out of them. Both anchors are gone: Var names are no
+        # longer written back by `parameters()` (830272fc removed that -- a
+        # query used to mutate the model, and the checkpoint keys then depended
+        # on which level of the tree called `parameters()` first), and the
+        # executor prints `Op(<name> N/M)`, which is only ever "fused ..." when
+        # the op actually fused. The filter therefore matched nothing and the
+        # test asserted on an empty list -- and, failing, kept its frame and so
+        # its ten Linears alive, which is what made `test_number_of_hold_vars`
+        # see 42 held vars afterwards.
+        #
+        # After `step`, each `weight` holder points at a new Var, and exactly
+        # one finished op produced it. That identity is what this test is
+        # about, and it cannot go stale the way a name can.
+        updated = [int(re.search(r"Var\((\d+):", m.weight.debug_msg()).group(1))
+                   for m in a]
+        order_of = {}
         for l in logs:
             msg = l["msg"]
-            if "Finished" in msg:
-                # print(msg)
-                if "weight" in msg:
-                    # One output is the parameter itself. Plain SGD writes only
-                    # that -- it keeps no velocity buffer when momentum is 0 --
-                    # so this counts the op, and the order checks below are what
-                    # the test is actually about.
-                    assert msg.count("Var") >= 1
-                    order = int(msg.split('fused ')[1].split("/")[0])
-                    # print(order)
-                    orders.append(order)
-        assert len(orders) == 10, orders
+            if "Finished" not in msg:
+                continue
+            produced = {int(v) for v in re.findall(r"Var\((\d+):", msg)}
+            for layer, var_id in enumerate(updated):
+                if var_id in produced:
+                    order_of[layer] = int(
+                        re.search(r"Op\([^)]*?(\d+)/\d+\)", msg).group(1))
+        assert len(order_of) == 10, sorted(order_of.items())
+        # Backward order: the last layer's parameter is ready first. What is
+        # pinned is that the executor does not defer an update behind unrelated
+        # work -- layer 9 lands early and each earlier layer follows within a
+        # few ops of it.
+        orders = [order_of[9 - i] for i in range(10)]
         for i in range(10):
-            assert orders[i] <= 14+i*3
+            assert orders[i] <= 14 + i * 3, orders
 
     def test_bc_bug(self):
         a = jt.zeros((1,1))
