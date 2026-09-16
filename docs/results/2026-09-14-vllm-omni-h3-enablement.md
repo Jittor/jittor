@@ -765,6 +765,28 @@ routing the packed path through the non-packed entry
 (`JITTOR_FLASH_ATTN_DIRECT_PACKED=0`) -> 25 s. Do not retry either; the next
 session should start from a fresh hypothesis about the packed call on rank 1.
 
+**Five hypotheses measured away** (do not repeat these):
+
+- *offload-related* -- `OFFLOAD=` reproduces it, earlier.
+- *wrong ambient device at the extension boundary* -- at the packed call on
+  rank 1: `jt_current=1`, `shim_current=1`, and every argument is either
+  `loc=none` (lazy q/k/v) or `loc=device` (`cu_seqlens`). Nothing host-resident,
+  and `torch::empty_like` therefore allocates on the right device.
+- *invalid NCCL device index* -- measured at bootstrap: rank 1 has
+  `CVD='4,5'`, `visible_n=2`, `jt_device_count=2`, `jt_current=1`, and
+  `nccl_device_id = 1 % 2 = 1`, all valid.
+- *device binding in the packed branch* (`torch.cuda.set_device(rank)`) -- 25 s,
+  worse than the 145 s baseline.
+- *the non-packed entry* (`JITTOR_FLASH_ATTN_DIRECT_PACKED=0`) -- 25 s, worse.
+
+And `compute-sanitizer --tool memcheck` on a run that reaches the failure reports
+**no invalid memory access at all** -- only three `cudaErrorNoKernelImageForDevice`
+inside NCCL's `ncclInitKernelsForDevice`, which persists even though the device
+index is valid. So this illegal address is not a data access memcheck can see.
+That, plus the "second device only" signature, is what narrowed the next step to
+synchronous launches (`CUDA_LAUNCH_BLOCKING=1`), which attribute a fault to the
+launch immediately before it.
+
 **Next instrument, prepared but not yet run.** The event-handle defect needs the
 handle's provenance: log device + handle at `create_event`, `destroy_event` and
 `record_event` (`backends/cuda/runtime/driver.cc`, `record_event` is where the
