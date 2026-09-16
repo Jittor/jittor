@@ -61,4 +61,16 @@ def logsumexp(x, dim, keepdims=False, keepdim=False):
     keep = keepdim or keepdims
     maximum = jt.max(x, dim, keepdims=True)
     result = (x - maximum).exp().sum(dim, keepdims=True).log() + maximum
-    return result if keep else result.squeeze(dim)
+    if keep:
+        return result
+    # `dim` may name several axes -- torch takes a tuple here, and einops
+    # reduces over all of them at once. `Var.squeeze` takes one axis, so
+    # handing it the tuple raised `TypeError: '<' not supported between
+    # instances of 'tuple' and 'int'`. Drop them highest-first so the
+    # remaining indices do not shift under each other.
+    if isinstance(dim, (tuple, list)):
+        for axis in sorted((a if a >= 0 else a + x.ndim for a in dim),
+                           reverse=True):
+            result = result.squeeze(axis)
+        return result
+    return result.squeeze(dim)
