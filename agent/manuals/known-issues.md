@@ -1783,7 +1783,18 @@ about whether to take it.
   it needs rank 2. Matching the new form means teaching the tuner to read the
   stride-0 axes and giving the relay a way to name the base rather than the
   view.
+- A third consumer, found later and measured: the **merge-loop-var pass**
+  keyed on the same shape. `a + x` with `a` of `[10,10,10,10]` and `x` of
+  `[1,10,1,1]` used to collapse dims 2 and 3 into one `range2_3` loop; the
+  generated kernel now carries `op0_ystride1` instead and the merge does not
+  fire (`tests/codegen/test_merge_loop_var_pass.py::test3` and four siblings).
+  What it costs, measured on `64x64x64x64 + 1x64x1x1` on CPU: jittor's
+  broadcast add takes **4.22x** its own dense add of the same output, where
+  NumPy's takes **1.01x**. Jittor is still 30x faster than NumPy here in
+  absolute terms, so this is a lost optimization rather than a cliff -- but
+  bias add, normalisation scale and attention masks are all this shape.
 - Exit condition: with `enable_tuner=1`, a hand-written `broadcast * broadcast
   -> reduce` product on CPU emits a `mkl_matmul` jit op key and the conv
   tuner's confidence is 20 again, with `tests/ops/test_matmul.py` and
-  `tests/backends/cpu/test_mkl_conv_op.py` green and no numerical change.
+  `tests/backends/cpu/test_mkl_conv_op.py` green and no numerical change; and
+  a broadcast elementwise add costs about what its dense counterpart does.
