@@ -1381,11 +1381,17 @@ The trace prints only the exception's type; widening it to the message is the ne
 one-line measurement. That message names the jittor path that leaves a device-1
 Var unreadable.
 
-**Interleaved, and separately annoying:** the *startup* now stalls about one run in
-two at `diffusion_worker.py:327` (both workers log the final IR-op-priority line,
-then rank 0 spins at 100% CPU and rank 1 idles; no store trace at all, so it is the
-`NCCL(env)` init path and not the TCPStore that section 19 fixed). The runner
-retries past it.
+**A trap worth naming, because it cost three runs:** that stall -- both workers
+logging the final IR-op-priority line and then no progress, rank 0 spinning at 100%
+CPU and rank 1 idle -- looks exactly like the section 19 deadlock at a different
+call site, and it is not. It appeared only while `instrument_store_and_triton.py`'s
+**store** trace was applied, and vanished the moment `distributed/store.py` was
+restored from the repo. `_strace` writes a line per request and response on both
+sides inside the store's own request/response path, and the rendezvous it is there
+to observe is sensitive enough that the extra work deadlocks it. So: instrument the
+store to *diagnose* the rendezvous, never while measuring anything else, and
+restore `store.py` before the next run. The triton half of that script is harmless
+(it only fires on kernel launches, which happen after startup).
 
 ## Verification
 
