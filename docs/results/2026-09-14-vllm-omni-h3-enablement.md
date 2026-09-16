@@ -495,6 +495,133 @@ row walk above). Relaunch with `H3_STORE_TRACE=1 H3_TRITON_SHAPES=1`; both are
 no-ops without their env var, and the repo copies are the clean ones to restore
 from afterwards.
 
+**The cause is jittor's own allocator, and it is reached through the offload's
+storage swap.** With `compute-sanitizer` on a TP2 run the failure is not a bad
+kernel launch at all -- the sanitizer reports no invalid memory access -- but
+this, raised out of the request:
+
+    sfrl_allocator.cc:305: mem_ptr does not belong to allocation: 2167
+    [check failed: (char*)mem_ptr >= (char*)block->memory_ptr
+                   && (char*)mem_ptr <= (char*)block->memory_ptr + block->size]
+
+    method_api.py:506 in _data_set
+        self._update(src)
+    "... This is an internal Jittor invariant, not an error in your program."
+
+`_data_set` is the shim's `tensor.data = value`, and the caller is vLLM-Omni's
+layer offload: `tensor_utils.py:111 set_tensor_storage` does `target.data = value`
+to swap a parameter for a zero-element placeholder
+(`clear_tensor_storage`), and later installs a fresh weight buffer with
+`torch.as_strided` (`layerwise_backend.py:196`). So TP2 dies inside a jittor
+memory-management invariant, which is also why the reported location kept moving
+with the instrumentation: every candidate stack was just the first CUDA call
+after the corruption.
+
+**Reduced to three lines** (`probe_split_alias.py`, lab):
+
+    param = torch.zeros(4096, 512, dtype=torch.bfloat16, device="cuda")
+    alias = param[3072:]                                    # non-zero offset
+    param.data = torch.empty((0,), dtype=..., device="cuda")  # offload's swap
+    small = torch.ones(8, 512, ...) + 1.0                   # reuse -> split
+    del alias    # -> sfrl_allocator.cc:305, same assert
+
+Bisected (`probe_split_alias_cases.py`): a **tail slice with a non-zero offset** is
+the trigger; `.data`, `.detach()`, a head slice and a zero-offset `as_strided` are
+all fine, and so is the swap with no reuse.
+
+The two code facts that meet:
+
+- `Var::share_with(x, offset)` only *records* the request
+  (`var.h:113`: `share_src = x; share_offset = offset;`). The alias is registered
+  with the allocator later, in the child's own `Var::alloc`
+  (`var.cc:242-265`), which does
+  `x->allocator->share_with(storage_span_bytes(), x->allocation)` and then
+  `mem_ptr = (char*)x->mem_ptr + share_offset`. If the source's storage was
+  freed in between, that call registers against *whatever now owns that
+  allocation id* and the child points into reused memory.
+- `should_split` (`sfrl_allocator.cc:172`) is `block->size - size >= ALIGN_SIZE`
+  -- it does not consider shares -- and on a split the tail keeps the *same*
+  allocation id (`:278 rest->allocation = block->allocation`). So one allocation
+  spans two adjacent blocks (the code leans on that: `try_merge_two_blocks`
+  asserts neighbours share an allocation), while `free` validates the pointer
+  against only the single block `get_occupied(allocation)` returns. If the
+  split-off head is what the id maps to, a tail pointer is "outside" it.
+
+An eager `jt.sync_all(True)` after the slice (to register the share before the
+swap) does **not** help, so `share_times` is not protecting the block in this
+ordering.
+
+What the alias then *reads* is worth recording, because it bounds the claim:
+after the swap the alias reports shape `(0,)`, i.e. it re-evaluated through the
+rebound variable rather than reading the small tensor's values
+(`probe_alias_uaf.py`). So this repro shows a **stale deferred share being freed**
+-- a bookkeeping defect -- and the downstream that turns it into the observed
+illegal address (a freed block handed to a live tensor) is the next thing to pin,
+not something this repro demonstrates directly.
+
+Two candidate fixes, both in jittor, neither applied yet:
+
+1. **Make the share eager and pinned.** Register the share at request time when
+   the source is already allocated, and hold a liveness reference to the source
+   (`share_src` is a raw `Var*` today, so the request can outlive the variable it
+   names). Then `share_times` keeps the block from being freed or split for as
+   long as the alias exists, which is the property the allocator's own comment
+   assumes.
+2. **Invalidate a deferred request whose source storage changed.** Record the
+   source's allocation/pointer at request time and refuse to alias at `alloc`
+   time when it no longer matches, falling back to the fresh-allocation path that
+   already exists at `var.cc:266-269`.
+
+**The failure is jittor's multi-device resource path, and the last run names it
+directly in jittor's own executor.** With the flash-attn bridge off, no offload,
+the text encoder sharded (`JITTOR_FLASH_ATTN_JITTOR=0`, `OFFLOAD=`,
+`TEXT_ENCODER_TP=2`, `ATTN=TORCH_SDPA`) and `NCCL_DEBUG=INFO`, the server starts
+and loads 66.4 GiB per rank, NCCL logs the *correct* device for every communicator
+(`rank 1 ... Setting affinity for GPU 5 ... localRank 1`), and the request then
+dies on rank 1 with
+
+    exec_runner.cc:402: Execute fused operator(0/35) failed
+    cudaEventRecord((cudaEvent_t)event.handle, (cudaStream_t)stream.handle)
+      -> cudaErrorInvalidResourceHandle(400)   [driver.cc record_event]
+
+`record_event` opens with `CHECK(event.device.index == stream.device.index)`, and
+that check passes -- so the two agree about the device while CUDA still rejects
+the event handle on that stream. The event comes from the side-stream pipelining
+machinery (`src/runtime/backend_streams.cc`), whose per-device `ready`/`done`
+events are created by `get_resources(device)` and destroyed by
+`cleanup_streams()` (registered as a cleanup callback, which also clears the
+`resources` vector). So the handle is stale or belongs to another context; which
+of the two is the thing to settle next, with a print of the handle and its
+creating device at both `event_create` and `record_event` as the instrument.
+
+Three jittor-side defects are now identified on this path, in the order they are
+reached. None is fixed yet:
+
+1. **A sub-group communicator is created without selecting the rank's device.**
+   `nccl_create_process_group` (`backends/comm/nccl/src/nccl_wrapper.cc:536-560`)
+   calls `init_nccl_comm` -> `ncclCommInitRank` with no `set_current_device` /
+   `cudaSetDevice`, while the world path in `nccl_init` does both explicitly
+   (`:592-597`). Rank 0 is right by accident (its device is already 0); rank 1
+   creates the group communicator against whatever device is current. This is one
+   observed failure on its own -- `ncclCommInitRank failed: unhandled cuda error`,
+   reached from `_build_text_encoder_group` -> `init_world_group` -> `new_group`
+   -- and jittor then reports it through the wrong checker, `checkCudaErrors` on
+   an **ncclResult_t** (`:247`), which is why the text reads like a CUDA error and
+   never mentions NCCL.
+2. **The deferred share in `Var::share_with` is resolved too late** (see above):
+   the alias is registered in the child's own `alloc`, against whatever owns the
+   source's allocation id by then.
+3. **A stale or foreign event handle reaches `cudaEventRecord`**, which is what
+   the run above actually trips.
+
+Two startup failures are separate from those and are *intermittent*, not
+deterministic: the store rendezvous (above) and the sub-group comm init
+(identical `JITTOR_FLASH_ATTN_JITTOR=0` runs: one died at
+`_build_text_encoder_group`, the next came up). That intermittency is why the same
+TP2 configuration has produced illegal address, unhandled CUDA error, invalid
+resource handle and allocator-invariant failures across attempts, and why every
+stack recorded before the last one was a candidate rather than the cause.
+
 **Do not reuse a per-step number for TP2.** The loop's progress bar reached
 `0/7` before the fault, so there is no measured TP2 step time. An earlier
 version of this section recorded 6.4 s/it as the TP2 denoise rate; that figure
