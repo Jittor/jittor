@@ -850,44 +850,76 @@ the shim's own cpp_extension on device 1 is the comparison, and the fix is centr
 and probably small) versus something the flash-attn extension caches at load. That
 is a few seconds per run now, not seven minutes.
 
-**A candidate fix tried and disproved.** The obvious suspect was
-`compat/shim/cpp_extension/include/c10/cuda/CUDAStream.h`, which ignored the device
-and returned the legacy default stream:
+**A first candidate, tried, that turned out to be a red herring.** The obvious
+suspect was `compat/shim/cpp_extension/include/c10/cuda/CUDAStream.h`, which ignored
+the device and returned the legacy default stream:
 
     inline CUDAStream getCurrentCUDAStream(int = -1) { return CUDAStream((cudaStream_t)0); }
 
 Handle 0 is the *current context's* legacy stream, so an extension running on
 device 1 would launch on a device-0-context stream while its pointers belong to
-device 1 -- and memcheck reports no invalid data access, which fits. It was
-changed to return `cudaStreamPerThread` for the device the caller names, binding
-that device first, and the flash-attn extension was force-rebuilt
+device 1. It was changed to return `cudaStreamPerThread` for the device the caller
+names, binding that device first, and the flash-attn extension was force-rebuilt
 (`JITTOR_FLASH_ATTN_FORCE_BUILD=1`, ~30 min). **It did not fix it**: device 0 still
 passes and device 1 still fails with the same illegal address. The change is
-reverted in both trees rather than left in unverified. So either the extension does
-not use that accessor, or the stream is not the mechanism. Next: check what the
-extension actually calls to obtain its stream (`grep -n 'CUDAStream\|cudaStream'
-csrc/` in the flash-attention checkout) before trying another fix on this axis.
+reverted in both trees rather than left in unverified.
 
-**A second candidate tried and disproved.** `torch::Tensor::device()` and
-`get_device()` hardcoded index 0 for CUDA tensors
-(`compat/shim/cpp_extension/include/torch/extension.h:228-231`), and the
-flash-attn extension guards every launch with
-`at::cuda::CUDAGuard device_guard{q.device()}` -- so a device-1 tensor would have
-bound device 0. That is the right *shape* of explanation, but reporting the Var's
-real `device_id` (`vh_device_index`, added in `jtorch_aten.cu`) **did not fix it**
-either: after a 30-minute forced rebuild, `device 0 packed/dense OK` and
-`device 1 FAILED cudaErrorIllegalAddress` are unchanged. Reverted in both trees,
-recorded so it is not retried.
+That accessor was in fact already correct. Handle 0 is not a device-0 stream, it
+is "the current device's default stream", so once the *current device* is the
+tensor's device the launch lands on that device. The stream was never the
+mechanism; the current device was, and the fix belongs one level up (below).
 
-Two fixes tried, two disproved -- both were device-binding hypotheses, and both
-left the fault identical. That is evidence the fault is not "the launch happened
-on the wrong device": the extension works on index 0 and fails on any other index
-even though jittor's own device-1 work, a triton kernel on device 1, the
-materialised inputs, `cu_seqlens`, contiguity, strides and the ambient device have
-all been measured correct. The next session should stop guessing at device binding
-and read the extension's kernel-side setup for a per-device resource instead
-(`csrc/flash_attn/flash_api.cpp` around the launch, and `run_mha_fwd`), since the
-seconds-long repro makes each attempt cheap.
+**Both device-binding candidates were right, and each was only half the fix.**
+Neither was really disproved -- they were each measured in isolation, and the
+fault needs both.
+
+`torch::Tensor::device()` and `get_device()` hardcoded index 0 for CUDA tensors
+(`compat/shim/cpp_extension/include/torch/extension.h`), so
+`at::cuda::CUDAGuard device_guard{q.device()}` -- which every flash-attn entry
+guards with at its top -- bound device 0 for a device-1 tensor. Reporting the
+Var's real index is necessary, and was measured alone: still
+`device 1 FAILED cudaErrorIllegalAddress`.
+
+It is not sufficient, because of the second half. The shim's tensor factories --
+the `torch::empty` calls an extension makes for `out`, `softmax_lse`,
+`rng_state`, `softmax_lse_accum` and `out_accum` -- build their Var from
+*jittor's* current device, and `cudaSetDevice` does not move that one:
+
+    jt.current_device() == 0        # also after jt.ones(...).to_device(1)
+    jt.flags.device_id = 1  ->  jt.current_device() == 1
+
+So the index fix alone leaves those buffers on device 0 while the kernel runs on
+device 1, and moving the ambient device alone leaves the kernel on device 0 while
+its inputs and buffers are on device 1. Either way a kernel reads or writes memory
+that does not belong to the device it runs on: `cudaErrorIllegalAddress`, for any
+non-zero index, with index 0 unaffected because there both notions of "current
+device" already agree.
+
+**The fix, and why it is the shim's to make.** Keep torch's two notions of
+"current device" in step:
+
+- `compat/shim/cpp_extension/include/torch/extension.h`: `device()`/`get_device()`
+  report the Var's real index, via `vh_device_index` (defined in
+  `src/jtorch_aten.cu`).
+- `compat/shim/cpp_extension/include/c10/cuda/CUDAGuard.h`: `CUDAGuard` and
+  `OptionalCUDAGuard` also switch jittor's current device, through the out-of-line
+  helpers `accelerator_current_device`/`accelerator_set_current_device`. They stay
+  out-of-line because the public ABI header must not pull jittor headers in.
+
+No downstream library changed: `CUDAGuard` still means what libtorch means by it,
+it just moves both devices, and it restores both when it goes out of scope.
+
+**Verified on two visible devices.** `probe_packed_devices.py`, dense and packed:
+
+    device 0 packed OK | device 1 packed OK | device 0 dense OK | device 1 dense OK
+
+plus `probe_hdim_dev.py` (head dim 64 and 128) on both indices, `cuda:1` called
+*before* `cuda:0`, and both ambient-device variants of `probe_ambient_dev.py`.
+`probe_dev_parity.py` checks values rather than just absence of a fault: the two
+indices agree with each other and with a plain-jittor
+`softmax(q k^T * scale) v` reference to `max|diff| = 2.7e-4` (fp16 noise).
+`compat/tests/torch/test_cpp_extension_device_index.py` builds a probe extension
+that reports both halves and passes 6/6.
 
 **Next instrument, prepared but not yet run.** The event-handle defect needs the
 handle's provenance: log device + handle at `create_event`, `destroy_event` and
@@ -1146,6 +1178,71 @@ only holds when the ambient device happens to be 1 -- which a full file-order
 run arranges and an isolated run does not. It is a separate bug from this one
 and is not touched here.
 
+## 17. The extension build cache ignored header edits, and served a stale `.so`
+
+Chasing section 13 cost two things that were *not* the bug, and both came from
+one defect in the shim's build cache.
+
+While diagnosing, the deployed flash-attn extension stopped importing at all:
+
+    compile official flash-attn backend failed: .../flash_attn_2_cuda_jittor...so:
+    undefined symbol: _ZN6jtorch6detail15vh_device_indexEPN6jittor9VarHolderE
+
+`vh_device_index` had only ever existed in an uncommitted experiment of mine, and
+had been reverted. The `.so` still referenced it, and the build had reported every
+object `up-to-date` while it did.
+
+The up-to-date checks compare an object's **source mtime** and its **compile
+command** (`_object_matches_command`, `_output_matches_build` in
+`compat/shim/cpp_extension/__init__.py`). Neither looks at headers. Editing
+`torch/extension.h` or `c10/cuda/CUDAGuard.h` therefore invalidated nothing: the
+objects compiled against the old text were reused and relinked, and the first
+symptom was an `undefined symbol` at import -- or, worse, a silently stale
+extension that re-measures the *old* behavior. The build directory is keyed by the
+flash-attention checkout's path, git HEAD, head dims and dtypes, so a shim-side
+header change does not even move the directory.
+
+Two practical consequences worth knowing:
+
+- The old workaround is to force the build (`JITTOR_FLASH_ATTN_FORCE_BUILD=1`,
+  ~30 min) or to `touch` each affected source so its mtime wins. `touch` only
+  covers the sources that include the header, which is the trap.
+- Every measurement in this document that follows a shim header edit has to say
+  how the extension was rebuilt. The two device-binding candidates in section 13
+  were each force-rebuilt, so those results stand; the stale `.so` above came from
+  a third edit that was *not* rebuilt.
+
+**Fix.** `build()` now digests the shim's own ABI headers (14 files, 76 KB) and
+passes the digest as `-DJTORCH_SHIM_ABI=<digest>`, and records it in the link
+stamp. A header edit changes the command, the command is part of the object's
+identity and its stamp, so what depends on the header recompiles and the object
+files are not reused behind a "up-to-date" line.
+
+Two notes on landing it: it invalidates every existing extension cache exactly
+once (the command changed for all of them), and `compat/tests/torch/
+test_torch_cpp_extension.py::TestShimHeadersInvalidateTheBuildCache` locks the
+behavior with a faked compiler -- unchanged tree compiles nothing, edited header
+recompiles and re-links.
+
+## 18. Stale lab processes are a first-class failure mode
+
+Two different stale processes each produced a wrong-looking result during this
+work, and neither was a jittor defect:
+
+- **Orphaned workers hold the rendezvous.** `serve-vllmomni.sh`'s
+  `DiffusionWorker` children do not carry `--port` in their argv, so a kill by
+  port string leaves them alive holding `MASTER_PORT`; the next run's rank 1 then
+  rendezvouses with the orphan's store and dies with an intermittent "NCCL store
+  rendezvous timeout". Three such orphans from earlier TP2 attempts were still
+  resident (18-19 h old, each spinning at 100% CPU) when this section was written;
+  `stop-vllmomni.sh PORT` walks the process tree from the parent and clears
+  `/tmp/jittor-nccl-*` for exactly this reason. Check `ps -eo pid,ppid,pcpu,args`
+  before blaming a jittor startup failure.
+- **A leftover server answers the health check.** A 20 h old single-GPU server
+  still listening on a port makes `curl /v1/models` succeed, so a retry loop can
+  "come up" instantly and send its request to the wrong process, with the wrong
+  config and the wrong build.
+
 ## Verification
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails
@@ -1183,6 +1280,17 @@ and is not touched here.
 - 6: `compat/tests/torch/_torch_compat_checks.py` (`x.data =` checks) and a
   standalone probe: empty placeholder, shape restore, dtype change,
   `requires_grad` preserved.
+
+- 13: `compat/tests/torch/test_cpp_extension_device_index.py` (6/6) builds a probe
+  extension and checks both halves on every visible index -- `device().index()`,
+  the CUDA device a guard actually binds, where a fresh tensor lands inside the
+  guard, and that the guard restores the device it found. Behavior: the flash-attn
+  bridged entry passes on devices 0 and 1, dense and packed, head dim 64 and 128,
+  in either call order, and agrees with a jittor `softmax(q k^T * scale) v`
+  reference to fp16 noise.
+- 17: `compat/tests/torch/test_torch_cpp_extension.py::TestShimHeadersInvalidateTheBuildCache`,
+  which fakes the compiler and asserts an unchanged tree compiles nothing while an
+  edited shim header recompiles and re-links.
 
 Each fix was synced into the lab venv at
 `$JITTOR_LAB_ROOT/_state/h3/venv-jittor/lib/python3.12/site-packages/jittor/`,
