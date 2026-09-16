@@ -380,6 +380,10 @@ python -m pytest -v tests/ops/test_ops.py
 JITTOR_TEST_DEVICES=cpu python -m pytest tests/ops/test_ops.py -k exp
 python -m pytest -m structure tests/structure
 
+# 兼容层测试：走符号链接的那条路径，不要直接指 compat/
+JITTOR_TORCH_SHIM=1 PYTHONPATH=python \
+    python -m pytest python/jittor/compat/tests/torch
+
 # 可复现门禁
 python -m nox -s structure
 python -m nox -s cpu
@@ -393,6 +397,16 @@ python -m nox -s nccl
 
 nox 会话会建立隔离的状态与缓存。**直接并发运行时也必须使用不同的 `JITTOR_HOME` 或
 `cache_name`；新 JIT 运算或扩展的首次构建应当串行执行。**
+
+兼容层那条命令为什么要绕一下：`compat/` 自己带 `__init__.py`，直接
+`pytest compat/tests/torch` 会让 pytest 把它当**顶层**包 `compat` 导入，而
+`compat/_aliases.py` 的 `from .._runtime import ...` 要求自己是 `jittor.compat`，
+于是每一个用例都以
+`ImportError: attempted relative import beyond top-level package` 报错——收集阶段
+看起来是好的（1888 collected），错误全落在 setup，所以很容易误判成"收集不了"。
+`python/jittor/compat` 是指向 `compat/` 的符号链接，从它进去包名就解析成
+`jittor.compat.tests.torch`，相对导入成立。门禁里没有这个问题是因为
+`_run_pytest_once` 会先 `pip install -e compat/`，把 `jittor-torch` 装成真包。
 
 ## CI 支持矩阵
 
