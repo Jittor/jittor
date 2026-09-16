@@ -100,13 +100,29 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
     // its var indices into and that grad(), dump_all_graphs() and the
     // topological sorts also used, so a traversal starting while these were
     // live renumbered the graph under the executor.
+    plan.op_outputs.reserve(op_num);
+    plan.op_inputs.reserve(op_num);
     for (Node* node : bfs_q)
         if (!node->is_var()) {
-            node->set_batch_index(tt, ops.size());
+            int op_id = ops.size();
+            node->set_batch_index(tt, op_id);
             ops.push_back(node->op());
+            // Snapshot this op's edges while they are still the ones the BFS
+            // just walked; see the comment on `op_outputs` in exec_plan.h.
+            vector<Var*> outs;
+            for (Var* o : node->op()->outputs()) outs.push_back(o);
+            plan.op_outputs.emplace_back(move(outs));
+            vector<pair<Var*, int>> ins;
+            for (auto ve : node->op()->_inputs)
+                ins.emplace_back(ve.node->var(), ve.reverse().index);
+            plan.op_inputs.emplace_back(move(ins));
         } else {
             node->set_batch_index(tt, all_vars.size());
             all_vars.push_back(node->var());
+            Var* v = node->var();
+            int slot = 0;
+            if (!v->_inputs.empty()) slot = v->_inputs.front().reverse().index;
+            plan.var_producer[v] = {v->input(), slot};
         }
     int var_num = all_vars.size();
     plan.op_num = op_num;

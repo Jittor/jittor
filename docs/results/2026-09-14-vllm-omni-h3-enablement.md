@@ -1966,6 +1966,49 @@ down: `update_ops` reads `op->outputs()`, but `load_fused_op`'s `edges` loop rea
 rest and a freed op yields *incomplete* edges -- wrong kernels rather than an
 assert, which is worse. It has to be the whole tuple.
 
+### Resolved: the batch has to hold what it uses
+
+The design above was built, and it is not sufficient on its own -- but building it
+is what found the answer. Snapshot only, 20 runs: **0 dumps, 0 underflows, and 7
+segfaults**, and the backtrace names the reader:
+
+    FusedOp::execute_fused_prepared -> Op::execute_prepared -> run_exec_plan
+      -> VarRelayManager::get_op_relay_info   (var_relay.cc)
+
+i.e. a *codegen* walk of the graph, at execution time, over a node that had been
+destroyed. So the plan does not merely need the *edges*; it needs the **nodes**,
+and no amount of snapshotting or deferral changes that.
+
+What the batch was missing is ownership, and the mechanism was already in the
+tree: `VarPtr`. `Executor::run_sync` now holds a `VarPtr` for every var in
+`plan.all_vars` for the batch's duration. That pins the vars, and it pins the ops
+too -- an op's liveness comes from its outputs, so an op whose output var is held
+cannot be freed either. It touches no counter arithmetic and takes no lock, which
+is why it does not have either failure mode of the candidates above.
+
+Measured, `H3_FUSE_DUMP=1 probe_loader_race.py threads 4 6`, 20 runs each:
+
+| variant | result |
+| --- | --- |
+| no hold (baseline) | 4 ok, 1 failed, **2 dumps** in 6 runs |
+| keep the node alive (early return from `free()`) | 12 ok, **3 underflow** |
+| hold the graph mutation lock for the batch | **deadlock** (`exit=124`) |
+| lock released around the compile phase | still **deadlock** (9/12): this lab runs with `use_parallel_op_compiler=0`, so that phase never happens and the window never opens |
+| edge snapshot only | 13 ok, **7 segfault** |
+| edge snapshot + this hold | **20 ok, 0 dumps, 0 segfaults, 0 underflows, 0 hangs** |
+
+The probe's own checksum is unchanged (`sum=-26415.4` in every run), so the fix
+does not alter the numbers. The edge snapshot stays in the change as well: a
+*live* var can still have its edges released underneath the planner
+(`release_inputs`, which the shim uses to park tensors), so the plan should not
+read them live even with the vars pinned.
+
+Landed in `src/core/{exec_plan.h,exec_plan.cc,fused_op.h,fused_op.cc,executor.cc}`;
+the four `exec_plan`/`fused_op` files had no drift between the repo and the lab's
+deployed snapshot, so they were copied, and `executor.cc` (43 lines of drift) got
+the same three hunks by hand. Verified by building the repo's own core
+(`REPO_CORE_OK`) and by 20 loader-race runs on the deployed build.
+
 The probe for any candidate is
 `H3_FUSE_DUMP=1 probe_loader_race.py threads 4 6` -- 15-20 runs, because the rate
 is roughly one in four -- and the per-run timeout should be short (~120 s), since
@@ -2273,6 +2316,24 @@ buffer jittor recycled. The measurement that would separate them is
 `compute-sanitizer --tool memcheck` over one request; at roughly 10-50x, on a load
 that already takes six minutes, that is a hours-long run and it was not
 attempted here.
+
+**Correction, later the same session: it was attempted, and it does not work.**
+`compute-sanitizer --tool memcheck --target-processes all` on a TP2 `TORCH_SDPA`
+serve (`LAUNCHER=... ./serve-vllmomni.sh`, which `serve-vllmomni.sh` supports for
+exactly this) reaches the request and reports `ERROR SUMMARY: 202 errors`, but
+**every one of them is NCCL**: 100 ×
+
+    Program hit cudaErrorNoKernelImageForDevice (error 209) ...
+    ncclInitKernelsForDevice -> ncclCommInitRankFunc -> ... -> jittor::nccl_init
+
+and the application's failure is `exec_runner.cc:402` (the collective), not the
+usual `cudaMemGetInfo` report. NCCL cannot initialise its own kernels under the
+sanitizer, so the run never reaches the fault. There is also a structural reason
+not to expect this tool to be decisive even if NCCL worked: memcheck reports
+accesses outside an allocation, while a node or block that has been freed and
+recycled *inside the same mapping* is still a valid address -- which is the shape
+this fault has had all along (`Node::free()` clearing edges, the recycled-buffer
+family of section 29).
 
 The extension itself was re-checked as a suspect and cleared: of the four
 `getCurrentCUDAStream()` launch sites and every `flash_api.cpp` runtime call,

@@ -45,6 +45,38 @@ void FusedOp::update_jit_key() {
     do_jit_prepare(jk);
 }
 
+vector<Var*> FusedOp::snapshot_outputs(Op* op) const {
+    if (batch_op_outputs && op->batch_stamp == batch_stamp_wanted) {
+        int idx = op->batch_index_at(batch_stamp_wanted);
+        if (idx >= 0 && (uint)idx < batch_op_outputs->size())
+            return (*batch_op_outputs)[idx];
+    }
+    vector<Var*> out;
+    for (Var* o : op->outputs()) out.push_back(o);
+    return out;
+}
+
+vector<pair<Var*, int>> FusedOp::snapshot_inputs(Op* op) const {
+    if (batch_op_inputs && op->batch_stamp == batch_stamp_wanted) {
+        int idx = op->batch_index_at(batch_stamp_wanted);
+        if (idx >= 0 && (uint)idx < batch_op_inputs->size())
+            return (*batch_op_inputs)[idx];
+    }
+    vector<pair<Var*, int>> in;
+    for (auto ve : op->_inputs) in.emplace_back(ve.node->var(), ve.reverse().index);
+    return in;
+}
+
+pair<Op*, int> FusedOp::snapshot_producer(Var* v) const {
+    if (batch_var_producer) {
+        auto it = batch_var_producer->find(v);
+        if (it != batch_var_producer->end()) return it->second;
+    }
+    int slot = 0;
+    if (!v->_inputs.empty()) slot = v->_inputs.front().reverse().index;
+    return {v->input(), slot};
+}
+
 void FusedOp::update_ops() {
     if (!ops.empty()) float32_precision = ops.back()->float32_precision;
     if (!ops.empty()) launch_origin = ops.back()->launch_origin;
@@ -60,7 +92,7 @@ void FusedOp::update_ops() {
     for (uint i=0; i<ops.size(); i++)
         op_index[ops[i]] = i;
     for (Op* op : ops) {
-        for (Var* o : op->outputs()) {
+        for (Var* o : snapshot_outputs(op)) {
             if (o->loop_options) {
                 if (loop_options_origin == nullptr)
                     loop_options_origin = &o->loop_options.data();
@@ -132,14 +164,15 @@ void FusedOp::update_ops() {
     LOGvvvv << "set fused output" << outputs();
     
     for (Op* opi : ops) {
-        for (Var* i : opi->inputs()) {
+        for (auto& in : snapshot_inputs(opi)) {
+            Var* i = in.first;
             if (!var_index.count(i)) {
                 var_index[i] = vars.size();
                 vars.push_back({i, 0});
                 _inputs.emplace_back((Node*)i);
             }
         }
-        for (Var* o : opi->outputs()) {
+        for (Var* o : snapshot_outputs(opi)) {
             if (!var_index.count(o)) {
                 var_index[o] = vars.size();
                 // intermediate(can fuse) or output
