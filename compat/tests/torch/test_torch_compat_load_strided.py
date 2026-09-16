@@ -135,7 +135,10 @@ class TestLoadHonoursSavedStrides(unittest.TestCase):
                 self.base = np.array([2**45+i for i in range(6)], dtype=dtype)
                 self.storage = _StorageRef("0", self.base, storage_type)
                 got = self._load(0, (3, 2), (1, 3))
-                self.assertEqual(str(got.dtype), np.dtype(dtype).name)
+                # torch spells a dtype `torch.int64`; the reference here is
+                # NumPy's bare name, so compare on the bare name.
+                self.assertEqual(str(got.dtype).replace("torch.", ""),
+                                 np.dtype(dtype).name)
                 np.testing.assert_array_equal(got.numpy(), self.base.reshape(2, 3).T)
 
     def test_a_transposed_view_loads_transposed(self):
