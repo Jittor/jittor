@@ -23,6 +23,21 @@ def load_definitions(path, names=None, **namespace):
     if names is not None:
         assert {node.name for node in selected} == names, (path, names)
     class InjectedImports(ast.NodeTransformer):
+        # Both import forms, not just `from x import y`.
+        #
+        # This dropped only `ImportFrom`, so a plain `import jittor as jt`
+        # inside a function re-bound `jt` at call time and overwrote the
+        # stand-in the caller injected. `kernels/math/igamma.py` does exactly
+        # that, and its `jt.code(...)` therefore reached the real operator and
+        # failed with "Wrong inputs arguments ... help(jt.ops.code)" -- a
+        # confusing way to be told the injection did not take. The loader in
+        # tests/backends/acl/test_acl_tensor_routing.py handles both forms;
+        # this one handles both now too.
+        def visit_Import(self, node):
+            node.names = [alias for alias in node.names
+                          if (alias.asname or alias.name) not in namespace]
+            return node if node.names else None
+
         def visit_ImportFrom(self, node):
             node.names = [alias for alias in node.names
                           if (alias.asname or alias.name) not in namespace]
@@ -36,7 +51,11 @@ class NativeCudaSources(unittest.TestCase):
     def test_native_domains_do_not_store_cuda_algorithms(self):
         package = ROOT / "python" / "jittor"
         paths = [package / filename for filename in (
-            "math_util/gamma.py", "math_util/igamma.py", "math_util/src/igamma.h")]
+            # math_util lives under contrib/ now; the old paths named files
+            # that are not there, and `read_text` raised FileNotFoundError
+            # instead of this test checking anything.
+            "contrib/math_util/gamma.py", "contrib/math_util/igamma.py",
+            "contrib/math_util/src/igamma.h")]
         for domain in ("ops", "distributions"):
             implementations = list((package / domain).rglob("*.py"))
             self.assertTrue(implementations, domain)
