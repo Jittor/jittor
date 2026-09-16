@@ -1303,6 +1303,27 @@ remaining difference is not the call itself but the state the server is in when 
 makes it: two ranks holding tens of GB each, after a multi-threaded sharded load,
 on device 1 only. That is the next thing to reproduce.
 
+**Follow-up: one phase was not enough.** The read barrier above still hung about
+one start in two, and py-spy named both halves at once:
+
+    rank 0 (server, 101% CPU, active+gil)
+      _init_nccl_from_store (compile_extern.py:703)   <- nccl_init_with_unique_id
+    rank 1 (idle)
+      readinto (socket.py:720) <- request <- wait
+      _init_nccl_from_store (compile_extern.py:698)   <- the read barrier's wait
+
+Rank 1's own barrier `wait` is answered by rank 0's store server threads, and rank 0
+had already entered the collective -- which holds the GIL for its whole duration --
+so the answer could never be produced. "Everyone has read the id" does not imply
+"nobody still has a request in flight": the marker is set *before* the waiting rank
+gets its reply. The barrier now has a second phase -- each rank records that it has
+*completed* the barrier, and nobody enters the collective until every rank has -- so
+when the first rank parks in the collective no peer has an unanswered request.
+Verified by three consecutive starts (two passed the rendezvous in 30 s, where
+previously roughly every other attempt hung; the third was killed by the test
+script's own back-to-back servers, not by the barrier).
+`tests/distributed/test_nccl_store_rendezvous.py` now pins both phases.
+
 ## 20. The generated direct attention entries pinned the launch to device 0
 
 The request-path fault of section 13 has one more layer, and it was in jittor's own
@@ -1456,10 +1477,10 @@ restore `store.py` before the next run. The triton half of that script is harmle
   which fakes the compiler and asserts an unchanged tree compiles nothing while an
   edited shim header recompiles and re-links.
 
-- 19: the deadlock is removed by construction (nobody enters the collective before
-  every rank has read the id) and a TP2 start that previously failed ~1 run in 3
-  now came up, loaded the sharded weights and served a request. The request fault
-  above is still open.
+- 19: the deadlock is removed by construction -- in two phases, because one was not
+  enough (see the follow-up in section 19) -- and repeated TP2 starts now pass the
+  rendezvous in ~30 s instead of hanging about every other attempt. The request
+  fault of section 21 is still open.
 
 - 20: `probe_encoder_sdpa.py` under `no_grad` -- the condition that reaches the
   generated entries -- fails on device 1 before the six guards are fixed and

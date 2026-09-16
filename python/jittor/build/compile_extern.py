@@ -699,6 +699,21 @@ def _init_nccl_from_store(nccl_module, store=None):
             "jittor/nccl/world/unique_id_read/{}".format(rank)
             for rank in range(world_size)
         ])
+        # A second phase, because "everyone has read the id" is not enough: a
+        # peer's own barrier `wait` is answered by the store server *after* it
+        # sets that marker, so the rank that hosts the server could enter the
+        # collective with a peer's request still unanswered -- and inside the
+        # collective it cannot answer it, because the pyjt wrapper holds the GIL
+        # for the whole call. py-spy on a hung run shows exactly that: the server
+        # rank active+gil inside `nccl_init_with_unique_id`, the peer in
+        # `readinto` inside `store.wait`. Recording completion of the barrier
+        # itself closes the window: nobody enters the collective until every rank
+        # has finished every store request it is going to make.
+        store.set("jittor/nccl/world/unique_id_done/{}".format(world_rank), b"1")
+        store.wait([
+            "jittor/nccl/world/unique_id_done/{}".format(rank)
+            for rank in range(world_size)
+        ])
 
         nccl_module.nccl_init_with_unique_id(list(unique_id))
 

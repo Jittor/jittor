@@ -75,6 +75,7 @@ def _preload(world_size):
     keys = {"jittor/nccl/world/unique_id": _UNIQUE_ID}
     for rank in range(world_size):
         keys["jittor/nccl/world/unique_id_read/%d" % rank] = b"1"
+        keys["jittor/nccl/world/unique_id_done/%d" % rank] = b"1"
         keys["jittor/nccl/world/initialized/%d" % rank] = b"1"
     return keys
 
@@ -90,6 +91,29 @@ def _run(world_size, rank):
 
 
 class TestNcclStoreRendezvousOrder(unittest.TestCase):
+    def test_the_barrier_completes_before_the_collective(self):
+        """Both phases precede the collective, not just "everyone read it".
+
+        The single-phase version was not enough and hung roughly every other
+        start: a peer's barrier `wait` is answered by the store server *after* it
+        sets the read marker, so the rank hosting the server could be inside the
+        GIL-holding collective while the peer's request was still unanswered
+        (py-spy: server rank active+gil in `nccl_init_with_unique_id`, peer in
+        `readinto` inside `store.wait`).
+        """
+        calls = _run(2, 0)
+        operations = [call[0] for call in calls]
+        waits = [call for call in calls
+                 if call[0] == "wait"
+                 and any("unique_id_done" in key for key in call[1])]
+        self.assertTrue(waits, "the barrier-completion phase disappeared")
+        self.assertLess(
+            max(i for i, call in enumerate(calls)
+                if call[0] == "wait" and any(key in ("jittor/nccl/world/unique_id_read/0",
+                                                      "jittor/nccl/world/unique_id_read/1")
+                                             for key in call[1])),
+            operations.index("collective"))
+
     def test_the_read_barrier_precedes_the_collective(self):
         for world_size in (1, 2, 3):
             calls = _run(world_size, 0)
