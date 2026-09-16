@@ -1518,6 +1518,34 @@ shim needs its own lock on the entry points a weight load goes through --
 same probe plus a TP2 request to verify. Section 22's measurement stands: this is
 not the index buffers, whose metadata is identical on both ranks.
 
+## 24. The request phase is single-threaded, so the race is *not* its cause
+
+Section 23 ended by proposing that the request-path fault was the same
+op-construction race, on the strength of `contiguous` appearing in both. That is
+now measured away, and the measurement is cheap enough to have been done first:
+`py-spy dump` on the rank-1 worker across the request window shows **three
+threads** --
+
+    Thread 575656 (idle): "MainThread"
+    Thread 583468 (idle): "Thread-1 (_accept_loop)"      (the store server)
+    Thread 583469 (idle): "Thread-2 (_serve_connection)"  (a store connection)
+
+-- and no thread but the main one ever builds or runs ops. With one thread in the
+graph there is nothing to serialise, so a shim-level lock would have been a
+change that fixed a real defect (section 23 stands) while doing nothing for this
+fault. Withdrawn: the request-path fault is not the concurrent-construction race.
+
+What is left, all of it measured rather than assumed: the fault is a device-1 MMU
+fault in the first DiT block, on one thread, in the sequence
+`torch.split` -> `contiguous` -> linear; the all-gather's arguments are correct
+(`ynum == group_size * num`, device-1 operands on device 1's stream); the index
+metadata is identical on both ranks; every attention entry binds the input device;
+and the shim's own documented racy-illegal-address window (the second jittor
+barrier is skipped when `JITTOR_TORCH_SHIM=1`) does not apply, because no triton
+kernel has launched yet when the context dies -- the `[trishape]` trace prints
+exactly once per rank, at the first denoise kernel, and that kernel already
+reports the poisoned context.
+
 ## Verification
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails
@@ -1578,6 +1606,8 @@ not the index buffers, whose metadata is identical on both ranks.
   `TestPackedEntryDeviceGuard`.
 
 - 21: the shape trace above, from a 4-step 256x256 request on two cards.
+- 24: `py-spy dump` on the rank-1 worker across the request window: three
+  threads, only the main one in the graph.
 - 23: `probe_loader_migrate.py` with and without `SERIALISE=1` (fails / passes with
   four threads), and the launch list of the post-`ArrayOp` TP2 run, which names
   `torch.split` + `contiguous` immediately before the fault.
