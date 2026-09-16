@@ -751,12 +751,33 @@ class TestCudaDeviceAndEvents(StubPolicyBase):
     def test_set_device_zero_is_accepted(self):
         self.assertIsNone(torch.cuda.set_device(0))
 
-    def test_set_device_non_zero_is_refused(self):
-        self.assertRefuses(lambda: torch.cuda.set_device(1),
-                           "torch.cuda.set_device", "device 0")
+    def test_set_device_non_zero_takes_effect(self):
+        """Moved from the "refused" shape to the "implemented" one.
 
-    def test_set_device_non_zero_stub_fallback(self):
-        self.assertStubFallback(lambda: torch.cuda.set_device(3))
+        `torch.cuda.set_device(1)` used to raise, because the runtime only
+        ever ran on device 0 and silently accepting the call would have put
+        the tensors somewhere the caller did not ask for. It now forwards to
+        `jt.set_device` (compat/torch/installers/cuda/api.py), so the thing to
+        pin is that the device actually moves -- and moves back.
+        """
+        if torch.cuda.device_count() < 2:
+            self.skipTest("a second CUDA device is required")
+        before = torch.cuda.current_device()
+        try:
+            self.assertIsNone(torch.cuda.set_device(1))
+            self.assertEqual(torch.cuda.current_device(), 1)
+        finally:
+            torch.cuda.set_device(before)
+        self.assertEqual(torch.cuda.current_device(), before)
+
+    def test_set_device_rejects_a_device_that_is_not_there(self):
+        """Implemented is not the same as unconditional."""
+        absent = torch.cuda.device_count() + 8
+        before = torch.cuda.current_device()
+        with self.assertRaises((RuntimeError, ValueError)):
+            torch.cuda.set_device(absent)
+        self.assertEqual(torch.cuda.current_device(), before,
+                         "a refused set_device must not move the device")
 
     def test_event_elapsed_time_measures_something(self):
         import time
