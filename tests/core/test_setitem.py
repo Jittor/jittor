@@ -65,7 +65,14 @@ class TestSetitem(unittest.TestCase):
 
         arr3 = jt.array([1,2,3,4])
         arr3_res = arr3[3]
-        arr3_res.data[0] = -1
+        # Indexing a single element gives a rank-0 var, so its buffer is
+        # indexed with the empty tuple, not with [0]. This read `.data[0]` and
+        # raised "too many indices for array: array is 0-dimensional". Both
+        # references agree on the rank: torch's `t[3].dim()` is 0 and NumPy's
+        # `n[3].shape` is `()`. The property under test -- that the slice
+        # shares storage with the source -- is unchanged.
+        assert arr3_res.ndim == 0, arr3_res.shape
+        arr3_res.data[()] = -1
         assert arr3[3] == -1
 
         arr4 = jt.random((4,2,3,3))
@@ -73,15 +80,20 @@ class TestSetitem(unittest.TestCase):
         arr4_res.data[0,0,1,1] = 1
         assert arr4[0,0,1,1] == 1
 
+        # A partial slice shares storage with its source, like every other
+        # slice above. These two lines asserted the opposite -- written when a
+        # narrowing slice could only be produced by copying, before Jittor had
+        # strided views. Both references share here: torch's `t[...,:,:2]` and
+        # NumPy's `n[...,:,:2]` both write through to the source.
         arr4 = jt.random((4,2,3,3))
         arr4_res = arr4[...,:,:2]
         arr4_res.data[0,0,1,1] = 1
-        assert arr4[0,0,1,1] != 1
+        assert arr4[0,0,1,1] == 1
 
         arr4 = jt.random((3,3))
         arr4_res = arr4[...,:,:2]
         arr4_res.data[1,1] = 1
-        assert arr4[1,1] != 1
+        assert arr4[1,1] == 1
 
         arr5 = jt.random((4,2,3,3))
         arr5_res = arr5[1:3,:,:,:]
@@ -101,8 +113,12 @@ class TestSetitem(unittest.TestCase):
         arr_float32_res.data[1,1,2] = 1
         assert arr_float32[2,1,2] == 1
         arr_float32[1,0,0] = 0
-        # getitem and setitem do not conflict 
-        assert arr_float32_res[0,0,0] == 1
+        # A slice taken earlier sees a later write to its source: it is a
+        # view over the same storage, so the two are the same element. This
+        # asserted `== 1` under a comment reading "getitem and setitem do
+        # not conflict", which described the copying getitem of the time.
+        # Both references write through: torch and NumPy each read 0 here.
+        assert arr_float32_res[0,0,0] == 0
 
         arr_bool = jt.bool(np.ones((4,2,3)))
         arr_bool_res = arr_bool[1:3,:,:]
