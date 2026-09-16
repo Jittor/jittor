@@ -1428,6 +1428,57 @@ store to *diagnose* the rendezvous, never while measuring anything else, and
 restore `store.py` before the next run. The triton half of that script is harmless
 (it only fires on kernel launches, which happen after startup).
 
+## 22. The weight-load crash was a null allocator in `ArrayOp::run`
+
+The intermittent `cudaErrorIllegalAddress` during rank 1's sharded weight load had
+a second, deeper cause, and it is a plain null dereference in jittor's own core.
+
+`jt.array()` is what the shim's `torch.tensor(numpy, dtype=..., device="cpu")` path
+becomes -- i.e. what a safetensors load does for every tensor, from four threads at
+once. `ArrayOp`'s output is created by the op itself (`create_output` gives it shape
+and dtype; the `_force_fuse`/scalar shapes take the element path and never get an
+allocation), and `run()` then freed "the previous allocation" unconditionally:
+
+    if (save_mem) free_with_swap(o);
+    else o->allocator->free(o->mem_ptr, o->size, o->allocation);   // o->allocator can be null
+
+jittor's own crash handler caught it, with `addr2line` resolving the fault PC to
+`jittor::ArrayOp::run()` and the fault address 0x0. Reproduced in seconds by
+`probe_loader_migrate.py`, which runs the loader's real pattern -- a host tensor,
+`narrow` of it, `copy_` into a device parameter -- and it reproduced **on one
+thread** (twice), so this was never a threading race on its own. On a TP2 rank the
+same null storage is what a later copy reads, which is the device-1 illegal address.
+
+Fixed by skipping the free when there is no allocator (there is nothing to free).
+`tests/core/test_array.py::TestArrayOpDoesNotAssumeAnOutputAllocator` covers the
+`_force_fuse` path. **Verified:** the probe's single-threaded phase segfaulted
+before and passes after, and a TP2 run then loaded *both* ranks with zero illegal
+addresses -- previously roughly two starts in three died in this phase.
+
+**Still there, and separate: the threaded case.** With the null allocator fixed, the
+probe's four-thread phase fails with
+
+    fused_op.cc:89: [check failed: outputs().size()]     op: fused_op(contiguous)
+
+i.e. a **thread-safety** problem in jittor's op-building/fusion layer: several
+loader threads build and fuse ops while the main thread applies weights. jittor has
+the right mechanism already -- `ExecutorEntryScope` in `src/runtime/executor_entry.h`,
+a per-thread recursive lock that drops the GIL before blocking on the lock -- so the
+next step is to find which op-construction path the shim takes that does not enter
+it (`jtorch_aten.cu`'s `make_empty_vh`/`make_copy_vh` call the op constructors
+directly, from whatever thread the caller is on).
+
+**One hypothesis measured away.** The index inputs of the first DiT block are *not*
+host-resident, on either rank:
+
+    rank 0: inverse_indices int64[3072] dev=0 loc=device   token_tags int64[3072] dev=0 loc=device
+    rank 1: inverse_indices int64[3072] dev=1 loc=device   token_tags int64[3072] dev=1 loc=device
+
+(`H3_IDX_TRACE=1`, metadata only, so a poisoned context cannot hide the answer.)
+They are identical and device-resident, so the "garbage/stale index buffer" reading
+is withdrawn for good -- the request-path fault is elsewhere in that block, after
+the all-gather whose arguments section 21 already verified.
+
 ## Verification
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails
@@ -1488,6 +1539,10 @@ restore `store.py` before the next run. The triton half of that script is harmle
   `TestPackedEntryDeviceGuard`.
 
 - 21: the shape trace above, from a 4-step 256x256 request on two cards.
+- 22: `probe_loader_migrate.py` -- the single-threaded phase segfaults in
+  `jittor::ArrayOp::run` before the fix and passes after; `tests/core/test_array.py`
+  covers the guarded path; a TP2 run loaded both ranks with zero illegal addresses.
+  The four-thread phase still trips `fused_op.cc:89`, which is the next thing.
 
 Each fix was synced into the lab venv at
 `$JITTOR_LAB_ROOT/_state/h3/venv-jittor/lib/python3.12/site-packages/jittor/`,
