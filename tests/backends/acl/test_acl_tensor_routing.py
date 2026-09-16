@@ -19,10 +19,44 @@ def definitions(relative, names=None, **namespace):
     namespace.setdefault("_numbers", numbers)
     path = ROOT / "python" / "jittor" / relative
     tree = ast.parse(path.read_text(encoding="utf8"))
-    tree.body = [node for node in tree.body if isinstance(node, ast.FunctionDef)
-                 and (names is None or node.name in names)]
+    # Keep the module-level constants the surviving functions read.
+    #
+    # Only FunctionDef nodes used to survive the filter below, so every
+    # module-level assignment in the source file was dropped -- and
+    # `ops/indexing.py` has two its functions depend on: `_jt = None` (the
+    # cached module, read before falling back to `_jittor()`) and
+    # `_PYINT = (0).__class__`. Each one raised `NameError` from inside a
+    # function that otherwise worked, and naming them here one at a time would
+    # break again the next time the source file gained a constant.
+    #
+    # Only assignments whose value is self-contained are carried over: a
+    # literal, or a constant expression over names this namespace already
+    # provides. Anything reaching for a name the host did not inject is left
+    # out, which is what keeps the stand-ins the caller passed in charge.
+    def _is_self_contained(node):
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name) and sub.id not in namespace:
+                return False
+            if isinstance(sub, (ast.Call, ast.Await)):
+                return False
+        return True
+
+    carried = []
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name) or target.id.startswith("__"):
+            continue
+        if target.id in namespace or not _is_self_contained(node.value):
+            continue
+        carried.append(node)
+    tree.body = carried + [node for node in tree.body
+                           if isinstance(node, ast.FunctionDef)
+                           and (names is None or node.name in names)]
     if names is not None:
-        assert {node.name for node in tree.body} == names, (path, names)
+        assert {node.name for node in tree.body
+                if isinstance(node, ast.FunctionDef)} == names, (path, names)
     # Local imports must use the same injected host stand-ins as former globals.
     class InjectedImports(ast.NodeTransformer):
         def visit_Import(self, node):
