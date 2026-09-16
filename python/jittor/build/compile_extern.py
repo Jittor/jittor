@@ -681,6 +681,25 @@ def _init_nccl_from_store(nccl_module, store=None):
         if world_rank == 0:
             store.set(unique_id_key, bytes(nccl_module.nccl_get_unique_id()))
         unique_id = store.get(unique_id_key)
+
+        # Rendezvous *before* the collective as well as after it.
+        # `nccl_init_with_unique_id` is a collective that parks until every rank
+        # arrives, and the pyjt wrapper holds the GIL while it does. The rank
+        # whose process hosts the store -- rank 0 runs its server threads -- then
+        # cannot answer a peer that is still in the store, and the peer's `get`
+        # sits unserved until its timeout. Observed on TP2 (2 ranks, TCPStore):
+        # rank 0 past its own `get` and inside `ncclCommInitRank` at 100% CPU,
+        # rank 1 blocked in the store client, and the run dying as "NCCL store
+        # rendezvous timeout: rank 1 waited 120 s" -- roughly one start in three.
+        # Waiting for every rank to have *read* the id before anyone enters the
+        # collective removes the overlap, and this wait costs nothing: it is a
+        # socket read, which releases the GIL, so the server keeps serving.
+        store.set("jittor/nccl/world/unique_id_read/{}".format(world_rank), b"1")
+        store.wait([
+            "jittor/nccl/world/unique_id_read/{}".format(rank)
+            for rank in range(world_size)
+        ])
+
         nccl_module.nccl_init_with_unique_id(list(unique_id))
 
         arrived = "jittor/nccl/world/initialized/{}".format(world_rank)

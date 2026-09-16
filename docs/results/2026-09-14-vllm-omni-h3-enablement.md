@@ -1243,6 +1243,66 @@ work, and neither was a jittor defect:
   "come up" instantly and send its request to the wrong process, with the wrong
   config and the wrong build.
 
+## 19. The intermittent TP2 startup deadlock, from the store's own trace
+
+The startup flake of section 13 -- "NCCL store rendezvous timeout: rank 1 waited
+120 s", about one run in three -- is a GIL deadlock, and the store trace settles
+it. `compile_extern.py`'s rendezvous is
+
+    if world_rank == 0: store.set(unique_id_key, ...)
+    unique_id = store.get(unique_id_key)
+    nccl_module.nccl_init_with_unique_id(list(unique_id))
+
+and `nccl_init_with_unique_id` is a *collective*: it parks until every rank
+arrives, and the pyjt wrapper holds the GIL for the whole of it. Rank 0's process
+is also the one running the store's server threads, so while rank 0 sits in
+`ncclCommInitRank` no Python thread in that process can run -- including the one
+that would answer rank 1's `get`.
+
+With `H3_STORE_TRACE=1` the wire shows exactly that, on a hung run:
+
+    pid=692276 (rank 0, server)  server -> 29 bytes for 'set'
+    pid=692276 (rank 0)          client -> 'get'
+    pid=692276 (rank 0, server)  server -> 199 bytes for 'get'
+    pid=692276 (rank 0)          client <- 199 bytes for 'get'
+    pid=692278 (rank 1)          client -> 'get'
+                                 ... and no server line for it, ever
+
+so the request reaches a process whose server thread never dispatches it, while
+`ps` shows rank 0 at 99% CPU (parked in the collective) and rank 1 at 6% (blocked
+in `readline`). The earlier readings in section 13 -- "rank 0 past its own `get`",
+"no server thread in `_dispatch`", "bytes not in flight" -- are all this one fact:
+the server thread cannot get the GIL. It is intermittent because it only happens
+when rank 0 reaches the collective before rank 1's `get` has been served.
+
+**Fix.** Rendezvous before the collective as well as after it: every rank records
+that it has *read* the unique id, and nobody enters the collective until every
+rank has. `store.wait` is a socket read, which releases the GIL, so the server
+keeps serving while a rank waits there. jittor already has the other fix this
+shape of bug wants -- `GILReleaseScope` in `src/bindings/pyjt/gil.h`, used by the
+parallel compiler and the executor's device waits -- but it cannot be used here:
+the NCCL core is compiled by `compile_custom_ops` without Python headers on the
+include path and dlopened, so the release has to be at the collective's call site
+in Python.
+
+**What that leaves.** With the deadlock fixed the server starts, loads and reaches
+the request, which then fails in 10 s with `cudaErrorIllegalAddress` on rank 1.
+The traceback finally names the call -- the launch list is stale and says
+`encoder.py`, which is where the rotary runs, not where the fault is:
+
+    out = fn(
+    return packed_low_level.fwd(q, k, v, float(softmax_scale), bool(causal), wl, wr)
+    RuntimeError: ... cudaErrorIllegalAddress
+
+i.e. the text encoder's `F.scaled_dot_product_attention` reaching the shim's
+*packed* flash-attn entry. That entry is exercised in isolation by
+`probe_encoder_sdpa.py` -- the transposed views, the GQA `repeat_interleave`, the
+rotary `cat`, `is_causal=True`, head dim 128, 32 query and 4 KV heads per rank,
+fp16 and bf16, sequence 489/512/1000/1023 -- and it passes on both devices. So the
+remaining difference is not the call itself but the state the server is in when it
+makes it: two ranks holding tens of GB each, after a multi-threaded sharded load,
+on device 1 only. That is the next thing to reproduce.
+
 ## Verification
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails
@@ -1291,6 +1351,11 @@ work, and neither was a jittor defect:
 - 17: `compat/tests/torch/test_torch_cpp_extension.py::TestShimHeadersInvalidateTheBuildCache`,
   which fakes the compiler and asserts an unchanged tree compiles nothing while an
   edited shim header recompiles and re-links.
+
+- 19: the deadlock is removed by construction (nobody enters the collective before
+  every rank has read the id) and a TP2 start that previously failed ~1 run in 3
+  now came up, loaded the sharded weights and served a request. The request fault
+  above is still open.
 
 Each fix was synced into the lab venv at
 `$JITTOR_LAB_ROOT/_state/h3/venv-jittor/lib/python3.12/site-packages/jittor/`,
