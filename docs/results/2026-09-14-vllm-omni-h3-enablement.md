@@ -1377,9 +1377,23 @@ also explains why the fault is invisible to a *shape* check, why it is
 intermittent (it depends on what the unreadable buffer happens to contain) and why
 device 0 is immune: there the tensor materialises.
 
-The trace prints only the exception's type; widening it to the message is the next
-one-line measurement. That message names the jittor path that leaves a device-1
-Var unreadable.
+Widening that trace to the message settles which of the two it is, and the answer
+is neither of the above:
+
+    indices_ptr<RuntimeError: helper_cuda.h:135: CUDA error at .../driver.cc:176
+      code=700( cudaErrorIllegalAddress ) cudaMemGetInfo(&free, &total)>
+
+Reading the values raises the *same* illegal address, at the allocator's
+`cudaMemGetInfo` -- the first CUDA call made after an async fault. The trace runs
+*before* the launch, on the first denoise kernel, so the device context was already
+dead when the denoise loop started: the index read is a victim that reports the
+error, not its cause, and the "garbage index" reading above is withdrawn. The fault
+is in the pre-attention work of the first DiT block on rank 1, and the launch lists
+of those runs name `nccl_all_gather` (TP communication) alongside `cublas_matmul`,
+`reshape` and `fused_op` -- that is where the next instrument belongs: log device,
+stream, counts and pointers on both ranks for the first all-gather of the denoise
+loop. Nothing in the attention path is implicated any more; every fault seen after
+the three fixes above happens *before* the first kernel of the loop.
 
 **A trap worth naming, because it cost three runs:** that stall -- both workers
 logging the final IR-op-priority line and then no progress, rank 0 spinning at 100%
