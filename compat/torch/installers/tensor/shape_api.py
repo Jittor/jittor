@@ -1,5 +1,6 @@
 """Stable Torch shape and reduction adapters using native Tensor operations."""
 from ...context import get_install_context
+from ...grad import autocast_is_enabled
 from . import jt, np, dtype, _jittor_dtype_name, _dtype_to_str, _diff, _trapz, nn
 from .method_api import _ip
 
@@ -198,6 +199,10 @@ def _axis_reduce(name, self, *a, **k):
 
 
 def _method_mean(self, *a, **k):
+    if (autocast_is_enabled()
+            and jt.core.dispatch_context([self])[0] in ("cpu", "cuda")):
+        with jt.flag_scope(amp_reg=0):
+            return _plain_reduce('mean', self, *a, **k)
     return _plain_reduce('mean', self, *a, **k)
 
 

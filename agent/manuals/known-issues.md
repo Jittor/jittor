@@ -24,6 +24,50 @@ framework defects.
 - **Research:** an intentionally unsupported capability requiring architectural
   work.
 
+## KI-TORCH-AMP-001: half-precision weak scalars can overflow before arithmetic
+
+- Severity: Medium
+- Status: Open; reviewed 2026-09-16 with a CUDA causal reproduction and independent Torch CPU/CUDA oracle
+- Owner: Torch dtype-promotion and AMP maintainers
+- Evidence: the unversioned `Accelerate/perf_repair/amp_scale_probe.py` in
+  `${JITTOR_LAB_ROOT}` without ablation flags, compared in the isolated Jittor
+  and real-Torch environments. `amp_scale_shim_cuda.json` and
+  `amp_scale_oracle_cuda.json` record the mismatch; CPU and CUDA typed-zero-dim
+  scaling behavior must use separate independent oracle results.
+- Symptom: the bridge first casts a Python scalar to half precision, so
+  `float16([0.25, -0.125]) * 65536.0` becomes infinities, whereas real Torch
+  CPU/CUDA returns finite half values `[16384, -8192]`. A typed zero-dim scale
+  is a different promotion path and must not be assumed equivalent to a
+  Python scalar across CPU/CUDA.
+- Workaround: for the Python-scalar expression, compute in explicit FP32 and
+  cast the result back to half. The current shim GradScaler uses a Python
+  float scale, whereas independent Torch uses a typed zero-dimensional scale;
+  this repair does not modify the scaler. Fixing weak-scalar promotion must
+  also validate the shim scaler's overflow detection, skipped updates and
+  backoff against Torch's distinct CPU/CUDA typed-scale paths.
+- Review/expiry condition: verify Python int/float and reflected arithmetic,
+  typed zero-dim operands, dtype, value, backward and genuine overflow against
+  independent real Torch on CPU and CUDA, preserving GradScaler skip/backoff.
+
+## KI-TORCH-AMP-002: public sqrt retains native autocast demotion
+
+- Severity: Medium
+- Status: Open for the public sqrt path; reviewed 2026-09-16 with a CUDA public-path reproduction
+- Owner: Torch operation-binding and AMP maintainers
+- Evidence: unversioned `Accelerate/perf_repair/amp_scale_probe.py` and
+  `amp_scale_shim_cuda_math_public.json` versus
+  `amp_scale_oracle_cuda_math_public.json`, under `${JITTOR_LAB_ROOT}`; the
+  [scoped repair report](../../refactor-wip/results/2026-09-16-accelerate-wrapper-performance-repair.md)
+  distinguishes canonical optimizer math from the public operation.
+- Symptom: native sqrt can demote an FP32 variance to FP16 under compatibility
+  autocast, while real Torch keeps its FP32 input/output policy. Correcting
+  elementwise arithmetic alone does not close this public-operation mismatch.
+- Workaround: disable autocast locally around explicit FP32 sqrt computation.
+  The canonical Adam update has a local AMP-disabled math scope; that does not
+  establish that the general public sqrt path is fixed.
+- Review/expiry condition: public sqrt dtype/value/backward matches independent
+  real Torch on CPU/CUDA, while raw native AMP behavior remains unchanged.
+
 ## KI-TEST-001: formerly silent test cases expose unresolved contracts
 
 - Severity: Medium

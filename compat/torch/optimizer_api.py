@@ -5,6 +5,7 @@ import weakref as _weakref
 import jittor as jt
 import numpy as np
 from .context import get_install_context
+from .grad import autocast_is_enabled
 from .types import _dtype_to_str
 from ..diagnostics import EXPECTED, swallowed
 from typing import Any, Dict, List
@@ -610,6 +611,13 @@ def _update_in_target_dtype(target, value):
     target.update(value)
 
 
+def _adam_update_in_input_dtype(*args, **kwargs):
+    if jt.core.dispatch_context([args[0]])[0] in ("cpu", "cuda"):
+        with jt.flag_scope(amp_reg=0):
+            return adam_update(*args, **kwargs)
+    return adam_update(*args, **kwargs)
+
+
 def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay):
     native_fsdp_loss = None
     if closure is None and callable(loss):
@@ -651,6 +659,9 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
         return native_fsdp_loss if native_fsdp_loss is not None else loss
     if not getattr(self, "_torch_backward_advanced_n_step", False):
         self.n_step = int(getattr(self, "n_step", 0)) + 1
+    math_update = adam_update
+    if autocast_is_enabled() and jt.flags.amp_reg:
+        math_update = _adam_update_in_input_dtype
     jt.flags.node_order = 1
     for pg in self.param_groups:
         lr = pg.get("lr", self.lr)
@@ -693,7 +704,7 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
             if not was_trainable or not isinstance(g, jt.Var) or list(g.shape) != list(p.shape):
                 continue
             param_steps[i] = int(param_steps[i]) + 1
-            _update_in_target_dtype(p, adam_update(
+            _update_in_target_dtype(p, math_update(
                 p, g, v, m, lr=lr, eps=eps, weight_decay=weight_decay,
                 betas=(b0, b1), step=param_steps[i],
                 decoupled_weight_decay=decoupled_weight_decay,

@@ -44,6 +44,8 @@ def _optimizer_arithmetic(tensors, coefficients, *, enabled=True):
     """Native ops for resolved FP32 frontend updates, preserving scalar policy."""
     if not enabled or not all(_concrete_frontend_tensor(t) for t in tensors):
         return _STANDARD_OPTIMIZER_ARITHMETIC
+    if jt.flags.amp_reg != 0:
+        return _STANDARD_OPTIMIZER_ARITHMETIC
     if not all(isinstance(c, (int, float)) for c in coefficients) or not all(
             _jittor_dtype_name(t.dtype) == "float32" for t in tensors):
         return _STANDARD_OPTIMIZER_ARITHMETIC

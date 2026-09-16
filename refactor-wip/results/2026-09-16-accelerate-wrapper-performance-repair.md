@@ -1,9 +1,9 @@
 # Accelerate wrapper performance repair
 
-- Status: verified within scoped FP32 CPU/CUDA optimizer and batching validation
+- Status: verified within scoped FP32 CPU/CUDA optimizer, batching and compatibility-autocast validation
 - Date: 2026-09-16
 - Baseline commit: `feature/cgq_transformers@4d424432`
-- Repair commit: introducing commit of this report
+- Repair commit: `1048a6ec` for FP32 performance; introducing AMP followup commit for the scoped autocast repair
 - Owner: Jittor core maintainers
 - Review when: optimizer arithmetic, Tensor scalar promotion/placement, Accelerate wrapping, or TensorDataset batching changes
 
@@ -162,10 +162,6 @@ coverage is retained. Exact frozen-baseline replay confirms the stale tests
 failed before this repair; the broader legacy family installer/placement and
 dtype-string failures are likewise unchanged and remain outside this scope.
 
-A separate independent oracle identifies an existing low-precision elementwise/reduction
-gradient-policy defect. Its diagnosis and repair are outside this FP32
-performance commit; finite-only AMP smoke passes are not numerical parity
-evidence for that defect.
 The native optimizer regression passes 37/37 tests in its independent native
 process: closed-form SGD/Adam/AdamW rules, low-precision dtype preservation,
 gradient plumbing and CPU save/resume. CPU/CUDA update cases execute under
@@ -186,7 +182,7 @@ CPU child-process compilation and CUDA compilation occupy separate native
 configuration caches, and the warmed CUDA binary remains unchanged.
 No ROCm/NPU performance claim is made.
 
-Final frozen source hashes:
+Frozen FP32 performance-commit source hashes:
 
 | File | SHA-256 |
 | --- | --- |
@@ -194,6 +190,66 @@ Final frozen source hashes:
 | `optim/algorithms/adam.py` | `ec2d62eff7da73a91b9e358ab2114ebc7dca8be2c2b3b3323c470be080aa10c2` |
 | `optim/algorithms/sgd.py` | `35a4c76d3b01cdf93cc3f9776d47bfd3b620fa71c135efa87706d1bd001a478b` |
 | `compat/torch/installers/data.py` | `0c39609829bec692241a9c2d34f8fd2ae21a27fdcaf5960ad624fcb8fe2e2492` |
+
+## Scoped compatibility-autocast followup
+
+The followup to `1048a6ec` addresses a separate correctness defect exposed by
+an independent AMP oracle: native AMP can demote FP32 pointwise arithmetic,
+mean and Adam's square root while compatibility autocast is active. The
+frontend now preserves input dtype for Tensor add/subtract/multiply/division
+operators and mean on CPU/CUDA. Functional add, mul and the multiply alias
+call their original canonical native functions inside a local AMP-disabled
+scope, retaining alpha/out behavior and native/custom-subclass protocols.
+Canonical Adam math alone also uses a local AMP-disabled scope; closures and
+backward retain their caller's autocast context. The shared FP32 optimizer
+dispatcher falls back whenever native AMP is enabled. Raw native AMP and
+other backends retain their existing policies.
+
+The final integrated regression passes 46 tests with two skips on CPU
+(9.03 s) and all 50 tests on real CUDA (15.35 s), covering optimizer,
+batching, Accelerate and the final ten-case AMP test file. The sessions
+report zero fallback and verify actual placement. Functional tests cover
+raw native Vars, custom Parameter arithmetic overrides, aliases and alpha/out
+protocols. A final production probe uses no ablation flags and confirms FP32
+functional arithmetic, mean and division, identical three-step AdamW/SGD
+trajectories inside and outside autocast, and the default loss scale 65536.
+Against independent real-Torch CUDA, parameter trajectories match exactly
+and Adam moment-state maximum error is 1.86e-9. The scaled gradients match
+exactly (weight 170.625, bias 1365). Maintained tests also exercise genuine
+overflow skip/backoff followed by a finite update and closure-context
+preservation. Finite-only smoke tests are not used as numerical parity evidence.
+
+The affected optimizer/API owner and import-boundary structure subset passes
+all 31 cases (4.01 s), and the layout checker passes. The full 1333-case
+structure result and four proven baseline failures above remain the full-gate
+record; the followup subset is not presented as a new full-structure green
+run. A final warmed FP32 SGD sanity run measures 3.374 ms direct and 3.819 ms
+wrapped with zero fallback, showing no clear performance regression relative
+to the earlier direct/full control under shared GPU load. It is a short
+sanity check, not a replacement for the FP32 ABBA attribution experiments.
+
+This is a bounded autocast correction, not a complete AMP parity claim.
+Half-precision Python weak-scalar overflow and the general public sqrt policy
+remain open as
+[KI-TORCH-AMP-001 and KI-TORCH-AMP-002](../../agent/manuals/known-issues.md#ki-torch-amp-001-half-precision-weak-scalars-can-overflow-before-arithmetic).
+The current shim GradScaler uses a Python float scale; independent Torch
+uses a typed zero-dimensional scale. This followup does not modify the scaler.
+Weak Python-scalar promotion and Torch's CPU/CUDA typed-scale paths must be
+compared separately, and a future weak-scalar repair must jointly verify the
+shim scaler's overflow detection, skipped updates and backoff. Canonical
+Adam's local scope avoids the sqrt mismatch without claiming a public sqrt
+repair.
+
+Final AMP followup source hashes:
+
+| File | SHA-256 |
+| --- | --- |
+| `optim/base.py` | `50f362f352a2672cc5eec852c55c54f311f2e38c4abbf167e01dcff36679d96e` |
+| `compat/torch/optimizer_api.py` | `c08bc20d88b06927871b5047c2579154d1309015297c34d37d8b362ca219bf17` |
+| `tensor/method_api.py` | `d7bbd2ac0e0de5b247d2267202d30728d24655ed5a730723047f11d85b9ee40a` |
+| `tensor/methods.py` | `29e932f1e4fd970f74503c0da3ba142f9957c09446358c957b2e2ca0dbf07caa` |
+| `tensor/shape_api.py` | `ab11c0602d3fb46c6525535ee8752eda377000d1f04b2fba4be562a8f55eedbf` |
+| `test_accelerate_amp.py` | `510e8398e49fb86642bfe07d2ff566947186daacb6eb2e3d13167e30c8f38096` |
 
 ## Reproduction
 

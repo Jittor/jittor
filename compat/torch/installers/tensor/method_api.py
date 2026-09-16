@@ -2,6 +2,7 @@
 from importlib import import_module
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
+from ...grad import autocast_is_enabled
 from ..core import _promote_pair
 
 _owner = import_module(__package__)
@@ -434,13 +435,39 @@ class _Storage:
         return self.size() * self._element_size()
 
 
+def _functional_preserves_input_dtype(input, other):
+    if not autocast_is_enabled():
+        return False
+    tensor = input if isinstance(input, _NativeVar) else other
+    return (isinstance(tensor, _NativeVar)
+            and _owner.jt.core.dispatch_context([tensor])[0] in ("cpu", "cuda"))
+
+
 def _add(input, other, *, alpha=1, out=None):
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _native_add = _native['_native_add']
-    if alpha != 1:
-        other = other * alpha
-    result = _native_add(input, other)
+    if _functional_preserves_input_dtype(input, other):
+        with _owner.jt.flag_scope(amp_reg=0):
+            if alpha != 1:
+                other = other * alpha
+            result = _native_add(input, other)
+    else:
+        if alpha != 1:
+            other = other * alpha
+        result = _native_add(input, other)
+    if out is not None:
+        return _owner._assign_out(out, result)
+    return result
+
+
+def _mul(input, other, *, out=None):
+    native = get_install_context(_owner.jt).state["tensor_native_api"]["_native_mul"]
+    if _functional_preserves_input_dtype(input, other):
+        with _owner.jt.flag_scope(amp_reg=0):
+            result = native(input, other)
+    else:
+        result = native(input, other)
     if out is not None:
         return _owner._assign_out(out, result)
     return result
@@ -911,9 +938,20 @@ def _var_norm(self, p="fro", dim=None, keepdims=None, *rest,
 
 
 
+_AUTOCAST_INPUT_DTYPE_ARITHMETIC = {
+    '__add__', '__radd__', '__sub__', '__rsub__', '__mul__', '__rmul__',
+    '__truediv__', '__rtruediv__',
+}
+
+
 def _binary_native(opname, left, right):
     native = get_install_context(_owner.jt).state["tensor_native_api"]["operators"][opname]
-    result = native(left, right)
+    if (opname in _AUTOCAST_INPUT_DTYPE_ARITHMETIC and autocast_is_enabled()
+            and _owner.jt.core.dispatch_context([left])[0] in ("cpu", "cuda")):
+        with _owner.jt.flag_scope(amp_reg=0):
+            result = native(left, right)
+    else:
+        result = native(left, right)
     return _owner._mark_cpu_like(result, left, right)
 
 def _promoting_binary(self, other, opname, reflected):
