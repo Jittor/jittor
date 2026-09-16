@@ -1850,14 +1850,50 @@ node releases the liveness it holds on its inputs. Returning early skips those
 releases and the counters underflow later. So the node must **not** be kept
 alive; the planner and the freeing thread must not **overlap**. That is
 `graph_mutation_mutex()`, which `Node::free()` already takes, and which the
-executor's planning path never takes -- the guard is one-sided. Section 29's
-first draft proposed holding it from `SetupFreeBuffer`'s constructor rather than
-only its destructor; that is still the shape, with the caveat that the window has
-to stop short of the parts that wait on the device or on the compile workers.
+executor's planning path never takes -- the guard is one-sided.
+
+### The one-sided guard, enforced: also measured, also not the fix
+
+That made the next candidate obvious -- hold `graph_mutation_mutex()` for the
+batch, in `Executor::run_sync`, so no other thread can clear a batch node's edges
+while the planner reads them. It is five lines (`free()` takes the same recursive
+lock, so the batch's own frees still pass through). Measured:
+
+```
+#### ex run 1
+exit=124          # timeout 600
+```
+
+Both of the first two runs had to be killed; neither reached a verdict. The
+exclusion **deadlocks** the four-thread loader. The reason is a lock-order
+inversion, not the device wait: `run_sync` already holds `ExecutorEntryScope`
+(call it L1) and would now hold `graph_mutation_mutex()` (L2) inside it, while a
+second thread sitting in `Node::free()` holds L2 and can need L1 -- that drain can
+re-enter the executor. Reverted in both trees.
+
+So both cheap shapes are now excluded by measurement rather than by argument:
+
+| candidate | result |
+| --- | --- |
+| keep the node alive (early return in `free()`) | assert gone, 3/12 runs fail `node.h:279` counter underflow |
+| hold the graph-mutation lock for the whole batch | loader deadlocks (`exit=124`) |
+
+What is left is to separate the two halves of `free()`: the **accounting** (the
+`release_*_liveness` it enqueues on its neighbours) has to happen immediately and
+exactly once, while the **graph surgery** (`erase_output` on its producers,
+`erase_input` on its consumers, `_inputs.clear()`, `_outputs.clear()`, the
+recursive free of its output vars, `free_var`) is what the plan can trip over and
+is therefore what has to wait until the batch is done. A deferred-surgery list
+drained at the end of the batch preserves the counters, which is why it is the
+remaining design -- and the reason it is written down rather than landed here is
+that `free()` is re-entered from several liveness paths and the erasures are
+index-based (`back_index`), so the drain has to erase by identity and run exactly
+once per node.
 
 The probe for any candidate is
 `H3_FUSE_DUMP=1 probe_loader_race.py threads 4 6` -- 15-20 runs, because the rate
-is roughly one in four.
+is roughly one in four -- and the per-run timeout should be short (~120 s), since
+a wrong candidate hangs rather than fails.
 
 ## 30. The deployed core was missing the whole stream-consistency set
 
@@ -2074,10 +2110,42 @@ graph, and a running executor. Combined with the trace (same geometry as the
 calls that worked, correct devices, the process dying inside the call) and with
 `CUDA_LAUNCH_BLOCKING` not moving the error to a launch, that is the signature of
 a lifetime or ordering hole that only the long-running context can open -- not of
-a wrong index. The outstanding audit is therefore the ownership of the buffers
-the extension allocates for itself through the shim's tensor factories
-(`out`, `softmax_lse`, and the split-kv `out_accum` / `softmax_lse_accum`), which
-are the only ones in this call with no owner on the Python side.
+a wrong index.
+
+### Components checked and cleared, so they are not re-audited
+
+Each of these was a plausible seat for a device-1-only asynchronous fault, and
+each is correct in the tree as it now stands:
+
+* `compat/shim/cpp_extension/include/c10/cuda/CUDAStream.h` -- the extension
+  launches on `cudaStreamPerThread`, and the freshly built `.so` is confirmed to
+  contain it (the `strings` check above).
+* `c10/cuda/CUDAGuard.h` -- `CUDAGuard` calls `cudaSetDevice` *and* moves jittor's
+  own current device, which is what stops the extension's `torch::empty` buffers
+  from being allocated on device 0. Its comment already describes this exact
+  failure mode.
+* The generated packed entry -- every entry constructs
+  `at::cuda::CUDAGuard device_guard{q.device()}`, and the generated source in the
+  build directory confirms it.
+* `flash_api.cpp` -- every launch site takes
+  `at::cuda::getCurrentCUDAStream().stream()`, and there is **no** runtime-API call
+  that omits the stream. That is also why rebuilding the extension with
+  `--default-stream per-thread` would be thirty minutes for nothing.
+* The shim's `jtorch::Tensor` -- it holds `shared_ptr<VarHolder>`, so the buffers
+  the extension allocates for itself (`out`, `softmax_lse`, `out_accum`,
+  `softmax_lse_accum`) are owned and cannot be recycled while the C++ object
+  lives. The Python-side `_mark_readonly_borrow` is skipped on the packed path,
+  but that is not a hole: the packed path's inputs go through the generated
+  entry's `jt_readonly_tensor`.
+* `nccl_stream_begin` / `nccl_stream_end` -- the side-stream join records on the
+  communication stream and waits on `BackendStreamKind::Compute`, i.e.
+  `cudaStreamPerThread`, so the ordering target agrees with the per-thread
+  compile.
+
+What is left is the long-running context itself. The two things to point
+`compute-sanitizer` at, when a run can be afforded, are the TP collectives'
+driver-API launches (which `CUDA_LAUNCH_BLOCKING` does not serialise) and the
+`cudaMemcpyAsync` on the copy side stream.
 
 The extension itself was re-checked as a suspect and cleared: of the four
 `getCurrentCUDAStream()` launch sites and every `flash_api.cpp` runtime call,
