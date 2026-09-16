@@ -124,6 +124,16 @@ def _supports_mkl(a, b, trans_a=False, trans_b=False):
         return False
     if not (a._storage_is_contiguous() and b._storage_is_contiguous()):
         return False
+    if jt.flags.auto_mixed_precision_level:
+        # Same trap `MatmulTuner` declines for, and for the same reason: auto
+        # mixed precision retypes the *output* to float16 while the operands
+        # stay float32, so an op that is float32 through and through cannot
+        # stand in. Here it does not surface in the forward -- it surfaces one
+        # step later, when `MklMatmulOp::grad` builds its own op out of a
+        # cotangent that came back float16 and `mkl_matmul_op.cc` asserts
+        # "support float32 only now". The generic path already writes the
+        # requested output dtype, so leave it in place.
+        return False
     ops = get_library_ops("mkl", load=True)
     return ops is not None and hasattr(ops, "mkl_matmul")
 
