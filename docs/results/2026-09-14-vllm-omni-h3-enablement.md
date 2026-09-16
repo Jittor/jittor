@@ -1919,6 +1919,11 @@ The probe for any candidate is
 is roughly one in four -- and the per-run timeout should be short (~120 s), since
 a wrong candidate hangs rather than fails.
 
+Baseline on the core as it stands (stream fixes + the `H3_FUSE_DUMP`
+diagnostics): **6 runs, 4 `OK`, 1 failed, 2 dumps** -- so the assert is still
+there at about one run in three and the diagnostics are in the binary. Any
+candidate should be read against that, not against zero.
+
 ## 30. The deployed core was missing the whole stream-consistency set
 
 The FLASH_ATTN request was the first run with the rebuilt extension, and it
