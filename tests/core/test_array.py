@@ -285,5 +285,34 @@ class TestArray(unittest.TestCase):
 
 
 
+class TestArrayOpDoesNotAssumeAnOutputAllocator(unittest.TestCase):
+    """`ArrayOp::run` installs the output's memory, so it may have none yet.
+
+    The output of `array` is created by the op itself: `create_output` gives it a
+    shape and dtype, and for shapes that take the element/`_force_fuse` path the
+    executor never allocates it. `run()` then freed "the previous allocation"
+    with an unconditional `o->allocator->free(...)` -- a null dereference, fault
+    address 0x0, caught by jittor's own segfault handler as
+    `jittor::ArrayOp::run()`.
+
+    It is reachable from the ordinary weight-loading pattern the shim's torch
+    API produces -- `torch.tensor(numpy, dtype=..., device="cpu")` and then
+    `param[a:b].copy_(host.narrow(...))` with `param` on a device -- which is what
+    a safetensors load does from four threads at once. On one thread that pattern
+    segfaulted; on a TP2 rank it left a null storage that a copy then read, which
+    is the device-1 `cudaErrorIllegalAddress` seen during the sharded weight load.
+    """
+
+    def test_scalar_and_one_element_arrays(self):
+        # `num == 1` takes the `_force_fuse`/element path, which is the shape
+        # that has no allocation to free when `run()` replaces the output's
+        # memory.
+        for value in (np.float32(1.0), np.zeros(1, dtype="float32"),
+                      np.zeros(0, dtype="float32")):
+            out = jt.array(value)
+            out.sync()
+            self.assertEqual(int(out.numel()), int(np.asarray(value).size))
+
+
 if __name__ == "__main__":
     unittest.main()
