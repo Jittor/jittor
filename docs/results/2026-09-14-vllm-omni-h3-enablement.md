@@ -487,7 +487,13 @@ out "rank 0 never set the key" -- the earlier orphan-port story explained the
 *first* occurrences and does not explain this one. The remaining suspect is the
 request/response framing between `_TCPStoreClient.request` and
 `_serve_connection` (statically each pair looked balanced), and the way to settle
-it is a per-request trace in those two functions on a hung run.
+it is a per-request trace in those two functions on a hung run. The lab has that
+ready: `instrument_store_and_triton.py` applies both traces to the deployed shim
+(store request/response logging, and a triton launch trace printing each kernel's
+grid next to its operands' shapes, which is the one-line check for the unmasked
+row walk above). Relaunch with `H3_STORE_TRACE=1 H3_TRITON_SHAPES=1`; both are
+no-ops without their env var, and the repo copies are the clean ones to restore
+from afterwards.
 
 **Do not reuse a per-step number for TP2.** The loop's progress bar reached
 `0/7` before the fault, so there is no measured TP2 step time. An earlier
