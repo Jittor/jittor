@@ -303,6 +303,8 @@ include docs/community/AWESOME-JITTOR-LIST.cn.md
 include docs/community/AWESOME-JITTOR-LIST.md
 include docs/community/index.md
 include docs/compatibility/index.md
+include docs/compatibility/torch-architecture.md
+include docs/compatibility/torch-lowering.md
 include docs/compatibility/torch-shim.md
 include docs/compatibility/torch.md
 include docs/conf.py
@@ -337,6 +339,9 @@ include docs/performance/index.md
 include docs/performance/library-standing.md
 include docs/releases/2.0.md
 include docs/releases/index.md
+include docs/results/2026-09-12-minimax-h3-torch-compat.md
+include docs/results/2026-09-14-autocast-conv-mixed-dtype.md
+include docs/results/2026-09-14-exit-heap-corruption.md
 include docs/tutorials/index.md
 include examples/README.md
 include examples/gan/README.md
@@ -805,6 +810,7 @@ include tools/release/pack_offline.py
 include tools/release/test_check_sdist_contents.py
 include tools/release/test_check_wheel_contents.py
 include tools/roundtrip_consistency_sweep.py
+include tools/run_accelerate_gate.py
 include tools/run_test_suite.py
 include tools/semantic_divergence_probe.py
 include tools/side_effect_probe.py

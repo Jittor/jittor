@@ -312,6 +312,14 @@ def _load_state_dict_torch(self, state_dict):
             "loaded state dict has a different number of parameter groups")
     load_plan = []
     max_step = 0
+    g = _context.target_namespace
+    moment_names = {
+        "adam": ("exp_avg", "exp_avg_sq"),
+        "adamw": ("exp_avg", "exp_avg_sq"),
+        "sgd": ("momentum_buffer",),
+        "rmsprop": ("square_avg",),
+        "adan": ("exp_avg", "exp_avg_sq", "exp_avg_diff", "pre_grad"),
+    }.get(kind, ())
     for saved_pg, current_pg in zip(saved_groups, self.param_groups):
         if not isinstance(saved_pg, Mapping):
             raise TypeError("loaded optimizer parameter group must be a mapping")
@@ -323,7 +331,7 @@ def _load_state_dict_torch(self, state_dict):
                 "loaded state dict contains a parameter group that "
                 "doesn't match the size of optimizer's group")
         slots = []
-        for pid in saved_params:
+        for pid, parameter in zip(saved_params, current_pg["params"]):
             missing = object()
             try:
                 st = saved_state.get(pid, missing)
@@ -347,6 +355,14 @@ def _load_state_dict_torch(self, state_dict):
                     raise ValueError(
                         "loaded optimizer step must be a non-negative integer")
                 step = int(numeric)
+            for name in moment_names:
+                if name not in st:
+                    continue
+                value = st[name]
+                if not isinstance(value, (jt.Var, np.ndarray)):
+                    raise TypeError("loaded optimizer %s must be a Tensor or ndarray" % name)
+                st[name] = g.tensor(value, dtype=_jittor_dtype_name(value.dtype),
+                                    device=parameter.device).stop_grad()
             max_step = max(max_step, step)
             slots.append((st, step))
         load_plan.append((dict(saved_pg), slots))
@@ -362,7 +378,10 @@ def _load_state_dict_torch(self, state_dict):
                 continue
             for i, buffer in enumerate(buffers):
                 if isinstance(buffer, jt.Var):
-                    buffers[i] = jt.zeros_like(buffer).stop_grad()
+                    parameter = pg["params"][i]
+                    buffers[i] = g.zeros(tuple(parameter.shape),
+                                         dtype=_jittor_dtype_name(buffer.dtype),
+                                         device=parameter.device).stop_grad()
     for gi, (saved_pg, slots) in enumerate(load_plan):
         pg = self.param_groups[gi]
         steps = _torch_param_steps(pg)

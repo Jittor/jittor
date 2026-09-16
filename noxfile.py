@@ -1280,7 +1280,8 @@ def tutorials(session):
     _run_pytest(session, ("tests/integration/test_notebooks.py",), env)
 
 
-def _record_asv(session, root, env, asv_command, default_machine, external=False):
+def _record_asv(session, root, env, asv_command, default_machine, external=False,
+                benchmark_filter=None):
     asv_home = root / "jittor-asv-home"
     asv_home.mkdir(parents=True, exist_ok=True)
     env["JITTOR_HOME"] = str(asv_home)
@@ -1348,6 +1349,7 @@ def _record_asv(session, root, env, asv_command, default_machine, external=False
                     "--show-stderr",
                     "--no-pull",
                 )
+                + (("--bench", benchmark_filter) if benchmark_filter else ())
                 + tuple(session.posargs)
             ),
             env=env,
@@ -1417,6 +1419,62 @@ def benchmark(session):
         "tqdm==4.67.1",
     )
     _record_asv(session, root, env, ("asv",), "jittor-ci-cpu")
+
+
+@nox.session(python=False)
+def accelerate(session):
+    """Required Accelerate-only correctness; --stage unit/nccl/all is explicit."""
+    _root, env = _session_env(session, "accelerate")
+    python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
+    _install_compat_source(session, env, python)
+    session.run(python, str(REPO_ROOT / "tools" / "run_accelerate_gate.py"),
+                *(session.posargs or ("--stage", "unit", "--device", "cpu")),
+                external=True, env=env)
+
+
+@nox.session(python="3.11", venv_backend="venv")
+def accelerate_cpu(session):
+    """Nightly required CPU Accelerate gate in a venv containing no real Torch."""
+    env = _cpu_gate_env(session)
+    session.install(*CPU_GATE_REQUIREMENTS)
+    session.install("packaging==25.0", "psutil==7.0.0", "pyyaml==6.0.2",
+                    "huggingface-hub==0.34.4", "safetensors==0.6.2")
+    # Accelerate's dependency resolver would install real Torch and overwrite
+    # the optional frontend. Its non-Torch dependencies are installed above.
+    session.install("--no-deps", "accelerate==1.10.1")
+    _install_compat_source(session, env)
+    session.run("python", str(REPO_ROOT / "tools" / "run_accelerate_gate.py"),
+                "--stage", "unit", "--device", "cpu", *session.posargs, env=env)
+
+
+@nox.session(python=False)
+def benchmark_accelerate(session):
+    """Report isolated Accelerate direct/full ASV results, without a hard threshold.
+
+    Use a preconfigured Accelerate/ASV interpreter via JITTOR_CI_PYTHON. Select
+    CPU/CUDA through ASV parameters; CUDA requires an externally configured SDK.
+    """
+    root, env = _session_env(session, "asv-accelerate")
+    python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
+    _install_compat_source(session, env, python)
+    env["cache_name"] = "asv-accelerate"
+    env["JITTOR_TORCH_SHIM"] = "1"
+    env["backend_fallback"] = "error"
+    session.run(python, "-c",
+                "import importlib.util, importlib.metadata; "
+                "assert all(importlib.util.find_spec(name) is not None "
+                "for name in ('asv', 'accelerate', 'numpy')); "
+                "assert importlib.metadata.version('accelerate') == '1.10.1'",
+                external=True, env=env)
+    # Always filter this namespace-owning workload, even when callers supply
+    # ASV sampling/parameter options. Native/real-Torch cases use other sessions.
+    if any(arg == "--bench" or arg.startswith("--bench=") for arg in session.posargs):
+        session.error("benchmark_accelerate fixes --bench; use ASV parameter options to select cases")
+    _record_asv(session, root, env, (python, "-m", "asv"),
+                "jittor-accelerate", external=True,
+                benchmark_filter="^accelerate_training\\.")
 
 
 @nox.session(python=False)

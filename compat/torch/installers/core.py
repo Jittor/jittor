@@ -387,15 +387,17 @@ def _manual_seed(s):
     ctx = _misc_context()
     g = ctx.jittor_module
     s = int(s)
+    if s < -(1 << 63) or s >= 1 << 64:
+        raise RuntimeError("manual_seed expects a seed in the supported 64-bit range")
+    s %= 1 << 64
     # Torch random factories consume their old stream before manual_seed
     # returns. Jittor evaluates lazily, so materialize the currently live graph
     # before resetting its stream; otherwise pending model initialization runs
     # under the new sampling seed and shifts every later random draw.
-    if hasattr(jt, "sync_all"):
-        jt.sync_all()
+    jt.set_cpu_seed(s)
+    if g.cuda.is_available():
+        g.cuda.manual_seed_all(s)
     ctx.state["core_misc"]["seed"] = s
-    if hasattr(jt, "set_global_seed"):
-        jt.set_global_seed(s)
     return g
 
 
@@ -420,23 +422,29 @@ def _seed(value=_seed_sentinel):
 
 
 def _get_rng_state():
-    return jt.array([initial_seed()], dtype="int64")
+    return _encode_rng_state(jt.get_cpu_rng_state())
+
+
+def _encode_rng_state(state):
+    g = _misc_context().jittor_module
+    data = _np.frombuffer(state.encode("ascii"), dtype=_np.uint8).copy()
+    return g.tensor(data, dtype=g.uint8, device="cpu")
+
+
+def _decode_rng_state(state):
+    ctx = _misc_context()
+    if not isinstance(state, ctx.state["Var"]):
+        raise TypeError("RNG state must be a CPU uint8 tensor")
+    if _jittor_dtype_name(state.dtype) != "uint8" or state.ndim != 1 \
+            or str(state.device).split(":", 1)[0] != "cpu":
+        raise TypeError("RNG state must be a one-dimensional CPU uint8 tensor")
+    return state.numpy().tobytes().decode("ascii")
 
 
 def _set_rng_state(state):
     ctx = _misc_context()
-    Var = ctx.state["Var"]
-    try:
-        if isinstance(state, Var):
-            state = int(state.reshape(-1)[0].item())
-        elif hasattr(state, "__len__"):
-            state = int(list(state)[0])
-        else:
-            state = int(state)
-    except EXPECTED as exc:
-        swallowed("torch/installers/core.py _set_rng_state: if isinstance(state, Var):", exc)
-        state = initial_seed()
-    _manual_seed(state)
+    jt.set_cpu_rng_state(_decode_rng_state(state))
+    ctx.state["core_misc"]["seed"] = int(jt.get_cpu_initial_seed())
 
 
 class PyTorchFileReader:
@@ -594,13 +602,13 @@ def _category(name):
 def result_type(a, b):
     ctx = _misc_context()
     _DTYPE_OBJS = ctx.state["dtypes"]
-    (na, sa), (nb, sb) = (_result_type_info(a), _result_type_info(b))
-    if sa and (not sb):
-        res = _promote_pair(na, nb) if _category(na) > _category(nb) else nb
-    elif sb and (not sa):
+    (na, pa), (nb, pb) = (_result_type_info(a), _result_type_info(b))
+    if pa == pb:
+        res = _promote_pair(na, nb)
+    elif pa > pb:
         res = _promote_pair(na, nb) if _category(nb) > _category(na) else na
     else:
-        res = _promote_pair(na, nb)
+        res = _promote_pair(na, nb) if _category(na) > _category(nb) else nb
     return _DTYPE_OBJS.get(res, res)
 
 
@@ -691,27 +699,28 @@ def set_default_device(device=None):
 def _result_type_info(x):
     ctx = _misc_context()
     g = ctx.jittor_module
-    Var = ctx.state["Var"]
     _DTYPE_OBJS = ctx.state["dtypes"]
-    if isinstance(x, Var):
-        return (_dtype_to_str(x.dtype), False)
+    # Dimensional tensors outrank zero-dimensional tensors, which outrank
+    # wrapped Python numbers within the same numeric category.
+    if isinstance(x, ctx.native_backend.Var):
+        return (_dtype_to_str(x.dtype), 1 if x.ndim == 0 else 2)
     if isinstance(x, dtype) or (
         isinstance(x, str) and _dtype_to_str(x) in _jittor_dtype_name(_DTYPE_OBJS)
     ):
-        return (_dtype_to_str(x), False)
+        return (_dtype_to_str(x), 2)
     if isinstance(x, bool):
-        return ("bool", True)
+        return ("bool", 0)
     if isinstance(x, int):
-        return ("int64", True)
+        return ("int64", 0)
     if isinstance(x, float):
-        return (_dtype_to_str(g.get_default_dtype()) or "float32", True)
+        return (_dtype_to_str(g.get_default_dtype()) or "float32", 0)
     if isinstance(x, complex):
-        return ("complex64", True)
-    return (_dtype_to_str(x) or "float32", False)
+        return ("complex64", 0)
+    return (_dtype_to_str(x) or "float32", 2)
 
 
 def initial_seed():
-    return int(_misc_context().state["core_misc"].get("seed", 0))
+    return int(jt.get_cpu_initial_seed())
 
 
 def is_tensor(value):
@@ -863,8 +872,8 @@ _MISC_DETAILS = {
     "PyTorchFileReader": "raises NotImplementedError; use torch.load instead",
     "set_autocast_enabled": "no-op setter; use the supported autocast scope",
     "use_deterministic_algorithms": "no-op setter; deterministic algorithm policy is not implemented",
-    "get_rng_state": "seed-only state, not a full generator snapshot or exact stream restoration",
-    "set_rng_state": "restores the recorded seed, not an exact generator stream snapshot",
+    "get_rng_state": "versioned CPU engine snapshot after pending random graphs complete; Jittor algorithm, not Torch state bytes",
+    "set_rng_state": "restores the CPU engine and seed without reseeding accelerator, Python or NumPy streams",
     "norm": "existing Torch norm adapter; out and extra keyword semantics are not implemented",
     "where": "existing one- or three-argument selection; out is not implemented",
     "bincount": "native scatter-add implementation; existing flatten/minlength behavior retained",

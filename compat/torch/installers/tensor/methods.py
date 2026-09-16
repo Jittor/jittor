@@ -55,6 +55,9 @@ from .method_api import (
     _TorchGradFn,
     _add,
     _mul,
+    _method_mul,
+    _sqrt,
+    _method_sqrt,
     _addmm_method,
     _as_strided,
     _assign_data_owner,
@@ -303,6 +306,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     _native_mul = g.mul
     g.mul = _mul
     g.multiply = _mul
+    Var.mul = _method_mul
+    Var.multiply = _method_mul
+    _native_sqrt = g.sqrt
+    g.sqrt = _sqrt
+    Var.sqrt = _method_sqrt
 
     g.cumsum = _owner.cumsum
     Var.cumsum = _owner.cumsum
@@ -580,6 +588,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         '_jt_var_where': locals().get('_jt_var_where'),
         '_native_add': locals().get('_native_add'),
         '_native_mul': locals().get('_native_mul'),
+        '_native_sqrt': locals().get('_native_sqrt'),
         '_native_clamp': locals().get('_native_clamp'),
         '_native_data_descriptor': locals().get('_native_data_descriptor'),
         '_native_desc': locals().get('_native_desc'),

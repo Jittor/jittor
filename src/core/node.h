@@ -122,9 +122,9 @@ struct OpFlags {
         // Its outputs must remain pending until a later graph-wiring step adds
         // their control edges. TapeOp uses this while Tapes is assembled.
         _must_stay_pending,
-        // Six consecutive bits mirroring amp_reg; op.cc writes them and
-        // grad.cc reads them back as one field. Only the first three have
-        // names, but all six belong to amp -- hence the placeholders, which
+        // Seven consecutive bits mirroring amp_reg; op.cc writes them and
+        // grad.cc reads them back as one field. The first three and BF16 bit
+        // have names; all seven belong to amp -- hence the placeholders, which
         // are what stops the next flag from landing inside the field.
         _prefer_32,
         _prefer_16,
@@ -132,6 +132,7 @@ struct OpFlags {
         _amp_reserved_3,
         _amp_reserved_4,
         _amp_reserved_5,
+        _prefer_bfloat16,
         _custom_flag,
         // Op meaning of the shared *name*: the op owns frozen edge snapshots
         // of its requires-grad-disabled inputs. Nothing to do with the Var bit
@@ -143,7 +144,7 @@ struct OpFlags {
     };
     static constexpr int _op_type_nbits = NodeBits::_node_order_nbits;
     // The width op.cc and grad.cc pass amp_reg through.
-    static constexpr int _amp_nbits = 6;
+    static constexpr int _amp_nbits = 7;
 };
 
 struct NodeFlags {
@@ -221,7 +222,7 @@ static_assert((int)VarFlags::_force_fuse == (int)NodeFlags::_n
     && (int)OpFlags::_cpu == (int)NodeFlags::_n,
     "the private layouts must both start where the shared range ends");
 static_assert((int)OpFlags::_custom_flag == (int)OpFlags::_prefer_32 + OpFlags::_amp_nbits,
-    "the six amp bits op.cc and grad.cc move as one field are no longer contiguous");
+    "the AMP bits op.cc and grad.cc move as one field are no longer contiguous");
 static_assert((int)OpFlags::_op_type_high == (int)OpFlags::_op_type + 1,
     "OpType is read as two bits and they are no longer adjacent");
 static_assert((int)NodeFlags::_node_order_high == (int)NodeFlags::_node_order_low + 1,

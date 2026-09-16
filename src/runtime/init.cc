@@ -8,6 +8,8 @@
 #include "runtime/backend.h"
 #include <dlfcn.h>
 #include <random>
+#include <sstream>
+#include <limits>
 
 #include <csignal>
 #include "runtime/init.h"
@@ -16,6 +18,7 @@
 #include "ops/composite/tape_op.h"
 #include "core/fused_op.h"
 #include "core/var.h"
+#include "core/var_holder.h"
 #include "core/op.h"
 #include "core/executor.h"
 #include "runtime/float32_precision.h"
@@ -64,6 +67,8 @@ unique_ptr<std::default_random_engine> eng;
 vector<set_seed_callback> callbacks;
 int current_seed;
 int64 current_offset;
+static uint64 cpu_initial_seed;
+static bool legacy_seed_valid = true;
 
 // fron fetch_op.cc
 EXTERN_LIB list<VarPtr> fetcher;
@@ -123,6 +128,8 @@ void init() {
 
 void set_seed(int seed) {
     current_seed = seed;
+    cpu_initial_seed = uint64(seed);
+    legacy_seed_valid = true;
     current_offset = 0;
     eng.reset(new std::default_random_engine(seed));
     for (auto cb : callbacks)
@@ -130,7 +137,68 @@ void set_seed(int seed) {
 }
 
 int get_seed() {
+    USER_CHECK(legacy_seed_valid)
+        << "get_seed() cannot represent this uint64 CPU seed; use get_cpu_initial_seed()";
     return current_seed;
+}
+
+void set_cpu_seed(uint64 seed) {
+    sync_all(true);
+    eng.reset(new std::default_random_engine(seed));
+    cpu_initial_seed = seed;
+    legacy_seed_valid = seed <= uint64(std::numeric_limits<int>::max());
+    current_seed = legacy_seed_valid ? int(seed) : 0;
+    current_offset = 0;
+}
+
+uint64 get_cpu_initial_seed() {
+    return cpu_initial_seed;
+}
+
+string get_cpu_rng_state() {
+    sync_all(true);
+    std::ostringstream output;
+    output << "JITTOR_CPU_RNG_V2\n" << cpu_initial_seed << ' ' << current_seed << ' '
+           << int(legacy_seed_valid) << ' ' << current_offset
+           << '\n' << *eng << '\n';
+    return output.str();
+}
+
+void set_cpu_rng_state(const string& state) {
+    USER_CHECK(state.size() > 0 && state.size() <= 16384)
+        << "invalid CPU RNG state size";
+    std::istringstream input(state);
+    string version;
+    string full_seed_token;
+    int seed;
+    int legacy_valid;
+    int64 offset;
+    std::default_random_engine replacement;
+    USER_CHECK(bool(input >> version) && version == "JITTOR_CPU_RNG_V2"
+        && bool(input >> full_seed_token >> seed >> legacy_valid >> offset) && offset >= 0
+        && (legacy_valid == 0 || legacy_valid == 1) && !full_seed_token.empty())
+        << "invalid CPU RNG state";
+    uint64 full_seed = 0;
+    for (char c : full_seed_token) {
+        USER_CHECK(c >= '0' && c <= '9') << "invalid CPU RNG seed";
+        uint64 digit = c - '0';
+        USER_CHECK(full_seed <= (std::numeric_limits<uint64>::max() - digit) / 10)
+            << "CPU RNG seed exceeds uint64 range";
+        full_seed = full_seed * 10 + digit;
+    }
+    USER_CHECK(!legacy_valid || full_seed == uint64(seed)) << "inconsistent CPU RNG seed metadata";
+    input >> std::ws;
+    USER_CHECK(bool(input >> replacement)) << "invalid CPU RNG engine state";
+    input >> std::ws;
+    USER_CHECK(input.eof()) << "trailing data in CPU RNG state";
+    // Resolve graphs under their original stream before replacing the engine.
+    // Calling set_seed here would also rewind every accelerator generator.
+    sync_all(true);
+    eng.reset(new std::default_random_engine(replacement));
+    current_seed = seed;
+    cpu_initial_seed = full_seed;
+    legacy_seed_valid = bool(legacy_valid);
+    current_offset = offset;
 }
 
 int get_cpu_num_threads() {

@@ -3,6 +3,7 @@ import runpy
 import sys
 import types
 from pathlib import Path
+from _helpers.child_process import run_python_child
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -42,6 +43,60 @@ def _load_noxfile(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "nox", fake_nox)
     monkeypatch.setenv("JITTOR_LAB_ROOT", str(tmp_path / "lab"))
     return runpy.run_path(str(REPO_ROOT / "noxfile.py"), run_name="jittor_noxfile")
+
+
+def test_accelerate_nightly_pins_dependency_without_real_torch(monkeypatch, tmp_path):
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/usr/bin/python3-config")
+    session.posargs = []
+    installs = []
+    session.install = lambda *args: installs.append(args)
+    module["accelerate_cpu"](session)
+    assert ("--no-deps", "accelerate==1.10.1") in installs
+    assert not any(str(arg).startswith("torch==") for args in installs for arg in args)
+    args, _kwargs = session.calls[-1]
+    assert args[1].endswith("tools/run_accelerate_gate.py")
+    assert args[2:] == ("--stage", "unit", "--device", "cpu")
+    workflow = (REPO_ROOT / ".github/workflows/cpu.yml").read_text()
+    assert "github.event_name == 'schedule'" in workflow
+    assert "python -m nox -s accelerate_cpu" in workflow
+
+
+def test_accelerate_asv_filters_namespace_and_defers_runtime_import(monkeypatch, tmp_path):
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/usr/bin/python3-config")
+    session.posargs = ["--quick"]
+    recorded = []
+    namespace = module["benchmark_accelerate"].__globals__
+    monkeypatch.setitem(namespace, "_record_asv", lambda *args, **kwargs: recorded.append((args, kwargs)))
+    module["benchmark_accelerate"](session)
+    assert recorded[0][1]["benchmark_filter"] == r"^accelerate_training\."
+    assert recorded[0][0][2]["cache_name"].startswith("asv-")
+    probe = session.calls[-1][0][2]
+    assert "find_spec" in probe and "import asv, accelerate" not in probe
+    assert session.posargs == ["--quick"]
+
+
+def test_general_asv_skips_accelerate_before_importing_backends():
+    env = {name: value for name, value in os.environ.items()
+           if not name.startswith("JITTOR_TORCH_")}
+    env.update(cache_name="asv-nox-cpu", JITTOR_TORCH_SHIM="0",
+               JITTOR_TORCH_STRICT_BOOTSTRAP="0")
+    script = """
+import os, sys
+sys.path.insert(0, sys.argv[1])
+from benchmarks.accelerate_training import AccelerateTrainingBenchmarks
+assert 'jittor' not in sys.modules and 'torch' not in sys.modules
+try:
+    AccelerateTrainingBenchmarks().setup('direct', 'sgd', 'cpu')
+except NotImplementedError as error:
+    assert 'dedicated benchmark_accelerate session' in str(error)
+else:
+    raise AssertionError('generic ASV unexpectedly entered Accelerate setup')
+assert 'jittor' not in sys.modules and 'torch' not in sys.modules
+"""
+    run_python_child(["-I", "-c", script, str(REPO_ROOT)],
+                     check=True, env=env, inherit=False, text=True)
 
 
 def test_session_env_uses_the_session_interpreters_python_config(monkeypatch, tmp_path):

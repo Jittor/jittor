@@ -575,6 +575,15 @@ class Join:
         self.enable = enable
         self.throw_on_early_termination = throw_on_early_termination
     def __enter__(self):
+        if self.enable and _distributed_world_size() > 1:
+            return _stub_unimplemented(
+                "torch.distributed.algorithms.join.Join",
+                "leave unequal ranks issuing different numbers of gradient "
+                "collectives and hang the distributed run",
+                "The current DDP reducer has no Join notify/shadow-collective "
+                "ABI. Use even_batches=True or equal step counts on every "
+                "rank; enable=False is supported for already balanced inputs.",
+                stub_result=self)
         return self
     def __exit__(self, exc_type, exc, tb):
         return False
@@ -670,21 +679,236 @@ class StateDictOptions:
         self.flatten_optimizer_state_dict = bool(flatten_optimizer_state_dict)
 
 
+def _checkpoint_model(model):
+    ddp = get_install_context(jt).target_namespace.nn.parallel.DistributedDataParallel
+    return model.module if isinstance(model, ddp) else model
+
+
+def _checkpoint_options(options):
+    options = options or StateDictOptions()
+    if options.broadcast_from_rank0 and not options.full_state_dict:
+        raise ValueError("broadcast_from_rank0 requires full_state_dict=True")
+    if options.flatten_optimizer_state_dict:
+        raise NotImplementedError("flatten_optimizer_state_dict is not supported")
+    if not options.keep_submodule_prefixes:
+        raise NotImplementedError("checkpoint prefix removal is not supported")
+    return options
+
+
+def _checkpoint_fsdp(model):
+    if any(getattr(child, "_fsdp_state", None) is not None
+           for _, child in model.named_modules()):
+        provider = _fsdp_hooks.provider()
+        if provider is None:
+            raise RuntimeError("FSDP checkpoint model has no registered provider")
+        return provider
+    return None
+
+
+def _checkpoint_cpu_tree(value):
+    if isinstance(value, jt.Var):
+        return value.detach().clone().cpu()
+    if isinstance(value, dict):
+        return {key: _checkpoint_cpu_tree(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_checkpoint_cpu_tree(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_checkpoint_cpu_tree(item) for item in value)
+    return value
+
+
+def _checkpoint_host_tree(value):
+    if isinstance(value, jt.Var):
+        return value.detach().clone().cpu().numpy().copy()
+    if isinstance(value, dict):
+        return {key: _checkpoint_host_tree(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_checkpoint_host_tree(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_checkpoint_host_tree(item) for item in value)
+    return value
+
+
+def _checkpoint_broadcast_input(state_dict, options):
+    if options.broadcast_from_rank0 and _distributed_world_size() > 1:
+        payload = [_checkpoint_host_tree(state_dict) if _distributed_rank() == 0 else None]
+        _broadcast_object_list(payload, src=0)
+        return payload[0]
+    return state_dict
+
+
+def _checkpoint_export(value, options):
+    if options.cpu_offload:
+        if options.full_state_dict and _distributed_world_size() > 1:
+            # Every rank must consume lazy FULL gather collectives before a
+            # nonzero rank discards its export and starts the next collective.
+            jt.sync_all(True)
+        value = _checkpoint_cpu_tree(value)
+        if options.full_state_dict and _distributed_rank() != 0:
+            return {}
+    return value
+
+
 def _get_model_state_dict(model, *a, options=None, **k):
-    return model.state_dict(*a, **k) if hasattr(model, "state_dict") else {}
+    if a or k:
+        raise NotImplementedError("checkpoint submodule selection is not supported")
+    model = _checkpoint_model(model)
+    options = _checkpoint_options(options)
+    _fsdp = _checkpoint_fsdp(model)
+    result = (_fsdp._get_full_state_dict(model)
+              if _fsdp is not None and options.full_state_dict else model.state_dict(keep_vars=False))
+    if options.ignore_frozen_params:
+        frozen = {name for name, param in model.named_parameters(remove_duplicate=False)
+                  if not param.requires_grad}
+        result = {key: value for key, value in result.items() if key not in frozen}
+    return _checkpoint_export(result, options)
 
 
 def _set_model_state_dict(model, state_dict, *a, options=None, **k):
     # `_is_fsdp_module` is set only by fsdp2, so a model carrying it proves
     # fsdp2 was imported and has registered -- see jittor/compat/
     # fsdp_hooks.py for why this file must not import fsdp2 directly.
-    if getattr(model, "_is_fsdp_module", False):
-        _fsdp = _fsdp_hooks.provider()
-        if _fsdp is not None:
-            _fsdp._load_full_state_dict(model, state_dict)
-            return None
+    if a or k:
+        raise NotImplementedError("checkpoint submodule selection is not supported")
+    model = _checkpoint_model(model)
+    legacy_full = options is None
+    options = _checkpoint_options(options)
+    _fsdp = _checkpoint_fsdp(model)
+    if _fsdp is not None and legacy_full:
+        # Preserve the existing native FULL reload entry's rank-zero source.
+        options = StateDictOptions(full_state_dict=True, broadcast_from_rank0=True)
+    state_dict = _checkpoint_broadcast_input(state_dict, options)
+    if _fsdp is not None and options.full_state_dict:
+        expected = set(model.state_dict())
+        missing, unexpected = expected - set(state_dict), set(state_dict) - expected
+        _fsdp._load_full_state_dict(model, state_dict, strict=options.strict)
+        from .nn.module_methods import _IncompatibleKeys
+        return _IncompatibleKeys(sorted(missing), sorted(unexpected))
     if hasattr(model, "load_state_dict"):
+        g = get_install_context(jt).target_namespace
+        current = model.state_dict()
+        state_dict = {
+            key: g.tensor(value, dtype=current[key].dtype, device=current[key].device).detach()
+            if key in current and isinstance(value, (jt.Var, np.ndarray)) else value
+            for key, value in state_dict.items()
+        }
         return model.load_state_dict(state_dict, strict=getattr(options, "strict", True))
+    return None
+
+
+def _checkpoint_optimizers(optimizers):
+    if optimizers is None:
+        return ()
+    if hasattr(optimizers, "param_groups"):
+        return (optimizers,)
+    return tuple(optimizers)
+
+
+def _checkpoint_optimizer_names(model, optimizer, _fsdp):
+    if _fsdp is not None:
+        _fsdp.refresh_optimizer_fsdp_params(optimizer)
+    names = {id(param): name for name, param in model.named_parameters()}
+    result = []
+    for group in optimizer.param_groups:
+        try:
+            result.append([names[id(param)] for param in group["params"]])
+        except KeyError as error:
+            raise ValueError("checkpoint optimizer contains a parameter outside the model") from error
+    return result
+
+
+def _checkpoint_optimizer_metadata(state):
+    result = {}
+    for name, entry in state.items():
+        result[name] = {}
+        for field, value in entry.items():
+            if field == "step":
+                result[name][field] = ("step", float(value.item() if isinstance(value, jt.Var) else value))
+            elif isinstance(value, jt.Var):
+                result[name][field] = ("tensor", str(value.dtype))
+            else:
+                result[name][field] = ("value", value)
+    return result
+
+
+def _checkpoint_init_optimizer_state(optimizer):
+    # Match DCP's lazy-state initialization through the existing public step.
+    if optimizer.state or any(param.grad is not None for group in optimizer.param_groups
+                              for param in group["params"]):
+        return
+    g = get_install_context(jt).target_namespace
+    rates = [group["lr"] for group in optimizer.param_groups]
+    try:
+        for group in optimizer.param_groups:
+            group["lr"] = 0.0
+            for param in group["params"]:
+                if param.requires_grad:
+                    param.grad = g.zeros_like(param)
+        optimizer.step()
+    finally:
+        for group, rate in zip(optimizer.param_groups, rates):
+            group["lr"] = rate
+        optimizer.zero_grad(set_to_none=True)
+
+
+def _get_optimizer_state_dict(model, optimizers, *, options=None, submodules=None):
+    if submodules is not None:
+        raise NotImplementedError("checkpoint submodule selection is not supported")
+    model = _checkpoint_model(model)
+    options = _checkpoint_options(options)
+    _fsdp = _checkpoint_fsdp(model)
+    state, groups = {}, []
+    for optimizer in _checkpoint_optimizers(optimizers):
+        names = _checkpoint_optimizer_names(model, optimizer, _fsdp)
+        _checkpoint_init_optimizer_state(optimizer)
+        saved = optimizer.state_dict()
+        for group, group_names in zip(saved["param_groups"], names):
+            group = dict(group)
+            for pid, name in zip(group["params"], group_names):
+                if pid in saved["state"]:
+                    state[name] = dict(saved["state"][pid])
+            group["params"] = group_names
+            groups.append(group)
+    result = {"state": state, "param_groups": groups}
+    if _fsdp is not None and options.full_state_dict:
+        metadata = [None] * _distributed_world_size()
+        _native_all_gather_object(metadata, _checkpoint_optimizer_metadata(state))
+        result = _fsdp._gather_optimizer_state_dict(model, result, metadata)
+    return _checkpoint_export(result, options)
+
+
+def _set_optimizer_state_dict(model, optimizers, optim_state_dict, *, options=None):
+    model = _checkpoint_model(model)
+    options = _checkpoint_options(options)
+    optim_state_dict = _checkpoint_broadcast_input(optim_state_dict, options)
+    if not isinstance(optim_state_dict, dict) or set(optim_state_dict) != {"state", "param_groups"}:
+        raise ValueError("optimizer checkpoint requires state and param_groups")
+    _fsdp = _checkpoint_fsdp(model)
+    if _fsdp is not None and options.full_state_dict:
+        optim_state_dict = _fsdp._shard_optimizer_state_dict(model, optim_state_dict)
+    optimizers = _checkpoint_optimizers(optimizers)
+    if len(optim_state_dict["param_groups"]) != sum(len(opt.param_groups) for opt in optimizers):
+        raise ValueError("optimizer checkpoint has a different number of parameter groups")
+    offset = 0
+    plans = []
+    for optimizer in optimizers:
+        names = _checkpoint_optimizer_names(model, optimizer, _fsdp)
+        current = optimizer.state_dict()
+        state, groups = {}, []
+        for id_group, group_names in zip(current["param_groups"], names):
+            group = dict(optim_state_dict["param_groups"][offset])
+            offset += 1
+            if group["params"] != group_names:
+                raise ValueError("optimizer checkpoint parameter-group names do not match the model")
+            for pid, name in zip(id_group["params"], group_names):
+                if name not in optim_state_dict["state"]:
+                    continue
+                state[pid] = dict(optim_state_dict["state"][name])
+            group["params"] = id_group["params"]
+            groups.append(group)
+        plans.append((optimizer, {"state": state, "param_groups": groups}))
+    for optimizer, state in plans:
+        optimizer.load_state_dict(state)
     return None
 
 
@@ -822,11 +1046,13 @@ def _api_symmetric_memory_is_symm_mem_enabled_for_group(*a, **k):
 
 
 def _api_checkpoint_sd_get_state_dict(model, optimizers=None, *a, **k):
-    return (_get_model_state_dict(model, *a, **k), optimizers.state_dict() if hasattr(optimizers, 'state_dict') else {})
+    return (_get_model_state_dict(model, *a, **k), _get_optimizer_state_dict(model, optimizers, *a, **k))
 
 
 def _api_checkpoint_sd_set_state_dict(model, optimizers=None, model_state_dict=None, optim_state_dict=None, *a, **k):
-    return _set_model_state_dict(model, model_state_dict or {}, *a, **k)
+    result = _set_model_state_dict(model, model_state_dict or {}, *a, **k)
+    _set_optimizer_state_dict(model, optimizers, optim_state_dict or {}, *a, **k)
+    return result
 
 
 def _api_sharded_tensor_init_from_local_shards(shards, *a, **k):
@@ -852,8 +1078,24 @@ _dcp_load_effect = ("return the state dict unchanged without reading the "
                     "weights")
 
 
-_dcp_hint = ("Use torch.save / Module.state_dict for a single-rank "
-             "checkpoint; sharded dcp is task 8.18.")
+_dcp_hint = ("DCP planner, DTensor chunk metadata and storage-format protocols "
+             "are not implemented. Use FSDP2 FULL_STATE_DICT with "
+             "Accelerator.save_state/load_state instead; multi-node "
+             "checkpoint hardware validation is separately tracked by task 8.18.")
+
+
+class DefaultSavePlanner:
+    def __init__(self, *args, **kwargs):
+        _stub_unimplemented(
+            'torch.distributed.checkpoint.default_planner.DefaultSavePlanner',
+            _dcp_save_effect, _dcp_hint, stub_result=None)
+
+
+class DefaultLoadPlanner:
+    def __init__(self, *args, **kwargs):
+        _stub_unimplemented(
+            'torch.distributed.checkpoint.default_planner.DefaultLoadPlanner',
+            _dcp_load_effect, _dcp_hint, stub_result=None)
 
 
 def _api_checkpoint_load_state_dict(*args, **kwargs):
@@ -1171,6 +1413,8 @@ def _install_distributed(g, registry=None):
     checkpoint_sd.StateDictOptions = StateDictOptions
     checkpoint_sd.get_model_state_dict = _get_model_state_dict
     checkpoint_sd.set_model_state_dict = _set_model_state_dict
+    checkpoint_sd.get_optimizer_state_dict = _get_optimizer_state_dict
+    checkpoint_sd.set_optimizer_state_dict = _set_optimizer_state_dict
     checkpoint_sd.get_state_dict = _api_checkpoint_sd_get_state_dict
     checkpoint_sd.set_state_dict = _api_checkpoint_sd_set_state_dict
     checkpoint_fs = _types.ModuleType("torch.distributed.checkpoint.filesystem")
@@ -1184,6 +1428,13 @@ def _install_distributed(g, registry=None):
     _modules["torch.distributed.checkpoint.filesystem"] = checkpoint_fs
     checkpoint.state_dict = checkpoint_sd
     checkpoint.filesystem = checkpoint_fs
+    # Accelerate imports these even for FULL checkpoints, which never create
+    # a DCP planner. Actual planner construction retains the unsupported policy.
+    checkpoint_planner = _types.ModuleType("torch.distributed.checkpoint.default_planner")
+    checkpoint_planner.DefaultSavePlanner = DefaultSavePlanner
+    checkpoint_planner.DefaultLoadPlanner = DefaultLoadPlanner
+    _modules[checkpoint_planner.__name__] = checkpoint_planner
+    checkpoint.default_planner = checkpoint_planner
 
     shard = dist._shard
     shard.__path__ = getattr(shard, "__path__", [])
@@ -1249,9 +1500,12 @@ def _install_distributed(g, registry=None):
         ("load_state_dict", "save_state_dict", "load", "save", "FileSystemReader", "FileSystemWriter"),
         Fidelity.UNIMPLEMENTED, "Checkpoint I/O follows the existing explicit unsupported policy")
     register_api_bindings(checkpoint_sd, "torch.distributed.checkpoint.state_dict",
-        ("StateDictOptions", "get_model_state_dict", "set_model_state_dict", "get_state_dict", "set_state_dict"),
-        Fidelity.APPROXIMATE, "Local module state and registered FSDP load provider; "
-        "full distributed checkpoint/options semantics are not implemented")
+        ("StateDictOptions", "get_model_state_dict", "set_model_state_dict", "get_optimizer_state_dict", "set_optimizer_state_dict", "get_state_dict", "set_state_dict"),
+        Fidelity.APPROXIMATE, "Canonical named optimizer state and registered FSDP FULL gather/load; "
+        "sharded checkpoint storage and flattened/submodule options are unsupported")
+    register_api_bindings(checkpoint_planner, "torch.distributed.checkpoint.default_planner",
+        ("DefaultSavePlanner", "DefaultLoadPlanner"), Fidelity.UNIMPLEMENTED,
+        "Import-compatible names; constructing planners rejects unsupported DCP protocols")
     register_api_bindings(rendezvous_mod, "torch.distributed.rendezvous", ("rendezvous",),
         Fidelity.APPROXIMATE, "Delegates supported URL, rank, world-size and timeout handling to native stores")
     register_api_bindings(c10d, "torch.distributed.distributed_c10d",

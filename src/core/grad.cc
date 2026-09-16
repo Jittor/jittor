@@ -64,7 +64,7 @@ struct AmpGradGuard {
     int amp_reg_bk;
     AmpGradGuard(Op* op) {
         amp_reg_bk = amp_reg;
-        // Mirror only the six amp bits the constructor wrote (op.cc). Reading
+        // Mirror only the AMP bits the constructor wrote (op.cc). Reading
         // the field by width rather than shifting the raw word is what keeps
         // _custom_flag and the requires_grad bookkeeping bits out of amp_reg;
         // the two sides now name the same field instead of the same number.

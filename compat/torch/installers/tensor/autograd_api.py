@@ -236,6 +236,8 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
                     and not tensor_state.leaf_params.is_weak(id(p))):
                 tensor_state.leaf_params.pop(id(p), None)
             continue
+        if _jittor_dtype_name(gr.dtype) != _jittor_dtype_name(p.dtype):
+            gr = gr.cast(_jittor_dtype_name(p.dtype))
         grad_by_id[id(p)] = gr
         if id(p) not in opt_ids:
             # non-optimizer leaf (retain_grad screenspace etc.): accumulate

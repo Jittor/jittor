@@ -23,7 +23,7 @@ class TestCudaStreams(unittest.TestCase):
                 self.assertIs(fidelity_of("torch.cuda." + name).implementation, implementation)
         self.assertIs(fidelity_of("torch.cuda.Stream").level, Fidelity.APPROXIMATE)
         self.assertIn("sampled", fidelity_of("torch.cuda.max_memory_allocated").detail)
-        self.assertIs(fidelity_of("torch.cuda.get_rng_state").level, Fidelity.UNIMPLEMENTED)
+        self.assertIs(fidelity_of("torch.cuda.get_rng_state").level, Fidelity.APPROXIMATE)
 
     def test_batch_invariant_precision_controls_are_mutable(self):
         matmul = torch.backends.cuda.matmul

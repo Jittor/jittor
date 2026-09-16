@@ -961,17 +961,37 @@ def _api_cuda_synchronize(*a, **k):
 
 
 def _api_cuda_manual_seed(s):
-    jt.sync_all()
-    return jt.set_global_seed(int(s))
+    if device_count() == 0:
+        return
+    _curand_rng_library().manual_seed(current_device(), _cuda_rng_seed(s))
 
 
 def _api_cuda_manual_seed_all(s):
-    jt.sync_all()
-    return jt.set_global_seed(int(s))
+    seed = _cuda_rng_seed(s)
+    count = device_count()
+    if count == 0:
+        return
+    library = _curand_rng_library()
+    for index in range(count):
+        library.manual_seed(index, seed)
 
 
-def _api_cuda_is_bf16_supported():
-    return True
+def _api_cuda_is_bf16_supported(including_emulation=True):
+    if not is_available() or not (getattr(jt, "has_cuda", 0) or getattr(jt.compiler, "has_cuda", 0)):
+        return False
+    lib, ctypes = _cuda_driver()
+    if lib is None:
+        return False
+    dev = ctypes.c_int()
+    status = lib.cuDeviceGet(ctypes.byref(dev), current_device())
+    if status:
+        raise RuntimeError("cuDeviceGet failed while checking BF16 support: %s" % status)
+    major, minor = ctypes.c_int(), ctypes.c_int()
+    status = lib.cuDeviceComputeCapability(ctypes.byref(major), ctypes.byref(minor), dev)
+    if status:
+        raise RuntimeError("cuDeviceComputeCapability failed while checking BF16 support: %s" % status)
+    # The native autocast convolution/matmul path requires hardware BF16.
+    return major.value >= 8
 
 
 def _api_cuda_get_device_capability(*a, **k):
@@ -998,32 +1018,84 @@ def _api_cuda_memory__set_allocator_settings(*a, **k):
     return None
 
 
-def _api_cuda_get_rng_state(*a, **k):
-    return jt.array([0], dtype='uint8')
+def _curand_rng_library():
+    from jittor._runtime.backend_libraries import get_library
+
+    library = get_library("curand", load=True)
+    if library is None:
+        raise RuntimeError("CUDA RNG state requires the native cuRAND backend")
+    return library
 
 
-def _api_cuda_get_rng_state_all(*a, **k):
-    return [jt.array([0], dtype='uint8')]
+def _cuda_rng_seed(seed):
+    seed = int(seed)
+    if seed < -(1 << 63) or seed >= 1 << 64:
+        raise RuntimeError("CUDA RNG seed is outside the supported 64-bit range")
+    return seed % (1 << 64)
 
 
-def _api_cuda_set_rng_state(*a, **k):
-    return None
+def _cuda_rng_device(value):
+    if value is None or value == "cuda":
+        return current_device()
+    if isinstance(value, int):
+        index = value
+    else:
+        parsed = device(value)
+        if parsed.type != "cuda":
+            raise ValueError("CUDA RNG state requires a CUDA device")
+        index = current_device() if parsed.index is None else int(parsed.index)
+    if index < 0 or index >= device_count():
+        raise ValueError("CUDA RNG device index is out of range")
+    return index
 
 
-def _api_cuda_set_rng_state_all(*a, **k):
-    return None
+def _api_cuda_get_rng_state(device=None):
+    from ..core import _encode_rng_state
+
+    return _encode_rng_state(_curand_rng_library().get_rng_state(_cuda_rng_device(device)))
 
 
-def _api_cuda_initial_seed(*a, **k):
-    return 0
+def _api_cuda_get_rng_state_all():
+    return [_api_cuda_get_rng_state(index) for index in range(device_count())]
 
 
-def _api_cuda_seed(*a, **k):
-    return None
+def _api_cuda_set_rng_state(state, device=None):
+    from ..core import _decode_rng_state
+
+    text = _decode_rng_state(state)
+    _curand_rng_library().set_rng_state(_cuda_rng_device(device), text)
 
 
-def _api_cuda_seed_all(*a, **k):
-    return None
+def _api_cuda_set_rng_state_all(states):
+    from ..core import _decode_rng_state
+
+    states = list(states)
+    if len(states) != device_count():
+        raise ValueError("CUDA RNG states must match the visible device count")
+    if not states:
+        return
+    library = _curand_rng_library()
+    texts = [_decode_rng_state(state) for state in states]
+    for text in texts:
+        library.validate_rng_state(text)
+    for index, text in enumerate(texts):
+        library.set_rng_state(index, text)
+
+
+def _api_cuda_initial_seed():
+    return int(_curand_rng_library().initial_seed(current_device()))
+
+
+def _api_cuda_seed():
+    import secrets
+
+    _api_cuda_manual_seed(secrets.randbits(64))
+
+
+def _api_cuda_seed_all():
+    import secrets
+
+    _api_cuda_manual_seed_all(secrets.randbits(64))
 
 
 def _api_mp_reductions_reduce_tensor(tensor):
@@ -1207,6 +1279,10 @@ def _api_accelerator_current_accelerator(*a, **k):
 
 
 _CUDA_FIDELITY_DETAILS = {
+    _api_cuda_get_rng_state: "Versioned per-device XORWOW snapshot only after float32 uniform draws; normal/float64 histories raise explicitly. Same cuRAND version required.",
+    _api_cuda_get_rng_state_all: "One strictly representable snapshot per visible CUDA device; fails if any device has normal/float64 history. State bytes and algorithm differ from Torch.",
+    _api_cuda_set_rng_state: "Restores the selected cuRAND stream without changing CPU, Python or NumPy RNG state.",
+    _api_cuda_set_rng_state_all: "Validates every versioned snapshot before restoring per-device cuRAND streams.",
     _Stream: "Logical streams share native execution; no independent CUDA stream handle.",
     _StreamContext: "Thread-local logical stream selection; native execution remains serialized.",
     _current_stream: "Thread-local logical stream identity; device argument is not implemented.",
@@ -1225,9 +1301,6 @@ _CUDA_FIDELITY_DETAILS = {
 
 _CUDA_PLACEHOLDERS = frozenset((
     CUDAGraph, CUDAPluggableAllocator, TorchFunctionMode,
-    _api_cuda_get_rng_state, _api_cuda_get_rng_state_all,
-    _api_cuda_set_rng_state, _api_cuda_set_rng_state_all,
-    _api_cuda_initial_seed, _api_cuda_seed, _api_cuda_seed_all,
     _api_cuda_ipc_collect, _api_cuda_memory__set_allocator_settings,
     _api_mp_reductions_rebuild_cuda_tensor,
     _api_g__C__autograd__push_saved_tensors_default_hooks,

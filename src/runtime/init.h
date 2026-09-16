@@ -31,6 +31,19 @@ Returns the seed of jittor random number generator.
 // @pyjt(get_seed)
 int get_seed();
 
+// CPU-only seeding with complete metadata, without accelerator callbacks.
+// @pyjt(set_cpu_seed)
+void set_cpu_seed(uint64 seed);
+// @pyjt(get_cpu_initial_seed)
+uint64 get_cpu_initial_seed();
+
+// Versioned snapshots of the CPU engine, independent of accelerator streams.
+// @pyjt(get_cpu_rng_state)
+string get_cpu_rng_state();
+
+// @pyjt(set_cpu_rng_state)
+void set_cpu_rng_state(const string& state);
+
 // @pyjt(get_cpu_num_threads)
 int get_cpu_num_threads();
 

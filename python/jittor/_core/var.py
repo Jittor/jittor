@@ -110,6 +110,8 @@ class amp_flags:
     #: a float16 sum/mean does NOT use a float32 intermediate accumulator
     #: (read directly as ``amp_reg & 32`` in src/ops/reduce_op.cc)
     reduce16_no_fp32_acc = 32
+    #: prefer bfloat16 explicitly, retaining float64 and prefer32 precedence
+    prefer_bfloat16 = 64
 
 def _amp_array_preference(ret):
     """Apply the array-like AMP preference to a freshly produced Var.
@@ -134,6 +136,10 @@ def _amp_array_preference(ret):
         return ret
     if amp_reg & amp_flags.prefer32:
         return ret if _jittor_dtype_name(ret.dtype) == "float32" else ret.float32()
+    if amp_reg & amp_flags.prefer_bfloat16:
+        if _jittor_dtype_name(ret.dtype) == "float64":
+            return ret
+        return ret if _jittor_dtype_name(ret.dtype) == "bfloat16" else ret.bfloat16()
     if amp_reg & amp_flags.prefer16:
         return ret if _jittor_dtype_name(ret.dtype) == "float16" else ret.float16()
     return ret
@@ -234,6 +240,10 @@ Var.device = property(_device)
 
 def float_auto(x):
     import jittor as jt
+    if jt.flags.amp_reg & amp_flags.prefer_bfloat16:
+        if jt.flags.amp_reg & amp_flags.prefer32:
+            return x.float32()
+        return x if _jittor_dtype_name(x.dtype) == "float64" else x.bfloat16()
     if jt.flags.amp_reg & amp_flags.prefer16:
         return x.float16()
     return x.float32()

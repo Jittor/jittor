@@ -14,6 +14,9 @@
 #include "curand_random_op.h"
 #include "curand_wrapper.h"
 #include "core/executor.h"
+#include "runtime/device.h"
+#include "runtime/cuda_streams.h"
+#include "stream_compat.h"
 
 namespace jittor {
 
@@ -49,6 +52,8 @@ void CurandRandomOp::jit_run() {
     auto generator = curand_bind_stream();
     index_t num = output->num;
     if (num == 0) return;
+    bool snapshot_safe = @if(@strcmp(@R,uniform)==0,sizeof(T) == sizeof(float),false);
+    curand_check_offset_advance(snapshot_safe ? uint64(num) : 0);
     // curandGenerateUniform has no parity requirement; curandGenerateNormal
     // wants an even count for pseudorandom generators. The old code rounded
     // the count up for both and wrote one element past the end of the output
@@ -71,12 +76,13 @@ void CurandRandomOp::jit_run() {
             T* tail = (T*)runtime_executor().temp_allocator->alloc(2*sizeof(T), tail_allocation);
             checkCudaErrors(curandGenerateNormal@TT (generator, tail, 2, 0, 1));
             checkCudaErrors(cudaMemcpyAsync(x+num-1, tail, sizeof(T),
-                cudaMemcpyDeviceToDevice, 0));
+                cudaMemcpyDeviceToDevice, cuda_compute_stream(current_device())));
             runtime_executor().temp_allocator->free(tail, 2*sizeof(T), tail_allocation);
         } else {
             checkCudaErrors(curandGenerateNormal@TT (generator, x, num, 0, 1));
         }
     )
+    curand_advance_offset(uint64(num), snapshot_safe);
 }
 #endif // JIT_cpu
 #endif // JIT

@@ -121,17 +121,27 @@ class _RandomSampler(_Sampler):
         self.replacement = replacement
         self._num_samples = num_samples
         self.generator = generator
+        if not isinstance(replacement, bool):
+            raise TypeError("replacement should be a boolean value")
+        if not isinstance(self.num_samples, int) or self.num_samples <= 0:
+            raise ValueError("num_samples should be a positive integer value")
     @property
     def num_samples(self):
         return len(self.data_source) if self._num_samples is None else self._num_samples
     def __iter__(self):
-        import random as _random
+        from ..tensor_state import compatibility_owner
+        g = compatibility_owner(jt)
         n = len(self.data_source)
         if self.replacement:
-            return iter(_random.randrange(n) for _ in range(self.num_samples))
-        indices = list(range(n))
-        _random.shuffle(indices)
-        return iter(indices[:self.num_samples])
+            if self.generator is not None:
+                raise NotImplementedError(
+                    "explicit Generator is not implemented for replacement RandomSampler")
+            yield from g.randint(0, n, (self.num_samples,), device="cpu").tolist()
+            return
+        for _ in range(self.num_samples // n):
+            yield from g.randperm(n, generator=self.generator).tolist()
+        yield from g.randperm(n, generator=self.generator).tolist()[
+            :self.num_samples % n]
     def __len__(self):
         return self.num_samples
 
@@ -141,10 +151,12 @@ class _SubsetRandomSampler(_Sampler):
         self.indices = list(indices)
         self.generator = generator
     def __iter__(self):
-        import random as _random
-        indices = list(self.indices)
-        _random.shuffle(indices)
-        return iter(indices)
+        from ..tensor_state import compatibility_owner
+        if not self.indices:
+            return iter(())
+        g = compatibility_owner(jt)
+        positions = g.randperm(len(self.indices), generator=self.generator).tolist()
+        return (self.indices[index] for index in positions)
     def __len__(self):
         return len(self.indices)
 
@@ -323,12 +335,7 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
         self._prefetch = max(1, int(prefetch if prefetch else 2))
         self._timeout = float(loader.timeout or 0) or None
         self._pending = _collections_data.deque()
-        base_seed = 0
-        try:
-            base_seed = int(jt.get_seed())
-        except EXPECTED as exc:
-            swallowed("torch/installers/data.py __init__: base_seed = int(jt.get_seed())", exc)
-            base_seed = 0
+        base_seed = int(jt.get_cpu_initial_seed())
         self._pool = _futures_data.ThreadPoolExecutor(
             max_workers=self._num_workers,
             thread_name_prefix="jt-dataloader",

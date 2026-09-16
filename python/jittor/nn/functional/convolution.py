@@ -3,6 +3,7 @@
 import jittor as jt
 from jittor.misc import _pair, _triple
 from jittor._runtime.dispatch import select_kernel
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 def _check_conv2d_output_size(x, oh, ow, kernel_size, stride, padding, dilation):
     """Reject a geometry whose output has no elements, with the numbers in it."""
@@ -91,6 +92,18 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     # so validating inside the reindex branches only would leave CUDA silent.
     _check_conv2d_output_size(x, out_height, out_width, (Kh, Kw), stride,
                               padding, dilation)
+    # Module and functional calls share temporary compute operands; master
+    # parameters retain their dtype and receive gradients through the casts.
+    amp_reg = jt.flags.amp_reg
+    operands = (x, weight) if bias is None else (x, weight, bias)
+    if (amp_reg & jt.amp_flags.prefer_bfloat16
+            and not amp_reg & jt.amp_flags.prefer32
+            and all(_jittor_dtype_name(value.dtype) in ("float32", "float16", "bfloat16")
+                    for value in operands)):
+        x = x.cast("bfloat16")
+        weight = weight.cast("bfloat16")
+        if bias is not None:
+            bias = bias.cast("bfloat16")
     kernel = select_kernel("conv2d", x, weight, bias, stride, padding, dilation, groups,
                            _depthwise_fast_path=_depthwise_fast_path)
     if kernel is not None:

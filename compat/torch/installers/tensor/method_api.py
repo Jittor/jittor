@@ -445,6 +445,15 @@ def _functional_preserves_input_dtype(input, other):
 
 def _add(input, other, *, alpha=1, out=None):
     _context = get_install_context(_owner.jt)
+    g = _context.target_namespace
+    dtype = g.result_type(input, other)
+    tensor = input if isinstance(input, _NativeVar) else other
+    if (isinstance(alpha, (int, float))
+            and _jittor_dtype_name(dtype) in ("float16", "bfloat16", "float32", "float64")
+            and _owner.np.isfinite(alpha) and abs(alpha) > g.finfo(dtype).max
+            and _owner.jt.core.dispatch_context(
+                [tensor] if isinstance(tensor, _NativeVar) else [])[0] == "cpu"):
+        raise RuntimeError("value cannot be converted to type %s without overflow" % dtype)
     _native = _context.state["tensor_native_api"]
     _native_add = _native['_native_add']
     if _functional_preserves_input_dtype(input, other):
@@ -463,14 +472,42 @@ def _add(input, other, *, alpha=1, out=None):
 
 def _mul(input, other, *, out=None):
     native = get_install_context(_owner.jt).state["tensor_native_api"]["_native_mul"]
+    target_dtype = None
+    tensor, scalar = input, other
+    if isinstance(other, _NativeVar) and isinstance(input, (bool, int, float)):
+        tensor, scalar = other, input
+    if (isinstance(tensor, _NativeVar) and isinstance(scalar, (bool, int, float))
+            and _jittor_dtype_name(tensor.dtype) in ('float16', 'bfloat16')):
+        source, constant, target_dtype = _weak_scalar_operands(tensor, scalar, '__mul__')
+        input, other = ((source, constant) if tensor is input else (constant, source))
     if _functional_preserves_input_dtype(input, other):
         with _owner.jt.flag_scope(amp_reg=0):
             result = native(input, other)
     else:
         result = native(input, other)
+    if target_dtype is not None and _jittor_dtype_name(result.dtype) != target_dtype:
+        result = result.cast(target_dtype)
     if out is not None:
         return _owner._assign_out(out, result)
     return result
+
+
+def _method_mul(self, other):
+    return _mul(self, other)
+
+
+def _sqrt(input, *, out=None):
+    native = get_install_context(_owner.jt).state["tensor_native_api"]["_native_sqrt"]
+    if _functional_preserves_input_dtype(input, input):
+        with _owner.jt.flag_scope(amp_reg=0):
+            result = native(input)
+    else:
+        result = native(input)
+    return _owner._assign_out(out, result) if out is not None else result
+
+
+def _method_sqrt(self):
+    return _sqrt(self)
 
 
 def _invert(self):
@@ -954,6 +991,32 @@ def _binary_native(opname, left, right):
         result = native(left, right)
     return _owner._mark_cpu_like(result, left, right)
 
+
+def _zero_dimensional_arithmetic(tensor, scalar, opname):
+    g = get_install_context(_owner.jt).target_namespace
+    target = _owner._dtype_to_str(g.result_type(tensor, scalar))
+    if opname in ('__truediv__', '__rtruediv__') and not target.startswith(('float', 'bfloat', 'complex')):
+        target = 'float32'
+    backend, _ = _owner.jt.core.dispatch_context([tensor])
+    compute = 'float32' if backend == 'cpu' and target in ('float16', 'bfloat16') else target
+    a = tensor if _jittor_dtype_name(tensor.dtype) == compute else tensor.cast(compute)
+    b = scalar if _jittor_dtype_name(scalar.dtype) == compute else scalar.cast(compute)
+    result = _binary_native(opname, a, b)
+    return result if _jittor_dtype_name(result.dtype) == target else result.cast(target)
+
+
+def _weak_scalar_operands(tensor, number, opname):
+    from ...frontend import tensor_frontend
+    context = get_install_context(_owner.jt)
+    dtype = _owner._dtype_to_str(context.target_namespace.result_type(tensor, number))
+    compute = ('float32' if dtype in ('float16', 'bfloat16')
+               and opname in _AUTOCAST_INPUT_DTYPE_ARITHMETIC else dtype)
+    with tensor_frontend(context.target_namespace.Var, like=tensor):
+        scalar = _owner.jt.array(number, dtype=compute).stop_grad()
+        source = tensor if _jittor_dtype_name(tensor.dtype) == compute else tensor.cast(compute)
+    return source, scalar, dtype
+
+
 def _promoting_binary(self, other, opname, reflected):
     g = get_install_context(_owner.jt).target_namespace
     if isinstance(other, (str, bytes)):
@@ -981,9 +1044,15 @@ def _promoting_binary(self, other, opname, reflected):
             elif other_scalar and not self_scalar:
                 other = other.cuda() if self_cuda else other.cpu()
         da, db = _jittor_dtype_name(self.dtype), _jittor_dtype_name(other.dtype)
+        if self_scalar != other_scalar and opname in _AUTOCAST_INPUT_DTYPE_ARITHMETIC:
+            if self_scalar:
+                inverse = ('__' + opname[3:] if opname.startswith('__r')
+                           else '__r' + opname[2:])
+                return _zero_dimensional_arithmetic(other, self, inverse)
+            return _zero_dimensional_arithmetic(self, other, opname)
         if da == db and not da.startswith("uint"):
             return _binary_native(opname, self, other)
-        res = _promote_pair(da, db)
+        res = _owner._dtype_to_str(g.result_type(self, other))
         a = self if da == res else self.cast(res)
         b = other if db == res else other.cast(res)
         out = _binary_native(opname, a, b)
@@ -1006,20 +1075,10 @@ def _promoting_binary(self, other, opname, reflected):
         # CUDA operation (``cuda_tensor + 1``), while PyTorch keeps scalar
         # promotion on the tensor's backend.  Materialize it explicitly so
         # native operators never receive a mixed-device graph.
-        scalar_dtype = _owner._dtype_to_str(g.result_type(self, other))
-        scalar = _owner.jt.array(other, dtype=scalar_dtype)
-        if bool(getattr(self, "is_cuda", False)):
-            scalar = scalar.cuda()
-        elif bool(getattr(self, "is_cpu", False)):
-            # A frontend CPU tensor remains explicitly host-resident even
-            # when the process-wide Jittor default is CUDA.  Without this
-            # branch ``0 + cpu_tensor`` can combine a CUDA-default scalar
-            # with an explicit CPU Var inside a module frontend scope.
-            scalar = scalar.cpu()
-        # Python numbers are constants in Torch autograd. Placement conversion
-        # creates a new native Var, so stop gradients only after that conversion.
-        scalar.stop_grad()
-        result = _promoting_binary(self, scalar, opname, reflected)
+        source, scalar, scalar_dtype = _weak_scalar_operands(self, other, opname)
+        result = _promoting_binary(source, scalar, opname, reflected)
+        if _jittor_dtype_name(result.dtype) != scalar_dtype:
+            result = result.cast(scalar_dtype)
         # CUDA native binary ops may mark an output trainable even when both
         # inputs are stopped. The Python scalar contributes no autograd edge.
         if not bool(self.requires_grad):
@@ -1038,6 +1097,11 @@ def _true_division(self, other, opname):
         other = _complex_scalar_var(other)
     if isinstance(other, _NativeVar):
         da, db = _jittor_dtype_name(self.dtype), _jittor_dtype_name(other.dtype)
+        if (self.ndim == 0) != (other.ndim == 0):
+            if self.ndim == 0:
+                inverse = '__truediv__' if opname == '__rtruediv__' else '__rtruediv__'
+                return _zero_dimensional_arithmetic(other, self, inverse)
+            return _zero_dimensional_arithmetic(self, other, opname)
         if da == db and da.startswith(("float", "bfloat", "complex")):
             return _binary_native(opname, self, other)
         tgt = _truediv_target(da, db)
@@ -1441,7 +1505,7 @@ def _api_reciprocal_(self):
 
 
 def _api_rsqrt_(self):
-    return _ip(self, 1.0 / _owner.jt.sqrt(self))
+    return _ip(self, 1.0 / _sqrt(self))
 
 
 _UNARY_INPLACE_APIS = {
@@ -1472,7 +1536,7 @@ def _api_exp_(self):
     return _ip(self, _owner.jt.exp(self))
 
 def _api_sqrt_(self):
-    return _ip(self, _owner.jt.sqrt(self))
+    return _ip(self, _sqrt(self))
 
 def _api_abs_(self):
     return _ip(self, _owner.jt.abs(self))
