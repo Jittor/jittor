@@ -1914,10 +1914,43 @@ It is a larger change than the two that were measured -- `load_fused_op`'s
 producers (`v->_inputs.front()`) have to be captured too -- which is why the two
 five-line candidates were tried first.
 
+### Why the cheap family is exhausted, measured four ways
+
+Two more shapes were built and measured before concluding that, and the reason
+they fail is one property of `free()` that no amount of deferral can work around:
+
+| candidate | 20 runs |
+| --- | --- |
+| deferred surgery, accounting (incl. the recursive output-var free) left out | 12 ok, 8 fail, 0 dumps, **8 underflows** |
+| deferred surgery, accounting kept, including the recursion | 7 ok, 10 fail, 0 dumps, **10 underflows** |
+| hold one *pending* liveness per planned node, released after execution | never built: it cannot work (below) |
+
+`Node::free()`'s surgery is what *removes the node from its neighbours' reach*.
+A node that keeps its edges keeps being the target of further counter releases --
+`release_forward_liveness`/`release_backward_liveness` propagate along exactly
+those edges -- so every scheme that keeps the node alive ends in
+`node.h:279: backward liveness release without a matching owner`. Splitting
+`free()` cannot be made sound by choosing which half to defer, because the two
+halves are the same choice seen from two sides.
+
+And the pin does not work either, for a reason worth writing down: **nothing
+gates `free()` on a counter.** `release_backward_liveness` calls it
+unconditionally the moment its counter reaches zero (`node.cc`, "Free
+backward_liveness=0" then `free();`), so holding one liveness does not stop the
+next release from reaching zero and firing it. `NodeLiveness::need_free()` is
+consulted by callers, not by `free()`. To pin a node you would have to floor its
+counters inside the release handlers while a batch is live -- i.e. add exactly
+the state the snapshot design makes unnecessary.
+
+So the two halves of the conclusion are: the *plan* must stop reading live edges
+(snapshot), or the *release handlers* must learn about a pinned batch (floor).
+The first is smaller and matches what this code did for `custom_data`.
+
 The probe for any candidate is
 `H3_FUSE_DUMP=1 probe_loader_race.py threads 4 6` -- 15-20 runs, because the rate
 is roughly one in four -- and the per-run timeout should be short (~120 s), since
-a wrong candidate hangs rather than fails.
+a wrong candidate hangs rather than fails. Count `dumps` **and**
+`without a matching owner`: the assertion is easy to trade for the underflow.
 
 Baseline on the core as it stands (stream fixes + the `H3_FUSE_DUMP`
 diagnostics): **6 runs, 4 `OK`, 1 failed, 2 dumps** -- so the assert is still
