@@ -52,7 +52,7 @@ struct Allocator {
     inline virtual void gc() {};
     // A true result adds exactly one owner, requiring one later free. False
     // means no new owner was acquired; callers must use their non-sharing path.
-    inline virtual bool share_with(size_t size, size_t allocation) { return false; };
+    inline virtual bool share_with(size_t size, size_t allocation, size_t offset = 0) { return false; };
     // Whether share_with() can actually hold one block for several owners.
     // Asked *before* anything is moved, because a migration that cannot keep
     // a share group together has to be decided on, not discovered halfway.

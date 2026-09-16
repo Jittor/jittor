@@ -323,10 +323,29 @@ void destroy_event(BackendEvent event) {
 }
 void record_event(BackendEvent event, BackendStream stream) {
     CHECK(event.device.index == stream.device.index) << "Event and recording stream must share a device";
-    on_device_void(stream.device.index, [&] {
-        LaunchErrorScope error_scope(stream.device, true, reinterpret_cast<uintptr_t>(stream.handle));
+    // Two things this used to get wrong on a device that is not the process
+    // default, both observed as cudaErrorInvalidResourceHandle(400) from
+    // cudaEventRecord inside a fused operator (rank 1 of a TP=2 run, and never
+    // rank 0):
+    //
+    //  - a caller that leaves the stream unset passes a null handle, which
+    //    reaches CUDA as the *legacy default stream*. This file avoids that
+    //    stream on purpose (see compute_stream: it is what breaks graph
+    //    capture), so resolve it to this device's compute stream.
+    //  - `on_device_void` only drives jittor's own device switch (ops.set_device
+    //    = accelerator_set). A thread whose CUDA context is still the process
+    //    default then records a device-1 event on a device-0 context, which CUDA
+    //    rejects while the device *indices* jittor compares still agree.
+    //    nccl_init calls both; do the same here.
+    BackendStream target = stream;
+    if (!target.handle)
+        target.handle = accelerator_backend_stream(
+            target.device.index, BackendStreamKind::Compute);
+    on_device_void(target.device.index, [&] {
+        checkCudaErrors(cudaSetDevice(target.device.index));
+        LaunchErrorScope error_scope(target.device, true, reinterpret_cast<uintptr_t>(target.handle));
         checkCudaErrors(cudaEventRecord(reinterpret_cast<cudaEvent_t>(event.handle),
-                                      reinterpret_cast<cudaStream_t>(stream.handle)));
+                                      reinterpret_cast<cudaStream_t>(target.handle)));
     });
 }
 void synchronize_event(BackendEvent event) {

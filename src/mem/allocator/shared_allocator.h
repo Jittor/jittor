@@ -47,7 +47,7 @@ struct SharedAllocator final : Allocator {
         return pointer;
     }
 
-    bool share_with(size_t size, size_t allocation) override {
+    bool share_with(size_t size, size_t allocation, size_t offset) override {
         if (!allocation) return size == 0;
         std::lock_guard<std::recursive_mutex> lock(mutex);
         auto it = blocks.find(allocation);

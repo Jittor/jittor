@@ -245,7 +245,7 @@ bool Var::alloc(Allocator* allocator) {
         // allocated first) called a virtual function through a null pointer.
         // With the request in its own field the source's state can be asked
         // about, and an unusable source simply falls through to a real alloc.
-        if (x->allocator && x->allocator->share_with(storage_span_bytes(), x->allocation)) {
+        if (x->allocator && x->allocator->share_with(storage_span_bytes(), x->allocation, share_offset)) {
             mem_ptr = ((char*) x->mem_ptr) + share_offset;
             storage_offset_bytes = x->storage_offset_bytes + share_offset;
             allocation = x->allocation;

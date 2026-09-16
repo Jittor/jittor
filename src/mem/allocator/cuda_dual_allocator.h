@@ -64,7 +64,7 @@ struct CudaDualAllocator : Allocator {
         }
     }
 
-    bool share_with(size_t size, size_t allocation) override {
+    bool share_with(size_t size, size_t allocation, size_t offset) override {
         auto& da = allocations[allocation];
         da.ref_cnt++;
         return true;
@@ -94,8 +94,8 @@ struct DelayFree final : Allocator {
         LOGf << "Should not call this";
         return nullptr;
     }
-    bool share_with(size_t size, size_t allocation) override {
-        return cuda_dual_allocator.share_with(size, allocation);
+    bool share_with(size_t size, size_t allocation, size_t offset) override {
+        return cuda_dual_allocator.share_with(size, allocation, offset);
     };
     bool can_share() const override { return true; }
     void free(void* mem_ptr, size_t size, const size_t& allocation) override {

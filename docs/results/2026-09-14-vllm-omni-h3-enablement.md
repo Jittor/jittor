@@ -644,6 +644,120 @@ NCCL extension compiles from the *deployed* sources and is cached under
 `JITTOR_HOME/.cache/.../custom_ops/`, so a fix must be copied there and that
 cache invalidated before a rebuild picks it up.
 
+**Fix 2 landed and verified: the event-handle fault is gone.** The handle trace
+settled it: the failing `cudaEventRecord` had a *valid* event (created on device 1,
+recorded successfully ten times before, destroyed only after the fault), so the
+invalid resource was not a stale handle; and substituting the device's compute
+stream for the null one still failed, so it was not only the stream either. The
+cause is that `on_device_void` drives jittor's own device switch
+(`ops.set_device = accelerator_set`) and not a raw `cudaSetDevice`, so a thread
+whose CUDA context is still the process default records a device-1 event on a
+device-0 context -- which CUDA rejects while jittor's own
+`CHECK(event.device.index == stream.device.index)` passes. `record_event` now
+resolves a null stream to the device's compute stream and calls `cudaSetDevice`
+explicitly, as `nccl_init` already did. Two independent verifications: the
+no-flash/no-offload config went from `fused operator(0/35)` to `(24/34)` with no
+`InvalidResourceHandle` (237 successful rebinds), and the flash+offload config
+reached the denoise loop. Committed as its own change.
+
+**What is still open, after that fix** (so the next session starts from the real
+front line, not from this section's earlier lists):
+
+   Confirmed as the *sole* blocker across every memory-adequate configuration:
+   flash-attn + DiT/text-encoder offload (`acc-2`) and DiT-resident +
+   text-encoder offload (`best-2`, `RESULT failed in 25.1 s`) both now reach the
+   denoise loop after fix 2 and both die here; the no-flash/no-offload config
+   instead runs out of memory. The fix-2 verification and this verdict come from
+   the same runs, so the front line is unambiguous.
+   **Not tied to the offload after all** -- a no-offload TP2 run at 512x512
+   (text encoder TP-sharded, `OFFLOAD=`) fails with it too, earlier in the
+   pipeline (~10 s, before the denoise loop, i.e. in prompt encoding). With the
+   offload on it was reached only later, in the denoise loop, which is what made
+   the offload look implicated; the earlier reasoning that the layer offload's
+   `param.data =` swap is the trigger is therefore withdrawn.
+1. `cudaErrorIllegalAddress` on rank 1 in the flash-attn + layer-offload config,
+   now that the run gets into the denoise loop. This is the class the earliest
+   TP2 attempts hit; with the event fault gone it is the first thing the request
+   trips.
+2. Out of memory in the no-offload + text-encoder-TP config at 832x480 (66.4 GiB
+   resident per rank of 97 GiB, so the DiT activations have no headroom). A
+   memory-budget question, not a correctness one.
+3. The two intermittent startup failures: the TCPStore rendezvous (~1 in 3 runs)
+   and the sub-group communicator init. `run_tp2_probe.sh` retries past them so
+   they do not block diagnosis, but they are unfixed.
+
+**The remaining fix, spelled out so it is one step next time.** The range-checked
+variant of `share_with` is the one that should be landed, and the only reason it
+was not is mechanical: widening the virtual to
+
+    bool share_with(size_t size, size_t allocation, size_t offset = 0)
+
+requires **every** override to move with it in the same commit. There are five,
+across four headers, plus one call site:
+
+    src/mem/allocator.h:55                            the virtual (add offset)
+    src/mem/allocator/sfrl_allocator.h:150            SFRLAllocator (+ .cc def)
+    src/mem/allocator/cuda_dual_allocator.h:67        CudaDualAllocator
+    src/mem/allocator/cuda_dual_allocator.h:97        DelayFree
+    src/mem/allocator/foreign_allocator.h:17          ForeignAllocator (+ .cc)
+    src/mem/allocator/shared_allocator.h:50           SharedAllocator
+    src/core/var.cc                                   Var::alloc passes share_offset Two more mechanical traps, both hit while trying to land it: the base virtual
+must gain the default (`size_t offset = 0`) or every override is "marked
+`override`, but does not override" -- the trailing `;` after the inline body makes
+the obvious text replacement miss; and `cuda_dual_allocator.h:98` *calls*
+`share_with(size_t, size_t)` internally, so it needs the extra argument too.
+Widening only part of the set leaves the rest marked `override` without a
+matching base, and the build stops with
+
+    error: 'bool jittor::CudaDualAllocator::share_with(size_t, size_t)'
+           marked 'override', but does not override
+
+which is what happened. With the whole set changed, the check
+`if (offset + size > block->size) return false;` makes a request whose range no
+longer fits the block the allocation id names fall through to the
+independent-allocation path instead of aliasing it -- which is the use-after-free
+behind the illegal address. Verify with `probe_split_alias.py` (seconds, no
+server) and then one `run_tp2_probe.sh` cycle.
+
+**Fix 3 landed: the allocator invariant, verified at the repro.** `share_with`
+now takes the request's `offset` and `SFRLAllocator` refuses a request whose range
+no longer fits the block the allocation id names (`offset + size > block->size`),
+falling through to the independent-allocation path `Var::alloc` already has.
+Landing it meant widening the virtual *and* all five overrides across four
+headers, the `DelayFree` internal forwarding call, the `Var::alloc` call site and
+the C++ tests that call the two-argument form directly -- three failed builds
+along the way, each stopping on one of those. Verified where it matters: 
+`probe_split_alias.py` went from tripping
+`sfrl_allocator.cc:305 mem_ptr does not belong to allocation` twice per cycle to
+passing silently (`ALIAS RELEASE OK`).
+
+**But it is not the only source of the illegal address.** The same TP2 request
+that used to die at 20-25 s now runs **145 s** before failing with
+`cudaErrorIllegalAddress` again -- much further in, but not through. So the
+allocator defect was real and is fixed; at least one more cause of the same
+CUDA error remains, and the run's new length is the evidence that the two are
+distinct. The next instrument is the same handle/allocator trace on this longer
+run, now that the run survives far enough to make the trace readable.
+
+**Where the remaining fault now sits** (read off the 145 s run, so this is the
+front line, not the older lists): the innermost frames are
+
+    flash_attn/__init__.py:199 flash_attn_varlen_func
+      -> _call_native :123
+        -> adapter.py:355 flash_attn_varlen_func
+          -> packed_low_level.varlen_fwd(...)
+            -> sticky cudaErrorIllegalAddress, device=1
+
+i.e. the packed varlen call in the DiT denoise loop, on **rank 1 only** -- the same
+"second device only" signature as the record_event fault, and now reached after
+145 s of work (text encoder and earlier steps all succeed) instead of at 20 s.
+Two candidates follow from the shape of it, in order: the officially-built
+flash-attn extension's per-device state on a non-default device (the sanitizer
+already caught exactly that class inside NCCL, `cudaErrorNoKernelImageForDevice`
+in `ncclInitKernelsForDevice`), or the packed path's own `cu_seqlens`/output
+buffers on that device. `instrument_store_and_triton.py` plus the `H3_FA_*`
+traces are the instruments; the run is long enough now to make them readable.
+
 **Next instrument, prepared but not yet run.** The event-handle defect needs the
 handle's provenance: log device + handle at `create_event`, `destroy_event` and
 `record_event` (`backends/cuda/runtime/driver.cc`, `record_event` is where the
