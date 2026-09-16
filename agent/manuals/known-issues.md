@@ -1746,6 +1746,14 @@ about whether to take it.
   `binary«…«DIM=3«XSTRIDED=1«YSTRIDED=1«XSMASK=3«YSMASK=6` plus `reduce«…`,
   with no broadcast member, and the tuner reports
   `Run tuner matmul: confidence(0) candidates({})`.
+- The declared-vs-actual gate notices it too, from the other side:
+  `tests/backends/cpu/test_onednn_contract.py` asks
+  `backend_capability_dtypes("cpu", "matmul")` what oneDNN claims and then
+  probes which implementation actually runs. It reports
+  "the capability declares ['float32'] but oneDNN's matmul actually ran for
+  []" -- because the shape it probes with is the broadcast/multiply/reduce
+  spelling, which its own docstring calls "the only form `MatmulTuner`
+  recognises". The declaration is right and the relay is what is missing.
 - Evidence: `tests/ops/test_matmul.py::TestMatmul::{test_matmul,
   test_matmul_type,test_matmul_cuda,test_matmul_type_cuda}` (their
   `check_matmul2` builds the product by hand out of `broadcast`/`*`/`sum`) and
