@@ -1345,6 +1345,48 @@ serialization artifact) and on cards with ~95 GB free (so it is not memory
 pressure). A single-threaded and an 8-thread replay of every loader pattern at the
 real sizes passes, so it needs the server's own multi-threaded load context.
 
+## 21. The mirror image: rank 1's index tensor cannot be read at all
+
+Section 13 left one hypothesis untested -- "*the `_indexed_scale_shift_kernel`
+masks columns but not rows, so a grid whose row count exceeds any operand's is an
+unmasked out-of-bounds read*". With `H3_TRITON_SHAPES=1` (plus a min/max print for
+integer operands, added to the same trace) the first direct-kernel launch of the
+denoise loop now reads:
+
+    [trishape] _rms_norm_indexed_scale_shift_kernel grid=(3072, 1, 1)
+      output_ptr[3072, 5376]@dev1  x_ptr[3072, 5376]@dev1  weight_ptr[5376]@dev1
+      shift_ptr[3, 5376]@dev1  scale_ptr[3, 5376]@dev1  indices_ptr<RuntimeError>
+    [trishape] _rms_norm_indexed_scale_shift_kernel grid=(3072, 1, 1)
+      output_ptr[3072, 5376]@dev0  x_ptr[3072, 5376]@dev0  weight_ptr[5376]@dev0
+      shift_ptr[3, 5376]@dev0  scale_ptr[3, 5376]@dev0  indices_ptr[3072]@dev0{min=0,max=2}
+
+Two things fall out of that.
+
+*The shapes are not the problem.* The grid is the row count of `x` (3072), the
+kernel masks columns to `hidden_size`, and the index values on the rank that
+works are `0..2` -- exactly the three rows of `shift`/`scale`. Nothing walks out of
+bounds *if* the index buffer holds what it should.
+
+*The index buffer is the problem, and only on device 1.* Reading its values there
+raises a `RuntimeError` (`.numpy()` on the Var fails) before the kernel is even
+launched, while the same tensor on device 0 reads `min=0,max=2`. So the kernel is
+handed a pointer to a buffer whose contents were never valid, `index` comes back
+as garbage, and `shift_ptr + index * stride_shift_row` lands wherever that garbage
+points -- an unmapped page on device 1, which is the `cudaErrorIllegalAddress`. It
+also explains why the fault is invisible to a *shape* check, why it is
+intermittent (it depends on what the unreadable buffer happens to contain) and why
+device 0 is immune: there the tensor materialises.
+
+The trace prints only the exception's type; widening it to the message is the next
+one-line measurement. That message names the jittor path that leaves a device-1
+Var unreadable.
+
+**Interleaved, and separately annoying:** the *startup* now stalls about one run in
+two at `diffusion_worker.py:327` (both workers log the final IR-op-priority line,
+then rank 0 spins at 100% CPU and rank 1 idles; no store trace at all, so it is the
+`NCCL(env)` init path and not the TCPStore that section 19 fixed). The runner
+retries past it.
+
 ## Verification
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails
@@ -1403,6 +1445,8 @@ real sizes passes, so it needs the server's own multi-threaded load context.
   generated entries -- fails on device 1 before the six guards are fixed and
   passes on devices 0 and 1 after; the generator's output is asserted directly by
   `TestPackedEntryDeviceGuard`.
+
+- 21: the shape trace above, from a 4-step 256x256 request on two cards.
 
 Each fix was synced into the lab venv at
 `$JITTOR_LAB_ROOT/_state/h3/venv-jittor/lib/python3.12/site-packages/jittor/`,
