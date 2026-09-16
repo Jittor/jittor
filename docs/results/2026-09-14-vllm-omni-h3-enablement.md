@@ -787,6 +787,36 @@ That, plus the "second device only" signature, is what narrowed the next step to
 synchronous launches (`CUDA_LAUNCH_BLOCKING=1`), which attribute a fault to the
 launch immediately before it.
 
+**The fault is now reproducible in seconds, without a server** --
+`probe_packed_devices.py` calls the shim's bridged `flash_attn_varlen_func` on a
+289x28x128 fp16 tensor with `cu_seqlens=[0,289,289]`:
+
+    CUDA_VISIBLE_DEVICES=4,5  ... python probe_packed_devices.py
+        --- device 0
+            device 0 OK, out mean=1.000000
+        --- device 1
+            device 1 FAILED: cudaErrorIllegalAddress
+
+and the two things that pin it down:
+
+    CUDA_VISIBLE_DEVICES=5  (that card alone -> index 0)   -> OK
+    CUDA_VISIBLE_DEVICES=4  (the other card alone -> index 0) -> OK
+    CUDA_VISIBLE_DEVICES=4,5, call device 1 FIRST, then 0  -> device 1 fails
+
+So it is **not the card and not the order**: the bridged flash-attn entry faults
+whenever the CUDA device *index* is non-zero, in a plain script with no H3, no TP,
+no NCCL and no offload. jittor's own ops on device 1 in that same script
+(`jt.ones`, `.to_device(1)`, `device_copy`, the reshapes) all succeed, so this is
+the extension/its bridge, not core device handling. That is the mechanism behind
+every rank-1-only TP2 failure in this section.
+
+Everything above about offload, ambient device, NCCL device index, the non-packed
+entry and Python-side device binding is superseded as an explanation: those were
+different views of this one defect, and it is now isolated. The next step is a
+seconds-long bisection on this probe -- dense entry vs packed, and shim bridge vs
+extension -- which is what the "five hypotheses measured away" list above could
+not offer at 7 minutes per cycle.
+
 **Next instrument, prepared but not yet run.** The event-handle defect needs the
 handle's provenance: log device + handle at `create_event`, `destroy_event` and
 `record_event` (`backends/cuda/runtime/driver.cc`, `record_event` is where the
