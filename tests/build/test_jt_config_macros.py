@@ -24,7 +24,13 @@ import unittest
 import jittor.compiler as compiler
 
 
-SOURCE_ROOTS = ("src", "extern")
+#: The C++ core (``src/``, found through ``core_root``) and the backend trees
+#: beside it; both moved out of the package in 4.15.
+def _source_roots():
+    from jittor_utils.backend_resources import core_root
+    jittor_path = os.path.dirname(os.path.dirname(compiler.__file__))
+    core = core_root(jittor_path)
+    return (core, os.path.join(os.path.dirname(core), "backends"))
 SOURCE_SUFFIXES = (".cc", ".h", ".cu", ".cuh")
 CONDITIONAL = re.compile(r"^\s*#\s*(?:ifdef|ifndef|if)\b([^\r\n]*)", re.M)
 JT_MACRO = re.compile(r"\bJT_[A-Za-z0-9_]+\b")
@@ -32,9 +38,8 @@ JT_MACRO = re.compile(r"\bJT_[A-Za-z0-9_]+\b")
 
 def _macros_used_in_sources():
     found = set()
-    root = os.path.dirname(compiler.__file__)
-    for directory in SOURCE_ROOTS:
-        for current, _dirs, files in os.walk(os.path.join(root, directory)):
+    for directory in _source_roots():
+        for current, _dirs, files in os.walk(directory):
             for name in files:
                 if not name.endswith(SOURCE_SUFFIXES):
                     continue

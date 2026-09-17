@@ -695,6 +695,10 @@ cc_flags += " -fdiagnostics-color=always "
 #: separates them (task 9.21).
 JT_CONFIG_MACROS = (
     "JT_CHECK_NAN",
+    # ``#ifndef``-defaulted in loop_var_analyze_pass.cc; a backend (corex)
+    # overrides it with ``-DJT_DEFAULT_PARA_OPT_LEVEL=4`` and so may the
+    # environment.
+    "JT_DEFAULT_PARA_OPT_LEVEL",
     "JT_GRAPH_BUILD_PROFILE",
     "JT_HAS_HALF_SIMD",
     "JT_HCCL_NO_MPI",

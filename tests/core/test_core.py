@@ -97,17 +97,17 @@ class TestCore(unittest.TestCase):
         expect_error(
             lambda: jt.matmul(1,1),
             exc_type=AttributeError,
-            match=r"'int' object has no attribute 'shape'",
+            match=r"'int' object has no attribute '(shape|ndim)'",
         )
         expect_error(
             lambda: jt.matmul([1],[1]),
             exc_type=AttributeError,
-            match=r"'list' object has no attribute 'shape'",
+            match=r"'list' object has no attribute '(shape|ndim)'",
         )
         expect_error(
             lambda: jt.matmul([[1]],[1]),
             exc_type=AttributeError,
-            match=r"'list' object has no attribute 'shape'",
+            match=r"'list' object has no attribute '(shape|ndim)'",
         )
         self.assertEqual(jt.introspection.counters.live_vars, 0)
         a = jt.matmul(jt.float32([[3]]), jt.float32([[4]])).data
