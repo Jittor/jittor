@@ -169,6 +169,12 @@ def pytest_addoption(parser):
 def pytest_configure(config):
     global _PYTEST_ROOT
     _PYTEST_ROOT = Path(config.rootpath)
+    # The mode is stated by the environment, so make it hold before the first
+    # module is collected: importing jittor under JITTOR_TORCH_SHIM=1 installs
+    # the Torch shim, and a test file that says ``import torch`` before
+    # ``import jittor`` must not depend on some earlier file having done so.
+    if _torch_mode_is_active() and not hasattr(sys.modules.get("torch"), "_torch_compat_install_context"):
+        importlib.import_module("jittor")
     # Registered rather than reimplemented here: its hooks have to run even when
     # this module's own sessionfinish raises, because the thing it records is
     # whether the session reached its end at all. A native crash takes the
