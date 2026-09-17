@@ -556,7 +556,10 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                 expr == "expand_op" ||
                     expr == "is_def" || expr == "python" ||
                     (k<src.size() && src[k]=='(')) {
-                    ASSERT(src[k] == '(');
+                    // A directive without its argument list is the user's
+                    // template being malformed, not an invariant of ours.
+                    USER_CHECK(k < src.size() && src[k] == '(')
+                        << "jit template directive @" + expr + " must be followed by '('";
                     comma.push_back(k);
                     while (l<src.size() && presum) {
                         if (src[l] == ')')

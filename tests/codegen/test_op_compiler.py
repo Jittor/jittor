@@ -147,7 +147,9 @@ class TestOpCompiler(unittest.TestCase):
         expect_error(lambda: jit_precompile(vars, "@asd"),
                      exc_type=RuntimeError, match=r"Jit var\s+asd\s+not found")
         expect_error(lambda: jit_precompile(vars, "@if"),
-                     exc_type=RuntimeError, match=r"Jit compiler error:\n@if$")
+                     # The log joins streamed pieces with a space, so the
+                     # echoed line may carry one.
+                     exc_type=RuntimeError, match=r"Jit compiler error:\n\s*@if$")
         expect_error(lambda: jit_precompile(vars, "@if(1,1,1,1)"),
                      exc_type=RuntimeError, match="if wrong arguments")
         expect_error(lambda: jit_precompile(vars, "@if(1)"),
