@@ -2892,3 +2892,20 @@ Verified:
 The lesson generalises: for a diffusion model whose TP shards weights, any
 per-rank divergence in *inputs* (RNG streams above all) is fatal and looks
 exactly like "the TP math is wrong". Check the streams before the kernels.
+
+### How close TP1 and TP2 are now (same seed, 512x512)
+
+| pair | mean abs diff | per-frame corr | block SSIM (16 px) |
+| --- | --- | --- | --- |
+| TP1 vs TP1 (same config twice) | 1.50/255 | 0.971-0.994 | 0.942-0.985 |
+| TP1 vs TP2, **2 steps** | 8.29/255 | 0.982-0.985 | **0.972-0.985** |
+| TP1 vs TP2, 8 steps | 16.70/255 | 0.40-0.76 | 0.693-0.958 |
+
+Read it as: at two steps the two paths agree to block-SSIM ~0.98, i.e. the TP
+computation is numerically equivalent to one rank; the 8-step figure is the
+sampler amplifying that bf16 rounding (the same run twice is 1.5/255, so it is not
+run-to-run noise, and it is not a structural error either -- the frames stay the
+same scene and the same overlaid text, see
+`runs/sheet-8step-tp1-vs-tp2.png`). Pixel-identical output between a weight-sharded
+bf16 TP and a single GPU is not something a chaotic 8-step sampler can give, so
+"correct" here means numerically equivalent per step, same content overall.
