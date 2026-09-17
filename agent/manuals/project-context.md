@@ -70,7 +70,7 @@ limitations. See [native complex dtype](../../docs/notes/complex-dtype.md).
 ### Tests and performance
 
 Accelerate 1.10.1 has scoped CPU/CUDA AMP, scaler, accumulation/clip/scheduler, state-placement and actual two-rank DDP/no_sync/local FSDP2 FULL regressions. Required CPU, maintained CUDA ASV and layout pass; full structure retains four existing failures after affected repairs. See the [capability report](../../refactor-wip/results/2026-09-17-accelerate-maturity-repair.md).
-Meta/offload functional passes do not release native CUDA storage. Native `curand_random` CUDA RNG snapshots use bounded operation-log replay and pass mixed normal/uniform FP32/FP64 and fresh-process continuation; APIs bypassing that owner remain explicit limits. CPU explicit-generator replacement sampling is repaired through \(2^{32}\); CUDA generators and wider ranges fail closed. Uneven-input Join and SHARDED DCP still require missing native collective/storage owners.
+Meta/offload functional passes do not release native CUDA storage. Complete CUDA RNG capture after normal/float64 generation, Join and SHARDED DCP remain explicit limits; uniform-only snapshots are not general CUDA save/resume support.
 The independent reference is PyTorch 2.6 and the shim declares API 2.11, without a complete parity claim.
 
 The test architecture uses independent forward references, numerical gradients, and CPU-to-accelerator parity. See [test system](../../docs/development/test-system.md).

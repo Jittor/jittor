@@ -24,41 +24,48 @@ framework defects.
 - **Research:** an intentionally unsupported capability requiring architectural
   work.
 
-## KI-TORCH-RNG-001: complete CUDA generator snapshots use bounded replay
+## KI-TORCH-RNG-001: complete CUDA generator snapshots are not representable
 
 - Severity: Research (C5)
-- Status: Repaired for native `curand_random`; reviewed 2026-09-17
+- Status: Explicit limitation; reviewed 2026-09-17 against large Host cuRAND
+  XORWOW/Philox continuation counterexamples
 - Owner: native CUDA RNG and state-storage maintainers
 - Evidence: `${JITTOR_LAB_ROOT}/Accelerate/maturity_repair/` contains
   `curand_large_offset_probe.py`, `curand_philox_offset_probe.py` and the
   strict-uniform subset probe. The
   [Accelerate capability report](../../refactor-wip/results/2026-09-17-accelerate-maturity-repair.md)
   separates full CPU snapshots from the restricted CUDA format.
-- Symptom: Host cuRAND exposes no opaque state, so restore replays a bounded
-  operation log and latency grows with history; vendor random APIs are not logged.
-- Current behavior: `JITTOR_CURAND_REPLAY_V1` restores native mixed streams and
-  rejects incompatible/malformed states plus histories over 1,000,000 calls or
-  1 GiB replay scratch.
-- Review/expiry condition: benchmark replay cost on maintained workloads and add
-  explicit owners for vendor random APIs bypassing `curand_random`.
+- Symptom: interleaved normal/float64 calls cannot be captured by one Host
+  cuRAND seed/offset. Normal initialization or Gaussian/float64 sampling can
+  therefore make ordinary `Accelerator.save_state()` explicitly fail.
+  `JITTOR_CURAND_XORWOW_U32_V1` capture permits only FP32 uniform history since
+  seed or safe restore; an earlier safe snapshot remains restorable. Sampling
+  operations themselves still compute normally.
+- Workaround: use only the documented safe-uniform capture domain, or perform
+  checkpoint work without claiming exact CUDA RNG continuation. A small-seed
+  reset is not a general exact-resume workaround. Legacy native int seed
+  getters also explicitly reject uint64 seeds they cannot represent.
+- Review/expiry condition: a runtime-owned complete state representation or a
+  reviewed canonical RNG transition passes mixed normal/uniform/float64, odd
+  and large sizes, device isolation, pending work, malformed state and fresh
+  process continuation, followed by generation/checkpoint throughput checks.
 
 ## KI-TORCH-SAMPLER-001: replacement sampling lacks an explicit-generator owner
 
 - Severity: Medium (C4)
-- Status: Resolved for CPU explicit-generator replacement ranges up to 2^32;
-  reviewed 2026-09-17
+- Status: Explicit unsupported combination; reviewed 2026-09-17
 - Owner: native generator-aware integer sampling maintainers
-- Evidence: native `generator_randint` in
-  `src/ops/composite/generator_randint_op.{cc,h}`, its compat factory path, and
-  `compat/tests/torch/test_torch_sampler_rng.py` plus
-  `compat/tests/torch/test_torch_factory_fidelity.py`; values and continuation
-  match independent PyTorch 2.6 for the supported CPU range, with 22 focused
-  tests passing.
-- Remaining boundary: explicit CUDA generators and integer ranges wider than
-  2^32 remain explicitly rejected; replacement sampler worker execution is the
-  maintained thread approximation already used by this compat DataLoader.
-- Review/expiry condition: add a native multiword integer owner before widening
-  the range or claiming explicit CUDA generator support.
+- Evidence: `compat/torch/installers/data.py::RandomSampler.__iter__` and
+  `compat/tests/torch/test_torch_sampler_rng.py`; the current implementation
+  rejects explicit Generator plus replacement without advancing the generator.
+- Symptom: nonreplacement sampling reuses canonical generator-aware randperm,
+  but replacement sampling has no corresponding native Generator.randint
+  owner. Ignoring the supplied generator would silently violate continuation.
+- Workaround: use nonreplacement with the explicit generator, or default RNG
+  replacement when that is the intended randomness contract.
+- Review/expiry condition: implement a reusable native generator-aware integer
+  sampling owner and verify replacement values, continuation, isolation,
+  malformed arguments and DataLoader behavior against an independent reference.
 
 ## KI-TORCH-JOIN-001: uneven-input Join lacks reducer collective hooks
 

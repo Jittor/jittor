@@ -52,7 +52,8 @@ void CurandRandomOp::jit_run() {
     auto generator = curand_bind_stream();
     index_t num = output->num;
     if (num == 0) return;
-    bool normal = @if(@strcmp(@R,uniform)==0,false,true);
+    bool snapshot_safe = @if(@strcmp(@R,uniform)==0,sizeof(T) == sizeof(float),false);
+    curand_check_offset_advance(snapshot_safe ? uint64(num) : 0);
     // curandGenerateUniform has no parity requirement; curandGenerateNormal
     // wants an even count for pseudorandom generators. The old code rounded
     // the count up for both and wrote one element past the end of the output
@@ -81,7 +82,7 @@ void CurandRandomOp::jit_run() {
             checkCudaErrors(curandGenerateNormal@TT (generator, x, num, 0, 1));
         }
     )
-    curand_record_operation(uint64(num), normal, sizeof(T) == sizeof(double));
+    curand_advance_offset(uint64(num), snapshot_safe);
 }
 #endif // JIT_cpu
 #endif // JIT

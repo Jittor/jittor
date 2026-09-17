@@ -49,49 +49,6 @@ class TestTorchFactoryFidelity(unittest.TestCase):
         restored = torch.Generator().set_state(state)
         np.testing.assert_array_equal(torch.randperm(16, generator=restored).numpy(), expected.numpy())
 
-    def test_cpu_generator_randint_matches_pytorch_26_and_advances(self):
-        generator = torch.Generator(device="cpu").manual_seed(777)
-        first = torch.randint(0, 16, (23,), generator=generator)
-        self.assertEqual(first.tolist(), [7, 15, 11, 6, 7, 1, 7, 13, 15, 4, 7,
-                                         9, 14, 10, 8, 7, 2, 13, 14, 0, 11,
-                                         1, 2])
-        overload = torch.Generator(device="cpu").manual_seed(7)
-        np.testing.assert_array_equal(
-            torch.randint(5, (8,), generator=overload).numpy(),
-            np.array([0, 2, 1, 1, 3, 2, 2, 4], dtype=np.int64),
-        )
-        keyword_size = torch.Generator(device="cpu").manual_seed(7)
-        np.testing.assert_array_equal(
-            torch.randint(0, 5, size=(8,), generator=keyword_size).numpy(),
-            np.array([0, 2, 1, 1, 3, 2, 2, 4], dtype=np.int64),
-        )
-        replay = torch.Generator(device="cpu").manual_seed(777)
-        np.testing.assert_array_equal(torch.randint(0, 16, (23,), generator=replay).numpy(),
-                                      first.numpy())
-        state = generator.get_state()
-        expected = torch.randint(0, 16, (8,), generator=generator)
-        restored = torch.Generator(device="cpu").set_state(state)
-        np.testing.assert_array_equal(torch.randint(0, 16, (8,), generator=restored).numpy(),
-                                      expected.numpy())
-
-    def test_generator_randint_rejects_invalid_arguments_without_advancing(self):
-        cases = [
-            ((0, 0, (2,)), {}, "less than"),
-            ((0, 4, (-1,)), {}, "negative dimension"),
-            ((0, 4, (2,)), {"dtype": torch.float32}, "int32 and int64"),
-            ((0, 4, (2,)), {"requires_grad": True}, "floating point"),
-        ]
-        if hasattr(torch, "_torch_compat_install_context"):
-            cases.append(((0, 2 ** 32 + 1, (2,)), {}, "2\\^32"))
-        for args, kwargs, message in cases:
-            with self.subTest(args=args, kwargs=kwargs):
-                generator = torch.Generator(device="cpu").manual_seed(91)
-                state = generator.get_state()
-                with self.assertRaisesRegex(RuntimeError, message):
-                    torch.randint(*args, generator=generator, **kwargs)
-                if hasattr(torch, "_torch_compat_install_context"):
-                    np.testing.assert_array_equal(generator.get_state().numpy(), state.numpy())
-
     def test_generator_randperm_lazy_reverse_evaluation_keeps_reserved_states(self):
         forward_generator = torch.Generator().manual_seed(91)
         expected_first = torch.randperm(32, generator=forward_generator).numpy()

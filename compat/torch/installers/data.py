@@ -133,8 +133,10 @@ class _RandomSampler(_Sampler):
         g = compatibility_owner(jt)
         n = len(self.data_source)
         if self.replacement:
-            yield from g.randint(0, n, (self.num_samples,), device="cpu",
-                                 generator=self.generator).tolist()
+            if self.generator is not None:
+                raise NotImplementedError(
+                    "explicit Generator is not implemented for replacement RandomSampler")
+            yield from g.randint(0, n, (self.num_samples,), device="cpu").tolist()
             return
         for _ in range(self.num_samples // n):
             yield from g.randperm(n, generator=self.generator).tolist()

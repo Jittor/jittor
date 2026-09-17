@@ -593,8 +593,6 @@ include src/ops/composite/fused_sgd_op.cc
 include src/ops/composite/fused_sgd_op.h
 include src/ops/composite/generator_randperm_op.cc
 include src/ops/composite/generator_randperm_op.h
-include src/ops/composite/generator_randint_op.cc
-include src/ops/composite/generator_randint_op.h
 include src/ops/composite/generator_uniform_op.cc
 include src/ops/composite/generator_uniform_op.h
 include src/ops/composite/getitem_op.cc

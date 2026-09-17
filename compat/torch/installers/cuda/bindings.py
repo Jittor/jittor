@@ -228,8 +228,8 @@ def _install_cuda(g, registry=None):
     cuda.memory.max_memory_reserved = cuda.max_memory_reserved
     cuda.memory.CUDAPluggableAllocator = CUDAPluggableAllocator
     cuda.CUDAPluggableAllocator = CUDAPluggableAllocator
-    # RNG state (trainer checkpoints save/restore it). The native cuRAND owner
-    # serializes a runtime-owned operation log and replays it on restore.
+    # rng state (trainer checkpoints save/restore it). jittor has no portable
+    # CUDA rng-state handle, so use a small placeholder Var round-trip.
     cuda.get_rng_state = _api_cuda_get_rng_state
     cuda.get_rng_state_all = _api_cuda_get_rng_state_all
     cuda.set_rng_state = _api_cuda_set_rng_state
