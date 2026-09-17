@@ -65,14 +65,37 @@ class TestSamplerRNG(unittest.TestCase):
     def test_explicit_replacement_support_is_not_silently_ignored(self):
         generator = torch.Generator(device="cpu").manual_seed(777)
         state = generator.get_state()
-        if hasattr(torch, "_torch_compat_install_context"):
-            with self.assertRaisesRegex(NotImplementedError, "explicit Generator.*replacement"):
-                sample("replacement", generator)
-            np.testing.assert_array_equal(values(generator.get_state()), values(state))
-        else:
-            expected = sample("replacement", generator)
-            generator.set_state(state)
-            self.assertEqual(sample("replacement", generator), expected)
+        expected = [7, 15, 11, 6, 7, 1, 7, 13, 15, 4, 7, 9, 14, 10, 8, 7,
+                    2, 13, 14, 0, 11, 1, 2]
+        self.assertEqual(sample("replacement", generator), expected)
+        generator.set_state(state)
+        self.assertEqual(sample("replacement", generator), expected)
+
+    @unittest.skipUnless(hasattr(torch, "_torch_compat_install_context"),
+                         "Jittor explicit Generator device policy")
+    def test_explicit_replacement_generator_is_cpu_only(self):
+        if not torch.cuda.is_available():
+            self.skipTest("needs CUDA generator construction")
+        generator = torch.Generator(device="cuda").manual_seed(7)
+        with self.assertRaisesRegex(RuntimeError, "explicit Generator.*CPU only"):
+            sample("replacement", generator)
+
+    def test_explicit_replacement_does_not_advance_default_rng(self):
+        torch.manual_seed(42)
+        default_state = torch.get_rng_state()
+        generator = torch.Generator(device="cpu").manual_seed(777)
+        sample("replacement", generator)
+        np.testing.assert_array_equal(values(torch.get_rng_state()), values(default_state))
+
+    def test_explicit_replacement_with_workers_keeps_sample_count(self):
+        generator = torch.Generator(device="cpu").manual_seed(777)
+        dataset = TensorDataset(torch.arange(16, device="cpu"))
+        loader = DataLoader(dataset, batch_size=4, sampler=RandomSampler(
+            dataset, replacement=True, num_samples=23, generator=generator),
+                            num_workers=1)
+        sampled = [int(value) for batch in loader for value in batch[0].tolist()]
+        self.assertEqual(len(sampled), 23)
+        self.assertTrue(all(0 <= index < len(dataset) for index in sampled))
 
     def test_invalid_sampler_parameters_are_rejected(self):
         for replacement in (0, 1, "yes"):

@@ -53,19 +53,20 @@ framework defects.
 ## KI-TORCH-SAMPLER-001: replacement sampling lacks an explicit-generator owner
 
 - Severity: Medium (C4)
-- Status: Explicit unsupported combination; reviewed 2026-09-17
+- Status: Resolved for CPU explicit-generator replacement ranges up to 2^32;
+  reviewed 2026-09-17
 - Owner: native generator-aware integer sampling maintainers
-- Evidence: `compat/torch/installers/data.py::RandomSampler.__iter__` and
-  `compat/tests/torch/test_torch_sampler_rng.py`; the current implementation
-  rejects explicit Generator plus replacement without advancing the generator.
-- Symptom: nonreplacement sampling reuses canonical generator-aware randperm,
-  but replacement sampling has no corresponding native Generator.randint
-  owner. Ignoring the supplied generator would silently violate continuation.
-- Workaround: use nonreplacement with the explicit generator, or default RNG
-  replacement when that is the intended randomness contract.
-- Review/expiry condition: implement a reusable native generator-aware integer
-  sampling owner and verify replacement values, continuation, isolation,
-  malformed arguments and DataLoader behavior against an independent reference.
+- Evidence: native `generator_randint` in
+  `src/ops/composite/generator_randint_op.{cc,h}`, its compat factory path, and
+  `compat/tests/torch/test_torch_sampler_rng.py` plus
+  `compat/tests/torch/test_torch_factory_fidelity.py`; values and continuation
+  match independent PyTorch 2.6 for the supported CPU range, with 22 focused
+  tests passing.
+- Remaining boundary: explicit CUDA generators and integer ranges wider than
+  2^32 remain explicitly rejected; replacement sampler worker execution is the
+  maintained thread approximation already used by this compat DataLoader.
+- Review/expiry condition: add a native multiword integer owner before widening
+  the range or claiming explicit CUDA generator support.
 
 ## KI-TORCH-JOIN-001: uneven-input Join lacks reducer collective hooks
 

@@ -448,10 +448,69 @@ def _seed_from(gen):
 
 def _random_adapter(name, original, *args, generator=None, **kwargs):
     if generator is not None:
-        if name != "randperm":
+        if name not in ("randperm", "randint"):
             raise NotImplementedError("explicit Generator is not implemented for torch.{}".format(name))
         if generator.device.type != "cpu":
-            raise RuntimeError("torch.randperm with an explicit Generator currently supports CPU only")
+            raise RuntimeError("torch.{} with an explicit Generator currently supports CPU only".format(name))
+        if name == "randint":
+            if len(args) == 1:
+                low, high = 0, args[0]
+                args = args[1:]
+            elif len(args) == 2:
+                # Torch's two-positional overload is (high, size).  The
+                # (low, high, size) form is handled below; a two-number
+                # call without a size remains an argument error.
+                if "size" in kwargs:
+                    low, high = args
+                    args = ()
+                else:
+                    low, high = 0, args[0]
+                    args = (args[1],)
+            elif len(args) >= 2:
+                low, high = args[:2]
+                args = args[2:]
+            else:
+                low = kwargs.pop("low", 0)
+                if "high" not in kwargs:
+                    raise TypeError("torch.randint missing required argument: high")
+                high = kwargs.pop("high")
+            if args:
+                if "size" in kwargs:
+                    raise TypeError("torch.randint received multiple values for size")
+                size = args[0]
+                if len(args) != 1:
+                    raise TypeError("torch.randint received too many positional arguments")
+            else:
+                if "size" not in kwargs:
+                    raise TypeError("torch.randint missing required argument: size")
+                size = kwargs.pop("size")
+            dtype = kwargs.pop("dtype", None) or jt.int64
+            device = kwargs.pop("device", None)
+            device_type = getattr(device, "type", str(device).split(":", 1)[0]) if device is not None else "cpu"
+            if device_type != "cpu":
+                raise RuntimeError("Expected a CPU generator for a CPU randint result")
+            kwargs.pop("layout", None)
+            kwargs.pop("pin_memory", None)
+            requires_grad = kwargs.pop("requires_grad", None)
+            if requires_grad:
+                raise RuntimeError("Only Tensors of floating point and complex dtype can require gradients")
+            if kwargs:
+                raise TypeError("unsupported randint arguments: {}".format(sorted(kwargs)))
+            low, high = int(low), int(high)
+            if low >= high:
+                raise RuntimeError("random_ expects 'from' to be less than 'to'")
+            if high - low > (1 << 32):
+                raise RuntimeError("torch.randint explicit Generator supports ranges no wider than 2^32")
+            dtype_name = _dtype_to_str(dtype)
+            if dtype_name not in ("int32", "int64"):
+                raise RuntimeError("torch.randint with an explicit Generator supports int32 and int64 only")
+            shape = tuple(int(value) for value in size) if not isinstance(size, int) else (int(size),)
+            if any(value < 0 for value in shape):
+                raise RuntimeError("Trying to create tensor with negative dimension")
+            count = int(np.prod(shape, dtype=np.int64))
+            offset = generator._reserve(count)
+            return jt.ops.generator_randint(shape, low, high, generator._seed,
+                                            offset, dtype_name)
         n = int(args[0] if args else kwargs.pop("n"))
         dtype = kwargs.pop("dtype", None) or jt.int64
         device = kwargs.pop("device", None)
