@@ -1897,6 +1897,30 @@ about whether to take it.
   `gx` relative error 1.0 on a batched `nn.Linear`). `MklMatmulOp`,
   `MklConvOp` and `MklConvBackwardXOp` all needed `grad()` and the
   `_needed_by_backward` flags added.
+- Measured 2026-09-17, by trying it: dropping the tuner's `fop->has(...)`
+  requirement on the two expands (they are still `BroadcastToOp` producers,
+  still carrying `x` and `bcast_mask` -- they are merely no longer *members*
+  of the fused op) does make the relay fire again. It then aborts inside the
+  relay machinery, which requires the relay op's operands to be fused-op
+  members in two separate places:
+  * `src/codegen/opt/var_relay.cc:66`, `ASSERT(q.size()==2*group.size())`
+    ("currently, we only support single op relay") -- the backward BFS from
+    the relay source stops at fused-op nodes, so it reaches exactly the relay
+    op and its output *only* when every operand is inside the fused op.
+    Observed failure: `var_relay.cc:66: [check failed: q.size()==2*group.size()]`
+    on `tests/ops/test_matmul.py::TestMatmul::test_matmul_type`.
+  * the `oprcs` loop below it, `ASSERT(fnodes.count(v))`, because
+    `relayed_members[i]` is a *fused-op node id*: that is the channel through
+    which the generated kernel hands an operand to the relay op. An operand
+    that is not a fused var has no id to put there.
+  With the expand a storage descriptor, the fused op's inputs are the stride-0
+  views and the underlying 2-D operands are not fused vars at all, so neither
+  requirement can be met by re-pointing the tuner. Two ways out, both real
+  work: (a) let a view expand join the fused op (`count_fuse` refuses every
+  edge touching an `OpType::other` op before it looks at `_force_fuse`), which
+  would also address KI-CODEGEN-001's per-element index cost; or (b) extend
+  the relay to carry operands that live outside the fused op -- a new sentinel
+  in `relayed_members` plus the execution support to pass such a var.
 - Why reviving the relay is not a one-line change: the relay substitutes a
   fused-op var into the relay op's members at run time
   (`OpRelayContext::set_var_member`). The fused op's vars are now the expanded

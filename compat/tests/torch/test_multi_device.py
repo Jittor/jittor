@@ -173,9 +173,11 @@ class TestMultiDeviceFacade(_Case):
         # unchanged and a fresh tensor stayed on the ambient device. Measured
         # before the fix, with CUDA_VISIBLE_DEVICES=1,2: `.to(1).device` was
         # cuda:0. torch itself raises on an int here; silently ignoring it is
-        # the one thing that must not happen. Kept first in the test because the
-        # bare-"cuda" case below fails when this file runs alone (see section 16
-        # of the results doc), and an early failure would hide these.
+        # the one thing that must not happen. (Kept first from when the
+        # bare-"cuda" case below failed in an isolated run; that turned out to
+        # be the assertion rather than the implementation -- see the note
+        # closing section 16 of the results doc -- so the ordering is now just
+        # ordering.)
         self.assertEqual(a.to(1).device.index, 1)
         np.testing.assert_array_equal(a.to(1).cpu().numpy(), a.cpu().numpy())
         self.assertEqual(a.to(0).device.index, 0)
