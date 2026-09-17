@@ -99,6 +99,9 @@ print("DONE", rank, os.environ["STORE_INIT_METHOD"], flush=True)
 
 class TestProcessGroupOwnership(unittest.TestCase):
     def test_native_and_torch_share_classes_and_legacy_pickle(self):
+        import importlib.util
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("the child imports the real torch.distributed")
         source = r'''
 import importlib
 import pickle
