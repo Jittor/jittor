@@ -156,7 +156,7 @@ class _Driver:
     so launching here touches the very same device memory jittor allocated.
     """
 
-    _inst = None
+    _insts = {}
     _lock = threading.Lock()
 
     @staticmethod
@@ -213,6 +213,8 @@ class _Driver:
             rt.cudaMemset.restype = ctypes.c_int
             rt.cudaMemcpy.argtypes = [c_vp, c_vp, ctypes.c_size_t, ctypes.c_int]
             rt.cudaMemcpy.restype = ctypes.c_int
+            rt.cudaSetDevice.argtypes = [ctypes.c_int]
+            rt.cudaSetDevice.restype = ctypes.c_int
             rt.cudaDeviceSynchronize.argtypes = []
             rt.cudaDeviceSynchronize.restype = ctypes.c_int
         except EXPECTED as exc:
@@ -220,7 +222,8 @@ class _Driver:
             return None
         return rt
 
-    def __init__(self):
+    def __init__(self, ordinal=0):
+        self.ordinal = int(ordinal)
         lib = None
         last = None
         for name in ("libcuda.so.1", "libcuda.so"):
@@ -257,7 +260,12 @@ class _Driver:
 
         self.check(lib.cuInit(0), "cuInit")
         dev = c_i(0)
-        self.check(lib.cuDeviceGet(ctypes.byref(dev), 0), "cuDeviceGet")
+        # This driver owns ONE CUDA device: a CUmodule/CUfunction belongs to
+        # the context it was loaded into, so a rank whose operands live on
+        # device 1 cannot be served by device 0's handles. Pinning 0 here made
+        # a rank-1 triton launch run against another device's memory, which
+        # surfaced as a sticky cudaErrorIllegalAddress.
+        self.check(lib.cuDeviceGet(ctypes.byref(dev), self.ordinal), "cuDeviceGet")
         self.device = dev
         ctx = ctypes.c_void_p()
         self.check(lib.cuDevicePrimaryCtxRetain(ctypes.byref(ctx), dev),
@@ -289,12 +297,22 @@ class _Driver:
                 what, res, s.value.decode() if s.value else "?"))
 
     @classmethod
-    def get(cls):
-        if cls._inst is None:
+    def get(cls, ordinal=0):
+        """The driver bound to CUDA device ``ordinal``.
+
+        One instance per device: the primary context, the loaded cubin modules
+        and the CUfunction handles are all context-specific, so device 1 needs
+        its own driver rather than device 0's.
+        """
+        ordinal = int(ordinal)
+        inst = cls._insts.get(ordinal)
+        if inst is None:
             with cls._lock:
-                if cls._inst is None:
-                    cls._inst = cls()
-        return cls._inst
+                inst = cls._insts.get(ordinal)
+                if inst is None:
+                    inst = cls(ordinal)
+                    cls._insts[ordinal] = inst
+        return inst
 
     def get_function(self, cubin, name):
         """Load (and cache) the cubin module + return the named CUfunction.
@@ -342,6 +360,14 @@ class _Driver:
             self.lib.cuCtxSetCurrent(self.ctx)
         except EXPECTED as exc:
             swallowed("triton/backend.py ensure_ctx: self.lib.cuCtxSetCurrent(self.ctx)", exc)
+        # The bounce buffers go through cudaMalloc (runtime API, current device)
+        # and are read by a kernel launched in the driver context above, so the
+        # runtime device has to be this one too.
+        if self.rt is not None:
+            try:
+                self.rt.cudaSetDevice(ctypes.c_int(self.ordinal))
+            except EXPECTED as exc:
+                swallowed("triton/backend.py ensure_ctx: self.rt.cudaSetDevice", exc)
 
     def alloc(self, nbytes):
         """Allocate device memory via the runtime API (works on jittor's context;
@@ -1083,6 +1109,22 @@ def run(jitfn, args, kwargs, grid):
             signature[name] = sig
             runtime_vals.append((name, sig, val))
 
+    # Device the launch must happen on: the operands'. The driver context, its
+    # module/function handles and the guard buffers are all per-device.
+    _launch_dev = None
+    for (_, _, _v) in runtime_vals:
+        if _is_tensor(_v):
+            _d = int(getattr(_v, "device_id", 0) or 0)
+            if _launch_dev is None:
+                _launch_dev = _d
+            elif _d != _launch_dev:
+                raise JittorTritonError(
+                    "triton kernel %r has operands on devices %d and %d; the "
+                    "jittor triton backend launches one kernel on one device"
+                    % (kname, _launch_dev, _d))
+    if _launch_dev is None:
+        _launch_dev = 0
+
     if not any(_is_tensor(v) for (_, _, v) in runtime_vals):
         raise JittorTritonError(
             "triton kernel %r launched with no tensor arguments; the jittor "
@@ -1146,7 +1188,8 @@ def run(jitfn, args, kwargs, grid):
         print("  PTRTRACE after  materialize: %r" % {k: hex(x) for k, x in _ptd().items()}, file=_sys.stderr)
 
     # -- pack kernel params (in param order; pointers first only if scratch) - #
-    drv = _Driver.get()
+    drv = _Driver.get(_launch_dev)
+    drv.ensure_ctx()
     keepalive = []
     cvals = []
     # bounced tensors to copy back + guard buffers to recycle after the launch:
@@ -1218,6 +1261,7 @@ def run(jitfn, args, kwargs, grid):
         *[ctypes.cast(ctypes.byref(cv), ctypes.c_void_p) for cv in cvals])
 
     block = (info["num_warps"] * 32, 1, 1)
+    drv.ensure_ctx()
     func = drv.get_function(info["cubin"], info["name"])
     drv.ensure_dynamic_shared(func, info["shared"])  # flash-attn etc. need >48KB
     if os.environ.get("JT_TRITON_DEBUG"):

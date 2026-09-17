@@ -2641,3 +2641,76 @@ Each fix was synced into the lab venv at
 `$JITTOR_LAB_ROOT/_state/h3/venv-jittor/lib/python3.12/site-packages/jittor/`,
 which is a **copy** of `python/jittor` plus the installed `jittor-torch`
 compat package; the adapter checkout is editable.
+
+## 32. The storage view model, and the triton bridge's CUDA device
+
+Two independent defects on the H3 TP2 path, one closed and one open, plus the
+repro that separates them.
+
+### 32.1 `_Storage` / `set_` described a tensor, not its allocation (closed)
+
+`PinnedModuleStager` (text_encoder offload) snapshots a module group as one byte
+image of its storage and re-creates each member with
+`set_(storage, offset, shape, stride)`. The shim reported
+`_Storage.nbytes()` as the tensor's *own* `numel * dsize` while
+`storage_offset()` is an absolute offset inside the shared allocation, so a
+weight sliced out of a fused one -- a shard rank 1 has and rank 0 does not --
+was restored past the end of the buffer it was given: the rank-1
+`as_strided`/`getitem` out-of-bounds seen at 5-30 s.
+
+Fixed (`74bfe44c`): `_Storage.nbytes()` is the byte extent from the allocation
+origin to the tensor's last element (`_storage_offset()` +
+`_storage_strides()`, both real exports), and `set_(storage, ...)` is
+byte-addressed. A physically non-contiguous shard has no byte range to
+materialise and is refused rather than packed into the wrong positions.
+
+Verified: minimal repro `probe_storage_model.py` (cpu and cuda:3, contiguous
+shard at a nonzero offset round-trips exactly; a stride-2 shard raises);
+`test_contiguous_storage`, `test_torch_compat_load_strided` (10 passed),
+`test_multi_device`, `tests/core/test_storage_strides` (10 passed). On the real
+TP2 `ATTN=FLASH_ATTN` + text_encoder-offload request the log now contains zero
+`as_strided` and zero out-of-bounds hits: the request runs `encode_prompt` and
+enters the DiT denoise loop.
+
+### 32.2 The triton bridge's driver was pinned to CUDA device 0 (closed)
+
+`compat/triton/backend.py` retained **one** primary context
+(`cuDeviceGet(&dev, 0)`, `cuDevicePrimaryCtxRetain`) and cached every
+`CUmodule`/`CUfunction` in it. A module belongs to the context it was loaded
+into, so a rank whose operands live on CUDA ordinal 1 launched its kernels in
+device 0's context against device-1 pointers. Now `_Driver` is one instance per
+device (`_Driver.get(ordinal)`, `_insts`), `run()` selects the operands' device
+(and refuses mixed-device operands), and `ensure_ctx()` asserts both the driver
+context and the runtime device so the guarded bounce buffers and the launch
+agree. Regression test:
+`compat/tests/triton/test_triton_backend.py::TestDriverIsPerDevice` (also
+repairs that file's stale `_Driver.instance()` call, which no longer existed).
+
+### 32.3 The open residual, and a repro that runs in seconds
+
+Both target configurations (`ATTN=FLASH_ATTN` TP2 with and without text_encoder
+offload) still fail on rank 1 with a sticky `cudaErrorIllegalAddress`, 20-75 s
+in, at whatever CUDA call comes next (`cudaMemGetInfo`, a NCCL broadcast, a
+triton `cudaMalloc`, the triton launch). Reported location varies between runs;
+the device is always 1.
+
+`probe_triton_device.py` reproduces it in **seconds** with no model: one
+process, `CUDA_VISIBLE_DEVICES=1,2`, tensors on ordinal 1, one `@triton.jit`
+add through the bridge. What it establishes:
+
+* device 0: launch and values correct; device 1: `cudaDeviceSynchronize ->
+  cudaError 700`;
+* a stride-0 operand (`torch.ones(n)` materialised by the shim as a broadcast
+  view: `s=[0] r=1/4096 SHORT`) is read as 4096 dense elements -- wrong values
+  on device 0, fault on device 1. Making the operands dense cures device 0's
+  values but not device 1;
+* syncing each operand (`t.sync(True)`) *before* the bridge is entered turns
+  device 1 into a correct result, while the same call inside `run()` (and
+  `jt.sync_all(True)` there, `device_raw_ptr`, `device_ptr_ready`, the guard,
+  the fast-sync path) does not.
+
+So the residual is in operand materialisation/commit before the launch, not in
+the kernel arithmetic: the modulation kernel's operands were all in bounds
+(`indices` min 0 max 2 against 3 rows; `shift`/`scale` `!CONTIG TALL` but their
+strided reads stay inside their own reach). The next step is on that gap, not on
+the kernels.

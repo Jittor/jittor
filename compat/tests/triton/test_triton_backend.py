@@ -375,7 +375,7 @@ class TestBridgeLaunchStream(unittest.TestCase):
         """The stream value handed to cuLaunchKernel, without launching."""
         from jittor.compat.triton import backend as tb
 
-        driver = tb._Driver.instance()
+        driver = tb._Driver.get(0)
         seen = []
 
         class _Recorder:
@@ -404,6 +404,33 @@ class TestBridgeLaunchStream(unittest.TestCase):
         with mock.patch.dict(os.environ,
                              {"JITTOR_TRITON_LEGACY_STREAM": "1"}):
             self.assertEqual(self._recorded_stream(), [None])
+
+
+@unittest.skipUnless(_HAVE, "real upstream triton + CUDA not available")
+class TestDriverIsPerDevice(unittest.TestCase):
+    """The bridge's driver has to follow the operands' device.
+
+    A ``CUmodule``/``CUfunction`` belongs to the context it was loaded into and a
+    primary context is per device, so a rank whose operands live on CUDA device 1
+    cannot be served by device 0's handles. Pinning device 0 made the first
+    triton launch of a TP2 rank-1 request run on the wrong device against
+    device-1 pointers: a sticky ``cudaErrorIllegalAddress`` reported later, at
+    whatever CUDA call came next (measured on the H3 modulation kernel, whose
+    operands were all in bounds and identical to rank 0's).
+    """
+
+    def test_a_driver_is_cached_per_cuda_device(self):
+        from jittor.compat.triton import backend as tb
+
+        count = int(getattr(jt, "device_count", lambda: 1)())
+        if count < 2:
+            self.skipTest("needs at least two visible CUDA devices")
+        d0 = tb._Driver.get(0)
+        d1 = tb._Driver.get(1)
+        self.assertIs(d0, tb._Driver.get(0))
+        self.assertIsNot(d0, d1)
+        self.assertEqual((d0.ordinal, d1.ordinal), (0, 1))
+        self.assertNotEqual(d0.ctx.value, d1.ctx.value)
 
 
 if __name__ == "__main__":
