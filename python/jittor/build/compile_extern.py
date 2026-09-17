@@ -543,7 +543,7 @@ def install_nccl(root_folder):
     asset = manifest.NCCL
     url, filename = asset.url, asset.filename
     fullname = os.path.join(root_folder, filename)
-    dirname = os.path.join(root_folder, "nccl-2.8.4-1")
+    dirname = os.path.join(root_folder, "nccl-" + manifest.NCCL_VERSION)
     true_md5 = manifest.digest_of(asset)[1]
 
     if os.path.exists(fullname):
@@ -575,10 +575,17 @@ def install_nccl(root_folder):
             safe_tar_extractall(tar, root_folder)
 
         LOG.i("installing nccl...")
-        arch_flag = ""
+        # NVCC_GENCODE replaces NCCL's own default list, so handing it one
+        # without a single `-gencode` builds the device code for the compiler's
+        # default architecture while the host objects expect the real one, and
+        # the device link then fails with hundreds of "nvlink error: Undefined
+        # reference to ncclFunction_...". Only override it when the
+        # architectures are actually known (they are not, for instance, in a
+        # cache home whose `cuda_archs` was never filled in).
+        gencode = ""
         if len(flags.cuda_archs):
-            arch_flag = cuda_arch_flags(flags.cuda_archs)
-        run_cmd(f"CC=\"{cc_path}\" CXX=\"{cc_path}\" make -j8 src.build CUDA_HOME='{cuda_home}' NVCC_GENCODE='{arch_flag} --cudart=shared ' ", cwd=dirname)
+            gencode = f" NVCC_GENCODE='{cuda_arch_flags(flags.cuda_archs)} --cudart=shared '"
+        run_cmd(f"CC=\"{cc_path}\" CXX=\"{cc_path}\" make -j8 src.build CUDA_HOME='{cuda_home}'{gencode} ", cwd=dirname)
     return dirname
 
 def _skip_nccl_p2p_without_peer_access():

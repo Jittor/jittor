@@ -84,6 +84,11 @@ _CHILD = """
 import os, sys, traceback
 try:
     import jittor
+    # A one-rank job is not "distributed" (see ``distributed_requested``), so
+    # importing jittor leaves NCCL to whoever initializes distributed. Ask for
+    # it the way an initializer does, so the rendezvous really runs. For a
+    # multi-rank job the import above has already done it -- and raised.
+    jittor.compile_extern.setup_nccl()
 except BaseException:
     traceback.print_exc()
     sys.stdout.flush(); sys.stderr.flush()

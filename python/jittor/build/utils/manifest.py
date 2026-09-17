@@ -58,11 +58,15 @@ CUTT = _asset(
     "14d0fd1132c8cd657dc3cf29ce4db931",
     url="https://codeload.github.com/Jittor/cutt/zip/v1.2")
 
+#: The wrapper (backends/comm/nccl/src/nccl_wrapper.cc) uses ``ncclBfloat16``
+#: (NCCL >= 2.10) and ``ncclCommGetAsyncError``/``ncclInProgress`` (>= 2.14);
+#: the 2.8.4 that was pinned here could not build it.
+NCCL_VERSION = "2.18.3-1"
 NCCL = _asset(
     "nccl", "nccl.tgz",
-    "a5c1b4da6e1608ee63baa87f6df424bba7a8b1cedad597a25d5b4cf8d56d0865",
-    "900666558c5bc43e0a5e84045b88a06f",
-    url="https://codeload.github.com/NVIDIA/nccl/tar.gz/v2.8.4-1")
+    "6477d83c9edbb34a0ebce6d751a1b32962bc6415d75d04972b676c6894ceaef9",
+    "4d041d876ed55183572b8982e059e24e",
+    url="https://codeload.github.com/NVIDIA/nccl/tar.gz/v" + NCCL_VERSION)
 
 MSVC = _asset(
     "msvc", "msvc.zip",
