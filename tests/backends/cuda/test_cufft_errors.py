@@ -61,10 +61,13 @@ class TestCufftErrors(unittest.TestCase):
     def test_invalid_plan_is_not_cached(self):
         # The first failure must not leave an invalid handle in the plan
         # cache: a second attempt with the same shape has to fail the same
-        # way rather than "succeed" through the cached garbage.
+        # way rather than "succeed" through the cached garbage. Its own shape
+        # so the key is not shared with the other cases; the zero has to be
+        # the leading transform size -- cuFFT only rejects that one (a trailing
+        # zero plans fine and produces an empty result).
         for _ in range(2):
             with self.assertRaises(RuntimeError):
-                _fft2(jt.zeros((1, 4, 0, 2), "float32")).sync()
+                _fft2(jt.zeros((1, 0, 8, 2), "float32")).sync()
 
     def test_valid_transforms_still_work_after_a_failure(self):
         with self.assertRaises(RuntimeError):
