@@ -1728,6 +1728,35 @@ about whether to take it.
   skips with a reason when the toolchain has no translations installed, because
   otherwise both locales print English and the assertion proves nothing.
 
+## KI-COMPAT-004: a factory result is not a backward leaf
+
+- Severity: Low (``is_leaf`` / ``grad_fn`` are introspection; gradients are
+  correct either way).
+- Status: Open. One attempt is recorded below because it looked like a
+  one-liner and was not.
+- Owner: torch compatibility / core autograd
+- Symptom: ``torch.ones(3, requires_grad=True).is_leaf`` is False here and
+  True in real torch, and ``grad_fn`` names ``broadcast_to``. Any code that
+  branches on "is this a leaf" -- parameter collection, gradient-clipping
+  helpers, some checkpointing wrappers -- takes the wrong branch.
+- Mechanism: ``jt.ones`` broadcasts a scalar literal (``_constant_scalar`` in
+  ``python/jittor/_core/var.py``). Every float Var requires grad by default,
+  the literal included, and ``backward_grad_fn`` (src/core/grad.cc) calls a
+  Var a leaf only when *no* input of its producer requires grad. So the
+  broadcast counts as a differentiable producer.
+- Attempt that did not hold (2026-09-17): making the literal ``stop_grad()``.
+  It gives exactly the torch answer and leaves every first-order gradient
+  unchanged (tests/ops and tests/autograd stay green except for the one
+  below), but it breaks the double-backward trick:
+  ``tests/autograd/test_autograd_functional_seeds.py::TestAutogradGradSeedAlignment::test_jvp_multi_input_is_unchanged``
+  then reads a tangent of 0.0 where it should be 348.0. ``jvp`` has no
+  forward mode; it differentiates a first backward graph a second time, and
+  a tangent built by a factory stops carrying the second-order edge. Reverted
+  rather than papered over; whoever closes this needs to understand that
+  interaction first.
+- Pinned by ``tests/torch/test_torch_compat_autograd_semantics.py::TestBackwardLeafAndGradFn::test_leaf_and_intermediate_report_torch_shape``,
+  which asserts the gap as it stands.
+
 ## KI-COMPAT-003: a nested tensor is not a Tensor
 
 - Severity: Low (it is a stand-in for the few ``torch.nested`` paths verl
