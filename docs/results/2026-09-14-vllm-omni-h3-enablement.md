@@ -2281,21 +2281,50 @@ That matters for two reasons, and it is the state bug 1 is actually left in:
   against the no-offload configuration, because that is the one the probe used
   and the one this document's earlier measurements are all stated in.
 
-**And the index is not garbage.** The server log of that run has 16 reports, all
-against the same `388956160`-row buffer, drawn from just three values, and the
-arithmetic of the most frequent one (11 of 16) is a layout, not noise:
+### Root cause: the residency manager's shared-storage idiom, and the shim's gather
 
-    388956160 = 64 x 6077440          <- the buffer's row count
-    395033601 = 65 x 6077440 + 1      <- the index that fires, exactly
+Following that lead into the shim found the reader. `_as_strided` is not a real
+strided view: it builds a full-length int64 index (`arange(size[d]) * stride[d]`
+summed over the dimensions, plus `storage_offset`) and gathers with it out of
+`self.reshape(-1)`. torch validates that request against the *storage*; the shim
+did not check anything, so an oversized view became an out-of-bounds gather.
 
-so the index was computed for a tensor **1/64 larger** than the one it indexes,
-plus an off-by-one, while the other two values (`737396059`, `439601509`) do not
-follow that pattern at all. An index tensor whose entries mostly fit *and* whose
-failures carry a 65/64 factor is what a shape or padding mismatch looks like, and
-the single-GPU run -- same offload, same request -- passes, so the mismatch is
-rank-specific. That is where the fix should be looked for: not in the copy
-engine, not in NCCL, not in the allocator, but in whatever builds this index for
-rank 1.
+Adding that check (there is now a test for it) made the failing request name
+itself in 5.1 s instead of after 30-475 s:
+
+```
+as_strided: sizes (75968, 5120), strides (5120, 1), storage_offset 388956160
+  are too large for the 388956160 element(s) this tensor can address
+  (the view would span [388956160, 777912319])
+```
+
+`75968 x 5120 = 388956160` is exactly how many elements the tensor *has*, and the
+storage offset asked for is that same number: the caller wants a view of the
+**second half** of a `777912320`-element buffer. That is torch's shared-storage
+idiom -- `t.set_(storage, storage_offset=N)` to re-point a layer tensor at another
+shard, which is what the residency manager does when it moves a layer between the
+host and a rank -- and it is the one thing the shim cannot express:
+
+* `set_`'s own docstring says so: "jittor has no user-visible byte storage, so ...
+  the two tensors do not share memory";
+* `_Storage.nbytes()` returns `numel x dsize` -- the *tensor's* elements, not the
+  storage's, so the manager's arithmetic is working with half the buffer it
+  believes in.
+
+Both faces of bug 1 are this one gather: when the out-of-range index landed in
+unmapped memory it was the sticky `cudaErrorIllegalAddress` of the no-offload runs
+(reported later, at a memory query, with no site); when it landed inside the
+larger offload allocation, jittor's `IndexFault` caught it first and named the
+`getitem`. Same call, same offset, different landing.
+
+So the jittor defect -- an out-of-bounds gather that manifested as an illegal
+address -- is fixed at the root: the request now fails immediately and says
+exactly which view it could not serve, and the device read is gone. Making the
+*request* succeed needs one of two things, and they are not small: the shim would
+have to track the tensor a view's storage came from and gather from *that*
+allocation (real shared storage, which the materialising view model does not
+have), or the residency manager would have to stop using the idiom. Neither is a
+fix that can be assumed without the shape of the manager's decision to change.
 
 `CUDA_LAUNCH_BLOCKING=1` is the other half of the picture. It fails *earlier*
 (30.1 s) with the same rank-1 `cudaErrorIllegalAddress` at `cudaMemGetInfo`.

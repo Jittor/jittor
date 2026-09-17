@@ -782,6 +782,36 @@ def _as_strided(self, size, stride, storage_offset=0):
     size = [int(s) for s in size]
     stride = [int(s) for s in stride]
     flat = self.reshape(-1)
+    # The gather below can only reach `flat`'s own elements, so a view that
+    # reaches past them reads outside this tensor: on a device tensor that is an
+    # `cudaErrorIllegalAddress` at whatever CUDA call comes next, with nothing
+    # naming this one. torch validates the same thing and raises
+    # ("setStorage: sizes ..., strides ..., storage_offset ... are too large").
+    #
+    # Measured on the H3 TP2 request, whose failure was a `getitem` with a
+    # full-length int64 index: `388956160 // 64 * 65 + 1` was the top index
+    # against a 388956160-element buffer -- a view described one sixty-fourth
+    # too large. Nothing else in the failure pointed at `as_strided`.
+    #
+    # A caller whose view really does fit a *larger* allocation is a different
+    # case: the shim has no user-visible storage, so `flat` here is the tensor's
+    # own elements and that request cannot be served from them. Rejecting it is
+    # the honest answer; serving it by reading past them is not.
+    n = int(flat.shape[0]) if len(flat.shape) else 1
+    lo = hi = int(storage_offset)
+    for s, st in zip(size, stride):
+        if s <= 0:
+            continue
+        span = (s - 1) * st
+        if span >= 0:
+            hi += span
+        else:
+            lo += span
+    if lo < 0 or hi >= n:
+        raise ValueError(
+            "as_strided: sizes %s, strides %s, storage_offset %d are too large "
+            "for the %d element(s) this tensor can address (the view would span "
+            "[%d, %d])" % (tuple(size), tuple(stride), int(storage_offset), n, lo, hi))
     idx = None
     for d in range(len(size)):
         ar = _owner.jt.arange(size[d], dtype="int64") * stride[d]
