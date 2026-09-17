@@ -2,7 +2,12 @@
 import pickle as _pickle
 
 _SAFE_NUMPY_NAMES = frozenset((
-    "ndarray", "dtype", "_reconstruct", "scalar",
+    # ``_frombuffer`` is how numpy pickles an array that views a buffer, which
+    # is what this layer's own ``torch.save`` writes -- without it the shim
+    # could not load its own checkpoints at the default ``weights_only=True``.
+    # Like ``_reconstruct`` it only builds an array out of bytes, a dtype and a
+    # shape; neither can execute anything from the file.
+    "ndarray", "dtype", "_reconstruct", "_frombuffer", "scalar",
     "bool_", "int8", "int16", "int32", "int64", "intp", "longlong",
     "uint8", "uint16", "uint32", "uint64", "uintp", "ulonglong",
     "float16", "float32", "float64", "longdouble",
