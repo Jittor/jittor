@@ -1756,6 +1756,11 @@ about whether to take it.
   interaction first.
 - Pinned by ``tests/torch/test_torch_compat_autograd_semantics.py::TestBackwardLeafAndGradFn::test_leaf_and_intermediate_report_torch_shape``,
   which asserts the gap as it stands.
+- The same bookkeeping, from the other side: ``torch.Tensor(other)`` aliases
+  the graph in torch (the result requires grad and is not a leaf), while here
+  ``Tensor`` is a plain ``Var`` subclass with no constructor of its own, so
+  the call builds a fresh Var from the data and the linkage is lost. Pinned
+  by ``tests/torch/test_independent_frontend.py::test_independent_tensor_installation_preserves_native_type``.
 
 ## KI-COMPAT-003: a nested tensor is not a Tensor
 
