@@ -2686,31 +2686,36 @@ agree. Regression test:
 `compat/tests/triton/test_triton_backend.py::TestDriverIsPerDevice` (also
 repairs that file's stale `_Driver.instance()` call, which no longer existed).
 
-### 32.3 The open residual, and a repro that runs in seconds
+### 32.3 Why device 1 faulted, and the repro that found it (closed)
 
-Both target configurations (`ATTN=FLASH_ATTN` TP2 with and without text_encoder
-offload) still fail on rank 1 with a sticky `cudaErrorIllegalAddress`, 20-75 s
-in, at whatever CUDA call comes next (`cudaMemGetInfo`, a NCCL broadcast, a
-triton `cudaMalloc`, the triton launch). Reported location varies between runs;
-the device is always 1.
+Both target configurations (`ATTN=FLASH_ATTN` TP2 with and without
+text_encoder offload) used to fail on rank 1 with a sticky
+`cudaErrorIllegalAddress`, 20-75 s in, reported at whatever CUDA call came next
+(`cudaMemGetInfo`, a NCCL broadcast, a triton `cudaMalloc`, the triton launch) --
+a different site per run, always device 1.
 
 `probe_triton_device.py` reproduces it in **seconds** with no model: one
-process, `CUDA_VISIBLE_DEVICES=1,2`, tensors on ordinal 1, one `@triton.jit`
-add through the bridge. What it establishes:
+process, `CUDA_VISIBLE_DEVICES=1,2`, tensors on ordinal 1, one `@triton.jit` add
+through the bridge. device 0 launched fine, device 1 raised
+`cudaDeviceSynchronize -> cudaError 700`.
 
-* device 0: launch and values correct; device 1: `cudaDeviceSynchronize ->
-  cudaError 700`;
-* a stride-0 operand (`torch.ones(n)` materialised by the shim as a broadcast
-  view: `s=[0] r=1/4096 SHORT`) is read as 4096 dense elements -- wrong values
-  on device 0, fault on device 1. Making the operands dense cures device 0's
-  values but not device 1;
-* syncing each operand (`t.sync(True)`) *before* the bridge is entered turns
-  device 1 into a correct result, while the same call inside `run()` (and
-  `jt.sync_all(True)` there, `device_raw_ptr`, `device_ptr_ready`, the guard,
-  the fast-sync path) does not.
+The cause was ordering inside the bridge, not the kernels. `_Driver.__init__`
+called `cuCtxSetCurrent`, and the compilation path calls `_Driver.get()` for its
+compute capability -- so the *first* triton launch of a rank-1 process switched
+the current context to device 0 before the materialising `sync_all` ran. The
+sync then waited on device 0's streams, device 1's operands were not committed,
+and the kernel was handed device-1 pointers while device 0 was current:
+uncommitted memory on device 0 (stale values), an illegal address on device 1.
+Fixed (`95ad1ea2`): `__init__` only `cuDevicePrimaryCtxRetain`s (no context
+switch), and `run()` selects the operands' device with `ensure_ctx()` *before*
+compiling and materialising, so the runtime device and the driver context agree
+for both the bounce buffers and the launch.
 
-So the residual is in operand materialisation/commit before the launch, not in
-the kernel arithmetic: the modulation kernel's operands were all in bounds
-(`indices` min 0 max 2 against 3 rows; `shift`/`scale` `!CONTIG TALL` but their
-strided reads stay inside their own reach). The next step is on that gap, not on
-the kernels.
+Verified: the probe is green on device 0 and device 1; the real request
+(TP2, 2 steps, 256x256, `ATTN=FLASH_ATTN`) reports
+`RESULT completed in 495.3 s` with zero `cudaErrorIllegalAddress` and zero worker
+tracebacks. Two operational notes the probe also produced, which are *not* this
+fault: a stride-0 operand (`torch.ones(n)` through the shim is a broadcast view,
+`s=[0] r=1/4096`) is read by such a kernel as `n` dense elements, which gives
+wrong values on device 0 as well; and an operand whose last stride is not 1
+cannot be served by the kernels the model uses.
