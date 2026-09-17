@@ -190,7 +190,7 @@ def test_cutt_plan_banks_own_devices_and_survive_targeted_clear(cache_libraries)
             assert cutt.cutt_plan_destroy_count(0) == destroyed + 1
             cutt.cutt_clear_plan_cache(0)
             assert cutt.cutt_plan_destroy_count(0) == destroyed + 1
-        with jt.flag_scope(device_id=0):
+        with jt.flag_scope(use_cuda=1, device_id=0):
             output = operations.cutt_transpose(jt.array(data), (2, 0, 1))
             output.sync()
             cutt.cutt_clear_plan_cache(0)
