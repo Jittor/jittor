@@ -1760,6 +1760,14 @@ about whether to take it.
   `tests/backends/cpu/test_mkl_conv_op.py::TestMklConvOp::{test_forward,
   test_backward,test_forward_nhwc_hwio,test_backward_nhwc_hwio}`, whose
   `assert logs[0][0] == '20'` reads the conv tuner's confidence and gets `'0'`.
+  On CUDA, `tests/backends/cuda/test_cudnn_op.py::TestCudnnConvOp::{test,
+  test_backward}` run with `enable_tuner=1` and look for the
+  `Jit op key (not )?found: cudnn_conv…` line that only the relay emits.
+  `tests/backends/cuda/test_cuda_op_capabilities.py::{test_cuda_matmul_capability_relays_meta_operator_graph,
+  test_cuda_conv_capability_relays_meta_operator_graph}` build the product /
+  the convolution by hand out of `broadcast`/`reindex`/`*`/`sum` under
+  `compile_options={"_capability_matmul": 1}` (resp. `_capability_conv`) and
+  read the profiler for a `cublas_matmul` / `cudnn_conv` row: none appears.
 - What it cost before the routing change, measured on this machine, float32:
 
   | operation | jittor | reference | ratio |

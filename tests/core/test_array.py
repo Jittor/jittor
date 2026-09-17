@@ -234,7 +234,9 @@ class TestArray(unittest.TestCase):
                      match="type <dict> not support")
         expect_error(lambda : jt.array("asdasd"), exc_type=RuntimeError,
                      match="type <str> not support")
-        expect_error(lambda : jt.array(jt), exc_type=RuntimeError,
+        # A plain module: ``jittor`` itself is a ``_LibraryModule`` subclass
+        # and the message names the concrete type.
+        expect_error(lambda : jt.array(np), exc_type=RuntimeError,
                      match="type <module> not support")
 
     def test_64_bit(self):

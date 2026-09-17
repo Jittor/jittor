@@ -294,19 +294,21 @@ class TestCublasMatmulBoundaries(CudaBoundaryCase):
     def setUp(self):
         self.cublas = _ops("cublas_ops")
 
+    # Rank > 2 is accepted since fd887f54 (a dense operand is its own rank-2
+    # flattening), so the boundary is rank < 2.
     @jt.flag_scope(use_cuda=1)
     def test_matrix_a_rank(self):
         self.rejects(
             lambda: self.cublas.cublas_matmul(
-                jt.random((1, 2, 3)), jt.random((3, 4)), False, False),
-            r"a->shape\.size\(\)\(3\) == 2")
+                jt.random((3,)), jt.random((3, 4)), False, False),
+            r"cublas matmul requires rank-2 or higher input a")
 
     @jt.flag_scope(use_cuda=1)
     def test_matrix_b_rank(self):
         self.rejects(
             lambda: self.cublas.cublas_matmul(
-                jt.random((2, 3)), jt.random((1, 3, 4)), False, False),
-            r"cublas matmul requires rank-2 input b")
+                jt.random((2, 3)), jt.random((3,)), False, False),
+            r"cublas matmul requires rank-2 or higher input b")
 
     @jt.flag_scope(use_cuda=1)
     def test_inner_dimensions(self):
