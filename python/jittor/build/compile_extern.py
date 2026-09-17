@@ -561,7 +561,10 @@ def install_nccl(root_folder):
         # archive it then threw away.
         if core.get_device_count() == 0:
             return
-        if not inside_mpi():
+        # ... or under the MPI-free rendezvous: ``setup_nccl`` builds NCCL for
+        # ``JT_NCCL_WORLD_SIZE`` precisely so multi-card runs need no mpirun,
+        # and that path has to be able to fetch NCCL too.
+        if not inside_mpi() and os.environ.get("JT_NCCL_WORLD_SIZE") is None:
             return
         if not os.path.isfile(os.path.join(root_folder, filename)):
             LOG.i("Downloading nccl...")

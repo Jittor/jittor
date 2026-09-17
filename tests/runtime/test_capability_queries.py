@@ -13,6 +13,7 @@ read as the answer to a different question.
 
 import os
 import unittest
+from unittest import mock
 
 import jittor as jt
 from jittor._runtime.backend_libraries import BackendLibraries
@@ -51,7 +52,7 @@ class _FakeExtern:
 
 
 class _FakeLibraries:
-    LIBRARY_NAMES = ("mkl", "mpi", "cudnn", "cutt")
+    LIBRARY_NAMES = ("mkl", "mpi", "cudnn", "cutt", "nccl")
 
     def __init__(self, registry):
         self._registry = registry
@@ -192,6 +193,56 @@ class TestCapabilityRecordRefusesToCollapse(unittest.TestCase):
             jt.capability.accelerator("no_such_accelerator")
         with self.assertRaises(ValueError):
             jt.capability.library("no_such_library")
+
+
+class TestLibraryPrerequisites(unittest.TestCase):
+    """``setup_nccl`` returns without building unless MPI is present or
+    ``JT_NCCL_WORLD_SIZE`` names an MPI-free rendezvous. Read through the
+    loader alone that is "bailed out silently" -- a broken build -- when it
+    is a missing prerequisite, which is a skip."""
+
+    def _cuda_machine(self, registry):
+        return _capabilities(
+            _FakeBuildConfig(backend="cuda", has_cuda=True, is_cuda=True,
+                             nvcc_path="/usr/local/cuda/bin/nvcc"),
+            _FakeCore(device_count=1),
+            _FakeExtern(has_mpi=False, mpicc_path=""),
+            registry)
+
+    def _require_enabled_cuda(self, caps):
+        accelerator = caps.accelerator("cuda")
+        if not accelerator.enabled:
+            raise unittest.SkipTest(
+                "the fake CUDA build is not enabled here, so the prerequisite "
+                "branch is not reached: " + accelerator.reason)
+
+    def test_a_declining_loader_behind_an_absent_prerequisite_is_absent_not_failed(self):
+        registry = BackendLibraries()
+        registry.register_loader("nccl", lambda: None)  # setup_nccl's early return
+        with mock.patch.dict(os.environ):
+            os.environ.pop("JT_NCCL_WORLD_SIZE", None)
+            caps = self._cuda_machine(registry)
+            self._require_enabled_cuda(caps)
+            capability = caps.library("nccl", load=True)
+        self.assertIs(capability.state, CapabilityState.ABSENT)
+        self.assertFalse(capability.failed)
+        # The reason carries the whole chain: what is needed, why it is not
+        # there, and the alternative.
+        self.assertIn("mpi", capability.reason)
+        self.assertIn("mpicc_path", capability.reason)
+        self.assertIn("JT_NCCL_WORLD_SIZE", capability.reason)
+
+    def test_the_rendezvous_variable_lets_the_loader_answer_for_itself(self):
+        registry = BackendLibraries()
+        registry.register_loader("nccl", lambda: None)
+        with mock.patch.dict(os.environ, {"JT_NCCL_WORLD_SIZE": "2"}):
+            caps = self._cuda_machine(registry)
+            self._require_enabled_cuda(caps)
+            capability = caps.library("nccl", load=True)
+        # Nothing stands in the loader's way, so publishing nothing is the
+        # broken build it always was.
+        self.assertIs(capability.state, CapabilityState.FAILED)
+        self.assertIn("bailed out silently", capability.reason)
 
 
 class TestLibraryProbeSeparatesOffFromBrokenFromAbsent(unittest.TestCase):
@@ -361,51 +412,41 @@ class TestTestSideHelpersRefuseToSkipOnFailure(unittest.TestCase):
 
     def test_require_accelerator_raises_assertion_error_on_failure(self):
         from _helpers import capability as helpers
-
         broken = Capability(
             "cuda", "accelerator", CapabilityState.FAILED,
             "nvcc was handed a path and the build came out without CUDA")
-
-        original = jt.capability
-
         class _Stub:
             @staticmethod
-            def accelerator(name):
+            def backend(name):
                 return broken
-
-        try:
-            jt.__dict__["capability"] = _Stub()
+        # The helper reads ``jt.introspection.capabilities.backend``; the
+        # introspection object refuses assignment, so patch the descriptor.
+        with mock.patch.object(type(jt.introspection), "capabilities",
+                               new_callable=mock.PropertyMock,
+                               return_value=_Stub()):
             with self.assertRaises(AssertionError) as caught:
                 helpers.require_accelerator("cuda")
-            self.assertIn("broken build", str(caught.exception))
-            # Specifically NOT a skip.
-            self.assertNotIsInstance(caught.exception, unittest.SkipTest)
-        finally:
-            jt.__dict__["capability"] = original
+        self.assertIn("broken build", str(caught.exception))
+        # Specifically NOT a skip.
+        self.assertNotIsInstance(caught.exception, unittest.SkipTest)
 
     def test_require_accelerator_skips_with_the_machine_level_reason(self):
         from _helpers import capability as helpers
-
         off = Capability(
             "cuda", "accelerator", CapabilityState.DISABLED,
             "the machine has 8 device nodes but this build has no nvcc_path")
-
-        original = jt.capability
-
         class _Stub:
             @staticmethod
-            def accelerator(name):
+            def backend(name):
                 return off
-
-        try:
-            jt.__dict__["capability"] = _Stub()
+        with mock.patch.object(type(jt.introspection), "capabilities",
+                               new_callable=mock.PropertyMock,
+                               return_value=_Stub()):
             with self.assertRaises(unittest.SkipTest) as caught:
                 helpers.require_accelerator("cuda")
-            # The skip says what the machine has, separately from the build.
-            self.assertIn("8 device nodes", str(caught.exception))
-            self.assertIn("no nvcc_path", str(caught.exception))
-        finally:
-            jt.__dict__["capability"] = original
+        # The skip says what the machine has, separately from the build.
+        self.assertIn("8 device nodes", str(caught.exception))
+        self.assertIn("no nvcc_path", str(caught.exception))
 
     def test_machine_has_accelerator_answers_the_machine_question(self):
         from _helpers import capability as helpers

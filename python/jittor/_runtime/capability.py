@@ -294,6 +294,17 @@ LIBRARY_BUILD_FLAGS = {
     "cutt": ("use_cutt", None),
 }
 
+#: What else a library needs before its loader will even try: another library,
+#: or an environment variable naming a rendezvous that stands in for it.
+#: ``setup_nccl`` returns without building unless MPI is present or
+#: ``JT_NCCL_WORLD_SIZE`` names an MPI-free rendezvous; read through
+#: ``probe_library`` alone that silent return is "the loader bailed out
+#: silently" -- a broken build -- when it is a missing prerequisite, which
+#: is a skip.
+LIBRARY_PREREQUISITES = {
+    "nccl": ("mpi", "JT_NCCL_WORLD_SIZE"),
+}
+
 
 class Capabilities:
     """The ``jt.capability`` namespace.
@@ -493,6 +504,28 @@ class Capabilities:
                     "the build set %s=%r, so %s was compiled out"
                     % (flag_name, flag_value, name), evidence)
 
+        prerequisite = LIBRARY_PREREQUISITES.get(name)
+        if prerequisite is not None:
+            library_name, env_name = prerequisite
+            rendezvous = os.environ.get(env_name)
+            evidence[env_name] = rendezvous
+            if rendezvous is None:
+                other = self.library(library_name)
+                evidence["prerequisite"] = library_name
+                evidence["prerequisite_state"] = other.state.value
+                if other.state in (CapabilityState.ABSENT, CapabilityState.DISABLED,
+                                   CapabilityState.FAILED):
+                    # Inherit the prerequisite's state, as with the accelerator
+                    # above: a broken MPI build must not present as a missing
+                    # nccl, and a missing one must not present as broken.
+                    return self._make(
+                        name, "library", other.state,
+                        "%s needs the %s library (which is %s: %s) or the %s "
+                        "rendezvous, and neither is present, so its loader "
+                        "declines without building"
+                        % (name, library_name, other.state.value, other.reason,
+                           env_name),
+                        evidence)
         state, reason, extra = self._libraries.probe_library(name, load=load)
         evidence.update(extra)
         return self._make(name, "library", CapabilityState(state), reason,
@@ -520,4 +553,5 @@ class Capabilities:
 
 
 __all__ = ["Capabilities", "Capability", "CapabilityState",
-           "ACCELERATOR_PROBES", "LIBRARY_ACCELERATOR", "LIBRARY_BUILD_FLAGS"]
+           "ACCELERATOR_PROBES", "LIBRARY_ACCELERATOR", "LIBRARY_BUILD_FLAGS",
+           "LIBRARY_PREREQUISITES"]
