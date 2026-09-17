@@ -94,9 +94,11 @@ class TestLinalg(Base):
     def test_svd_values_and_recon(self):
         A = np.random.RandomState(5).randn(5, 3).astype("float32")
         def body(dev):
-            # Jittor's canonical torch.linalg path returns the reduced (U, S, Vh)
-            # decomposition, equivalent to torch full_matrices=False.
-            U, S, Vh = torch.linalg.svd(jt.array(A))
+            # torch.linalg.svd defaults to full_matrices=True, so U is (5, 5)
+            # for this 5x3 input and only its first k columns take part in the
+            # reconstruction. Ask for the reduced form, which is what this
+            # check is about.
+            U, S, Vh = torch.linalg.svd(jt.array(A), full_matrices=False)
             self.ac(np.sort(S.numpy())[::-1], np.linalg.svd(A, compute_uv=False),
                     rtol=1e-3, msg=f"singular values {dev}")
             recon = U.numpy() @ np.diag(S.numpy()) @ Vh.numpy()

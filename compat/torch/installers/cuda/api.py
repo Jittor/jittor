@@ -1270,9 +1270,16 @@ def _register_cuda_fidelity(ctx):
     namespaces.extend((name, module) for name, module in modules.items()
                       if name in ancillary or any(name == prefix or name.startswith(prefix + ".")
                                                   for prefix in prefixes))
+    # ``__module__`` is how this sweep recognises what it published -- except
+    # for the legacy CUDA tensor classes, which report ``torch.cuda`` because
+    # that is where torch reports them from and what mmcv reads. Name them.
+    published_types = set(_CUDA_TENSOR_TYPES.values())
     for namespace, module in namespaces:
         for name, implementation in tuple(vars(module).items()):
-            if not callable(implementation) or getattr(implementation, "__module__", None) != __name__:
+            if not callable(implementation):
+                continue
+            if (getattr(implementation, "__module__", None) != __name__
+                    and implementation not in published_types):
                 continue
             placeholder = implementation in _CUDA_PLACEHOLDERS
             if implementation.__name__.startswith("_api_mod_"):
