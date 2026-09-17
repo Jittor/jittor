@@ -2822,6 +2822,29 @@ The modulation kernel that used to fault reads
 this failure and the shape of the original crash. Whether the three tensors
 cross that boundary with consistent row splits is the next thing to look at.
 
+### Every shim primitive on that path has now been checked (2026-09-17)
+
+Each row is a probe in the lab, run against the shim, not a reading of the code.
+`probe_tp_dist.py`, `probe_sp_chunk.py`, `probe_sp_gather.py` and the write
+probes are single-purpose and take seconds to a minute:
+
+| primitive / behaviour | probe | result |
+| --- | --- | --- |
+| `all_reduce` sum and mean, `all_gather`, `broadcast`, row-parallel split+reduce | `probe_tp_dist.py`, 2 ranks | exact |
+| `Tensor.chunk` (1-D/2-D/3-D, non-divisible, `chunks > size`, on views) | `probe_sp_chunk.py` | matches numpy |
+| the SP gather assembly `reshape([ws]+size) -> movedim(0,dim) -> reshape` at dim 1/2, and `movedim` alone | `probe_sp_gather.py`, 2 ranks | matches numpy |
+| `copy_` into `param.data[a:b]`, both rank regions, fp32/bf16, cpu/cuda, and into a parameter that is itself a shard | `probe_slice_copy.py`, `probe_shard_write.py` | write lands |
+| which model line calls each collective | `H3_TP_TRACE=1` + call-site capture | all from vllm `ColumnParallelLinear(gather_output=True)` / `RowParallelLinear` and the encoder, at shapes that are internally consistent (`video_out` 48 = 96/2, `audio_out` 16 = 32/2, DiT hidden 2688 = 5376/2, rows 3072 = the full sequence) |
+
+So the fault is *not* a collective, a split, an assembly or a write: every
+primitive that the TP2 path uses behaves as torch does. What remains is model
+-side TP semantics -- which tensor is replicated where the code assumes a shard
+(or the reverse), or a `shard_id`-to-region mapping -- and that lives in
+vllm/vllm-omni. Finishing the localisation therefore needs a *dump-only*
+diagnostic inside the lab's `vllm-omni` checkout (per-rank encoder weight shard
+digests, or one forward's intermediate tensors); that is a change to the
+component the work is not supposed to modify, so it is not done unilaterally.
+
 Next diagnostic, in order of cost: (1) isolate the DiT's per-rank parameter
 count under TP1 vs TP2 (a shim-side print of the parameter storages at load, or
 the DiT's own size line); (2) instrument the shim's `all_gather`/`all_reduce` to
