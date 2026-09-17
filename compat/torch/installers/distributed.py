@@ -1074,28 +1074,37 @@ def _api_checkpoint_sd_set_state_dict(model, optimizers=None, model_state_dict=N
 
 
 def _api_sharded_tensor_init_from_local_shards(shards, *a, **k):
+    # Do not inspect local shards before the default fail-closed policy raises.
+    stub_result = None
+    if _allow_stub():
+        stub_result = shards[0] if shards else None
     return _stub_unimplemented(
         "torch.distributed._shard.sharded_tensor.init_from_local_shards",
         _dcp_save_effect,
         _dcp_hint,
-        # Preserve the historical opt-in fallback while making the default
-        # path fail before pretending that local metadata is a global tensor.
-        stub_result=shards[0] if shards else None,
+        stub_result=stub_result,
     )
 
 
 def _api_sharded_tensor_empty(*a, **k):
+    # Avoid allocating storage until the caller explicitly opts into the old
+    # local stub behavior.
+    stub_result = None
+    if _allow_stub():
+        stub_result = jt.empty(*a, **{kk: vv for kk, vv in k.items() if kk == 'dtype'})
     return _stub_unimplemented(
         "torch.distributed._shard.sharded_tensor.empty",
         _dcp_save_effect,
         _dcp_hint,
-        # ``JITTOR_TORCH_ALLOW_STUB=1`` explicitly opts into the old local
-        # allocation behavior for callers that need an import-only fallback.
-        stub_result=jt.empty(*a, **{kk: vv for kk, vv in k.items() if kk == 'dtype'}),
+        stub_result=stub_result,
     )
 
 
-from ...stub_policy import unimplemented as _stub_unimplemented, record_unimplemented as _record_unimplemented
+from ...stub_policy import (
+    allow_stub as _allow_stub,
+    unimplemented as _stub_unimplemented,
+    record_unimplemented as _record_unimplemented,
+)
 
 class SerializationFormat:
     TORCH_SAVE = "torch_save"

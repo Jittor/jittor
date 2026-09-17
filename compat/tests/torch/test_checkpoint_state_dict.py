@@ -203,3 +203,45 @@ def test_sharded_dcp_storage_remains_explicitly_unsupported(tmp_path):
         assert not (tmp_path / "sharded").exists()
     finally:
         stub_policy.set_allow_stub(previous)
+
+
+@pytest.mark.skipif(not hasattr(torch, "_torch_compat_install_context"), reason="Jittor unsupported-boundary policy")
+def test_sharded_tensor_rejection_does_not_construct_stub_storage(monkeypatch):
+    from jittor.compat import stub_policy
+    from jittor.compat.torch.installers import distributed as owner
+
+    class UninspectableShards:
+        def __bool__(self):
+            raise AssertionError("rejection path inspected shards")
+
+        def __getitem__(self, key):
+            raise AssertionError("rejection path accessed shards")
+
+    previous = stub_policy.set_allow_stub(False)
+    try:
+        with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
+            owner._api_sharded_tensor_init_from_local_shards(UninspectableShards())
+
+        def unexpected_empty(*args, **kwargs):
+            raise AssertionError("rejection path allocated jt.empty storage")
+
+        monkeypatch.setattr(owner.jt, "empty", unexpected_empty)
+        with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
+            owner._api_sharded_tensor_empty((2,), dtype=np.float32)
+    finally:
+        stub_policy.set_allow_stub(previous)
+
+
+@pytest.mark.skipif(not hasattr(torch, "_torch_compat_install_context"), reason="Jittor unsupported-boundary policy")
+def test_sharded_tensor_stub_opt_in_keeps_legacy_local_results(monkeypatch):
+    from jittor.compat import stub_policy
+    from jittor.compat.torch.installers import distributed as owner
+
+    sentinel = object()
+    previous = stub_policy.set_allow_stub(True)
+    try:
+        assert owner._api_sharded_tensor_init_from_local_shards([sentinel]) is sentinel
+        monkeypatch.setattr(owner.jt, "empty", lambda *args, **kwargs: sentinel)
+        assert owner._api_sharded_tensor_empty((2,), dtype=np.float32) is sentinel
+    finally:
+        stub_policy.set_allow_stub(previous)
