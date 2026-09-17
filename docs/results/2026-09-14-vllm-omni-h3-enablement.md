@@ -2790,15 +2790,37 @@ Ruled out by measurement:
 | text-encoder TP sharding | `TEXT_ENC_TP=1` (DiT still TP2) is still wrong |
 | the shim's collectives | `probe_tp_dist.py` on 2 ranks: all_reduce sum=3.0, all_gather slots [0,1], broadcast, and the row-parallel "split + all_reduce" arithmetic all exact (max err 0) |
 
-What is left, and the strongest anomaly so far: the run *is* configured for TP2
-(`'tensor_parallel_size': 2` in the log, workers TP0/TP1, and the DiT uses
-`ColumnParallelLinear`/`RowParallelLinear`/`MergedColumnParallelLinear` with
-`gather_output=True` heads), yet **each rank loads the same model footprint as
-TP1** -- 10.2354 GiB against TP1's 10.2402 GiB. Sharded DiT weights should make
-the TP2 rank smaller. (Caveat: that number covers the whole diffusion runner,
-VAEs included; the DiT's own share was not isolated.) Together with the
-blocky/tiled look of the noise this fits "the layer applies a TP reduce/gather
-while every rank holds the same weights", i.e. duplicated work being combined.
+### The DiT *is* TP-sharded -- the "same footprint" reading is withdrawn
+
+A first pass compared each rank's loaded footprint and found TP2 and TP1 equal
+(10.2354 against 10.2402 GiB), which looked like unsharded weights. That number
+covers the whole diffusion runner (VAEs included), so it does not isolate the
+DiT, and a trace of the shim's collectives (`H3_TP_TRACE=1`, installed in the
+deployed shim only: `_tp_trace` prints one line per distinct (kind, shape) and an
+`[tptrace-sum]` count at exit) settles it the other way:
+
+| rank | distinct collective operands seen |
+| --- | --- |
+| TP0 | `all_gather_into` (1,2688) (1,48384) (1,5376) (2368,2688) (289,2688) (3072,16) (3072,48) (414,2688); `all_reduce` (1,2688) (1,289,5120) (289,5376) (3072,5376) |
+| TP1 | the same set, with **different operand heads** |
+
+2688 = 5376/2 is the DiT hidden split, and the two ranks hand in different
+values, so the DiT shards its weights and reduces them. The text encoder shows
+up as `all_reduce (1,289,5120)` with 289 tokens unsharded (5120 = Qwen3-VL
+hidden). So "the layers are not sharded" is **not** the fault.
+
+### The sharpest remaining lead: packed rows versus their metadata
+
+The DiT also moves a `(3072, 5376)` `all_gather_into`, i.e. the *packed rows*
+are split across the two ranks as well as the hidden dim -- and
+`MiniMaxH3SPPrepare` exists precisely to shard `hidden_states` *and* its
+metadata (`rope_table`, `combined_indices`) together. The log says
+`ulysses=1, ring=1, use_ulysses_low=True`, so the row split is not Ulysses'.
+The modulation kernel that used to fault reads
+`indices_ptr + row * stride_indices` for exactly those rows, so
+"rows sharded, indices/rope not (or sharded differently)" is both the shape of
+this failure and the shape of the original crash. Whether the three tensors
+cross that boundary with consistent row splits is the next thing to look at.
 
 Next diagnostic, in order of cost: (1) isolate the DiT's per-rank parameter
 count under TP1 vs TP2 (a shim-side print of the parameter storages at load, or
