@@ -7,6 +7,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 from jittor_utils.ring_buffer import *
+import random
 import unittest
 
 def test_ring_buffer():

@@ -180,7 +180,9 @@ class TestMklCheckedByLoadingIt(unittest.TestCase):
             shutil.copy(found, os.path.join(lib, "libmkldnn.so"))
             with self.assertRaises(RuntimeError) as caught:
                 check_mkl_usable(d)
-            self.assertIn("dnnl_sgemm", str(caught.exception))
+            # The probe reads the library's own version entry point first.
+            self.assertIn("is not a usable oneDNN library", str(caught.exception))
+            self.assertIn("missing dnnl_version", str(caught.exception))
 
     def test_the_real_one_passes(self):
         from jittor.compile_extern import check_mkl_usable

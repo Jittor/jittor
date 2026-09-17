@@ -1768,6 +1768,14 @@ about whether to take it.
   the convolution by hand out of `broadcast`/`reindex`/`*`/`sum` under
   `compile_options={"_capability_matmul": 1}` (resp. `_capability_conv`) and
   read the profiler for a `cublas_matmul` / `cudnn_conv` row: none appears.
+  `tests/codegen/test_conv_tuner.py::TestConvTuner::{test_forward,test_backward,
+  test_forward_cuda,test_backward_cuda}` are the tuner's own gate for the same
+  relay and fail the same way (`AssertionError: []`, no relayed row).
+  The broadcast tuner is a sixth face of the same change:
+  `src/codegen/opt/tuner/broadcast_tuner.cc:34` recognises its input by
+  `op->type() == OpType::broadcast`, which `BroadcastToOp` no longer is, so
+  `tests/codegen/test_broadcast_tuner.py::TestBroadcastTuner::test_broadcast_tuner`
+  never sees its `Run tuner broadcast: confidence(20)` line.
 - What it cost before the routing change, measured on this machine, float32:
 
   | operation | jittor | reference | ratio |

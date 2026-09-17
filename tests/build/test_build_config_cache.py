@@ -149,7 +149,14 @@ class TestCachePathComponents(unittest.TestCase):
     def test_the_project_path_key_is_wide_enough_to_separate_checkouts(self):
         """Four hex digits is 65536 slots; two parallel worktrees colliding
         means two source trees sharing one cache directory."""
-        key = jit_utils.get_str_hash(os.path.abspath(jit_utils.__file__))[:12]
+        # The key is the standalone ``jittor_utils`` entry point beside the
+        # package, not this implementation's file: it stayed put across the
+        # build move so established caches kept their name.
+        python_root = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(jit_utils.__file__)))))
+        bootstrap = os.path.join(python_root, "jittor_utils", "__init__.py")
+        self.assertTrue(os.path.isfile(bootstrap), bootstrap)
+        key = jit_utils.get_str_hash(bootstrap)[:12]
         self.assertEqual(len(key), 12)
         self.assertIn(key, jit_utils.cache_path)
 
