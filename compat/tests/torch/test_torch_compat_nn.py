@@ -406,11 +406,11 @@ class TestModules(Base):
             def body(dev):
                 linear = nn.Linear(5, 3)
                 embedding = nn.Embedding(8, 3)
-                self.assertEqual(str(linear.weight.dtype), "bfloat16", dev)
-                self.assertEqual(str(linear.bias.dtype), "bfloat16", dev)
-                self.assertEqual(str(embedding.weight.dtype), "bfloat16", dev)
+                self.assertEqual(str(linear.weight.dtype), "torch.bfloat16", dev)
+                self.assertEqual(str(linear.bias.dtype), "torch.bfloat16", dev)
+                self.assertEqual(str(embedding.weight.dtype), "torch.bfloat16", dev)
                 explicit = nn.Linear(5, 3, dtype=torch.float32)
-                self.assertEqual(str(explicit.weight.dtype), "float32", dev)
+                self.assertEqual(str(explicit.weight.dtype), "torch.float32", dev)
 
             both_devices(body)
         finally:

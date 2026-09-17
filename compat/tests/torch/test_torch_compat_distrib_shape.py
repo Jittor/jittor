@@ -54,8 +54,13 @@ def both_devices(fn):
 
 
 def _c(shape):
-    """Collapse torch's 0-d () to jittor's (1,) (jittor has no 0-d Var)."""
-    return (1,) if tuple(shape) == () else tuple(shape)
+    """The shape torch reports, unchanged.
+
+    This used to collapse torch's 0-d ``()`` to ``(1,)`` because jittor had no
+    0-d Var. It has one now, so the recorded torch shapes are compared as
+    they stand.
+    """
+    return tuple(shape)
 
 
 # Each entry: name -> (factory, [torch shape for sample(()), sample((4,)), sample((4,2)),
