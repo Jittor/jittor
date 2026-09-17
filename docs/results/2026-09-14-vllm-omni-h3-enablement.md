@@ -2216,7 +2216,9 @@ is left in.
 Three more components were excluded after that paragraph was written, each by
 measurement on the failing request:
 
-* **NCCL's P2P transport**: `NCCL_P2P_DISABLE=1` fails identically (20.1 s).
+* **NCCL's P2P transport**: `NCCL_P2P_DISABLE=1` fails identically (20.1 s); so
+  does `NCCL_PROTO=Simple` (the low-latency protocols are the ones that write
+  directly into a peer's buffer, so that was the sharpest NCCL knob).
 * **jittor's copy path metadata**: an instrumented `copy_async` (gated on
   `JITTOR_COPY_CHECK`) compares each copy's declared `Device` pair against what
   `cudaPointerGetAttributes` says about the two pointers -- residency *and*
@@ -2230,6 +2232,60 @@ measurement on the failing request:
   mis-transfer; the instrumented trace of a failing run has every `num=` value an
   even number of times (113 collective lines, 2 per line counted once), i.e. both
   ranks called the same sequence of counts.
+* **the allocator's managed-memory fallback**: `raw_malloc` logs `Unable to alloc
+  cuda device memory for size ... falling back to cudaMallocManaged` before it
+  takes that path, and that line appears in none of the failing runs -- nor in the
+  passing ones. `cudaMemGetInfo`, the call the error is always reported at, is
+  `memory_info(device, ...)`/`raw_memory_info`, so it is whoever asks for free
+  memory next (the allocator, or the shim's `mem_get_info` via vLLM), not a
+  component of the fault.
+
+What that leaves is a shape rather than a component: **something recycled a
+buffer that an operation still had in flight**, which needs only the ordering
+guarantees to have failed -- and the condition that separates the failing server
+from every control that passes is **memory pressure**. Each TP2 rank holds ~66
+GiB with the probe's `OFFLOAD=` empty, on a card where another tenant's usage
+moves; the single-GPU run that passes uses the shipped default offload, and so
+does the real serve command. `run_tp2_probe.sh` is what sets `OFFLOAD=` empty --
+that is a property of the probe, not of the configuration the lab ships.
+
+### The shipped config fails *differently*, in 30 s, and jittor reports it
+
+Running the same request with the shipped default (layerwise offload of
+`text_encoder`, i.e. what `serve-vllmomni.sh` does when `OFFLOAD` is not
+overridden) fails the *same* request much faster and with a *reported* error
+instead of a sticky one:
+
+```
+exec_runner.cc:402: Execute fused operator(0/295) failed.
+getitem_op.cc:455: index 395033601 is out of bounds for dimension 0 with size 388956160
+op: getitem
+  in:  bfloat16[388956160,], int64[388956160,]
+  out: bfloat16[388956160,]
+```
+
+Three different indices were reported in that one run -- 737396059, 395033601,
+439601509, all against the same 388956160-row buffer -- which is what garbage
+looks like, not what a systematic offset looks like. A 389M-entry int64 index
+tensor gathering from a 778 MB bf16 buffer is the offload path moving a layer,
+and the single-GPU run (which passes) uses the same offload.
+
+That matters for two reasons, and it is the state bug 1 is actually left in:
+
+* it is a **jittor-reported out-of-bounds driven by an index tensor**, i.e. the
+  same shape as the sticky `cudaErrorIllegalAddress` of the no-offload runs --
+  there the access went to device memory and no `IndexFault`-instrumented op
+  happened to be the first reader, so nothing named it;
+* it is a **30-second repro on rank 1 instead of a 265-475 s one**, with the
+  shapes and the op in hand. Any fix for the garbage index should be re-checked
+  against the no-offload configuration, because that is the one the probe used
+  and the one this document's earlier measurements are all stated in.
+
+The next measurement, not yet taken: whether the index is garbage because it was
+never written (an uninitialised or recycled buffer) or because it was written by
+something on the wrong device -- `jt.flags.trace_py_var` records the creating
+Python stack per node, and the offload index is built by the pipeline, so its
+creator and its device are both one probe away.
 
 `CUDA_LAUNCH_BLOCKING=1` is the other half of the picture. It fails *earlier*
 (30.1 s) with the same rank-1 `cudaErrorIllegalAddress` at `cudaMemGetInfo`.
