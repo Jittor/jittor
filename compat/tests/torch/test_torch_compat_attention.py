@@ -8,6 +8,7 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_attention.py
 """
 
 from _helpers import capability as _test_capability
+import contextlib
 import unittest
 import os
 import pathlib
@@ -100,6 +101,20 @@ class Base(unittest.TestCase):
                                    err_msg=msg)
 
 
+#: The legacy name ``jt.nn._acl_scaled_dot_product_attention`` is gone: the
+#: shim reaches the fast path through ``nn/backends/hooks.py``, which
+#: dispatches ``nn.scaled_dot_product_attention`` on the runtime kernel table.
+#: Patching the old attribute (with ``create=True``) built one nothing reads,
+#: so the fast path was never taken and these tests measured the generic one.
+@contextlib.contextmanager
+def _acl_sdpa_kernel(implementation):
+    from jittor._runtime.dispatch import dispatch_context, override_kernel
+    backend = dispatch_context().backend
+    with override_kernel("nn.scaled_dot_product_attention", backend,
+                         implementation):
+        yield implementation
+
+
 class TestSDPA(Base):
     def test_flash_statistics_follow_the_producer_owner(self):
         from jittor._runtime.state import RuntimeContext, RuntimeState
@@ -169,9 +184,7 @@ class TestSDPA(Base):
             calls.append((query.shape, key.shape, value.shape, kwargs))
             return marker
 
-        with jt.no_grad(), mock.patch.object(
-                jt.nn, "_acl_scaled_dot_product_attention",
-                side_effect=fake_acl, create=True):
+        with jt.no_grad(), _acl_sdpa_kernel(fake_acl):
             actual = torch.nn.functional.scaled_dot_product_attention(
                 q, k, v, is_causal=True, enable_gqa=True)
 
@@ -195,9 +208,7 @@ class TestSDPA(Base):
             calls.append(kwargs)
             return marker
 
-        with jt.no_grad(), mock.patch.object(
-                jt.nn, "_acl_scaled_dot_product_attention",
-                side_effect=fake_acl, create=True):
+        with jt.no_grad(), _acl_sdpa_kernel(fake_acl):
             actual = torch.nn.functional.scaled_dot_product_attention(
                 q, k, v, attn_mask=mask)
 
@@ -581,6 +592,10 @@ path = pathlib.Path(sys.argv[1])
 code = compile(path.read_text(encoding="utf-8"), os.fspath(path), "exec")
 module = types.ModuleType("_flashattn_jittor_reload_test")
 module.__file__ = os.fspath(path)
+# The module body imports its siblings relatively, so the copy needs to know
+# which package it is a copy of; without that the exec dies on the first
+# `from .official_codegen import ...` instead of re-running the body.
+module.__package__ = "jittor.compat.shim.backends.flash_attention"
 exec(code, module.__dict__)
 state = module._BACKEND_ENV_EPOCH_STATE
 old_token = module.backend_cache_token()
@@ -1168,30 +1183,38 @@ assert after == before + 1, (before, after)
 
     @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_sdpa_cuda_routes_masked_rows_through_safe_softmax(self):
-        from jittor.backends.cuda.kernels.nn import softmax_cuda
+        # The fast softmax is reached through the runtime kernel table
+        # (``select_kernel("nn.softmax", ...)`` in nn/functional/attention.py),
+        # which holds the implementation it was registered with -- patching the
+        # module attribute it was defined in traces nothing.
+        from jittor._runtime.dispatch import (dispatch_context, override_kernel,
+                                              registered_kernel)
 
         calls = []
-        original = softmax_cuda.softmax_v1
-
-        def traced(value, log=False, zero_all_neg_inf=False):
-            calls.append(bool(zero_all_neg_inf))
-            return original(value, log, zero_all_neg_inf)
 
         q = jt.ones((1, 2, 4, 8), dtype="float32")
         keep = jt.ones((4, 4), dtype="bool")
         keep[2, :] = False
-        with jt.flag_scope(use_cuda=1), mock.patch.object(
-                softmax_cuda, "softmax_v1", side_effect=traced):
-            masked = torch.nn.functional.scaled_dot_product_attention(
-                q, q, q, attn_mask=keep)
-            masked.sync()
-            self.assertEqual(calls, [True])
+        with jt.flag_scope(use_cuda=1):
+            backend = dispatch_context().backend
+            original = registered_kernel("nn.softmax", backend)
+            self.assertIsNotNone(original, "no fast softmax kernel on " + backend)
 
-            calls.clear()
-            causal = torch.nn.functional.scaled_dot_product_attention(
-                q, q, q, is_causal=True)
-            causal.sync()
-            self.assertEqual(calls, [False])
+            def traced(value, *args, **kwargs):
+                calls.append(bool(kwargs.get("zero_all_neg_inf", False)))
+                return original(value, *args, **kwargs)
+
+            with override_kernel("nn.softmax", backend, traced):
+                masked = torch.nn.functional.scaled_dot_product_attention(
+                    q, q, q, attn_mask=keep)
+                masked.sync()
+                self.assertEqual(calls, [True])
+
+                calls.clear()
+                causal = torch.nn.functional.scaled_dot_product_attention(
+                    q, q, q, is_causal=True)
+                causal.sync()
+                self.assertEqual(calls, [False])
 
         self.assertTrue(np.isfinite(masked.numpy()).all())
         self.assertTrue(np.isfinite(causal.numpy()).all())
