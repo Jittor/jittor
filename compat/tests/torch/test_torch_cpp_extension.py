@@ -357,6 +357,9 @@ class TestShimHeadersInvalidateTheBuildCache(unittest.TestCase):
         "src_inc": "", "extern_inc": "", "extern_cuda_inc": "",
         "py_inc": "", "pybind_inc": "", "cuda_includes": [],
         "core_dirs": [], "arch_flags": [], "cores": {}, "cuda_libs": [],
+        # The real cfg() always carries these two (None when there is no CUDA
+        # runtime / no wheel stack); the build path reads them unconditionally.
+        "cudart_lib": None, "cuda_wheel_fingerprint": None,
     }
 
     @staticmethod
