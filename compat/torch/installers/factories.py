@@ -333,7 +333,63 @@ def _seed_from(gen):
         jt.set_global_seed(int(s))
 
 
-def _random_adapter(original, *args, generator=None, **kwargs):
+def _draw_from_generator(name, generator, args, kwargs):
+    """Draw from the generator's own stream, or None if this call is not covered.
+
+    `Generator.manual_seed` builds this stream, so a request's latents are
+    reproducible and -- the part that matters for TP -- identical in every rank
+    that seeds the same generator, no matter what that rank did before.
+    """
+    import numpy as _np
+    rng = getattr(generator, "_rng", None)
+    if rng is None:
+        return None
+    # shape: torch.randn(*size) or torch.randn(size); *_like takes a tensor
+    shape = None
+    if name.endswith("_like"):
+        src = args[0] if args else kwargs.get("input")
+        if src is None or not hasattr(src, "shape"):
+            return None
+        shape = tuple(int(s) for s in src.shape)
+    elif args and isinstance(args[0], (tuple, list)) and len(args) == 1:
+        shape = tuple(int(s) for s in args[0])
+    elif args and all(isinstance(a, int) for a in args):
+        shape = tuple(int(a) for a in args)
+    elif not args:
+        shape = ()
+    if shape is None:
+        return None
+    if name in ("randn", "randn_like"):
+        values = rng.standard_normal(shape)
+    elif name in ("rand", "rand_like"):
+        values = rng.random(shape)
+    elif name == "normal":
+        mean = kwargs.pop("mean", args[1] if len(args) > 1 else 0.0)
+        std = kwargs.pop("std", args[2] if len(args) > 2 else 1.0)
+        values = rng.normal(float(mean), float(std), size=shape)
+    elif name == "randint":
+        low = kwargs.pop("low", args[1] if len(args) > 1 else 0)
+        high = kwargs.pop("high", args[2] if len(args) > 2 else None)
+        if high is None:
+            return None
+        values = rng.integers(int(low), int(high), size=shape)
+    elif name == "randperm":
+        n = int(args[0]) if args else int(shape[0])
+        values = rng.permutation(n)
+        shape = (n,)
+    else:
+        return None
+    dtype = kwargs.get("dtype")
+    t = jt.array(_np.ascontiguousarray(values, dtype=_np.float32))
+    if dtype is not None:
+        t = t.cast(_dtype_to_str(dtype))
+    return t
+
+
+def _random_adapter(original, *args, generator=None, _name=None, **kwargs):
+    drawn = _draw_from_generator(_name, generator, args, kwargs) if _name else None
+    if drawn is not None:
+        return drawn
     _seed_from(generator)
     return original(*args, **kwargs)
 
@@ -346,4 +402,5 @@ def _install_random_and_linspace(g):
                  "randn_like", "rand_like", "multinomial", "bernoulli"):
         original = _factory_implementation(getattr(g, name, None))
         if original is not None:
-            _publish_factory(g, name, functools.partial(_random_adapter, original))
+            _publish_factory(g, name,
+                             functools.partial(_random_adapter, original, _name=name))
