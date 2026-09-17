@@ -17,6 +17,8 @@ import torch
 
 
 class TestTorchApiVersionReporting(unittest.TestCase):
+    #: ``__jittor_version__`` is the name the *torch namespace* carries for
+    #: jittor's version; on the jittor module itself it is ``__version__``.
     def setUp(self):
         self._saved = torch.__version__
 
@@ -24,7 +26,7 @@ class TestTorchApiVersionReporting(unittest.TestCase):
         torch.__version__ = self._saved
 
     def test_by_default_version_is_jittors_own(self):
-        self.assertEqual(torch.__version__, jt.__jittor_version__)
+        self.assertEqual(torch.__version__, jt.__version__)
         self.assertNotEqual(torch.__version__, torch.__torch_version__)
 
     def test_the_torch_api_level_is_separately_available(self):
@@ -38,8 +40,8 @@ class TestTorchApiVersionReporting(unittest.TestCase):
     def test_it_is_reversible(self):
         torch.compat_report_torch_api_version(True)
         got = torch.compat_report_torch_api_version(False)
-        self.assertEqual(got, jt.__jittor_version__)
-        self.assertEqual(torch.__version__, jt.__jittor_version__)
+        self.assertEqual(got, jt.__version__)
+        self.assertEqual(torch.__version__, jt.__version__)
 
     def test_it_is_idempotent(self):
         first = torch.compat_report_torch_api_version(True)

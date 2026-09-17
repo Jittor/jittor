@@ -832,11 +832,11 @@ Var.unsqueeze = unsqueeze
 def squeeze(x, dim=None):
     shape = list(x.shape)
     if dim is None:
-        # squeeze removes ONLY size-1 dims (size-0 dims must be kept, else an empty
-        # tensor like [0,1] reshapes to the wrong size). jittor has no 0-dim tensors,
-        # so an all-ones shape collapses to [1] (mmdet: nonzero(...).squeeze()).
-        new_shape = [s for s in shape if s != 1]
-        return x.reshape(new_shape if new_shape else [1])
+        # squeeze removes ONLY size-1 dims (size-0 dims must be kept, else an
+        # empty tensor like [0,1] reshapes to the wrong size). An all-ones
+        # shape leaves nothing, which is the 0-d value torch returns -- this
+        # used to collapse to [1] because jittor had no 0-d Var.
+        return x.reshape([s for s in shape if s != 1])
     else:
         if dim < 0: dim += len(shape)
         if dim < 0 or dim >= len(shape):
@@ -845,8 +845,7 @@ def squeeze(x, dim=None):
         # not an error (canine's _downsample_attention_mask relies on this).
         if shape[dim] != 1:
             return x
-        new_shape = shape[:dim] + shape[dim+1:]
-        return x.reshape(new_shape if new_shape else [1])
+        return x.reshape(shape[:dim] + shape[dim+1:])
 
 Var.squeeze = squeeze
 
