@@ -180,13 +180,20 @@ def gen_ops_stub(jittor_path, runtime=None):
             hint += " ...\n"
         return hint
 
-    for func_name, func in jittor.ops.__dict__.items():
+    # ``jittor.ops`` is a Python package that resolves names through a module
+    # ``__getattr__``; the pyjt functions carrying a ``Declaration:`` block
+    # live on the native module.
+    for func_name, func in jittor.jittor_core.ops.__dict__.items():
         if func_name.startswith("__"):
             continue
         # Exclude a function that overrides the builtin bool:
         #       def bool(x: Var) -> Var: ...
         # It will confuse the IDE. So we ignore this function in pyi.
         if func_name == "bool":
+            continue
+        # Sub-modules re-exported into the namespace (``_native_ops``) and
+        # anything without a pyjt docstring carry no Declaration to parse.
+        if inspect.ismodule(func) or not getattr(func, "__doc__", None):
             continue
 
         docstrings = []
@@ -260,11 +267,20 @@ def gen_flags_stub(jittor_path, runtime=None):
     for attr_name, attr in jittor.Flags.__dict__.items():
         if attr_name.startswith("__"):
             continue
-        docstring = attr.__doc__
-        docstring = attr.__doc__[:attr.__doc__.find("Declaration:")]
+        docstring = attr.__doc__ or ""
+        docstring = docstring[:docstring.find("Declaration:")]
+        header = re.findall(r"\(type:(.+), default:(.+)\)", docstring)
+        if not header:
+            # Aliases bound straight to a getter (the deprecated
+            # accelerator-mode names) carry only their Declaration: type
+            # them from its return and leave the description out.
+            decl = re.findall(r"Declaration:\n(.+)\n", attr.__doc__ or "")
+            attr_type = ctype_to_python(decl[0].split(' ', 1)[0]) if decl else ""
+            f.write(f"\t{attr_name}: {attr_type or 'Any'}\n")
+            continue
         docbody = re.findall(r"\(type.+default.+\):(.+)", docstring)[0].strip()
         docbody += "." if not docbody.endswith('.') else ""
-        attr_type, attr_val = re.findall(r"\(type:(.+), default:(.+)\)", docstring)[0]
+        attr_type, attr_val = header[0]
         attr_type = ctype_to_python(attr_type)
         attr_type = attr_type if attr_type else "Any"
         f.write(f"\t{attr_name}: {attr_type}\n")
@@ -301,12 +317,20 @@ def synchronize_public_exports(jittor_path, runtime=None):
                 if isinstance(target, ast.Name)
                 and (not target.id.startswith("_") or target.id == "__version__")
             )
+        elif isinstance(node, ast.Import):
+            # ``import m as m`` re-exports and ``import m as n`` binds a public
+            # name; a bare ``import m`` is private to the stub.
+            declared.update(
+                alias.asname for alias in node.names
+                if alias.asname and not alias.asname.startswith("_"))
         elif isinstance(node, ast.ImportFrom):
             if node.module in ("typing", "collections", "collections.abc"):
                 continue
             for alias in node.names:
                 if alias.name != "*":
-                    declared.add(alias.asname or alias.name)
+                    name = alias.asname or alias.name
+                    if not name.startswith("_"):
+                        declared.add(name)
                 elif node.module == "jittor_core":
                     declared.update(
                         name for name in dir(jittor.jittor_core)
@@ -471,13 +495,21 @@ def get_pyi(jittor_path=None, cache_path=None):
         import jittor_utils
         cache_path = jittor_utils.cache_path
 
-    run_stubgen(jittor_path, cache_path)
-    gen_ops_stub(jittor_path)
-    gen_flags_stub(jittor_path)
-    synchronize_public_exports(jittor_path)
-    repair_existing_stub(Path(jittor_path) / "__init__.pyi")
+    target = Path(jittor_path) / "__init__.pyi"
+    header = target.parents[2] / "src/core/var_holder.h"
+    # Build in a staging directory and replace the shipped stub only once
+    # every step has succeeded: a failure half-way must not leave a truncated
+    # ``__init__.pyi`` in the checkout.
+    with tempfile.TemporaryDirectory(prefix="jittor-pyi-", dir=cache_path) as stage:
+        run_stubgen(stage, cache_path)
+        gen_ops_stub(stage)
+        gen_flags_stub(stage)
+        synchronize_public_exports(stage)
+        staged = (Path(stage) / "__init__.pyi").read_text(encoding="utf-8")
+    content = repair_stub_content(staged, binding_properties(header.read_text(encoding="utf-8")))
+    target.write_text(content, encoding="utf-8")
 
-    print(f"Generated stubfile: {os.path.join(jittor_path, '__init__.pyi')}")
+    print(f"Generated stubfile: {target}")
 
 
 if __name__ == "__main__":

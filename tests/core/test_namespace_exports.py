@@ -151,12 +151,20 @@ class TestRootExportsAreDeclared(unittest.TestCase):
                     if isinstance(target, ast.Name)
                     and (not target.id.startswith("_") or target.id == "__version__")
                 )
+            elif isinstance(node, ast.Import):
+                # ``import m as m`` re-exports and ``import m as n`` binds a public
+                # name; a bare ``import m`` is private to the stub.
+                declared.update(
+                    alias.asname for alias in node.names
+                    if alias.asname and not alias.asname.startswith("_"))
             elif isinstance(node, ast.ImportFrom):
                 if node.module in ("typing", "collections", "collections.abc"):
                     continue
                 for alias in node.names:
                     if alias.name != "*":
-                        declared.add(alias.asname or alias.name)
+                        name = alias.asname or alias.name
+                        if not name.startswith("_"):
+                            declared.add(name)
                     elif node.module == "jittor_core":
                         declared.update(
                             name for name in dir(jt.jittor_core)

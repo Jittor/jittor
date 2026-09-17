@@ -5,8 +5,9 @@ import jittor_core as jittor_core
 import jittor_core as core
 from ._runtime.introspection import Introspection as _Introspection
 introspection: _Introspection
+from ._runtime.capability import Capabilities as _Capabilities
+capability: _Capabilities
 from . import autograd as autograd, compile_extern as compile_extern, compiler as compiler, dataset as dataset, distributions as distributions, fft as fft, init as init, linalg as linalg, math_util as math_util, misc as misc, nn as nn, optim as optim, sparse as sparse
-from .benchmarking import BenchmarkResult as BenchmarkResult, benchmark as benchmark
 from . import contrib as contrib
 from .compile_extern import cublas as cublas, cudnn as cudnn, cufft as cufft, curand as curand, cusparse as cusparse, mkl_ops as mkl_ops, mpi as mpi, mpi_ops as mpi_ops
 from .compiler import LOG as LOG, compile_custom_op as compile_custom_op, compile_custom_ops as compile_custom_ops, has_cuda as has_cuda
@@ -17,8 +18,10 @@ from .nn.functional.matrix import baddbmm as baddbmm, bmm as bmm, bmm_transpose 
 from .nn.functional.softmax import logsumexp as logsumexp
 from .nn.functional.tensor import kron as kron, tensordot as tensordot
 from .optim import legacy_schedulers as lr_scheduler
+from .ops.numerical import sinc as sinc
+from ._core.var import submit_pending as submit_pending
 
-__all__ = ['CTCLoss', 'DumpGraphs', 'ExitHooks', 'Finfo', 'Flags', 'Function', 'GradHooker', 'LOG', 'MemInfo', 'Module', 'NanoString', 'NanoVector', 'RingBuffer', 'Var', 'ZipFile', '__version__', 'abs', 'abs_', 'acos', 'acosh', 'add', 'add_', 'all', 'all_', 'all_equal', 'amax', 'amin', 'amp_flags', 'any', 'any_', 'arange', 'arccos', 'arccosh', 'arcsin', 'arcsinh', 'arctan', 'arctan2', 'arctanh', 'arg_reduce', 'argmax', 'argmin', 'argsort', 'array', 'array64', 'array_', 'asin', 'asinh', 'atan', 'atan2', 'atanh', 'atleast_1d', 'atleast_2d', 'atleast_3d', 'attention', 'attrs', 'auto_parallel', 'autograd', 'baddbmm', 'bernoulli', 'bfloat16', 'bfloat16_finfo', 'binary', 'binary_dtype_infer', 'bitwise_and', 'bitwise_not', 'bitwise_or', 'bitwise_xor', 'block_diag', 'bmm', 'bmm_transpose', 'bool', 'broadcast', 'broadcast_var', 'candidate', 'cartesian_prod', 'cast', 'cat', 'ceil', 'ceil_int', 'chunk', 'clamp', 'clamp_', 'clean', 'clean_graph', 'cleanup', 'clear_trace_data', 'clone', 'code', 'compile_custom_op', 'compile_custom_ops', 'compile_extern', 'compiler', 'concat', 'config', 'conj', 'contiguous', 'contrib', 'copy', 'core', 'cos', 'cosh', 'count_nonzero', 'cpu', 'cross', 'ctc_loss', 'cub_cumsum', 'cublas', 'cuda', 'cudnn', 'cufft', 'cummax', 'cummin', 'cumprod', 'cumsum', 'curand', 'current_device', 'cusparse', 'dataset', 'deg2rad', 'detach', 'device_copy', 'dfs_to_numpy', 'diag', 'diagonal', 'digamma', 'dirty_fix_pytorch_runtime_error', 'display_max_memory_info', 'display_memory_info', 'distributions', 'div', 'divide', 'double', 'dtype', 'dump_all_graphs', 'dump_trace_data', 'einsum', 'empty', 'enable_grad', 'equal', 'erf', 'erf_', 'erfinv', 'erfinv_', 'exp', 'expand', 'expm1', 'fetch', 'fetch_sync', 'fft', 'finfo', 'flag_scope', 'flags', 'flatten', 'flip', 'float', 'float16', 'float32', 'float64', 'float_auto', 'floor', 'floor_divide', 'floor_int', 'format', 'from_torch', 'full', 'full_like', 'fuse_transpose', 'fused_adamw', 'gather', 'gc', 'get_device_count', 'get_len', 'get_max_memory_info', 'get_max_memory_treemap', 'get_mem_info', 'get_seed', 'getitem', 'grad', 'grad_hooker', 'grad_optional', 'gradfunctional', 'graph_check', 'graph_replay', 'greater', 'greater_equal', 'half', 'has_cuda', 'hash', 'histc', 'hooks', 'hypot', 'igamma', 'iinfo', 'in_mpi', 'index', 'index_add', 'index_add_', 'index_fill', 'index_fill_', 'index_select', 'index_var', 'init', 'int', 'int16', 'int32', 'int64', 'int8', 'introspection', 'is_var', 'isfinite', 'isin', 'isinf', 'isnan', 'isneginf', 'isposinf', 'jittor_core', 'jittor_exit', 'jt_init_subprocess', 'knn', 'kron', 'kthvalue', 'left_shift', 'less', 'less_equal', 'lgamma', 'linalg', 'linspace', 'liveness_info', 'load', 'lock_acquire', 'lock_is_held', 'lock_release', 'log', 'log2', 'log_capture_scope', 'logical_and', 'logical_not', 'logical_or', 'logical_xor', 'logsumexp', 'lr_scheduler', 'make_grid', 'make_module', 'masked_fill', 'math_util', 'matmul', 'max', 'maximum', 'mean', 'median', 'meshgrid', 'migrate_all_to_cpu', 'min', 'minimum', 'misc', 'mkl_ops', 'mod', 'mpi', 'mpi_ops', 'mul', 'multinomial', 'multiply', 'multiply_', 'ne', 'negative', 'new', 'new_empty', 'new_full', 'new_ones', 'new_zeros', 'nms', 'nn', 'no_grad', 'nonzero', 'norm', 'normal', 'normalize', 'not_equal', 'number_of_hold_vars', 'number_of_lived_ops', 'number_of_lived_vars', 'numpy2cupy', 'numpy_code', 'numpy_cumprod', 'numpy_cumsum', 'ones', 'ones_like', 'op_compiler', 'ops', 'optim', 'origin_reshape', 'origin_transpose', 'outer', 'peek', 'peek_s', 'permute', 'pow', 'print_trace', 'print_tree', 'prod', 'product', 'profile_mark', 'profile_scope', 'profiler', 'python_pass_wrapper', 'rad2deg', 'rand', 'rand_like', 'randint', 'randint_like', 'randn', 'randn_like', 'random', 'randperm', 'rank', 'reduce', 'reduce_add', 'reduce_bitwise_and', 'reduce_bitwise_or', 'reduce_bitwise_xor', 'reduce_logical_and', 'reduce_logical_or', 'reduce_logical_xor', 'reduce_maximum', 'reduce_minimum', 'reduce_multiply', 'register_hook', 'reindex', 'reindex_reduce', 'reindex_var', 'reinterpret_view', 'repeat', 'repeat_interleave', 'reshape', 'reuse_np_array', 'right_shift', 'roll', 'round', 'round_int', 'rsqrt', 'runtime', 'safe_clip', 'safe_log', 'safepickle', 'safeunpickle', 'save', 'save_image', 'scatter', 'scatter_', 'scatter_add', 'scatter_add_', 'scatter_reduce', 'searchsorted', 'seed', 'set_device', 'set_global_seed', 'set_lock_fd', 'set_seed', 'setitem', 'sigmoid', 'sigmoid_', 'sin', 'single_log_capture', 'single_process_scope', 'sinh', 'size', 'sort', 'sparse', 'split', 'sqr', 'sqrt', 'sqrt_', 'squeeze', 'stack', 'std', 'sub', 'subtract', 'sum', 'sync', 'sync_all', 't', 'tan', 'tanh', 'tape', 'tape_together', 'tensordot', 'ternary', 'ternary_out_hint', 'tests', 'to', 'to_bool', 'to_device', 'to_float', 'to_int', 'tolist', 'topk', 'transpose', 'tril', 'triu', 'type_as', 'uint16', 'uint32', 'uint64', 'uint8', 'unary', 'unbind', 'unique', 'unique_consecutive', 'unsqueeze', 'var', 'view', 'view_as', 'vtos', 'where', 'world_size', 'wrap_var_addr', 'zeros', 'zeros_like']
+__all__ = ['CTCLoss', 'DumpGraphs', 'ExitHooks', 'Finfo', 'Flags', 'Function', 'GradHooker', 'LOG', 'MemInfo', 'Module', 'NanoString', 'NanoVector', 'RingBuffer', 'Var', 'ZipFile', '__version__', 'abs', 'abs_', 'acos', 'acosh', 'add', 'add_', 'all', 'all_', 'all_equal', 'amax', 'amin', 'amp_flags', 'any', 'any_', 'arange', 'arccos', 'arccosh', 'arcsin', 'arcsinh', 'arctan', 'arctan2', 'arctanh', 'arg_reduce', 'argmax', 'argmin', 'argsort', 'array', 'array64', 'array_', 'asin', 'asinh', 'atan', 'atan2', 'atanh', 'atleast_1d', 'atleast_2d', 'atleast_3d', 'attention', 'attrs', 'auto_parallel', 'autograd', 'baddbmm', 'bernoulli', 'bfloat16', 'bfloat16_finfo', 'binary', 'binary_dtype_infer', 'bitwise_and', 'bitwise_not', 'bitwise_or', 'bitwise_xor', 'block_diag', 'bmm', 'bmm_transpose', 'bool', 'broadcast', 'broadcast_var', 'candidate', 'capability', 'cartesian_prod', 'cast', 'cat', 'ceil', 'ceil_int', 'chunk', 'clamp', 'clamp_', 'clean', 'clean_graph', 'cleanup', 'clear_trace_data', 'clone', 'code', 'compile_custom_op', 'compile_custom_ops', 'compile_extern', 'compiler', 'concat', 'config', 'conj', 'contiguous', 'contrib', 'copy', 'core', 'cos', 'cosh', 'count_nonzero', 'cpu', 'cross', 'ctc_loss', 'cub_cumsum', 'cublas', 'cuda', 'cudnn', 'cufft', 'cummax', 'cummin', 'cumprod', 'cumsum', 'curand', 'current_device', 'cusparse', 'dataset', 'deg2rad', 'detach', 'device_copy', 'dfs_to_numpy', 'diag', 'diagonal', 'digamma', 'dirty_fix_pytorch_runtime_error', 'display_max_memory_info', 'display_memory_info', 'distributions', 'div', 'divide', 'double', 'dtype', 'dump_all_graphs', 'dump_trace_data', 'einsum', 'empty', 'enable_grad', 'equal', 'erf', 'erf_', 'erfinv', 'erfinv_', 'exp', 'expand', 'expm1', 'fetch', 'fetch_sync', 'fft', 'finfo', 'flag_scope', 'flags', 'flatten', 'flip', 'float', 'float16', 'float32', 'float64', 'float_auto', 'floor', 'floor_divide', 'floor_int', 'format', 'from_torch', 'full', 'full_like', 'fuse_transpose', 'fused_adamw', 'fused_sgd', 'gather', 'gc', 'get_device_count', 'get_len', 'get_max_memory_info', 'get_max_memory_treemap', 'get_mem_info', 'get_seed', 'getitem', 'grad', 'grad_hooker', 'grad_optional', 'gradfunctional', 'graph_capture_begin', 'graph_capture_end', 'graph_capture_supported', 'graph_check', 'graph_launch', 'graph_release', 'graph_replay', 'greater', 'greater_equal', 'half', 'has_cuda', 'hash', 'histc', 'hooks', 'hypot', 'igamma', 'iinfo', 'in_mpi', 'index', 'index_add', 'index_add_', 'index_fill', 'index_fill_', 'index_select', 'index_var', 'init', 'int', 'int16', 'int32', 'int64', 'int8', 'introspection', 'is_var', 'isfinite', 'isin', 'isinf', 'isnan', 'isneginf', 'isposinf', 'jittor_core', 'jittor_exit', 'jt_init_subprocess', 'knn', 'kron', 'kthvalue', 'left_shift', 'less', 'less_equal', 'lgamma', 'linalg', 'linspace', 'liveness_info', 'load', 'lock_acquire', 'lock_is_held', 'lock_release', 'log', 'log2', 'log_capture_scope', 'logical_and', 'logical_not', 'logical_or', 'logical_xor', 'logsumexp', 'lr_scheduler', 'make_grid', 'make_module', 'masked_fill', 'math_util', 'matmul', 'max', 'maximum', 'mean', 'median', 'meshgrid', 'migrate_all_to_cpu', 'min', 'minimum', 'misc', 'mkl_ops', 'mod', 'mpi', 'mpi_ops', 'mul', 'multinomial', 'multiply', 'multiply_', 'ne', 'negative', 'new', 'new_empty', 'new_full', 'new_ones', 'new_zeros', 'nms', 'nn', 'no_grad', 'nonzero', 'norm', 'normal', 'normalize', 'not_equal', 'number_of_hold_vars', 'number_of_lived_ops', 'number_of_lived_vars', 'numpy2cupy', 'numpy_code', 'numpy_cumprod', 'numpy_cumsum', 'ones', 'ones_like', 'op_compiler', 'ops', 'optim', 'origin_reshape', 'origin_transpose', 'outer', 'peek', 'peek_s', 'permute', 'pow', 'print_trace', 'print_tree', 'prod', 'product', 'profile_mark', 'profile_scope', 'profiler', 'python_pass_wrapper', 'rad2deg', 'rand', 'rand_like', 'randint', 'randint_like', 'randn', 'randn_like', 'random', 'randperm', 'rank', 'reduce', 'reduce_add', 'reduce_bitwise_and', 'reduce_bitwise_or', 'reduce_bitwise_xor', 'reduce_logical_and', 'reduce_logical_or', 'reduce_logical_xor', 'reduce_maximum', 'reduce_minimum', 'reduce_multiply', 'register_hook', 'reindex', 'reindex_reduce', 'reindex_var', 'reinterpret_view', 'repeat', 'repeat_interleave', 'reshape', 'reuse_np_array', 'right_shift', 'roll', 'round', 'round_int', 'rsqrt', 'runtime', 'safe_clip', 'safe_log', 'safepickle', 'safeunpickle', 'save', 'save_image', 'scatter', 'scatter_', 'scatter_add', 'scatter_add_', 'scatter_reduce', 'searchsorted', 'seed', 'set_device', 'set_global_seed', 'set_lock_fd', 'set_seed', 'setitem', 'sigmoid', 'sigmoid_', 'sin', 'sinc', 'single_log_capture', 'single_process_scope', 'sinh', 'size', 'sort', 'sparse', 'split', 'sqr', 'sqrt', 'sqrt_', 'squeeze', 'stack', 'std', 'sub', 'submit_pending', 'subtract', 'sum', 'sync', 'sync_all', 't', 'tan', 'tanh', 'tape', 'tape_together', 'tensordot', 'ternary', 'ternary_out_hint', 'tests', 'to', 'to_bool', 'to_device', 'to_float', 'to_int', 'tolist', 'topk', 'transpose', 'tril', 'triu', 'type_as', 'uint16', 'uint32', 'uint64', 'uint8', 'unary', 'unbind', 'unique', 'unique_consecutive', 'unsqueeze', 'var', 'view', 'view_as', 'vtos', 'where', 'world_size', 'wrap_var_addr', 'zeros', 'zeros_like']
 
 __version__: str
 gradfunctional = autograd
@@ -4684,6 +4687,12 @@ def reindex_var(x: Var, indexes: List[Var], overflow_value: _builtins.float=0, o
 	* Alias x.reindex([i,j,k]) ->
 	        x.reindex(i.shape, ['@e0(...)','@e1(...)','@e2(...)',], extras=[i,j,k])'''
 	...
+def graph_capture_supported()-> _builtins.bool: ...
+def graph_capture_begin()-> _builtins.bool: ...
+def graph_capture_end()-> _builtins.int: ...
+def graph_launch(graph: _builtins.int)-> None: ...
+def graph_release(graph: _builtins.int)-> None: ...
+def fused_sgd(parameters: List[Var], velocities: List[Var], gradients: List[Var], lr: _builtins.float, momentum: _builtins.float, weight_decay: _builtins.float, dampening: _builtins.float, nesterov: _builtins.bool, maximize: _builtins.bool)-> Tuple[Var, ...]: ...
 class Var:
 	'''Variable that stores multi-dimensional data.'''
 	# Torch compatibility installs these residency helpers dynamically; they
@@ -8668,7 +8677,7 @@ class Flags:
 flags: Flags
 '''Compatibility access to startup configuration and live runtime flags.'''
 
-class StartupConfig:
+class _StartupConfig:
 	'''Detached startup configuration; all fields are immutable.'''
 	def __init__(self, native_flags: Flags) -> None: ...
 	@property
@@ -8693,7 +8702,7 @@ class StartupConfig:
 	def python_path(self) -> str: ...
 	def snapshot(self) -> dict[str, Any]: ...
 
-class RuntimeContext:
+class _RuntimeContext:
 	'''Read-only diagnostic access to live runtime switches and counters.'''
 	def __init__(self, native_flags: Flags) -> None: ...
 	@property
@@ -8852,9 +8861,9 @@ class RuntimeContext:
 	def use_threading(self) -> _builtins.int: ...
 	def snapshot(self) -> dict[str, Any]: ...
 
-class RuntimeState:
+class _RuntimeState:
 	'''Writable runtime switches and aliases; counters remain read-only.'''
-	def __init__(self, context: RuntimeContext, scope_factory: Optional[Callable[..., ContextManager[None]]] = None) -> None: ...
+	def __init__(self, context: _RuntimeContext, scope_factory: Optional[Callable[..., ContextManager[None]]] = None) -> None: ...
 	addr2line_path: str
 	amp_level: _builtins.int
 	amp_reg: _builtins.int
@@ -8938,13 +8947,13 @@ class RuntimeState:
 	use_tensorcore: _builtins.int
 	use_threading: _builtins.int
 	@property
-	def context(self) -> RuntimeContext: ...
+	def context(self) -> _RuntimeContext: ...
 	def snapshot(self) -> dict[str, Any]: ...
 	def scope(self, **changes: Any) -> ContextManager[None]: ...
 
-config: StartupConfig
+config: _StartupConfig
 '''Immutable startup configuration captured after backend bootstrap.'''
-runtime: RuntimeState
+runtime: _RuntimeState
 '''Live runtime switches, scoped policy changes and read-only counters.'''
 
 # Public names whose precise type is not inferred yet.
