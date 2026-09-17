@@ -21,6 +21,13 @@ except Exception:
 @unittest.skipUnless(_HAS, "needs torch_shim")
 class TestTorchLinalg(unittest.TestCase):
     def setUp(self):
+        # These check torch.linalg's API semantics, which do not depend on the
+        # device, and the CUDA routes here are numpy-code operators that need
+        # CuPy (tests/linalg covers those under their own guard). State CPU so
+        # the file measures what it is about on any machine.
+        self._policy = jt.flag_scope(use_cuda=0)
+        self._policy.__enter__()
+        self.addCleanup(lambda: self._policy.__exit__(None, None, None))
         rs = np.random.RandomState(0)
         self.A = rs.randn(4, 4).astype('float32')
         self.SPD = self.A @ self.A.T + np.eye(4, dtype='float32')

@@ -48,10 +48,22 @@ class NativeOperation:
         self.__module__ = __name__
         self.__doc__ = "Native %s under the active Torch frontend policy." % name
 
+    #: Where torch's default differs from the native one. ``linalg.svd``
+    #: returns the full decomposition unless asked otherwise; jittor's returns
+    #: the thin one. Forwarding without this, ``torch.linalg.svd(B)`` on a
+    #: 5x3 input answered with a (5,3) ``U`` where torch and numpy both give
+    #: (5,5) -- a quietly different answer, not an error.
+    _TORCH_DEFAULTS = {"linalg.svd": {"full_matrices": True}}
+
     def __call__(self, *args, **kwargs):
         import jittor
         context = get_install_context(jittor)
         implementation = context.state["native_torch_operations"][self._operation_key]
+        defaults = self._TORCH_DEFAULTS.get(self._operation_key)
+        if defaults:
+            kwargs = dict(kwargs)
+            for name, value in defaults.items():
+                kwargs.setdefault(name, value)
         device = None
         if self._operation_key in ("fft.fftfreq", "fft.rfftfreq"):
             kwargs = dict(kwargs)

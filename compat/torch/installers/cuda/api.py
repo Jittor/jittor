@@ -500,8 +500,11 @@ class _CudaTypedTensorMeta(type):
 
 
 _CUDA_TENSOR_TYPES = {
+    # ``__module__`` is "torch.cuda", where these are published and where
+    # torch reports them from -- not this file, which is an implementation
+    # detail nothing outside should have to know the name of.
     name: _CudaTypedTensorMeta(name, (), {
-        "_tensor_name": name, "__module__": __name__,
+        "_tensor_name": name, "__module__": "torch.cuda",
     })
     for name in (
         "FloatTensor", "DoubleTensor", "HalfTensor", "BFloat16Tensor",
