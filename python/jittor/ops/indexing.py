@@ -188,7 +188,10 @@ def setitem(x, slices, value):
     jt = _jt if _jt is not None else _jittor()
 
     if _jittor_dtype_name(x.dtype) == "complex64" and isinstance(value, (complex, np.complexfloating)):
-        value = jt.array(np.asarray([value], dtype=np.complex64))
+        # 0-d, so it fits a single indexed element as well as a slice; a
+        # [1]-shaped value tripped setitem's ``data_dim <= out dims`` check
+        # on ``z[i, j] = 1 + 2j``.
+        value = jt.array(np.asarray(value, dtype=np.complex64))
     value = _acl_assignment_value(x, value)
 
     if isinstance(slices, jt.Var) and _jittor_dtype_name(slices.dtype) == "uint8":

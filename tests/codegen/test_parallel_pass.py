@@ -35,6 +35,25 @@ class SimpleAsmParser:
         return count
 
 
+def _assembly_for(source):
+    """Compile a cached kernel source to assembly.
+
+    The tree no longer keeps a ``.s`` beside the ``.cc`` (the assembly-text
+    rewriter went in acfed956), so run the exact command the cache recorded
+    for the kernel -- the first line of its ``.so.key`` -- with ``-S``.
+    """
+    import subprocess
+    import tempfile
+    command = open(source[:-len(".cc")] + ".so.key", encoding="utf8").readline().strip()
+    command = re.sub(r'\s-o\s+"[^"]*"\s*$', "", command).replace(" -shared ", " ")
+    with tempfile.TemporaryDirectory() as scratch:
+        listing = os.path.join(scratch, "kernel.s")
+        subprocess.run(command + ' -S -o "%s"' % listing, shell=True, check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
+        with open(listing, encoding="utf8") as f:
+            return f.read()
+
+
 class TestParallelPass(unittest.TestCase):
     def check(self, use_int32):
         n = 1024
@@ -52,8 +71,7 @@ class TestParallelPass(unittest.TestCase):
         with open(fname) as f:
             src = f.read()
             assert "thread_id" in src
-        with open(fname.replace(".cc", ".s")) as f:
-            asm = SimpleAsmParser(f.read())
+        asm = SimpleAsmParser(_assembly_for(fname))
         func_name = "run"
         ca = asm.count_instructions(func_name, "vmova")
         cu = asm.count_instructions(func_name, "vmovu")
@@ -91,8 +109,7 @@ class TestParallelPass2(TestParallelPass):
         with open(fname) as f:
             src = f.read()
             assert "thread_id" in src
-        with open(fname.replace(".cc", ".s")) as f:
-            asm = SimpleAsmParser(f.read())
+        asm = SimpleAsmParser(_assembly_for(fname))
         func_name = "run"
         ca = asm.count_instructions(func_name, "vmova")
         cu = asm.count_instructions(func_name, "vmovu")

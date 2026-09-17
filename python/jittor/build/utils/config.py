@@ -67,7 +67,7 @@ if __name__ == "__main__":
         elif arg == "--cxx-example":
             cc_src = '''
 // please compile with: g++ a.cc $(python3 -m jittor_utils.config --include-flags --libs-flags --cxx-flags) -o a.out && ./a.out
-#include <pyjt/pyjt_console.h>
+#include <bindings/pyjt/pyjt_console.h>
 #include <iostream>
 
 using namespace std;

@@ -55,8 +55,10 @@ def amp_level(level):
 
 class TestAmpBitNames(unittest.TestCase):
     def test_the_python_names_match_the_cpp_constants(self):
-        header = (Path(jt.__file__).resolve().parent
-                  / "src" / "type" / "nano_string.h").read_text(encoding="utf-8")
+        from jittor_utils.backend_resources import core_root
+        # The C++ core lives beside the package (``src/``), not inside it.
+        header = (Path(core_root(Path(jt.__file__).resolve().parent))
+                  / "type" / "nano_string.h").read_text(encoding="utf-8")
         found = dict(
             (name, int(value)) for name, value in
             re.findall(r"constexpr\s+int\s+(amp_\w+)\s*=\s*(\d+)\s*;", header))
@@ -75,8 +77,9 @@ class TestAmpBitNames(unittest.TestCase):
 
     def test_bit_5_is_the_one_reduce_op_reads_by_number(self):
         # src/ops/reduce_op.cc has no constant for it; it spells `amp_reg & 32`.
-        source = (Path(jt.__file__).resolve().parent
-                  / "src" / "ops" / "reduce_op.cc").read_text(encoding="utf-8")
+        from jittor_utils.backend_resources import core_root
+        source = (Path(core_root(Path(jt.__file__).resolve().parent))
+                  / "ops" / "reduce_op.cc").read_text(encoding="utf-8")
         self.assertIn("amp_reg & %d" % jt.amp_flags.reduce16_no_fp32_acc, source)
 
     def test_the_level_mapping_is_what_the_names_say(self):
