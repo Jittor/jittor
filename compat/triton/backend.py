@@ -270,7 +270,12 @@ class _Driver:
         ctx = ctypes.c_void_p()
         self.check(lib.cuDevicePrimaryCtxRetain(ctypes.byref(ctx), dev),
                    "cuDevicePrimaryCtxRetain")
-        self.check(lib.cuCtxSetCurrent(ctx), "cuCtxSetCurrent")
+        # Deliberately NOT cuCtxSetCurrent here: merely *getting* a driver (e.g.
+        # for its compute capability during compilation) must not move the
+        # thread onto that device's context. Only ensure_ctx() switches, right
+        # where a launch or an allocation needs it -- otherwise compile-time
+        # driver creation for device 0 leaves device 0 current while the
+        # operands' device-1 streams are being synced.
         self.ctx = ctx
         # compute capability -> triton arch (e.g. 8.9 -> 89)
         maj, mino = c_i(0), c_i(0)
@@ -1124,6 +1129,10 @@ def run(jitfn, args, kwargs, grid):
                     % (kname, _launch_dev, _d))
     if _launch_dev is None:
         _launch_dev = 0
+    # Operands' device current before anything else touches a device: the
+    # materialising ``sync_all`` below and the compilation path must not run
+    # with another device (or context) current.
+    _Driver.get(_launch_dev).ensure_ctx()
 
     if not any(_is_tensor(v) for (_, _, v) in runtime_vals):
         raise JittorTritonError(
