@@ -2769,3 +2769,44 @@ diffusers. `venv-oracle-cu129` (torch/torchaudio/torchvision `+cu129`,
 `transformers==5.5.3`, venv-oracle's packages layered through a `.pth`) plus
 `env-oracle-cu129.sh` / `run-oracle-cu129.sh` are the working pair; see
 `agent/manuals/` or the lab notes for the recipe.
+
+## 34. TP2 completes but its pictures are noise (open)
+
+`ATTN=FLASH_ATTN`, 2 steps, 256x256, seed 11223, same prompt: TP1 writes a
+blurry-but-real frame, TP2 writes **coloured blocks**. Measured over the decoded
+frames: TP1 mean 129.4 / std 30.5 / |dx| 9.8 (spatially smooth), TP2 mean 88.6 /
+std 82.4 / |dx| 16.8 with |dt| 31.6 (flickering); per-pixel mean difference
+82.6/255 (p99 183). Sheet: `runs/sheet-tp1-vs-tp2.png`.
+
+It is not our recent work, and not the attention backend: a TP2 run from the day
+before the storage/triton fixes (tag `tp2-sdpa-2step-256`, TORCH_SDPA) has the
+same character, and single-GPU runs are fine (`runs/sheet-oldtp2-vs-single.png`).
+
+Ruled out by measurement:
+
+| hypothesis | result |
+| --- | --- |
+| too few steps | TP2 at 8 steps is still noise |
+| text-encoder TP sharding | `TEXT_ENC_TP=1` (DiT still TP2) is still wrong |
+| the shim's collectives | `probe_tp_dist.py` on 2 ranks: all_reduce sum=3.0, all_gather slots [0,1], broadcast, and the row-parallel "split + all_reduce" arithmetic all exact (max err 0) |
+
+What is left, and the strongest anomaly so far: the run *is* configured for TP2
+(`'tensor_parallel_size': 2` in the log, workers TP0/TP1, and the DiT uses
+`ColumnParallelLinear`/`RowParallelLinear`/`MergedColumnParallelLinear` with
+`gather_output=True` heads), yet **each rank loads the same model footprint as
+TP1** -- 10.2354 GiB against TP1's 10.2402 GiB. Sharded DiT weights should make
+the TP2 rank smaller. (Caveat: that number covers the whole diffusion runner,
+VAEs included; the DiT's own share was not isolated.) Together with the
+blocky/tiled look of the noise this fits "the layer applies a TP reduce/gather
+while every rank holds the same weights", i.e. duplicated work being combined.
+
+Next diagnostic, in order of cost: (1) isolate the DiT's per-rank parameter
+count under TP1 vs TP2 (a shim-side print of the parameter storages at load, or
+the DiT's own size line); (2) instrument the shim's `all_gather`/`all_reduce` to
+log the first operands of each call on both ranks during a TP2 request -- if the
+two ranks hand in *equal* values where a shard is expected, the layers are not
+sharded and the fault is at the layer/config boundary rather than in a
+collective.
+
+Until that is settled, **TP2 output cannot be used**: run TP1 for pictures. TP2's
+1.72x at 8 steps 832x480 (section 33) does not compensate for wrong frames.
