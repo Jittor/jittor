@@ -453,6 +453,14 @@ class ExternalBackend:
                     if key == name or key.startswith(name + "."):
                         displaced[key] = sys.modules.pop(key)
                         state["before"][key] = displaced[key]
+                        # Recorded separately from the snapshot: on the success
+                        # path these slots are left empty for the source module
+                        # to fill, and whatever it did not fill has to be put
+                        # back when the candidate is rejected afterwards (a
+                        # capability miss). ``before`` is the whole table, so
+                        # it cannot be used for that without resurrecting
+                        # modules something else unloaded on purpose.
+                        state.setdefault("displaced", {})[key] = displaced[key]
                 importlib.invalidate_caches()
             try:
                 imported = importlib.import_module(name)
@@ -662,6 +670,12 @@ class ExternalBackend:
                 sys.modules[name] = before[name]
             else:
                 sys.modules.pop(name, None)
+        # A submodule the source import displaced and never replaced: the
+        # installed package is back in its own slot, so its children have to be
+        # too, or the next `import pkg.child` re-imports one half of it.
+        for name, module in state.get("displaced", {}).items():
+            if name not in sys.modules:
+                sys.modules[name] = module
         importlib.invalidate_caches()
         if conflicts:
             raise TransactionConflict("; ".join(conflicts))
