@@ -165,10 +165,16 @@ def child_env(extra=None, inherit=True, without_torch_mode=False,
         env.pop("PYTHONPATH", None)
         return env
     pinned = source_python_dir()
+    # The test-support root as well: a child script that lives under a test
+    # tree and imports ``_helpers`` (the aggregate check scripts do) can only
+    # find it if the directory holding it is on the child's path. The parent
+    # has it on ``sys.path``; sys.path does not travel to a child.
+    support = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if pinned is not None:
         existing = env.get("PYTHONPATH", "")
-        parts = [pinned] + [
-            part for part in existing.split(os.pathsep) if part and part != pinned
+        parts = [pinned, support] + [
+            part for part in existing.split(os.pathsep)
+            if part and part not in (pinned, support)
         ]
         env["PYTHONPATH"] = os.pathsep.join(parts)
     return env

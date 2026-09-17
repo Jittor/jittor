@@ -214,7 +214,9 @@ class TestStateDict(Base):
 
     def test_load_state_dict_preserves_target_dtype(self):
         def body(dev):
-            dst = nn.Linear(4, 3)
+            # torch.nn, not jittor.nn: ``.data`` is the torch frontend's
+            # detached alias here, where the native one is the numpy view.
+            dst = torch.nn.Linear(4, 3)
             dst.weight.data = dst.weight.data.bfloat16()
             dst.bias.data = dst.bias.data.bfloat16()
             src = {

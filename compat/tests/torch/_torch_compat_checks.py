@@ -2,6 +2,13 @@
 
 Run: python compat/tests/torch/_torch_compat_checks.py.
 These exercise the torch-API surface that transformers/LlamaFactory depend on.
+
+Where a check reaches a torch-only Tensor method -- ``nan_to_num`` (through
+``nansum``/``nanmean``), ``movedim``, ``index_put_``, ``index_copy_``,
+``tensor_split``, ``take`` -- the tensor is built with ``torch``: since the
+frontends were split those live on ``Tensor``, not on a native ``Var``. The
+rest stay native, which is what keeps the gradient checks meaningful (a
+native Var requires grad; ``torch.tensor`` does not).
 """
 
 from _helpers import capability as _test_capability
@@ -17,16 +24,16 @@ def ok(cond, name):
 
 # dtypes
 ok(repr(torch.float32) == "torch.float32", "dtype repr")
-ok(torch.float32 == "float32", "dtype eq str")
+ok(str(torch.float32) == "torch.float32", "dtype prints as torch's")
 ok(torch.float32.is_floating_point and not torch.int64.is_floating_point, "is_floating_point")
-ok(torch.zeros(2, dtype=torch.float16).dtype == "float16", "zeros dtype")
-ok(torch.long == "int64", "long alias")
+ok(torch.zeros(2, dtype=torch.float16).dtype is torch.float16, "zeros dtype")
+ok(torch.long is torch.int64, "long alias")
 
 # constructors with torch kwargs
 _available_device = "cuda" if _test_capability.check_accelerator('cuda', backend=jt).enabled else "cpu"
 ok(tuple(torch.zeros(2, 3, device=_available_device).shape) == (2, 3), "zeros device kwarg")
 ok(tuple(torch.arange(5, device=_available_device).shape) == (5,), "arange device kwarg")
-ok(torch.from_numpy(np.zeros(3, dtype=np.int64)).dtype == "int64", "from_numpy int64")
+ok(torch.from_numpy(np.zeros(3, dtype=np.int64)).dtype is torch.int64, "from_numpy int64")
 _numel_t = torch.tensor([1,2,3])
 ok(int(_numel_t.numel()) == 3, "tensor numel")
 ok(_numel_t.is_mps is False and _numel_t.is_xpu is False and _numel_t.is_meta is False,
@@ -35,7 +42,7 @@ ok(_numel_t.is_mps is False and _numel_t.is_xpu is False and _numel_t.is_meta is
 # reductions (torch semantics)
 x = torch.tensor([[1., 5., 2.], [7., 3., 4.]])
 ok(torch.argmax(x, dim=-1).numpy().tolist() == [1, 0], "argmax indices")
-ok(str(torch.argmax(x, dim=-1).dtype) == "int64", "argmax int64")
+ok(torch.argmax(x, dim=-1).dtype is torch.int64, "argmax int64")
 mx = torch.max(x, dim=-1)
 ok(mx.values.numpy().tolist() == [5., 7.] and mx.indices.numpy().tolist() == [1, 0], "max namedtuple")
 ok(float(torch.max(x).numpy()) == 7.0, "max scalar")
@@ -365,7 +372,7 @@ ok(abs(float(_hw_sym[0])) < 1e-6 and abs(float(_hw_sym[-1])) < 1e-6,
 _wave = torch.from_numpy(np.sin(np.arange(400, dtype=np.float32) * 0.1))
 _spec = torch.stft(_wave, n_fft=64, hop_length=16,
                    window=torch.hann_window(64), return_complex=True)
-ok(tuple(_spec.shape) == (33, 26) and str(_spec.dtype) == "complex64",
+ok(tuple(_spec.shape) == (33, 26) and _spec.dtype is torch.complex64,
    "stft returns a onesided complex64 spectrogram")
 ok(torch.get_num_threads() > 0 and torch.get_num_interop_threads() > 0,
    "thread-count getters report a usable count")
@@ -631,16 +638,16 @@ _rx = np.random.randn(2, 3, 8).astype("float32"); _rw = np.random.randn(8).astyp
 ok(abs(float(torch.nn.functional.rms_norm(jt.array(_rx), (8,), weight=jt.array(_rw)).sum().item()) - (-4.61942)) < 1e-3,
    "F.rms_norm matches torch (Llama/Qwen)")
 _mvx = np.random.randn(2, 6, 4, 4).astype("float32")
-ok(np.array_equal(jt.array(_mvx).movedim(1, -1).numpy(), np.moveaxis(_mvx, 1, -1)), "Var.movedim")
-_ipa = jt.ones(3)
-_ipa.index_put_((jt.array(np.array([0, 0, 1], dtype="int64")),), jt.array(np.array([2., 3., 4.], dtype="float32")), accumulate=True)
+ok(np.array_equal(torch.tensor(_mvx).movedim(1, -1).numpy(), np.moveaxis(_mvx, 1, -1)), "Tensor.movedim")
+_ipa = torch.ones(3)
+_ipa.index_put_((torch.tensor(np.array([0, 0, 1], dtype="int64")),), torch.tensor(np.array([2., 3., 4.], dtype="float32")), accumulate=True)
 ok(_ipa.numpy().tolist() == [6.0, 5.0, 1.0], "Var.index_put_ accumulate sums duplicate indices")
-_ipn = jt.zeros((3, 4))
-_ipn.index_put_((jt.array(np.array([0, 2], dtype="int64")), jt.array(np.array([1, 3], dtype="int64"))), jt.array(np.array([5., 7.], dtype="float32")))
+_ipn = torch.zeros(3, 4)
+_ipn.index_put_((torch.tensor(np.array([0, 2], dtype="int64")), torch.tensor(np.array([1, 3], dtype="int64"))), torch.tensor(np.array([5., 7.], dtype="float32")))
 ok(float(_ipn.sum().item()) == 12.0, "Var.index_put_ (non-accumulate)")
-ok([t.numpy().tolist() for t in jt.array(np.arange(10).astype("float32")).tensor_split(3)] ==
+ok([t.numpy().tolist() for t in torch.tensor(np.arange(10).astype("float32")).tensor_split(3)] ==
    [[0., 1., 2., 3.], [4., 5., 6.], [7., 8., 9.]], "Var.tensor_split (uneven)")
-ok(jt.array(np.arange(12).reshape(3, 4).astype("float32")).take(jt.array(np.array([0, 5, 11], dtype="int64"))).numpy().tolist()
+ok(torch.tensor(np.arange(12).reshape(3, 4).astype("float32")).take(torch.tensor(np.array([0, 5, 11], dtype="int64"))).numpy().tolist()
    == [0., 5., 11.], "Var.take (flat gather)")
 
 # Activations / losses jittor lacked (verified vs real torch; silu/mish/hardswish/glu/elu
@@ -707,7 +714,7 @@ _lx2 = np.random.randn(5).astype("float32")
 ok(np.abs(torch.logcumsumexp(jt.array(_lx2), 0).numpy() - np.log(np.cumsum(np.exp(_lx2)))).max() < 1e-4, "torch.logcumsumexp")
 _try = np.random.randn(3, 5).astype("float32")
 _trx = np.linspace(0.0, 1.0, 5).astype("float32")
-ok(np.abs(torch.trapz(jt.array(_try), jt.array(_trx), dim=1).numpy() - np.trapz(_try, _trx, axis=1)).max() < 1e-5,
+ok(np.abs(torch.trapz(jt.array(_try), jt.array(_trx), dim=1).numpy() - np.trapezoid(_try, _trx, axis=1)).max() < 1e-5,
    "torch.trapz/trapezoid")
 _ta2 = np.random.randn(2, 3, 4).astype("float32"); _tb2 = np.random.randn(4, 5, 2).astype("float32")
 ok(np.abs(torch.tensordot(jt.array(_ta2), jt.array(_tb2), dims=1).numpy() - np.tensordot(_ta2, _tb2, axes=1)).max() < 1e-4, "torch.tensordot")
@@ -723,14 +730,14 @@ ok(np.array_equal(torch.signbit(jt.array(_ea)).numpy().astype(bool), np.signbit(
 # reductions: logsumexp (attention/MoE/loss), nansum/nanmean (NaN-aware), aminmax, quantile.
 _rx2 = np.random.randn(4, 5).astype("float32"); _rxn = _rx2.copy(); _rxn[0, 0] = np.nan; _rxn[2, 3] = np.nan
 ok(np.abs(torch.logsumexp(jt.array(_rx2), dim=1).numpy() - np.log(np.exp(_rx2).sum(1))).max() < 1e-4, "torch.logsumexp")
-ok(abs(float(torch.nansum(jt.array(_rxn)).item()) - float(np.nansum(_rxn))) < 1e-3, "torch.nansum")
-ok(abs(float(torch.nanmean(jt.array(_rxn)).item()) - float(np.nanmean(_rxn))) < 1e-4,
+ok(abs(float(torch.nansum(torch.tensor(_rxn)).item()) - float(np.nansum(_rxn))) < 1e-3, "torch.nansum")
+ok(abs(float(torch.nanmean(torch.tensor(_rxn)).item()) - float(np.nanmean(_rxn))) < 1e-4,
    "torch.nanmean (isnan-count, not self-compare which jittor optimizes to True)")
 _amx = torch.aminmax(jt.array(_rx2))
 ok(abs(float(_amx.min.item()) - float(_rx2.min())) < 1e-5 and abs(float(_amx.max.item()) - float(_rx2.max())) < 1e-5, "torch.aminmax")
 ok(abs(float(torch.quantile(jt.array(_rx2), 0.5).item()) - float(np.quantile(_rx2, 0.5))) < 1e-4, "torch.quantile")
 # Var.index_copy_ (overwrite at indices) + scatter_reduce all modes (graph nets / MoE).
-_ica = jt.zeros((3, 4)); _ica.index_copy_(0, jt.array(np.array([0, 2], dtype="int64")), jt.ones((2, 4)) * 5)
+_ica = torch.zeros(3, 4); _ica.index_copy_(0, torch.tensor(np.array([0, 2], dtype="int64")), torch.ones(2, 4) * 5)
 ok(float(_ica.sum().item()) == 40.0, "Var.index_copy_ (overwrite along dim)")
 _sidx = jt.array(np.array([0, 0, 1, 3, 3, 3], dtype="int64")); _ssrc = jt.array(np.array([2., 3., 5., 1., 2., 4.], dtype="float32"))
 ok(jt.zeros(5).scatter_reduce(0, _sidx, _ssrc, reduce="amax", include_self=False).numpy().tolist() == [3., 5., 0., 4., 0.],
