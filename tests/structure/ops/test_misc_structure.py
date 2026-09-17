@@ -40,7 +40,7 @@ _PUBLIC_NAMES = {
     "peek_s", "print_tree", "python_pass_wrapper", "rad2deg", "randperm",
     "repeat", "repeat_interleave", "roll", "rsqrt", "safe_log", "save_image",
     "scatter", "scatter_", "scatter_add", "scatter_add_", "scatter_reduce",
-    "searchsorted", "set_global_seed", "sort", "split", "stack", "t",
+    "searchsorted", "set_global_seed", "sinc", "sort", "split", "stack", "t",
     "tensor_ops", "to", "tolist", "topk", "tril", "triu", "unbind", "unique",
     "unique_consecutive", "view_as",
     "reductions", "shape_composition", "shape_transforms",

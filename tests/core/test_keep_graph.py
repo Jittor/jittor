@@ -115,6 +115,10 @@ class TestKeepGraph(unittest.TestCase):
 @unittest.skipIf(not _test_capability.machine_has_accelerator("cuda"),
                  "no CUDA device")
 @_test_preserve_policy(jt, 'keep_graph')
+# Decorated in its own right: the base class's decorator wraps *its* setUp,
+# and this subclass overrides setUp, so inheriting the class does not inherit
+# the wrapper. This one also switches use_cuda.
+@_test_preserve_policy(jt, 'keep_graph', 'use_cuda')
 class TestKeepGraphCuda(TestKeepGraph):
 
     def setUp(self):

@@ -59,7 +59,7 @@ class BackendLibraries:
             self._forget()
 
     def get_library(self, name, *, load=False):
-        memo = self._memo.get((name, load, False), _MISS)
+        memo = self._memo.get((name, load), _MISS)
         if memo is not _MISS:
             return memo
         return self._get_library_uncached(name, load, False)
@@ -93,17 +93,24 @@ class BackendLibraries:
         -- which clears the memo -- so the entry is written after that, not
         before.
         """
-        answer = module
+        # A load that ran the loader and got nothing stays *unmemoized*: the
+        # condition it declined on (a missing toolkit, an unset rendezvous
+        # variable) can change, and remembering the refusal would make a
+        # missing or failed loader permanent -- which is the opposite of what
+        # the registry promises.
+        if enabled is None and not (load and module is None):
+            self._memo[(name, load)] = module
         if want_ops:
-            answer = getattr(module, "ops", None) if module is not None else None
-        if enabled is None:
-            self._memo[(name, load, want_ops)] = answer
-        return answer
+            return getattr(module, "ops", None) if module is not None else None
+        return module
 
     def get_library_ops(self, name, *, load=False):
-        memo = self._memo.get((name, load, True), _MISS)
+        memo = self._memo.get((name, load), _MISS)
         if memo is not _MISS:
-            return memo
+            # `.ops` is read through rather than memoized: it is an attribute
+            # of a live module, and the registry's contract is that ops follow
+            # the module (tests/structure/build/test_backend_libraries.py).
+            return getattr(memo, "ops", None) if memo is not None else None
         return self._get_library_uncached(name, load, True)
 
     def library_resource(self, name, key):

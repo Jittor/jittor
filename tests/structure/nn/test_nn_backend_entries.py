@@ -27,7 +27,10 @@ ALIASES = {
 
 def test_nn_backend_directory_contains_only_composition_and_hooks():
     assert {path.name for path in (NN / "backends").glob("*.py")} == {
-        "__init__.py", "cudnn.py", "hooks.py",
+        # One adapter module per library that owns kernel-table rows, plus the
+        # composition root and the hooks: cuDNN for the accelerator, oneDNN for
+        # the CPU rows the dead ConvTuner relay used to cover.
+        "__init__.py", "cudnn.py", "onednn.py", "hooks.py",
     }
     assert list(NN.glob("*_cuda.py")) == []
     assert not (NN / "_cuda_inference.py").exists()

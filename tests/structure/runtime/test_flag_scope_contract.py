@@ -197,9 +197,31 @@ def _cleanup_method_names(class_node):
     return names
 
 
+def _flags_a_class_decorator_preserves(class_node):
+    """Flags a ``@preserve_policy(jt, "a", "b")`` class decorator puts back.
+
+    The shared helper (tests/_helpers/runtime_policy.py) wraps ``setUp`` in a
+    ``runtime.scope`` holding the values it captured, so it restores them on
+    every exit path -- the same guarantee a ``tearDown`` gives, written once.
+    """
+    names = set()
+    for decorator in class_node.decorator_list:
+        if not isinstance(decorator, ast.Call):
+            continue
+        function = decorator.func
+        name = (function.attr if isinstance(function, ast.Attribute)
+                else getattr(function, "id", ""))
+        if not name.endswith("preserve_policy"):
+            continue
+        names.update(argument.value for argument in decorator.args
+                     if isinstance(argument, ast.Constant)
+                     and isinstance(argument.value, str))
+    return names
+
+
 def _class_offenders(class_node, relative):
     cleanup_methods = _cleanup_method_names(class_node) | _TEARDOWN
-    restored = set()
+    restored = _flags_a_class_decorator_preserves(class_node)
     methods = [node for node in class_node.body
                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
     for method in methods:
