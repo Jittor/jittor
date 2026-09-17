@@ -10,6 +10,13 @@ import torch
 
 class TestDiffusersVideoCompat(unittest.TestCase):
     def test_kornia_import_time_torch_api_surface(self):
+        # CPU: ``linalg.inv_ex`` on the accelerator is a numpy-code operator
+        # that needs CuPy (tests/linalg covers that route under its own
+        # guard), and the API surface this checks is device-independent.
+        with jt.flag_scope(use_cuda=0):
+            return self._kornia_import_time_torch_api_surface()
+
+    def _kornia_import_time_torch_api_surface(self):
         x = torch.tensor([[[1.0, 2.0], [3.0, 5.0]]])
         result = torch.linalg.inv_ex(x)
         self.assertTrue(hasattr(result, "inverse"))
@@ -37,7 +44,7 @@ class TestDiffusersVideoCompat(unittest.TestCase):
                     y = torch.nn.functional.layer_norm(x, (512,), weight, bias, 1e-5)
                     y.sync()
                 self.assertEqual(tuple(y.shape), (4, 512))
-                self.assertEqual(str(y.dtype), "float32")
+                self.assertEqual(str(y.dtype), "torch.float32")
             finally:
                 _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=prev_use_cuda))
 

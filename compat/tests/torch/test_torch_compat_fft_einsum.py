@@ -423,15 +423,17 @@ class TestEinsum(Base):
         self.rs = np.random.RandomState(12)
 
     def _chk(self, eq, *arrs, atol=1e-4, msg=""):
-        """Compare torch.einsum to numpy.einsum. Scalar outputs (jittor shape [1] vs
-        numpy ()) are compared via .item()."""
+        """Compare torch.einsum to numpy.einsum, shape included.
+
+        A scalar result used to come back as shape ``[1]`` because jittor had
+        no 0-d Var; it is 0-d now, like numpy's and torch's.
+        """
         def body(dev):
             ts = [torch.tensor(a) for a in arrs]
             got = torch.einsum(eq, *ts)
             ref = np.einsum(eq, *arrs)
             if np.ndim(ref) == 0:
-                # jittor has no 0-d scalar: result is shape [1]; compare scalar value.
-                self.assertEqual(tuple(np.asarray(got.numpy()).shape), (1,),
+                self.assertEqual(tuple(np.asarray(got.numpy()).shape), (),
                                  f"scalar einsum shape {eq} {dev}")
                 np.testing.assert_allclose(float(got.item()), float(ref), atol=atol,
                                            err_msg=f"{eq} {dev} {msg}")
