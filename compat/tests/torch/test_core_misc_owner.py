@@ -63,7 +63,13 @@ class TestCoreMiscOwner(unittest.TestCase):
             self.assertEqual(int(torch.get_rng_state().numpy()[0]), 1729)
             torch.set_rng_state(torch.tensor([42], dtype=torch.int64))
             self.assertEqual(torch.random.initial_seed(), 42)
-            self.assertEqual(torch.get_default_device().type, "cpu")
+            # The default device follows the runtime policy, which is what
+            # the factories follow too: under use_cuda the tensors really do
+            # land on the accelerator, so reporting "cpu" there would be a
+            # lie. With the accelerator off it is cpu, as in torch.
+            import jittor as jt
+            with jt.flag_scope(use_cuda=0):
+                self.assertEqual(torch.get_default_device().type, "cpu")
             with torch.set_grad_enabled(False):
                 self.assertFalse(torch.is_grad_enabled())
         finally:

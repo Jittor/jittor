@@ -175,8 +175,10 @@ class TestMultiDeviceFacade(_Case):
         # helper may still hand back a fresh Var -- .cpu() above can leave
         # `b` host-resident -- so this is about the device, not identity.)
         self.assertEqual(b.to("cuda:1").device.index, 1)
-        # a bare "cuda" leaves it where it is, as in torch
-        self.assertEqual(b.to("cuda").device.index, 1)
+        # A bare "cuda" is the *current* device, not "wherever it already is":
+        # checked against real PyTorch 2.13, where a cuda:1 tensor sent to
+        # "cuda" with current_device()==0 lands on cuda:0.
+        self.assertEqual(b.to("cuda").device.index, jt.current_device())
         c = b.cuda(0)
         self.assertEqual(c.device.index, 0)
         np.testing.assert_array_equal(c.cpu().numpy(), a.cpu().numpy())
