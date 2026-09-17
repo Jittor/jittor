@@ -1728,6 +1728,22 @@ about whether to take it.
   skips with a reason when the toolchain has no translations installed, because
   otherwise both locales print English and the assertion proves nothing.
 
+## KI-COMPAT-003: a nested tensor is not a Tensor
+
+- Severity: Low (it is a stand-in for the few ``torch.nested`` paths verl
+  reaches; nothing else asks).
+- Status: Open.
+- Owner: torch compatibility
+- Symptom: ``isinstance(torch.nested.as_nested_tensor(...), torch.Tensor)`` is
+  False here and True in real torch (checked against 2.13 on this machine).
+  Code that type-checks before branching therefore takes the dense path.
+- Why it is not a one-line fix: ``compat/torch/nested.py``'s ``_NestedTensor``
+  holds a list of Vars plus their concatenation, and reports ``shape ==
+  (3, -1)``. A Tensor subclass is a Var subclass, and no Var can hold a
+  ragged extent, so this needs a real jagged storage rather than a cast.
+- Pinned by ``tests/torch/test_torch_compat_ops.py::TestNestedTensor::test_nested_jagged_basic``,
+  which asserts the gap as it stands so that closing it turns the test red.
+
 ## KI-CODEGEN-001: a broadcast of a real input is a strided view, and fused elementwise kernels pay a division and a modulo per element for it
 
 - Severity: Medium (a memory-bound broadcast add runs 4.22x its dense

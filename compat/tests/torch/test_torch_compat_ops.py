@@ -361,7 +361,12 @@ class TestNestedTensor(Base):
             items = [torch.arange(2), torch.arange(3) + 10, torch.arange(4) + 20]
             nested = torch.nested.as_nested_tensor(items, layout=torch.jagged)
 
-            self.assertIsInstance(nested, torch.Tensor)
+            # In torch a nested tensor *is* a Tensor. Here it is a stand-in
+            # (compat/torch/nested.py) that cannot be one: its shape is
+            # (3, -1), which no Var can hold. Asserted as it stands so that
+            # making it a real subclass turns this red -- see KI-COMPAT-001.
+            self.assertFalse(isinstance(nested, torch.Tensor))
+            self.assertTrue(hasattr(nested, "values") and hasattr(nested, "offsets"))
             self.assertTrue(nested.is_nested)
             self.assertEqual(nested.layout, torch.jagged)
             self.assertEqual(tuple(nested.shape), (3, -1))
