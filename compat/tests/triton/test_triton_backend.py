@@ -433,5 +433,119 @@ class TestDriverIsPerDevice(unittest.TestCase):
         self.assertNotEqual(d0.ctx.value, d1.ctx.value)
 
 
+@unittest.skipUnless(_HAVE, "real upstream triton + CUDA not available")
+class TestGuardedBounceRequiresContiguous(unittest.TestCase):
+    """A strided operand must not be bounced.
+
+    The over-read guard copies a small operand into a guarded buffer with one
+    flat ``copy_dtod`` of ``numel * elsize`` bytes from ``data_ptr()`` and hands
+    the kernel the bounce pointer -- while the caller's own stride arguments
+    still describe the original layout. A contiguous operand survives that; a
+    strided one does not: the copy takes the wrong elements and the kernel then
+    walks off the copied payload reading the zeroed guard, so the launch
+    succeeds and returns silently wrong numbers.
+
+    MiniMax-H3 hit this on its AdaLN modulation, whose ``chunk`` views have row
+    stride ``6 * hidden``: the fused kernel diverged from its own eager
+    reference by 40 (cos 0.985) on the real tensors while agreeing bitwise on
+    contiguous ones, and the DiT produced title cards instead of the prompted
+    scene. This drives the same shape through ``matmul_kernel``'s explicit
+    strides, with a contiguous control.
+    """
+
+    def _prepare(self):
+        # Done per test rather than in `setUp` so a by-path runner that calls the
+        # test method directly (no `setUpModule`/`setUpClass`/`setUp`) still
+        # exercises the kernels.
+        global triton, tl
+        if triton is None or tl is None:
+            setUpModule()
+        if not _shim.activate_bridge():
+            self.skipTest("jittor Triton bridge is unavailable")
+        # The model code passes the shim's torch-shaped tensors, which is the
+        # operand flavour this regression is about. `jittor.compat.torch`
+        # installs itself as `torch` for the process.
+        import jittor.compat.torch  # noqa: F401
+        import torch as _torch
+        if not callable(getattr(_torch, "tensor", None)) or not callable(getattr(_torch, "empty", None)):
+            self.skipTest("no torch-shaped tensor namespace for the strided operand")
+        return _torch
+
+    def _run_matmul(self, torch_ns, a, b, M, N, K, stride_am):
+        c = torch_ns.empty((M, N), dtype=torch_ns.float32, device="cuda:0")
+        BM = BN = BK = 32
+        grid = (triton.cdiv(M, BM), triton.cdiv(N, BN))
+        matmul_kernel[grid](a, b, c, M, N, K, stride_am, 1, N, 1, N, 1,
+                            BLOCK_M=BM, BLOCK_N=BN, BLOCK_K=BK)
+        jt.sync_all(True)
+        return np.asarray(c.float().cpu().numpy(), dtype=np.float64)
+
+    def test_strided_operand_survives_the_guard(self):
+        """The failing case: the operand is a row-strided view.
+
+        This is MiniMax-H3's AdaLN modulation shape -- a `chunk` of a
+        `[M, k*H]` projection, i.e. row stride `k*H` -- driven through
+        ``matmul_kernel``'s explicit strides. Before the fix the guard bounced
+        it and the result was silently wrong.
+        """
+        torch_ns = self._prepare()
+        M, N, K = 64, 64, 64
+        rs = np.random.RandomState(7)
+        wide = rs.randn(M, 2 * K).astype("float32")
+        bn = rs.randn(K, N).astype("float32")
+
+        a_view = torch_ns.tensor(wide, device="cuda:0")[:, :K]
+        b = torch_ns.tensor(bn, device="cuda:0")
+        jt.sync_all(True)
+        self.assertFalse(bool(a_view.is_contiguous()),
+                         "the view must be strided for this test to mean anything")
+
+        got = self._run_matmul(torch_ns, a_view, b, M, N, K, 2 * K)
+        np.testing.assert_allclose(got, wide[:, :K] @ bn, atol=1e-2, rtol=1e-3,
+                                   err_msg="matmul with a row-strided operand")
+
+    def test_contiguous_control_still_matches(self):
+        # The same values and kernel with a contiguous operand: the guard may
+        # bounce this one, and it must stay correct.
+        torch_ns = self._prepare()
+        M, N, K = 64, 64, 64
+        rs = np.random.RandomState(8)
+        an = rs.randn(M, K).astype("float32")
+        bn = rs.randn(K, N).astype("float32")
+        a = torch_ns.tensor(an, device="cuda:0")
+        b = torch_ns.tensor(bn, device="cuda:0")
+        jt.sync_all(True)
+        self.assertTrue(bool(a.is_contiguous()))
+        got = self._run_matmul(torch_ns, a, b, M, N, K, K)
+        np.testing.assert_allclose(got, an @ bn, atol=1e-2, rtol=1e-3,
+                                   err_msg="matmul with a contiguous operand")
+
+    def test_the_helper_reports_layout(self):
+        from jittor.compat.triton import backend as tb
+
+        torch_ns = self._prepare()
+        M, K = 8, 6
+        wide = torch_ns.tensor(np.arange(M * 2 * K, dtype="float32").reshape(M, 2 * K),
+                               device="cuda:0")
+        jt.sync_all(True)
+        self.assertTrue(tb._tensor_is_contiguous(wide))
+        self.assertFalse(tb._tensor_is_contiguous(wide[:, :K]))
+        self.assertTrue(tb._tensor_is_contiguous(wide[:, :K].contiguous()))
+
+        # jittor Vars reach the bridge too, where `_storage_is_contiguous` is the
+        # authority. Whether a slice is a view or a copy is jittor's business, so
+        # only assert agreement with that authority when it yields a bool.
+        def authority(value):
+            flag = getattr(value, "_storage_is_contiguous", None)
+            flag = flag() if callable(flag) else flag
+            return flag if isinstance(flag, bool) else None
+
+        var = jt.array(np.arange(M * 2 * K, dtype="float32").reshape(M, 2 * K))
+        for candidate in (var, var[:, :K]):
+            expected = authority(candidate)
+            if expected is not None:
+                self.assertEqual(tb._tensor_is_contiguous(candidate), expected)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

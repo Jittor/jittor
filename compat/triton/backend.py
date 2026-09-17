@@ -625,6 +625,66 @@ def _tensor_is_cuda(v):
     return dev is not None and "cuda" in str(dev).lower()
 
 
+def _tensor_is_contiguous(v):
+    """Whether an operand's layout is flat, i.e. whether it may be bounced.
+
+    The guard path copies an operand with one flat ``copy_dtod`` of
+    ``numel * elsize`` bytes taken from ``data_ptr()`` and then hands the kernel
+    the *bounce* pointer, while the caller's own stride arguments still describe
+    the original layout. That is only self-consistent for a contiguous operand.
+
+    On a non-contiguous operand the copy picks up the wrong elements -- a
+    row-strided ``[M, H]`` view of a ``[M, k*H]`` buffer copies the first ``M*H``
+    elements of the parent rather than the view's rows -- and the kernel then
+    walks off the copied payload with the caller's strides, reading the zeroed
+    guard. The launch succeeds and returns silently wrong numbers.
+
+    Measured, MiniMax-H3's AdaLN modulation (``minimax_h3_modulation.py``): the
+    DiT passes ``chunk`` views with row stride ``6 * hidden``, and the fused
+    ``rms_norm_indexed_scale_shift`` then diverged from its own eager reference
+    by 40 (cos 0.985) where the contiguous call agreed bitwise.
+
+    Two operand flavours reach the launch: the shim's torch-shaped ``Tensor``
+    (``is_contiguous``) and a raw jittor ``Var`` (``_storage_is_contiguous``).
+    Only a genuine ``bool`` is trusted from either -- jittor's ``Var.__getattr__``
+    synthesises a proxy for unknown names, so a plain ``getattr`` probe can
+    return something that merely looks callable. Strides are the last resort, and
+    an operand whose layout cannot be established is reported as non-contiguous:
+    skipping the bounce only risks a masked over-read reaching the allocator's
+    slack instead of the guard, whereas bouncing something strided corrupts
+    results.
+    """
+    for name in ("_storage_is_contiguous", "is_contiguous"):
+        accessor = getattr(v, name, None)
+        if accessor is None:
+            continue
+        try:
+            result = accessor() if callable(accessor) else accessor
+        except EXPECTED as exc:
+            swallowed("triton/backend.py _tensor_is_contiguous: %s" % name, exc)
+            continue
+        if isinstance(result, bool):
+            return result
+    strides = getattr(v, "stride", None)
+    try:
+        shape = [int(s) for s in v.shape]
+        got = strides() if callable(strides) else getattr(v, "_storage_strides")
+        got = [int(s) for s in (got() if callable(got) else got)]
+    except EXPECTED as exc:
+        swallowed("triton/backend.py _tensor_is_contiguous: shape/stride", exc)
+        return False
+    if len(shape) != len(got):
+        return False
+    # Row-major check: walking inward, each kept dim's stride must be the product
+    # of the sizes already passed. Size-1 dims carry no information.
+    want = 1
+    for size, stride in zip(reversed(shape), reversed(got)):
+        if size > 1 and stride != want:
+            return False
+        want *= max(size, 1)
+    return True
+
+
 def _ptr_sig(var):
     name = _dtype_name(var.dtype)
     code = _DT.get(name)
@@ -1211,7 +1271,12 @@ def run(jitfn, args, kwargs, grid):
             else:
                 ptr = _tensor_ptr(val)
                 nbytes = _tensor_nbytes(val, sig) if _guard_enabled() else 0
-                if (not _looks_like_output_arg(name)) and 0 < nbytes <= _guard_max_payload():
+                # Only a contiguous operand can be bounced: the copy is a flat
+                # memcpy of the payload and the kernel keeps the caller's
+                # strides, so a strided view would be copied wrongly and then
+                # read out of the copied buffer (see `_tensor_is_contiguous`).
+                if (not _looks_like_output_arg(name)) and 0 < nbytes <= _guard_max_payload() \
+                        and _tensor_is_contiguous(val):
                     # bounce through a guarded buffer so a masked over-read past the
                     # operand's end hits zeroed slack instead of an unmapped page.
                     try:

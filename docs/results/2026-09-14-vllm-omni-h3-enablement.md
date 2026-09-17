@@ -2909,3 +2909,124 @@ same scene and the same overlaid text, see
 `runs/sheet-8step-tp1-vs-tp2.png`). Pixel-identical output between a weight-sharded
 bf16 TP and a single GPU is not something a chaotic 8-step sampler can give, so
 "correct" here means numerically equivalent per step, same content overall.
+
+## 35. The pink title card: the over-read guard bounced a strided operand
+
+The server path rendered a pink card with gibberish glyphs for the pottery
+prompt at every TP and every step count, while the diffusers path -- same shim,
+same weights, same prompt, same 8 steps and 512x512 -- rendered the prompted
+scene. TP1 and TP2 agreed with each other, which is why this read as a TP
+problem for as long as it did.
+
+### What the card was not
+
+Every candidate below was *measured* on the server's own configuration before the
+real cause was reached. Each row is a lab probe, not a reading of the code.
+
+| suspect | probe | result |
+| --- | --- | --- |
+| text conditioning | `probe_vllm_encoder_cond.py`, `probe_capture_server_cond.py` vs `oracle-512.cond.npy` | matches to bf16 slop (cos 0.9999960, rms 0.0374); the diffs path's own parity is 0.0372. Holds with the encoder offloaded and with the DiT offloaded. `encoder_hidden` reaches the DiT as `prompt_embeds` bitwise |
+| initial noise | `probe_server_noise.py` vs the captured `dit_x`/`dit_audio_x` | reproduced bit-for-bit from `seed=0` (max\|d\| = 0), right shape, scale, tags and padding |
+| sigma schedule, sampler | `minimax_h3_time_shift_sigmas` vs `MiniMaxH3Scheduler`; `minimax_h3_rf_v_to_x0` + `euler_eta0_step` vs `MiniMaxH3Scheduler.step` | identical at shift 12/3 for 2/6/8/50 steps; same `x0 = x_t + sigma*v`, `x_next = r*x_t + (1-r)*x0` |
+| DiT weights | `probe_ckpt_layout.py` | `FL2VA/transformer` (native) and `transformer` (diffusers) agree exactly under the documented transforms (qkv grouped->qkv, `fc1` gate-first); no "Skipping" warnings |
+| row packing | `probe_index_add_bf16.py` | `index_add_` correct in bf16/fp16/fp32, with duplicate indices and slice destinations |
+| attention | `probe_sdpa_parity.py`, `probe_varlen_parity.py` | dense 4-D SDPA and packed `flash_attn_varlen_func` at `cu_seqlens=[0,10175,10176]` both match float64; varlen is bit-identical to the dense flash entry |
+| DiT inputs | `probe_capture_server_cond.py` + checkpoint matmuls | `condition_proj`, the token refiner (replayed from the diffusers checkpoint, cos 0.99998), both patch projections, the `_embed` assembly and `t_emb` (t=0 at step 0) all reproduce |
+| fused qk-norm+RoPE | `probe_fused_qk_rope.py` | the Triton kernel matches its eager reference and a half-split torch chain |
+| fused AdaLN modulation | `probe_modulation_ops.py` | all three kernels match their CPU eager branches **on contiguous inputs** |
+
+The last row is the one that was wrong, and the last two words are the whole
+story.
+
+### Root cause: the guard's flat copy is only valid for a contiguous operand
+
+`compat/triton/backend.py` routes small tensor arguments through a guarded
+bounce buffer so that a masked over-read lands in zeroed slack instead of an
+unmapped page (`jittor` Vars are exactly sized, unlike a torch caching
+allocator's rounded-up blocks). The copy is one flat `copy_dtod` of
+`numel * elsize` bytes taken from `data_ptr()`, after which the kernel is given
+the *bounce* pointer -- while the caller's own stride arguments still describe
+the original layout. `_tensor_nbytes` sized it from the element count, with the
+comment "contiguous tensors, which triton requires for these kernels anyway".
+
+MiniMax-H3's DiT does not hand it contiguous tensors. `MiniMaxH3AdalnProj`
+returns `tuple(x.chunk(expand_ratio, dim=-1))` of an `[M*3, 6*H]` projection, so
+`shift_msa`/`scale_msa`/`gate_msa` are views with row stride `6 * H = 32256`,
+not `H = 5376`. The bounce copied the first `numel` elements of the parent
+buffer instead of the view's rows, and the kernel then walked past the copied
+payload with stride 32256 into the zeroed guard. The launch succeeded and the
+numbers were silently wrong -- in `rms_norm_indexed_scale_shift`,
+`indexed_gate_rms_norm_scale_shift` and `indexed_gate`, twice per block, in all
+50 blocks, at every step.
+
+Measured directly (`probe_modulation_strides2.py`, same values, four layouts):
+
+| shift / scale layout | fused op vs float64 |
+| --- | --- |
+| both contiguous | cos 0.99999863, max\|d\| 0.124 |
+| shift strided (offset 0), scale contiguous | cos 0.99293, max\|d\| 2.39 |
+| shift contiguous, scale strided (offset `H`) | cos 0.99325, max\|d\| 21.96 |
+| both strided -- the DiT's real call | cos 0.98616, max\|d\| 21.21 |
+
+and the op's *own CPU eager branch* handles those same strided tensors correctly
+(cos 0.99999754), which is why comparing the Triton path against its eager
+reference with contiguous random data had passed. The error is small per step and
+systematic, so the sampler compounds it: at 2 steps the frames are a blur, at 8 a
+wooden disc on a pink field, at 50 a pink card with glyphs -- the conditioning
+being correct, the model simply degenerates. It is identical on both ranks,
+which is exactly why TP1 and TP2 "agreed" while both were wrong.
+
+### The fix
+
+`_tensor_is_contiguous` in `compat/triton/backend.py`, and the bounce is taken
+only for operands it accepts. It reads `Var._storage_is_contiguous` for jittor
+Vars and `is_contiguous()` for the shim's torch-shaped tensors, falls back to a
+row-major stride check, and trusts only a genuine `bool` -- `Var.__getattr__`
+synthesises a proxy for unknown names. An undetermined layout is reported as
+non-contiguous: skipping the bounce only risks a masked over-read reaching the
+allocator's slack, whereas bouncing something strided corrupts results. The guard
+itself is unchanged for the operands it was written for (weights, index and
+segment tables, all contiguous).
+
+### Verification
+
+* `probe_modulation_strides2.py`: all four layouts now cos 0.99999863,
+  max\|d\| 0.124 -- identical to the contiguous case.
+* Block-level A/B on the rows a live request produced
+  (`probe_dit_block_parity.py`, vLLM-Omni's block 0 vs diffusers' block 0):
+
+  | stage | before | after |
+  | --- | --- | --- |
+  | adaln shift/scale/gate | cos 0.9999976 | unchanged |
+  | norm1 + modulation | cos 0.84167 | **0.99998** |
+  | attention output | 0.93299 | 0.99727 (bf16 at these magnitudes) |
+  | gated residual 1 | 0.98274 | 0.99938 |
+  | norm2 + modulation | 0.54199 | 0.99915 |
+  | mlp output | 0.51228 | 0.99957 |
+  | block output | cos 0.18744 | **0.99978** |
+
+* Regression test `TestGuardedBounceRequiresContiguous` in
+  `compat/tests/triton/test_triton_backend.py` (strided operand through
+  `matmul_kernel`'s explicit strides, contiguous control, helper semantics).
+  Against the pre-change bridge the strided case fails with
+  `Mismatched elements: 2047 / 4096 (50%)`; with the fix all three pass.
+* End to end through the OpenAI endpoint, `t2va`, the pottery prompt, 8 steps,
+  512x512, `seed=0`, after the fix:
+
+  | run | result | request time |
+  | --- | --- | --- |
+  | TP1, one GPU | prompt-following clip (`runs/fix-tp1-8s.mp4`) | 118.9 s |
+  | TP2, two GPUs | prompt-following clip (`runs/fix-tp2-8s.mp4`) | see below |
+
+  Both clips show the potter's hands shaping a clay bowl on the spinning wheel
+  with the studio shelves behind, i.e. the structured prompt, in place of the
+  pink card. The bounce copies that are no longer made for strided operands are
+  also a small saving.
+
+### Lesson
+
+A fused kernel verified against its own eager reference proves nothing about the
+*bridge*: the two agreed bitwise here because both were fed contiguous tensors,
+which is not what the model passes. When a compiled path diverges while every
+kernel looks right, check the layouts the model actually hands over -- views,
+`chunk`s, `split`s, slices -- not just the values.
