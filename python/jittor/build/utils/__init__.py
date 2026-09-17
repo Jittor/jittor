@@ -1049,8 +1049,23 @@ def get_version(output):
     Six of these were ``nvcc --version``, one per CUDA library, every import.
     """
     tool = resolve_exe(output)
-    return probe.cached("version:" + tool, [tool],
-                        lambda: _read_version(output))
+    answer = probe.cached("version:" + tool, [tool],
+                          lambda: _read_version_record(output))
+    if isinstance(answer, dict):
+        raise RuntimeError(answer["error"])
+    return answer
+
+
+def _read_version_record(output):
+    """The version, or the failure to read one -- both are states of the tool's
+    file and both are remembered under its stamp. Otherwise every import
+    re-spawns a subprocess that failed last time and will fail the same way
+    until the file changes (a broken ``mpicc`` wrapper on PATH did exactly
+    that)."""
+    try:
+        return _read_version(output)
+    except Exception as error:
+        return {"error": "%s: %s" % (type(error).__name__, error)}
 
 
 def _read_version(output):

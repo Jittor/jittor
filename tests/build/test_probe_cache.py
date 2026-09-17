@@ -46,6 +46,27 @@ class TestProbeCache(unittest.TestCase):
                 f.write("v2")
             self.assertEqual(probe.cached(key, [tool], self._compute("c")), "c")
 
+    def test_a_tool_that_cannot_report_a_version_is_remembered_as_failing(self):
+        """A broken tool on PATH must not be re-run on every import."""
+        with tempfile.TemporaryDirectory() as d:
+            tool = os.path.join(d, "broken-tool")
+            with open(tool, "w") as f:
+                f.write("#!/bin/sh\nexit 1\n")
+            os.chmod(tool, 0o755)
+            before = probe.MISSES
+            with self.assertRaises(RuntimeError):
+                jit_utils.get_version(tool)
+            self.assertEqual(probe.MISSES, before + 1)
+            with self.assertRaises(RuntimeError):
+                jit_utils.get_version(tool)
+            self.assertEqual(probe.MISSES, before + 1, "the failure was probed again")
+            # Repairing the tool changes its file, and that is what re-probes.
+            time.sleep(0.01)
+            with open(tool, "w") as f:
+                f.write("#!/bin/sh\necho 'tool 1.2.3'\n")
+            self.assertEqual(jit_utils.get_version(tool), "(1.2.3)")
+            self.assertEqual(probe.MISSES, before + 2)
+
     def test_a_missing_tool_is_a_state_of_its_own(self):
         with tempfile.TemporaryDirectory() as d:
             tool = os.path.join(d, "later")
