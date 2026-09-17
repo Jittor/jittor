@@ -197,6 +197,15 @@ class TestTorchCppExtension(unittest.TestCase):
     def _build_probe_extension(self):
         import torch
         from torch.utils.cpp_extension import load_inline
+        from jittor.compat.shim.cpp_extension import _find_pybind_include
+
+        # ``torch/extension.h`` includes <pybind11/pybind11.h>, so building any
+        # extension needs those headers. They are not part of jittor, and this
+        # machine has no pybind11 at all -- report that rather than reporting a
+        # compile failure whose cause is a missing build dependency.
+        if _find_pybind_include() is None:
+            self.skipTest("building a C++ extension needs the pybind11 headers; "
+                          "they are not installed here")
 
         src = r"""
 #include <torch/extension.h>

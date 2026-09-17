@@ -235,7 +235,9 @@ class TestAvgPoolCountIncludePad(Base):
 
         def body(dev):
             for cip in (True, False):
-                xj = torch.tensor(x)
+                # requires_grad: torch factories default to False, and the
+                # gradient is what this compares.
+                xj = torch.tensor(x, requires_grad=True)
                 y = F.avg_pool2d(xj, k, stride=s, padding=p,
                                  count_include_pad=cip).sum()
                 ga = jt.grad(y, [xj])[0].numpy()
@@ -318,7 +320,7 @@ class TestAdaptiveAvgPoolNonDivisor(Base):
             return g
 
         def body(dev):
-            xj = torch.tensor(x)
+            xj = torch.tensor(x, requires_grad=True)
             y = F.adaptive_avg_pool2d(xj, O).sum()
             ga = jt.grad(y, [xj])[0].numpy()
             self.ac(ga, ref_grad(), atol=1e-3, rtol=1e-3,
