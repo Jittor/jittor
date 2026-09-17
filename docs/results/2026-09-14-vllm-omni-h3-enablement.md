@@ -2281,11 +2281,21 @@ That matters for two reasons, and it is the state bug 1 is actually left in:
   against the no-offload configuration, because that is the one the probe used
   and the one this document's earlier measurements are all stated in.
 
-The next measurement, not yet taken: whether the index is garbage because it was
-never written (an uninitialised or recycled buffer) or because it was written by
-something on the wrong device -- `jt.flags.trace_py_var` records the creating
-Python stack per node, and the offload index is built by the pipeline, so its
-creator and its device are both one probe away.
+**And the index is not garbage.** The server log of that run has 16 reports, all
+against the same `388956160`-row buffer, drawn from just three values, and the
+arithmetic of the most frequent one (11 of 16) is a layout, not noise:
+
+    388956160 = 64 x 6077440          <- the buffer's row count
+    395033601 = 65 x 6077440 + 1      <- the index that fires, exactly
+
+so the index was computed for a tensor **1/64 larger** than the one it indexes,
+plus an off-by-one, while the other two values (`737396059`, `439601509`) do not
+follow that pattern at all. An index tensor whose entries mostly fit *and* whose
+failures carry a 65/64 factor is what a shape or padding mismatch looks like, and
+the single-GPU run -- same offload, same request -- passes, so the mismatch is
+rank-specific. That is where the fix should be looked for: not in the copy
+engine, not in NCCL, not in the allocator, but in whatever builds this index for
+rank 1.
 
 `CUDA_LAUNCH_BLOCKING=1` is the other half of the picture. It fails *earlier*
 (30.1 s) with the same rank-1 `cudaErrorIllegalAddress` at `cudaMemGetInfo`.
