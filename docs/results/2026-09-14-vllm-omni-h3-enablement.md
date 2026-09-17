@@ -2722,3 +2722,50 @@ fault: a stride-0 operand (`torch.ones(n)` through the shim is a broadcast view,
 `s=[0] r=1/4096`) is read by such a kernel as `n` dense elements, which gives
 wrong values on device 0 as well; and an operand whose last stride is not 1
 cannot be served by the kernels the model uses.
+
+## 33. Speed: jittor shim vs real torch, and TP2 vs TP1
+
+Same script (`infer_h3.py`), same request (512x512, 124 frames, 6 steps, seed 0,
+`--vae-dtype float16`, injected latents), one GPU each, both idle. The jittor side
+uses its flash-attn extension; the oracle has no real flash-attn, so it runs
+diffusers' `_native_flash` (torch SDPA's flash kernel). `load_seconds` is **not**
+comparable and is omitted: the shim loads weights eagerly (385-392 s) while the
+oracle's `ComponentsManager` builds lazily (2.13 s).
+
+`generate_seconds`, and the per-phase split the script prints:
+
+| phase | jittor, cold | jittor, warm | torch | warm jittor / torch |
+| --- | --- | --- | --- | --- |
+| dit | 61.41 | 25.92 | 23.35 | 1.11x |
+| text_encoder | 17.25 | 3.77 | 10.18 | **0.37x** |
+| vae.video | 66.50 | 15.69 | 6.79 | 2.31x |
+| vae.audio | 36.90 | 5.64 | 0.28 | 20.1x |
+| phase sum | 182.1 | 51.0 | 40.6 | 1.26x |
+| **generate_seconds** | **253.69** | **92.34** | **75.94** | **1.22x** |
+
+So: the first jittor run pays ~2.7x for JIT compilation and must not be used as a
+speed number; warm, the shim is 1.22x off torch overall, is *faster* than torch on
+the text encoder, is at parity on the DiT (1.11x), and loses on the VAEs -- the
+video decoder by 2.31x and the audio decoder by 20x (5.64 s against 0.28 s, the
+single largest per-phase gap and the obvious next target). Both sides wrote a
+512x512 6-step mp4 of the same size (359,623 vs 358,341 bytes).
+
+For the vllm-omni server path (a different pipeline, so not comparable with the
+table above), 2 steps 256x256, `ATTN=FLASH_ATTN`, warm:
+
+| load | request |
+| --- | --- |
+| TP1 (1 GPU) | 41.9 s |
+| TP2 (2 GPUs) | 55.1 s |
+| TP2 + text_encoder offload | 50.1 s |
+
+and at 8 steps 832x480: **TP1 309.2 s against TP2 180.2 s** -- 1.72x, i.e. TP2 pays
+off only once per-step compute outweighs the per-layer NCCL traffic, which a
+2-step 256x256 request is far too small for.
+
+The oracle needed its own venv on this box: `venv-oracle`'s torch is cu130 and
+the driver is 535 (CUDA 12.9), and its `transformers 5.17` breaks the lab's
+diffusers. `venv-oracle-cu129` (torch/torchaudio/torchvision `+cu129`,
+`transformers==5.5.3`, venv-oracle's packages layered through a `.pth`) plus
+`env-oracle-cu129.sh` / `run-oracle-cu129.sh` are the working pair; see
+`agent/manuals/` or the lab notes for the recipe.
