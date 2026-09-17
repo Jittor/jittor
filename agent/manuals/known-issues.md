@@ -24,31 +24,23 @@ framework defects.
 - **Research:** an intentionally unsupported capability requiring architectural
   work.
 
-## KI-TORCH-RNG-001: complete CUDA generator snapshots are not representable
+## KI-TORCH-RNG-001: complete CUDA generator snapshots use bounded replay
 
 - Severity: Research (C5)
-- Status: Explicit limitation; reviewed 2026-09-17 against large Host cuRAND
-  XORWOW/Philox continuation counterexamples
+- Status: Repaired for native `curand_random`; reviewed 2026-09-17
 - Owner: native CUDA RNG and state-storage maintainers
 - Evidence: `${JITTOR_LAB_ROOT}/Accelerate/maturity_repair/` contains
   `curand_large_offset_probe.py`, `curand_philox_offset_probe.py` and the
   strict-uniform subset probe. The
   [Accelerate capability report](../../refactor-wip/results/2026-09-17-accelerate-maturity-repair.md)
   separates full CPU snapshots from the restricted CUDA format.
-- Symptom: interleaved normal/float64 calls cannot be captured by one Host
-  cuRAND seed/offset. Normal initialization or Gaussian/float64 sampling can
-  therefore make ordinary `Accelerator.save_state()` explicitly fail.
-  `JITTOR_CURAND_XORWOW_U32_V1` capture permits only FP32 uniform history since
-  seed or safe restore; an earlier safe snapshot remains restorable. Sampling
-  operations themselves still compute normally.
-- Workaround: use only the documented safe-uniform capture domain, or perform
-  checkpoint work without claiming exact CUDA RNG continuation. A small-seed
-  reset is not a general exact-resume workaround. Legacy native int seed
-  getters also explicitly reject uint64 seeds they cannot represent.
-- Review/expiry condition: a runtime-owned complete state representation or a
-  reviewed canonical RNG transition passes mixed normal/uniform/float64, odd
-  and large sizes, device isolation, pending work, malformed state and fresh
-  process continuation, followed by generation/checkpoint throughput checks.
+- Symptom: Host cuRAND exposes no opaque state, so restore replays a bounded
+  operation log and latency grows with history; vendor random APIs are not logged.
+- Current behavior: `JITTOR_CURAND_REPLAY_V1` restores native mixed streams and
+  rejects incompatible/malformed states plus histories over 1,000,000 calls or
+  1 GiB replay scratch.
+- Review/expiry condition: benchmark replay cost on maintained workloads and add
+  explicit owners for vendor random APIs bypassing `curand_random`.
 
 ## KI-TORCH-SAMPLER-001: replacement sampling lacks an explicit-generator owner
 

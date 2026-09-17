@@ -4,7 +4,9 @@
   complete structure gate retains four existing worktree/baseline failures
 - Date: 2026-09-17
 - Baseline commit: `7c8b309625f5b711181cf174a7e259446cec9f7a`
-- Repair commit: `da820bf343d7adebe3ffce42bc817e4ac808147d`
+- Repair commits: `da820bf343d7adebe3ffce42bc817e4ac808147d`,
+  `0a06da95` (DCP fail-closed), `c4130774` (explicit replacement sampler),
+  `26ba47da` (CUDA RNG replay state), and `50cc23d7` (lazy sharded-stub rejection)
 - Owner: Jittor core maintainers
 - Review when: AMP policy, scalar promotion, optimizer state loading, RNG state,
   distributed synchronization, checkpoint formats, or Accelerate wrapping changes
@@ -96,27 +98,22 @@ operations preserve Python and NumPy RNG streams. The legacy native int seed
 ABI is retained, but legacy `get_seed()` callers explicitly reject wide seeds
 they cannot represent.
 
-**Complete CUDA RNG continuation remains unsupported (C5).** The current Host
-cuRAND ABI cannot snapshot all interleaved subsequence progress after arbitrary
-normal and float64 draws. The safe `JITTOR_CURAND_XORWOW_U32_V1` format permits
-capture only after FP32 uniform generation since the last seed or safe restore.
-Normal initialization, Gaussian training noise or float64 sampling therefore
-can make ordinary `Accelerator.save_state()` fail explicitly, even when model
-and optimizer serialization works. Sampling itself still computes normally,
-and an earlier safe snapshot remains restorable. Uniform-only continuation
-evidence must not be presented as general CUDA resume support. Exit requires
-a runtime-owned complete state representation or a reviewed canonical RNG
-transition, with mixed, odd, large and fresh-process continuation plus
-throughput regressions. Raw large-counterexample and strict-subset experiments
-remain in `${JITTOR_LAB_ROOT}/Accelerate/maturity_repair/`.
+CUDA RNG continuation now uses native `JITTOR_CURAND_REPLAY_V1` runtime-owned
+operation logs. Each device records distribution, precision and length for every
+native `curand_random` call; restore resets cuRAND and replays those calls into
+temporary CUDA buffers. Mixed normal/uniform and f32/f64 histories, odd/large
+lengths, device isolation and malformed-state atomicity pass without fallback.
+The log is bounded at 1,000,000 operations and 1 GiB replay scratch, so fresh
+process restore latency grows with history. Vendor random APIs outside
+`curand_random` remain unsupported.
 
-The final RNG/sampler selection passes 14 cases on actual CPU with 11 CUDA-only
-skips, and 25/25 on two actual CUDA devices (30.17 s), with zero fallback.
-Native CPU RNG tests pass 3/3. The CUDA selection covers device isolation,
-large draws, unsafe-history rejection, restoration of an earlier safe snapshot,
-mixed future draws and actual CPU/CUDA fresh-process Accelerate continuation.
-Its two task-process peaks are 874/872 MiB. Mixed future draws after a restored
-safe snapshot do not imply that a new snapshot is supported after those draws.
+The final CPU RNG/sampler selection passes 14 cases with 11 CUDA-only skips.
+The focused post-fix CUDA RNG selection passes 18 tests with one expected skip,
+and the two fresh-process Accelerate CPU/CUDA continuation cases pass after the
+runner adds its `tests/` helper directory to `PYTHONPATH`; all observed native
+CUDA paths report zero fallback. Native CPU RNG tests pass 3/3. The CUDA
+selection covers device isolation, large draws, mixed future draws and
+malformed-state rejection. Its two task-process peaks are 874/872 MiB.
 
 The named checkpoint/unsupported-boundary CPU suite passes nine cases on actual
 CPU (9.85 s), with fallback count unchanged at zero. It covers named optimizer
@@ -131,13 +128,14 @@ against the final source, as recorded under Continuous Gates and Performance.
 The old sampler CPU baseline fails all nine seed/default-state/explicit-state
 continuation checks across RandomSampler, SubsetRandomSampler and DataLoader.
 Nonreplacement sampling delegates to canonical generator-aware CPU randperm;
-default replacement uses CPU randint. The final sampler cases pass within the
-RNG selection above. With a CUDA default backend, spies observe 33 randperm
-and four randint calls executing on native CPU, preserving the sampler RNG
-owner and continuation semantics. Explicit-generator replacement sampling is a
-separate native integer sampling owner gap: it rejects without advancing the
-generator. Exit requires canonical generator-aware integer sampling and
-replacement continuation/isolation tests.
+default replacement uses CPU randint. Explicit-generator replacement now uses
+the native generator-aware CPU randint owner for integer ranges no wider than
+2^32. Values, continuation, default-RNG isolation, keyword/positional overloads,
+invalid arguments and the maintained worker-thread DataLoader path pass in the
+22-case focused sampler/factory suite. Explicit CUDA generators and wider
+ranges remain fail-closed. With a CUDA default backend, spies observe 33
+randperm and four randint calls executing on native CPU, preserving the sampler
+RNG owner and continuation semantics.
 
 The actual two-rank prepared-loader case consumes 17 IDs with batch size four
 and accumulation two. Gathered metrics contain each ID exactly once; flags are
@@ -164,7 +162,10 @@ FSDP gather/shard owner. The real two-rank, FP32, no-wrap FSDP2 FULL case runs
 and matches the next loss and update. Optimizer step metadata is exported as
 a public Tensor. Accelerate imports DefaultSavePlanner/DefaultLoadPlanner even
 on the FULL path, so their names are import-compatible while actual planner
-construction precisely rejects the unsupported SHARDED protocol. Before FULL
+construction precisely rejects the unsupported SHARDED protocol. The default
+`init_from_local_shards` and `sharded_tensor.empty` rejection path now checks
+the fail-closed policy before inspecting shards or allocating storage; the
+three-case focused regression passes. Before FULL
 CPU-offload export drops a nonzero rank's result, it now consumes pending lazy
 gather collectives; otherwise that rank could start the next collective out of
 sequence.
