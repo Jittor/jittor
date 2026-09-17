@@ -66,7 +66,7 @@ class TestSGD(Base):
     def test_sgd_torch_style_step_keeps_grad_until_zeroed(self):
         def body(dev):
             w0 = np.array([1.0, 2.0], "float32")
-            w = jt.array(w0)
+            w = torch.tensor(w0, requires_grad=True)
             opt = torch.optim.SGD([w], lr=0.1)
 
             (w * w).sum().backward()
@@ -105,7 +105,7 @@ class TestSGD(Base):
 
     def test_sgd_momentum_state_dict_round_trip(self):
         def body(dev):
-            source_value = jt.array(np.array([1.0, 2.0], "float32"))
+            source_value = torch.tensor(np.array([1.0, 2.0], "float32"), requires_grad=True)
             source = torch.optim.SGD(
                 [source_value], lr=0.1, momentum=0.9)
             (source_value * source_value).sum().backward()
@@ -116,7 +116,7 @@ class TestSGD(Base):
             self.assertIn(source_value, source.state)
             self.assertIn("momentum_buffer", source.state[source_value])
 
-            restored_value = jt.array(np.array([1.0, 2.0], "float32"))
+            restored_value = torch.tensor(np.array([1.0, 2.0], "float32"), requires_grad=True)
             restored = torch.optim.SGD(
                 [restored_value], lr=0.1, momentum=0.9)
             restored.load_state_dict(state_dict)
@@ -131,8 +131,8 @@ class TestSGD(Base):
             for optimizer_type in (torch.optim.SGD, torch.optim.RMSprop,
                                    torch.optim.Adan):
                 initial = np.array([1.0, 2.0], "float32")
-                direct_value = jt.array(initial)
-                split_value = jt.array(initial)
+                direct_value = torch.tensor(initial, requires_grad=True)
+                split_value = torch.tensor(initial, requires_grad=True)
                 direct = optimizer_type([direct_value], lr=0.01)
                 split = optimizer_type([split_value], lr=0.01)
 
@@ -147,7 +147,7 @@ class TestSGD(Base):
                         atol=2e-5, rtol=2e-5,
                         msg=f"{optimizer_type.__name__} split step parity {dev}")
 
-            assigned = jt.array(np.array([1.0, 2.0], "float32"))
+            assigned = torch.tensor(np.array([1.0, 2.0], "float32"), requires_grad=True)
             assigned_opt = torch.optim.Adan([assigned], lr=0.01)
             assigned_opt.backward((assigned * assigned).sum())
             assigned.grad = assigned.grad
@@ -155,7 +155,7 @@ class TestSGD(Base):
             self.assertEqual(assigned_opt.n_step, 1,
                              f"grad reassignment preserves native counter {dev}")
 
-            accumulated = jt.array(np.array([1.0, 2.0], "float32"))
+            accumulated = torch.tensor(np.array([1.0, 2.0], "float32"), requires_grad=True)
             accumulated_opt = torch.optim.Adan([accumulated], lr=0.01)
             accumulated_opt.backward((accumulated * accumulated).sum())
             (accumulated * 3.0).sum().backward()
@@ -229,7 +229,7 @@ class TestAdam(Base):
 
     def test_adam_step_inside_no_grad_keeps_param_trainable(self):
         def body(dev):
-            w = jt.array(np.array([1.0, 2.0], "float32"))
+            w = torch.tensor(np.array([1.0, 2.0], "float32"), requires_grad=True)
             opt = torch.optim.Adam([w], lr=0.1)
             (w * w).sum().backward()
             with torch.no_grad():
@@ -258,7 +258,7 @@ class TestAdam(Base):
                 ("fill_", lambda value: value.data.fill_(0.5)),
             )
             for name, operation in operations:
-                value = jt.array(np.array([1.0, 2.0], "float32"))
+                value = torch.tensor(np.array([1.0, 2.0], "float32"), requires_grad=True)
                 self.assertFalse(value.is_stop_grad(), f"{name} starts trainable {dev}")
                 with torch.no_grad():
                     operation(value)
@@ -270,7 +270,7 @@ class TestAdam(Base):
 
             # Torch factories default to requires_grad=False; this part checks
             # that mutating a parameter data view preserves an enabled flag.
-            parent = jt.ones((2, 3)).start_grad()
+            parent = torch.ones(2, 3).start_grad()
             with torch.no_grad():
                 parent.data[0].zero_()
             assert_stays_on_device(parent, "data view zero_")
@@ -279,7 +279,7 @@ class TestAdam(Base):
             self.assertFalse(parent.is_stop_grad(),
                              f"view zero_ keeps parent trainable {dev}")
 
-            setitem_parent = jt.ones((2, 3))
+            setitem_parent = torch.ones(2, 3)
             retained_data = setitem_parent.data
             self.assertIsNot(retained_data, setitem_parent,
                              f"data returns a detached alias {dev}")
@@ -299,20 +299,20 @@ class TestAdam(Base):
             self.ac(parent.numpy()[1], np.full(3, 3.0, dtype=np.float32),
                     atol=0.0, rtol=0.0, msg=f"view add_ writes parent {dev}")
 
-            chained = jt.zeros((2, 3, 4))
+            chained = torch.zeros(2, 3, 4)
             chained[1][2].fill_(7.0)
             self.ac(chained.numpy()[1, 2], np.full(4, 7.0, dtype=np.float32),
                     atol=0.0, rtol=0.0,
                     msg=f"chained view fill_ writes root parent {dev}")
 
-            direct = jt.zeros((2, 3, 4))
+            direct = torch.zeros(2, 3, 4)
             middle = direct[1]
             middle[1:] = 5.0
             self.ac(direct.numpy()[1, 1:], np.full((2, 4), 5.0, dtype=np.float32),
                     atol=0.0, rtol=0.0,
                     msg=f"chained direct setitem writes root parent {dev}")
 
-            deep = jt.zeros((2, 3, 4, 5))
+            deep = torch.zeros(2, 3, 4, 5)
             deep_view = deep[1][2][3]
             self.assertTrue(deep_view._is_view())
             self.assertNotIn("_torch_index_parent", deep_view.__dict__)
@@ -322,7 +322,7 @@ class TestAdam(Base):
                     atol=0.0, rtol=0.0,
                     msg=f"deep chained view writes root parent {dev}")
 
-            frozen = jt.ones((2, 3)).stop_grad()
+            frozen = torch.ones(2, 3).stop_grad()
             frozen.normal_(0.0, 0.1)
             frozen[0].add_(1.0)
             self.assertTrue(frozen.is_stop_grad(),
@@ -332,7 +332,7 @@ class TestAdam(Base):
 
     def test_adamw_step_without_gradients_is_noop(self):
         def body(dev):
-            value = jt.array(np.array([1.0, 2.0], "float32"))
+            value = torch.tensor(np.array([1.0, 2.0], "float32"), requires_grad=True)
             before = value.numpy().copy()
             optimizer = torch.optim.AdamW([value], lr=0.1)
             optimizer.zero_grad(set_to_none=False)
@@ -379,7 +379,7 @@ class TestAdam(Base):
 
     def test_adamw_grad_setter_updates_optimizer_slot(self):
         def body(dev):
-            value = jt.array(np.array([1.0, 2.0], "float32"))
+            value = torch.tensor(np.array([1.0, 2.0], "float32"), requires_grad=True)
             optimizer = torch.optim.AdamW([value], lr=0.1, weight_decay=0.1)
             (value * value).sum().backward()
             before = value.numpy().copy()
@@ -410,7 +410,7 @@ class TestAdam(Base):
 
     def test_shared_parameter_uses_one_published_grad_slot(self):
         def body(dev):
-            value = jt.array(np.array([1.0, 2.0], "float32"))
+            value = torch.tensor(np.array([1.0, 2.0], "float32"), requires_grad=True)
             first = torch.optim.AdamW([value], lr=0.1)
             second = torch.optim.AdamW([value], lr=0.1)
 
@@ -436,8 +436,8 @@ class TestAdam(Base):
 
     def test_adamw_unused_parameter_stays_none_and_unchanged(self):
         def body(dev):
-            used = jt.array(np.array([1.0, 2.0], "float32"))
-            unused = jt.array(np.array([3.0, 4.0], "float32"))
+            used = torch.tensor(np.array([1.0, 2.0], "float32"), requires_grad=True)
+            unused = torch.tensor(np.array([3.0, 4.0], "float32"), requires_grad=True)
             unused_before = unused.numpy().copy()
             optimizer = torch.optim.AdamW(
                 [used, unused], lr=0.1, weight_decay=0.2)
@@ -459,9 +459,9 @@ class TestAdam(Base):
 
     def test_adamw_late_parameter_uses_its_first_step_bias(self):
         def body(dev):
-            first = jt.array(np.array([1.0, 2.0], "float32"))
+            first = torch.tensor(np.array([1.0, 2.0], "float32"), requires_grad=True)
             late_initial = np.array([3.0, 4.0], "float32")
-            late = jt.array(late_initial)
+            late = torch.tensor(late_initial, requires_grad=True)
             optimizer = torch.optim.AdamW(
                 [first, late], lr=0.01, weight_decay=0.2)
 
@@ -474,7 +474,7 @@ class TestAdam(Base):
             (late * late).sum().backward()
             optimizer.step()
 
-            fresh = jt.array(late_initial)
+            fresh = torch.tensor(late_initial, requires_grad=True)
             fresh_optimizer = torch.optim.AdamW(
                 [fresh], lr=0.01, weight_decay=0.2)
             (fresh * fresh).sum().backward()
@@ -493,8 +493,8 @@ class TestAdam(Base):
     def test_adamw_partial_load_clears_absent_parameter_state(self):
         def body(dev):
             source_params = [
-                jt.array(np.array([1.0, 2.0], "float32")),
-                jt.array(np.array([3.0, 4.0], "float32")),
+                torch.tensor(np.array([1.0, 2.0], "float32"), requires_grad=True),
+                torch.tensor(np.array([3.0, 4.0], "float32"), requires_grad=True),
             ]
             source = torch.optim.AdamW(source_params, lr=0.01)
             (source_params[0] * source_params[0]).sum().backward()
@@ -503,8 +503,8 @@ class TestAdam(Base):
             self.assertEqual(set(partial["state"]), {0})
 
             target_params = [
-                jt.array(np.array([1.0, 2.0], "float32")),
-                jt.array(np.array([3.0, 4.0], "float32")),
+                torch.tensor(np.array([1.0, 2.0], "float32"), requires_grad=True),
+                torch.tensor(np.array([3.0, 4.0], "float32"), requires_grad=True),
             ]
             target = torch.optim.AdamW(target_params, lr=0.01)
             ((target_params[0] * target_params[0]).sum()
@@ -526,7 +526,7 @@ class TestAdam(Base):
         both_devices(body)
 
     def test_optimizer_load_rejects_group_shape_before_mutation(self):
-        value = jt.array(np.array([1.0, 2.0], "float32"))
+        value = torch.tensor(np.array([1.0, 2.0], "float32"), requires_grad=True)
         optimizer = torch.optim.AdamW([value], lr=0.01)
         (value * value).sum().backward()
         optimizer.step()
@@ -542,7 +542,7 @@ class TestAdam(Base):
                 msg="mismatched optimizer load is non-mutating")
 
     def test_optimizer_load_rejects_malformed_state_before_mutation(self):
-        value = jt.array(np.array([1.0, 2.0], "float32"))
+        value = torch.tensor(np.array([1.0, 2.0], "float32"), requires_grad=True)
         optimizer = torch.optim.AdamW([value], lr=0.01)
         (value * value).sum().backward()
         optimizer.step()
@@ -567,12 +567,12 @@ class TestAdam(Base):
 
     def test_adam_state_field_assignment_and_delete_are_live(self):
         def body(dev):
-            value = jt.array(np.array([1.0, 2.0], "float32"))
+            value = torch.tensor(np.array([1.0, 2.0], "float32"), requires_grad=True)
             optimizer = torch.optim.AdamW([value], lr=0.01)
             (value * value).sum().backward()
             optimizer.step()
 
-            replacement = jt.array(np.array([7.0, 8.0], "float32")).stop_grad()
+            replacement = torch.tensor(np.array([7.0, 8.0], "float32"), requires_grad=True).stop_grad()
             optimizer.state[value]["exp_avg"] = replacement
             self.assertIs(optimizer.param_groups[0]["m"][0], replacement)
             self.assertIs(optimizer.state[value]["exp_avg"], replacement)
@@ -589,7 +589,7 @@ class TestAdam(Base):
                     msg=f"deleted state does not mutate saved references {dev}")
 
             optimizer.zero_grad(set_to_none=True)
-            fresh_value = jt.array(value.numpy().copy())
+            fresh_value = torch.tensor(value.numpy().copy(), requires_grad=True)
             fresh = torch.optim.AdamW([fresh_value], lr=0.01)
             (value * value).sum().backward()
             (fresh_value * fresh_value).sum().backward()
