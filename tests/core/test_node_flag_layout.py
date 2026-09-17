@@ -61,7 +61,10 @@ target = jt.array(np.arange(8, dtype="float32")) + 1
 target[2:5] = 7.0
 
 total = (first_order_only + target).sum()
-print("RESULT", total.item(), list(target.numpy()))
+# .tolist(), not list(): NumPy 2 prints a scalar as `np.float32(7.0)`, so
+# `list(arr)` no longer contains the plain "7.0, 7.0, 7.0" the parent looks
+# for. .tolist() yields python floats and prints the same on every version.
+print("RESULT", total.item(), target.numpy().tolist())
 '''
 
 

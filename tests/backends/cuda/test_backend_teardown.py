@@ -74,7 +74,12 @@ print("BODY-DONE", flush=True)
 # outlived the teardown noise -- the assertion passed nowhere and was only
 # reasoned about. `sync_all(True)` device-synchronizes, which is where jittor
 # checks and reports, so the fault the test is about is now really raised.
-_POISON_CONTEXT = """
+# dedent-ed here, at the definition. _TOUCH_BACKENDS is written flush left
+# and this block indented, and _run_child dedents the *concatenation* --
+# which removes nothing when the first line has no indent, so the child
+# died at `import sys` with IndentationError before running anything, and
+# the test then reported 'POISONED' not found in '' with no hint why.
+_POISON_CONTEXT = textwrap.dedent("""
     import sys
     x = jt.zeros((1,), "float32")
     y = jt.code(x.shape, x.dtype, [x], cuda_src=\"\"\"
@@ -90,7 +95,7 @@ _POISON_CONTEXT = """
         raise AssertionError("the out-of-bounds write was never reported")
     assert ctypes.CDLL(None).cudaDeviceSynchronize() == 700  # cudaErrorIllegalAddress
     print("POISONED", flush=True)
-"""
+""")
 
 
 @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")

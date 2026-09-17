@@ -11,14 +11,17 @@ def test_runtime_device_flag_rejects_invalid_index_and_remains_usable():
         pytest.skip("CUDA runtime required")
     with jt.flag_scope(use_cuda=1):
         before = jt.flags.device_id
+        # The flag holds the *requested* index (-1 until one is set); the
+        # device actually in use is reported by ``current_device()``.
+        before_dev = jt.current_device()
         try:
             with pytest.raises(RuntimeError, match="Invalid CUDA device index"):
                 jt.flags.device_id = jt.get_device_count() + 1
             assert jt.flags.device_id == before
-            assert jt.current_device() == before
+            assert jt.current_device() == before_dev
             result = jt.array([2.0, 3.0]).sqr()
             result.sync()
-            assert result.device_id == before
+            assert result.device_id == before_dev
             assert result.location() == "device"
             np.testing.assert_array_equal(result.numpy(), [4.0, 9.0])
         finally:

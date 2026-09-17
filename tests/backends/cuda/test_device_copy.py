@@ -116,6 +116,11 @@ class TestDeviceCopy(_DeviceCase):
 
     def test_same_device_is_the_same_var(self):
         x = jt.array(np.ones(4, "float32"))
+        # Until it is materialised a Var only *remembers* a device -- a host
+        # copy of it reports the same index and ``location() == "none"`` --
+        # so the skip needs the data to be known to sit there.
+        x.sync()
+        self.assertEqual(x.location(), "device")
         self.assertIs(x.to_device(0), x)
 
     def test_invalid_device_is_rejected(self):
