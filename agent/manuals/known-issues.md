@@ -96,6 +96,10 @@ framework defects.
   `test_checkpoint_state_dict.py::test_sharded_dcp_storage_remains_explicitly_unsupported`.
   The baseline and nine-case actual CPU suite execute the refusal; final
   integration also covers import-compatible names with rejecting construction.
+  The fail-closed boundary includes `FileSystemReader`/`FileSystemWriter`,
+  `ShardedTensor`, `init_from_local_shards`, and `sharded_tensor.empty`; these
+  names remain import-compatible but reject before creating storage or exposing
+  a local shard as a global tensor.
 - Symptom: planner, DTensor chunk metadata and storage reader/writer protocols
   are missing. SHARDED DCP raises before creating a checkpoint rather than
   emitting a private or silently incomplete format. Named FULL transforms
