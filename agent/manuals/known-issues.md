@@ -1776,6 +1776,11 @@ about whether to take it.
   `op->type() == OpType::broadcast`, which `BroadcastToOp` no longer is, so
   `tests/codegen/test_broadcast_tuner.py::TestBroadcastTuner::test_broadcast_tuner`
   never sees its `Run tuner broadcast: confidence(20)` line.
+  The tuners' own gates in `tests/codegen/` fail the same way:
+  `test_matmul_tuner.py::TestMatmulTuner::test_matmul_tuner` ("confidence of
+  reorder should be 20") and
+  `test_group_conv_tuner.py::TestGroupConvTuner::{test_forward,test_backward}`
+  (`assert 0 == 3` relayed kernels).
 - What it cost before the routing change, measured on this machine, float32:
 
   | operation | jittor | reference | ratio |

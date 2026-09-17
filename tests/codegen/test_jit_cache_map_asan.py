@@ -143,8 +143,10 @@ def _compile_and_run(source, extra_includes=()):
             # than failing, but never quietly pass the first case.
             return None, build.stdout + build.stderr
         # Leaks are not what this looks for, and the predecessor case leaks by
-        # construction.
-        environment = dict(os.environ, ASAN_OPTIONS="detect_leaks=0")
+        # construction. The link-order check is about LD_PRELOAD hygiene and
+        # trips on a machine whose /etc/ld.so.preload injects a system library
+        # ahead of the runtime; it says nothing about the table under test.
+        environment = dict(os.environ, ASAN_OPTIONS="detect_leaks=0:verify_asan_link_order=0")
         run = subprocess.run([str(binary)], capture_output=True, text=True,
                              timeout=300, env=environment)
         return run, run.stdout + run.stderr

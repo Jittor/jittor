@@ -35,8 +35,10 @@ class TestOpCompiler(unittest.TestCase):
 
     def test_eval(self):
         def check(expr, vars={}):
-            for k,v in vars.items():
-                locals()[k] = int(v)
+            # Writing into ``locals()`` never reached ``eval`` reliably and
+            # stopped working altogether in Python 3.13 (PEP 667); give the
+            # reference evaluation an explicit namespace instead.
+            namespace = {k: int(v) for k, v in vars.items()}
             _v1 = None
             _v2 = None
             try:
@@ -44,7 +46,7 @@ class TestOpCompiler(unittest.TestCase):
             except:
                 pass
             try:
-                _v2 = eval(expr)
+                _v2 = eval(expr, {}, namespace)
             except:
                 pass
             LOG.vv(f"check {expr} = {_v1}, {_v2}, {_v1 == _v2}")

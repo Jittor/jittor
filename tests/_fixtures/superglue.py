@@ -307,7 +307,8 @@ class SuperGlue(nn.Module):
             loss = get_weighted_loss_batch(scores, all_matches[i:end])
             loss.sync()
             losses.append(loss)
-        loss = jt.concat(losses)
+        # Each loss is a scalar; ``concat`` rejects 0-d inputs as torch does.
+        loss = jt.stack(losses)
         '''
         # Compute matching descriptor distance.
         scores = nn.bmm(desc0.t(), desc1) * self.scale # 457.76 MB
