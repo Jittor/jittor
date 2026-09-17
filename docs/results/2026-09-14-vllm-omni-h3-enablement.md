@@ -2711,10 +2711,13 @@ switch), and `run()` selects the operands' device with `ensure_ctx()` *before*
 compiling and materialising, so the runtime device and the driver context agree
 for both the bounce buffers and the launch.
 
-Verified: the probe is green on device 0 and device 1; the real request
-(TP2, 2 steps, 256x256, `ATTN=FLASH_ATTN`) reports
-`RESULT completed in 495.3 s` with zero `cudaErrorIllegalAddress` and zero worker
-tracebacks. Two operational notes the probe also produced, which are *not* this
+Verified: the probe is green on device 0 and device 1, and both real
+configurations pass -- TP2, 2 steps, 256x256, `ATTN=FLASH_ATTN`:
+`RESULT completed in 495.3 s` with no offload (`tp2-ctxfix-1.log`), and
+`RESULT completed in 50.1 s` with the factory default text_encoder offload
+(`tp2-ctxfix-offload.log`). Both logs contain zero `cudaErrorIllegalAddress`,
+zero `as_strided` and zero worker tracebacks; the offload one also exercises
+section 32.1's storage/`set_` fix end to end. Two operational notes the probe also produced, which are *not* this
 fault: a stride-0 operand (`torch.ones(n)` through the shim is a broadcast view,
 `s=[0] r=1/4096`) is read by such a kernel as `n` dense elements, which gives
 wrong values on device 0 as well; and an operand whose last stride is not 1
