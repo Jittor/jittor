@@ -367,6 +367,29 @@ def _element_size(self):
     return _DTYPE_BYTES.get(_jittor_dtype_name(self.dtype), 4)
 
 
+def _storage_dsize(var):
+    return _DTYPE_BYTES.get(_jittor_dtype_name(var.dtype), 4)
+
+
+def _storage_reach_elements(var):
+    """One past the last element this tensor addresses from its allocation origin.
+
+    jittor keeps the allocation itself -- `allocator` + `allocation`,
+    `storage_offset_bytes` and `storage_strides` (`core/var.h`) -- so a weight
+    sliced out of a fused one is a *shard* with a nonzero `_storage_offset()`
+    that addresses past its own first element. Both exports used here are real,
+    so the reach is exact.
+    """
+    hi = int(var._storage_offset())
+    for size, step in zip([int(s) for s in var.shape], list(var._storage_strides())):
+        if size <= 0:
+            continue
+        delta = (size - 1) * int(step)
+        if delta > 0:
+            hi += delta
+    return hi + 1
+
+
 class _Storage:
     def __init__(self, var):
         self._var = var
@@ -375,7 +398,14 @@ class _Storage:
     def size(self):
         return int(self._var.numel())
     def nbytes(self):
-        return int(self._var.numel()) * _DTYPE_BYTES.get(_jittor_dtype_name(self._var.dtype), 4)
+        """Bytes from the allocation's origin to this tensor's last element.
+
+        Not `numel * dsize`: a shard of a fused allocation addresses its own
+        elements from an offset, and callers (`PinnedModuleStager`) place it at
+        `storage_offset()` inside these bytes. Reporting only the shard's own
+        bytes put that placement past the end of the buffer it was given.
+        """
+        return _storage_reach_elements(self._var) * _storage_dsize(self._var)
 
 
 def _add(input, other, *, alpha=1, out=None):
@@ -738,21 +768,68 @@ def _pin_memory(self, device=None):
     return self
 
 
+def _as_byte_view(var):
+    """A contiguous uint8 view of a contiguous tensor's own bytes.
+
+    A strided tensor has no physical byte range: the bytes between its elements
+    belong to other elements of the allocation. Refusing is the honest answer --
+    packing it instead would place values at positions a later strided read does
+    not look at, which reads as silently wrong data rather than an error.
+    """
+    if not bool(var.is_contiguous()):
+        raise ValueError(
+            "set_: cannot materialize %s with strides %s as bytes; a storage "
+            "can only be read from a physically contiguous tensor"
+            % (tuple(var.shape), tuple(var.stride())))
+    nbytes = int(var.numel()) * _storage_dsize(var)
+    if _storage_dsize(var) == 1:
+        return var.reshape(-1)
+    return _owner.jt.reinterpret_view(var, (nbytes,), "uint8")
+
+
+def _strided_index(size, stride, base):
+    """The flat gather a strided view of `size`/`stride` performs, shifted by `base`."""
+    idx = None
+    for d in range(len(size)):
+        ar = _owner.jt.arange(size[d], dtype="int64") * stride[d]
+        shp = [1] * len(size)
+        shp[d] = size[d]
+        ar = ar.reshape(shp)
+        idx = ar if idx is None else idx + ar
+    if base:
+        idx = idx - base
+    return idx.reshape(-1)
+
+
 def _set_(self, source, storage_offset=0, size=None, stride=None):
     """torch.Tensor.set_ -- re-point this tensor at `source`'s storage.
 
     `source` is a tensor or an untyped-storage carrier. jittor has no
-    user-visible byte storage, so a whole-storage byte view (`size ==
-    (nbytes,)`, stride `(1,)`), which vLLM-Omni's residency manager takes to
-    snapshot a group, materializes the owning tensor's elements instead; every
-    other form is an element-level view built with the same gather as
-    `Tensor.as_strided`. Values are exact either way; the two tensors do not
-    share memory.
+    user-visible byte storage, so `set_` materializes the bytes it is asked for
+    and the two tensors do not share memory. Values are exact either way.
+
+    A *storage* is byte-addressed from the allocation's origin, exactly as in
+    torch: `storage_offset` and `stride` count elements of `self.dtype` and the
+    bytes of those elements are read. A whole-storage request (`size ==
+    (nbytes,)`, stride `(1,)`, offset 0) -- what vLLM-Omni's residency manager
+    takes to snapshot a group -- yields the owning tensor's bytes placed at its
+    own `storage_offset()`. Only that shard's bytes have a Python handle here;
+    the rest of a shared allocation does not, which is why each group is
+    materialized from the tensor that owns its storage.
     """
     base = getattr(source, "_var", source)
     if not isinstance(base, _NativeVar):
         raise TypeError("Tensor.set_ expects a Tensor or a storage, got %s"
                         % type(source).__name__)
+    # A storage exposes `nbytes` as a method, a Tensor as a property: the
+    # native VarHolder binds it with @pyjt(__get__nbytes). Calling it
+    # unconditionally made `set_` raise "'int' object is not callable" for
+    # every Tensor source, which is half the sources the signature accepts.
+    raw_nbytes = getattr(source, "nbytes", None)
+    is_storage = callable(raw_nbytes)
+    if is_storage:
+        raw_nbytes = raw_nbytes()
+    nbytes = int(raw_nbytes) if raw_nbytes is not None else None
     if size is None:
         size = tuple(int(s) for s in base.shape)
     else:
@@ -761,17 +838,48 @@ def _set_(self, source, storage_offset=0, size=None, stride=None):
         stride = tuple(int(s) for s in base.stride())
     else:
         stride = tuple(int(s) for s in stride)
-    # A storage exposes `nbytes` as a method, a Tensor as a property: the
-    # native VarHolder binds it with @pyjt(__get__nbytes). Calling it
-    # unconditionally made `set_` raise "'int' object is not callable" for
-    # every Tensor source, which is half the sources the signature accepts.
-    raw_nbytes = getattr(source, "nbytes", None)
-    if callable(raw_nbytes):
-        raw_nbytes = raw_nbytes()
-    nbytes = int(raw_nbytes) if raw_nbytes is not None else None
-    if nbytes is not None and size == (nbytes,) and stride == (1,) and not int(storage_offset):
-        result = base.as_strided(tuple(int(s) for s in base.shape),
-                                 tuple(int(s) for s in base.stride()), 0)
+    whole_storage = is_storage and size == (nbytes,) and stride == (1,) \
+        and not int(storage_offset)
+    if whole_storage:
+        start = int(base._storage_offset()) * _storage_dsize(base)
+        member = _as_byte_view(base)
+        if start + int(member.numel()) > int(nbytes):
+            raise ValueError(
+                "set_: %d byte(s) of storage are too few for the %d element(s) "
+                "starting at offset %d of %s"
+                % (int(nbytes), base.numel(), int(base._storage_offset()),
+                   tuple(base.shape)))
+        with _new_scope(base, base.device):
+            image = _owner.jt.zeros((int(nbytes),), "uint8")
+        if int(member.numel()):
+            image[start : start + int(member.numel())] = member
+        result = image
+    elif is_storage:
+        # Byte-addressed read: `storage_offset`/`stride` are in elements of this
+        # tensor's dtype, so the addressed range is [lo, hi] *elements* from the
+        # offset, i.e. [(offset+lo)*dsize, (offset+hi+1)*dsize) *bytes*, and the
+        # gather then walks that span with no further offset.
+        dsize = self.element_size()
+        lo = hi = 0
+        for s, st in zip(size, stride):
+            if s <= 0:
+                continue
+            span = (s - 1) * st
+            if span >= 0:
+                hi += span
+            else:
+                lo += span
+        start = (int(storage_offset) + lo) * dsize
+        n = (hi - lo + 1) * dsize
+        if start < 0 or start + n > int(nbytes):
+            raise ValueError(
+                "set_: sizes %s, strides %s, storage_offset %d are too large for "
+                "the %d byte(s) this storage holds (the view would span "
+                "[%d, %d] bytes)"
+                % (size, stride, int(storage_offset), int(nbytes), start, start + n - 1))
+        seg = _as_byte_view(base)[start : start + n]
+        flat = (seg.view(self.dtype) if dsize != 1 else seg).reshape(-1)
+        result = flat[_strided_index(size, stride, lo)].reshape(size)
     else:
         result = base.as_strided(size, stride, int(storage_offset))
     self._update(result)
@@ -793,10 +901,12 @@ def _as_strided(self, size, stride, storage_offset=0):
     # against a 388956160-element buffer -- a view described one sixty-fourth
     # too large. Nothing else in the failure pointed at `as_strided`.
     #
-    # A caller whose view really does fit a *larger* allocation is a different
-    # case: the shim has no user-visible storage, so `flat` here is the tensor's
-    # own elements and that request cannot be served from them. Rejecting it is
-    # the honest answer; serving it by reading past them is not.
+    # A caller whose view really does fit a *larger* allocation has to go
+    # through the storage (`Tensor.set_(storage, offset, size, stride)`), which
+    # is byte-addressed from the allocation origin and can serve a shard at a
+    # nonzero offset. Called on a *tensor*, `flat` below is that tensor's own
+    # elements and the request genuinely cannot be served from them: rejecting
+    # it is the honest answer, serving it by reading past them is not.
     n = int(flat.shape[0]) if len(flat.shape) else 1
     lo = hi = int(storage_offset)
     for s, st in zip(size, stride):

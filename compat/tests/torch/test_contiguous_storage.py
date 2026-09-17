@@ -64,6 +64,37 @@ def test_as_strided_rejects_a_view_that_reaches_past_the_tensor():
         t.as_strided((3, 4), (4, 1), -1)
 
 
+@pytest.mark.cpu
+def test_a_storage_serves_a_shard_at_a_nonzero_offset():
+    """`set_(storage, offset, size, stride)` is byte-addressed from the origin.
+
+    vLLM-Omni's `PinnedModuleStager` snapshots a module group as one byte image
+    of its storage (`torch.empty(0, dtype=torch.uint8).set_(storage, 0,
+    (nbytes,), (1,))`) and re-creates each member with `set_(storage, offset,
+    shape, stride)`. A weight sliced out of a fused one is a shard with a
+    nonzero `storage_offset()`, so reading the offset as an index into the
+    shard's *own* elements describes a buffer the shard runs past. That is how
+    the H3 text encoder's fused-weight shard failed on rank 1.
+    """
+    for dtype in (torch.float32, torch.bfloat16, torch.uint8):
+        big = torch.arange(128, dtype=torch.float32).to(dtype).reshape(16, 8)
+        for shard in (big[:8], big[8:]):
+            storage = shard.untyped_storage()
+            image = torch.empty(0, dtype=torch.uint8, device=shard.device).set_(
+                storage, 0, (storage.nbytes(),), (1,))
+            restored = torch.empty(0, dtype=dtype, device=image.device).set_(
+                image.untyped_storage(), shard.storage_offset(),
+                tuple(shard.shape), tuple(shard.stride()))
+            np.testing.assert_array_equal(restored.float().numpy(),
+                                          shard.float().numpy())
+    # A strided shard has no physical byte range, so it is refused rather than
+    # packed at positions a later strided read does not look at.
+    strided = big.reshape(-1)[1::2]
+    with pytest.raises(ValueError, match="set_"):
+        storage = strided.untyped_storage()
+        torch.empty(0, dtype=torch.uint8).set_(storage, 0, (storage.nbytes(),), (1,))
+
+
 def test_contiguous_storage_and_gradient_cpu():
     with jt.flag_scope(use_cuda=0):
         _check_contiguous("cpu")
