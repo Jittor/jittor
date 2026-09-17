@@ -2770,7 +2770,7 @@ diffusers. `venv-oracle-cu129` (torch/torchaudio/torchvision `+cu129`,
 `env-oracle-cu129.sh` / `run-oracle-cu129.sh` are the working pair; see
 `agent/manuals/` or the lab notes for the recipe.
 
-## 34. TP2 completes but its pictures are noise (open)
+## 34. TP2 completed but its pictures were noise (closed: the shim's Generator had no stream)
 
 `ATTN=FLASH_ATTN`, 2 steps, 256x256, seed 11223, same prompt: TP1 writes a
 blurry-but-real frame, TP2 writes **coloured blocks**. Measured over the decoded
@@ -2845,13 +2845,50 @@ diagnostic inside the lab's `vllm-omni` checkout (per-rank encoder weight shard
 digests, or one forward's intermediate tensors); that is a change to the
 component the work is not supposed to modify, so it is not done unilaterally.
 
-Next diagnostic, in order of cost: (1) isolate the DiT's per-rank parameter
-count under TP1 vs TP2 (a shim-side print of the parameter storages at load, or
-the DiT's own size line); (2) instrument the shim's `all_gather`/`all_reduce` to
-log the first operands of each call on both ranks during a TP2 request -- if the
-two ranks hand in *equal* values where a shard is expected, the layers are not
-sharded and the fault is at the layer/config boundary rather than in a
-collective.
+### Root cause: the shim's `torch.Generator` did not own a stream (closed)
 
-Until that is settled, **TP2 output cannot be used**: run TP1 for pictures. TP2's
-1.72x at 8 steps 832x480 (section 33) does not compensate for wrong frames.
+None of the primitives was wrong, because the bug was not in a primitive: it was
+in **which numbers the two ranks started from**.
+
+The H3 pipeline builds the initial latents with a *seeded CPU generator*:
+
+    g = torch.Generator(device="cpu").manual_seed(seed)
+    video = torch.randn(1, 24, latent_t, latent_h, latent_w, generator=g, dtype=torch.float32)
+
+and its DiT shards **weights**, not the sequence -- so both ranks must denoise the
+*same* latent. The shim's `Generator` kept only a seed and left drawing to
+jittor's **global** generator (`_seed_from` reseeded the global stream, then the
+factory drew from it). Measured directly: two `manual_seed(1234)` generators
+returned *different* numbers, and a fresh `manual_seed(1234)` generator returned
+different numbers again after the process had sampled 100 more values. So each
+rank drew from its own global stream, advancing by different amounts (the
+text-encoder sharding, the collectives, warmup), and the two ranks denoised
+*different* latents. Every `RowParallelLinear` then all-reduced two halves
+computed from different inputs: the sum is meaningless, and the picture is noise.
+TP1 is unaffected because it has one rank -- which is why this looked like a
+"TP2 correctness" mystery while everything about the TP itself checked out. It
+also explains the earlier observations: `TEXT_ENC_TP=1` changed the *appearance*
+(it changes each rank's stream advance) but not the conclusion, 8 steps stayed
+noise, and the attention backend did not matter.
+
+Fixed (`0ea3448c`): `Generator.manual_seed` gives that generator its own
+deterministic stream (`numpy.random.default_rng(seed)`), and the random factories
+(`randn`/`rand`/`randn_like`/`rand_like`/`normal`/`randint`/`randperm`) draw from
+it when a generator is passed, honouring `dtype`. Without a generator the old
+global-stream behaviour is unchanged. Regression test:
+`compat/tests/torch/test_generator_streams.py`.
+
+Verified:
+* single process: same seed -> same numbers, different seed -> different,
+  unmoved by the process's own sampling; the pipeline's exact call shape
+  (`randn(1,24,T,H,W, generator=g, dtype=float32)`) reproduces;
+* two ranks that first sample *different* amounts: `video_sum` identical
+  (-350.171417) and `audio_sum` equal to the last print digit;
+* TP2 request (2 steps, 256x256, seed 11223): the decoded frames go from
+  `std 82.4` with `|dt| 31.6` (flickering noise) to `std 31.0` against TP1's
+  `std 30.5`, i.e. the same statistics as a real sample
+  (`runs/genfix-tp2.mp4`, `runs/sheet-tp1-vs-genfix-tp2.png`).
+
+The lesson generalises: for a diffusion model whose TP shards weights, any
+per-rank divergence in *inputs* (RNG streams above all) is fatal and looks
+exactly like "the TP math is wrong". Check the streams before the kernels.
