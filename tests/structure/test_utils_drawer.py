@@ -130,10 +130,10 @@ class TestWhatLeftTheDrawer(unittest.TestCase):
                                          ast.FunctionDef, ast.If)):
                         continue
                     if isinstance(node, ast.Expr) \
-                            and isinstance(node.value, (ast.Str, ast.Constant)):
+                            and isinstance(node.value, ast.Constant):
                         continue
                     if isinstance(node, ast.Assign) \
-                            and isinstance(node.value, (ast.Str, ast.Constant)):
+                            and isinstance(node.value, ast.Constant):
                         continue
                     side_effects.append(type(node).__name__)
                 self.assertEqual(side_effects, [])
@@ -143,7 +143,7 @@ class TestWhatLeftTheDrawer(unittest.TestCase):
                 self.assertIsInstance(guard, ast.Compare)
                 self.assertIsInstance(guard.left, ast.Name)
                 self.assertEqual(guard.left.id, "__name__")
-                self.assertEqual(guard.comparators[0].s, "__main__")
+                self.assertEqual(guard.comparators[0].value, "__main__")
 
 
 class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):

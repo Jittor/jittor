@@ -722,7 +722,7 @@ def _test_functions(tree):
 
 def _without_docstring(body):
     if (body and isinstance(body[0], ast.Expr)
-            and isinstance(body[0].value, (ast.Str, ast.Constant))
+            and isinstance(body[0].value, ast.Constant)
             and isinstance(getattr(body[0].value, "value", None), str)):
         return body[1:]
     return body

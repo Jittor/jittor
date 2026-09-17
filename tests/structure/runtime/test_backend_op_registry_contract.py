@@ -7,6 +7,17 @@ from pathlib import Path
 RUNTIME = Path(__file__).resolve().parents[3] / "python/jittor/_runtime"
 
 
+def _string(node):
+    """The value of a string-literal node, or None.
+
+    ``ast.Str`` and its ``.s`` were removed in Python 3.12; a string literal
+    has been an ``ast.Constant`` since 3.8.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
 def _backend_reads(tree):
     names = {"use_cuda", "use_acl", "use_rocm", "use_corex", "use_device",
              "is_cuda", "has_acl", "has_rocm"}
@@ -16,7 +27,7 @@ def _backend_reads(tree):
             yield node
         elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
               and node.func.id == "getattr" and len(node.args) >= 2
-              and isinstance(node.args[1], ast.Str) and node.args[1].s in names):
+              and _string(node.args[1]) in names):
             yield node
 
 
@@ -73,6 +84,10 @@ def test_python_dispatch_queries_native_placement_without_fake_backend_capabilit
     context = functions["dispatch_context"]
     backend = functions["_dispatch_backend"]
     placement = functions["_dispatch_placement"]
+    # The native handles are bound once and cached in module globals, so the
+    # chain runs through ``_bind_core`` rather than reading ``jittor.core`` on
+    # every dispatch.
+    binder = functions["_bind_core"]
     # The optimized public facade delegates through two helpers. Follow the
     # complete chain so a helper rename cannot hide a Python backend guess.
     assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
@@ -82,15 +97,31 @@ def test_python_dispatch_queries_native_placement_without_fake_backend_capabilit
     assert any(isinstance(node, ast.Assign) and isinstance(node.value, ast.Attribute)
                and node.value.attr == "core"
                and any(isinstance(target, ast.Name) and target.id == "core"
-                       for target in node.targets) for node in ast.walk(placement))
-    assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-               and node.func.attr == "dispatch_context"
-               and isinstance(node.func.value, ast.Name) and node.func.value.id == "core"
+                       for target in node.targets) for node in ast.walk(binder))
+    # The placement query itself is the native one, through that binding.
+    assert any(isinstance(node, ast.Assign) and isinstance(node.value, ast.Attribute)
+               and node.value.attr == "dispatch_context"
+               and isinstance(node.value.value, ast.Name) and node.value.value.id == "core"
+               for node in ast.walk(binder))
+    assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+               and node.func.id == "_DISPATCH_CONTEXT_NATIVE"
                for node in ast.walk(placement))
+    assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+               and node.func.id == "_bind_core" for node in ast.walk(placement))
     # Backend selection belongs to the native query, including no-input calls.
     for function in (context, backend, placement):
-        assert not any(isinstance(node, ast.Str) and node.s in {"cpu", "cuda", "acl"}
-                       for node in ast.walk(function))
+        # ``_canonical_backend`` is inlined into the innermost dispatch frame:
+        # ``"acl" if backend == "acl_legacy" else backend`` renames what the
+        # native query answered, which is not a Python backend guess. Any
+        # other backend-name literal in these functions would be.
+        canonical = {
+            id(inner)
+            for node in ast.walk(function) if isinstance(node, ast.IfExp)
+            and any(_string(other) == "acl_legacy" for other in ast.walk(node.test))
+            for inner in ast.walk(node)
+        }
+        assert not any(_string(node) in {"cpu", "cuda", "acl"}
+                       for node in ast.walk(function) if id(node) not in canonical)
     assert not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                    and node.func.id == "bytearray" for node in ast.walk(tree))
     assert not any(isinstance(node, (ast.ClassDef, ast.FunctionDef))
@@ -106,12 +137,12 @@ def test_core_api_registers_and_calls_the_same_python_dispatch_table():
     register = imports["register_kernel"]
     dispatch = imports["try_dispatch"]
     registrations = {
-        node.value.args[0].s: node.value.args[1].s
+        _string(node.value.args[0]): _string(node.value.args[1])
         for node in tree.body
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
         and isinstance(node.value.func, ast.Name) and node.value.func.id == register
         and len(node.value.args) >= 2
-        and all(isinstance(arg, ast.Str) for arg in node.value.args[:2])
+        and all(_string(arg) is not None for arg in node.value.args[:2])
     }
     for name in ("outer", "clamp", "flatten"):
         assert registrations[name] == "*"
@@ -119,7 +150,7 @@ def test_core_api_registers_and_calls_the_same_python_dispatch_table():
                         if isinstance(node, ast.FunctionDef) and node.name == name)
         assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                    and node.func.id == dispatch and node.args
-                   and isinstance(node.args[0], ast.Str) and node.args[0].s == name
+                   and _string(node.args[0]) == name
                    for node in ast.walk(function))
 
 

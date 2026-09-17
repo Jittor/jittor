@@ -64,10 +64,9 @@ class TestTorchCompatStructure(unittest.TestCase):
                     node = node.value
                 if isinstance(node, ast.Name):
                     return node.id
-                if isinstance(node, (ast.Str, ast.Constant)) and isinstance(
-                    getattr(node, "s", None), str
-                ):
-                    return repr(getattr(node, "s"))
+                # ``ast.Str`` and ``Constant.s`` were removed in Python 3.12.
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    return repr(node.value)
                 if isinstance(node, ast.Constant) and node.value is None:
                     return "None"
                 if isinstance(node, ast.JoinedStr):
@@ -82,8 +81,8 @@ class TestTorchCompatStructure(unittest.TestCase):
                         and isinstance(value.func, ast.Name)
                         and value.func.id == "__import__"
                         and value.args
-                        and isinstance(value.args[0], (ast.Str, ast.Constant))
-                        and getattr(value.args[0], "s", None) == "sys"
+                        and isinstance(value.args[0], ast.Constant)
+                        and value.args[0].value == "sys"
                     ):
                         import_fallbacks.append(
                             (path.relative_to(compat_root).as_posix(), node.lineno)

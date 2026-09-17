@@ -367,15 +367,19 @@ class TestCleanupStructure(unittest.TestCase):
                         isinstance(node.func, ast.Name) and node.func.id == "__import__"
                     )
                     argument = node.args[0]
-                    if (is_import_module or is_builtin_import) and isinstance(argument, ast.Str):
-                        imported.append(argument.s)
+                    # ``ast.Str``/``.s``: removed in Python 3.12.
+                    if ((is_import_module or is_builtin_import)
+                            and isinstance(argument, ast.Constant)
+                            and isinstance(argument.value, str)):
+                        imported.append(argument.value)
                     elif (
                         (is_import_module or is_builtin_import)
                         and isinstance(argument, ast.BinOp)
                         and isinstance(argument.op, ast.Add)
-                        and isinstance(argument.left, ast.Str)
+                        and isinstance(argument.left, ast.Constant)
+                        and isinstance(argument.left.value, str)
                     ):
-                        imported.append(argument.left.s + "*")
+                        imported.append(argument.left.value + "*")
                 for module in imported:
                     if any(
                         module == retired or module.startswith(retired + ".")
