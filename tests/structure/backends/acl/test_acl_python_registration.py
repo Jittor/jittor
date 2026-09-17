@@ -336,6 +336,9 @@ def test_acl_transpose_argument_forms_reach_the_core_op_normalised(
         "Var": _Tensor,
         "numbers": numbers,
         "ori_int": int,
+        # ``_core/var.py`` reads this module-level constant (``(0).__class__``)
+        # inside the functions below; only the FunctionDefs are exec'd here.
+        "_pyint": int,
         "_try_dispatch": providers.dispatch.try_dispatch,
         "origin_transpose": record_transpose,
     }
