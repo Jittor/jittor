@@ -1728,6 +1728,41 @@ about whether to take it.
   skips with a reason when the toolchain has no translations installed, because
   otherwise both locales print English and the assertion proves nothing.
 
+## KI-CODEGEN-001: a broadcast of a real input is a strided view, and fused elementwise kernels pay a division and a modulo per element for it
+
+- Severity: Medium (a memory-bound broadcast add runs 4.22x its dense
+  counterpart, measured 2026-09-16; NumPy 1.01x on the same shapes).
+- Status: Open. A documented trade-off, not an accident:
+  `src/ops/broadcast_to_op.cc:166-181` chooses the view so a broadcast feeding
+  a *non-fused* consumer never materializes, and accepts the op becoming
+  `OpType::other`.
+- Owner: codegen maintainers
+- Symptom: `x + y` with `y` an expand of a real tensor. `y` reaches the binary
+  op as `YSTRIDED` with a `YSMASK` of the moving axes, and the template in
+  `src/ops/binary_op.cc:672-708` (likewise unary/ternary) recovers `yi` from
+  the flat index `i` with one `%` and one `/` per masked axis, per element.
+  Before 7e83d6da the expand was `OpType::broadcast`, fused by index
+  expression (`xid = id1`) and hoisted by the loop structure at no per-element
+  cost.
+- Second symptom: the merge-loop-var structure changed. The recovery math is
+  written to `yrem`/`yi`, names `MergeLoopVarPass` does not inspect (it checks
+  defines ending in `id`/`_i`), so it merges every loop it can: `a + x` with
+  `x=[1,10,1,1]` becomes one `range0_1_2_3` loop where `range2_3` under
+  `id0,id1` was expected. `tests/codegen/test_merge_loop_var_pass.py`
+  `TestMergeLoopVarPass::test3` and `TestMergeLoopVarPassCuda::test3` fail on
+  that; `::test` (`sum([2,3])`, no merge at all) and
+  `TestMergeLoopVarPassCuda::test5` (`range0_2_3`) fail because the blocked
+  pairwise reduction (2026-09-10) restructured the reduce loops; and
+  `tests/codegen/test_parallel_pass.py::TestParallelPass3::test_reduce_with_merge_loop_var`
+  compares generated source against the old shape. The kernels are
+  numerically right (every ops gate passes); the tests are left red as the
+  guard for the cost above rather than rewritten to bless it.
+- Direction: keep the view for non-fused consumers, but in a *fused* kernel
+  express a strided operand's index in loop ids with the masked axes' strides
+  folded to zero at compile time (`YSMASK` is already in the jit key), so the
+  compiler hoists the invariant terms and the merge pass sees a linear index
+  again. Then re-derive the expected merge structure and update the tests.
+
 ## KI-TUNER-001: the matmul and conv relays never fire, so a hand-written meta-op product runs as a generic kernel
 
 - Severity: High (a supported operation runs orders of magnitude slower than
@@ -1781,6 +1816,14 @@ about whether to take it.
   reorder should be 20") and
   `test_group_conv_tuner.py::TestGroupConvTuner::{test_forward,test_backward}`
   (`assert 0 == 3` relayed kernels).
+  The profiler's relay accounting shows it from yet another side:
+  `tests/runtime/test_profiler.py::TestProfiler::test_profiler` compares the
+  `AvgTime` of the last two report rows to within 1e-3 -- which only ever
+  held for a fused op and the `mkl_matmul` the tuner relayed it to, recorded
+  as a pair -- and now finds a single `mkl_matmul` row (the CPU row the
+  workaround registers directly). `::test_marks` expects six rows for five
+  matmul calls under three marks and gets five; the relay row for the
+  unmarked context is the plausible sixth, unverified.
 - What it cost before the routing change, measured on this machine, float32:
 
   | operation | jittor | reference | ratio |
