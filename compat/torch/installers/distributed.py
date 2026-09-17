@@ -658,11 +658,23 @@ class Future:
 
 class FileSystemReader:
     def __init__(self, path, *a, **k):
+        _stub_unimplemented(
+            "torch.distributed.checkpoint.FileSystemReader",
+            _dcp_load_effect,
+            _dcp_hint,
+            stub_result=None,
+        )
         self.path = path
 
 
 class FileSystemWriter:
     def __init__(self, path, *a, **k):
+        _stub_unimplemented(
+            "torch.distributed.checkpoint.FileSystemWriter",
+            _dcp_save_effect,
+            _dcp_hint,
+            stub_result=None,
+        )
         self.path = path
 
 
@@ -913,7 +925,13 @@ def _set_optimizer_state_dict(model, optimizers, optim_state_dict, *, options=No
 
 
 class ShardedTensor:
-    pass
+    def __init__(self, *args, **kwargs):
+        _stub_unimplemented(
+            "torch.distributed._shard.sharded_tensor.ShardedTensor",
+            _dcp_save_effect,
+            _dcp_hint,
+            stub_result=None,
+        )
 
 
 class _RendezvousModule(_types.ModuleType):
@@ -1056,11 +1074,25 @@ def _api_checkpoint_sd_set_state_dict(model, optimizers=None, model_state_dict=N
 
 
 def _api_sharded_tensor_init_from_local_shards(shards, *a, **k):
-    return shards[0] if shards else None
+    return _stub_unimplemented(
+        "torch.distributed._shard.sharded_tensor.init_from_local_shards",
+        _dcp_save_effect,
+        _dcp_hint,
+        # Preserve the historical opt-in fallback while making the default
+        # path fail before pretending that local metadata is a global tensor.
+        stub_result=shards[0] if shards else None,
+    )
 
 
 def _api_sharded_tensor_empty(*a, **k):
-    return jt.empty(*a, **{kk: vv for kk, vv in k.items() if kk == 'dtype'})
+    return _stub_unimplemented(
+        "torch.distributed._shard.sharded_tensor.empty",
+        _dcp_save_effect,
+        _dcp_hint,
+        # ``JITTOR_TORCH_ALLOW_STUB=1`` explicitly opts into the old local
+        # allocation behavior for callers that need an import-only fallback.
+        stub_result=jt.empty(*a, **{kk: vv for kk, vv in k.items() if kk == 'dtype'}),
+    )
 
 
 from ...stub_policy import unimplemented as _stub_unimplemented, record_unimplemented as _record_unimplemented

@@ -181,6 +181,7 @@ def test_join_uneven_inputs_refuses_before_training_but_balanced_contexts_work(m
 def test_sharded_dcp_storage_remains_explicitly_unsupported(tmp_path):
     import torch.distributed.checkpoint as dcp
     from torch.distributed.checkpoint.default_planner import DefaultLoadPlanner, DefaultSavePlanner
+    from torch.distributed._shard.sharded_tensor import ShardedTensor, empty, init_from_local_shards
     from jittor.compat import stub_policy
 
     previous = stub_policy.set_allow_stub(False)
@@ -188,6 +189,15 @@ def test_sharded_dcp_storage_remains_explicitly_unsupported(tmp_path):
         for planner in (DefaultSavePlanner, DefaultLoadPlanner):
             with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
                 planner()
+        for reader_or_writer in (dcp.FileSystemReader, dcp.FileSystemWriter):
+            with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
+                reader_or_writer(tmp_path / "sharded")
+        with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
+            ShardedTensor()
+        with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
+            init_from_local_shards([torch.ones(2, device=DEVICE)])
+        with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
+            empty((2,), dtype=torch.float32)
         with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
             dcp.save({"value": torch.ones(2, device=DEVICE)}, checkpoint_id=tmp_path / "sharded")
         assert not (tmp_path / "sharded").exists()
