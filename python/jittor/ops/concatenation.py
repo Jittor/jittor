@@ -2,11 +2,50 @@
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from collections.abc import Sequence
+from contextlib import contextmanager
 
 from .._runtime.dispatch import select_kernel
 
 
 _MAX_DIRECT_INPUTS = 64
+
+
+@contextmanager
+def _allocate_where_the_inputs_are(x):
+    """Run a block where ``jt.empty`` allocates on ``x``'s device.
+
+    Two scopes are needed, because a Var can be off the ambient device without
+    any record of it:
+
+    * :func:`placement_scope_like` covers an *explicit* placement -- a tensor
+      built with ``device="cpu"`` inside a CUDA process.
+    * It does not cover a tensor moved with ``.to_device(1)``, whose
+      ``placement_backend`` stays -1. Concatenating device-1 tensors in a
+      process whose current device is 0 then built the destination on device 0,
+      and the ``setitem`` filling it was rejected by ``dispatch_context`` for
+      mixing two devices (or, where the check does not reach, copied across
+      devices).
+
+    ``jt.flag_scope(device_id=...)`` is not enough for the second one:
+    ``device_id`` starts at -1 and its setter ignores negative values, so the
+    scope restores the flag to -1 and leaves the backend device where it left
+    it. Restore it by hand instead.
+    """
+    import jittor as jt
+    from .._core.var import placement_scope_like
+
+    device_id = int(getattr(x, "device_id", -1))
+    previous = int(jt.current_device())
+    with placement_scope_like(x):
+        if device_id < 0 or device_id == previous:
+            yield
+            return
+        jt.flags.device_id = device_id
+        try:
+            yield
+        finally:
+            if previous >= 0:
+                jt.flags.device_id = previous
 
 
 def _merge_dtypes(dtypes):
@@ -21,12 +60,11 @@ def _concat_direct(arr, dim, dtype):
     import jittor as jt
     output_shape = list(arr[0].shape)
     output_shape[dim] = sum(value.shape[dim] for value in arr)
-    from .._core.var import placement_scope_like
-    # Allocate where the inputs are: `jt.empty` follows the ambient placement,
-    # so concatenating a tensor that was placed explicitly (CPU) inside a CUDA
-    # process put the destination on the other device and dispatch_context
-    # rejected every setitem below.
-    with placement_scope_like(arr[0]):
+    # Allocate where the inputs are: `jt.empty` follows the ambient placement
+    # and device, so concatenating tensors that are on neither puts the
+    # destination on the ambient device and dispatch_context rejects every
+    # setitem below.
+    with _allocate_where_the_inputs_are(arr[0]):
         output = jt.empty(output_shape, dtype=dtype)
     slices = [slice(None)] * len(output_shape)
     offset = 0

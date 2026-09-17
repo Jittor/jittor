@@ -482,6 +482,33 @@ def _shared_object_path(src, cmd_without_output):
     return os.path.join(_shared_object_root(), f"{base}_{digest}.o")
 
 
+def _shim_abi_digest():
+    """Content digest of the shim's ABI headers.
+
+    The up-to-date checks below compare an object's source mtime and its compile
+    command. Neither one looks at headers, so editing ``torch/extension.h`` or
+    ``c10/cuda/CUDAGuard.h`` silently reused objects compiled against the old
+    text: an extension kept a call to a symbol the new header no longer defined
+    and died at *import* with ``undefined symbol`` -- with the build reporting
+    every object "up-to-date" while it happened. Carry the headers' content in
+    the command as a define the compiler has no use for, so a header edit
+    recompiles what depends on it.
+    """
+    digest = hashlib.sha256()
+    for root, dirs, files in os.walk(SHIM_INCLUDE):
+        dirs.sort()
+        for name in sorted(files):
+            path = os.path.join(root, name)
+            digest.update(os.path.relpath(path, SHIM_INCLUDE).encode("utf-8"))
+            try:
+                with open(path, "rb") as handle:
+                    digest.update(handle.read())
+            except OSError as exc:
+                swallowed("cpp_extension _shim_abi_digest: open(path, 'rb')", exc)
+                digest.update(b"<unreadable>")
+    return digest.hexdigest()[:16]
+
+
 def build(name, sources, build_dir, output_path=None,
           include_dirs=None, define_macros=None,
           extra_cflags=None, extra_cuda_cflags=None,
@@ -497,6 +524,7 @@ def build(name, sources, build_dir, output_path=None,
     c = cfg()
     if abi is None:
         abi = "1" if CXX11_ABI else "0"
+    shim_abi = _shim_abi_digest()
     os.makedirs(build_dir, exist_ok=True)
     if output_path is None:
         output_path = os.path.join(build_dir, name + c["ext_suffix"])
@@ -510,6 +538,7 @@ def build(name, sources, build_dir, output_path=None,
         f'-D_GLIBCXX_USE_CXX11_ABI={abi}',
         '-DJTORCH_SHIM=1',
         f'-DJTORCH_EXTENSION_MODULE_NAME={name}',
+        f'-DJTORCH_SHIM_ABI={shim_abi}',
     ]
     extension_macros = project_macros + [f'-DTORCH_EXTENSION_NAME={name}'] + shim_macros
 
@@ -579,6 +608,7 @@ def build(name, sources, build_dir, output_path=None,
         "name": name,
         "sources": [os.path.abspath(s) for s in sources],
         "objects": [_file_state(o) for o in objs],
+        "shim_abi": shim_abi,
         "include_dirs": list(include_dirs or []),
         "define_macros": [str(m) for m in (define_macros or [])],
         "extra_cflags": list(extra_cflags or []),

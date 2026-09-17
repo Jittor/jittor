@@ -338,5 +338,88 @@ torch::Tensor zeros_like_with_options(torch::Tensor x) {
         self.assertEqual(float(z.sum().item()), 0.0)
 
 
+class TestShimHeadersInvalidateTheBuildCache(unittest.TestCase):
+    """A shim header edit has to recompile, not report "up-to-date".
+
+    The up-to-date checks compare an object's source mtime and its compile
+    command, so they never saw a header change. Editing ``torch/extension.h``
+    therefore reused objects compiled against the old text: the extension kept a
+    call to a symbol the new header no longer defined, every object was reported
+    "up-to-date", and the failure only appeared later as ``undefined symbol`` at
+    import. The shim's header content is carried in the command as
+    ``-DJTORCH_SHIM_ABI=<digest>`` so that cannot happen silently again.
+    """
+
+    # build() only needs these keys for a single C++ source; the compiler itself
+    # is faked below, so the paths do not have to exist.
+    _CFG = {
+        "cc_path": "/bin/true", "nvcc_path": "/bin/true", "ext_suffix": ".so",
+        "src_inc": "", "extern_inc": "", "extern_cuda_inc": "",
+        "py_inc": "", "pybind_inc": "", "cuda_includes": [],
+        "core_dirs": [], "arch_flags": [], "cores": {}, "cuda_libs": [],
+    }
+
+    @staticmethod
+    def _abi_digest_in(commands):
+        for cmd in commands:
+            for arg in cmd:
+                if arg.startswith("-DJTORCH_SHIM_ABI="):
+                    return arg.split("=", 1)[1]
+        return None
+
+    def test_editing_a_shim_header_recompiles(self):
+        from jittor.compat.shim import cpp_extension
+
+        with tempfile.TemporaryDirectory() as tmp:
+            include = os.path.join(tmp, "include")
+            os.makedirs(os.path.join(include, "torch"))
+            header = os.path.join(include, "torch", "extension.h")
+            build_dir = os.path.join(tmp, "build")
+            os.makedirs(build_dir)
+            src = os.path.join(tmp, "probe.cpp")
+            commands = []
+
+            def write(path, text):
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(text)
+
+            def fake_run(cmd, **kwargs):
+                commands.append(list(cmd))
+                # The compiler is faked, so create the object it was asked for --
+                # otherwise _object_matches_command sees a missing object and the
+                # "unchanged tree" case would compile for the wrong reason.
+                if "-o" in cmd:
+                    write(cmd[cmd.index("-o") + 1], "")
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            write(header, "// v1\n")
+            write(src, "int probe() { return 0; }\n")
+
+            with mock.patch.object(cpp_extension, "SHIM_INCLUDE", include), \
+                    mock.patch.object(cpp_extension, "SHIM_SOURCES", []), \
+                    mock.patch.object(cpp_extension, "cfg",
+                                      return_value=dict(self._CFG)), \
+                    mock.patch.object(cpp_extension.subprocess, "run",
+                                      side_effect=fake_run):
+                cpp_extension.build("probe", [src], build_dir, verbose=False)
+                self.assertEqual(len(commands), 2,
+                                 "expected one compile and one link, got %r" % commands)
+                first = self._abi_digest_in(commands)
+                self.assertIsNotNone(
+                    first, "the shim header digest never reached the compiler")
+
+                commands.clear()
+                cpp_extension.build("probe", [src], build_dir, verbose=False)
+                self.assertEqual(commands, [],
+                                 "an unchanged tree recompiled: %r" % commands)
+
+                commands.clear()
+                write(header, "// v2: the ABI changed\n")
+                cpp_extension.build("probe", [src], build_dir, verbose=False)
+                self.assertNotEqual(commands, [],
+                                    "a shim header edit was ignored by the cache")
+                self.assertNotEqual(first, self._abi_digest_in(commands))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -23,6 +23,7 @@
 #include "core/executor.h"
 #include "ops/op_register.h"
 #include "mem/allocator.h"
+#include "runtime/device.h"
 #include "bindings/pyjt/py_obj_holder.h"
 #include "bindings/pyjt/py_converter.h"
 
@@ -494,6 +495,27 @@ int vh_device_type(jittor::VarHolder* vh) {
     sync_for_data_ptr(vh);
     return (vh->var->allocator && vh->var->allocator->is_cuda()) ? 1 : 0;
 }
+int vh_device_index(jittor::VarHolder* vh) {
+    // torch::Tensor::device().index(): the Var's own CUDA device, reported
+    // rather than invented. Extensions guard their launches with
+    // `at::cuda::CUDAGuard{q.device()}`, so hardcoding 0 here made every
+    // non-zero-index tensor guard device 0 -- see c10/cuda/CUDAGuard.h.
+    if (!vh || !vh->var || vh_device_type(vh) == 0) return -1;
+    int index = vh->var->device_id;
+    if (index < 0) index = jittor::current_device();
+    return index < 0 ? 0 : index;
+}
+
+// jittor's own current device -- what the tensor factories above build their Var
+// from. cudaSetDevice does not move it, so an extension on cuda:1 would otherwise
+// get its out/rng/accum buffers on cuda:0 (see c10/cuda/CUDAGuard.h).
+int accelerator_current_device() { return jittor::current_device(); }
+
+void accelerator_set_current_device(int device) {
+    if (device < 0) return;
+    if (jittor::current_device() != device) jittor::set_current_device(device);
+}
+
 double vh_item_double(jittor::VarHolder* vh) {
     jittor::ItemData d = vh->item(); std::string n = d.dtype.to_cstring();
     if (n == "float32") { float f; std::memcpy(&f, &d.data, 4); return f; }

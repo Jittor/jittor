@@ -355,8 +355,45 @@ def placement_scope_like(x):
         jt.core._reset_tensor_placement(token)
 
 
+@contextmanager
+def device_scope_like(x):
+    """Run a block so that constructors allocate on `x`'s device.
+
+    `torch.ones_like` and the rest of the `*_like` family preserve the reference
+    tensor's *device*, not only its shape and dtype, and so do the `x.new_*`
+    methods. jittor's constructors take their device from the ambient one, and
+    `to_device` does not move the ambient -- it is the caller's, and `run_sync`
+    restores it -- so on a rank whose device is not the process default
+    `ones_like(x)` came back on the wrong device. jittor's own ops reject the
+    mixture in `dispatch_context`; the flash-attn extension does not check (it
+    forms its launch guard from one input's device), and there the mixture is a
+    kernel on one device reading another device's pointers, i.e. an illegal
+    address.
+
+    Two scopes, because a Var can be off the ambient device with nothing
+    recording it: `placement_scope_like` covers an *explicit* placement, while a
+    tensor moved with `.to_device(1)` keeps `placement_backend == -1` and needs
+    the runtime flag. `device_id` starts at -1 and its setter ignores negative
+    values, so the flag is restored by hand.
+    """
+    import jittor as jt
+    device_id = ori_int(getattr(x, "device_id", -1))
+    previous = ori_int(jt.current_device())
+    with placement_scope_like(x):
+        if device_id < 0 or device_id == previous:
+            yield
+            return
+        jt.flags.device_id = device_id
+        try:
+            yield
+        finally:
+            if previous >= 0:
+                jt.flags.device_id = previous
+
+
 def new_ones(x, size):
-    return ones(size, x.dtype)
+    with device_scope_like(x):
+        return ones(size, x.dtype)
 
 Var.new_ones = new_ones
 
@@ -368,7 +405,8 @@ def ones_like(x):
     :return: The output Var.
     :rtype: jittor.Var
     '''
-    return ones(x.shape,x.dtype)
+    with device_scope_like(x):
+        return ones(x.shape,x.dtype)
 
 def zeros(*shape, dtype="float32"):
     ''' Constructs a jittor Var with all elements set to 0.
@@ -391,7 +429,8 @@ def zeros(*shape, dtype="float32"):
     return _constant_scalar(0, dtype).broadcast(shape)
 
 def new_zeros(x, size):
-    return zeros(size, x.dtype)
+    with device_scope_like(x):
+        return zeros(size, x.dtype)
 
 Var.new_zeros = new_zeros
 
@@ -404,7 +443,8 @@ def empty(*shape, dtype="float32"):
     return ops.empty(shape, dtype)
 
 def new_empty(x, size):
-    return empty(size, x.dtype)
+    with device_scope_like(x):
+        return empty(size, x.dtype)
 
 Var.new_empty = new_empty
 
@@ -428,7 +468,8 @@ def full(shape,val,dtype="float32"):
     return _constant_scalar(val, dtype).broadcast(shape)
 
 def new_full(x, size, val):
-    return full(size, val, x.dtype)
+    with device_scope_like(x):
+        return full(size, val, x.dtype)
 
 Var.new_full = new_full
 
@@ -451,7 +492,8 @@ def full_like(x, val, dtype=None) -> Var:
     :rtype: jittor.Var
     '''
     if dtype is None: dtype = x.dtype
-    return full(x.shape, val, dtype)
+    with device_scope_like(x):
+        return full(x.shape, val, dtype)
 
 def zeros_like(x, dtype=None) -> Var:
     ''' Constructs a jittor Var with all elements set to 0 and shape same with x.
@@ -465,7 +507,8 @@ def zeros_like(x, dtype=None) -> Var:
     :rtype: jittor.Var
     '''
     if dtype is None: dtype = x.dtype
-    return zeros(x.shape, dtype)
+    with device_scope_like(x):
+        return zeros(x.shape, dtype)
 
 def var(x, dim=None, dims=None, unbiased=False, keepdims=False, keepdim=None):
     """ return the sample variance. If unbiased is True, Bessel's correction will be used.
@@ -1303,7 +1346,8 @@ def rand_like(x, dtype=None) -> Var:
     '''
     import jittor as jt
     if dtype is None: dtype = x.dtype
-    return jt.random(x.shape, dtype)
+    with device_scope_like(x):
+        return jt.random(x.shape, dtype)
 
 def randn_like(x, dtype=None) -> Var:
     ''' samples random values from standard normal distribution with the same shape as x.
@@ -1324,7 +1368,8 @@ def randn_like(x, dtype=None) -> Var:
     '''
     import jittor as jt
     if dtype is None: dtype = x.dtype
-    return jt.random(x.shape, dtype, "normal")
+    with device_scope_like(x):
+        return jt.random(x.shape, dtype, "normal")
 
 def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
     ''' samples random integers from a uniform distribution on the interval [low, high).
@@ -1384,7 +1429,8 @@ def randint_like(x, low, high=None) -> Var:
                 [14. 17. 15.]], dtype=float32)
      '''
 
-    return randint(low, high, x.shape, x.dtype)
+    with device_scope_like(x):
+        return randint(low, high, x.shape, x.dtype)
 
 def normal(mean, std, size=None, dtype="float32") -> Var:
     ''' samples random values from a normal distribution.

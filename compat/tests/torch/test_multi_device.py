@@ -168,6 +168,19 @@ class TestMultiDeviceFacade(_Case):
     def test_to_and_cuda_with_an_index(self):
         a = torch.arange(6, dtype=torch.float32).reshape(2, 3)
         self.assertEqual(a.device.index, 0)
+        # A bare int is a device *index*, and it used to be dropped: `.to(1)`
+        # matched none of the argument branches, so it returned the tensor
+        # unchanged and a fresh tensor stayed on the ambient device. Measured
+        # before the fix, with CUDA_VISIBLE_DEVICES=1,2: `.to(1).device` was
+        # cuda:0. torch itself raises on an int here; silently ignoring it is
+        # the one thing that must not happen. Kept first in the test because the
+        # bare-"cuda" case below fails when this file runs alone (see section 16
+        # of the results doc), and an early failure would hide these.
+        self.assertEqual(a.to(1).device.index, 1)
+        np.testing.assert_array_equal(a.to(1).cpu().numpy(), a.cpu().numpy())
+        self.assertEqual(a.to(0).device.index, 0)
+        # ...and it must not shadow the dtype form.
+        self.assertEqual(a.to(torch.int64).dtype, torch.int64)
         b = a.to("cuda:1")
         self.assertEqual(b.device.index, 1)
         np.testing.assert_array_equal(b.cpu().numpy(), a.cpu().numpy())

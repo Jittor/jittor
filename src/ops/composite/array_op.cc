@@ -97,9 +97,18 @@ void ArrayOp::run() {
         share_group_unlink(o);
     if (save_mem)
         free_with_swap(o);
-    else
+    else if (o->allocator && o->mem_ptr)
+        // The output of this op is *created* here: `create_output` gives it a
+        // shape and dtype and the executor may not have allocated it yet (the
+        // `_force_fuse`/scalar shapes take the element path and never get an
+        // allocation). There is then nothing to free, but calling
+        // `o->allocator->free(...)` on that null allocator is a null dereference:
+        // a loader-bound `jt.array` (all four threads of a safetensors load, and
+        // `probe_loader_migrate.py` on one thread) segfaults at address 0 inside
+        // `ArrayOp::run`, and the same null storage reaching a copy is the
+        // device-1 illegal address during the TP weight load.
         o->allocator->free(o->mem_ptr, o->size, o->allocation);
-    
+
     o->mem_ptr = allocation.ptr;
     allocation.ptr = nullptr;
     o->allocator = allocation.allocator;

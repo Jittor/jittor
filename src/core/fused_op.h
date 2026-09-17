@@ -71,6 +71,22 @@ struct FusedOp final : Op {
     // The stamp of that batch; a node's batch_index means something only while
     // Node::batch_stamp matches it.
     int64 batch_stamp_wanted = 0;
+    // The batch's recorded edges, borrowed from the same `ExecPlan` frame. The
+    // planner used to read an op's live `_inputs`/`_outputs` here, which a
+    // concurrent `Node::free()` on another thread can clear (see section 29 of
+    // the results doc): `update_ops` then saw a segment with no outputs, and
+    // `load_fused_op` would have built incomplete `edges`. Reading the batch's
+    // own snapshot makes both independent of that.
+    const vector<vector<Var*>>* batch_op_outputs = nullptr;
+    const vector<vector<pair<Var*, int>>>* batch_op_inputs = nullptr;
+    const unordered_map<Var*, pair<Op*, int>>* batch_var_producer = nullptr;
+
+    // The snapshot if there is one, otherwise the live lists -- a `FusedOp`
+    // built outside `run_sync` (the relay test) has no batch to borrow from.
+    vector<Var*> snapshot_outputs(Op* op) const;
+    vector<pair<Var*, int>> snapshot_inputs(Op* op) const;
+    // {producing op, slot in its output list}
+    pair<Op*, int> snapshot_producer(Var* v) const;
 
     // A var the batch classified as fusable may be fused away. A var that is
     // not in the batch -- a multi-output op only one of whose outputs this

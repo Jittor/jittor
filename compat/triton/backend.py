@@ -109,6 +109,44 @@ def is_available():
 # --------------------------------------------------------------------------- #
 #  ctypes CUDA driver wrapper (libcuda.so.1)
 # --------------------------------------------------------------------------- #
+# The stream bridge kernels are launched on.
+#
+# jittor puts every one of its own launches, copies and library calls on
+# `cudaStreamPerThread` -- `compute_stream` in
+# `backends/cuda/runtime/driver.cc`, which also says why: `cudaStreamPerThread`
+# and the legacy default stream do NOT synchronise with each other, so work left
+# on the legacy stream is "an unordered race that raises no error and produces
+# no message".
+#
+# This bridge used to launch with a NULL stream, i.e. the legacy default stream,
+# which made every triton kernel exactly that straggler: jittor scheduled its
+# own ops -- and its allocator's frees -- with no ordering against the kernel.
+# The observable result was a racy `cudaErrorIllegalAddress` when bridge
+# launches were packed, which is the hazard the trailing `jt.sync_all(True)` in
+# `run` exists to paper over and which the fast-sync path deliberately skips.
+# Handing `cuLaunchKernel` the per-thread default stream instead puts the kernel
+# inside jittor's own order.
+#
+# `cudaStreamPerThread` is the constant 0x2 -- `CU_STREAM_PER_THREAD` in the
+# driver API, which is what `cuLaunchKernel` accepts here; neither API has a
+# call that returns it. Set `JITTOR_TRITON_LEGACY_STREAM=1` to launch on the old
+# NULL stream.
+#
+# Note this does not by itself make the bridge usable during CUDA graph
+# capture: `run` still calls `drv.synchronize()` (a full-device sync, illegal
+# inside a capture) after the launch when `need_sync_after_launch` holds. That
+# predates this change and is what the "moves the launch onto jittor's own
+# stream as a graph node" plan in the module docstring has to fix as well.
+_CUDA_STREAM_PER_THREAD = 0x2
+
+
+def _launch_stream():
+    """The stream to hand `cuLaunchKernel`, or None for the legacy default."""
+    if _truthy_env("JITTOR_TRITON_LEGACY_STREAM"):
+        return None
+    return _CUDA_STREAM_PER_THREAD
+
+
 class _Driver:
     """Minimal, error-checked CUDA *driver* API surface over ``libcuda.so.1``.
 
@@ -118,7 +156,7 @@ class _Driver:
     so launching here touches the very same device memory jittor allocated.
     """
 
-    _inst = None
+    _insts = {}
     _lock = threading.Lock()
 
     @staticmethod
@@ -175,6 +213,8 @@ class _Driver:
             rt.cudaMemset.restype = ctypes.c_int
             rt.cudaMemcpy.argtypes = [c_vp, c_vp, ctypes.c_size_t, ctypes.c_int]
             rt.cudaMemcpy.restype = ctypes.c_int
+            rt.cudaSetDevice.argtypes = [ctypes.c_int]
+            rt.cudaSetDevice.restype = ctypes.c_int
             rt.cudaDeviceSynchronize.argtypes = []
             rt.cudaDeviceSynchronize.restype = ctypes.c_int
         except EXPECTED as exc:
@@ -182,7 +222,8 @@ class _Driver:
             return None
         return rt
 
-    def __init__(self):
+    def __init__(self, ordinal=0):
+        self.ordinal = int(ordinal)
         lib = None
         last = None
         for name in ("libcuda.so.1", "libcuda.so"):
@@ -219,12 +260,22 @@ class _Driver:
 
         self.check(lib.cuInit(0), "cuInit")
         dev = c_i(0)
-        self.check(lib.cuDeviceGet(ctypes.byref(dev), 0), "cuDeviceGet")
+        # This driver owns ONE CUDA device: a CUmodule/CUfunction belongs to
+        # the context it was loaded into, so a rank whose operands live on
+        # device 1 cannot be served by device 0's handles. Pinning 0 here made
+        # a rank-1 triton launch run against another device's memory, which
+        # surfaced as a sticky cudaErrorIllegalAddress.
+        self.check(lib.cuDeviceGet(ctypes.byref(dev), self.ordinal), "cuDeviceGet")
         self.device = dev
         ctx = ctypes.c_void_p()
         self.check(lib.cuDevicePrimaryCtxRetain(ctypes.byref(ctx), dev),
                    "cuDevicePrimaryCtxRetain")
-        self.check(lib.cuCtxSetCurrent(ctx), "cuCtxSetCurrent")
+        # Deliberately NOT cuCtxSetCurrent here: merely *getting* a driver (e.g.
+        # for its compute capability during compilation) must not move the
+        # thread onto that device's context. Only ensure_ctx() switches, right
+        # where a launch or an allocation needs it -- otherwise compile-time
+        # driver creation for device 0 leaves device 0 current while the
+        # operands' device-1 streams are being synced.
         self.ctx = ctx
         # compute capability -> triton arch (e.g. 8.9 -> 89)
         maj, mino = c_i(0), c_i(0)
@@ -251,12 +302,22 @@ class _Driver:
                 what, res, s.value.decode() if s.value else "?"))
 
     @classmethod
-    def get(cls):
-        if cls._inst is None:
+    def get(cls, ordinal=0):
+        """The driver bound to CUDA device ``ordinal``.
+
+        One instance per device: the primary context, the loaded cubin modules
+        and the CUfunction handles are all context-specific, so device 1 needs
+        its own driver rather than device 0's.
+        """
+        ordinal = int(ordinal)
+        inst = cls._insts.get(ordinal)
+        if inst is None:
             with cls._lock:
-                if cls._inst is None:
-                    cls._inst = cls()
-        return cls._inst
+                inst = cls._insts.get(ordinal)
+                if inst is None:
+                    inst = cls(ordinal)
+                    cls._insts[ordinal] = inst
+        return inst
 
     def get_function(self, cubin, name):
         """Load (and cache) the cubin module + return the named CUfunction.
@@ -304,6 +365,14 @@ class _Driver:
             self.lib.cuCtxSetCurrent(self.ctx)
         except EXPECTED as exc:
             swallowed("triton/backend.py ensure_ctx: self.lib.cuCtxSetCurrent(self.ctx)", exc)
+        # The bounce buffers go through cudaMalloc (runtime API, current device)
+        # and are read by a kernel launched in the driver context above, so the
+        # runtime device has to be this one too.
+        if self.rt is not None:
+            try:
+                self.rt.cudaSetDevice(ctypes.c_int(self.ordinal))
+            except EXPECTED as exc:
+                swallowed("triton/backend.py ensure_ctx: self.rt.cudaSetDevice", exc)
 
     def alloc(self, nbytes):
         """Allocate device memory via the runtime API (works on jittor's context;
@@ -424,7 +493,7 @@ class _Driver:
             func,
             ctypes.c_uint(gx), ctypes.c_uint(gy), ctypes.c_uint(gz),
             ctypes.c_uint(bx), ctypes.c_uint(by), ctypes.c_uint(bz),
-            ctypes.c_uint(shared), ctypes.c_void_p(0),
+            ctypes.c_uint(shared), ctypes.c_void_p(_launch_stream()),
             ctypes.cast(params, ctypes.POINTER(ctypes.c_void_p)),
             ctypes.cast(None, ctypes.POINTER(ctypes.c_void_p))),
             "cuLaunchKernel")
@@ -1045,6 +1114,26 @@ def run(jitfn, args, kwargs, grid):
             signature[name] = sig
             runtime_vals.append((name, sig, val))
 
+    # Device the launch must happen on: the operands'. The driver context, its
+    # module/function handles and the guard buffers are all per-device.
+    _launch_dev = None
+    for (_, _, _v) in runtime_vals:
+        if _is_tensor(_v):
+            _d = int(getattr(_v, "device_id", 0) or 0)
+            if _launch_dev is None:
+                _launch_dev = _d
+            elif _d != _launch_dev:
+                raise JittorTritonError(
+                    "triton kernel %r has operands on devices %d and %d; the "
+                    "jittor triton backend launches one kernel on one device"
+                    % (kname, _launch_dev, _d))
+    if _launch_dev is None:
+        _launch_dev = 0
+    # Operands' device current before anything else touches a device: the
+    # materialising ``sync_all`` below and the compilation path must not run
+    # with another device (or context) current.
+    _Driver.get(_launch_dev).ensure_ctx()
+
     if not any(_is_tensor(v) for (_, _, v) in runtime_vals):
         raise JittorTritonError(
             "triton kernel %r launched with no tensor arguments; the jittor "
@@ -1108,7 +1197,8 @@ def run(jitfn, args, kwargs, grid):
         print("  PTRTRACE after  materialize: %r" % {k: hex(x) for k, x in _ptd().items()}, file=_sys.stderr)
 
     # -- pack kernel params (in param order; pointers first only if scratch) - #
-    drv = _Driver.get()
+    drv = _Driver.get(_launch_dev)
+    drv.ensure_ctx()
     keepalive = []
     cvals = []
     # bounced tensors to copy back + guard buffers to recycle after the launch:
@@ -1180,6 +1270,7 @@ def run(jitfn, args, kwargs, grid):
         *[ctypes.cast(ctypes.byref(cv), ctypes.c_void_p) for cv in cvals])
 
     block = (info["num_warps"] * 32, 1, 1)
+    drv.ensure_ctx()
     func = drv.get_function(info["cubin"], info["name"])
     drv.ensure_dynamic_shared(func, info["shared"])  # flash-attn etc. need >48KB
     if os.environ.get("JT_TRITON_DEBUG"):

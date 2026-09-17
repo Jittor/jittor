@@ -484,12 +484,31 @@ struct VarHolder {
         return (uint64)var->mem_ptr;
     }
 
+    /**
+     * The device a host-resident Var should be migrated to.
+     *
+     * `get_allocator()` with no device picks the *ambient* one
+     * (`allocator.cc: get_allocator(bool) -> current_device()`), and `to_device`
+     * does not move the ambient -- it belongs to the caller, and `run_sync`
+     * restores it. So on a rank whose device is not the process default a
+     * migration target taken from the ambient puts the operand on one device and
+     * the caller then hands that pointer to a kernel launched on another: a
+     * cross-device access with nothing to reject it, i.e. an illegal address.
+     * The Var's own device is where its consumers run, so that is the target;
+     * a Var with no device of its own (still unplaced) falls back to the
+     * ambient one.
+     */
+    inline int migration_device() {
+        int device = (int)var->device_id;
+        return device < 0 ? current_device() : device;
+    }
+
     // @pyjt(__get__device_raw_ptr)
     inline uint64 device_raw_ptr() {
         sync(true, false);
         #ifdef HAS_ACCELERATOR
         if (!var->allocator->is_cuda())
-            migrate_to_gpu(var, get_allocator());
+            migrate_to_gpu(var, get_allocator(migration_device(), false));
         #endif
         return (uint64)var->mem_ptr;
     }
@@ -508,7 +527,7 @@ struct VarHolder {
     inline uint64 device_ptr_ready() {
         #ifdef HAS_ACCELERATOR
         if (!var->allocator->is_cuda())
-            migrate_to_gpu(var, get_allocator());
+            migrate_to_gpu(var, get_allocator(migration_device(), false));
         #endif
         return (uint64)var->mem_ptr;
     }

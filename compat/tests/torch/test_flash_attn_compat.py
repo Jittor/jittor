@@ -100,5 +100,44 @@ class TestFlashAttnCompat(unittest.TestCase):
         np.testing.assert_array_equal(got, np.zeros_like(value))
 
 
+class TestPackedEntryDeviceGuard(unittest.TestCase):
+    """The generated direct entries must launch on the input's device.
+
+    They used to emit ``at::cuda::CUDAGuard device_guard{0}``, so a call with
+    device-1 tensors picked device 0 for the launch and ran the kernel against
+    another device's pointers: index 0 was fine, every non-zero index died with
+    ``cudaErrorIllegalAddress``. That is what killed TP2's rank 1 inside the
+    text encoder's attention, where inference takes this direct entry
+    (``no_grad`` makes ``_grad_enabled()`` false) rather than the slow path.
+    The dense entry in ``csrc/flash_attn/flash_api.cpp`` has always guarded with
+    ``q.device()``; these did not.
+    """
+
+    def test_every_generated_entry_binds_the_input_device(self):
+        import pathlib as _pathlib
+        import tempfile
+
+        from jittor.compat.shim.backends.flash_attention import official_codegen
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = _pathlib.Path(
+                official_codegen._official_packed_source(tmp)).read_text()
+
+        self.assertNotIn(
+            "device_guard{0}", source,
+            "a generated entry pins the launch to device 0 again")
+        entries = source.count("m.def(")
+        guards = source.count("at::cuda::CUDAGuard device_guard{")
+        self.assertEqual(entries, 6, "the generated entry set changed")
+        self.assertEqual(
+            guards, entries,
+            "every generated entry needs its own device guard")
+        self.assertEqual(
+            source.count("device_guard{q.device()}") +
+            source.count("device_guard{qkv.device()}"),
+            entries,
+            "every guard must come from an input tensor")
+
+
 if __name__ == "__main__":
     unittest.main()

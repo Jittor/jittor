@@ -11,8 +11,11 @@
 #include "utils/fast_shared_ptr.h"
 #include "runtime/device.h"
 #include "runtime/jit_policy.h"
+#include "runtime/traversal_state.h"
 #include "ops/op_register.h"
 #include "utils/graph_build_profile.h"
+#include <cstdlib>
+#include <sstream>
 
 namespace jittor {
 
@@ -42,6 +45,38 @@ void FusedOp::update_jit_key() {
     do_jit_prepare(jk);
 }
 
+vector<Var*> FusedOp::snapshot_outputs(Op* op) const {
+    if (batch_op_outputs && op->batch_stamp == batch_stamp_wanted) {
+        int idx = op->batch_index_at(batch_stamp_wanted);
+        if (idx >= 0 && (uint)idx < batch_op_outputs->size())
+            return (*batch_op_outputs)[idx];
+    }
+    vector<Var*> out;
+    for (Var* o : op->outputs()) out.push_back(o);
+    return out;
+}
+
+vector<pair<Var*, int>> FusedOp::snapshot_inputs(Op* op) const {
+    if (batch_op_inputs && op->batch_stamp == batch_stamp_wanted) {
+        int idx = op->batch_index_at(batch_stamp_wanted);
+        if (idx >= 0 && (uint)idx < batch_op_inputs->size())
+            return (*batch_op_inputs)[idx];
+    }
+    vector<pair<Var*, int>> in;
+    for (auto ve : op->_inputs) in.emplace_back(ve.node->var(), ve.reverse().index);
+    return in;
+}
+
+pair<Op*, int> FusedOp::snapshot_producer(Var* v) const {
+    if (batch_var_producer) {
+        auto it = batch_var_producer->find(v);
+        if (it != batch_var_producer->end()) return it->second;
+    }
+    int slot = 0;
+    if (!v->_inputs.empty()) slot = v->_inputs.front().reverse().index;
+    return {v->input(), slot};
+}
+
 void FusedOp::update_ops() {
     if (!ops.empty()) float32_precision = ops.back()->float32_precision;
     if (!ops.empty()) launch_origin = ops.back()->launch_origin;
@@ -57,7 +92,7 @@ void FusedOp::update_ops() {
     for (uint i=0; i<ops.size(); i++)
         op_index[ops[i]] = i;
     for (Op* op : ops) {
-        for (Var* o : op->outputs()) {
+        for (Var* o : snapshot_outputs(op)) {
             if (o->loop_options) {
                 if (loop_options_origin == nullptr)
                     loop_options_origin = &o->loop_options.data();
@@ -86,18 +121,58 @@ void FusedOp::update_ops() {
     }
     loop_options = loop_options_origin;
 
+    if (outputs().size() == 0 && getenv("H3_FUSE_DUMP")) {
+        // TEMP DIAGNOSTIC: this segment was classified with no output that has
+        // to stay in memory, so the assertion below is about to fire. Dump the
+        // batch verdict and the marks the planner read it out of: an op or var
+        // whose tflag is not this batch's stamp means the traversal that built
+        // the verdict was looking at a different one.
+        auto& tstate = runtime_traversal_state();
+        std::ostringstream os;
+        os << "fused segment with no in-memory output: ops=" << ops.size()
+           << " batch_stamp_wanted=" << batch_stamp_wanted
+           << " batch_var_fused=" << (batch_var_fused ? "set" : "null")
+           << " stamp_count=" << tstate.stamp_count()
+           << " active_epochs=" << tstate.active_epochs();
+        for (Op* op : ops) {
+            // `addr` is what the H3FUSE erase-output log prints for its
+            // producer, so the two lines can be matched up; `holder` is the
+            // op's strong list of its own outputs. Zero `outputs` with a
+            // non-empty `holder` means the edge was erased while the var is
+            // still alive -- somebody detached the producer, not the var.
+            os << "\n  op " << op->name() << " addr=" << (void*)op
+               << " tflag=" << op->tflag
+               << " batch_stamp=" << op->batch_stamp
+               << " outputs=" << op->outputs().size()
+               << " holder=" << op->outputs_holder.size()
+               << " inputs=" << op->inputs().size();
+            for (Var* o : op->outputs()) {
+                os << "\n     out tflag=" << o->tflag
+                   << " batch_stamp=" << o->batch_stamp
+                   << " stays=" << (int)var_stays_in_memory((Node*)o);
+                if (batch_var_fused && o->batch_stamp == batch_stamp_wanted) {
+                    int idx = o->batch_index_at(batch_stamp_wanted);
+                    os << " batch_index=" << idx;
+                    if (idx >= 0 && (uint)idx < batch_var_fused->size())
+                        os << " var_fused=" << (*batch_var_fused)[idx];
+                }
+            }
+        }
+        LOGw << os.str();
+    }
     ASSERT(outputs().size());
     LOGvvvv << "set fused output" << outputs();
     
     for (Op* opi : ops) {
-        for (Var* i : opi->inputs()) {
+        for (auto& in : snapshot_inputs(opi)) {
+            Var* i = in.first;
             if (!var_index.count(i)) {
                 var_index[i] = vars.size();
                 vars.push_back({i, 0});
                 _inputs.emplace_back((Node*)i);
             }
         }
-        for (Var* o : opi->outputs()) {
+        for (Var* o : snapshot_outputs(opi)) {
             if (!var_index.count(o)) {
                 var_index[o] = vars.size();
                 // intermediate(can fuse) or output

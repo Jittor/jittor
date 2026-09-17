@@ -1,5 +1,9 @@
 """Python flags, core state and dynamically compiled operators share storage."""
 
+import ctypes
+import ctypes.util
+import threading
+
 import jittor as jt
 import numpy as np
 import pytest
@@ -34,3 +38,66 @@ def test_python_flag_writes_reach_core_and_jit_owner():
             assert all(getattr(jt.flags, name) == 0 for name in
                        ("use_cuda", "use_device", "use_acl", "use_rocm", "use_corex"))
     assert jt.flags.sync_run == saved
+
+
+def _load_cudart():
+    """libcudart, or None where it cannot be loaded."""
+    for name in ("libcudart.so", "libcudart.so.12", "libcudart.so.13",
+                 ctypes.util.find_library("cudart")):
+        if not name:
+            continue
+        try:
+            return ctypes.CDLL(name)
+        except OSError:
+            continue
+    return None
+
+
+_CUDART = _load_cudart()
+
+
+def _thread_cuda_device(lib):
+    """The calling thread's own CUDA device, straight from the runtime."""
+    index = ctypes.c_int(-1)
+    lib.cudaGetDevice(ctypes.byref(index))
+    return index.value
+
+
+@pytest.mark.skipif(_CUDART is None, reason="libcudart is not loadable here")
+def test_current_device_binds_the_calling_thread():
+    """A thread that never called cudaSetDevice must still run where jittor says.
+
+    CUDA's current device is per-host-thread and starts at 0 on every new one;
+    jittor's lives in a single process-wide ``RuntimeDeviceState``. A pool
+    worker that only reads the process value therefore ran on device 0 while
+    everything that resolved a device through jittor -- an allocation, a memory
+    query, a copy, an event -- was booked against device 1. That is a
+    cross-device mismatch: its signature is a Xid 31 MMU fault and a
+    context-sticky ``cudaErrorIllegalAddress`` that later surfaces on a call
+    like ``cudaMemGetInfo``, which only reports that the context is gone. It hit
+    rank 1 of a TP=2 run and never rank 0, whose threads default to the device
+    it uses anyway.
+    """
+    if jt.get_device_count() < 2:
+        pytest.skip("needs a second accelerator to distinguish 0 from the ambient one")
+    target = 1
+    saved = jt.flags.device_id
+    seen = {}
+    try:
+        jt.flags.device_id = target
+        assert jt.current_device() == target
+
+        def worker():
+            seen["reported"] = jt.current_device()
+            seen["bound"] = _thread_cuda_device(_CUDART)
+
+        thread = threading.Thread(target=worker, name="device-probe")
+        thread.start()
+        thread.join()
+    finally:
+        jt.flags.device_id = saved
+    assert seen["reported"] == target
+    assert seen["bound"] == target, (
+        "a fresh thread was bound to device %d while jittor reported device %d, "
+        "so every device operation it issued used the wrong context"
+        % (seen["bound"], seen["reported"]))

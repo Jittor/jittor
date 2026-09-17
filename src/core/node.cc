@@ -9,9 +9,17 @@
 #include "core/op.h"
 #include "core/var.h"
 #include <algorithm>
+#include <cstdlib>
 #include <functional>
 
 namespace jittor {
+
+// TEMP DIAGNOSTIC: see Node::erase_output. Cached because the erase path runs
+// for every edge of every node the liveness drain frees.
+static bool h3_fuse_dump_on() {
+    static const bool on = getenv("H3_FUSE_DUMP") != nullptr;
+    return on;
+}
 
 int free_buffer_depth = 0;
 // See graph.cc: check_graph turns this on so that the dangling-node half of
@@ -159,6 +167,17 @@ void Node::free() {
     if (is_var() && _inputs.size() && (liveness.forward.active() || !is_finished())) {
         return;
     }
+    // NOTE: an op with a live or unfinished output reaches this point, and
+    // clearing the edges below is what takes its segment out from under a
+    // batch the executor is still planning (`FusedOp::update_ops` classifies a
+    // segment by walking `op->outputs()`). Returning early here is NOT the fix:
+    // `free()` is also the point where this node releases the liveness it holds
+    // on its inputs, so skipping it makes the counters underflow later
+    // ("backward liveness release without a matching owner", node.h:279).
+    // Measured: the early return removed the `outputs().size()` assert over 12
+    // loader-race runs and replaced it with that underflow in 3 of them. The
+    // fix has to keep the planning thread and this one from overlapping at all
+    // -- `graph_mutation_mutex()` -- not keep this node alive.
     flags.set(NodeFlags::_queued_for_free);
     free_buffer().push_back(this);
     for (auto in : _inputs) {
@@ -380,6 +399,17 @@ void Node::erase_output(uint index) {
     _outputs.erase(_outputs.begin() + index);
     for (uint i = index; i < _outputs.size(); ++i)
         _outputs[i].reverse().back_index = i;
+    // TEMP DIAGNOSTIC (H3_FUSE_DUMP): an Op's `_outputs` is the list of Vars it
+    // produces, and FusedOp::update_ops() classifies a fused segment by walking
+    // exactly that list. Erasing the last entry leaves the op with nothing to
+    // classify, which is the "no in-memory output" assert this is hunting. The
+    // `addr` matches the one the fused_op dump prints for the same op, so the
+    // dump can be attributed to the erase that caused it.
+    if (h3_fuse_dump_on() && !is_var() && _outputs.size() == 0) {
+        LOGw << "H3FUSE erase_output emptied producer op" << this
+             << "tflag" << tflag << "batch_stamp" << batch_stamp
+             << "erased_index" << index;
+    }
 }
 
 void Node::set_inputs(list<Node*> nodes) {

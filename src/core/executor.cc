@@ -138,17 +138,17 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
     for (Op* op : fused_op.ops) {
         uint fid1 = fused_op.op_index.at(op);
         int iid = 0;
-        for (auto ve : op->_inputs) {
+        for (auto& edge : fused_op.snapshot_inputs(op)) {
+            Var* v = edge.first;
             // this is a control dependency edge, dont used
-            if (ve.reverse().index<0) continue;
-            auto v = ve.node->var();
+            if (edge.second < 0) continue;
             iid++;
             int iop_id;
             int iv_id;
-            if (v->_inputs.size() && fused_epoch.marked(v->input())) {
-                auto e = v->_inputs.front();
-                iop_id = fused_op.op_index.at(e.node->op());
-                iv_id = e.reverse().index;
+            pair<Op*, int> producer = fused_op.snapshot_producer(v);
+            if (producer.first && fused_epoch.marked(producer.first)) {
+                iop_id = fused_op.op_index.at(producer.first);
+                iv_id = producer.second;
             } else {
                 iv_id = fused_op.var_index.at(v);
                 // add iv_id, prevent iv_id jit key overflow
@@ -307,6 +307,31 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // == phases 2-5: graph -> execution plan ==
     ExecPlan plan;
     build_exec_plan(vars, weak_sync, plan);
+    // Hold the batch's vars for its duration -- and with them the ops that
+    // produce them, since an op's liveness comes from its outputs, so an op
+    // whose output var is held cannot be freed either.
+    //
+    // The batch plans and executes from raw `Op*`/`Var*`. It used to rely on
+    // `TraversalEpoch`'s unenforced contract ("a traversal must not have a node
+    // it marked destroyed before its epoch ends"), and a concurrent
+    // `Node::free()` on another thread -- vLLM loads weights from four of them
+    // -- destroyed a node the plan still pointed at.
+    //
+    // Measured on `H3_FUSE_DUMP=1 probe_loader_race.py threads 4 6` (20 runs
+    // each, baseline is ~2 dumps in 6):
+    //   no hold             : the "no in-memory output" assert in fused_op.cc
+    //   keep the node alive : 3/12 runs die on a liveness underflow (node.h:279)
+    //   hold the graph lock : deadlock, killed at the timeout
+    //   edge snapshot only  : 0 dumps but 7/20 segfault in the execution-time
+    //                         relay walk (`VarRelayManager::get_op_relay_info`)
+    //   snapshot + this hold: 20/20 ok, 0 dumps, 0 segfaults, 0 underflows
+    // The hold is the missing piece: the plan has to own what it is about to
+    // use. The edge snapshot stays because a *live* var can still have its
+    // edges released (`release_inputs`, which the shim uses to park tensors),
+    // and the planner reads them.
+    vector<VarPtr> batch_hold;
+    batch_hold.reserve(plan.all_vars.size());
+    for (Var* v : plan.all_vars) batch_hold.emplace_back(v);
     ExecutionBackendScope backend_scope(plan.backend);
 
     // The fusion verdict goes to FusedOp as the vector it already is, instead
@@ -315,6 +340,11 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     FusedOp fused_op;
     fused_op.batch_var_fused = &plan.var_fused;
     fused_op.batch_stamp_wanted = plan.stamp;
+    // The batch's own record of the edges it was collected from; see
+    // `ExecPlan::op_outputs`.
+    fused_op.batch_op_outputs = &plan.op_outputs;
+    fused_op.batch_op_inputs = &plan.op_inputs;
+    fused_op.batch_var_producer = &plan.var_producer;
 
     // compile all ops, prevent compiling during running
     parallel_compile_all_ops(plan.queue, plan.range, fused_op,

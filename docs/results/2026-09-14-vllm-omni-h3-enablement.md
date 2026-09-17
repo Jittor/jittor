@@ -758,6 +758,169 @@ in `ncclInitKernelsForDevice`), or the packed path's own `cu_seqlens`/output
 buffers on that device. `instrument_store_and_triton.py` plus the `H3_FA_*`
 traces are the instruments; the run is long enough now to make them readable.
 
+Two candidates for it are now *disproved by experiment*, both of which made the
+run fail earlier than the 145 s baseline: binding the device from the shim's
+packed branch (`torch.cuda.set_device(rank)` before `varlen_fwd`) -> 25 s, and
+routing the packed path through the non-packed entry
+(`JITTOR_FLASH_ATTN_DIRECT_PACKED=0`) -> 25 s. Do not retry either; the next
+session should start from a fresh hypothesis about the packed call on rank 1.
+
+**Five hypotheses measured away** (do not repeat these):
+
+- *offload-related* -- `OFFLOAD=` reproduces it, earlier.
+- *wrong ambient device at the extension boundary* -- at the packed call on
+  rank 1: `jt_current=1`, `shim_current=1`, and every argument is either
+  `loc=none` (lazy q/k/v) or `loc=device` (`cu_seqlens`). Nothing host-resident,
+  and `torch::empty_like` therefore allocates on the right device.
+- *invalid NCCL device index* -- measured at bootstrap: rank 1 has
+  `CVD='4,5'`, `visible_n=2`, `jt_device_count=2`, `jt_current=1`, and
+  `nccl_device_id = 1 % 2 = 1`, all valid.
+- *device binding in the packed branch* (`torch.cuda.set_device(rank)`) -- 25 s,
+  worse than the 145 s baseline.
+- *the non-packed entry* (`JITTOR_FLASH_ATTN_DIRECT_PACKED=0`) -- 25 s, worse.
+
+And `compute-sanitizer --tool memcheck` on a run that reaches the failure reports
+**no invalid memory access at all** -- only three `cudaErrorNoKernelImageForDevice`
+inside NCCL's `ncclInitKernelsForDevice`, which persists even though the device
+index is valid. So this illegal address is not a data access memcheck can see.
+That, plus the "second device only" signature, is what narrowed the next step to
+synchronous launches (`CUDA_LAUNCH_BLOCKING=1`), which attribute a fault to the
+launch immediately before it.
+
+**The fault is now reproducible in seconds, without a server** --
+`probe_packed_devices.py` calls the shim's bridged `flash_attn_varlen_func` on a
+289x28x128 fp16 tensor with `cu_seqlens=[0,289,289]`:
+
+    CUDA_VISIBLE_DEVICES=4,5  ... python probe_packed_devices.py
+        --- device 0
+            device 0 OK, out mean=1.000000
+        --- device 1
+            device 1 FAILED: cudaErrorIllegalAddress
+
+and the two things that pin it down:
+
+    CUDA_VISIBLE_DEVICES=5  (that card alone -> index 0)   -> OK
+    CUDA_VISIBLE_DEVICES=4  (the other card alone -> index 0) -> OK
+    CUDA_VISIBLE_DEVICES=4,5, call device 1 FIRST, then 0  -> device 1 fails
+
+So it is **not the card and not the order**: the bridged flash-attn entry faults
+whenever the CUDA device *index* is non-zero, in a plain script with no H3, no TP,
+no NCCL and no offload. jittor's own ops on device 1 in that same script
+(`jt.ones`, `.to_device(1)`, `device_copy`, the reshapes) all succeed, so this is
+the extension/its bridge, not core device handling. That is the mechanism behind
+every rank-1-only TP2 failure in this section.
+
+Everything above about offload, ambient device, NCCL device index, the non-packed
+entry and Python-side device binding is superseded as an explanation: those were
+different views of this one defect, and it is now isolated. The next step is a
+seconds-long bisection on this probe -- dense entry vs packed, and shim bridge vs
+extension -- which is what the "five hypotheses measured away" list above could
+not offer at 7 minutes per cycle.
+
+One more observation from that probe, and it points *back into jittor* rather
+than at the extension: with the tensors materialised first, the failure's launch
+list names a **`device_copy`** -- `probe_packed_devices.py:35`, the `.to_device(1)`
+line -- and the recent candidates are all `device_copy` (id=16) ops. So the
+seconds-long repro suggests the illegal address may arise in jittor's own
+cross-device copy to a non-zero index, before or around the extension call, which
+would make it fixable in `src/ops/composite/device_copy_op.cc` /
+`src/runtime/backend_streams.cc` rather than in the flash-attn bridge. Worth
+establishing before touching the extension: bisect the probe to the copy alone
+(`jt.ones(...).to_device(1)` in a fresh process) and see whether that faults by
+itself. `probe_side_streams.py` copied across devices without faulting, so the
+difference between the two scripts is the thing to pin down.
+
+**Two seconds-long bisections that finish the isolation.** First, the copy path
+is innocent -- `probe_dev1_copy.py` does only jittor's own work on device 1 and
+every step passes:
+
+    to_device(1) OK | op on device 1 OK | device 1 -> 0 OK | big fp16 to_device(1) OK
+
+so the launch list naming `device_copy` was just naming the most recent op.
+Second, it is not the packed path either -- the **dense** entry fails the same way:
+
+    DENSE dev=0 OK mean=1.0000
+    DENSE dev=1 FAILED cudaErrorIllegalAddress
+
+So the characterization is now: *jittor's own device-1 work is fine, and the
+bridged flash-attn boundary faults for both entries whenever the CUDA device index
+is non-zero, on either card.* The remaining bisection is which side of that
+boundary: the shim's generic extension machinery (in which case a triton kernel or
+the shim's own cpp_extension on device 1 is the comparison, and the fix is central
+and probably small) versus something the flash-attn extension caches at load. That
+is a few seconds per run now, not seven minutes.
+
+**A first candidate, tried, that turned out to be a red herring.** The obvious
+suspect was `compat/shim/cpp_extension/include/c10/cuda/CUDAStream.h`, which ignored
+the device and returned the legacy default stream:
+
+    inline CUDAStream getCurrentCUDAStream(int = -1) { return CUDAStream((cudaStream_t)0); }
+
+Handle 0 is the *current context's* legacy stream, so an extension running on
+device 1 would launch on a device-0-context stream while its pointers belong to
+device 1. It was changed to return `cudaStreamPerThread` for the device the caller
+names, binding that device first, and the flash-attn extension was force-rebuilt
+(`JITTOR_FLASH_ATTN_FORCE_BUILD=1`, ~30 min). **It did not fix it**: device 0 still
+passes and device 1 still fails with the same illegal address. The change is
+reverted in both trees rather than left in unverified.
+
+That accessor was in fact already correct. Handle 0 is not a device-0 stream, it
+is "the current device's default stream", so once the *current device* is the
+tensor's device the launch lands on that device. The stream was never the
+mechanism; the current device was, and the fix belongs one level up (below).
+
+**Both device-binding candidates were right, and each was only half the fix.**
+Neither was really disproved -- they were each measured in isolation, and the
+fault needs both.
+
+`torch::Tensor::device()` and `get_device()` hardcoded index 0 for CUDA tensors
+(`compat/shim/cpp_extension/include/torch/extension.h`), so
+`at::cuda::CUDAGuard device_guard{q.device()}` -- which every flash-attn entry
+guards with at its top -- bound device 0 for a device-1 tensor. Reporting the
+Var's real index is necessary, and was measured alone: still
+`device 1 FAILED cudaErrorIllegalAddress`.
+
+It is not sufficient, because of the second half. The shim's tensor factories --
+the `torch::empty` calls an extension makes for `out`, `softmax_lse`,
+`rng_state`, `softmax_lse_accum` and `out_accum` -- build their Var from
+*jittor's* current device, and `cudaSetDevice` does not move that one:
+
+    jt.current_device() == 0        # also after jt.ones(...).to_device(1)
+    jt.flags.device_id = 1  ->  jt.current_device() == 1
+
+So the index fix alone leaves those buffers on device 0 while the kernel runs on
+device 1, and moving the ambient device alone leaves the kernel on device 0 while
+its inputs and buffers are on device 1. Either way a kernel reads or writes memory
+that does not belong to the device it runs on: `cudaErrorIllegalAddress`, for any
+non-zero index, with index 0 unaffected because there both notions of "current
+device" already agree.
+
+**The fix, and why it is the shim's to make.** Keep torch's two notions of
+"current device" in step:
+
+- `compat/shim/cpp_extension/include/torch/extension.h`: `device()`/`get_device()`
+  report the Var's real index, via `vh_device_index` (defined in
+  `src/jtorch_aten.cu`).
+- `compat/shim/cpp_extension/include/c10/cuda/CUDAGuard.h`: `CUDAGuard` and
+  `OptionalCUDAGuard` also switch jittor's current device, through the out-of-line
+  helpers `accelerator_current_device`/`accelerator_set_current_device`. They stay
+  out-of-line because the public ABI header must not pull jittor headers in.
+
+No downstream library changed: `CUDAGuard` still means what libtorch means by it,
+it just moves both devices, and it restores both when it goes out of scope.
+
+**Verified on two visible devices.** `probe_packed_devices.py`, dense and packed:
+
+    device 0 packed OK | device 1 packed OK | device 0 dense OK | device 1 dense OK
+
+plus `probe_hdim_dev.py` (head dim 64 and 128) on both indices, `cuda:1` called
+*before* `cuda:0`, and both ambient-device variants of `probe_ambient_dev.py`.
+`probe_dev_parity.py` checks values rather than just absence of a fault: the two
+indices agree with each other and with a plain-jittor
+`softmax(q k^T * scale) v` reference to `max|diff| = 2.7e-4` (fp16 noise).
+`compat/tests/torch/test_cpp_extension_device_index.py` builds a probe extension
+that reports both halves and passes 6/6.
+
 **Next instrument, prepared but not yet run.** The event-handle defect needs the
 handle's provenance: log device + handle at `create_event`, `destroy_event` and
 `record_event` (`backends/cuda/runtime/driver.cc`, `record_event` is where the
@@ -1015,6 +1178,1340 @@ only holds when the ambient device happens to be 1 -- which a full file-order
 run arranges and an isolated run does not. It is a separate bug from this one
 and is not touched here.
 
+## 17. The extension build cache ignored header edits, and served a stale `.so`
+
+Chasing section 13 cost two things that were *not* the bug, and both came from
+one defect in the shim's build cache.
+
+While diagnosing, the deployed flash-attn extension stopped importing at all:
+
+    compile official flash-attn backend failed: .../flash_attn_2_cuda_jittor...so:
+    undefined symbol: _ZN6jtorch6detail15vh_device_indexEPN6jittor9VarHolderE
+
+`vh_device_index` had only ever existed in an uncommitted experiment of mine, and
+had been reverted. The `.so` still referenced it, and the build had reported every
+object `up-to-date` while it did.
+
+The up-to-date checks compare an object's **source mtime** and its **compile
+command** (`_object_matches_command`, `_output_matches_build` in
+`compat/shim/cpp_extension/__init__.py`). Neither looks at headers. Editing
+`torch/extension.h` or `c10/cuda/CUDAGuard.h` therefore invalidated nothing: the
+objects compiled against the old text were reused and relinked, and the first
+symptom was an `undefined symbol` at import -- or, worse, a silently stale
+extension that re-measures the *old* behavior. The build directory is keyed by the
+flash-attention checkout's path, git HEAD, head dims and dtypes, so a shim-side
+header change does not even move the directory.
+
+Two practical consequences worth knowing:
+
+- The old workaround is to force the build (`JITTOR_FLASH_ATTN_FORCE_BUILD=1`,
+  ~30 min) or to `touch` each affected source so its mtime wins. `touch` only
+  covers the sources that include the header, which is the trap.
+- Every measurement in this document that follows a shim header edit has to say
+  how the extension was rebuilt. The two device-binding candidates in section 13
+  were each force-rebuilt, so those results stand; the stale `.so` above came from
+  a third edit that was *not* rebuilt.
+
+**Fix.** `build()` now digests the shim's own ABI headers (14 files, 76 KB) and
+passes the digest as `-DJTORCH_SHIM_ABI=<digest>`, and records it in the link
+stamp. A header edit changes the command, the command is part of the object's
+identity and its stamp, so what depends on the header recompiles and the object
+files are not reused behind a "up-to-date" line.
+
+Two notes on landing it: it invalidates every existing extension cache exactly
+once (the command changed for all of them), and `compat/tests/torch/
+test_torch_cpp_extension.py::TestShimHeadersInvalidateTheBuildCache` locks the
+behavior with a faked compiler -- unchanged tree compiles nothing, edited header
+recompiles and re-links.
+
+## 18. Stale lab processes are a first-class failure mode
+
+Two different stale processes each produced a wrong-looking result during this
+work, and neither was a jittor defect:
+
+- **Orphaned workers hold the rendezvous.** `serve-vllmomni.sh`'s
+  `DiffusionWorker` children do not carry `--port` in their argv, so a kill by
+  port string leaves them alive holding `MASTER_PORT`; the next run's rank 1 then
+  rendezvouses with the orphan's store and dies with an intermittent "NCCL store
+  rendezvous timeout". Three such orphans from earlier TP2 attempts were still
+  resident (18-19 h old, each spinning at 100% CPU) when this section was written;
+  `stop-vllmomni.sh PORT` walks the process tree from the parent and clears
+  `/tmp/jittor-nccl-*` for exactly this reason. Check `ps -eo pid,ppid,pcpu,args`
+  before blaming a jittor startup failure.
+- **A leftover server answers the health check.** A 20 h old single-GPU server
+  still listening on a port makes `curl /v1/models` succeed, so a retry loop can
+  "come up" instantly and send its request to the wrong process, with the wrong
+  config and the wrong build.
+
+## 19. The intermittent TP2 startup deadlock, from the store's own trace
+
+The startup flake of section 13 -- "NCCL store rendezvous timeout: rank 1 waited
+120 s", about one run in three -- is a GIL deadlock, and the store trace settles
+it. `compile_extern.py`'s rendezvous is
+
+    if world_rank == 0: store.set(unique_id_key, ...)
+    unique_id = store.get(unique_id_key)
+    nccl_module.nccl_init_with_unique_id(list(unique_id))
+
+and `nccl_init_with_unique_id` is a *collective*: it parks until every rank
+arrives, and the pyjt wrapper holds the GIL for the whole of it. Rank 0's process
+is also the one running the store's server threads, so while rank 0 sits in
+`ncclCommInitRank` no Python thread in that process can run -- including the one
+that would answer rank 1's `get`.
+
+With `H3_STORE_TRACE=1` the wire shows exactly that, on a hung run:
+
+    pid=692276 (rank 0, server)  server -> 29 bytes for 'set'
+    pid=692276 (rank 0)          client -> 'get'
+    pid=692276 (rank 0, server)  server -> 199 bytes for 'get'
+    pid=692276 (rank 0)          client <- 199 bytes for 'get'
+    pid=692278 (rank 1)          client -> 'get'
+                                 ... and no server line for it, ever
+
+so the request reaches a process whose server thread never dispatches it, while
+`ps` shows rank 0 at 99% CPU (parked in the collective) and rank 1 at 6% (blocked
+in `readline`). The earlier readings in section 13 -- "rank 0 past its own `get`",
+"no server thread in `_dispatch`", "bytes not in flight" -- are all this one fact:
+the server thread cannot get the GIL. It is intermittent because it only happens
+when rank 0 reaches the collective before rank 1's `get` has been served.
+
+**Fix.** Rendezvous before the collective as well as after it: every rank records
+that it has *read* the unique id, and nobody enters the collective until every
+rank has. `store.wait` is a socket read, which releases the GIL, so the server
+keeps serving while a rank waits there. jittor already has the other fix this
+shape of bug wants -- `GILReleaseScope` in `src/bindings/pyjt/gil.h`, used by the
+parallel compiler and the executor's device waits -- but it cannot be used here:
+the NCCL core is compiled by `compile_custom_ops` without Python headers on the
+include path and dlopened, so the release has to be at the collective's call site
+in Python.
+
+**What that leaves.** With the deadlock fixed the server starts, loads and reaches
+the request, which then fails in 10 s with `cudaErrorIllegalAddress` on rank 1.
+The traceback finally names the call -- the launch list is stale and says
+`encoder.py`, which is where the rotary runs, not where the fault is:
+
+    out = fn(
+    return packed_low_level.fwd(q, k, v, float(softmax_scale), bool(causal), wl, wr)
+    RuntimeError: ... cudaErrorIllegalAddress
+
+i.e. the text encoder's `F.scaled_dot_product_attention` reaching the shim's
+*packed* flash-attn entry. That entry is exercised in isolation by
+`probe_encoder_sdpa.py` -- the transposed views, the GQA `repeat_interleave`, the
+rotary `cat`, `is_causal=True`, head dim 128, 32 query and 4 KV heads per rank,
+fp16 and bf16, sequence 489/512/1000/1023 -- and it passes on both devices. So the
+remaining difference is not the call itself but the state the server is in when it
+makes it: two ranks holding tens of GB each, after a multi-threaded sharded load,
+on device 1 only. That is the next thing to reproduce.
+
+**Follow-up: one phase was not enough.** The read barrier above still hung about
+one start in two, and py-spy named both halves at once:
+
+    rank 0 (server, 101% CPU, active+gil)
+      _init_nccl_from_store (compile_extern.py:703)   <- nccl_init_with_unique_id
+    rank 1 (idle)
+      readinto (socket.py:720) <- request <- wait
+      _init_nccl_from_store (compile_extern.py:698)   <- the read barrier's wait
+
+Rank 1's own barrier `wait` is answered by rank 0's store server threads, and rank 0
+had already entered the collective -- which holds the GIL for its whole duration --
+so the answer could never be produced. "Everyone has read the id" does not imply
+"nobody still has a request in flight": the marker is set *before* the waiting rank
+gets its reply. The barrier now has a second phase -- each rank records that it has
+*completed* the barrier, and nobody enters the collective until every rank has -- so
+when the first rank parks in the collective no peer has an unanswered request.
+Verified by three consecutive starts (two passed the rendezvous in 30 s, where
+previously roughly every other attempt hung; the third was killed by the test
+script's own back-to-back servers, not by the barrier).
+`tests/distributed/test_nccl_store_rendezvous.py` now pins both phases.
+
+## 20. The generated direct attention entries pinned the launch to device 0
+
+The request-path fault of section 13 has one more layer, and it was in jittor's own
+code generator rather than in the extension.
+
+Official flash-attn's dense entry guards its launch with the input's device
+(`at::cuda::CUDAGuard device_guard{q.device()}` in `csrc/flash_attn/flash_api.cpp`).
+The shim generates six direct entries of its own
+(`compat/shim/backends/flash_attention/official_codegen.py`: `fwd`, `varlen_fwd`,
+`varlen_qkvpacked_fwd`, `varlen_kvpacked_fwd`, `qkvpacked_fwd`, `kvpacked_fwd`) and
+every one of them emitted
+
+    at::cuda::CUDAGuard device_guard{0};
+
+so a call with device-1 tensors launched device 0's kernel against device 1's
+pointers. Index 0 worked; every non-zero index died with
+`cudaErrorIllegalAddress` -- rank 1's text encoder, ten seconds into the request.
+
+**Why the earlier probes missed it.** The direct entries are only used when
+`_grad_enabled()` is false, i.e. in inference. Every probe so far ran with grad
+enabled, so `--triton or native` attention took a *different* implementation and
+the packed entries were never called. Turning on `jt.flags.no_grad = 1` in
+`probe_encoder_sdpa.py` (same shapes, transposed views, GQA expansion, rotary,
+causal, head dim 128, 32/4 heads, fp16 and bf16) reproduced the server's fault on
+device 1 immediately, and the same command passes on devices 0 and 1 after the
+six guards were changed. `H3_FA_TRACE=1` in the adapter prints the tensors each
+direct call receives, which is how the two paths were told apart.
+
+**Verified.** `probe_encoder_sdpa.py` with `no_grad`: device 0 and device 1 both
+pass (before: device 0 passed, device 1 raised `cudaErrorIllegalAddress`).
+`compat/tests/torch/test_flash_attn_compat.py::TestPackedEntryDeviceGuard` asserts
+the generated source contains no `device_guard{0}` and that each of the six
+entries derives its guard from an input tensor.
+
+**Still intermittent, and separate.** Weight loading on rank 1 sometimes dies with
+the same `cudaErrorIllegalAddress` before the request: `safetensors.get_tensor` ->
+`jt.array` is where it surfaces, the launch list names the TP weight loaders, and
+it happens with and without `CUDA_LAUNCH_BLOCKING=1` (so it is a race, not a
+serialization artifact) and on cards with ~95 GB free (so it is not memory
+pressure). A single-threaded and an 8-thread replay of every loader pattern at the
+real sizes passes, so it needs the server's own multi-threaded load context.
+
+## 21. The mirror image: rank 1's index tensor cannot be read at all
+
+Section 13 left one hypothesis untested -- "*the `_indexed_scale_shift_kernel`
+masks columns but not rows, so a grid whose row count exceeds any operand's is an
+unmasked out-of-bounds read*". With `H3_TRITON_SHAPES=1` (plus a min/max print for
+integer operands, added to the same trace) the first direct-kernel launch of the
+denoise loop now reads:
+
+    [trishape] _rms_norm_indexed_scale_shift_kernel grid=(3072, 1, 1)
+      output_ptr[3072, 5376]@dev1  x_ptr[3072, 5376]@dev1  weight_ptr[5376]@dev1
+      shift_ptr[3, 5376]@dev1  scale_ptr[3, 5376]@dev1  indices_ptr<RuntimeError>
+    [trishape] _rms_norm_indexed_scale_shift_kernel grid=(3072, 1, 1)
+      output_ptr[3072, 5376]@dev0  x_ptr[3072, 5376]@dev0  weight_ptr[5376]@dev0
+      shift_ptr[3, 5376]@dev0  scale_ptr[3, 5376]@dev0  indices_ptr[3072]@dev0{min=0,max=2}
+
+Two things fall out of that.
+
+*The shapes are not the problem.* The grid is the row count of `x` (3072), the
+kernel masks columns to `hidden_size`, and the index values on the rank that
+works are `0..2` -- exactly the three rows of `shift`/`scale`. Nothing walks out of
+bounds *if* the index buffer holds what it should.
+
+*The index buffer is the problem, and only on device 1.* Reading its values there
+raises a `RuntimeError` (`.numpy()` on the Var fails) before the kernel is even
+launched, while the same tensor on device 0 reads `min=0,max=2`. So the kernel is
+handed a pointer to a buffer whose contents were never valid, `index` comes back
+as garbage, and `shift_ptr + index * stride_shift_row` lands wherever that garbage
+points -- an unmapped page on device 1, which is the `cudaErrorIllegalAddress`. It
+also explains why the fault is invisible to a *shape* check, why it is
+intermittent (it depends on what the unreadable buffer happens to contain) and why
+device 0 is immune: there the tensor materialises.
+
+Widening that trace to the message settles which of the two it is, and the answer
+is neither of the above:
+
+    indices_ptr<RuntimeError: helper_cuda.h:135: CUDA error at .../driver.cc:176
+      code=700( cudaErrorIllegalAddress ) cudaMemGetInfo(&free, &total)>
+
+Reading the values raises the *same* illegal address, at the allocator's
+`cudaMemGetInfo` -- the first CUDA call made after an async fault. The trace runs
+*before* the launch, on the first denoise kernel, so the device context was already
+dead when the denoise loop started: the index read is a victim that reports the
+error, not its cause, and the "garbage index" reading above is withdrawn. The fault
+is in the pre-attention work of the first DiT block on rank 1, and the launch lists
+of those runs name `nccl_all_gather` (TP communication) alongside `cublas_matmul`,
+`reshape` and `fused_op` -- that is where the next instrument belongs: log device,
+stream, counts and pointers on both ranks for the first all-gather of the denoise
+loop. Nothing in the attention path is implicated any more; every fault seen after
+the three fixes above happens *before* the first kernel of the loop.
+
+**A trap worth naming, because it cost three runs:** that stall -- both workers
+logging the final IR-op-priority line and then no progress, rank 0 spinning at 100%
+CPU and rank 1 idle -- looks exactly like the section 19 deadlock at a different
+call site, and it is not. It appeared only while `instrument_store_and_triton.py`'s
+**store** trace was applied, and vanished the moment `distributed/store.py` was
+restored from the repo. `_strace` writes a line per request and response on both
+sides inside the store's own request/response path, and the rendezvous it is there
+to observe is sensitive enough that the extra work deadlocks it. So: instrument the
+store to *diagnose* the rendezvous, never while measuring anything else, and
+restore `store.py` before the next run. The triton half of that script is harmless
+(it only fires on kernel launches, which happen after startup).
+
+## 22. The weight-load crash was a null allocator in `ArrayOp::run`
+
+The intermittent `cudaErrorIllegalAddress` during rank 1's sharded weight load had
+a second, deeper cause, and it is a plain null dereference in jittor's own core.
+
+`jt.array()` is what the shim's `torch.tensor(numpy, dtype=..., device="cpu")` path
+becomes -- i.e. what a safetensors load does for every tensor, from four threads at
+once. `ArrayOp`'s output is created by the op itself (`create_output` gives it shape
+and dtype; the `_force_fuse`/scalar shapes take the element path and never get an
+allocation), and `run()` then freed "the previous allocation" unconditionally:
+
+    if (save_mem) free_with_swap(o);
+    else o->allocator->free(o->mem_ptr, o->size, o->allocation);   // o->allocator can be null
+
+jittor's own crash handler caught it, with `addr2line` resolving the fault PC to
+`jittor::ArrayOp::run()` and the fault address 0x0. Reproduced in seconds by
+`probe_loader_migrate.py`, which runs the loader's real pattern -- a host tensor,
+`narrow` of it, `copy_` into a device parameter -- and it reproduced **on one
+thread** (twice), so this was never a threading race on its own. On a TP2 rank the
+same null storage is what a later copy reads, which is the device-1 illegal address.
+
+Fixed by skipping the free when there is no allocator (there is nothing to free).
+`tests/core/test_array.py::TestArrayOpDoesNotAssumeAnOutputAllocator` covers the
+`_force_fuse` path. **Verified:** the probe's single-threaded phase segfaulted
+before and passes after, and a TP2 run then loaded *both* ranks with zero illegal
+addresses -- previously roughly two starts in three died in this phase.
+
+**Still there, and separate: the threaded case.** With the null allocator fixed, the
+probe's four-thread phase fails with
+
+    fused_op.cc:89: [check failed: outputs().size()]     op: fused_op(contiguous)
+
+i.e. a **thread-safety** problem in jittor's op-building/fusion layer: several
+loader threads build and fuse ops while the main thread applies weights. jittor has
+the right mechanism already -- `ExecutorEntryScope` in `src/runtime/executor_entry.h`,
+a per-thread recursive lock that drops the GIL before blocking on the lock -- so the
+next step is to find which op-construction path the shim takes that does not enter
+it (`jtorch_aten.cu`'s `make_empty_vh`/`make_copy_vh` call the op constructors
+directly, from whatever thread the caller is on).
+
+**One hypothesis measured away.** The index inputs of the first DiT block are *not*
+host-resident, on either rank:
+
+    rank 0: inverse_indices int64[3072] dev=0 loc=device   token_tags int64[3072] dev=0 loc=device
+    rank 1: inverse_indices int64[3072] dev=1 loc=device   token_tags int64[3072] dev=1 loc=device
+
+(`H3_IDX_TRACE=1`, metadata only, so a poisoned context cannot hide the answer.)
+They are identical and device-resident, so the "garbage/stale index buffer" reading
+is withdrawn for good -- the request-path fault is elsewhere in that block, after
+the all-gather whose arguments section 21 already verified.
+
+## 23. The threaded op-construction race is confirmed, and it is around `contiguous`
+
+Section 22 ended with the four-thread probe failing at
+`fused_op.cc:89: [check failed: outputs().size()]`. That is now pinned:
+
+    probe_loader_migrate.py, 4 threads, no serialisation
+      -> 4 threads FAILED: fused_op.cc:89: [check failed: outputs().size()]
+    probe_loader_migrate.py, 4 threads, SERIALISE=1 (an RLock around each worker)
+      -> 4 threads OK
+
+So concurrent op construction from several Python threads corrupts jittor's fused
+batch -- the graph is single-threaded by design and the shim is the layer that lets
+a multi-threaded host library (vLLM's four-thread safetensors loader) drive it.
+`fused_op.cc` builds the fused op's outputs from `var_stays_in_memory(...)`, a
+verdict that comes from executor/batch state, so another thread's construction
+inside that window leaves the batch with no outputs at all.
+
+**And the request-path fault is bracketed by the same op.** In the run right after
+the `ArrayOp` fix (loading clean, request reaching the denoise loop) the last
+launches before the device-1 fault are
+
+    cublas_matmul   vllm/model_executor/layers/utils.py:98      (a linear)
+    getitem x2      vllm/distributed/utils.py:119               (torch.split)
+    reshape         group_coordinator.py:244
+
+i.e. vLLM's TP `split_tensor_along_last_dim` -- `torch.split(...)` then
+`tuple(chunk.contiguous() ...)` -- feeding a linear. `contiguous` is exactly the op
+the four-thread probe corrupts, so the leading explanation for the remaining
+request-path fault is the same race, surfacing as a null/invalid storage that the
+next cublas read dereferences instead of as the clean `outputs().size()` check.
+
+**Next step, then:** serialise op construction at the shim's boundary. jittor
+already has the per-thread recursive lock that does this for executor entry
+(`ExecutorEntryScope`, `src/runtime/executor_entry.h`), but it is C++-only, so the
+shim needs its own lock on the entry points a weight load goes through --
+`torch.tensor`/the factories and `Tensor.copy_`/`narrow`/indexing -- and then the
+same probe plus a TP2 request to verify. Section 22's measurement stands: this is
+not the index buffers, whose metadata is identical on both ranks.
+
+## 24. The request phase is single-threaded, so the race is *not* its cause
+
+Section 23 ended by proposing that the request-path fault was the same
+op-construction race, on the strength of `contiguous` appearing in both. That is
+now measured away, and the measurement is cheap enough to have been done first:
+`py-spy dump` on the rank-1 worker across the request window shows **three
+threads** --
+
+    Thread 575656 (idle): "MainThread"
+    Thread 583468 (idle): "Thread-1 (_accept_loop)"      (the store server)
+    Thread 583469 (idle): "Thread-2 (_serve_connection)"  (a store connection)
+
+-- and no thread but the main one ever builds or runs ops. With one thread in the
+graph there is nothing to serialise, so a shim-level lock would have been a
+change that fixed a real defect (section 23 stands) while doing nothing for this
+fault. Withdrawn: the request-path fault is not the concurrent-construction race.
+
+What is left, all of it measured rather than assumed: the fault is a device-1 MMU
+fault in the first DiT block, on one thread, in the sequence
+`torch.split` -> `contiguous` -> linear; the all-gather's arguments are correct
+(`ynum == group_size * num`, device-1 operands on device 1's stream); the index
+metadata is identical on both ranks; every attention entry binds the input device;
+and the shim's own documented racy-illegal-address window (the second jittor
+barrier is skipped when `JITTOR_TORCH_SHIM=1`) does not apply, because no triton
+kernel has launched yet when the context dies -- the `[trishape]` trace prints
+exactly once per rank, at the first denoise kernel, and that kernel already
+reports the poisoned context.
+
+## 25. `transpose`'s strides are *not* a lie, and "fixing" them breaks it
+
+The next hypothesis was that the shim misreports strides for views -- `x.transpose(0,1)`
+on a `(2,4,16)` tensor reports `stride=(32,16,1)`, `is_contiguous() == True`, where a
+lazy view would have `(16,64,1)` -- and that a consumer reading `.stride()` (a cublas
+leading dimension, an extension laying out a kernel) would walk out of bounds. The
+reasoning was wrong, and two cheap measurements show it:
+
+    x ptr=0x7ef989624200   t ptr=0x7ef989624400   same=False
+    t=[[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]]        # a (2,3) tensor transposed: correct
+    t stride=(2, 1) contig=True                   # correct for that materialized copy
+
+CUDA's transpose is **eager**: `cutt_transpose` (registered as `OpCapability::Transpose`)
+computes a fresh row-major buffer, so the output's contiguous strides are exactly right.
+No lying strides, no out-of-bounds read from this, hypothesis withdrawn.
+
+**And the attempted fix was reverted, because it broke the op.** Adding
+`y->set_storage_strides(<permuted strides>)` to `TransposeOp::infer_shape` (mirroring
+`reshape`/`getitem`) made the op declare a *transposed* layout for a buffer the
+execution path had written *contiguously*, and the values came back wrong:
+
+    before fix: t=[[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]]
+    with fix:   t=[[1.0, 5.0], [4.0, 3.0], [2.0, 6.0]]
+
+It is reverted in both trees and the core rebuilt; the roundtrip is exact again. The
+generalisable lesson, since this is easy to repeat: `set_storage_strides` describes how
+the *producer writes the bytes*, so it may only be used by an op whose execution really
+leaves the data strided. A materializing op that declares strided metadata hands every
+later consumer a wrong layout.
+
+## 26. The device jittor *reports* was not the device the thread ran on
+
+Sections 19-25 chased the same symptom from several directions -- rank 1's device-1
+CUDA context poisons itself during the four-thread shard load, and every later call on
+it fails -- and each time the evidence pointed at whatever call happened to notice the
+context was gone. The actual cause was one process-wide cache standing in for state the
+CUDA runtime keeps per host thread.
+
+`accelerator_current()` (`backends/cuda/runtime/driver.cc`) returned
+`runtime_device_state().current_device`, a single `int` behind the process-global
+`runtime_device_state()` (`src/runtime/device_state.h`). **CUDA's** current device is
+per-host-thread and starts at 0 on every new one. So a thread-pool worker -- every
+`multi_thread_safetensors_weights_iterator` worker -- sat on device 0 while jittor
+reported device 1:
+
+    # probe_thread_device.py, before the fix
+    worker0  jt.current_device()=1  jt.flags.device_id=1  cudaGetDevice=0
+    worker1  jt.current_device()=1  jt.flags.device_id=1  cudaGetDevice=0
+
+That alone would only mislabel things. What made it fatal is `on_device()`:
+
+    int previous = accelerator_current();          // process value: 1
+    if (device != previous) accelerator_set(device);   // 1 != 1 -> skipped
+    auto result = func();                          // runs on THIS thread's device: 0
+
+`previous` is the process value, so on a fresh thread `device != previous` is false and
+**`cudaSetDevice` never happens**. `cudaMalloc`, `cudaMemcpy`, `cudaMemGetInfo`, event
+recording and the cuBLAS/cuDNN handle selection then ran against that thread's device-0
+context while jittor booked them against device 1 -- a cross-device mismatch. Its
+signature is exactly what was observed: an Xid 31 MMU fault, and a context-sticky
+`cudaErrorIllegalAddress` that surfaces later on a call that only *reports* the context
+is gone, which is why `cudaMemGetInfo` inside `jt.array` was the call holding the error.
+It is invariant for rank 1 and can never happen on rank 0, whose worker threads default
+to the device it uses anyway.
+
+The file already knew: `record_event` (`driver.cc:326-339`) documents this precise
+hazard -- "a thread whose CUDA context is still the process default" -- and works around
+it with its own `cudaSetDevice`. The fix moves that to the one place that can state the
+invariant: `accelerator_current()` binds the calling thread to the device it is about to
+report (a thread-local cache, one `cudaSetDevice` plus the switch hooks on first use per
+thread), and `accelerator_set` records the binding. Every call site that resolves a
+device through jittor is then consistent with the thread's own context.
+
+    # after the fix
+    worker0  jt.current_device()=1  cudaGetDevice=1
+    worker1  jt.current_device()=1  cudaGetDevice=1
+
+Two things this does not cover. The deployed tree is an older, self-consistent snapshot
+whose `BackendOps` has no `graph_capture_*` members, so the lab build is the repo file
+with that surface removed -- copying the repo's `driver.cc` in whole does not compile
+there (`struct jittor::BackendOps has no member named graph_capture_begin`), which is
+also recorded in the lab notes. And ROCm has the identical pattern
+(`backends/rocm/runtime/driver.cc` caches `hipGetDevice` in the same process-global);
+there is no ROCm hardware here to verify a fix on, so it is deliberately left alone.
+
+## 27. Two more device-boundary defects, and the request fault is flash-attn's
+
+With the loading illegal address gone (section 26) the TP2 request still dies on
+rank 1, and the evidence now says the remaining fault is **not** the one the
+launch lists kept pointing at. Three negative results, each from a run:
+
+* the bridge's trailing `jt.sync_all(True)` is not it. `_fast_sync_enabled()`
+  returns True whenever `JITTOR_TORCH_SHIM` is set -- which `env-jittor.sh` does
+  -- so the barrier that `compat/triton/backend.py` says exists to close "a racy
+  `cudaErrorIllegalAddress`" is skipped in every lab run. Setting
+  `JITTOR_TRITON_FAST_SYNC=0` to re-enable it does not change the outcome.
+* the stream the bridge launches on is not it either, though it was wrong. The
+  bridge handed `cuLaunchKernel` a NULL stream -- the legacy default stream --
+  while jittor puts everything on `cudaStreamPerThread`, and `driver.cc` says
+  those two "do NOT synchronise with each other ... an unordered race that
+  raises no error and produces no message". Fixed (`_launch_stream()`, with
+  `JITTOR_TRITON_LEGACY_STREAM=1` as the escape hatch, and a test that
+  intercepts `cuLaunchKernel` and asserts the argument); the fault survives it.
+* it is not an async-attribution problem: `CUDA_LAUNCH_BLOCKING=1` reproduces it
+  at the same place, so the fault is deterministic and not a kernel-vs-kernel
+  race.
+
+What does discriminate is the attention backend. The same request with
+`ATTN=TORCH_SDPA` runs the two denoise steps to completion (`100%| 1/1`) with
+zero illegal addresses, while every `ATTN=FLASH_ATTN` run dies before finishing
+the first step -- and the logs confirm the runs really did resolve different
+backends ('SDPA' vs 'FLASH_ATTN' for `role='self'`). So the request-phase
+device-1 fault lives in the flash-attn path, not in the shared pre-attention
+work. Section 20's device guards are all still in place (`{q.device()}` /
+`{qkv.device()}` in all six generated entries), so it is somewhere else in that
+extension.
+
+Section 21 was right that the index read is a victim and wrong about where to
+look: `combined_indices = inverse_indices * 3 + token_tags.clamp(min=0)` is in
+bounds *by construction* -- `adaln_proj` maps `[M, t_dim]` to `[M*modality_num, H]`
+(`minimax_h3_transformer.py:743`), so an index in `[0, M*3)` cannot walk off it,
+and the `[3, 5376]` table in the launch trace just means M = 1 on that rank.
+
+**A third defect, found while checking that arithmetic.** `jt.unique` built its
+prepended element with `jt.concat([Var([False]), diff], 0)`, and `Var([False])`
+is created on the **ambient** device, so any input on another device made that
+concat raise
+
+    dispatch_context.cc:52: Expected all tensor inputs on the same backend and
+    device ..., first input backend=1 index=0 but another input has backend=1
+    index=1
+
+`probe_unique_scatter.py` reproduces it in one process (device 1, ambient 0:
+raises; ambient 1: matches numpy), and it is exactly what the denoise loop asks
+for -- `torch.unique(timesteps, sorted=True, return_inverse=True)` at
+`denoise_loop.py:207`, whose inverse becomes the AdaLN row index. It is the same
+defect family as the `concat` placement fix, and the same asymmetry: a
+multi-process run only hits it on the ranks whose device is not the process
+default. The element is now built out of `input_sorted`, so it carries that
+tensor's device, and `TestUniqueOffTheAmbientDevice` pins it.
+
+**A fourth, same family, and this one is on the denoise path.** `ones_like`,
+`zeros_like`, `full_like`, `rand_like`, `randn_like`, `randint_like` and the
+`x.new_*` methods all built their result from the *ambient* device -- `ones_like`
+is `ones(x.shape, x.dtype)`, and `zeros_like`/`full_like` are the same shape --
+while torch's contract for the whole family preserves the reference tensor's
+**device** as well as its shape and dtype:
+
+    probe_ambient_ops.py:  idx.device_id=1  ->  jt.ones_like(idx).device_id=0
+
+`jt.current_device()` is the ambient one and `to_device` does not move it (it
+belongs to the caller, and `run_sync` restores it), so on a rank whose device is
+not the process default every `*_like` in a kernel's neighbourhood produced a
+device-0 tensor beside device-1 ones. `dispatch_context` rejects that for
+jittor's own ops; the flash-attn extension does not check, and there it is a
+launch on one device with another device's pointers. Fixed with a
+`device_scope_like` context manager in `_core/var.py` (covering both an explicit
+placement and a `.to_device(n)` tensor, whose `placement_backend` stays -1), and
+`TestLikeConstructorsKeepTheDevice` pins the whole family.
+
+The same asymmetry has a core half: `device_raw_ptr` / `device_ptr_ready`
+(`src/core/var_holder.h`) migrate a host-resident Var with `get_allocator()`,
+whose no-device overload is `current_device()` (`allocator.cc:105`), i.e. the
+ambient device -- so the operand lands on one device and the caller hands that
+pointer to a kernel launched on another. They now migrate to the Var's own
+device instead.
+
+## 28. What the `fused_op.cc:89` assert actually is, and where the flash-attn path really runs
+
+**The assert is a recycled node, not a fusion verdict.** Section 27's diagnostic
+(`H3_FUSE_DUMP=1`, a dump in `FusedOp::update_ops` just before the assert) fires as
+
+    fused segment with no in-memory output: ops=1 batch_stamp_wanted=67
+      batch_var_fused=set stamp_count=68 active_epochs=1
+      op unary tflag=68 batch_stamp=67 outputs=0
+
+which rules the classification out on both counts: the segment holds **one** op,
+that op has **no outputs at all** (`outputs=0` -- its Var was destroyed), and its
+`tflag` is a **newer** stamp than the batch's (`68` vs `67`, `78` vs `71`), which
+is what a freed-and-reused node slot looks like. The batch holds raw `Op*`, so the
+executor is walking an object that no longer exists. That is why 1-2 threads pass
+where 4 fail and why `SERIALISE=1` passes (`probe_loader_migrate.py`).
+
+Serialising the shim's *Python* entry points does not remove it: with
+`JITTOR_SHIM_SERIALISE=1` (a lock around `torch.tensor`, `Tensor.copy_`,
+`Tensor.narrow`, `Tensor.__setitem__`) the probe turns into a segfault in
+`jit_utils_core.so` instead. That lock is also unsound as written -- it blocks on
+an `RLock` while holding the GIL, in paths that release the GIL inside jittor,
+which is the inversion `ExecutorEntryScope` documents -- so it is not a fix and
+should not be kept. The sharing that matters is inside core jittor, where the
+executor releases the GIL during device waits and a second thread can be inside
+the same graph machinery: the exclusion has to be process-wide and GIL-aware, like
+`ExecutorEntryScope`, applied to the loader's core-jittor entry points.
+
+**`flash_attn` does not come from the shim's stub.** The shim *deploys* its stub
+to a top-level `site-packages/flash_attn/`, and that installed copy is what
+imports - so editing
+`jittor/compat/shim/resources/stubs/flash_attn/__init__.py` changes nothing at
+run time (the two files were byte-identical apart from the edit). Instrument
+`site-packages/flash_attn/__init__.py`, and keep the stub in step so a redeploy
+does not drop the instrument.
+
+The jittor flash-attn *extension* is not installed either
+(`import flash_attn_jittor_cuda failed: No module named 'flash_attn_jittor_cuda'`),
+so `ATTN=FLASH_ATTN` runs this math fallback, not the extension. The shim's
+`c10/cuda/CUDAStream.h` was still wrong -- it handed torch extensions the **legacy
+default stream** while jittor runs on `cudaStreamPerThread`, the same defect as the
+triton bridge in section 27 -- but that is not this fault's cause, because nothing
+reaches the extension here.
+
+**Correction to the paragraph above, and the reason the stream fix did nothing.**
+`serve-vllmomni.sh` exports `JITTOR_FLASH_ATTN_JITTOR_SRC=/root/jittor-lab/flash-attention`
+and `JITTOR_FLASH_ATTN_JITTOR_REQUIRED=1`, so the real run *does* build and load
+the official extension: it lands in
+`$XDG_CACHE_HOME/jittor/torch-shim/<tag>/torch_extensions/flashattn_jittor/official_flash_attn*/<digest>/flash_attn_2_cuda_jittor.cpython-312-x86_64-linux-gnu.so`
+(several digests, newest 8.7 MB), and `adapter.py`'s trace line sits immediately
+before `packed_low_level.fwd(q, k, v, scale, causal, wl, wr)` -- the extension,
+not the math fallback. `flash_attn.flashattn_jittor_backend()` says "math" because
+it looks for a *different* module name (`flash_attn_jittor_cuda`), so that string
+is not evidence about this path.
+
+The build identity, in `official_build.py`, is
+
+    <source path> | <git HEAD> | head_dims | dtypes | native_forward_backward_dropout=1
+    <source path> | <git HEAD> | head_dims | dtypes | direct_packed_forward=6
+
+-- it covers what gets *compiled* but not the headers the extension compiles
+**against**. `c10/cuda/CUDAStream.h` is one of those, so fixing the stream left
+every existing build in place and the stale `.so` kept launching flash-attn's
+kernels on the legacy stream, unordered with jittor's allocator. Both digests now
+include `|shim_hdrs=<sha256 of cpp_extension/include>`, which both states the
+missing input and forces a rebuild that picks the fix up.
+
+
+## 29. The `fused_op.cc` assert is a batch node freed under the planner
+
+Section 28 located the assert as "a segment whose single op has no outputs and a
+`tflag` newer than the batch's". One half of that was a red herring and the other
+half was the clue:
+
+* `tflag` is *supposed* to differ. `load_fused_op` opens a `TraversalEpoch` for
+  itself and `mark()`s every op it loads, so the segment's ops carry the fused
+  epoch's stamp rather than the batch's. That is the loader working as designed.
+* `outputs == 0` was the real anomaly, and the dump was extended to attribute it.
+
+### What the dump says once it prints the op's address and its holder
+
+```
+op unary addr=0x7f6728004d50 tflag=66 batch_stamp=65 outputs=0 holder=1 inputs=0
+```
+
+`holder=1` is the op's own `vector<VarPtr> outputs_holder` (`core/op.h`,
+filled by `Op::create_output`): its output var is **alive and still owned by the
+op**. So no var was destroyed and no slot was recycled. `inputs=0` next to it is
+the tell -- these are empty *edge lists*, and `Node::free()` clears them
+**directly**:
+
+    _inputs.clear();            // node.cc, Node::free
+    ...
+    _outputs.clear();           // node.cc, Node::free
+
+It does not route its own edges through `Node::erase_output`. That is what the
+first instrument did: an `erase_output` hook (the path a *var* takes to detach
+itself from its producer) fired **zero times** in the runs that reproduced the
+assert, while the same runs printed the dump. The reading that fits every field
+is that `Node::free()` ran on the `unary.cast` op itself, mid-batch: edges
+cleared, `_queued_for_free` set, deletion still pending in `free_buffer()`, so
+the object stayed readable and `update_ops()` -- which classifies a segment by
+walking `op->outputs()` -- saw zero of them.
+
+Who calls it: `Op::free()` is reached from `release_backward_liveness` when an
+op's counters hit zero, i.e. from whichever thread drops the last reference to
+the cast's result. Why nothing stops it: the batch holds raw `Op*`/`Var*` in
+`plan.ops` and takes no liveness on them, and `Node::free()`'s only lifetime
+guard is
+
+    if (is_var() && _inputs.size() && (liveness.forward.active() || !is_finished())) return;
+
+which is about **vars** and has no counterpart for an **op**. `TraversalEpoch`'s
+own comment states the contract -- "Traversals are synchronous and stack-nested.
+They must not destroy a node they marked before their epoch ends" -- and the
+planner and a freeing thread only have to overlap for the loader's four threads
+to reach it. The first reading of this section (a process-global `free_buffer()`
+handing one thread's nodes to another's delete round) is **withdrawn**: it
+predicts a `tflag` mismatch, which is not evidence, and it does not explain a
+live `outputs_holder`.
+
+### The early return is not the fix -- measured, not argued
+
+An op is reachable only through the vars it produces, so "an op with a live or
+unfinished output is not garbage" looks like the missing dual of the var guard.
+It was tried, and it does suppress the assert: **12 loader-race runs, 0 dumps**
+(against 2-3 dumps in 7 runs of the instrumented-only core). It also replaces
+the assert with a different failure in 3 of those 12:
+
+```
+node.h:279: backward liveness release without a matching owner [check failed: value_ > 0]
+```
+
+`free()` is part of the liveness protocol, not just a destructor: it is where a
+node releases the liveness it holds on its inputs. Returning early skips those
+releases and the counters underflow later. So the node must **not** be kept
+alive; the planner and the freeing thread must not **overlap**. That is
+`graph_mutation_mutex()`, which `Node::free()` already takes, and which the
+executor's planning path never takes -- the guard is one-sided.
+
+### The one-sided guard, enforced: also measured, also not the fix
+
+That made the next candidate obvious -- hold `graph_mutation_mutex()` for the
+batch, in `Executor::run_sync`, so no other thread can clear a batch node's edges
+while the planner reads them. It is five lines (`free()` takes the same recursive
+lock, so the batch's own frees still pass through). Measured:
+
+```
+#### ex run 1
+exit=124          # timeout 600
+```
+
+Both of the first two runs had to be killed; neither reached a verdict. The
+exclusion **deadlocks** the four-thread loader. The reason is a lock-order
+inversion, not the device wait: `run_sync` already holds `ExecutorEntryScope`
+(call it L1) and would now hold `graph_mutation_mutex()` (L2) inside it, while a
+second thread sitting in `Node::free()` holds L2 and can need L1 -- that drain can
+re-enter the executor. Reverted in both trees.
+
+So both cheap shapes are now excluded by measurement rather than by argument:
+
+| candidate | result |
+| --- | --- |
+| keep the node alive (early return in `free()`) | assert gone, 3/12 runs fail `node.h:279` counter underflow |
+| hold the graph-mutation lock for the whole batch | loader deadlocks (`exit=124`) |
+
+What is left is to separate the two halves of `free()`: the **accounting** (the
+`release_*_liveness` it enqueues on its neighbours) has to happen immediately and
+exactly once, while the **graph surgery** (`erase_output` on its producers,
+`erase_input` on its consumers, `_inputs.clear()`, `_outputs.clear()`, the
+recursive free of its output vars, `free_var`) is what the plan can trip over and
+is therefore what has to wait until the batch is done. A deferred-surgery list
+drained at the end of the batch preserves the counters, which is why it is the
+remaining design -- and the reason it is written down rather than landed here is
+that `free()` is re-entered from several liveness paths and the erasures are
+index-based (`back_index`), so the drain has to erase by identity and run exactly
+once per node.
+
+### The design that avoids both problems: snapshot the edges in the plan
+
+Both rejected candidates are trying to keep the *live* graph alive for the
+planner. But the planner is the *only* reader that needs those edges, and it
+already walks them once, during collection. `build_exec_plan` BFSes from the
+batch's roots over `_inputs` and numbers every node it reaches in
+`Node::batch_index`; if it also recorded, per collected op, the input and output
+var pointers it saw, then `load_fused_op` and `FusedOp::update_ops` would read
+that snapshot instead of `op->_inputs` / `op->outputs()`.
+
+That is the same move this code already made once, for the same reason: the
+comment above `set_batch_index` says the numbering used to live in
+`Node::custom_data`, "so a traversal starting while these were live renumbered
+the graph under the executor" -- the fix was to give the batch its own
+immutable-per-batch record instead of reading shared state. The edges are the
+last thing the planner still reads live. A snapshot would make the batch
+independent of any concurrent `free()`, with no lock and no deferral, and it
+removes the whole class rather than one instance.
+
+It is a larger change than the two that were measured -- `load_fused_op`'s
+`edges` construction and the codegen numbering are delicate, and the vars'
+producers (`v->_inputs.front()`) have to be captured too -- which is why the two
+five-line candidates were tried first.
+
+### Why the cheap family is exhausted, measured four ways
+
+Two more shapes were built and measured before concluding that, and the reason
+they fail is one property of `free()` that no amount of deferral can work around:
+
+| candidate | 20 runs |
+| --- | --- |
+| deferred surgery, accounting (incl. the recursive output-var free) left out | 12 ok, 8 fail, 0 dumps, **8 underflows** |
+| deferred surgery, accounting kept, including the recursion | 7 ok, 10 fail, 0 dumps, **10 underflows** |
+| hold one *pending* liveness per planned node, released after execution | never built: it cannot work (below) |
+
+`Node::free()`'s surgery is what *removes the node from its neighbours' reach*.
+A node that keeps its edges keeps being the target of further counter releases --
+`release_forward_liveness`/`release_backward_liveness` propagate along exactly
+those edges -- so every scheme that keeps the node alive ends in
+`node.h:279: backward liveness release without a matching owner`. Splitting
+`free()` cannot be made sound by choosing which half to defer, because the two
+halves are the same choice seen from two sides.
+
+And the pin does not work either, for a reason worth writing down: **nothing
+gates `free()` on a counter.** `release_backward_liveness` calls it
+unconditionally the moment its counter reaches zero (`node.cc`, "Free
+backward_liveness=0" then `free();`), so holding one liveness does not stop the
+next release from reaching zero and firing it. `NodeLiveness::need_free()` is
+consulted by callers, not by `free()`. To pin a node you would have to floor its
+counters inside the release handlers while a batch is live -- i.e. add exactly
+the state the snapshot design makes unnecessary.
+
+So the two halves of the conclusion are: the *plan* must stop reading live edges
+(snapshot), or the *release handlers* must learn about a pinned batch (floor).
+The first is smaller and matches what this code did for `custom_data`.
+
+Why "floor" is not the ten-line alternative it sounds like, so nobody starts it
+blind:
+
+* it needs a new shared `NodeFlags` bit, and that region carries an explicit
+  warning that its layout is derived from two `_end`s precisely because a hand
+  picked bit had already broken it once;
+* it needs the floor in all three release handlers *and* on the direct
+  `out.node->free()` recursion inside `free()`, which is the one free call that
+  does not go through a release handler;
+* and making `need_free()` false for a pinned var is observable:
+  `exec_runner.cc` uses `!var->need_free()` to decide whether an output var goes
+  into `outputs_bk` (kept) or is merely marked finished, so flooring changes what
+  a batch retains.
+
+A snapshot of the *outputs* alone is not enough either, which is worth writing
+down: `update_ops` reads `op->outputs()`, but `load_fused_op`'s `edges` loop reads
+`op->_inputs` and `v->_inputs.front()` as well. Snapshot the first and not the
+rest and a freed op yields *incomplete* edges -- wrong kernels rather than an
+assert, which is worse. It has to be the whole tuple.
+
+### Resolved: the batch has to hold what it uses
+
+The design above was built, and it is not sufficient on its own -- but building it
+is what found the answer. Snapshot only, 20 runs: **0 dumps, 0 underflows, and 7
+segfaults**, and the backtrace names the reader:
+
+    FusedOp::execute_fused_prepared -> Op::execute_prepared -> run_exec_plan
+      -> VarRelayManager::get_op_relay_info   (var_relay.cc)
+
+i.e. a *codegen* walk of the graph, at execution time, over a node that had been
+destroyed. So the plan does not merely need the *edges*; it needs the **nodes**,
+and no amount of snapshotting or deferral changes that.
+
+What the batch was missing is ownership, and the mechanism was already in the
+tree: `VarPtr`. `Executor::run_sync` now holds a `VarPtr` for every var in
+`plan.all_vars` for the batch's duration. That pins the vars, and it pins the ops
+too -- an op's liveness comes from its outputs, so an op whose output var is held
+cannot be freed either. It touches no counter arithmetic and takes no lock, which
+is why it does not have either failure mode of the candidates above.
+
+Measured, `H3_FUSE_DUMP=1 probe_loader_race.py threads 4 6`, 20 runs each:
+
+| variant | result |
+| --- | --- |
+| no hold (baseline) | 4 ok, 1 failed, **2 dumps** in 6 runs |
+| keep the node alive (early return from `free()`) | 12 ok, **3 underflow** |
+| hold the graph mutation lock for the batch | **deadlock** (`exit=124`) |
+| lock released around the compile phase | still **deadlock** (9/12): this lab runs with `use_parallel_op_compiler=0`, so that phase never happens and the window never opens |
+| edge snapshot only | 13 ok, **7 segfault** |
+| edge snapshot + this hold | **20 ok, 0 dumps, 0 segfaults, 0 underflows, 0 hangs** |
+
+The probe's own checksum is unchanged (`sum=-26415.4` in every run), so the fix
+does not alter the numbers. The edge snapshot stays in the change as well: a
+*live* var can still have its edges released underneath the planner
+(`release_inputs`, which the shim uses to park tensors), so the plan should not
+read them live even with the vars pinned.
+
+Landed in `src/core/{exec_plan.h,exec_plan.cc,fused_op.h,fused_op.cc,executor.cc}`;
+the four `exec_plan`/`fused_op` files had no drift between the repo and the lab's
+deployed snapshot, so they were copied, and `executor.cc` (43 lines of drift) got
+the same three hunks by hand. Verified by building the repo's own core
+(`REPO_CORE_OK`) and by 20 loader-race runs on the deployed build.
+
+The probe for any candidate is
+`H3_FUSE_DUMP=1 probe_loader_race.py threads 4 6` -- 15-20 runs, because the rate
+is roughly one in four -- and the per-run timeout should be short (~120 s), since
+a wrong candidate hangs rather than fails. Count `dumps` **and**
+`without a matching owner`: the assertion is easy to trade for the underflow.
+
+Baseline on the core as it stands (stream fixes + the `H3_FUSE_DUMP`
+diagnostics): **6 runs, 4 `OK`, 1 failed, 2 dumps** -- so the assert is still
+there at about one run in three and the diagnostics are in the binary. Any
+candidate should be read against that, not against zero.
+
+## 30. The deployed core was missing the whole stream-consistency set
+
+The FLASH_ATTN request was the first run with the rebuilt extension, and it
+failed with a *different* error than every previous attempt:
+
+```
+exec_runner.cc:402: Execute fused operator(11/102) failed.
+setitem_op.cc:295  code=1( cudaErrorInvalidValue )
+  cudaMemcpyAsync(op, ip, out->size, cudaMemcpyDeviceToDevice, 0)
+```
+
+That trailing `0` is a stream, and it is the legacy default stream. The launch
+candidates around it are all `stream=2` -- jittor's own `cudaStreamPerThread` --
+including the `setitem` at `encoder.py:259` that is the failing op. The two
+streams do not synchronise (see `compute_stream` in `backends/cuda/runtime/driver.cc`),
+so the copy races whatever produced `ip`.
+
+The macro is real and the divergence is one line:
+
+    deployed  indexing_backend_copy() ... cudaMemcpyAsync(..., cudaMemcpyDeviceToDevice, 0)
+    repo      indexing_backend_copy() ... cudaMemcpyAsync(..., cudaMemcpyDeviceToDevice, cudaStreamPerThread)
+
+Auditing the whole tree rather than that one site turned up the full set, all of
+it from one repo commit (`28e8e1a7`, the CUDA-Graph work) that the deployed
+snapshot predates:
+
+| deployed snapshot | repo |
+| --- | --- |
+| `kernels/core/setitem_prefix.cc` -- stream `0` | `cudaStreamPerThread` |
+| `kernels/cutt/cutt_transpose_op.cc` -- stream `0` | `cudaStreamPerThread` |
+| `kernels/curand/curand_random_op.cc` -- stream `0` | `cudaStreamPerThread` |
+| `cublas_wrapper.cc` -- handle left on the default | `cublasSetStream(..., cudaStreamPerThread)` |
+| `cudnn_wrapper.cc` -- handle left on the default | `cudnnSetStream(..., cudaStreamPerThread)` |
+| `cusparse_wrapper.cc` -- handle left on the default | `cusparseSetStream(..., cudaStreamPerThread)` |
+| `curand_wrapper.cc` -- generator left on the default | `curandSetStream(..., cudaStreamPerThread)` |
+
+In the deployed tree `cudaStreamPerThread` appeared in exactly one file --
+`runtime/driver.cc` -- and that one is this session's own device-binding fix.
+Every cuBLAS/cuDNN/cuSparse/cuRAND call the model makes was therefore issued on
+a stream that does not order against the kernels feeding it. That is a
+process-wide source of intermittent wrong results and illegal addresses, and it
+is a better candidate than anything else on the table for the remaining
+`ATTN=FLASH_ATTN` faults -- the failures were always intermittent, and the
+`SDPA` profile that passed is the same code with different timing.
+
+### The library handles are only half of it: the kernels themselves
+
+The same commit also splits the fix in two, and its own comment in
+`driver.cc` says so:
+
+    //   - jittor's own kernels: `--default-stream per-thread` in the nvcc flags,
+
+The deployed `runtime/driver.cc` carries that comment (it has the whole
+CUDA-Graph `compute_stream`/capture machinery) while the deployed
+`build/compiler.py` **does not carry either flag**. The repo has both:
+
+    cc_flags += " -D__CUDA_API_PER_THREAD_DEFAULT_STREAM=1 "      # host side
+    nvcc_flags += " --default-stream per-thread "                 # device side
+
+So the deployed tree is a *partial* copy of that commit: `compute_stream()` says
+`cudaStreamPerThread`, the library handles were left on the legacy stream, and --
+the part that matters most -- every kernel the tree compiled was compiled with
+the **legacy** default stream. This is not indirect: jittor's generated kernels
+launch with a bare `<<<grid, block>>>` and no stream argument. From the run's own
+jit cache, `..._hash_df1ef54aa29ad859_op.cc`:
+
+    kernel<<<1,1>>>(op0_outputp, op0_outputv);
+
+With `--default-stream` unset that is the legacy default stream, not
+`cudaStreamPerThread`. The runtime then reasons about -- and records in
+`[Recent launch candidates]` -- a stream its kernels are not on, which is exactly
+why those traces show `stream=2` for ops that are in fact racing on stream 0.
+The macro (`__CUDA_API_PER_THREAD_DEFAULT_STREAM`) is the same fix for the
+runtime-API calls that take no stream; the flag is the one that moves the
+generated kernels.
+
+Because it changes how *every* translation unit is compiled, the two flags only
+take effect after a core rebuild **and** a jit-cache clear -- the jit key does not
+cover the compile flags either, so a warm cache keeps the old kernels (see the
+`*_prefix.cc` trap below).
+
+Both halves are checkable at the artifact level, because jittor records the full
+command line it ran next to every output: `.../<hash>.o.key` for a core object,
+`<jit-key>.so.key` for a jit kernel. After the rebuild the recorded command for
+`backends/nan_checker.cu` contains
+
+    -D__CUDA_API_PER_THREAD_DEFAULT_STREAM=1
+    --default-stream per-thread
+
+and the `jit.pre-streamfix/…_op.so.key` from before the change contains neither.
+That is the same kind of evidence as the `strings` check on the flash-attn
+extension, and it is why the flags were applied before the run rather than
+inferred from it.
+
+Two traps in applying it:
+
+* `backends/cuda/kernels/cublas/lt_linear_cuda.py` also carries the fix, but the
+  deployed snapshot has no such file (it predates the file's introduction). It
+  was **not** copied: adding one codegen module to an older tree that never had
+  that path is not a stream fix.
+* The two changed `*_prefix.cc` files are codegen prefixes, and section 17
+  already established that the prefix/include is **not** part of an op's jit key.
+  A warm kernel cache would therefore keep serving kernels built with the old
+  prefix. The run's `jit/` cache was moved aside so every affected kernel
+  recompiles.
+
+### What the stream fix changed, and what is left
+
+Three `ATTN=FLASH_ATTN` TP2 requests, 2 steps at 256x256, one after the other:
+
+| core | where it died | how long it ran |
+| --- | --- | --- |
+| rebuilt flash-attn extension, nothing else | `setitem` D2D copy in request-input prep (`encoder.py:259`), `cudaErrorInvalidValue` | 10.1 s |
+| + the seven library/prefix sites | same place, same error | ~10 s |
+| + the two per-thread default stream flags | rank-1 `cudaErrorIllegalAddress`, surfacing at the emulated modulation kernel's sync in the *denoise* loop | 475.3 s |
+
+So the stream consistency is real and load-bearing -- the third run gets through
+request preparation and essentially the whole two-step denoise, where the first
+two never reached the sampler -- but it is not sufficient. What is left has the
+same shape as everything that came before it: rank 1 only, device 1 only, and
+asynchronous (the error surfaces at a sync, `overwrite`d counts in the tens of
+thousands, and the recorded candidates are the last sixteen launches rather than
+the faulting one).
+
+The last two things rank 1 did before the sync that reported it are worth
+recording, because they narrow it:
+
+* an `all_gather` of 2688 elements on the communication **side** stream
+  (`stream=0x1d01e200`), whose device-side output `y` is then reshaped and read
+  by `getitem` on the compute stream;
+* the emulated triton kernel of `rms_norm_indexed_scale_shift`, which is where the
+  sticky error becomes visible -- the same op the pre-fix run died in.
+
+The side-stream join itself is *not* the defect: `backend_default_stream_wait_side`
+records on the side stream and waits on `BackendStreamKind::Compute`, which
+resolves to `ops.compute_stream(device)` == `cudaStreamPerThread`, so the
+ordering target is already the per-thread stream and the per-thread compile
+agrees with it.
+
+Two controls, both on that same rebuilt core, and together they say where the
+residual is **not**:
+
+* **`ATTN=TORCH_SDPA`, same request: completes, 620.4 s.** The model, the TP
+  collectives, the modulation kernels, the scheduler and the VAE are therefore
+  all sound in this binary -- and the residual is specific to the flash-attn
+  path, exactly as section 27 concluded for the original fault.
+* **`ATTN=FLASH_ATTN`, single GPU: completes, 121.3 s.** Same extension, same
+  shim, same core, one rank. So the flash-attn path is sound in the one
+  configuration where jittor's device *is* the process default device (0).
+
+Read together with the failure being rank-1-only, that is a narrower statement
+than "flash-attn is broken": the residual needs **both** tensor parallelism and
+the extension -- i.e. the case where jittor's device is not the process default.
+That is the same shape as sections 20, 21, 26 and 27, and it is why the next
+instrument prints the attention *result*'s device and the ambient device, not
+just the inputs': correct inputs on cuda:1 with a result buffer labelled cuda:0
+would send the next jittor op to device 0 with device-1 pointers.
+
+**Correction, later the same session: that pair of controls was under-powered and
+the "needs the extension" half is wrong.** Every one of those runs is n=1, and the
+fault is intermittent, so a single pass says very little. The counter-example
+arrived when the same `TORCH_SDPA` request was re-run on the recovered core: it
+failed after **465.3 s** with the *identical* rank-1 `cudaErrorIllegalAddress` at
+`cudaMemGetInfo`, and the run is confirmed to be a real SDPA run (the log says
+`Resolved diffusion attention backend 'SDPA' for role='self'` twice, and
+`flashattn_jittor` never appears). The launch candidates at the failure are
+`denoise_loop.py:189/190/207` (`copy`, `getitem`, `setitem`) rather than the
+encoder, and the sticky error again surfaces inside the emulated modulation
+kernel's sync.
+
+So the residual is: a **late, intermittent, rank-1/device-1 illegal address in a
+TP2 request, independent of the attention backend**. What it is *not* is
+established: the request-preparation failure (sections 27, 30) *was* flash-attn
+specific and is fixed; this one is downstream of attention. The next step is the
+denoise loop's own op stream on device 1 -- the `copy`/`setitem`/`getitem` burst
+around `denoise_loop.py:189-207`, which is where the candidates now point -- not
+the attention path.
+
+**A third thing it is not: the batch-node lifetime hole of section 29.** That fix
+landed (see the end of section 29) and the same `TORCH_SDPA` request was re-run on
+the fixed core: it fails after 265.2 s with the identical rank-1
+`cudaErrorIllegalAddress`. So the plan-vs-`free()` race -- which is real, and is
+now fixed for what it *does* cause: the "no in-memory output" assert and the
+loader's segfaults -- is not what the server trips over.
+
+Given `CUDA_LAUNCH_BLOCKING=1` already showed the faulting operation is not one of
+jittor's kernel launches (jittor wraps those in `LaunchErrorScope`, and the error
+still surfaced at a memory query), what remains are the operations that
+`LAUNCH_BLOCKING` does not cover: `cudaMemcpyAsync` on the copy side stream and
+NCCL's driver-API work. `compute-sanitizer` cannot separate them here (NCCL fails
+under it, above), and single-run controls cannot either. That is the state bug 1
+is left in.
+
+Three more components were excluded after that paragraph was written, each by
+measurement on the failing request:
+
+* **NCCL's P2P transport**: `NCCL_P2P_DISABLE=1` fails identically (20.1 s); so
+  does `NCCL_PROTO=Simple` (the low-latency protocols are the ones that write
+  directly into a peer's buffer, so that was the sharpest NCCL knob).
+* **jittor's copy path metadata**: an instrumented `copy_async` (gated on
+  `JITTOR_COPY_CHECK`) compares each copy's declared `Device` pair against what
+  `cudaPointerGetAttributes` says about the two pointers -- residency *and*
+  device index -- and shouts on a disagreement. Across the whole failing request
+  it never fired. So `copy_kind` is not choosing a wrong direction and `copy()`
+  is not picking a wrong device or peer mapping; if the fault is in the copy
+  engine, the pointers really were as declared and the memory behind them had
+  been recycled.
+* **a disagreement between the ranks about a collective's size**: `ncclAllGather`
+  takes the count from `x->num` on each rank, so a mismatch would make one rank
+  mis-transfer; the instrumented trace of a failing run has every `num=` value an
+  even number of times (113 collective lines, 2 per line counted once), i.e. both
+  ranks called the same sequence of counts.
+* **the allocator's managed-memory fallback**: `raw_malloc` logs `Unable to alloc
+  cuda device memory for size ... falling back to cudaMallocManaged` before it
+  takes that path, and that line appears in none of the failing runs -- nor in the
+  passing ones. `cudaMemGetInfo`, the call the error is always reported at, is
+  `memory_info(device, ...)`/`raw_memory_info`, so it is whoever asks for free
+  memory next (the allocator, or the shim's `mem_get_info` via vLLM), not a
+  component of the fault.
+
+What that leaves is a shape rather than a component: **something recycled a
+buffer that an operation still had in flight**, which needs only the ordering
+guarantees to have failed -- and the condition that separates the failing server
+from every control that passes is **memory pressure**. Each TP2 rank holds ~66
+GiB with the probe's `OFFLOAD=` empty, on a card where another tenant's usage
+moves; the single-GPU run that passes uses the shipped default offload, and so
+does the real serve command. `run_tp2_probe.sh` is what sets `OFFLOAD=` empty --
+that is a property of the probe, not of the configuration the lab ships.
+
+### The shipped config fails *differently*, in 30 s, and jittor reports it
+
+Running the same request with the shipped default (layerwise offload of
+`text_encoder`, i.e. what `serve-vllmomni.sh` does when `OFFLOAD` is not
+overridden) fails the *same* request much faster and with a *reported* error
+instead of a sticky one:
+
+```
+exec_runner.cc:402: Execute fused operator(0/295) failed.
+getitem_op.cc:455: index 395033601 is out of bounds for dimension 0 with size 388956160
+op: getitem
+  in:  bfloat16[388956160,], int64[388956160,]
+  out: bfloat16[388956160,]
+```
+
+Three different indices were reported in that one run -- 737396059, 395033601,
+439601509, all against the same 388956160-row buffer -- which is what garbage
+looks like, not what a systematic offset looks like. A 389M-entry int64 index
+tensor gathering from a 778 MB bf16 buffer is the offload path moving a layer,
+and the single-GPU run (which passes) uses the same offload.
+
+That matters for two reasons, and it is the state bug 1 is actually left in:
+
+* it is a **jittor-reported out-of-bounds driven by an index tensor**, i.e. the
+  same shape as the sticky `cudaErrorIllegalAddress` of the no-offload runs --
+  there the access went to device memory and no `IndexFault`-instrumented op
+  happened to be the first reader, so nothing named it;
+* it is a **30-second repro on rank 1 instead of a 265-475 s one**, with the
+  shapes and the op in hand. Any fix for the garbage index should be re-checked
+  against the no-offload configuration, because that is the one the probe used
+  and the one this document's earlier measurements are all stated in.
+
+### Root cause: the residency manager's shared-storage idiom, and the shim's gather
+
+Following that lead into the shim found the reader. `_as_strided` is not a real
+strided view: it builds a full-length int64 index (`arange(size[d]) * stride[d]`
+summed over the dimensions, plus `storage_offset`) and gathers with it out of
+`self.reshape(-1)`. torch validates that request against the *storage*; the shim
+did not check anything, so an oversized view became an out-of-bounds gather.
+
+Adding that check (there is now a test for it) made the failing request name
+itself in 5.1 s instead of after 30-475 s:
+
+```
+as_strided: sizes (75968, 5120), strides (5120, 1), storage_offset 388956160
+  are too large for the 388956160 element(s) this tensor can address
+  (the view would span [388956160, 777912319])
+```
+
+`75968 x 5120 = 388956160` is exactly how many elements the tensor *has*, and the
+storage offset asked for is that same number: the caller wants a view of the
+**second half** of a `777912320`-element buffer. That is torch's shared-storage
+idiom -- `t.set_(storage, storage_offset=N)` to re-point a layer tensor at another
+shard, which is what the residency manager does when it moves a layer between the
+host and a rank -- and it is the one thing the shim cannot express:
+
+* `set_`'s own docstring says so: "jittor has no user-visible byte storage, so ...
+  the two tensors do not share memory";
+* `_Storage.nbytes()` returns `numel x dsize` -- the *tensor's* elements, not the
+  storage's, so the manager's arithmetic is working with half the buffer it
+  believes in.
+
+Both faces of bug 1 are this one gather: when the out-of-range index landed in
+unmapped memory it was the sticky `cudaErrorIllegalAddress` of the no-offload runs
+(reported later, at a memory query, with no site); when it landed inside the
+larger offload allocation, jittor's `IndexFault` caught it first and named the
+`getitem`. Same call, same offset, different landing.
+
+So the jittor defect -- an out-of-bounds gather that manifested as an illegal
+address -- is fixed at the root: the request now fails immediately and says
+exactly which view it could not serve, and the device read is gone. Making the
+*request* succeed needs one of two things, and they are not small: the shim would
+have to track the tensor a view's storage came from and gather from *that*
+allocation (real shared storage, which the materialising view model does not
+have), or the residency manager would have to stop using the idiom. Neither is a
+fix that can be assumed without the shape of the manager's decision to change.
+
+`CUDA_LAUNCH_BLOCKING=1` is the other half of the picture. It fails *earlier*
+(30.1 s) with the same rank-1 `cudaErrorIllegalAddress` at `cudaMemGetInfo`.
+Making kernel launches synchronous did not move the error to a launch, and
+jittor wraps its own launches in `LaunchErrorScope`, so the faulting operation is
+**not** one of the launches jittor issues in that window. That leaves the paths
+`CUDA_LAUNCH_BLOCKING` does not cover: `cudaMemcpyAsync` (the copy stream and the
+H2D path) and NCCL's own driver-API launches -- for which a rank-1-only fault and
+a sticky error surfacing at the next memory query are both expected.
+
+### The fault is inside the extension call, at an allocation
+
+The trace was extended to print the attention **result** and the ambient device
+after each `packed_low_level.fwd(...)`, and the run fails in 20.1 s with the same
+error every time now. What it shows on rank 1:
+
+* every q/k/v is `dev=1 contig=True bf16 shape=(1,289,32,128)`, with pointers that
+  repeat across calls (the same buffers are reused);
+* every *returned* output is `dev=1` with a device-1 pointer, and
+  `current_device=1` after each call -- the device-plumbing on the extension
+  boundary is right, so the section-20 `CUDAGuard` and section-26/27 device work
+  hold;
+* the final call prints its q/k/v and `causal=... scale=...` and then **no result
+  line at all**. The process dies inside that `packed_low_level.fwd(...)`.
+
+That also explains why the error surfaces at `cudaMemGetInfo` in
+`backends/cuda/runtime/driver.cc`: the query is jittor's allocator asking for free
+memory, and the allocation that asks for it is one the **extension** makes for
+its own buffer (`torch::empty` for out / `softmax_lse_accum` / `out_accum` goes
+through the shim's tensor factory). So the sticky error was set by an
+*asynchronous* operation before that allocation, and the allocation is merely the
+first CUDA call after it.
+
+Put together with the two controls, the residual is: an asynchronous read/write
+on device 1 by something in the extension path, after ~100 identical calls that
+worked, in the one configuration where jittor's device is not the process default
+device. The next audit is the lifetime of the buffers the extension itself
+allocates through the shim -- those are the ones no Python owner keeps alive, and
+the only ones (unlike q/k/v, which the caller holds) whose recycling depends on
+allocator timing rather than on a reference.
+
+### A plain attention call is fine, so it is the context around it
+
+`probe_encoder_sdpa.py` is the seconds-scale repro for the encoder's attention
+(the SDPA call that `no_grad` routes to the dense flash-attn entry). On the same
+core, on device 1 with device 0 as the ambient one -- the failing rank's
+configuration -- it passes for S in {289, 489, 512, 1000, 1023} in both fp16 and
+bf16, all ten through the official extension (`backend:
+flashattn_jittor_official:/root/jittor-lab/flash-attention`, `hits: 10`), with
+every tensor reporting device 1.
+
+So there is no geometry-, dtype- or device-level defect in the attention call
+itself. What the full request adds is *context*: a hundred calls deep, an
+allocator that has been recycling for minutes, TP collectives in the same stream
+graph, and a running executor. Combined with the trace (same geometry as the
+calls that worked, correct devices, the process dying inside the call) and with
+`CUDA_LAUNCH_BLOCKING` not moving the error to a launch, that is the signature of
+a lifetime or ordering hole that only the long-running context can open -- not of
+a wrong index.
+
+### Components checked and cleared, so they are not re-audited
+
+Each of these was a plausible seat for a device-1-only asynchronous fault, and
+each is correct in the tree as it now stands:
+
+* `compat/shim/cpp_extension/include/c10/cuda/CUDAStream.h` -- the extension
+  launches on `cudaStreamPerThread`, and the freshly built `.so` is confirmed to
+  contain it (the `strings` check above).
+* `c10/cuda/CUDAGuard.h` -- `CUDAGuard` calls `cudaSetDevice` *and* moves jittor's
+  own current device, which is what stops the extension's `torch::empty` buffers
+  from being allocated on device 0. Its comment already describes this exact
+  failure mode.
+* The generated packed entry -- every entry constructs
+  `at::cuda::CUDAGuard device_guard{q.device()}`, and the generated source in the
+  build directory confirms it.
+* `flash_api.cpp` -- every launch site takes
+  `at::cuda::getCurrentCUDAStream().stream()`, and there is **no** runtime-API call
+  that omits the stream. That is also why rebuilding the extension with
+  `--default-stream per-thread` would be thirty minutes for nothing.
+* The shim's `jtorch::Tensor` -- it holds `shared_ptr<VarHolder>`, so the buffers
+  the extension allocates for itself (`out`, `softmax_lse`, `out_accum`,
+  `softmax_lse_accum`) are owned and cannot be recycled while the C++ object
+  lives. The Python-side `_mark_readonly_borrow` is skipped on the packed path,
+  but that is not a hole: the packed path's inputs go through the generated
+  entry's `jt_readonly_tensor`.
+* `nccl_stream_begin` / `nccl_stream_end` -- the side-stream join records on the
+  communication stream and waits on `BackendStreamKind::Compute`, i.e.
+  `cudaStreamPerThread`, so the ordering target agrees with the per-thread
+  compile.
+
+What is left is the long-running context itself. The two things to point
+`compute-sanitizer` at, when a run can be afforded, are the TP collectives'
+driver-API launches (which `CUDA_LAUNCH_BLOCKING` does not serialise) and the
+`cudaMemcpyAsync` on the copy side stream. NCCL is the weaker of the two now:
+`NCCL_DEBUG=WARN,NCCL_DEBUG_SUBSYS=INIT,COLL` on a failing run prints nothing at
+all -- NCCL initialises on the right device per rank and never reports an error.
+
+### The generated packed entry is not the cause
+
+`JITTOR_FLASH_ATTN_DIRECT_PACKED=0` turns off the direct/packed adapter, so the
+model's attention goes through the *classic* dense low-level entry
+(`flash_attn_2_cuda_jittor.so`'s `mha_fwd`) instead of the five-hundred-line
+generated `flashattn_jittor_packed_fwd.cu`. That entry was worth suspecting: it
+is generated, it was the seat of the section-20 device-guard bug, and its
+`jt_fill_params` is a hand-port of upstream's `set_params_fprop` (it checks out
+against upstream, including `seqlen_q_rounded = round_multiple(seqlen_q, 128)`
+with `softmax_lse` sized `[batch, heads, seqlen_q]`).
+
+The request fails **identically** with it disabled: 20.1 s, rank-1
+`cudaErrorIllegalAddress` at `cudaMemGetInfo`, same signature. So both entry
+paths fail, which is what they have in common -- `run_mha_fwd` and the extension's
+kernels -- and the generated adapter is out.
+
+That leaves the extension's kernels themselves against buffers whose contents
+come from a long-running request, or an unchecked extension launch reading a
+buffer jittor recycled. The measurement that would separate them is
+`compute-sanitizer --tool memcheck` over one request; at roughly 10-50x, on a load
+that already takes six minutes, that is a hours-long run and it was not
+attempted here.
+
+**Correction, later the same session: it was attempted, and it does not work.**
+`compute-sanitizer --tool memcheck --target-processes all` on a TP2 `TORCH_SDPA`
+serve (`LAUNCHER=... ./serve-vllmomni.sh`, which `serve-vllmomni.sh` supports for
+exactly this) reaches the request and reports `ERROR SUMMARY: 202 errors`, but
+**every one of them is NCCL**: 100 ×
+
+    Program hit cudaErrorNoKernelImageForDevice (error 209) ...
+    ncclInitKernelsForDevice -> ncclCommInitRankFunc -> ... -> jittor::nccl_init
+
+and the application's failure is `exec_runner.cc:402` (the collective), not the
+usual `cudaMemGetInfo` report. NCCL cannot initialise its own kernels under the
+sanitizer, so the run never reaches the fault. There is also a structural reason
+not to expect this tool to be decisive even if NCCL worked: memcheck reports
+accesses outside an allocation, while a node or block that has been freed and
+recycled *inside the same mapping* is still a valid address -- which is the shape
+this fault has had all along (`Node::free()` clearing edges, the recycled-buffer
+family of section 29).
+
+The extension itself was re-checked as a suspect and cleared: of the four
+`getCurrentCUDAStream()` launch sites and every `flash_api.cpp` runtime call,
+none omits the stream, so there is nothing for a per-thread compile of the
+extension to change and no reason to spend thirty minutes rebuilding it.
+
+The next measurement is the attention call itself: `H3_FA_TRACE=1` prints q/k/v
+device, contiguity and pointers immediately before each `packed_low_level.fwd(...)`,
+and the last one before the fault is where a device-1 geometry or pointer
+mismatch would show up.
+
+## 31. `Tensor.to(1)` dropped the device index
+
+Found while chasing the corrected residual of section 30 into the denoise loop,
+whose `Recent launch candidates` are `copy`/`getitem`/`setitem` bursts around
+`denoise_loop.py:189-207`. That code builds its per-step kwargs with in-place
+scattered writes driven by precomputed tensors, with `x[0].index_copy_(0,
+self.img_pos_dev, video_rows)` and `timesteps[self.img_pos_dev[mask]] = t` in the
+middle of it. A repro of the same shape was written
+(`probe_denoise_scatter.py`) and it failed immediately -- but on the *index*
+tensor's device, not on the write:
+
+```
+tensors: img_pos=cuda:0 mask=cuda:1 x_base=cuda:1
+dispatch_context.cc:52: Expected all tensor inputs on the same backend and device
+```
+
+`img_pos` was built as `torch.arange(ROWS, dtype=torch.int64).to(dev)` with
+`dev=1`. The shim's `_to` classifies each argument as a dtype, a `torch.device`,
+another tensor or a string, and a bare **int matches none of those branches**, so
+it was dropped: `dev` stayed `None`, `dev = self.device` fell back to the tensor's
+own device, and the tensor never moved. Isolated:
+
+    .to(1)                        device=cuda:0   <- asked for 1
+    .to("cuda:1")                 device=cuda:1
+    .to(torch.device("cuda", 1))  device=cuda:1
+    torch.arange(8, device=1)     device=cuda:1
+
+torch itself raises on an int here (`TypeError: to() received an invalid
+combination of arguments`), so the silent-drop is the one behaviour that cannot
+be right: on a rank whose ambient device is not the tensor's, a caller that asks
+for cuda:1 gets whatever it already had. Fixed by reading a bare int (excluding
+`bool`, which is an `int`) as a device index.
+
+**This is not the cause of the section-30 residual**, and saying so matters:
+the model passes `device=self.device` and `self.device` comes from
+`get_local_device()`, which returns a `torch.device`, and every `torch.device`
+form was already correct. So the fix closes a real silent-misplacement hole in
+the same family as sections 26/27, but the fault that survives is still open.
+
 ## Verification
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails
@@ -1053,7 +2550,362 @@ and is not touched here.
   standalone probe: empty placeholder, shape restore, dtype change,
   `requires_grad` preserved.
 
+- 13: `compat/tests/torch/test_cpp_extension_device_index.py` (6/6) builds a probe
+  extension and checks both halves on every visible index -- `device().index()`,
+  the CUDA device a guard actually binds, where a fresh tensor lands inside the
+  guard, and that the guard restores the device it found. Behavior: the flash-attn
+  bridged entry passes on devices 0 and 1, dense and packed, head dim 64 and 128,
+  in either call order, and agrees with a jittor `softmax(q k^T * scale) v`
+  reference to fp16 noise.
+- 17: `compat/tests/torch/test_torch_cpp_extension.py::TestShimHeadersInvalidateTheBuildCache`,
+  which fakes the compiler and asserts an unchanged tree compiles nothing while an
+  edited shim header recompiles and re-links.
+
+- 19: the deadlock is removed by construction -- in two phases, because one was not
+  enough (see the follow-up in section 19) -- and repeated TP2 starts now pass the
+  rendezvous in ~30 s instead of hanging about every other attempt. The request
+  fault of section 21 is still open.
+
+- 20: `probe_encoder_sdpa.py` under `no_grad` -- the condition that reaches the
+  generated entries -- fails on device 1 before the six guards are fixed and
+  passes on devices 0 and 1 after; the generator's output is asserted directly by
+  `TestPackedEntryDeviceGuard`.
+
+- 21: the shape trace above, from a 4-step 256x256 request on two cards.
+- 25: pointer comparison + values + strides for `transpose` on CUDA (materialized
+  copy, correct contiguous strides), and the same check after the reverted attempt,
+  which is how the wrong-values regression was caught.
+- 24: `py-spy dump` on the rank-1 worker across the request window: three
+  threads, only the main one in the graph.
+- 23: `probe_loader_migrate.py` with and without `SERIALISE=1` (fails / passes with
+  four threads), and the launch list of the post-`ArrayOp` TP2 run, which names
+  `torch.split` + `contiguous` immediately before the fault.
+- 22: `probe_loader_migrate.py` -- the single-threaded phase segfaults in
+  `jittor::ArrayOp::run` before the fix and passes after; `tests/core/test_array.py`
+  covers the guarded path; a TP2 run loaded both ranks with zero illegal addresses.
+  The four-thread phase still trips `fused_op.cc:89`, which is the next thing.
+- 26: `probe_thread_device.py` asks jittor and the CUDA runtime for the current device
+  from the main thread and from fresh threads -- `jt.current_device()=1` beside
+  `cudaGetDevice=0` before the fix, `1`/`1` after, which is the assertion
+  `tests/runtime/test_runtime_device_state.py::test_current_device_binds_the_calling_thread`
+  now makes (it fails on the old core, passes on the new one; `libcudart` is loaded
+  through `ctypes` and the test skips where it cannot be). The rank-1-only asymmetry is
+  the point: worker threads on rank 0 default to the device rank 0 uses.
+- 27: `JITTOR_TRITON_FAST_SYNC=0` (still fails), the `cuLaunchKernel` stream
+  interception test (the argument is `0x2` by default, NULL with
+  `JITTOR_TRITON_LEGACY_STREAM=1`) plus the run that survives it, a
+  `CUDA_LAUNCH_BLOCKING=1` run that fails identically, and the
+  `ATTN=TORCH_SDPA` run that completes both denoise steps with zero illegal
+  addresses against `ATTN=FLASH_ATTN` runs that never finish the first -- with
+  the resolved-backend lines from each log showing the backends really differ.
+  `probe_unique_scatter.py` is the `unique` repro (device 1 with ambient 0
+  raises; with ambient 1 numpy agrees) and `TestUniqueOffTheAmbientDevice` is
+  its regression. `probe_ambient_ops.py` prints `device_id` beside the device
+  jittor would really dispatch on for every step of the encoder's rotary chain
+  (`jt.ones_like(idx)` was the one that read 0), and
+  `TestLikeConstructorsKeepTheDevice` covers the family. The migration-target
+  change in `var_holder.h` is a core edit -- it needs the 218-file rebuild, so it
+  is verified by the rebuilt core plus a TP2 run, not by a Python test.
+- 28: `H3_FUSE_DUMP=1` on `probe_loader_race.py threads 4 6` reproduces the assert
+  once in three runs and prints the dump twice in that run (`ops=1`, `outputs=0`,
+  `tflag` 68 vs a batch stamp of 67, `active_epochs=1`); the same probe with
+  `JITTOR_SHIM_SERIALISE=1` is the negative result -- it segfaults in
+  `jit_utils_core.so` instead of asserting, so serialising the shim's Python entry
+  points is neither a fix nor a valid test of one. `flash_attn.__file__` is
+  `site-packages/flash_attn/__init__.py`, byte-identical to the shim's stub before
+  the instrument, and `flashattn_jittor_last_error()` is `import
+  flash_attn_jittor_cuda failed: No module named 'flash_attn_jittor_cuda'`.
+
+- 31: standalone, before/after, on a rank whose ambient device is not the
+  tensor's (`CUDA_VISIBLE_DEVICES=1,2`, device 1 requested): `.to(1)` reports
+  `cuda:0` before the fix and `cuda:1` after, while `.to(0)`, `.to("cuda:1")`,
+  `.to(torch.long)` and `torch.arange(..., device=1)` are unchanged.
+  `compat/tests/torch/test_multi_device.py::TestMultiDeviceFacade::test_to_and_cuda_with_an_index`
+  gained the int cases, placed *first* in that test: the file's bare-`"cuda"`
+  case at the end fails when the file runs alone (that is the pre-existing
+  "15/16, isolated-run-only" failure of section 16 -- a bare `"cuda"` resolves to
+  the ambient device, which in isolation is still 0), and an early abort would
+  hide anything added after it. Whole file, through the installed package:
+  `1 failed, 15 passed`, failing at the bare-`"cuda"` line; a sentinel print on
+  either side of the new block confirmed it executes and passes (it is what
+  located the failure at that later line rather than at the new assertions).
+  Note the shim's test files cannot be collected from the repo root
+  (`compat/__init__.py` does `from .._runtime import ...`, so pytest importing
+  `compat` as a top-level package dies with "attempted relative import beyond
+  top-level package" -- the untouched sibling `test_device_contexts` fails the
+  same way there); use
+  `PYTHONPATH=$REPO/python $VENV/bin/python -m pytest --pyargs jittor.compat.tests...`
+  from the lab's `env-jittor.sh` environment.
+
 Each fix was synced into the lab venv at
 `$JITTOR_LAB_ROOT/_state/h3/venv-jittor/lib/python3.12/site-packages/jittor/`,
 which is a **copy** of `python/jittor` plus the installed `jittor-torch`
 compat package; the adapter checkout is editable.
+
+## 32. The storage view model, and the triton bridge's CUDA device
+
+Two independent defects on the H3 TP2 path, one closed and one open, plus the
+repro that separates them.
+
+### 32.1 `_Storage` / `set_` described a tensor, not its allocation (closed)
+
+`PinnedModuleStager` (text_encoder offload) snapshots a module group as one byte
+image of its storage and re-creates each member with
+`set_(storage, offset, shape, stride)`. The shim reported
+`_Storage.nbytes()` as the tensor's *own* `numel * dsize` while
+`storage_offset()` is an absolute offset inside the shared allocation, so a
+weight sliced out of a fused one -- a shard rank 1 has and rank 0 does not --
+was restored past the end of the buffer it was given: the rank-1
+`as_strided`/`getitem` out-of-bounds seen at 5-30 s.
+
+Fixed (`74bfe44c`): `_Storage.nbytes()` is the byte extent from the allocation
+origin to the tensor's last element (`_storage_offset()` +
+`_storage_strides()`, both real exports), and `set_(storage, ...)` is
+byte-addressed. A physically non-contiguous shard has no byte range to
+materialise and is refused rather than packed into the wrong positions.
+
+Verified: minimal repro `probe_storage_model.py` (cpu and cuda:3, contiguous
+shard at a nonzero offset round-trips exactly; a stride-2 shard raises);
+`test_contiguous_storage`, `test_torch_compat_load_strided` (10 passed),
+`test_multi_device`, `tests/core/test_storage_strides` (10 passed). On the real
+TP2 `ATTN=FLASH_ATTN` + text_encoder-offload request the log now contains zero
+`as_strided` and zero out-of-bounds hits: the request runs `encode_prompt` and
+enters the DiT denoise loop.
+
+### 32.2 The triton bridge's driver was pinned to CUDA device 0 (closed)
+
+`compat/triton/backend.py` retained **one** primary context
+(`cuDeviceGet(&dev, 0)`, `cuDevicePrimaryCtxRetain`) and cached every
+`CUmodule`/`CUfunction` in it. A module belongs to the context it was loaded
+into, so a rank whose operands live on CUDA ordinal 1 launched its kernels in
+device 0's context against device-1 pointers. Now `_Driver` is one instance per
+device (`_Driver.get(ordinal)`, `_insts`), `run()` selects the operands' device
+(and refuses mixed-device operands), and `ensure_ctx()` asserts both the driver
+context and the runtime device so the guarded bounce buffers and the launch
+agree. Regression test:
+`compat/tests/triton/test_triton_backend.py::TestDriverIsPerDevice` (also
+repairs that file's stale `_Driver.instance()` call, which no longer existed).
+
+### 32.3 Why device 1 faulted, and the repro that found it (closed)
+
+Both target configurations (`ATTN=FLASH_ATTN` TP2 with and without
+text_encoder offload) used to fail on rank 1 with a sticky
+`cudaErrorIllegalAddress`, 20-75 s in, reported at whatever CUDA call came next
+(`cudaMemGetInfo`, a NCCL broadcast, a triton `cudaMalloc`, the triton launch) --
+a different site per run, always device 1.
+
+`probe_triton_device.py` reproduces it in **seconds** with no model: one
+process, `CUDA_VISIBLE_DEVICES=1,2`, tensors on ordinal 1, one `@triton.jit` add
+through the bridge. device 0 launched fine, device 1 raised
+`cudaDeviceSynchronize -> cudaError 700`.
+
+The cause was ordering inside the bridge, not the kernels. `_Driver.__init__`
+called `cuCtxSetCurrent`, and the compilation path calls `_Driver.get()` for its
+compute capability -- so the *first* triton launch of a rank-1 process switched
+the current context to device 0 before the materialising `sync_all` ran. The
+sync then waited on device 0's streams, device 1's operands were not committed,
+and the kernel was handed device-1 pointers while device 0 was current:
+uncommitted memory on device 0 (stale values), an illegal address on device 1.
+Fixed (`95ad1ea2`): `__init__` only `cuDevicePrimaryCtxRetain`s (no context
+switch), and `run()` selects the operands' device with `ensure_ctx()` *before*
+compiling and materialising, so the runtime device and the driver context agree
+for both the bounce buffers and the launch.
+
+Verified: the probe is green on device 0 and device 1, and both real
+configurations pass -- TP2, 2 steps, 256x256, `ATTN=FLASH_ATTN`:
+`RESULT completed in 495.3 s` with no offload (`tp2-ctxfix-1.log`), and
+`RESULT completed in 50.1 s` with the factory default text_encoder offload
+(`tp2-ctxfix-offload.log`). Both logs contain zero `cudaErrorIllegalAddress`,
+zero `as_strided` and zero worker tracebacks; the offload one also exercises
+section 32.1's storage/`set_` fix end to end. Two operational notes the probe also produced, which are *not* this
+fault: a stride-0 operand (`torch.ones(n)` through the shim is a broadcast view,
+`s=[0] r=1/4096`) is read by such a kernel as `n` dense elements, which gives
+wrong values on device 0 as well; and an operand whose last stride is not 1
+cannot be served by the kernels the model uses.
+
+## 33. Speed: jittor shim vs real torch, and TP2 vs TP1
+
+Same script (`infer_h3.py`), same request (512x512, 124 frames, 6 steps, seed 0,
+`--vae-dtype float16`, injected latents), one GPU each, both idle. The jittor side
+uses its flash-attn extension; the oracle has no real flash-attn, so it runs
+diffusers' `_native_flash` (torch SDPA's flash kernel). `load_seconds` is **not**
+comparable and is omitted: the shim loads weights eagerly (385-392 s) while the
+oracle's `ComponentsManager` builds lazily (2.13 s).
+
+`generate_seconds`, and the per-phase split the script prints:
+
+| phase | jittor, cold | jittor, warm | torch | warm jittor / torch |
+| --- | --- | --- | --- | --- |
+| dit | 61.41 | 25.92 | 23.35 | 1.11x |
+| text_encoder | 17.25 | 3.77 | 10.18 | **0.37x** |
+| vae.video | 66.50 | 15.69 | 6.79 | 2.31x |
+| vae.audio | 36.90 | 5.64 | 0.28 | 20.1x |
+| phase sum | 182.1 | 51.0 | 40.6 | 1.26x |
+| **generate_seconds** | **253.69** | **92.34** | **75.94** | **1.22x** |
+
+So: the first jittor run pays ~2.7x for JIT compilation and must not be used as a
+speed number; warm, the shim is 1.22x off torch overall, is *faster* than torch on
+the text encoder, is at parity on the DiT (1.11x), and loses on the VAEs -- the
+video decoder by 2.31x and the audio decoder by 20x (5.64 s against 0.28 s, the
+single largest per-phase gap and the obvious next target). Both sides wrote a
+512x512 6-step mp4 of the same size (359,623 vs 358,341 bytes).
+
+For the vllm-omni server path (a different pipeline, so not comparable with the
+table above), 2 steps 256x256, `ATTN=FLASH_ATTN`, warm:
+
+| load | request |
+| --- | --- |
+| TP1 (1 GPU) | 41.9 s |
+| TP2 (2 GPUs) | 55.1 s |
+| TP2 + text_encoder offload | 50.1 s |
+
+and at 8 steps 832x480: **TP1 309.2 s against TP2 180.2 s** -- 1.72x, i.e. TP2 pays
+off only once per-step compute outweighs the per-layer NCCL traffic, which a
+2-step 256x256 request is far too small for.
+
+The oracle needed its own venv on this box: `venv-oracle`'s torch is cu130 and
+the driver is 535 (CUDA 12.9), and its `transformers 5.17` breaks the lab's
+diffusers. `venv-oracle-cu129` (torch/torchaudio/torchvision `+cu129`,
+`transformers==5.5.3`, venv-oracle's packages layered through a `.pth`) plus
+`env-oracle-cu129.sh` / `run-oracle-cu129.sh` are the working pair; see
+`agent/manuals/` or the lab notes for the recipe.
+
+## 34. TP2 completed but its pictures were noise (closed: the shim's Generator had no stream)
+
+`ATTN=FLASH_ATTN`, 2 steps, 256x256, seed 11223, same prompt: TP1 writes a
+blurry-but-real frame, TP2 writes **coloured blocks**. Measured over the decoded
+frames: TP1 mean 129.4 / std 30.5 / |dx| 9.8 (spatially smooth), TP2 mean 88.6 /
+std 82.4 / |dx| 16.8 with |dt| 31.6 (flickering); per-pixel mean difference
+82.6/255 (p99 183). Sheet: `runs/sheet-tp1-vs-tp2.png`.
+
+It is not our recent work, and not the attention backend: a TP2 run from the day
+before the storage/triton fixes (tag `tp2-sdpa-2step-256`, TORCH_SDPA) has the
+same character, and single-GPU runs are fine (`runs/sheet-oldtp2-vs-single.png`).
+
+Ruled out by measurement:
+
+| hypothesis | result |
+| --- | --- |
+| too few steps | TP2 at 8 steps is still noise |
+| text-encoder TP sharding | `TEXT_ENC_TP=1` (DiT still TP2) is still wrong |
+| the shim's collectives | `probe_tp_dist.py` on 2 ranks: all_reduce sum=3.0, all_gather slots [0,1], broadcast, and the row-parallel "split + all_reduce" arithmetic all exact (max err 0) |
+
+### The DiT *is* TP-sharded -- the "same footprint" reading is withdrawn
+
+A first pass compared each rank's loaded footprint and found TP2 and TP1 equal
+(10.2354 against 10.2402 GiB), which looked like unsharded weights. That number
+covers the whole diffusion runner (VAEs included), so it does not isolate the
+DiT, and a trace of the shim's collectives (`H3_TP_TRACE=1`, installed in the
+deployed shim only: `_tp_trace` prints one line per distinct (kind, shape) and an
+`[tptrace-sum]` count at exit) settles it the other way:
+
+| rank | distinct collective operands seen |
+| --- | --- |
+| TP0 | `all_gather_into` (1,2688) (1,48384) (1,5376) (2368,2688) (289,2688) (3072,16) (3072,48) (414,2688); `all_reduce` (1,2688) (1,289,5120) (289,5376) (3072,5376) |
+| TP1 | the same set, with **different operand heads** |
+
+2688 = 5376/2 is the DiT hidden split, and the two ranks hand in different
+values, so the DiT shards its weights and reduces them. The text encoder shows
+up as `all_reduce (1,289,5120)` with 289 tokens unsharded (5120 = Qwen3-VL
+hidden). So "the layers are not sharded" is **not** the fault.
+
+### The sharpest remaining lead: packed rows versus their metadata
+
+The DiT also moves a `(3072, 5376)` `all_gather_into`, i.e. the *packed rows*
+are split across the two ranks as well as the hidden dim -- and
+`MiniMaxH3SPPrepare` exists precisely to shard `hidden_states` *and* its
+metadata (`rope_table`, `combined_indices`) together. The log says
+`ulysses=1, ring=1, use_ulysses_low=True`, so the row split is not Ulysses'.
+The modulation kernel that used to fault reads
+`indices_ptr + row * stride_indices` for exactly those rows, so
+"rows sharded, indices/rope not (or sharded differently)" is both the shape of
+this failure and the shape of the original crash. Whether the three tensors
+cross that boundary with consistent row splits is the next thing to look at.
+
+### Every shim primitive on that path has now been checked (2026-09-17)
+
+Each row is a probe in the lab, run against the shim, not a reading of the code.
+`probe_tp_dist.py`, `probe_sp_chunk.py`, `probe_sp_gather.py` and the write
+probes are single-purpose and take seconds to a minute:
+
+| primitive / behaviour | probe | result |
+| --- | --- | --- |
+| `all_reduce` sum and mean, `all_gather`, `broadcast`, row-parallel split+reduce | `probe_tp_dist.py`, 2 ranks | exact |
+| `Tensor.chunk` (1-D/2-D/3-D, non-divisible, `chunks > size`, on views) | `probe_sp_chunk.py` | matches numpy |
+| the SP gather assembly `reshape([ws]+size) -> movedim(0,dim) -> reshape` at dim 1/2, and `movedim` alone | `probe_sp_gather.py`, 2 ranks | matches numpy |
+| `copy_` into `param.data[a:b]`, both rank regions, fp32/bf16, cpu/cuda, and into a parameter that is itself a shard | `probe_slice_copy.py`, `probe_shard_write.py` | write lands |
+| which model line calls each collective | `H3_TP_TRACE=1` + call-site capture | all from vllm `ColumnParallelLinear(gather_output=True)` / `RowParallelLinear` and the encoder, at shapes that are internally consistent (`video_out` 48 = 96/2, `audio_out` 16 = 32/2, DiT hidden 2688 = 5376/2, rows 3072 = the full sequence) |
+
+So the fault is *not* a collective, a split, an assembly or a write: every
+primitive that the TP2 path uses behaves as torch does. What remains is model
+-side TP semantics -- which tensor is replicated where the code assumes a shard
+(or the reverse), or a `shard_id`-to-region mapping -- and that lives in
+vllm/vllm-omni. Finishing the localisation therefore needs a *dump-only*
+diagnostic inside the lab's `vllm-omni` checkout (per-rank encoder weight shard
+digests, or one forward's intermediate tensors); that is a change to the
+component the work is not supposed to modify, so it is not done unilaterally.
+
+### Root cause: the shim's `torch.Generator` did not own a stream (closed)
+
+None of the primitives was wrong, because the bug was not in a primitive: it was
+in **which numbers the two ranks started from**.
+
+The H3 pipeline builds the initial latents with a *seeded CPU generator*:
+
+    g = torch.Generator(device="cpu").manual_seed(seed)
+    video = torch.randn(1, 24, latent_t, latent_h, latent_w, generator=g, dtype=torch.float32)
+
+and its DiT shards **weights**, not the sequence -- so both ranks must denoise the
+*same* latent. The shim's `Generator` kept only a seed and left drawing to
+jittor's **global** generator (`_seed_from` reseeded the global stream, then the
+factory drew from it). Measured directly: two `manual_seed(1234)` generators
+returned *different* numbers, and a fresh `manual_seed(1234)` generator returned
+different numbers again after the process had sampled 100 more values. So each
+rank drew from its own global stream, advancing by different amounts (the
+text-encoder sharding, the collectives, warmup), and the two ranks denoised
+*different* latents. Every `RowParallelLinear` then all-reduced two halves
+computed from different inputs: the sum is meaningless, and the picture is noise.
+TP1 is unaffected because it has one rank -- which is why this looked like a
+"TP2 correctness" mystery while everything about the TP itself checked out. It
+also explains the earlier observations: `TEXT_ENC_TP=1` changed the *appearance*
+(it changes each rank's stream advance) but not the conclusion, 8 steps stayed
+noise, and the attention backend did not matter.
+
+Fixed (`0ea3448c`): `Generator.manual_seed` gives that generator its own
+deterministic stream (`numpy.random.default_rng(seed)`), and the random factories
+(`randn`/`rand`/`randn_like`/`rand_like`/`normal`/`randint`/`randperm`) draw from
+it when a generator is passed, honouring `dtype`. Without a generator the old
+global-stream behaviour is unchanged. Regression test:
+`compat/tests/torch/test_generator_streams.py`.
+
+Verified:
+* single process: same seed -> same numbers, different seed -> different,
+  unmoved by the process's own sampling; the pipeline's exact call shape
+  (`randn(1,24,T,H,W, generator=g, dtype=float32)`) reproduces;
+* two ranks that first sample *different* amounts: `video_sum` identical
+  (-350.171417) and `audio_sum` equal to the last print digit;
+* TP2 request (2 steps, 256x256, seed 11223): the decoded frames go from
+  `std 82.4` with `|dt| 31.6` (flickering noise) to `std 31.0` against TP1's
+  `std 30.5`, i.e. the same statistics as a real sample
+  (`runs/genfix-tp2.mp4`, `runs/sheet-tp1-vs-genfix-tp2.png`).
+
+The lesson generalises: for a diffusion model whose TP shards weights, any
+per-rank divergence in *inputs* (RNG streams above all) is fatal and looks
+exactly like "the TP math is wrong". Check the streams before the kernels.
+
+### How close TP1 and TP2 are now (same seed, 512x512)
+
+| pair | mean abs diff | per-frame corr | block SSIM (16 px) |
+| --- | --- | --- | --- |
+| TP1 vs TP1 (same config twice) | 1.50/255 | 0.971-0.994 | 0.942-0.985 |
+| TP1 vs TP2, **2 steps** | 8.29/255 | 0.982-0.985 | **0.972-0.985** |
+| TP1 vs TP2, 8 steps | 16.70/255 | 0.40-0.76 | 0.693-0.958 |
+
+Read it as: at two steps the two paths agree to block-SSIM ~0.98, i.e. the TP
+computation is numerically equivalent to one rank; the 8-step figure is the
+sampler amplifying that bf16 rounding (the same run twice is 1.5/255, so it is not
+run-to-run noise, and it is not a structural error either -- the frames stay the
+same scene and the same overlaid text, see
+`runs/sheet-8step-tp1-vs-tp2.png`). Pixel-identical output between a weight-sharded
+bf16 TP and a single GPU is not something a chaotic 8-step sampler can give, so
+"correct" here means numerically equivalent per step, same content overall.

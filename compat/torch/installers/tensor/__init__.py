@@ -612,11 +612,30 @@ def frombuffer(buffer, *, dtype, count=-1, offset=0, requires_grad=False):
 
 
 class Generator:
+    """A torch.Generator with its OWN stream.
+
+    A generator's draws must depend only on its seed and its own history -- in
+    torch, two `manual_seed(1234)` generators yield the same numbers, and a draw
+    does not care how much work the process has already queued. This used to keep
+    only a seed and leave drawing to jittor's *global* generator, so the value a
+    caller got depended on the process's prior ops. That is fatal for TP: the H3
+    pipeline makes the initial latents with a seeded CPU generator, the DiT shards
+    *weights* (so every rank must denoise the same latent), and two ranks whose
+    global streams have advanced differently drew different latents -- each
+    RowParallelLinear then added halves computed from different inputs, and the
+    TP2 picture came out as noise while TP1 (one rank) was fine.
+    """
+
     def __init__(self, device=None):
         self.device = globals()["device"](device or "cpu")
         self._seed = 0
+        self._rng = None
     def manual_seed(self, s):
         self._seed = int(s)
+        # one stream per generator: deterministic, and independent of whatever
+        # the process's global generator has already produced.
+        import numpy as _numpy_rng
+        self._rng = _numpy_rng.random.default_rng(self._seed)
         return self
     def get_state(self):
         return jt.array([self._seed])
