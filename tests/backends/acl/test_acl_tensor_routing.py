@@ -135,7 +135,11 @@ class IndexingRouting(unittest.TestCase):
             self.calls.append((operation, args))
             return self.provider_result
 
-        self.owner = definitions("ops/indexing.py", jt=self.jt, np=np,
+        # 6ae82f2b: the module reads the cached ``_jt`` (falling back to a real
+        # ``import jittor``) instead of a ``jt`` global, so the stand-in has
+        # to be injected under that name for the stub Var to be the one
+        # patched.
+        self.owner = definitions("ops/indexing.py", jt=self.jt, _jt=self.jt, np=np,
                                  try_dispatch=dispatch,
                                  dispatch_context=lambda *args: SimpleNamespace(backend="cpu"),
                                  _native_var_getitem=Var.getitem,
