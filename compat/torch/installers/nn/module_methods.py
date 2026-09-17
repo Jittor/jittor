@@ -830,7 +830,7 @@ def _zero_grad(self, set_to_none=True):
     # The bridged optimizer runs first: its zero_grad clears the torch-visible
     # .grad as a side effect, so doing it afterwards would undo the zero tensors
     # that set_to_none=False is required to leave behind.
-    from ...tensor_state import latest_optimizer
+    from ...tensor_state import compatibility_owner, latest_optimizer
     opt = latest_optimizer(jt)
     if opt is not None:
         try:
@@ -844,8 +844,13 @@ def _zero_grad(self, set_to_none=True):
                 if grad is not None:
                     object.__setattr__(p, "_torch_grad", None)
             elif grad is not None:
+                # Through the torch frontend, not ``jt.zeros``: the latter
+                # builds a native Var, and the published ``.grad`` would stop
+                # being a Tensor -- its dtype would print as "float32" where
+                # the parameter's prints as "torch.float32", and every Tensor
+                # method on it would vanish.
                 object.__setattr__(
-                    p, "_torch_grad", jt.zeros(grad.shape, dtype=grad.dtype))
+                    p, "_torch_grad", compatibility_owner(jt).zeros_like(grad))
     except EXPECTED as exc:
         swallowed("torch/installers/nn.py _zero_grad: for p in self.parameters():", exc)
     return None
@@ -876,14 +881,13 @@ def _get_parameter(self, target):
     if not hasattr(mod, leaf):
         raise AttributeError(f"`{target}` is not a parameter")
     v = getattr(mod, leaf)
-    # a parameter is a trainable Var directly attached to the module
-    if isinstance(v, jt.Var) and not v.is_stop_grad():
+    # `requires_grad` cannot classify it -- a buffer registered from a torch
+    # factory is not stop_grad either, so asking that question returned
+    # buffers from `get_parameter`, which torch answers with AttributeError.
+    # The module's own parameter listing is the authority; buffers are tracked
+    # separately, by name (see Module.register_buffer).
+    if isinstance(v, jt.Var) and target in {n for n, _ in self.named_parameters()}:
         return v
-    if isinstance(v, jt.Var):
-        # could still be a (frozen) parameter; distinguish from buffers
-        names = {n for n, _ in self.named_parameters()}
-        if target in names:
-            return v
     raise AttributeError(f"`{target}` is not a parameter")
 
 
@@ -932,15 +936,14 @@ def _module_type(self, dst_type=None):
 # jittor instead tags each buffer Var with `.persistent`; derive the set
 # from that. It's a property so it stays correct as buffers are (de)added.
 def _nonpersist_set(self):
-    """The immediate buffer names registered with ``persistent=False``."""
-    out = set()
-    for k, v in self.__dict__.items():
-        if (isinstance(k, str) and not k.startswith("_")
-                and isinstance(v, jt.Var)
-                and getattr(v, "is_buffer", False)
-                and not getattr(v, "persistent", True)):
-            out.add(k)
-    return out
+    """The immediate buffer names registered with ``persistent=False``.
+
+    Read from the names the module tracks, not from per-Var tags: those tags
+    are lost the moment a buffer Var is replaced (a dtype cast, a weight
+    load), which is exactly why ``Module.register_buffer`` keeps
+    ``_non_persistent_buffer_names`` instead.
+    """
+    return set(self.__dict__.get("_non_persistent_buffer_names", ()))
 
 
 # Fidelity for the promoted Module methods. Every entry is APPROXIMATE: these

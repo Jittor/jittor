@@ -365,8 +365,8 @@ def test_to_dtype_casts_float_params_only():
     net = _Net()
     net.register_buffer("ids", torch.tensor([1, 2, 3]))
     net.to(torch.float64)
-    assert str(net.lin.weight.dtype) == "float64"
-    assert str(net.ids.dtype) in ("int32", "int64"), \
+    assert str(net.lin.weight.dtype) == "torch.float64"
+    assert str(net.ids.dtype) in ("torch.int32", "torch.int64"), \
         "integer buffers must survive to(float64)"
 
 
@@ -388,9 +388,9 @@ def test_to_is_a_noop_without_device_or_dtype():
 def test_float_double_half_roundtrip():
     net = _Net()
     net.double()
-    assert str(net.lin.weight.dtype) == "float64"
+    assert str(net.lin.weight.dtype) == "torch.float64"
     net.float()
-    assert str(net.lin.weight.dtype) == "float32"
+    assert str(net.lin.weight.dtype) == "torch.float32"
 
 
 def test_get_parameter_rejects_a_buffer():
@@ -513,8 +513,8 @@ class TestModuleMethodsAcrossDevices:
         net = _Net()
         net.register_buffer("ids", torch.tensor([1, 2, 3]))
         net.to(torch.float64)
-        assert str(net.lin.weight.dtype) == "float64"
-        assert str(net.ids.dtype) in ("int32", "int64")
+        assert str(net.lin.weight.dtype) == "torch.float64"
+        assert str(net.ids.dtype) in ("torch.int32", "torch.int64")
 
     def test_round_trip_migration_preserves_values(self, device):
         """to(device) then to('cpu') is value-preserving, bit for bit."""

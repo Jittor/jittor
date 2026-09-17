@@ -93,20 +93,20 @@ class TestTorchCumulative(cu.JittorTestCase):
 
     def test_bool_input_is_promoted_to_int64_exactly(self, device):
         result = torch.cumsum(torch.tensor(MASK), -1)
-        self.assertEqual(str(result.dtype), "int64")
+        self.assertEqual(str(result.dtype), "torch.int64")
         np.testing.assert_array_equal(
             result.numpy(), np.cumsum(MASK.astype("int64"), axis=-1))
 
     def test_uint8_input_is_promoted_to_int64_exactly(self, device):
         values = np.array([[3, 0, 7], [1, 2, 0]], dtype="uint8")
         result = torch.cumsum(torch.tensor(values), -1)
-        self.assertEqual(str(result.dtype), "int64")
+        self.assertEqual(str(result.dtype), "torch.int64")
         np.testing.assert_array_equal(
             result.numpy(), np.cumsum(values.astype("int64"), axis=-1))
 
     def test_dtype_keyword_casts_the_result(self, device):
         result = torch.cumsum(torch.tensor(SMALL), 1, dtype=torch.float64)
-        self.assertEqual(str(result.dtype), "float64")
+        self.assertEqual(str(result.dtype), "torch.float64")
         np.testing.assert_allclose(
             result.numpy(), np.cumsum(SMALL.astype("float64"), axis=1),
             rtol=1e-6, atol=0)

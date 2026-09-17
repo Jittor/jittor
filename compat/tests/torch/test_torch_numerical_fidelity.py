@@ -471,8 +471,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             tensor = torch.tensor(values)
             functional = torch.sign(tensor)
             method = tensor.sign()
-        self.assertEqual(str(functional.dtype), "int32")
-        self.assertEqual(str(method.dtype), "int32")
+        self.assertEqual(str(functional.dtype), "torch.int32")
+        self.assertEqual(str(method.dtype), "torch.int32")
         np.testing.assert_array_equal(functional.numpy(), np.sign(values))
         np.testing.assert_array_equal(method.numpy(), np.sign(values))
 
@@ -832,8 +832,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             actual_tensor.numpy(), np.float_power(base, exponent), rtol=1e-6)
         np.testing.assert_allclose(
             actual_method.numpy(), np.float_power(base, 2.0), rtol=1e-6)
-        self.assertEqual(str(actual_scalar.dtype), "float64")
-        self.assertEqual(str(actual_tensor.dtype), "float64")
+        self.assertEqual(str(actual_scalar.dtype), "torch.float64")
+        self.assertEqual(str(actual_tensor.dtype), "torch.float64")
 
     def test_close_family_is_stable_module_level_objects(self):
         numerical = importlib.import_module(
@@ -924,8 +924,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             actual_left.numpy(), np.searchsorted(boundaries, values, side="left"))
         np.testing.assert_array_equal(
             actual_right.numpy(), np.searchsorted(boundaries, values, side="right"))
-        self.assertEqual(str(actual_left.dtype), "int64")
-        self.assertEqual(str(actual_right.dtype), "int32")
+        self.assertEqual(str(actual_left.dtype), "torch.int64")
+        self.assertEqual(str(actual_right.dtype), "torch.int32")
 
     def test_nan_reduction_family_is_stable_module_level_objects(self):
         numerical = importlib.import_module(
@@ -1359,8 +1359,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
     def test_trapz_cpu_dx_coordinate_and_var_delegate_match_numpy(self):
         values = np.array([[0.0, 1.0, 4.0], [2.0, 3.0, 8.0]], dtype="float32")
         coord = np.array([0.0, 0.5, 2.0], dtype="float32")
-        expected_dx = np.trapz(values, dx=2.0, axis=1)
-        expected_x = np.trapz(values, coord, axis=1)
+        expected_dx = np.trapezoid(values, dx=2.0, axis=1)
+        expected_x = np.trapezoid(values, coord, axis=1)
         with _native_jittor.flag_scope(use_cuda=0):
             values_tensor = torch.tensor(values)
             coord_tensor = torch.tensor(coord)
@@ -1373,7 +1373,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
 
     def test_trapz_cpu_out_identity(self):
         values = np.array([1.0, 2.0, 5.0], dtype="float32")
-        expected = np.trapz(values, dx=0.5)
+        expected = np.trapezoid(values, dx=0.5)
         with _native_jittor.flag_scope(use_cuda=0):
             values_tensor = torch.tensor(values)
             out = torch.zeros(1)
