@@ -33,8 +33,9 @@ void curand_manual_seed(int device, uint64 seed);
 // @pyjt(initial_seed)
 uint64 curand_initial_seed(int device);
 
-void curand_check_offset_advance(uint64 count);
-void curand_advance_offset(uint64 count, bool snapshot_safe);
+// Record the exact native distribution call.  CUDA's host cuRAND API does not
+// expose its internal state, so checkpoints replay this runtime-owned log.
+void curand_record_operation(uint64 count, bool normal, bool double_precision);
 
 // Destroys the generator, reporting a failure instead of raising. Idempotent.
 void curand_shutdown();

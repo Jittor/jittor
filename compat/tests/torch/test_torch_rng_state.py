@@ -4,6 +4,7 @@ import os
 import json
 from pathlib import Path
 import random
+import re
 import sys
 import tempfile
 import unittest
@@ -283,29 +284,31 @@ class TestCUDARNGState(RNGStateContract, unittest.TestCase):
         finally:
             torch.cuda.set_device(previous)
 
-    @unittest.skipUnless(hasattr(torch, "_torch_compat_install_context"),
-                         "Jittor's opaque Host cuRAND checkpoint limitation")
-    def test_unrepresentable_history_fails_and_prior_safe_state_restores(self):
-        for factory, dtype in ((torch.randn, torch.float32), (torch.rand, torch.float64),
-                               (torch.randn, torch.float64)):
-            torch.cuda.manual_seed(1729)
-            self.checkpoint_draws((4097, 65537))
-            state = torch.cuda.get_rng_state()
-            expected = draws("cuda", (4097, 65537, 4097, 65537))
-            torch.cuda.set_rng_state(state)
-            generated = factory(4097, dtype=dtype, device="cuda")
-            assert_random_device(generated, "cuda")
-            with self.assertRaisesRegex(RuntimeError, "complete CUDA RNG state is unsupported"):
-                torch.cuda.get_rng_state()
-            self.assertEqual(values(generated).shape, (4097,))
-            torch.cuda.set_rng_state(state)
-            self.assert_draws_equal(expected, draws("cuda", (4097, 65537, 4097, 65537)))
-            torch.cuda.set_rng_state(state)
-            legacy = values(state).tobytes().replace(b"XORWOW_U32_V1", b"XORWOW_V1")
-            invalid = torch.tensor(np.frombuffer(legacy, dtype=np.uint8).copy(), dtype=torch.uint8)
-            with self.assertRaises(RuntimeError):
-                torch.cuda.set_rng_state(invalid)
-            np.testing.assert_array_equal(values(torch.cuda.get_rng_state()), values(state))
+    def test_mixed_history_snapshot_restores(self):
+        """CUDA checkpoints preserve cuRAND normal, uniform, and f64 calls."""
+        torch.cuda.manual_seed(1729)
+        self.checkpoint_draws((17, 18))
+        torch.randn(4097, dtype=torch.float32, device="cuda")
+        torch.rand(33, dtype=torch.float64, device="cuda")
+        torch.randn(18, dtype=torch.float64, device="cuda")
+        state = torch.cuda.get_rng_state()
+        expected = draws("cuda", (7, 9, 8, 5))
+        torch.cuda.set_rng_state(state)
+        self.assert_draws_equal(expected, draws("cuda", (7, 9, 8, 5)))
+        torch.cuda.set_rng_state(state)
+        legacy = values(state).tobytes().replace(b"JITTOR_CURAND_REPLAY_V1", b"JITTOR_CURAND_XORWOW_U32_V1")
+        invalid = torch.tensor(np.frombuffer(legacy, dtype=np.uint8).copy(), dtype=torch.uint8)
+        with self.assertRaises(RuntimeError):
+            torch.cuda.set_rng_state(invalid)
+        np.testing.assert_array_equal(values(torch.cuda.get_rng_state()), values(state))
+        malformed_text = re.sub(
+            r"uniform f32 \d+", "uniform f64 18446744073709551615",
+            state.numpy().tobytes().decode(), count=1)
+        malformed = torch.tensor(np.frombuffer(malformed_text.encode(), dtype=np.uint8).copy(),
+                                 dtype=torch.uint8)
+        with self.assertRaises(RuntimeError):
+            torch.cuda.set_rng_state(malformed)
+        np.testing.assert_array_equal(values(torch.cuda.get_rng_state()), values(state))
 
 
 def resume_worker(target_device, mode, checkpoint, output_file):

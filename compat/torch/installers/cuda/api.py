@@ -1279,7 +1279,7 @@ def _api_accelerator_current_accelerator(*a, **k):
 
 
 _CUDA_FIDELITY_DETAILS = {
-    _api_cuda_get_rng_state: "Versioned per-device XORWOW snapshot only after float32 uniform draws; normal/float64 histories raise explicitly. Same cuRAND version required.",
+    _api_cuda_get_rng_state: "Versioned per-device cuRAND operation-log snapshot covering mixed uniform/normal and float32/float64 draws; same cuRAND version required.",
     _api_cuda_get_rng_state_all: "One strictly representable snapshot per visible CUDA device; fails if any device has normal/float64 history. State bytes and algorithm differ from Torch.",
     _api_cuda_set_rng_state: "Restores the selected cuRAND stream without changing CPU, Python or NumPy RNG state.",
     _api_cuda_set_rng_state_all: "Validates every versioned snapshot before restoring per-device cuRAND streams.",
