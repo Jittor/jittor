@@ -3102,3 +3102,47 @@ Net for the request as configured -- diffusers harness at fp16 (102.85 s) agains
 the server at its defaults (130.92 s) -- is about 27%, and the VAE accounts for
 most of it. For the like-for-like shim-vs-torch ratios the earlier sections still
 stand (DiT 1.11x, end to end 1.22x, both measured at one precision on one stack).
+
+## 37. The VAE gap is the shim's fp16 path, not the dtype choice
+
+Section 36 left the video VAE as the largest single cost on the server and
+1.35-1.55x behind the diffusers class at matched precision. Putting a real-torch
+baseline beside it turns "slower" into a specific defect.
+
+Same latent (`server_latent512.npz`), same class where possible, one decode each,
+on an H20. The reference row runs the checkpoint's own decoder class under real
+PyTorch (`probe_vae_torch_baseline.py`); the other two run the shim
+(`probe_vae_precision.py`, `probe_vae_fp16_gap.py`).
+
+| decode of `(1, 24, 37, 32, 32)` | autocast fp16 | fp32 |
+| --- | --- | --- |
+| real torch, checkpoint's class | **6.50 s** | 28.54 s |
+| shim, vLLM-Omni wrapper | **83.65 s** | 29.11 s |
+| shim, diffusers class | 20.07 s | 30.14 s |
+
+Two things follow:
+
+* **in fp32 the shim is fine**: 29.11 s against torch's 28.54 s on the same class
+  and latent. Whatever else is going on, this is not a general VAE slowdown;
+* **under `autocast(fp16)` the shim is 2.9x slower than its own fp32**, while real
+  torch is 4.4x *faster* than its own fp32. The shim's autocast is not a no-op --
+  a matmul inside the region does come back fp16 (`probe_vae_fp16_gap.py`) -- so
+  the regime the reference decode and the server both use is genuinely fp16, and
+  it is the slow one. Casting the module to fp16 outright (no autocast) gives
+  31.20 s, i.e. no better than fp32 either.
+
+So the server's 67.11 s in-pipeline decode is the shim's fp16 execution, not a
+precision choice that could be configured away. Which op pays for it is **not
+established**: `probe_autocast_ops.py` timed conv3d, group_norm, silu, padding and
+matmul with and without autocast, but its conv3d figures (0.04-0.05 ms for a
+512->512 3x3x3 conv over 4x32x32, i.e. >1 PFLOP/s) are past what the part can do,
+so those calls were not executing inside the timed loop and the per-op numbers
+must not be used. The one plausible-looking reading, group_norm at 352 ms fp32
+against 795 ms under autocast, is itself suspiciously far above a sane cost for
+16.8M elements. Attributing the 83.65 s needs a real profile of the decode
+(jittor's profiler or nsys), which is the next step.
+
+This is the one place in this whole enablement where the shim is behind torch by
+more than a small factor, and it is worth stating plainly: at matched precision
+and matched op the server's video VAE runs 3-13x slower than real torch, and the
+fp16 path is the reason.
