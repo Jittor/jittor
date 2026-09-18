@@ -4262,3 +4262,232 @@ pack 0.57 s + dtod 0.19 s + launch/final/memset 0.27 s. Both are GPU-side; the
 next measurement has to be an nsys kernel-mix diff of this same probe under the
 two runtimes, not another host-side frame.
 
+## 45. The whole gap was one call that never reached the fused backend
+
+Section 44 asked for an nsys kernel-mix diff of the same probe under both
+runtimes. That diff gives the structure; it also shows why its own durations
+cannot be believed, and the measurement that can be believed ends the search:
+the shim was running `F.scaled_dot_product_attention` through jittor's composite
+`matmul -> softmax -> matmul` while torch ran one fused cuDNN kernel, and *that*
+was the 3.48 s.
+
+### The kernel mix, and the trap in its numbers
+
+`bash run-nsys-both.sh 5` profiles `probe_decode_base_repeat.py` under each
+runtime. Six decodes each, 2,268 VAE decoder blocks per decode:
+
+| | shim | torch |
+| --- | --- | --- |
+| kernels / decode | **135,036** | 98,498 |
+| kernels / block | **59.5** | 43.4 |
+| GEMM-class launches / block | **6** | 4 |
+| attention-class launches / block | **0** | 1 |
+
+Torch's four GEMMs are all `nvjet` cuBLASLt, one per block Linear
+(`128x304`, `256x96` ×2, `256x144`), plus `cudnn_generated_fort_native_sdpa_sm90_flash_fprop_wgmma_f16`
+once per block. The shim has the four Linears but cuBLASLt merges two of them
+into a `384x72` kernel, and then adds **two GEMMs that torch never runs**:
+`cutlass_75_tensorop_f16_s1688gemm_f16_128x128_tn_align1` and
+`..._64x64_nn_align1`, plus `jittor::kernel(__half *, __half *, int)`. Splitting
+both reports into a family table and into matched / runtime-only kernel names
+puts the entire GEMM-family excess at exactly **+2 launches per block**, and both
+extra kernels live in `libcublasLt.so` (`grep -c s1688gemm` → 1684) -- they are
+cuBLASLt's CUTLASS-family kernels, i.e. an ordinary `jt.matmul`, not a jittor
+fallback kernel.
+
+`probe_sdpa_shapes.py` then closes the loop: wrapping
+`F.scaled_dot_product_attention` around a real decode reports exactly one shape
+and count on **both** runtimes -- `q=k=v=(1, 32, 1797, 64)` fp16, non-causal, no
+mask, `scale=None`, **2,268 calls per decode**, matching the block count. The VAE
+config leaves `_attn_implementation` unset, so diffusers uses SDPA on both sides.
+Two extra GEMMs per block is that call, decomposed.
+
+**The durations in those two profiles are not comparable.** The two runs are
+minutes apart and this box has a co-tenant on every card, and the sizes involved
+prove the inflation independently: the same two CUTLASS GEMMs read 541 + 466 us
+per block in the shim profile, while an isolated measurement of the *entire*
+composite SDPA call -- both GEMMs, the softmax and the scale multiply -- lands at
+**305 us** (`probe_sdpa_fused_isolated.py`). For jittor kernels nsys also inflates
+per-kernel time about 3x: the same isolated SDPA sums to 1,238 us/call from the
+profile's kernel durations against 394 us measured by wall clock. Only kernel
+*identity and count* from those profiles are usable. The `nvjet_hsh_64x16_64x16_4x2_h_bz_NNT`
+row is the control -- 379 launches at 2.7 us on the shim, 378 at 2.7 us on torch.
+
+### The measurement that does settle it: an end-to-end ablation
+
+Rather than size the call in isolation (where the two runtimes' streams and
+contention windows differ, and where the composite looks *faster* than cuDNN --
+0.394 against 0.592 ms/call, a reading that is simply wrong because torch's CUDA
+events do not bracket jittor's stream), price it where it is actually spent. Run
+the real decode twice, interleaved, in one process: once normally, and once with
+`F.scaled_dot_product_attention` replaced by `return value`. The shapes are
+unchanged (SDPA returns `[B, H, L, D]`, the same shape as `value`), so the rest of
+the graph is identical and the delta is the attention arithmetic alone.
+
+`probe_decode_sdpa_ablation.py`:
+
+| | baseline | attention elided | attention cost |
+| --- | --- | --- | --- |
+| shim | 10.16 s | **6.34 s** | **3.82 s/decode** |
+| torch | 6.68 s | **6.14 s** | **0.54 s/decode** |
+
+Two things fall out. Attention is 3.28 s of the 3.48 s gap -- **94% of it** -- and
+with attention elided the shim is at 6.34 s against torch's 6.14 s, i.e. every
+other part of this decode, the Linears, the norms, the elementwise work and the
+Triton bridge included, is already within 0.20 s. The family split of section 40
+("the gap is one kernel family, and it is fp16 elementwise") was reading a
+symptom: the composite attention *is* where the elementwise and cast volume was.
+
+### The fix was already written; it was never configured
+
+`compat/torch/installers/nn/attention.py` already routes
+`F.scaled_dot_product_attention` through `_try_flash_scaled_dot_product_attention`
+before jittor's composite, and the VAE's call passes every guard it applies:
+rank 4, `attn_mask is None`, `dropout_p == 0`, 32 == 32 == 32 heads, head_dim 64
+(a template dim), fp16, and not training. The one guard it tripped is
+`no_backend`: `jittor.compat.shim.backends.flash_attention` loads the official
+flash-attn extension only when `JITTOR_FLASH_ATTN_JITTOR_SRC` names a source
+checkout, which `env-jittor.sh` did not do. `serve-vllmomni.sh` sets the same
+variables, but only under `ATTN=FLASH_ATTN`, so the diffusers VAE path never had
+them.
+
+The branch is instrumented, so this is read rather than inferred --
+`diagnostics.sdpa_flash_stats(jt)` counts hits, per-reason misses and the backend
+name, and it names the reason exactly:
+
+| configuration | decode | `sdpa_flash_stats` |
+| --- | --- | --- |
+| no source named (before) | 10.13 s | `hits=0`, `misses={'no_backend': 2268}` |
+| source named (after) | **8.30 s** | `hits=6804`, `misses={}`, `backend='flashattn_jittor_official:/root/jittor-lab/flash-attention'` |
+
+`env-jittor.sh` now names the source. It deliberately does **not** set
+`JITTOR_FLASH_ATTN_JITTOR_REQUIRED` (a shape or dtype the extension does not
+cover should keep falling back to the composite rather than abort) or
+`JITTOR_FLASH_ATTN_CAST_FLOAT32` (which would reroute float32 attention through a
+bf16 cast -- a numerics change this env has no business making).
+`agent/manuals/environment.md` records the variable, the stats probe and the
+cost of the silent fallback.
+
+### The reference, before and after
+
+Interleaved repeated-minimum rounds, `run-repeat-interleaved.sh`, 4-5 decodes per
+run:
+
+| round | shim, composite | shim, fused | torch |
+| --- | --- | --- | --- |
+| 1 | 10.15 s | 8.32 s | 6.67 s |
+| 2 | 10.13 s | 8.32 s | 6.65 s |
+| 3 | 10.13 s | **8.30 s** | 6.67 s |
+
+**1.524x (3.48 s) becomes 1.248x (1.65 s).** Within-runtime spread is 0.02 s in
+every cell, so these are the estimators to quote.
+
+### Results, not just speed
+
+Enabling a different attention implementation is a numerics change, so it is
+measured rather than assumed. Same latent, same process-independent dump
+(`probe_decode_dump.py`), output shape `(1, 3, 124, 512, 512)` fp32:
+
+| | mean | std | min | max |
+| --- | --- | --- | --- | --- |
+| shim, fused | -0.604825 | 0.983054 | -5.507812 | 7.285156 |
+| shim, composite | -0.604825 | 0.983056 | -5.507812 | 7.285156 |
+| torch | -0.604968 | 0.982985 | -5.500700 | 7.286222 |
+
+| pair | max abs | mean abs | rms | p99 |
+| --- | --- | --- | --- | --- |
+| shim fused vs torch | 2.939e-02 | 1.104e-03 | **1.543e-03** | 5.123e-03 |
+| shim composite vs torch | 2.839e-02 | 1.121e-03 | 1.567e-03 | 5.199e-03 |
+| shim fused vs shim composite | 2.393e-02 | 8.031e-04 | 1.213e-03 | 3.906e-03 |
+
+The fused path moves the output *less* relative to torch (rms 1.543e-3) than the
+composite did (1.567e-3), and by less than the shim-torch disagreement itself.
+The switch costs nothing numerically; the shim-torch difference of ~1.5e-3 rms on
+unit-scale values is the standing gap, not this change.
+
+### What the remaining 1.65 s is
+
+The ablation still holds attention at ~1.96 s/decode against torch's 0.54 s. The
+compat layer's dense path is not a bare kernel call -- flash-attn wants `[B, L, H, D]`
+where torch's SDPA takes `[B, H, L, D]`, so it does three `permute -> reshape ->
+clone` copies per call and permutes the output back, while cuDNN takes torch's
+layout directly. Measuring both halves in isolation, through jittor's own
+`jt.sync_all` (torch's events do not bracket jittor's stream):
+
+| | 3 layout copies | full SDPA |
+| --- | --- | --- |
+| shim (fused) | 100.7 us min | 305.0 us min / 1076.7 us median |
+| torch | 41.3 us min | 557.4 us min / 557.5 us median |
+
+The copies are ~100 us of ~860 us in-decode, so ~0.14 s/decode at most, and
+jittor's own copies are 2.4x torch's. The rest is the official FA2 kernel: 13.2
+GFLOP in ~860 us is ~15 TFLOPS on a card whose fp16 peak is ~148, against cuDNN's
+~55 TFLOPS for the same shape. `batch * heads = 32` over 1,797 tokens is simply a
+low-parallelism launch for FA2's default tiling at head_dim 64, and
+`compat/shim/backends/flash_attention/official_codegen.py` exposes no block-size
+or warps knob to change that -- the extension is upstream sources as they are.
+
+Closing the rest means either a tuned fused-attention kernel for this shape
+(inside jittor, or by making the extension's configurable), or accepting the
+extension's tiling. It is no longer a host-side or launch-count problem.
+
+### The server path is reached too, but it is not where this lever is
+
+`serve-vllmomni.sh` sources `env-jittor.sh`, so the default `ATTN=TORCH_SDPA`
+server run now gets the fused backend as well. One full generation
+(`JITTOR_SDPA_STATS=1 bash run-vllmomni-gen.sh`, 113.8 s of generation after a
+318.9 s engine construction) reports:
+
+```
+[gen] sdpa_flash_stats: hits=304 backend='flashattn_jittor_official:/root/jittor-lab/flash-attention' misses={'mask': 50}
+[gen] frames: (124, 256, 256, 3)  audio: (1, 2, 165600)  peak_memory_mb: 26340.0
+```
+
+Two things to read out of that. The routing reaches the server -- 304 calls that
+would all have been composite before -- and **50 calls still miss, with `mask`**,
+because vLLM-Omni's `SDPAImpl` passes `attn_mask=attention_metadata.attn_mask`
+and the fused branch rejects any mask outright. That is the one remaining SDPA
+gap, and it needs a mask-aware fused kernel, not configuration.
+
+But the honest scale of this lever on the *server* is small: the whole pipeline
+makes only **354 SDPA calls**, against 2268 in the standalone VAE decode probe.
+At the ~0.8 ms/call the composite/elided difference implies, the ceiling here is
+~0.3 s of a 113.8 s generation. The reference VAE decode below is where this
+change is worth quoting; the server's 113.8 s is spent in the DiT's own
+flash-attn calls and the GEMMs, which is a separate investigation.
+
+### Three unfixed observations
+
+* **The server generation aborts during shutdown after a successful run.** The
+  run above printed `[gen] GENERATE-OK`, then the orchestrator did not stop within
+  30 s and the process ended `terminate called without an active exception` /
+  `SIGABRT` with a core dump. Attribution is not attempted here and it is not
+  known whether it predates this change; it is recorded because a serving
+  process that aborts on the way down affects restarts, and because it will
+  otherwise be mistaken for a symptom of whatever is measured next.
+
+* **`torch.backends.cudnn.version()` returns `None` under the shim**
+  (`compat/torch/installers/cuda/api.py:1030`), where real torch returns a
+  version number. `vllm_omni`'s CUDA platform reads it as
+  `torch.backends.cudnn.version() or 0` and routes attention on
+  `cudnn_version >= 90500`, so on a Blackwell card the shim would pick a
+  different diffusion attention backend than torch from the same code. Harmless on
+  this H20 (Hopper takes neither branch), unfixed here.
+* The oracle venv's own `torch.backends.cudnn.version()` *raises* a cuDNN
+  incompatibility (compiled against 9.20.0, found 9.16.0), so the comparison
+  above was not able to read a torch reference value either.
+
+### Gates
+
+The change is configuration plus documentation; no jittor source is touched.
+`python -m pytest -q tests/structure` and `bash tools/check_repo_layout.sh` pass.
+
+### What is left
+
+One call, one kernel. The shim's
+`F.scaled_dot_product_attention` now reaches a fused backend and the decode is
+6.34 s of non-attention work (torch: 6.14 s) plus 1.96 s of attention (torch:
+0.54 s). Anything further is fused-attention kernel efficiency for
+`batch * heads = 32, L = 1797, head_dim = 64` fp16 non-causal, not a bridge,
+dispatch or launch-count change.
+

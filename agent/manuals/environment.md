@@ -130,6 +130,39 @@ export JITTOR_FLASH_ATTN_JITTOR_SRC=/path/to/flash-attention
 python -m nox -s optional
 ```
 
+#### `F.scaled_dot_product_attention` uses that extension only when it is named
+
+`compat/torch/installers/nn/attention.py` tries the native fused backend before
+falling back to jittor's composite `mul -> matmul -> softmax -> matmul`
+(`_try_flash_scaled_dot_product_attention`), but it can only load the extension
+when `JITTOR_FLASH_ATTN_JITTOR_SRC` points at a source checkout. With the
+variable unset every call misses with `no_backend` and the composite runs, which
+is easy to miss because the fallback is numerically correct and silent.
+
+The branch is instrumented, so this is readable rather than inferable:
+
+```python
+import jittor as jt
+from jittor.compat import diagnostics
+print(diagnostics.sdpa_flash_stats(jt))   # hits, misses-by-reason, backend
+```
+
+`misses={'no_backend': n}` means the extension was never configured. Set the
+three `JITTOR_FLASH_ATTN_JITTOR_SRC` / `_HEAD_DIMS` / `_DTYPES` variables to get
+the fused path; leave `JITTOR_FLASH_ATTN_JITTOR_REQUIRED` unset so shapes and
+dtypes the extension does not cover keep falling back instead of aborting, and
+leave `JITTOR_FLASH_ATTN_CAST_FLOAT32` unset unless rerouting float32 attention
+through a bf16 cast is the intended numerics.
+
+The cost of the silent fallback is model-dependent and can be most of a
+workload. On the MiniMax-H3 video VAE decoder's `(1, 32, 1797, 64)` fp16
+non-causal blocks, an attention-elided ablation priced the composite at
+3.82 s/decode against torch's fused cuDNN kernel at 0.54 s, out of a 3.48 s
+total gap; naming the source took that decode from 10.13 s to 8.30 s with
+identical output statistics. See
+[`docs/results/2026-09-14-vllm-omni-h3-enablement.md`](../../docs/results/2026-09-14-vllm-omni-h3-enablement.md)
+section 45.
+
 ### Ascend NPU
 
 The NPU session requires `CANN_SET_ENV` to name the vendor `set_env.sh`, plus a
