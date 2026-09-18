@@ -4492,6 +4492,13 @@ The change is configuration plus documentation; no jittor source is touched.
 
 ### What is left
 
+> **Superseded by section 46.** The 1.96 s of attention below came from an
+> elision arm that let jittor prune `q`/`k`'s producers, so it is inflated. With
+> an arm that consumes q/k/v the attention is 1.04 s (torch 0.51) and the
+> non-attention part of the decode is 1.09 s slower than torch -- the larger
+> half of the 1.61 s gap, and not attention at all. Read section 46 before
+> acting on this one.
+
 One call, one kernel. The shim's
 `F.scaled_dot_product_attention` now reaches a fused backend and the decode is
 6.34 s of non-attention work (torch: 6.14 s) plus 1.96 s of attention (torch:
@@ -4499,3 +4506,78 @@ One call, one kernel. The shim's
 `batch * heads = 32, L = 1797, head_dim = 64` fp16 non-causal, not a bridge,
 dispatch or launch-count change.
 
+
+## 46. The elision baseline was pruning q/k, and attention is only a third of the gap
+
+Section 45 sized the residual by running the decode with
+`F.scaled_dot_product_attention` replaced by `return value`, and read the
+difference as "attention". That arm is **not a baseline**: `value` is returned
+untouched, so `query` and `key` have no consumer at all and jittor's executor
+does not run their producers. The elided number is therefore *less* than the
+real cost of the surrounding graph, and everything attributed to attention by
+subtracting it is inflated.
+
+The fix is an arm that consumes q/k/v and does nothing else. `consume` replaces
+the call with `(query + key + value) * 0.0` -- same shapes, same dtype, same
+downstream consumers, three cheap elementwise ops instead of the attention --
+so nothing upstream can be pruned. `stub` keeps the compat wrapper's three
+`permute -> reshape -> clone` sequences and replaces only the extension kernel
+with the same elementwise stand-in, which separates the kernel from the layout
+work. All arms are interleaved in one process and the minimum is quoted.
+
+`probe_decode_sdpa_decompose.py`, reference decode, fp32 weights under
+`autocast(fp16)`, 2,268 SDPA calls per decode:
+
+| arm | shim | torch |
+| --- | --- | --- |
+| `full` (real SDPA) | 8.28 | 6.67 |
+| `consume` (q/k/v consumed, no attention) | 7.25 | 6.16 |
+| `stub` (wrapper, no extension kernel) | 7.48 | -- |
+| `nocopy` (kernel on permuted views, no clones) | 8.25 | -- |
+| `elided` (`return value`, invalid baseline) | 6.30 | 6.12 |
+
+Read out of that:
+
+| component | shim | torch | gap |
+| --- | --- | --- | --- |
+| everything except attention | 7.25 | 6.16 | **1.09** |
+| attention, total | 1.04 | 0.51 | **0.53** |
+| -- fused kernel | 0.80 | ~0.51 | 0.29 |
+| -- compat wrapper | 0.23 | 0 | 0.23 |
+| **decode** | **8.28** | **6.67** | **1.61** |
+
+So the remaining 1.61 s is **not** mostly attention. Attention accounts for 0.53 s
+of it; 1.09 s is in the rest of the decode, which neither section 45 nor the
+"one call, one kernel" reading of it was looking at.
+
+**Correction to section 45.** Its "the rest is the official FA2 kernel: 13.2
+GFLOP in ~860 us is ~15 TFLOPS" is wrong twice over. The 860 us came from the
+pruning-inflated elision arm, and the FLOP count omitted one of the two matmuls
+-- a `d`-dimensional attention over `L` keys is `4 * B * H * L^2 * d` =
+2.65e10 FLOP per call, not 1.32e10. Against the measured 0.80 s of extension
+kernel over 2,268 calls (353 us/call) that is ~75 TFLOPS, not ~15, and the
+comparison to cuDNN is 0.80 s against ~0.51 s rather than 1.96 against 0.54.
+
+The same measurement rules out both of section 45's other candidates:
+
+* **The layout copies are ~free.** `full - nocopy` is 0.03 s/decode. Feeding the
+  extension the *permuted views* instead of cloned row-major buffers changes
+  nothing, so the copies the wrapper materialises are not a lever. (`stub -
+  consume`, which is the copies *plus* every Python shape/backend/stats step,
+  is 0.23 s -- so the whole wrapper is small too.)
+* **The wrapper's Python is not a lever either.** `nocopy` reaches the same
+  kernel through a hand-written five-line function with no shape checks, no
+  backend-cache lookup and no stats, and lands within 0.03 s of the full compat
+  path.
+
+**How to apply:** never use `return value` as an attention baseline under the
+shim. Any ablation arm that stops consuming an operand measures the pruning as
+well as the op. Prefer a `consume` arm that touches every input and writes the
+same shape; the two readings differ by 0.95 s/decode here, which is larger than
+the effect section 45 was trying to size.
+
+**What is left.** Two independent pieces, and the larger one is not attention:
+1.09 s of non-attention work (7.25 vs 6.16) on an identical graph, and 0.53 s of
+attention (kernel 0.29, wrapper 0.23). The non-attention gap is the next thing
+to attribute; it is a property of the shim's execution of the decode's ordinary
+convs, linears and norms, not of any attention backend.
