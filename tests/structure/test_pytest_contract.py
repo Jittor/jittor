@@ -407,8 +407,12 @@ def test_complete_suite_runner_owns_cpu_and_process_mode_environment(monkeypatch
 
 def test_complete_suite_runner_retries_a_zero_exit_cold_cache_refresh():
     module = _load_test_suite_runner()
+    # One marker per backend, because the warm-up probe is different for each:
+    # the cpu one asserts the build has no CUDA, the cuda one asserts it does
+    # and then computes on the device. An empty environment is the cpu case.
+    marker = module._WARMUP_MARKERS["cpu"]
     refreshed = SimpleNamespace(returncode=0, stdout="jit_utils updated, rerun\n")
-    ready = SimpleNamespace(returncode=0, stdout=module._WARMUP_MARKER + "\n")
+    ready = SimpleNamespace(returncode=0, stdout=marker + "\n")
 
     # The runner starts its children through _helpers.child_process now, so
     # that is what a warm-up retry has to be observed through (0.21: the
@@ -418,8 +422,29 @@ def test_complete_suite_runner_retries_a_zero_exit_cold_cache_refresh():
         code, output = module._warmup({})
 
     assert code == 0
-    assert module._WARMUP_MARKER in output
+    assert marker in output
     assert run.call_count == 2
+
+
+def test_complete_suite_runner_warms_up_per_backend():
+    """A cuda session must not be satisfied by a cpu warm-up, or the reverse.
+
+    The marker is what `_warmup` searches the child's output for, so one shared
+    marker would let a cpu probe satisfy a cuda session -- which is exactly the
+    failure the cuda backend exists to catch, a build that quietly fell back to
+    the host reporting green.
+    """
+    module = _load_test_suite_runner()
+    assert set(module._WARMUP_MARKERS) == set(module.BACKENDS)
+    assert len(set(module._WARMUP_MARKERS.values())) == len(module.BACKENDS)
+
+    cpu_ready = SimpleNamespace(
+        returncode=0, stdout=module._WARMUP_MARKERS["cpu"] + "\n")
+    with mock.patch.object(module, "run_python_child",
+                           side_effect=(cpu_ready,) * module._WARMUP_ATTEMPTS):
+        code, output = module._warmup({"JITTOR_TEST_DEVICES": "cuda"})
+    assert code != 0
+    assert "cuda probe" in output
 
 
 def test_complete_suite_runner_parses_quiet_and_decorated_summaries():
