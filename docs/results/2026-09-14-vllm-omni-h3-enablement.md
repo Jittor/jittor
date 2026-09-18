@@ -3641,3 +3641,43 @@ cost is amortised over less work. That is a launch-count and per-launch-overhead
 problem, and the two ways out are fewer launches (fuse the chain: `hidden +
 attn*scale` is three ops for what one fused kernel would do) or a cheaper launch
 -- not a wider access type.
+
+### Fusion works; it is not being limited by auto_flush, and that closes the cheap routes
+
+The natural reading of the family table above is "the shim issues 1.5x the
+elementwise launches, so fuse more". Two probes say that is not reachable cheaply.
+
+**jittor's fusion works, including broadcasts.** A two-line probe -- `c = a*b + d`
+and `c2 = a*b + d - a` on fp16 tensors -- compiles to a *single* kernel with five
+fp16 pointer arguments (`func_a7a5ed749db7d6dc`), one launch per iteration. The
+VAE's actual gated residual, `(B,S,H) + (B,S,H) * (H,)` with a per-channel
+broadcast, also fuses to one kernel (`func_bffa9096c80c8727`). So the machinery is
+not broken; the real decode is doing something the probe is not -- most likely the
+6,250 Triton-bridge operand barriers (`jt.sync_all`, one submission each) cutting
+the graph before a chain completes, plus chains that legitimately cannot fuse
+(reduces, `reindex`/`chunk`, `cat`, SDPA).
+
+**`auto_flush_ops` is not the constraint.** Raising it from 512 to 200,000 on one
+autocast decode changes the elementwise launch count by 0.2%:
+
+| `auto_flush_ops` | elementwise launches | decode |
+| --- | --- | --- |
+| 512 (default) | 212,407 | 18.99 s |
+| 200,000 | 212,028 | 20.11 s |
+
+So the flush heuristic is not what is cutting the graph, and the two remaining
+routes -- widening jittor's fusion coverage, or removing the bridge's per-launch
+submission -- are both changes inside the fusion/codegen path that need a quiet
+device to evaluate. Neither is a flag.
+
+**Where that leaves the cheap-route search, all measured:**
+
+| route | measured | verdict |
+| --- | --- | --- |
+| vectorized (128-bit) elementwise | 1.10x over scalar on the same buffers | not the answer |
+| `auto_flush_ops` | no effect on launch count | closed |
+| jittor's fusion of the VAE's chains | works, incl. broadcast | not broken |
+| bias fusion into the gemm | not implemented (torch's are `_bias_`) | bounded, small |
+| flash-attn vs cuDNN's | 2.84 against 1.89 s | bounded, needs a different backend |
+| bridge host work (guard copies, packing, waits) | hidden behind a busy device | already done |
+| per-launch device sync in the bridge | 2.65 -> 0.515 ms/launch | done (section 39) |
