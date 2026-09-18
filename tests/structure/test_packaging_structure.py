@@ -22,7 +22,13 @@ class TestPackagingStructure(unittest.TestCase):
             path.parent.relative_to(self.python_root).as_posix().replace("/", ".")
             for path in self.python_root.rglob("__init__.py")
         }
-        discovered = set(find_packages(where=str(self.python_root)))
+        # `python/jittor/compat` is a development symlink to the top-level
+        # compat/ tree -- the separate jittor-torch distribution. rglob does not
+        # follow it, and setup.py excludes it so the core wheel never ships
+        # another distribution's packages, which `test_pyproject_uses_regular
+        # _package_discovery` pins; discovery is asked the same question here.
+        discovered = set(find_packages(where=str(self.python_root),
+                                       exclude=("jittor.compat", "jittor.compat.*")))
         self.assertEqual(discovered, expected)
         backend_root = self.repo_root / "backends"
         backend_expected = {
@@ -53,6 +59,14 @@ class TestPackagingStructure(unittest.TestCase):
                            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                            and node.func.id == "find_packages"}
         self.assertEqual(discovery_roots, {"python", "backends"})
+        compat_exclusions = {
+            tuple(ast.literal_eval(keyword.value))
+            for node in ast.walk(setup_tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "find_packages" and ast.literal_eval(node.args[0]) == "python"
+            for keyword in node.keywords if keyword.arg == "exclude"
+        }
+        self.assertEqual(compat_exclusions, {("jittor.compat", "jittor.compat.*")})
         self.assertTrue(config["tool"]["setuptools"]["include-package-data"])
         with (self.repo_root / "compat/pyproject.toml").open("rb") as stream:
             compat_config = tomllib.load(stream)

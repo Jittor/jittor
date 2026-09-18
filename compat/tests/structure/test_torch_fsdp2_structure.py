@@ -173,6 +173,31 @@ _LEGACY_PICKLES = {
 }
 
 
+
+def _native_packages(repo_root):
+    """The packages the core distribution actually declares.
+
+    `python/jittor/compat` is a development symlink to the top-level compat/
+    tree -- this distribution's own source -- and raw `find_packages` walks
+    straight through it. setup.py excludes it so the core wheel never ships
+    another distribution's packages, so read that exclusion out of setup.py
+    and ask discovery the question setup.py asks: dropping the exclusion is
+    then what fails, instead of the symlink.
+    """
+    from setuptools import find_packages
+
+    setup_tree = ast.parse((repo_root / "setup.py").read_text(encoding="utf-8"))
+    exclusions = [
+        tuple(ast.literal_eval(keyword.value))
+        for node in ast.walk(setup_tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == "find_packages" and ast.literal_eval(node.args[0]) == "python"
+        for keyword in node.keywords if keyword.arg == "exclude"
+    ]
+    assert exclusions == [("jittor.compat", "jittor.compat.*")], exclusions
+    return find_packages(where=str(repo_root / "python"), exclude=exclusions[0])
+
+
 class TestTorchFSDP2Structure(unittest.TestCase):
     def _isolated_graph(self, registry_type=ModuleRegistry):
         root = types.ModuleType("torch")
@@ -567,7 +592,7 @@ assert value is fsdp2.DeviceMesh
         self.assertIn("jittor.compat.fsdp2", packages)
         self.assertIn("torch", packages)
         self.assertTrue((compat_root / "fsdp2/public_helpers.py").is_file())
-        self.assertNotIn("jittor.compat", find_packages(where=str(repo_root / "python")))
+        self.assertNotIn("jittor.compat", _native_packages(repo_root))
         self.assertNotIn("jittor._torch_fsdp2", packages)
         self.assertNotIn("jittor.torch_fsdp2_compat", packages)
 

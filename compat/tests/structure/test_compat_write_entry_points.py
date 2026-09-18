@@ -42,7 +42,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 COMPAT = ROOT / "compat"
 
-_ENVIRON_OWNERS = ("os.environ", "environ")
+#: `_os` is how the deployed payload spells it -- it imports under an
+#: underscore so the published namespace carries no stray names.
+_ENVIRON_OWNERS = ("os.environ", "_os.environ", "environ")
 _MODULE_OWNERS = ("sys.modules", "_sys.modules", "modules")
 _META_PATH_OWNERS = ("sys.meta_path", "_sys.meta_path", "meta_path")
 _PATH_OWNERS = ("sys.path", "_sys.path")
@@ -241,13 +243,11 @@ CLASSIFIED = {
     # Activation transaction: mutate_path / publish_module / mutate_flag.
     (C + "shim/runtime.py", "_activate_once", "flags"): "ledger",
     (C + "shim/runtime.py", "_activate_once", "sys.modules"): "ledger",
-    (C + "shim/runtime.py", "_activate_once", "env"): "ledger",
     (C + "torch/installers/core.py", "install_misc", "sys.modules"): "ledger",
     (C + "shim/runtime.py", "_publish_torch_module", "sys.modules"): "ledger",
 
     # ---- runtime requests, not installation steps --------------------------
     # torch.backends.cuda.matmul.allow_tf32 = True and friends.
-    (C + "torch/installers/cuda/api.py", "_tf32_set", "flags"): "runtime",
     # Module.to(device="cuda") turns CUDA on because the caller asked, after the
     # install has finished.
     (C + "torch/installers/nn/module_methods.py", "_module_to", "flags"): "runtime",
@@ -290,12 +290,15 @@ CLASSIFIED = {
 
     # ---- deployed payload, a different process -----------------------------
     (C + "shim/resources/torch/__init__.py", "<module>", "sys.modules"): "deployed-payload",
+    (C + "shim/resources/torch/__init__.py", "<module>", "env"): "deployed-payload",
     (C + "shim/resources/stubs/torchvision/__init__.py",
      "<module>", "sys.meta_path"): "deployed-payload",
     (C + "shim/resources/stubs/torchvision/__init__.py",
      "<module>", "sys.modules"): "deployed-payload",
     (C + "shim/resources/stubs/torchaudio/__init__.py",
      "__getattr__", "sys.modules"): "deployed-payload",
+    (C + "shim/resources/stubs/torchaudio/__init__.py",
+     "<module>", "sys.meta_path"): "deployed-payload",
     (C + "shim/resources/stubs/torchdata/__init__.py",
      "__getattr__", "sys.modules"): "deployed-payload",
 
