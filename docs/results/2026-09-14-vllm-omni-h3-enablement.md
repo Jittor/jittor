@@ -3037,3 +3037,45 @@ A fused kernel verified against its own eager reference proves nothing about the
 which is not what the model passes. When a compiled path diverges while every
 kernel looks right, check the layouts the model actually hands over -- views,
 `chunk`s, `split`s, slices -- not just the values.
+
+## 36. Speed: what the server's defaults actually cost
+
+Asked whether the server is slower than the diffusers path, the phases were
+measured on both. The two are **not** comparable as configured -- the diffusers
+harness runs the video VAE in float16 while vLLM-Omni's H3 VAE is loaded and
+decoded in float32 -- and once that is equalised the ordering reverses.
+
+`t2va`, the pottery prompt, 8 steps, 512x512, seed 0, jittor shim on both sides.
+vLLM-Omni is TP1 with the recipe's default offload; the server emits these with
+`--enable-diffusion-pipeline-profiler`.
+
+| phase (s) | diffusers, fp16 VAE | diffusers, fp32 VAE | vLLM-Omni (fp32 VAE) |
+| --- | --- | --- | --- |
+| text encoder | 3.91 | 3.75 | 8.65 |
+| denoise | 35.63 | 37.36 | 42.25 |
+| **video VAE decode** | **15.75** | **335.64** | **67.11** |
+| audio VAE decode | 6.04 | 5.59 | 12.50 |
+| total | 102.85 | 420.98 | 130.92 |
+
+Flipping only `--vae-dtype` on the diffusers harness moves `vae.video` from
+15.75 s to 335.64 s and leaves every other phase alone, so the VAE precision is
+the whole of the difference between those two columns. Read across:
+
+* at **equal precision** (last two columns) vLLM-Omni is 3.2x faster overall and
+  its video decode is 5x faster than the diffusers path's. The server's VAE
+  carries `install_h3_vae_optimizations` -- fp16 decoder-block Linears under the
+  decode's CUDA autocast, plus fused qk-norm-rope / scaled-residual / silu-and-mul
+  -- which dispatches on sm_90 + triton and is therefore active here;
+* vLLM-Omni's *default* only looks slower because it decodes in fp32, which is
+  its own choice for fidelity. It is not exposed as a serve flag, so it is not
+  something a lab run can turn down;
+* the phases where vLLM-Omni is ahead of even the fp16 diffusers run are the
+  VAE; the three where it is behind are the text encoder (8.65 vs 3.91: its
+  encoder is layerwise-offloaded, and that offload is forced -- a no-offload TP1
+  run OOMs, 51.5 GB encoder + DiT + fp32 VAE against 95 GB), the denoise
+  (42.25 vs 35.63, 1.19x) and the audio VAE (12.50 vs 6.04: the audio decode is
+  wrapped in `_AudioVAEDeterminismContext`, which disables flash/mem-efficient
+  SDPA and cuDNN for reproducible soundtracks).
+
+For the like-for-like shim-vs-torch ratios the earlier sections still stand
+(DiT 1.11x, end to end 1.22x, both measured at one precision on one stack).
