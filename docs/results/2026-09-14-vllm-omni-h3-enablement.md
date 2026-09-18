@@ -3287,3 +3287,89 @@ final=15.8s`), which is the same 2x.
   broken (`x86_64-conda-linux-gnu-cc: command not found`) and now that the probe
   cache is cold it aborts startup instead of warning. Putting
   `/usr/local/openmpi/bin` first resolves it.
+
+## 39. The last per-launch wait, and the four-way VAE matrix behind it
+
+Section 38 left the bridge at 2.72 ms/launch with `final` = 25.0 s of its 33.2 s
+total. That `final` was almost entirely one `drv.synchronize()` after the launch.
+
+### Where the 2.5 ms actually was
+
+`probe_bridge_floor.py` ablates the post-launch work in-process, and timing each
+step from inside `run` gives the same answer:
+
+| step of one launch | ms |
+| --- | --- |
+| `drv.synchronize()` | 2.070 |
+| the four bounce copy-ins | 0.069 |
+| the four guard memsets | 0.028 |
+| `cuLaunchKernel` | 0.011 |
+| `jt.sync_all` (the operand barrier) | 0.007 |
+| Python in `run` (compile lookup, packing) | ~0.32 |
+
+The wait looked load-bearing until it was measured against the GPU: queueing 60
+launches with no per-launch sync takes 22.7 ms of host time and then draining the
+launch stream takes **0.5 ms in total** -- 0.008 ms/launch of real GPU work. A
+`cudaDeviceSynchronize` on an idle device is 1.7 us. So the 2.07 ms bought nothing
+but latency, and every sync primitive (cudart device, cudart stream, jittor's own)
+cost the same.
+
+It bought nothing because the bridge now launches on `_launch_stream()`, the same
+`cudaStreamPerThread` jittor schedules its own ops on, so kernel, bounce copies and
+producers are ordered against each other by the stream. The wait dates from when
+the bridge launched on the legacy NULL stream, which has no such order -- that is
+the hazard it was papering over, and the reason the `cudaErrorIllegalAddress` in
+section 34 needed the launch moved rather than the wait kept.
+
+So `_sync_after_launch_enabled()` now defaults to the conservative answer *outside*
+the shim and to no wait inside it (`JITTOR_TRITON_SYNC_AFTER_LAUNCH=1` restores it,
+`=0` removes it everywhere), and a launch that allocates global scratch still waits
+because `drv.free` returns that memory to the driver rather than to a stream. The
+guard pool is safe to reuse without a wait: `guard_acquire`'s memset covers only
+the guard tail, disjoint from the payload the copy-back reads.
+
+| | before | after |
+| --- | --- | --- |
+| per launch | 2.65 ms | **0.515 ms** |
+| VAE autocast decode | 30.9 s | **17.25 s** |
+| VAE fp32 decode | 28.33 s | 28.33 s |
+| end-to-end TP1 512x512 | 85.7 s | **78.7 s** |
+| end-to-end TP2 512x512 | 85.5 s | **77.0 s** |
+
+Verified as in section 38: the decode differs from the previous build by max
+2.2-2.4e-03 against a 1.95e-03 same-build noise floor (smaller mean, no non-finite
+values); the triton suite is 6/16 with a fingerprint identical to the pre-change
+run; TP1 and TP2 both render the pottery scene, and their divergence (max 204-219,
+mean 9.4-17.7) matches the pre-fix validated pair (max 201-211, mean 10.0-10.4).
+
+### The four-way matrix: where the remaining gap is
+
+One protocol, one latent `(1,24,37,32,32)`, 1 warm-up + 2 timed decodes
+(`probe_vae_matrix.py`):
+
+| runtime | VAE implementation | fp32 | autocast fp16 |
+| --- | --- | --- | --- |
+| jittor shim | vLLM-Omni wrapper (fused Triton) | 28.25 | 29.80 -> **~17** |
+| jittor shim | diffusers class | 27.50 | 14.09 |
+| jittor shim | checkpoint class `decode_base` | 27.61 | 13.66 |
+| real torch | checkpoint class `decode_base` | 28.55 | **6.17** |
+
+Two cells cannot be measured on this box, both for environmental reasons: real
+torch's `vllm` wheel is built against CUDA 13 and only 12.9 is installed, so
+`import vllm_omni` fails there; and torch's diffusers class allocates ~88 GiB even
+at the 256x256 latent and OOMs on a 95 GiB card, where jittor decodes it in 3.4 s.
+
+That leaves **two separate gaps**, which the table separates cleanly:
+
+* **fp32 -- none.** 27.5 / 27.6 / 28.3 against torch's 28.6. Where the bridge is not
+  involved the shim is at parity.
+* **Plain fp16 execution -- ~2.2x, no Triton involved.** The checkpoint class under
+  autocast is 13.66 s on the shim and 6.17 s on torch, and the shim run logs no
+  Triton launch at all. This is ordinary fp16 op execution, and it is the next
+  defect. `JITTOR_TORCH_KEEP_FAST_MATH` is the first knob to try: the shim forces
+  `cuda_kernel_math='strict'` (`compat/shim/preflight.py`) unless that is set, and
+  strict math is exactly what would keep fp16 off the fast kernels.
+* **The bridge -- ~2.1x on top.** Under the shim, vLLM-Omni's wrapper (29.80) is
+  twice the eager classes (13.66/14.09) at the same dtype, because vLLM-Omni's
+  `install_h3_vae_optimizations` routes to fused Triton kernels and the diffusers
+  and checkpoint classes do not. On torch that same fused path is what buys 6.17 s.
