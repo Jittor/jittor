@@ -777,15 +777,19 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   liveness the clause reads, so the clause stopped firing and a legitimate
   release began failing the batch instead. Subtracting the hold
   (`ExecPlan::batch_hold_per_var`) restores the intent and removes most of it.
-- What is left. A var can carry backward liveness from a consumer as well as
-  from a holder, so the subtraction does not always bring the count to the
-  batch's own contribution, and the residual 1-in-20 remains. Deciding the
-  invariant a requested var actually has under concurrent holder rebinding is
-  the open part: either the batch records that *this* var's memory went during
-  *this* batch (a bit set in `free_var_mem`, cleared on allocation), or the
-  shim serialises the entry points a threaded loader drives, which is what
+- What is left, and the shape of the fix. A var carries backward liveness from
+  consumers as well as from holders, so subtracting the batch's own hold does
+  not always bring the count to zero, and the residual 1-in-20 remains. The
+  counter is the wrong thing to read: what phase 7 actually wants to know is
+  *was this var's storage released while this batch was in flight*, and that is
+  a fact about an event, not about a count. Recording the event answers it
+  exactly -- `free_var_mem` appends the Var to a per-executor list while a batch
+  is running (the list is only touched when one is, so the ordinary path pays
+  nothing), and phase 7 tolerates precisely the requested vars on it. The
+  alternative, serialising the entry points a threaded loader drives, is what
   section 23 of the vLLM enablement results proposed before section 29's fix
-  superseded it.
+  superseded it; it moves the cost to every caller instead of to the batch that
+  needs the answer.
 - Not covered by a test. `ceae1910` changed five core files and shipped with no
   in-repo regression case; its evidence is `probe_loader_race.py`, which lives
   outside the tree. `tests/core/test_executor_entry_lock.py` is a different
