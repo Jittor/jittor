@@ -46,6 +46,31 @@ def _conv_spatial_rank(native):
     return None
 
 
+def conv_padding_execute(module, x):
+    """``execute`` honoring torch's ``padding_mode``.
+
+    Torch's ``padding_mode`` pads the input *before* the convolution and then
+    convolves with no padding. jittor's only zero-pads, so the other modes are
+    emulated the same way here. Installed by
+    :meth:`NNFrontendOwner._conv_padding_members`, which is also what puts the
+    native ``execute`` and the spatial rank on the class.
+    """
+    native_execute = module._torch_conv_execute
+    mode = getattr(module, "padding_mode", "zeros")
+    pads = tuple(getattr(module, "padding", ()))
+    if mode in (None, "zeros") or not any(pads):
+        return native_execute(module, x)
+    # pad() takes the widths in reverse dimension order.
+    pad = []
+    for value in reversed(pads):
+        pad.extend((value, value))
+    backend = module._nn_frontend_owner.backend
+    x = backend.nn.pad(x, tuple(pad), mode=mode)
+    conv = getattr(backend.nn, "conv%dd" % module._torch_conv_rank)
+    return conv(x, module.weight, module.bias, module.stride, 0,
+                module.dilation, module.groups)
+
+
 class LayerInitializer:
     """Descriptor binds one native initializer to one frontend owner."""
     def __init__(self, owner, native):
@@ -88,7 +113,7 @@ class LayerInitializer:
         Torch's convolution layers take ``padding_mode``; the native
         signatures do not. It cannot simply be dropped: the value decides how
         the input is padded, so it is captured and handed to the execute
-        wrapper installed by :meth:`NNFrontendOwner._conv_padding_execute`.
+        wrapper installed by :meth:`NNFrontendOwner._conv_padding_members`.
         Found with MiniMax-H3's video VAE, whose ``BaseConv3d(nn.Conv3d)``
         forwards the torch default and would not construct without it.
         """
@@ -135,36 +160,24 @@ class NNFrontendOwner:
                 pending.extend(value)
         return seen
 
-    def _conv_padding_execute(self, native):
-        """An ``execute`` honoring torch's ``padding_mode``, or ``None``.
+    def _conv_padding_members(self, native):
+        """What :func:`conv_padding_execute` needs on the adapted class, or ``{}``.
 
-        Torch's ``padding_mode`` pads the input *before* the convolution and
-        then convolves with no padding. jittor's only zero-pads, so the other
-        modes are emulated the same way here.
+        The layer's own ``execute`` and its spatial rank travel as class
+        members rather than in a closure, so torch's ``padding_mode`` has one
+        definition for every adapted convolution instead of one per layer.
         """
         rank = _conv_spatial_rank(native)
-        if rank is None:
-            return None
         native_execute = native.__dict__.get("execute")
-        if native_execute is None:
-            return None
-        backend = self.backend
-
-        def execute(module, x):
-            mode = getattr(module, "padding_mode", "zeros")
-            pads = tuple(getattr(module, "padding", ()))
-            if mode in (None, "zeros") or not any(pads):
-                return native_execute(module, x)
-            # pad() takes the widths in reverse dimension order.
-            pad = []
-            for value in reversed(pads):
-                pad.extend((value, value))
-            x = backend.nn.pad(x, tuple(pad), mode=mode)
-            conv = getattr(backend.nn, "conv%dd" % rank)
-            return conv(x, module.weight, module.bias, module.stride, 0,
-                        module.dilation, module.groups)
-
-        return execute
+        if rank is None or native_execute is None:
+            return {}
+        return {
+            "execute": conv_padding_execute,
+            # A plain function here would bind as a method and take `module`
+            # twice; `conv_padding_execute` passes it explicitly.
+            "_torch_conv_execute": staticmethod(native_execute),
+            "_torch_conv_rank": rank,
+        }
 
     def adapt_class(self, native):
         known = self.adapters.get(native)
@@ -175,9 +188,7 @@ class NNFrontendOwner:
             "__init__": LayerInitializer(self, native),
             "_torch_native_layer": native,
         }
-        execute = self._conv_padding_execute(native)
-        if execute is not None:
-            namespace["execute"] = execute
+        namespace.update(self._conv_padding_members(native))
         adapted = type(native.__name__, (native, self.Module), namespace)
         self.adapters[native] = adapted
         return adapted

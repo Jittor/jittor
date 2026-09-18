@@ -69,6 +69,11 @@ _OWNERSHIP = {
     common: {
         "_prod", "_flatten_var", "_ceil_div", "_pad_flat", "_param_numel",
         "_fsdp2_flat_enabled",
+        # The frozen-forward and gradient-shape helpers `shard` calls around
+        # `_execute_with_true_fsdp`, which arrived with PR 18031's memory and
+        # lifecycle group.
+        "_primary_input_requires_grad", "_materialize_frozen_output",
+        "_tensor_values", "_full_gradient_from_shard",
     },
     dtensor: {
         "DeviceMesh", "init_device_mesh", "Placement", "Replicate", "Shard",
@@ -403,9 +408,13 @@ assert second is jittor.torch_fsdp2_compat
         ).encode()
         self.assertEqual(len(public), 79)
         self.assertEqual(len(callables), 70)
+        # Moved once since it was taken: `optimizer_step` gained the
+        # keyword-only `native_kind` with the FSDP2 memory and lifecycle group
+        # from PR 18031. No other public signature, qualname or enum member
+        # differs from the snapshot this digest replaced.
         self.assertEqual(
             hashlib.sha256(encoded).hexdigest(),
-            "ca8aea5689aa5280fcd65aa3157274e7f2cd0d2ee3e0d607ec14880d28e71e73",
+            "81c63656a535ca38f252286de574ec8fed3e1808643b2775d795824c5f181bf7",
         )
 
     def test_protocol_2_legacy_pickle_fixtures_load_canonical_objects(self):
