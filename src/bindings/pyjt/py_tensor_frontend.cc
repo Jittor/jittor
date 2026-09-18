@@ -111,6 +111,12 @@ void reset_tensor_placement_context(PyObject* token) {
         throw std::runtime_error("cannot reset tensor placement context");
 }
 
+PyObject* current_tensor_placement_request() {
+    TensorPlacement placement = selected_placement();
+    if (!placement.explicit_backend) Py_RETURN_NONE;
+    return Py_BuildValue("(ii)", int(placement.device.backend), placement.device.index);
+}
+
 PyObject* set_float32_precision_context(int matmul, int cudnn) {
     USER_CHECK(matmul >= 0 && matmul <= 2 && cudnn >= 0 && cudnn <= 2)
         << "frontend precision tiers must be in [0, 2]";
