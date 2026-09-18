@@ -29,7 +29,22 @@ import numpy as np
 import jittor as jt
 
 
-_HAVE = bool(_test_capability.check_accelerator('cuda', backend=jt).enabled and importlib.util.find_spec("triton") is not None)
+def _real_triton_is_importable():
+    """A genuine upstream triton, not the shim this repo deploys under the name.
+
+    ``find_spec("triton")`` answers yes for the shim as well, and ``setUpModule``
+    then skips the *whole module* when ``import triton.language`` fails -- which
+    took the launch-device tests at the bottom, the ones that need no triton at
+    all, down with it.
+    """
+    try:
+        return importlib.util.find_spec("triton.language") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+_HAVE_CUDA = bool(_test_capability.check_accelerator('cuda', backend=jt).enabled)
+_HAVE = bool(_HAVE_CUDA and _real_triton_is_importable())
 _shim = None
 triton = None
 tl = None
@@ -422,8 +437,7 @@ class TestDriverIsPerDevice(unittest.TestCase):
     def test_a_driver_is_cached_per_cuda_device(self):
         from jittor.compat.triton import backend as tb
 
-        count = int(getattr(jt, "device_count", lambda: 1)())
-        if count < 2:
+        if int(jt.get_device_count()) < 2:
             self.skipTest("needs at least two visible CUDA devices")
         d0 = tb._Driver.get(0)
         d1 = tb._Driver.get(1)
@@ -431,6 +445,69 @@ class TestDriverIsPerDevice(unittest.TestCase):
         self.assertIsNot(d0, d1)
         self.assertEqual((d0.ordinal, d1.ordinal), (0, 1))
         self.assertNotEqual(d0.ctx.value, d1.ctx.value)
+
+
+@unittest.skipUnless(_HAVE_CUDA, "cuda is not available")
+class TestTheLaunchDeviceIsRestored(unittest.TestCase):
+    """A launch may move the calling thread's device; it may not leave it moved.
+
+    ``run`` makes the operands' device current because that is where the launch,
+    its module handles and its bounce buffers belong. But the CUDA device is
+    current per *host thread* until something sets it back, and jittor caches
+    which device each of its threads is bound to (``tls_bound_device`` in
+    ``backends/cuda/runtime/driver.cc``): it re-issues ``cudaSetDevice`` only
+    when its own bookkeeping moves, so a switch made behind its back is one it
+    never undoes. The next jittor op then launches device-A pointers in device
+    B's context -- measured here as ``cudaMemGetInfo -> cudaErrorIllegalAddress``
+    on the very next ``sync``, which is the context-sticky failure that jittor's
+    own comment above ``tls_bound_device`` describes.
+
+    Unlike the rest of this file these need no triton: the switch under test is
+    ``_Driver.ensure_ctx``, plain ctypes over libcuda/libcudart, and the restore
+    is ``run``'s. They do need a second device, since switching to the device
+    the thread is already on proves nothing.
+    """
+
+    def setUp(self):
+        from jittor.compat.triton import backend as tb
+
+        if int(jt.get_device_count()) < 2:
+            self.skipTest("needs at least two cuda devices")
+        self.tb = tb
+        self.rt = tb._Driver._load_cudart()
+        if self.rt is None:
+            self.skipTest("libcudart is not loadable")
+
+    def _current_device(self):
+        dev = ctypes.c_int(-1)
+        self.assertEqual(self.rt.cudaGetDevice(ctypes.byref(dev)), 0)
+        return dev.value
+
+    def _launch_on_another_device(self):
+        """What a launch does to the thread: the operands' device, made current."""
+        other = 1 if self._current_device() == 0 else 0
+        self.tb._Driver.get(other).ensure_ctx()
+        # a precondition of the test, not its subject: the switch did happen
+        self.assertEqual(self._current_device(), other)
+
+    def test_a_launch_restores_the_device_it_switched(self):
+        before = self._current_device()
+        with mock.patch.object(self.tb, "_run",
+                               side_effect=lambda *a, **k: self._launch_on_another_device()):
+            self.tb.run(None, (), {}, None)
+        self.assertEqual(self._current_device(), before)
+
+    def test_the_device_comes_back_when_the_launch_raises(self):
+        before = self._current_device()
+
+        def failing_launch(*args, **kwargs):
+            self._launch_on_another_device()
+            raise self.tb.JittorTritonError("cuLaunchKernel -> CUresult 700")
+
+        with mock.patch.object(self.tb, "_run", side_effect=failing_launch):
+            with self.assertRaises(self.tb.JittorTritonError):
+                self.tb.run(None, (), {}, None)
+        self.assertEqual(self._current_device(), before)
 
 
 if __name__ == "__main__":

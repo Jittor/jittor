@@ -215,6 +215,8 @@ class _Driver:
             rt.cudaMemcpy.restype = ctypes.c_int
             rt.cudaSetDevice.argtypes = [ctypes.c_int]
             rt.cudaSetDevice.restype = ctypes.c_int
+            rt.cudaGetDevice.argtypes = [ctypes.POINTER(ctypes.c_int)]
+            rt.cudaGetDevice.restype = ctypes.c_int
             rt.cudaDeviceSynchronize.argtypes = []
             rt.cudaDeviceSynchronize.restype = ctypes.c_int
         except EXPECTED as exc:
@@ -880,17 +882,24 @@ def _make_ast_source(ASTSource, jitfn, signature, constants):
             type(last).__name__ if last else "?", last))
 
 
-def _compile(jitfn, signature, constants, options=None):
+def _compile(jitfn, signature, constants, options=None, device=0):
     """Compile (cached) and return a dict with cubin/name/launch metadata.
 
     ``options`` is an optional dict of launch options forwarded to triton
     (currently ``num_warps`` / ``num_stages``); ``None``/empty lets triton pick
     its defaults.
+
+    ``device`` is the device the kernel will be launched on. A cubin is built
+    for one compute capability and the cache is keyed on it, so taking the
+    capability from device 0 is only right while every device in the box is the
+    same model -- and it also built (and primary-context-retained) a driver for
+    device 0 in a rank that uses another device and may not be allowed near
+    that one.
     """
     triton = real_triton()
     from triton.compiler import ASTSource
 
-    drv = _Driver.get()
+    drv = _Driver.get(device)
     opt_items = tuple(sorted((options or {}).items()))
     key = (id(jitfn), tuple(sorted(signature.items())),
            tuple(sorted(constants.items())), opt_items, drv.arch)
@@ -971,7 +980,70 @@ def make_do_bench():
     return _do_bench
 
 
+#: A ``libcudart`` handle used only to read back and restore the calling
+#: thread's current device -- separate from any :class:`_Driver`, because the
+#: reading happens before ``run`` knows which device it will launch on.
+_AMBIENT_RT = None
+_ambient_lock = threading.Lock()
+
+
+def _ambient_runtime():
+    """The cudart handle for reading/restoring the thread's device, or None."""
+    global _AMBIENT_RT
+    if _AMBIENT_RT is None:
+        with _ambient_lock:
+            if _AMBIENT_RT is None:
+                _AMBIENT_RT = _Driver._load_cudart() or False
+    return _AMBIENT_RT or None
+
+
+def _current_device(rt):
+    """The CUDA device this host thread is bound to, or None if unknowable."""
+    if rt is None:
+        return None
+    dev = ctypes.c_int(-1)
+    try:
+        if rt.cudaGetDevice(ctypes.byref(dev)) != 0:
+            return None
+    except EXPECTED as exc:
+        swallowed("triton/backend.py _current_device: rt.cudaGetDevice", exc)
+        return None
+    return int(dev.value)
+
+
 def run(jitfn, args, kwargs, grid):
+    """Launch on the operands' device, and leave the caller's device current.
+
+    :func:`_run` makes the operands' device current (``_Driver.ensure_ctx``)
+    because that is where the launch, its module handles and its bounce buffers
+    have to be. A CUDA device is current per *host thread* until something sets
+    it back, and jittor caches which device each of its threads is bound to
+    (``tls_bound_device`` in ``backends/cuda/runtime/driver.cc``): it only
+    re-issues ``cudaSetDevice`` when its own bookkeeping moves, so a device this
+    bridge switched behind its back is one jittor never switches back. Every
+    later allocation, copy, event and library handle on this thread would then
+    run on the operands' device under the other device's bookkeeping -- the
+    cross-device mismatch whose signature is a Xid 31 and a sticky
+    ``cudaErrorIllegalAddress`` reported far from the launch that caused it.
+
+    Restoring the runtime device also restores the driver context, since both
+    devices' contexts here are the primary ones the runtime keeps current. A
+    failed launch leaves the switch behind exactly like a successful one, hence
+    the ``finally``.
+    """
+    rt = _ambient_runtime()
+    before = _current_device(rt)
+    try:
+        return _run(jitfn, args, kwargs, grid)
+    finally:
+        if before is not None and _current_device(rt) != before:
+            try:
+                rt.cudaSetDevice(ctypes.c_int(before))
+            except EXPECTED as exc:
+                swallowed("triton/backend.py run: rt.cudaSetDevice(before)", exc)
+
+
+def _run(jitfn, args, kwargs, grid):
     """Compile + launch a real ``@triton.jit`` kernel on jittor Vars.
 
     ``jitfn`` is the upstream triton ``JITFunction``; ``args``/``kwargs`` are the
@@ -1141,7 +1213,7 @@ def run(jitfn, args, kwargs, grid):
             "torch-shim tensor) to launch on." % kname)
 
     # ASTSource needs the JITFunction itself (it reads .cache_key), not fn.
-    info = _compile(jitfn, signature, constants, options)
+    info = _compile(jitfn, signature, constants, options, device=_launch_dev)
 
     if os.environ.get("JT_TRITON_DEBUG"):
         import sys as _sys
