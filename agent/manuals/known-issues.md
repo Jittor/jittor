@@ -676,8 +676,10 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
 
 ## KI-EXEC-005: a var released by another thread mid-batch fails the batch
 
-- Severity: Medium (rare, but it aborts a sync that asked for nothing unusual;
-  the shape is exactly a multi-threaded weight loader)
+- Severity: High -- a supported operation aborts. Rare, and the workaround
+  (serialise the threads) is practical, but the pattern is exactly a
+  multi-threaded weight loader and the sync that dies asked for nothing
+  unusual.
 - Status: Open. Partly addressed 2026-09-18 -- the batch no longer counts its
   own hold as a consumer -- and still reproducible at a lower rate.
 - Owner: executor maintainers
