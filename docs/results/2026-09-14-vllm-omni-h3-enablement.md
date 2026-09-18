@@ -4427,9 +4427,17 @@ low-parallelism launch for FA2's default tiling at head_dim 64, and
 `compat/shim/backends/flash_attention/official_codegen.py` exposes no block-size
 or warps knob to change that -- the extension is upstream sources as they are.
 
+**Ruled out: the per-call backend lookup.** `_sdpa_static_backend_cache_enabled()`
+is false unless `JITTOR_TORCH_INFERENCE=1`, so the dense path calls
+`_fa_jittor.load_backend_for(template_dim, dtype)` on *every* SDPA call rather
+than reading the cache -- and the count in question is exactly 2,268, the same
+loop section 43 fixed a project-tree re-walk in. Setting the variable changes the
+decode by nothing: **8.30 s with it, 8.30 s without**, same 6,804 hits. The
+lookup is not the residual.
+
 Closing the rest means either a tuned fused-attention kernel for this shape
-(inside jittor, or by making the extension's configurable), or accepting the
-extension's tiling. It is no longer a host-side or launch-count problem.
+(inside jittor, or by making the extension's tiling configurable), or accepting
+the extension's tiling. It is no longer a host-side or launch-count problem.
 
 ### The server path is reached too, but it is not where this lever is
 
