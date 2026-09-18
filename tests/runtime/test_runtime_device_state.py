@@ -41,6 +41,42 @@ def test_python_flag_writes_reach_core_and_jit_owner():
     assert jt.flags.sync_run == saved
 
 
+def test_current_device_resolves_the_unset_sentinel():
+    """``flags.device_id`` and ``current_device()`` are not the same reading.
+
+    ``device_id`` starts at -1, meaning "nobody has chosen one"; the resolved
+    answer for that is device 0. Only ``current_device()`` does the resolving,
+    so it is the one to read for "which card am I on" -- the raw flag is for
+    telling "unset" apart from "explicitly set to 0", which is what the
+    device-placement note now says and what the setter below relies on.
+    """
+    saved = jt.flags.device_id
+    if jt.get_device_count() == 0:
+        # A build with no accelerator has no device to resolve *to*, and
+        # device.h says so: `current_device()` is "the current device, or -1
+        # when no accelerator is visible". Answering 0 here would claim a
+        # device that `get_device_count()` says does not exist, so the two
+        # readings are checked against each other instead.
+        assert jt.current_device() == -1
+        assert jt.flags.device_id == saved
+        return
+    try:
+        assert jt.current_device() >= 0
+        if saved >= 0:
+            assert jt.current_device() == saved
+        jt.flags.device_id = 0
+        assert jt.flags.device_id == 0
+        assert jt.current_device() == 0
+    finally:
+        jt.flags.device_id = saved
+    # A negative write is refused rather than silently accepted as "unset".
+    with pytest.raises(RuntimeError):
+        jt.set_device(-1)
+    with pytest.raises(RuntimeError):
+        jt.set_device(jt.get_device_count() + 5)
+    assert jt.current_device() >= 0
+
+
 @functools.lru_cache(maxsize=None)
 def _load_cudart():
     """libcudart, or None where it cannot be loaded.
