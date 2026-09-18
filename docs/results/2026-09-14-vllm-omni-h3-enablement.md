@@ -3495,3 +3495,21 @@ together: the f32->f16 cast 2.06 -> ~0.95 s, flash-attn 2.84 -> ~1.89 s (cuDNN's
 and the bias adds folded into the gemm as torch does. On the VAE class that is
 ~2.9 s of a 29.1 s GPU budget, and the same codegen serves the denoise, which is
 53% of the request.
+
+### Profiling the server's own worker
+
+`serve-vllmomni.sh` takes `LAUNCHER` and prefixes it to the `vllm-omni serve`
+command, which is how to nsys the worker in the server's real configuration
+(FLASH_ATTN, no dit offload) rather than the single-process runner, whose
+attention backend is hardcoded to TORCH_SDPA:
+
+```sh
+GPU=0 PORT=8100 ATTN=FLASH_ATTN \
+  LAUNCHER="/opt/nvidia/nsight-compute/2025.2.1/host/target-linux-x64/nsys profile --stats=true -o /tmp/nsys-server --force-overwrite true" \
+  ./serve-vllmomni.sh
+```
+
+It does wrap the worker and the profile is collected, but **`stop-vllmomni.sh`
+kills the tree hard and nsys never writes the `.nsys-rep`** (it leaves an
+`nsys --start-agent` orphan holding the session). Stop the server with SIGINT and
+wait for the wrapper to exit instead, or the run is lost.
