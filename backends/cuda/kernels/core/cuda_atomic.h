@@ -287,10 +287,16 @@ template <> struct int_mapper<__nv_bfloat16> {
 
 template <> struct int_mapper<double> {
     typedef double src;
-    typedef long long target;
-    inline static __device__ target to_int(src a) { return __double_as_longlong(a); }
+    // `unsigned long long int`, not `long long`: the 64-bit `atomicCAS` takes
+    // the unsigned type and CUDA has no signed overload, exactly as the int64
+    // note further down says. With the signed typedef, `cuda_atomic_mul<double>`
+    // did not compile at all -- `prod()` over a float64 Var on CUDA failed in
+    // nvcc with "no instance of overloaded function atomicCAS matches the
+    // argument list", not at runtime.
+    typedef unsigned long long int target;
+    inline static __device__ target to_int(src a) { return (target)__double_as_longlong(a); }
     inline static __device__ target* to_intp(src* a) { return (target*)a; }
-    inline static __device__ src from_int(target a) { return __longlong_as_double(a); }
+    inline static __device__ src from_int(target a) { return __longlong_as_double((long long)a); }
 };
 
 template<class T> __device__
