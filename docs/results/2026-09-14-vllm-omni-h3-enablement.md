@@ -3738,3 +3738,49 @@ configuration change, and not any of the four shortcut routes that were tested a
 ruled out. None of them can be evaluated on this box while a co-tenant's occupancy
 job pins every GPU at 100%, which is why the numbers above are counts (exact) and
 phase times (noisy) rather than trusted absolute timings.
+
+### The extra launches are casts and layout copies, not arithmetic
+
+Mapping each `func_*` kernel back to its jit key (the cache filenames carry the op
+chain) breaks the shim's 311,195 elementwise launches into 63 distinct fused
+compositions. The head of that list is not arithmetic:
+
+| composition | launches | time |
+| --- | --- | --- |
+| `unary` fp32 -> fp16 `cast` | 33,894 | 2.06 s |
+| `unary` fp16 -> fp32 `cast` | 27,216 | 0.57 s |
+| **`contiguous` fp16, 4-D** | **27,216** | 0.37 s |
+| `unary` fp32 -> fp16 `cast` (second specialisation) | 27,090 | 0.05 s |
+| **`fuse_transpose` fp16, 4-D** | **20,409** | 0.43 s |
+| `binary` fp16 `add` | 13,608 | 1.94 s |
+| `unary` fp16 -> fp32 `cast` (second) | 13,608 | 0.83 s |
+| `unary` fp16 -> fp16 | 13,608 | 0.21 s |
+| `binary` fp32 `add` / `multiply` | 13,608 + 13,608 | 0.11 s |
+| `binary` fp16 `multiply` | 13,593 | 0.72 s |
+| `unary` fp32 -> fp32 | 13,587 | 0.04 s |
+
+Adding the cast specialisations gives roughly **102,000 cast launches** and the two
+layout compositions another **47,600**, i.e. about half the elementwise launches are
+dtype conversion and layout, not maths. Subtract them and the shim issues ~161,000
+launches of real arithmetic -- *fewer* than torch's 206,963 elementwise launches
+in total. So the shim is not decomposing the model's arithmetic more finely than
+torch; it is paying for casts and copies around it.
+
+Two of those are structural and not fixable here: the `contiguous` copies are the
+model's own (`qkv.chunk(3)` gives strided views and the fused qk-norm+RoPE path
+reshapes them, forcing a copy -- 2 per attention call, which is why there are
+9,072 per decode, and torch's `CatArrayBatchedCopy` at 9,135 per decode is the same
+copy). **The casts are the shim's.** torch documents, and relies on, autocast
+*caching* the cast of a weight for the duration of the region
+(`torch.autocast(..., cache_enabled=True)`); the shim's `_AutocastContext` accepts
+`cache_enabled` and does nothing with it, and jittor inserts the cast in C++ dtype
+inference per use instead. ~102,000 cast launches against torch's ~34,000
+cast-shaped launches is the right order of magnitude for exactly that difference,
+and it is the only remaining item that is both concrete and in jittor's own code.
+
+**The bridge is not involved in any of this.** The same measurement on the
+checkpoint class -- which uses no Triton-bridge kernel at all (`JITTOR_TRITON_STATS`
+reports zero launches; the driver-API launches in its profile are the flash-attn
+adapter's) -- still shows the 1.5x elementwise launch count. So the bridge's
+per-launch `jt.sync_all` submission is *not* what fragments the graph, and the two
+candidate fixes reduce to one: fewer casts per autocast region.
