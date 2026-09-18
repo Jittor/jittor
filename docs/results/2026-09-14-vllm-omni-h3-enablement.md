@@ -3784,3 +3784,57 @@ reports zero launches; the driver-API launches in its profile are the flash-attn
 adapter's) -- still shows the 1.5x elementwise launch count. So the bridge's
 per-launch `jt.sync_all` submission is *not* what fragments the graph, and the two
 candidate fixes reduce to one: fewer casts per autocast region.
+
+### The per-use weight cast is real, but caching it is worth ~2% per call
+
+The previous section left autocast weight-cast caching as the named next fix, with
+the caveat that nobody had shown the same weight is cast repeatedly. Measured now,
+with a probe built to avoid the two traps that invalidated the first attempts:
+
+* identical activations let jittor collapse the loop into a single op (100
+  `linear(x, w)` calls produced 4 gemm kernels and 5 casts);
+* and rebinding `y` each iteration lets jittor **prune the dead outputs**, so only
+  the last call ran at all.
+
+With a fresh activation per iteration and every output accumulated (so all calls
+execute, as they do in a decode), 40 `linear(x_fp16, w_fp32)` calls under the amp
+register produce **83 f32->f16 cast kernels**; the same 40 calls with the weight
+pre-cast to fp16 produce **3**. So the weight *is* cast per use, and torch's
+documented autocast caching is indeed something the shim does not do.
+
+But the prize is small where it matters. The same probe's wall time:
+
+| | 40 calls | per call |
+| --- | --- | --- |
+| A: fp32 weight, cast per use | 5.9 ms | 0.147 ms |
+| B: pre-cast fp16 weight | 6.6 ms | 0.164 ms |
+
+Nothing. The cast costs ~2.8 us against a gemm that costs ~150 us, so removing it
+changes nothing at this shape -- and the profile's 61 us *average* cast is an
+average over the whole model's cast sizes, not the gemm-adjacent ones. The cast
+launches do total ~3.5 s of the 12.67 s elementwise time, of which caching could
+remove roughly the repeated-weight half (~1.75 s of the 7.98 s gap, ~2% of the
+pipeline) -- at the price of a C++ memo in dtype inference with a staleness hazard
+the model would have to respect. That is not the 1.8x per-kernel difference the
+family table shows, and it is not worth a core change on this evidence.
+
+**So the residual is not one defect.** Every hypothesis that could be formed has
+now been measured: vectorization (1.10x), `auto_flush_ops` (no effect), fusion
+(works, broadcasts included), `EAGER=0` (no change), the bridge's submissions
+(exonerated -- the same launch ratio appears with no bridge kernel at all), and now
+cast caching (real, ~2% per call). What is left is a long tail of small effects --
+102k cast launches that are individually microseconds, 48k layout copies that are
+the model's own, and a per-kernel cost difference with no single cause left to
+name. That is the honest answer to "why is it still 1.5x": there is no one fix, and
+the remaining work is a per-op kernel library rather than a defect.
+
+### Probe methodology notes worth keeping
+
+Two traps cost several runs here and are easy to repeat:
+
+* **identical inputs collapse jittor's graph** -- N calls with the same operands
+  build one op, so kernel counts measure 1, not N;
+* **a rebound result is dead** -- if the loop rebinds its output and nothing reads
+  it, jittor prunes it and the kernels never run. Accumulate or keep a list.
+
+Both make a probe report far too *little* work, and both look like a fast result.
