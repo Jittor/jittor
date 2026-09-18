@@ -735,6 +735,41 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   forward-live keeps the var alive (`Node::free()`'s first guard). That is a
   change to the liveness model rather than to any one call site, and it is the
   part this entry is still open on.
+- The candidate, in two halves, written down 2026-09-18 and not yet measured.
+  Attempt 2 above is the right half of it and failed on breadth and on a cycle;
+  both are addressable.
+  * **Breadth.** "Keep the source op alive while such an output exists" fires
+    for every backward-needed output, and almost all of those *have* storage --
+    hence 92k retained ops when the condition was first tried. The vars this
+    bug is about are the ones that can only be satisfied by recomputation, and
+    that is a state you can read off the var: `mem_ptr == nullptr` (never
+    materialised) and `!liveness.pending.active()` (not merely waiting to be)
+    and `liveness.backward.active()` (something will read it again). A
+    materialised var fails the first test, an unexecuted one fails the second,
+    so the guard fires only on the fused-away case.
+  * **The cycle.** Attempt 2 left the var unfreeable because `Node::free()`'s
+    first guard also tests `!is_finished()`, and a fused-away var is never
+    finished: `exec_runner.cc`'s fused branch calls `finish_pending_liveness`
+    on `op->outputs()` only, and an internal var of a `FusedOp` is not one of
+    them. It is nonetheless as finished as it will ever be -- the kernel
+    inlined it and nothing will write it again.
+    Saying so with the flag has a second effect that has to be priced in, and
+    it is why this is written as a candidate rather than a patch: `_finished`
+    on an output var is also read by rule b3 in `release_forward_liveness`
+    ("a finished output var can no longer produce a gradient for us"), so
+    setting it makes the producing op release backward liveness the moment its
+    forward liveness drops -- the opposite of what the first half is for. The
+    narrower cycle break avoids that by not touching the flag at all: guard
+    167's `!is_finished()` is standing in for "this var is still going to be
+    written", and `liveness.pending.active()` says that directly and is false
+    for a var the kernel inlined. Swapping the clause frees exactly this class.
+    It is the more invasive-looking edit and the less invasive change, because
+    `_finished` is read in five places and the guard in one.
+  Both halves have to land together: the first alone is attempt 2 and leaks,
+  the second alone frees the var earlier than today and turns an unbacked
+  input into a missing one. Measure with the 30-repetition double-backward
+  shape that produced the 652 lived ops, and with a plain training loop, which
+  stayed flat under attempt 2 and must stay flat here.
 - What changed: the launch now says so. `check_input_is_backed` reports the var
   and the op instead of dereferencing a null allocator inside the generated
   kernel -- a named error rather than a segfault. `exec_plan.cc` and `fuser.cc` also stopped reading `v->input()`
