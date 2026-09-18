@@ -4159,3 +4159,106 @@ affected by this change:
 * `tests/structure/test_opinfo_dtype_declaration.py` cannot be collected in this
   venv at all (`No module named 'scipy'`), which aborts `pytest tests/structure`
   at collection before anything runs.
+
+## 44. The bridge's barrier swept the whole process -- and that was not the gap
+
+Section 43 left the autocast decode at 9.93 s. Before picking the next target,
+re-measure what it is actually being compared against, because the numbers this
+effort had been quoting could not support the conclusion drawn from them.
+
+**One sample proves nothing here.** `probe_decode_base_both.py` runs the *same
+file* under both runtimes (reference decode, fp32 weights, `autocast(fp16)`), and
+one back-to-back pair read **shim 10.87 s vs torch 11.88 s** -- which looks like
+parity. Three interleaved rounds then gave shim 11.07 / 12.40 / 22.59 against
+torch 14.34 / **6.68**. Torch's 6.68 s matches the earlier unloaded figure, so the
+11.88 s sample was contention. `probe_decode_base_repeat.py N` (warm up once, then
+N measured decodes) is stable *within* a process and noisy between them, so quote
+the minimum:
+
+| runtime | samples (s) | min | median |
+| --- | --- | --- | --- |
+| jittor shim | 10.75, then 10.16/10.14 | **10.14** | 10.16 |
+| real torch | 6.67, 6.68 x6, 6.69 | **6.67** | 6.68 |
+
+So the shim is **1.52x** (gap 3.47 s). Better than the 2.2x recorded earlier, and
+not parity.
+
+**Where the time is.** The Triton bridge is 2.39 s of a 9.98 s decode, and it is
+entered from exactly one op: vLLM-Omni's `try_scaled_residual_exact`
+(`ops/vae/scaled_residual.py`), a bit-exact `@triton.jit` kernel using inline asm
+`mul.rn.f32` to hold a rounding boundary. 4,536 launches per decode, 2 per
+transformer block. Real torch runs the *same* op on real Triton for a fraction of
+that, so this is shim overhead, not extra work.
+
+The barrier `run` puts before packing was `jt.sync_all(False)`, which in
+`src/core/var_holder.cc` walks `runtime_holder_state().holders()` and collects
+every var with no consumers. On an idle graph that is linear in live holders --
+1.2 us at 0, 138 us at 10,000, 752 us at 50,000 -- against a flat ~25 us for
+`jt.sync([o], False)`. **The bridge now names its operands**:
+
+```python
+operand_vars = [v for (_, _, v) in runtime_vals if _is_var(v)]
+if operand_vars:
+    jt.sync(operand_vars, not _fast_sync_enabled())
+elif any(_is_tensor(v) for (_, _, v) in runtime_vals):
+    jt.sync_all(not _fast_sync_enabled())   # a genuine torch.Tensor cannot be named
+```
+
+`TestTheLaunchBarrierNamesItsOperands` pins the scope: it fails against the old
+bridge (`[] is not true : the launch never named its operands to jt.sync`) and
+passes against this one, and it also asserts the launched values, so a barrier
+that stops submitting producers cannot pass.
+
+**The estimate was wrong, and the way it was wrong is the point.** The idle-graph
+numbers extrapolate to 1.5 s of the decode and ~1.85 s of saving. Measuring the
+scan *inside* the decode -- by timing one extra `sync_all(False)` right after the
+bridge's own barrier, so the graph is already materialised -- gives **47.9 us mean
+over the 4,536 calls, 0.217 s total**. The decode holds far fewer holders than the
+microbench did, and the other ~277 us per launch is jittor executing the pending
+graph, which has to happen. `weak_sync=True/False` changes nothing (1.474 vs
+1.454 s), so `top_weak_sync`'s widening is not the cause either.
+
+| | before | after |
+| --- | --- | --- |
+| bridge `sync` bucket | 1.640 s | **1.474 s** |
+| decode, repeated protocol | 10.15 / 10.14 s | 10.13 / 10.14 s |
+
+The bucket moves; **the decode does not**. Alternating the two bridges through the
+repeated protocol (old 10.15, 10.14; new 10.13, 10.14) puts the end-to-end effect
+at or below 0.02 s. The decode is **GPU-bound**, so 0.22 s of host work removed
+from the barrier is 0.22 s of overlap restored. The change stays because it
+removes an unbounded `O(live holders)` term from a per-launch path and is tested,
+not because it closes any of the 3.47 s.
+
+**Two more things this section fixed.**
+
+*The checksum cannot gate anything.* The output sum moved by 4 in 3.05e7 between
+before and after, and the change alters graph batching, so that looked like a
+numeric effect. Two runs per bridge:
+
+| run | sum | sha256 (first 8) |
+| --- | --- | --- |
+| new #1 / #2 | 3.0456164e+07 / 3.0456160e+07 | b89c753e / 224187b1 |
+| old #1 / #2 | 3.0456160e+07 / 3.0456164e+07 | 64780877 / 1798df24 |
+
+Four runs, four different sha256s, and both sums appear under *both* bridges. The
+decode is not run-to-run reproducible, so the checksum was noise and the change is
+numerically neutral within it.
+
+*The other candidate was not worth a core rebuild.* `nn/_bindings.py`'s
+arithmetic wrapper ranked 4th by cProfile tottime (0.707 s / 58,560 calls) and the
+repo deletes it in `c0f54335`, but that commit's `py_converter.h` work is not in
+the deployed core, so installing just the Python would break `1j * x`. A plain
+timing loop puts the wrapper's real cost at **185 ns/op, 0.011 s per decode** --
+cProfile had inflated a frame that calls into C by ~65x. Not worth a 218-file
+rebuild.
+
+**Gates.** `compat/tests/triton/test_triton_backend.py`: 17 passed, 1 skipped,
+including the new class. `tools/check_repo_layout.sh` passes.
+
+**What is left.** The shim's *non-bridge* work is 7.5 s, which on its own exceeds
+torch's entire 6.67 s decode, and the bridge's remaining per-launch overhead is
+pack 0.57 s + dtod 0.19 s + launch/final/memset 0.27 s. Both are GPU-side; the
+next measurement has to be an nsys kernel-mix diff of this same probe under the
+two runtimes, not another host-side frame.
+

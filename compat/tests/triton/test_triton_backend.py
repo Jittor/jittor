@@ -595,5 +595,77 @@ class TestLaunchFollowsItsProducers(unittest.TestCase):
                 err_msg="step %d: the launch read a stale operand" % step)
 
 
+class TestTheLaunchBarrierNamesItsOperands(unittest.TestCase):
+    """The barrier before packing must name the operands, not the process.
+
+    ``jt.sync_all(False)`` collects *every* leaf var alive -- it walks
+    ``runtime_holder_state().holders()`` and keeps each one with no consumers --
+    so what it costs is the size of the live holder set rather than the work a
+    launch needs. Measured on an idle graph: 1.2 us with nothing alive, 138 us at
+    10,000 live holders, 752 us at 50,000, against a flat ~25 us for
+    ``jt.sync([o], False)`` at any of those sizes. One MiniMax-H3 autocast VAE
+    decode reaches this barrier 4,536 times.
+
+    A broad sweep is not *wrong*, which is why no correctness test catches it:
+    it materialises at least as much as the operands need. So pin the scope.
+    Only ``sync_all(False)`` -- the sweep that skips the device wait -- is
+    asserted against; ``sync_all(True)`` is the conservative mode's own
+    before/after barrier and is a different thing.
+    """
+
+    def _prepare(self):
+        global triton, tl
+        if triton is None or tl is None:
+            setUpModule()
+        if not _shim.activate_bridge():
+            self.skipTest("jittor Triton bridge is unavailable")
+
+    def test_the_barrier_takes_operands_rather_than_the_whole_process(self):
+        self._prepare()
+        n, BLOCK = 1024, 256
+        grid = (triton.cdiv(n, BLOCK),)
+        xn = np.arange(n, dtype="float32")
+
+        def launch():
+            # `x` has a pending producer, so a barrier that does not submit it
+            # would leave the kernel reading an unbacked buffer.
+            x = jt.array(xn) * 2.0 + 1.0
+            y = jt.array(xn)
+            out = jt.empty(n, dtype="float32")
+            add_kernel[grid](x, y, out, n, BLOCK=BLOCK)
+            return out
+
+        launch()                       # warm up: compile the cubin
+        jt.sync_all(True)
+
+        seen = []
+        real_sync, real_sync_all = jt.sync, jt.sync_all
+
+        def recording(name, real):
+            def call(*args, **kwargs):
+                seen.append((name, args))
+                return real(*args, **kwargs)
+            return call
+
+        jt.sync = recording("sync", real_sync)
+        jt.sync_all = recording("sync_all", real_sync_all)
+        try:
+            out = launch()
+        finally:
+            jt.sync, jt.sync_all = real_sync, real_sync_all
+
+        np.testing.assert_allclose(
+            np.asarray(out.numpy(), dtype=np.float64),
+            xn.astype(np.float64) * 3.0 + 1.0, atol=1e-5,
+            err_msg="the launch did not read the operand its producer just wrote")
+
+        named = [a for (name, a) in seen if name == "sync" and a and a[0]]
+        self.assertTrue(named, "the launch never named its operands to jt.sync")
+        self.assertNotIn(
+            ("sync_all", (False,)), seen,
+            "the launch swept the whole process with jt.sync_all(False); name the "
+            "operand Vars instead, or every launch pays for every live holder")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

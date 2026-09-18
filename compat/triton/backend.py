@@ -1291,7 +1291,22 @@ def run(jitfn, args, kwargs, grid):
     # measured 41.9 s of a 59.4 s bridge total -- four times the next-largest
     # phase. `sync_all(False)` still plans, allocates and enqueues; it skips
     # only the trailing device wait (`sync_all` in `core/var_holder.cc`).
-    if any(_is_tensor(v) for (_, _, v) in runtime_vals):
+    #
+    # Target the operands rather than the process. `sync_all` collects *every*
+    # leaf var alive -- it walks `runtime_holder_state().holders()` and keeps
+    # each one with no consumers -- so what it costs is the size of the live
+    # holder set, not the work this launch needs. Measured on an idle graph:
+    # 1.2 us with nothing alive, 138 us at 10,000 live holders, 752 us at
+    # 50,000. One autocast VAE decode reaches here 4,536 times at 331 us each
+    # (1.50 s, 15% of the decode) to sweep holders this kernel never touches.
+    # `jt.sync` takes the operand list instead, and `_is_var` already says which
+    # operands are jittor Vars -- under the shim, all of them.
+    operand_vars = [v for (_, _, v) in runtime_vals if _is_var(v)]
+    if operand_vars:
+        jt.sync(operand_vars, not _fast_sync_enabled())
+    elif any(_is_tensor(v) for (_, _, v) in runtime_vals):
+        # A launchable tensor that is not a jittor Var (a genuine torch.Tensor)
+        # cannot be named to `jt.sync`; keep the broad sweep for that case.
         jt.sync_all(not _fast_sync_enabled())
     if _sync_before_launch_enabled():
         jt.sync_all(True)
