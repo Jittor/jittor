@@ -519,10 +519,25 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
 
     def test_autocast_cpu_context_restores_state(self):
+        """A cpu region turns cpu autocast on, and nothing else.
+
+        ``is_autocast_enabled()`` with no argument is the *cuda* question --
+        that is what torch answers, and it was verified against torch 2.13:
+        inside ``with torch.autocast("cpu")`` the bare call returns False while
+        ``is_autocast_enabled("cpu")`` returns True. This used to assert the
+        bare call was True, which passed only while the shim ignored the device
+        argument and answered one global flag for every backend.
+        """
         self.assertFalse(torch.is_autocast_enabled())
+        self.assertFalse(torch.is_autocast_enabled("cpu"))
         with torch.autocast("cpu", dtype=torch.bfloat16):
-            self.assertTrue(torch.is_autocast_enabled())
+            self.assertTrue(torch.is_autocast_enabled("cpu"))
+            self.assertTrue(torch.is_autocast_cpu_enabled())
+            self.assertIs(torch.get_autocast_dtype("cpu"), torch.bfloat16)
+            # cuda is untouched: asking for one device must not enable another.
+            self.assertFalse(torch.is_autocast_enabled())
         self.assertFalse(torch.is_autocast_enabled())
+        self.assertFalse(torch.is_autocast_enabled("cpu"))
 
     def test_eye_is_a_stable_module_level_object(self):
         numerical = importlib.import_module(
