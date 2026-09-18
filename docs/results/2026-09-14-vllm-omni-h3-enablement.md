@@ -3015,19 +3015,20 @@ segment tables, all contiguous).
 
   | run | result | request time |
   | --- | --- | --- |
-  | TP1, one GPU | prompt-following clip (`runs/fix-tp1-8s.mp4`) | 118.9 s |
-  | TP2, two GPUs | prompt-following clip (`runs/fix-tp2-8s.mp4`) | 130.1 s |
+  | TP1, one GPU, 512x512 | prompt-following clip (`runs/fix-tp1-8s.mp4`) | 118.9 s |
+  | TP2, two GPUs, 512x512 | prompt-following clip (`runs/fix-tp2-8s.mp4`) | 130.1 s |
+  | TP1, one GPU, 832x480 | prompt-following clip (`runs/fix-tp1-8s-832.mp4`) | 188.3 s |
+  | TP2, two GPUs, 832x480 | prompt-following clip (`runs/fix-tp2-8s-832.mp4`) | 170.2 s |
 
-  Both clips show the potter's hands shaping a clay bowl on the spinning wheel
-  with the studio shelves behind, i.e. the structured prompt, in place of the
-  pink card, and the two agree on content. 130 s > 119 s at this shape is the
-  known profile: at 8 steps and 512x512 the per-step collectives are paid without
-  the rows being long enough to win them back, which is why the earlier sweep saw
-  TP2 ahead only at larger canvases (832x480, 8 steps: 180.2 s vs TP1's 309.2 s).
-  The fix cannot slow anything down -- for the strided operands it removes a
-  device-to-device copy per launch; the contiguous operands it still guards are
-  unchanged. Against real torch the denoise parity measured earlier stands
-  (shim 1.11x on the DiT, 1.22x end to end on the diffusers path).
+  All four clips show the potter's hands shaping a clay bowl on the spinning
+  wheel with the studio shelves behind, i.e. the structured prompt, in place of
+  the pink card, and TP1 and TP2 agree on composition. The pair ordering is the
+  known profile: at 512x512 the per-step collectives are paid without the rows
+  being long enough to win them back, so TP2 is 9% slower; at 832x480 TP2 is 10%
+  faster. Against real torch the denoise parity measured earlier stands (shim
+  1.11x on the DiT, 1.22x end to end on the diffusers path). The fix cannot slow
+  anything down -- for the strided operands it removes a device-to-device copy
+  per launch; the contiguous operands it still guards are unchanged.
 
 ### Lesson
 
