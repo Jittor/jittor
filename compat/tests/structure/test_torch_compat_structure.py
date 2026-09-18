@@ -433,7 +433,16 @@ class TestTorchCompatStructure(unittest.TestCase):
             with self.subTest(path=path.name):
                 self.assertNotIn(".runtime import", source)
                 self.assertNotIn("preserve_facade_origins", source)
-                self.assertIn("import jittor as jt", source)
+                # The property is "reaches jittor directly", and there are two
+                # spellings of it. `import jittor as jt` is the usual one;
+                # `from jittor.amp import GradScaler` is the other, and
+                # grad_scaler.py uses it because the scaling algorithm lives in
+                # the native package and this module only adds torch's
+                # signature to it. Matching the one spelling would have forced
+                # an unused import to satisfy a check about layering.
+                self.assertRegex(
+                    source, r"(?m)^(import jittor\b|from jittor[. ])",
+                    "%s does not import the jittor root directly" % name)
 
     def test_package_discovery_includes_only_canonical_compat_packages(self):
         package_root = Path(types.__file__).resolve().parent

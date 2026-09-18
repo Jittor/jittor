@@ -53,20 +53,6 @@ class GradScaler(_NativeGradScaler):
                          growth_interval=growth_interval, enabled=enabled)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class _LegacyDeviceGradScaler(GradScaler):
     """``torch.cuda.amp.GradScaler`` / ``torch.cpu.amp.GradScaler``.
 
