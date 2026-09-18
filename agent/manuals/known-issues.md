@@ -674,13 +674,13 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   Nothing here identifies *which* tensors outlive their segment; that needs
   `use_stat_allocator` lifetimes and was not done.
 
-## KI-EXEC-006: a second backward over a retained graph can find an input gone
+## KI-EXEC-006: a second backward over a retained graph found an input gone
 
-- Severity: High -- a supported operation aborts, and until 2026-09-18 it did
+- Severity: High -- a supported operation aborted, and until 2026-09-18 it did
   so as a segfault with nothing naming the var.
-- Status: Open. Diagnosed and made diagnosable 2026-09-18; the lifetime itself
-  is unchanged.
-- Owner: executor maintainers
+- Status: **Fixed** 2026-09-18 in `src/core/node.cc`. Kept here because the
+  three dead ends below are worth not repeating and because the fix changes the
+  liveness model, not a call site.
 - Reproduction, three lines, deterministic, CPU, no threads:
 
       x = jt.array(np.random.rand(1, 1, 3, 3).astype("float32"))
@@ -692,31 +692,66 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
 
   Found by `tests/ops/test_ops.py::TestGradientsCPU::test_gradcheck_interpolate
   _bilinear`, whose gradcheck materialises the output (a dtype test) before
-  differentiating it element by element. That file is a Torch-mode path, so it
-  had not run in the sweeps.
-- Mechanism, pinned 2026-09-18 by probing `free_var_mem` and the node repr.
-  `jt.nn.interpolate`'s bilinear path gathers with `reindex_var`, whose index
-  operands come from `jt.index` -- a source op with no inputs. That var is
-  **fused away**: it holds no storage of its own and the kernel recomputes it
-  from its producer on every use. Materialising the forward drops the last
-  *forward* need for the producer, so `Node::free()` takes it and erases the
-  only producer edge. What is left is a var that is alive, carries
-  `_needed_by_backward`, has `mem_ptr == nullptr`, and has no producer --
-  `Var(4:1:9:5:i0:o8:s0:n1:g0,int32,,0)`. The planner then takes it for a batch
-  input that already exists, and the launch finds it unbacked.
-  `free_var_mem` is never called on it: there was never any storage to free.
-- Three fixes tried and ruled out, each measured:
+  differentiating it element by element.
+- What it cost, which is why it was worth the chase. The abort did not stay in
+  its own test: the broken graph stayed in the process, and `sync_all()` --
+  which `flag_scope` calls whenever the device changes -- re-ran the same dead
+  fused op for the rest of the session. Measured on the OpInfo battery: with
+  `interpolate_bilinear` deselected, `gradcheck_inv` and `gradcheck_log1p` pass;
+  run it first and both fail, and so does every test after it. The battery's
+  "14 failures" was one bug and ~350 poisoned tests, and the run that reported
+  them was 1.55 s rather than 14.69 s because nothing after the first failure
+  did any work.
+- Mechanism. `jt.nn.interpolate`'s bilinear path gathers with `reindex_var`,
+  whose index operands come from `jt.index` -- a source op with no inputs. Those
+  vars are **fused away**: they hold no storage and the kernel recomputes them
+  from their producer on every use. Materialising the forward drops the last
+  *forward* need for the producer, `Node::free()` takes it, and the only
+  producer edge goes. What is left is a var that is alive, carries
+  `_needed_by_backward`, has `mem_ptr == nullptr`, and has no producer. The
+  planner takes it for a batch input that already exists, and the launch finds
+  it unbacked. `free_var_mem` is never called on it: there was never any
+  storage to free.
+- The fix, in `Node::free()`. An op's outputs' *backward* need keeps the op
+  alive, the way a var's producer being forward-live keeps the var alive.
+  Three parts, and all three are load-bearing:
+  1. `needs_recompute(v)`: `mem_ptr == nullptr` **and**
+     `_needed_by_backward` **and** `backward.active()`. Each reading rules out
+     a case the others let through -- see the comment at the function, which
+     names the var in this graph that each one excludes.
+  2. The var-side guard keeps the op's output *tuple* whole. An op kept with
+     only some of its outputs is a half-op: its jit source still names the
+     freed vars, and the code generator then reports "op 10 index names 4 vars
+     in its jit source but has 0 inputs and 2 outputs" (that message is new
+     too; it was `ASSERT(member.size() <= var_num)`).
+  3. The guard's second clause is now `!is_finished() && pending.active()`
+     rather than `!is_finished()`. A var internal to a `FusedOp` never becomes
+     finished -- `exec_runner.cc` finishes `op->outputs()` only -- so without
+     this the retained op pins a var that can never be freed, which is what
+     made attempt 2 leak.
+  One further change fell out of it, in `finish_pending_liveness`: rule b3's
+  withdrawal is now guarded by `liveness.backward.active()`. A node with no
+  backward liveness has no contribution to withdraw, and withdrawing anyway is
+  a second release against one owner. Reaching that needs a var that goes
+  backward-dead and is *then* finished, which cannot happen while such a var is
+  freed on the spot -- so this bug was unreachable until the retention above
+  made it reachable, and it aborted the process at teardown.
+- Measured after the fix:
+  * the three-line reproduction runs 16 successive retained gradients;
+  * 30 repetitions of the double-backward shape leave **0 lived ops, 0 lived
+    vars** (attempt 2 left 652 ops / 938 vars, growing without bound);
+  * a plain training loop stays flat at 25 ops / 31 vars from step 5 to 30;
+  * `tools/run_test_suite.py --tier core`: 310 passed, 0 failed, both sessions.
+- Three fixes tried and ruled out first, each measured. They are why the fix
+  looks the way it does:
   1. **Mark source outputs `_needed_by_backward`** (drop `_inputs.size()==0`
      from `manual_set_vnbb` in op.cc). No effect -- the var already carries the
-     flag (`n1` above), and the flag protects storage, which this var never had.
-  2. **Keep the source op alive while such an output exists** (early return in
-     `Node::free()`). Fixes the crash -- the three-line reproduction runs for 2,
-     3 and 16 gradients, and `TestGradientsCPU` goes 4 failed -> 0 -- but
-     creates a retention cycle: the var cannot be freed because it now has an
-     input and is never `is_finished()`, and the op cannot be freed because the
-     var needs it. Measured 652 lived ops / 938 lived vars after 30 repetitions
-     of the double-backward shape, growing without bound; a plain training loop
-     stays flat, so it is specific to retained graphs.
+     flag, and the flag protects storage, which this var never had.
+  2. **Keep the source op alive whenever an output is needed backward.** Fixes
+     the crash and retains 92k ops: almost every backward-needed var *has*
+     storage, so the predicate has to exclude those, which is part 1 above.
+     Narrowing it to this var's state still left 652 lived ops through the
+     retention cycle that part 3 above removes.
   3. **Force the var to materialise in the fuser** (`var_fused = 1` for a
      backward-needed output of a source op). Breaks code generation: the fused
      source references `op3_outputstride0` and friends that were never
@@ -730,58 +765,13 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
      1024x1024 upsample of a batch would pay gigabytes. Not a general fix, and
      the same objection applies to doing it inside `reindex_var` for every
      caller.
-- What the shape of a real fix looks like, from those three: an op's outputs'
-  *backward* liveness has to keep the op alive, the way a var's producer being
-  forward-live keeps the var alive (`Node::free()`'s first guard). That is a
-  change to the liveness model rather than to any one call site, and it is the
-  part this entry is still open on.
-- The candidate, in two halves, written down 2026-09-18 and not yet measured.
-  Attempt 2 above is the right half of it and failed on breadth and on a cycle;
-  both are addressable.
-  * **Breadth.** "Keep the source op alive while such an output exists" fires
-    for every backward-needed output, and almost all of those *have* storage --
-    hence 92k retained ops when the condition was first tried. The vars this
-    bug is about are the ones that can only be satisfied by recomputation, and
-    that is a state you can read off the var: `mem_ptr == nullptr` (never
-    materialised) and `!liveness.pending.active()` (not merely waiting to be)
-    and `liveness.backward.active()` (something will read it again). A
-    materialised var fails the first test, an unexecuted one fails the second,
-    so the guard fires only on the fused-away case.
-  * **The cycle.** Attempt 2 left the var unfreeable because `Node::free()`'s
-    first guard also tests `!is_finished()`, and a fused-away var is never
-    finished: `exec_runner.cc`'s fused branch calls `finish_pending_liveness`
-    on `op->outputs()` only, and an internal var of a `FusedOp` is not one of
-    them. It is nonetheless as finished as it will ever be -- the kernel
-    inlined it and nothing will write it again.
-    Saying so with the flag has a second effect that has to be priced in, and
-    it is why this is written as a candidate rather than a patch: `_finished`
-    on an output var is also read by rule b3 in `release_forward_liveness`
-    ("a finished output var can no longer produce a gradient for us"), so
-    setting it makes the producing op release backward liveness the moment its
-    forward liveness drops -- the opposite of what the first half is for. The
-    narrower cycle break avoids that by not touching the flag at all: guard
-    167's `!is_finished()` is standing in for "this var is still going to be
-    written", and `liveness.pending.active()` says that directly and is false
-    for a var the kernel inlined. Swapping the clause frees exactly this class.
-    It is the more invasive-looking edit and the less invasive change, because
-    `_finished` is read in five places and the guard in one.
-  Both halves have to land together: the first alone is attempt 2 and leaks,
-  the second alone frees the var earlier than today and turns an unbacked
-  input into a missing one. Measure with the 30-repetition double-backward
-  shape that produced the 652 lived ops, and with a plain training loop, which
-  stayed flat under attempt 2 and must stay flat here.
-- What changed: the launch now says so. `check_input_is_backed` reports the var
-  and the op instead of dereferencing a null allocator inside the generated
-  kernel -- a named error rather than a segfault. `exec_plan.cc` and `fuser.cc` also stopped reading `v->input()`
-  without checking it -- a var in a batch need not have a producer, for exactly
-  the reason above, and four sites in the planner would have faulted on the
-  null one.
-- The open part is which invariant to restore. A var that has consumers and no
-  producer cannot be recomputed, so freeing its storage is only safe if nothing
-  will read it again; `retain_graph=True` says something will. Marking every
-  source output `_needed_by_backward` would pin every index and constant var in
-  memory for the graph's lifetime, which is the memory the flag exists to
-  avoid, so the fix belongs with whoever owns that tradeoff.
+- What else changed on the way, and stays. `check_input_is_backed` reports the
+  var and the op instead of dereferencing a null allocator inside the generated
+  kernel. `exec_plan.cc` and `fuser.cc` stopped reading `v->input()` without
+  checking it -- a var in a batch need not have a producer, and four sites in
+  the planner would have faulted on the null one. The backward-liveness
+  underflow now names the node and its counts rather than asserting a number
+  inside a template.
 
 ## KI-EXEC-005: a var released by another thread mid-batch fails the batch
 
