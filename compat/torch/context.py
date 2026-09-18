@@ -321,21 +321,50 @@ class InstallContext:
         setattr(self.target_namespace, self.COMPLETE_ATTR, True)
 
 
+_context_cache = None
+
+
 def get_install_context(module, *, required=True):
     """Read the active owner's context without creating state or installing APIs.
 
     ``compatibility_owner`` is resolved once rather than imported per call: this
     function runs several times per tensor operation, and a function-local import
     pays the import machinery each time (51 imports per ``torch.cat``, measured).
+
+    The resolution itself is memoized for the same reason and with the same kind
+    of measurement behind it: one MiniMax-H3 VAE decode reaches this 3.6M times,
+    where it and the owner resolution were 14.8 of the 38.2 seconds cProfile
+    attributes to that decode. An entry stores the target it resolved *and* the
+    context found there, and is accepted only while that target's own attribute
+    still holds that context -- so a context that is replaced or removed
+    invalidates its entry by itself. What the check cannot see is a rebinding to
+    a *different* target, and those go through the install ledger, which drops
+    the memo (`transaction._clear_resolution_caches`).
     """
-    global _compatibility_owner
+    global _compatibility_owner, _context_cache
     compatibility_owner = _compatibility_owner
     if compatibility_owner is None:
         from .tensor_state import compatibility_owner as compatibility_owner
         _compatibility_owner = compatibility_owner
+    cache = _context_cache
+    if cache is None:
+        from .tensor_state import _CONTEXT_CACHE as cache
+        _context_cache = cache
+
+    entry = cache.get(module)
+    if entry is not None:
+        target, context = entry
+        if target.__dict__.get(InstallContext.CONTEXT_ATTR) is context:
+            if isinstance(context, InstallContext):
+                return context
+            # A memoized "nothing installed yet", only ever stored by an
+            # optional lookup. Answer that again instead of re-resolving.
+            if not required:
+                return None
     target = compatibility_owner(module)
-    context = vars(target).get(InstallContext.CONTEXT_ATTR)
+    context = target.__dict__.get(InstallContext.CONTEXT_ATTR)
     if context is None and not required:
+        cache[module] = (target, None)
         return None
     if not isinstance(context, InstallContext):
         raise RuntimeError("Torch API requires an activated installation context")
@@ -343,6 +372,7 @@ def get_install_context(module, *, required=True):
         raise RuntimeError("Torch installation context belongs to a different target")
     if context.registry.native_backend is not context.native_backend:
         raise RuntimeError("Torch installation context has a different native backend")
+    cache[module] = (target, context)
     return context
 
 

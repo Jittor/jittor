@@ -3936,3 +3936,98 @@ Two things worth carrying forward:
   does `klass(method)` and calls the method, so every `self.<attr>` from
   `setUp` is missing. Use pytest for `tests/`; the lab runner is for the
   `compat/tests` files it was written for.
+
+## 42. The shim's per-op bookkeeping was 40% of the VAE decode
+
+Section 40 concluded the remaining gap was "a per-op kernel library rather than a
+defect", because every *kernel-level* hypothesis had been measured and closed.
+That conclusion was about the device. Profiling the **host** names the defect in
+one run: the shim spent most of the decode re-resolving things that had not
+changed.
+
+`probe_decode_cprofile.py autocast`, one decode, same conditions both times:
+
+| | plain | cProfile |
+| --- | --- | --- |
+| before | 15.79 s | 38.17 s (2.42x) |
+| after | **11.77 s** | 22.80 s (1.94x) |
+
+and the two functions that were at the top of it:
+
+| function | calls | cumtime |
+| --- | --- | --- |
+| `compat/torch/context.py get_install_context` | 3,583,266 | 14.81 s |
+| `compat/torch/tensor_state.py compatibility_owner` | 3,592,775 | 9.35 s |
+| `tensor_state._bound_owner` | 7,185,550 | 6.86 s |
+| `weakref.get` | 7,185,550 | 3.62 s |
+| `compat/torch/frontend.py _frontend_precision_policy` | 2,622,183 | 12.72 s |
+
+`tensor_frontend` is entered once per frontend operation -- ~1.3M times in this
+one decode, seventeen ops per emitted kernel -- and each entry resolved the
+installing owner from a `WeakKeyDictionary`, walked the binding chain twice,
+re-checked the context's identity in three ways, and then built a fresh
+`{"highest": 0, "high": 1, "medium": 2}` literal to convert a tier name.
+Per op that is a few microseconds; 3.6M times it is the decode.
+
+**What changed.** Three memos, all dropped from the one place that can rebind:
+
+* `compatibility_owner` memoizes `module -> weakref(owner)`. The *weakref* is
+  what is stored, never the owner: an entry must not be able to keep an
+  interpreter alive, which is the whole reason `_OWNERS` is weak.
+* `get_install_context` memoizes `module -> (target, context)`, and accepts the
+  entry only while `target.__dict__[CONTEXT_ATTR] is context`. A context that is
+  replaced or removed therefore invalidates its own entry.
+* `_frontend_precision_policy` memoizes the `cuda_runtime` state object per
+  frontend type and uses a module-level tier table. Only the *lookup* is cached;
+  the two tier names are still read on every call, because they are settable at
+  runtime (`torch.backends.cuda.matmul.allow_tf32`, and the H3 VAE's own
+  determinism scope) and a cached tuple would answer with a stale policy.
+
+Neither memo can see a rebinding to a *different* target, so both are dropped
+from `transaction.py`, which is the only thing that writes `_OWNERS`, on
+`rollback()` and from `bind_tensor_state`. That keeps the revertible-installation
+contract intact: `compat/transaction.py` stays importable without Jittor (the
+import is local and `ImportError` means "no shim to clear").
+
+**Result.** `get_install_context` fell to 961,083 calls and 0.94 s, the owner
+resolution and `weakref.get` left the profile entirely, `_dtype_get` (the next
+item, 654,801 calls) fell from 7.06 s to 2.06 s of cumtime, and the end-to-end
+decode on the same class:
+
+| `probe_vae_checksum.py autocast` | before | after |
+| --- | --- | --- |
+| decode | 17.51 / 17.55 s | **12.41 / 12.37 s** |
+| sum | 3.0456148e+07 | 3.0456168e+07 |
+
+**A note on the metric that led here.** The reason to profile the host at all
+was an nsys gap analysis: in the steady decode region the shim left the GPU busy
+51-69% of the time with 3,000-4,400 gaps of 1 ms or more, against **95.6% busy
+and 46 such gaps** for a real-torch report of the same class. That comparison is
+weaker than it looks -- a co-tenant job pins every card on this box, and a
+kernel delayed by another tenant's work shows up as a gap in *our* report -- so
+it is evidence, not proof. The profile is the proof, and it agrees.
+
+**Not fixed here.** The next items in the same profile are `sync_all` (4,537
+calls, 1.59 s -- one graph materialisation per triton-bridge launch), the
+`.dtype` accessor at 654,801 calls, and a `os.environ`/`pathlib`/`stat` cluster
+of ~1.5 s inside kernel selection.
+
+**Gates that were already red, checked rather than assumed.** Two of the repo's
+own gates fail on this branch, and both were confirmed against a pristine
+`git worktree` at the same commit with the fix absent:
+
+* `tests/structure/backends/comm/test_comm_resource_layout.py::test_legacy_runtime_resource_trees_are_absent`
+  -- `python/jittor/extern` still exists in the tree and the test says it must
+  not.
+* `compat/tests/structure/test_compat_write_entry_points.py` -- both the
+  `unclassified` and `stale` assertions fail identically without this change.
+  The pristine `unclassified` list is exactly one entry
+  (`compat/shim/resources/stubs/torchaudio/__init__.py::<module> writes
+  sys.meta_path`); the much longer list seen in this working tree is entirely
+  `compat/build/lib/**`, a gitignored build artifact that `rglob` walks and a
+  fresh checkout does not have. Note the gate's five categories only cover
+  `os.environ`, the module tables, `sys.meta_path`/`sys.path`, `builtins` and
+  Jittor flags -- the three module-level memo dicts added here are process-global
+  state it does not model, which is why they pass it unclassified. They are
+  dropped by the ledger instead, which is the same boundary the gate exists to
+  police.

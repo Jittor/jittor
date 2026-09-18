@@ -20,6 +20,28 @@ _STATE_SERVICE = "jittor.torch.tensor_states"
 _LEGACY_NAMES = ("_torch_tensor_state", "_torch_leaf_params", "_torch_retained",
                  "_active_optimizers", "_current_optimizer")
 
+#: Memoized owner resolution. `compatibility_owner` is called several times per
+#: tensor operation -- one MiniMax-H3 VAE decode makes 3.6M of them, and it plus
+#: `get_install_context` was 14.8 of the 38.2 seconds cProfile attributes to that
+#: decode. What it resolves changes only when `bind_tensor_state` runs, so the
+#: answer is memoized and dropped from that one place.
+#:
+#: The stored value is the *weakref*, never the owner: a memoized entry must not
+#: be able to keep an interpreter alive, which is the whole reason `_OWNERS` is
+#: weak in the first place.
+_OWNER_CACHE: dict = {}
+
+#: The same memo for `context.get_install_context`, which is on the same path
+#: (3.6M calls in that decode, 14.8 profiled seconds including the owner
+#: resolution above). Kept here so both are dropped by the one clearer.
+_CONTEXT_CACHE: dict = {}
+
+
+def _clear_resolution_caches():
+    """Drop every memoized binding resolution. Called on rebind only."""
+    _OWNER_CACHE.clear()
+    _CONTEXT_CACHE.clear()
+
 
 def _state_locked(function):
     @wraps(function)
@@ -39,6 +61,26 @@ def _bound_owner(module):
     if owner is None:
         _OWNERS.pop(module, None)
         return module
+    return owner
+
+
+def _cached_owner(module):
+    """`_bound_owner`'s answer, without re-walking the binding chain.
+
+    A hit is one dict lookup and one weakref dereference. What that skips is the
+    `isinstance`, the `_OWNERS` lookup, the second `_OWNERS` lookup the chain
+    check needs, and that check itself. Returns None when there is no memo --
+    including for a non-module, which `compatibility_owner` never binds.
+    """
+    if not isinstance(module, ModuleType):
+        return None
+    binding = _OWNER_CACHE.get(module)
+    if binding is None:
+        return None
+    owner = binding()
+    if owner is None:
+        _OWNER_CACHE.pop(module, None)
+        return None
     return owner
 
 class TorchTensorState(HolderRegistry):
@@ -65,11 +107,16 @@ class TorchTensorState(HolderRegistry):
 
 def compatibility_owner(module):
     """Resolve an explicitly bound owner, never an inferred sys.modules root."""
+    owner = _cached_owner(module)
+    if owner is not None:
+        return owner
     owner = _bound_owner(module)
     if owner is None or not hasattr(owner, "__dict__"):
         raise RuntimeError("invalid Torch compatibility owner binding")
     if _bound_owner(owner) is not owner:
         raise RuntimeError("Torch compatibility owner bindings must not form chains")
+    if isinstance(module, ModuleType):
+        _OWNER_CACHE[module] = ref(owner)
     return owner
 
 
@@ -232,6 +279,7 @@ def bind_tensor_state(native_backend, target, transaction, state=None):
             binding = ref(target)
             transaction.record(_OWNERS, owner, previous, binding)
             _OWNERS[owner] = binding
+    _clear_resolution_caches()
     return state
 
 

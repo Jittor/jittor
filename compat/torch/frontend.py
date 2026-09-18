@@ -12,20 +12,33 @@ from types import MethodType
 #: exists.
 _get_install_context = None
 
+#: The two accumulation tiers, as the state object spells them.
+_TIERS = {"highest": 0, "high": 1, "medium": 2}
+
+#: The `cuda_runtime` state object per frontend type. Only the *lookup* is
+#: memoized; the two tier names are read from it on every call, because they are
+#: settable at runtime (`torch.backends.cuda.matmul.allow_tf32`, the H3 VAE's
+#: determinism scope) and a cached tuple would answer with a stale policy.
+#: The type is created by the installer, so a reinstallation makes a new type and
+#: a new entry rather than reusing an old one.
+_precision_state = {}
+
 
 def _frontend_precision_policy(cls):
     """Read this frontend's two native accumulation tiers without flag writes."""
     global _get_install_context
-    get_install_context = _get_install_context
-    if get_install_context is None:
-        from .context import get_install_context as get_install_context
-        _get_install_context = get_install_context
-    state = get_install_context(cls._frontend_backend).state.get("cuda_runtime")
+    state = _precision_state.get(cls)
     if state is None:
-        # Type creation precedes CUDA facade publication during installation.
-        return (0, 1)
-    tiers = {"highest": 0, "high": 1, "medium": 2}
-    return tiers[state.matmul_precision], tiers[state.cudnn_precision]
+        get_install_context = _get_install_context
+        if get_install_context is None:
+            from .context import get_install_context as get_install_context
+            _get_install_context = get_install_context
+        state = get_install_context(cls._frontend_backend).state.get("cuda_runtime")
+        if state is None:
+            # Type creation precedes CUDA facade publication during installation.
+            return (0, 1)
+        _precision_state[cls] = state
+    return _TIERS[state.matmul_precision], _TIERS[state.cudnn_precision]
 
 
 def _default_tensor_dtype(backend):
