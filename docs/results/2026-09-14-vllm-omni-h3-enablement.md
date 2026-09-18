@@ -3373,3 +3373,80 @@ That leaves **two separate gaps**, which the table separates cleanly:
   twice the eager classes (13.66/14.09) at the same dtype, because vLLM-Omni's
   `install_h3_vae_optimizations` routes to fused Triton kernels and the diffusers
   and checkpoint classes do not. On torch that same fused path is what buys 6.17 s.
+
+## 40. The request is GPU-bound now, so the rest of the gap is kernel work
+
+Sections 38-39 removed the host-side bottlenecks in the Triton bridge. The next
+question is what is left, and the answer is: not host work.
+
+### Where the request spends its time
+
+`--enable-diffusion-pipeline-profiler` on a 512x512, 8-step request (one TI1
+server, seed 42):
+
+| phase | time |
+| --- | --- |
+| `MiniMaxH3Pipeline.encode_prompt` (text encoder) | 8.80 s |
+| `MiniMaxH3Pipeline.diffuse` (8 steps of the DiT) | **40.90 s** |
+| `MiniMaxH3Pipeline.video_vae.decode_latent` | 21.63 s |
+| `MiniMaxH3Pipeline.audio_vae.decode_latent` | 6.01 s |
+| `forward` (whole request) | 77.67 s |
+
+`JITTOR_TRITON_STATS=1` on the same server reports the bridge across the whole
+pipeline as 6,250 launches and 23.9 s -- `sync=9.8s pack=4.9s launch=5.6s
+final=3.6s | dtod=7.4s memset=0.2s ptr=0.1s`, i.e. 3.8 ms/launch. That looks like
+30% of the request, and the guard's bounce copies (`dtod`) alone look like 7.4 s.
+
+### But that time is hidden, and the device is saturated
+
+Turning the over-read guard off removes almost all of it -- and the request gets
+*slower*:
+
+| | guard on | guard off |
+| --- | --- | --- |
+| `total` / `sync` | 23.9 / 9.8 s | **12.3 / 11.3 s** |
+| `pack` / `launch` / `final` | 4.9 / 5.6 / 3.6 s | 0.7 / 0.3 / 0.1 s |
+| `dtod` / `memset` | 7.4 / 0.2 s | 0.0 / 0.0 s |
+| request wall | 77.7 s | 84.4 s |
+
+The phases trade against each other (`sync` rises by exactly what `launch` and
+`final` lose) because the host runs ahead of the GPU and blocks wherever it can
+no longer go further. Sampling `nvidia-smi` through a request shows **100% GPU
+utilisation from start to finish**. So the bridge's 23.9 s is not 23.9 s of
+request: it is host work overlapped with a saturated device, and shaving it
+further cannot help. That is why the host-side fixes of sections 38-39 moved the
+wall clock a great deal (118.9 -> 78.7 s end to end) while this one moves it not
+at all -- they were removing the bottleneck, this is past it.
+
+### What the remaining gap is, kernel by kernel
+
+Same class, same latent, same protocol, one decode each way, nsys, three decodes
+per report (one warm-up plus two timed):
+
+| | GPU total | instances | the three big gemms | attention | elementwise |
+| --- | --- | --- | --- | --- | --- |
+| shim | 29.1 s | 526,900 | nvjet_hsh: 12.35 s | flash: 2.84 s | ~8 s of `func_*` jit kernels |
+| real torch | 20.4 s | 262,717 | nvjet_hsh **`_bias_`**: 13.11 s | cuDNN flash: 1.89 s | ~3 s of `at::native` |
+
+The dominant matmuls are the *same kernels* and the shim's are marginally cheaper
+(12.35 against 13.11 s -- torch's are the bias-fused variants, so they do more per
+call). The 8.7 s GPU delta is entirely in the small stuff:
+
+* **jittor's elementwise kernels are scalar.** One f32->f16 cast costs 2.06 s over
+  33,894 calls against torch's 0.95 s over 34,020 calls -- same count, 2.2x per
+  call. The generated kernel is
+  `op0_yp[id1] = ((float16)(float16(op0_xp[id1])))` in a thread-strided loop, one
+  element per iteration, with a redundant double cast. jittor's vectorisation
+  machinery exists (`VectorizePass`) but is gated on `cc_type == "icc"` because
+  "only icc supports the pragmas these emit", and `float4`/`half2` appear nowhere
+  in `src/codegen/` -- so on nvcc there is no 128-bit computed-elementwise path at
+  all. (`src/type/fp16_compute.h` *does* vectorise bulk `vload`/`vfill` copies, so
+  this is specific to computed loops.)
+* **no bias fusion.** torch's gemms are `nvjet_hsh_..._bias_`; jittor computes the
+  bias add as a separate elementwise pass.
+* **flash-attn 1.5x cuDNN's.** 2.84 s against 1.89 s for the same 6,804 calls, once
+  the server's own attention env is set (without it, jittor decomposes attention
+  into explicit cutlass gemms costing 6.06 s more).
+
+So the honest position is that the remaining gap is three kernel-level items, of
+which the first is the largest and needs a new codegen path rather than a fix.
