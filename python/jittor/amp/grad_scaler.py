@@ -35,6 +35,7 @@ device-first signature and its legacy per-device subclasses on top. One
 algorithm, two front doors.
 """
 import collections.abc as _collections_abc
+import warnings
 
 import numpy as np
 
@@ -100,12 +101,40 @@ class GradScaler:
     def set_growth_interval(self, new_interval):
         self._growth_interval = int(new_interval)
 
+    #: float16's largest finite value. A scale above it cannot be applied to a
+    #: float16 loss of magnitude 1 or more without overflowing.
+    _FLOAT16_MAX = 65504.0
+
     def scale(self, outputs):
-        """Multiply a Var, or every Var in a container, by the scale."""
+        """Multiply a Var, or every Var in a container, by the scale.
+
+        The product keeps the input's dtype, which is what torch does -- its
+        ``_scale`` is a float32 *tensor*, and a half tensor times a float32
+        tensor promotes, but a half tensor times a python float does not. So
+        scaling a float16 loss directly overflows in both frameworks; torch
+        users rarely meet it because autocast keeps loss functions in float32,
+        and a native jittor model cast wholesale to float16 has a float16 loss.
+        Scale a float32 copy -- ``scaler.scale(loss.float32())`` -- and the
+        backward still runs in half from the first op.
+        """
         if not self._enabled:
             return outputs
         jt = _jittor()
         if isinstance(outputs, jt.Var):
+            if (self._scale > self._FLOAT16_MAX
+                    and _jittor_dtype_name(outputs.dtype) == "float16"):
+                # Guaranteed inf for any |loss| >= 1, and the failure is silent:
+                # every step then finds a non-finite gradient, skips, and backs
+                # the scale off until it reaches 1, so training simply does not
+                # happen and no exception is raised.
+                warnings.warn(
+                    "GradScaler.scale() on a float16 tensor with scale %g "
+                    "overflows float16 (max %g). Scale a float32 copy of the "
+                    "loss -- scaler.scale(loss.float32()) -- or lower "
+                    "init_scale; otherwise every step is skipped and the "
+                    "scale collapses to 1."
+                    % (self._scale, self._FLOAT16_MAX),
+                    RuntimeWarning, stacklevel=2)
             return outputs * self._scale
         if isinstance(outputs, (list, tuple)):
             return type(outputs)(self.scale(item) for item in outputs)
@@ -165,6 +194,22 @@ class GradScaler:
             self.unscale_(optimizer)
         self._unscaled = False
         if self._found_inf:
+            # Clear the gradients the skipped step would have consumed.
+            # `Optimizer.backward` *accumulates* into `pg["grads"]` and
+            # `post_step` is what normally empties them, so a skip that left
+            # them in place would add the next iteration's gradients on top of
+            # these -- and these contain the inf that caused the skip. Measured
+            # without this line: one overflow poisoned every later step, the
+            # scale backed off to 1 and stayed there, and training silently did
+            # not happen. torch does not need it because its callers zero the
+            # gradients themselves each iteration.
+            # `getattr`, because the only thing torch's GradScaler requires of
+            # an optimizer is `step`, and the compatibility suite steps objects
+            # that implement exactly that. An optimizer without `zero_grad` is
+            # one whose gradients the caller manages.
+            zero_grad = getattr(optimizer, "zero_grad", None)
+            if callable(zero_grad):
+                zero_grad()
             return None
         return optimizer.step(*args, **kwargs)
 

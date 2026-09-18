@@ -147,6 +147,78 @@ class TestGradScalerStep(unittest.TestCase):
                 scaler.update()
                 self.assertEqual(scaler.get_scale(), 512.0)
 
+    def test_a_skipped_step_does_not_poison_the_next_one(self):
+        """The skip has to clear the gradients the step would have consumed.
+
+        ``Optimizer.backward`` *accumulates* into ``pg["grads"]`` and
+        ``post_step`` is what normally empties them, so a skip that left them
+        in place adds the next iteration's gradients on top -- including the inf
+        that caused the skip. One overflow then poisons every later step, the
+        scale backs off to 1 and stays there, and training silently does not
+        happen. This is the one thing about the scaler that jittor needs and
+        torch does not, because torch's callers zero the gradients themselves.
+        """
+        for name, use_cuda in _DEVICES:
+            with self.subTest(device=name), jt.flag_scope(use_cuda=use_cuda):
+                model, opt = _model_and_optimizer()
+                scaler = jt.amp.GradScaler(init_scale=8.0)
+                x = jt.array(
+                    np.random.RandomState(4).randn(4, 8).astype("float32"))
+                opt.backward((model(x) ** 2).mean())
+                g = model.parameters()[0].opt_grad(opt)
+                g.update(g + np.float32("inf"))
+                self.assertIsNone(scaler.step(opt))
+                scaler.update()
+                # Next iteration: ordinary gradients, and the step must happen.
+                before = [p.numpy().copy() for p in model.parameters()]
+                opt.backward(scaler.scale((model(x) ** 2).mean()))
+                for p in model.parameters():
+                    grad = p.opt_grad(opt)
+                    self.assertTrue(
+                        np.isfinite(grad.float32().numpy()).all(),
+                        "the skipped step left an inf in %s" % p.shape)
+                scaler.step(opt)
+                scaler.update()
+                jt.sync_all()
+                moved = any(not np.array_equal(p.numpy(), was)
+                            for p, was in zip(model.parameters(), before))
+                self.assertTrue(moved, "the step after a skip did nothing")
+                self.assertGreater(scaler.get_scale(), 1.0)
+
+    def test_scaling_a_float16_loss_directly_is_reported(self):
+        """The default scale does not fit in float16, and the failure is silent.
+
+        65536 > float16's 65504, so `scale(loss)` on a float16 loss is inf
+        before the backward even starts; every step then skips and the scale
+        collapses. torch has the same behaviour -- its callers rarely meet it
+        because autocast keeps loss functions in float32 -- so this warns
+        rather than diverging, and the fix is `scale(loss.float32())`.
+        """
+        import warnings
+        scaler = jt.amp.GradScaler()
+        half = jt.ones(2).float16()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            scaled = scaler.scale(half)
+            # Read it *at* float16. `scaled.float32().numpy()` fuses the widen
+            # into the multiply, so the float16 intermediate is never
+            # materialised and the overflow does not happen -- 65536.0 comes
+            # back finite, which is a true statement about a float32
+            # computation and a false one about this Var.
+            scaled.sync()
+            self.assertFalse(np.isfinite(scaled.numpy()).all())
+        self.assertEqual(len(caught), 1)
+        self.assertIn("float32", str(caught[0].message))
+        # A float32 copy, and a scale that fits, are both quiet.
+        for quiet in (half.float32(), None):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                if quiet is None:
+                    jt.amp.GradScaler(init_scale=1024.0).scale(half)
+                else:
+                    scaler.scale(quiet)
+            self.assertEqual(len(caught), 0)
+
     def test_a_clean_step_updates_the_parameters(self):
         for name, use_cuda in _DEVICES:
             with self.subTest(device=name), jt.flag_scope(use_cuda=use_cuda):
