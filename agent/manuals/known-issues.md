@@ -509,8 +509,17 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   `auto_convert_64_to_32` is not the discriminator: it reads 1 in both native
   and Torch mode, so the compatibility frontend preserves float64 some other
   way and this path is common to both.
+- Half precision is *not* affected, and that has been measured rather than
+  assumed: float32 is wider than both float16 and bfloat16, so the narrowed
+  scalar still carries every bit the tensor can hold, and `v * 0.1`,
+  `v + 0.1`, `v * (2/3)` and `v * 2 ** 0.5` at fp16 and bf16 are bit-identical
+  to torch on both devices. Those four are pinned in
+  `TestHalfPythonScalar` (tests/type/test_half_precision_parity.py) so that
+  whoever builds the weak-scalar model keeps them true. This is a float64
+  problem, and a float32 one only where the scalar is inexact at float32.
 - Review/expiry condition: close when a Python float keeps its value against a
-  float64 operand in both modes, with the five expressions above as the test.
+  float64 operand in both modes, with the five expressions above as the test,
+  and the four half expressions still bit-identical to torch.
 
 ## KI-MEM-002: reading a device tensor relocates it to the host
 
