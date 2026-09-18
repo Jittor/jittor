@@ -29,6 +29,17 @@ diag/diagonal`` are pure native-op compositions and keep second derivatives.
 """
 from ._refs import *  # noqa: F401,F403  (make_tensor, SampleInput, np, jt, nn, F)
 from ..core import OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo, skip
+from _helpers.cupy_bridge import cuda_numpy_code_available
+
+#: Every op below reaches its answer through ``jt.numpy_code``, and on CUDA
+#: ``py_converter`` hands that callback CuPy rather than numpy -- the arrays it
+#: stages are device memory, so there is no numpy fallback to take. CuPy is
+#: optional, so on a machine without it the CUDA half of these ops cannot run;
+#: say that once, here, instead of letting each case fail inside execution.
+_NEEDS_CUPY = skip(
+    device_type="cuda", active_if=not cuda_numpy_code_available(),
+    reason="CUDA numpy-code operators need CuPy, which is not installed here")
+
 
 
 # =============================================================================
@@ -288,15 +299,19 @@ op_db = [
     # ---- well-conditioned matrix ops (value-pinned vs numpy) ----
     # numpy_code backward is not itself differentiable -> no 2nd derivative.
     OpInfo("inv", op=jt.linalg.inv, ref=inv_ref,
-           sample_inputs_func=sample_inv, supports_gradgrad=False),
+           sample_inputs_func=sample_inv, supports_gradgrad=False,
+           skips=(_NEEDS_CUPY,)),
     OpInfo("det", op=jt.linalg.det, ref=det_ref,
-           sample_inputs_func=sample_det, supports_gradgrad=False),
+           sample_inputs_func=sample_det, supports_gradgrad=False,
+           skips=(_NEEDS_CUPY,)),
     # slogdet returns (sign, logabsdet); sign is locally constant on a det>0
     # well-conditioned input, so its (zero) gradient gradchecks cleanly.
     OpInfo("slogdet", op=jt.linalg.slogdet, ref=slogdet_ref,
-           sample_inputs_func=sample_slogdet, supports_gradgrad=False),
+           sample_inputs_func=sample_slogdet, supports_gradgrad=False,
+           skips=(_NEEDS_CUPY,)),
     OpInfo("solve", op=jt.linalg.solve, ref=solve_ref,
-           sample_inputs_func=sample_solve, supports_gradgrad=False),
+           sample_inputs_func=sample_solve, supports_gradgrad=False,
+           skips=(_NEEDS_CUPY,)),
 
     # ---- gauge-invariant factorizations: op reconstructs A, ref returns A ----
     # forward check is the reconstruction identity; gradcheck drives the
@@ -308,10 +323,13 @@ op_db = [
     # gauge-invariant FD checks in test_linalg.py; skip only the generic gradcheck.
     OpInfo("cholesky", op=cholesky_recon, ref=recon_ref,
            sample_inputs_func=sample_cholesky, supports_gradgrad=False,
-           skips=(skip("test_gradcheck", reason="symmetric-input gauge; backward "
-                       "covered by test_linalg gauge-invariant FD checks"),)),
+           skips=(_NEEDS_CUPY,
+                  skip("test_gradcheck", reason="symmetric-input gauge; backward "
+                       "covered by test_linalg gauge-invariant FD checks"))),
     OpInfo("qr", op=qr_recon, ref=recon_ref,
-           sample_inputs_func=sample_qr, supports_gradgrad=False),
+           sample_inputs_func=sample_qr, supports_gradgrad=False,
+           skips=(_NEEDS_CUPY,)),
     OpInfo("svd", op=svd_recon, ref=recon_ref,
-           sample_inputs_func=sample_svd, supports_gradgrad=False),
+           sample_inputs_func=sample_svd, supports_gradgrad=False,
+           skips=(_NEEDS_CUPY,)),
 ]

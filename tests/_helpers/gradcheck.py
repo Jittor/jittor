@@ -205,7 +205,13 @@ def gradgradcheck(func, inputs, *, eps=1e-6, atol=1e-5, rtol=1e-3,
     # fixed cotangents per output, drawn once so g is deterministic
     vs0, outs0 = _call(func, base)
     rng = np.random.RandomState(0)
-    weights = [rng.randn(*to_numpy(o).shape).astype("float64") for o in outs0]
+    # `asarray`, because a 0-d output makes `randn()` return a Python float and
+    # a float has no `.astype`. Reductions are 0-d now -- `sum`, `mean`, `dot`,
+    # `trace`, `var` and every scalar loss -- so this was every second-order
+    # check on a reduction, failing as `'float' object has no attribute
+    # 'astype'` rather than as anything about a derivative.
+    weights = [np.asarray(rng.randn(*to_numpy(o).shape), dtype="float64")
+               for o in outs0]
 
     def grad_fn(*vars_):
         out = _as_list(func(*vars_))

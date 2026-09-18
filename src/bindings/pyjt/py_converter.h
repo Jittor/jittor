@@ -1004,7 +1004,29 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
                 npstr="cupy";
             #endif
 
-            PyObjHolder np(PyImport_ImportModule(npstr.data()));
+            PyObjHolder np;
+            if (npstr == "cupy") {
+                // CuPy is optional, and on CUDA a numpy-code operator cannot
+                // run without it: the arrays it stages are device memory, so
+                // handing the callback `numpy` instead reads a device pointer
+                // from the host -- measured, that is a segfault, not a slower
+                // answer. What it must not do is fail as a bare
+                // `ModuleNotFoundError` raised out of execution at whatever
+                // `.numpy()` forced it, with no frame naming the operator:
+                // that is how one absent optional dependency became 27
+                // unexplained failures in an OpInfo run.
+                PyObject* cupy = PyImport_ImportModule("cupy");
+                if (cupy) np.assign(cupy);
+                else {
+                    PyErr_Clear();
+                    LOGf << "a numpy_code operator on CUDA needs CuPy, which is"
+                         << "not installed. Install it, or run this operator"
+                         << "with use_cuda=0 -- the CPU path uses numpy and"
+                         << "needs nothing extra.";
+                }
+            } else {
+                np.assign(PyImport_ImportModule(npstr.data()));
+            }
             // data = {}
             PyObjHolder data(to_py_object(result->varrays));
             PyObjHolder data2(to_py_object(result->ints));

@@ -574,7 +574,8 @@ _ACCELERATOR_EXECUTED = 0
 #: appears in the reason wins. "insufficient-devices" therefore has to precede
 #: "accelerator", because its reasons name the accelerator too.
 _SKIP_BUCKET_ORDER = ("insufficient-devices", "accelerator", "backend", "mpi",
-                      "torch", "network", "manual", "opt-in", "other")
+                      "torch", "network", "manual", "opt-in", "declared",
+                      "other")
 _SKIP_BUCKET_PATTERNS = {
     # Not the same fact as "this box has no accelerator", and the difference is
     # the whole point of counting it apart. A test that wants two devices skips
@@ -625,6 +626,14 @@ _SKIP_BUCKET_PATTERNS = {
     # exactly what it was written to do.
     "opt-in": ("performance_test", "skip slow test", "upper bound on wall-clock",
                "load_sensitive"),
+    # The subject itself says the case does not apply: an OpInfo entry that
+    # declares no second derivative, no numpy reference, or no differentiable
+    # sample. A fact about the operator, not about this machine -- and, like
+    # the opt-in bucket, explained but wordless about hardware, so it counted
+    # as unexplained and failed the run. `tests/ops/test_ops.py` alone emits
+    # seven of them.
+    "declared": ("supports_gradgrad=false", "supports_autograd=false",
+                 "no numpy reference", "no differentiable samples"),
 }
 
 
