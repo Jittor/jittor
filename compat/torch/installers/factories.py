@@ -333,30 +333,86 @@ def _seed_from(gen):
         jt.set_global_seed(int(s))
 
 
+#: What a seeded draw of an integer factory must come back as. torch's own
+#: default is int64, but these have to match what the *same call without a
+#: generator* returns -- jittor's randint is int32 -- because a generator picks
+#: the stream a draw comes from and nothing else.
+_INTEGER_DRAWS = {"randperm": "int64", "randint": "int32"}
+
+
+def _is_dim(value):
+    """True for something torch accepts as one dimension of a shape."""
+    return isinstance(value, (int, np.integer)) and not isinstance(value, bool)
+
+
+def _is_number(value):
+    """True for a python/numpy scalar -- not a tensor, which draws elementwise."""
+    return (isinstance(value, (int, float, np.integer, np.floating))
+            and not isinstance(value, bool))
+
+
+def _shape_tuple(value):
+    """``value`` read as a shape, or None when it is not one.
+
+    torch spells one shape four ways -- ``randn(2, 3)``, ``randn((2, 3))``,
+    ``randn(t.shape)`` and ``randn(size=(2, 3))`` -- and under this shim a
+    ``torch.Size`` is a jittor ``NanoVector``, which is neither tuple nor list.
+    A spelling missed here is not a small loss: the call falls back to the
+    *global* stream, which is exactly the rank-dependent draw a passed
+    generator says it must not use.
+    """
+    if isinstance(value, jt.NanoVector):
+        return tuple(int(s) for s in value)
+    if isinstance(value, (tuple, list)) and all(_is_dim(s) for s in value):
+        return tuple(int(s) for s in value)
+    return None
+
+
 def _draw_from_generator(name, generator, args, kwargs):
     """Draw from the generator's own stream, or None if this call is not covered.
 
     `Generator.manual_seed` builds this stream, so a request's latents are
     reproducible and -- the part that matters for TP -- identical in every rank
     that seeds the same generator, no matter what that rank did before.
+
+    Covering a call is all-or-nothing: what comes back has to be the tensor the
+    same call returns *without* a generator -- same shape, same dtype, same
+    requires_grad -- because a generator chooses which stream a draw comes from
+    and nothing else. Arguments this cannot read that way return None, and the
+    original factory runs.
     """
     import numpy as _np
     rng = getattr(generator, "_rng", None)
     if rng is None:
         return None
-    # shape: torch.randn(*size) or torch.randn(size); *_like takes a tensor
-    shape = None
+    src = None
+    values_args = ()
     if name.endswith("_like"):
         src = args[0] if args else kwargs.get("input")
         if src is None or not hasattr(src, "shape"):
             return None
         shape = tuple(int(s) for s in src.shape)
-    elif args and isinstance(args[0], (tuple, list)) and len(args) == 1:
-        shape = tuple(int(s) for s in args[0])
-    elif args and all(isinstance(a, int) for a in args):
-        shape = tuple(int(a) for a in args)
-    elif not args:
-        shape = ()
+    elif name == "randperm":
+        n = args[0] if args else kwargs.get("n")
+        if not _is_dim(n):
+            return None
+        shape = (int(n),)
+    elif name in ("normal", "randint"):
+        # the value arguments come first -- normal(mean, std, size) and
+        # randint([low, ] high, size) -- and both also take size= by keyword.
+        values_args = list(args)
+        size = kwargs.get("size")
+        if size is None and values_args:
+            size = values_args.pop()
+        shape = _shape_tuple(size)
+    else:
+        shape = None
+        if len(args) == 1:
+            shape = _shape_tuple(args[0])
+        if shape is None and args and all(_is_dim(a) for a in args):
+            shape = tuple(int(a) for a in args)
+        if shape is None and not args:
+            shape = _shape_tuple(kwargs.get("size"))
     if shape is None:
         return None
     if name in ("randn", "randn_like"):
@@ -364,25 +420,52 @@ def _draw_from_generator(name, generator, args, kwargs):
     elif name in ("rand", "rand_like"):
         values = rng.random(shape)
     elif name == "normal":
-        mean = kwargs.pop("mean", args[1] if len(args) > 1 else 0.0)
-        std = kwargs.pop("std", args[2] if len(args) > 2 else 1.0)
+        mean = kwargs.get("mean", values_args[0] if len(values_args) > 0 else 0.0)
+        std = kwargs.get("std", values_args[1] if len(values_args) > 1 else 1.0)
+        if not (_is_number(mean) and _is_number(std)):
+            return None     # normal(mean_tensor, std_tensor) draws elementwise
         values = rng.normal(float(mean), float(std), size=shape)
     elif name == "randint":
-        low = kwargs.pop("low", args[1] if len(args) > 1 else 0)
-        high = kwargs.pop("high", args[2] if len(args) > 2 else None)
-        if high is None:
+        if "high" in kwargs:
+            low = kwargs.get("low", values_args[0] if values_args else 0)
+            high = kwargs["high"]
+        elif len(values_args) >= 2:
+            low, high = values_args[0], values_args[1]
+        elif len(values_args) == 1:
+            low, high = kwargs.get("low", 0), values_args[0]
+        else:
+            return None
+        if not (_is_dim(low) and _is_dim(high)):
             return None
         values = rng.integers(int(low), int(high), size=shape)
     elif name == "randperm":
-        n = int(args[0]) if args else int(shape[0])
-        values = rng.permutation(n)
-        shape = (n,)
+        values = rng.permutation(int(shape[0]))
     else:
         return None
+    # dtype: the caller's, else the one the plain call would have produced --
+    # the source's for *_like (jittor promotes a non-float source to float32),
+    # the integer width for randperm/randint, the default dtype otherwise.
     dtype = kwargs.get("dtype")
-    t = jt.array(_np.ascontiguousarray(values, dtype=_np.float32))
     if dtype is not None:
-        t = t.cast(_dtype_to_str(dtype))
+        cast_to = _dtype_to_str(dtype)
+    elif name.endswith("_like"):
+        like = _dtype_to_str(src.dtype)
+        cast_to = like if "float" in str(like) else "float32"
+    elif name in _INTEGER_DRAWS:
+        cast_to = _INTEGER_DRAWS[name]
+    else:
+        cast_to = _dtype_to_str(get_install_context(jt).target_namespace.get_default_dtype())
+    integral = name in _INTEGER_DRAWS
+    t = jt.array(_np.ascontiguousarray(
+        values, dtype=_np.int64 if integral else _np.float32))
+    if tuple(t.shape) != tuple(shape):
+        t = t.reshape(shape)
+    t = t.cast(cast_to)
+    t._jittor_torch_ext_mutable = True
+    requires_grad = bool(kwargs.get("requires_grad", False))
+    t.requires_grad_(requires_grad)
+    if requires_grad:
+        _torch_register_leaf(t)
     return t
 
 
