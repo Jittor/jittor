@@ -95,6 +95,10 @@ _BACKEND_SPEC = ExternalBackendSpec(
         "extensions/flash-attention",
     ),
     source_root_names=("flash-attention-jittor", "flash-attention"),
+    # _looks_like_official_flash_attention() reads these two directories'
+    # entries; declared so the discovery memo notices a checkout appearing
+    # inside a candidate that already exists.
+    source_marker_dirs=("csrc/flash_attn", "csrc/flash_attn/src"),
     project_root_envs=(
         "JITTOR_FLASH_ATTN_JITTOR_PROJECT_ROOT",
         "JITTOR_TORCH_PROJECT_ROOT",
@@ -418,17 +422,32 @@ _BACKEND_MODULE_STATE_ATTR = "_jittor_flashattn_backend_module_state_v1"
 
 
 def _install_backend_environment_epoch_hook():
-    """Install one process-wide watcher for backend-related environment writes."""
+    """Install one process-wide watcher for backend-related environment writes.
+
+    Also the invalidation token for every environment snapshot the shim caches,
+    so it is read once per backend lookup and has to stay cheap: rebuilding the
+    name sets here costs 20 us per call, which is more than the lookup it is
+    meant to guard.  The watched set only changes when a resolver registers
+    discovery hints, and that bumps its own generation counter, so the sets are
+    rebuilt from that counter instead of on every call.
+    """
+    state = getattr(sys, _BACKEND_ENV_EPOCH_STATE_ATTR, None)
+    generation = _EXTERNAL_BACKEND.discovery_generation
+    if (isinstance(state, dict) and state.get("version") == 1
+            and state.get("generation") == generation
+            and state.get("env_names") is _BACKEND_ENV_NAMES):
+        return state if state.get("active") and state.get("reliable") else None
     names = frozenset(
         dict.fromkeys(_BACKEND_ENV_NAMES + _EXTERNAL_BACKEND.environment_names())
     )
     byte_names = frozenset(os.fsencode(name) for name in names)
-    state = getattr(sys, _BACKEND_ENV_EPOCH_STATE_ATTR, None)
     if isinstance(state, dict) and state.get("version") == 1:
         if state.get("names") != names or state.get("byte_names") != byte_names:
             state["names"] = names
             state["byte_names"] = byte_names
             state["epoch"] += 1
+        state["generation"] = generation
+        state["env_names"] = _BACKEND_ENV_NAMES
         return state if state.get("active") and state.get("reliable") else None
 
     state = {
@@ -436,6 +455,8 @@ def _install_backend_environment_epoch_hook():
         "epoch": 0,
         "names": names,
         "byte_names": byte_names,
+        "generation": generation,
+        "env_names": _BACKEND_ENV_NAMES,
         "active": False,
         "reliable": True,
     }
@@ -513,13 +534,39 @@ def backend_publication_token(backend: Optional[ModuleType]) -> Optional[Tuple[i
     return _BACKEND_PUBLICATION_TOKEN
 
 
+_BACKEND_ENV_KEY_SNAPSHOT = None
+
+
 def _backend_environment_key() -> Tuple[Tuple[str, Optional[str]], ...]:
-    return tuple(
+    """Return the watched environment as a comparable key.
+
+    Memoized on the audit-hook epoch.  Holding the key while the epoch is
+    unchanged is exact rather than approximate: the epoch counts writes to a
+    watched name, so a key captured at epoch N is still the live key for as long
+    as the epoch reads N.  Without the memo every backend lookup re-read the
+    same ~60 variables to re-derive a value the epoch already vouched for, which
+    is most of what a memoized `load_backend()` used to cost.
+
+    The epoch is read *before* the variables, so a write that lands mid-read
+    leaves a snapshot stamped with an epoch that is already stale; the caller's
+    epoch-consistency loop then drops it and re-reads.  Stamp it afterwards
+    instead and the inconsistent pair would survive as a cache hit.
+    """
+    global _BACKEND_ENV_KEY_SNAPSHOT
+    epoch = backend_environment_epoch()
+    if epoch is not None:
+        snapshot = _BACKEND_ENV_KEY_SNAPSHOT
+        if snapshot is not None and snapshot[0] == epoch:
+            return snapshot[1]
+    key = tuple(
         dict.fromkeys(
             tuple((name, os.environ.get(name)) for name in _BACKEND_ENV_NAMES)
             + _EXTERNAL_BACKEND.environment_key()
         )
     )
+    if epoch is not None:
+        _BACKEND_ENV_KEY_SNAPSHOT = (epoch, key)
+    return key
 
 
 def _stable_backend_environment_key():

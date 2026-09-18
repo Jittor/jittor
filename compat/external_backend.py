@@ -111,6 +111,37 @@ def _split_env_list(value: Optional[str]) -> List[str]:
     return items
 
 
+def _stat_signature(path: str) -> Optional[Tuple[int, int, int, int, int, int]]:
+    """Identity of one filesystem entry, or None when it does not exist."""
+    try:
+        info = os.stat(path)
+    except OSError:
+        return None
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+            info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _nearest_existing(path: str) -> Tuple[Optional[str], object]:
+    """Return the path's own signature, or the first existing ancestor's.
+
+    A directory's `mtime` moves when an entry is created, removed or renamed
+    *directly inside* it, so a signature taken here is a witness for the whole
+    subtree below it: while that directory's signature is unchanged, every
+    deeper name is still present exactly as it was.  That is what makes a
+    negative discovery result revalidatable with one `stat` per anchor instead
+    of a fresh walk.
+    """
+    current = path
+    while True:
+        signature = _stat_signature(current)
+        if signature is not None:
+            return current, signature
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None, None
+        current = parent
+
+
 def _expand_paths(root: pathlib.Path, items: Sequence[str]) -> List[str]:
     paths = []
     for raw in items:
@@ -175,6 +206,11 @@ class ExternalBackendSpec:
     manifest_names: Tuple[str, ...] = ()
     relative_source_dirs: Tuple[str, ...] = ()
     source_root_names: Tuple[str, ...] = ()
+    #: Directories under a candidate root whose *entries* the source
+    #: predicates inspect beyond the root's immediate children (for instance
+    #: ``csrc/flash_attn``).  Declared so a memoized negative discovery result
+    #: is still invalidated when a marker file appears in one of them.
+    source_marker_dirs: Tuple[str, ...] = ()
     project_root_envs: Tuple[str, ...] = ()
     submodule_attrs: Tuple[str, ...] = ()
     environment_names: Tuple[str, ...] = ()
@@ -245,6 +281,11 @@ class ExternalBackend:
         self._cache: Dict[Tuple[object, ...], Optional[ModuleType]] = {}
         self._lock = threading.RLock()
         self._generation = 0
+        # Discovery *policy* generation: incremented by extend_discovery() so
+        # consumers can rebuild the sets of names and paths they watch without
+        # re-deriving them on every lookup.
+        self._discovery_generation = 0
+        self._discovery_memo = None
         self._last_report = BackendReport(spec.name, (), 0)
         self._source_env_hints: List[str] = []
         self._project_root_env_hints: List[str] = []
@@ -254,6 +295,10 @@ class ExternalBackend:
     @property
     def generation(self) -> int:
         return self._generation
+
+    @property
+    def discovery_generation(self) -> int:
+        return self._discovery_generation
 
     @property
     def last_report(self) -> BackendReport:
@@ -274,6 +319,7 @@ class ExternalBackend:
         """Add project-specific discovery hints without replacing the resolver."""
 
         with self._lock:
+            changed = False
             for target, values in (
                 (self._source_env_hints, source_envs),
                 (self._project_root_env_hints, project_root_envs),
@@ -283,7 +329,11 @@ class ExternalBackend:
                 for value in _names(values):
                     if value and value not in target:
                         target.append(value)
+                        changed = True
+            if changed:
+                self._discovery_generation += 1
             self._cache.clear()
+            self._discovery_memo = None
 
     def _log(self, message: str) -> None:
         if self._log_callback is not None:
@@ -344,33 +394,114 @@ class ExternalBackend:
                 return True
         return root.name in root_names and (root / "setup.py").is_file()
 
-    def source_roots(self, explicit_only: bool = False) -> List[str]:
+    def _explicit_source_candidates(self) -> List[Tuple[pathlib.Path, bool]]:
         candidates = []
-        source_envs = self._merged(self.spec.source_envs, self._source_env_hints)
-        relative_dirs = self._merged(
-            self.spec.relative_source_dirs, self._relative_source_dir_hints
-        )
-        for name in source_envs:
+        for name in self._merged(self.spec.source_envs, self._source_env_hints):
             for raw in _split_env_list(os.environ.get(name)):
                 candidates.append((pathlib.Path(raw).expanduser(), True))
-        if not explicit_only:
-            for base in self.project_roots():
-                candidates.append((base, False))
-                candidates.extend((base / relative, False) for relative in relative_dirs)
+        return candidates
+
+    def _detail_dirs(self) -> Tuple[str, ...]:
+        """Directories under a candidate that discovery looks *inside*."""
+        return tuple(dict.fromkeys(tuple(self.module_names())
+                                   + tuple(self.spec.source_marker_dirs)))
+
+    def _accept_source_candidates(self, candidates) -> List[str]:
         output = []
         seen = set()
         for root, explicit in candidates:
+            # Decide on the cheap `stat` first: most candidates are relative
+            # directories that do not exist, and `Path.resolve()` walks and
+            # lstats every component before `is_dir()` gets to reject them.
             try:
+                if not root.is_dir():
+                    continue
                 resolved = root.resolve()
             except OSError:
                 continue
             key = os.fspath(resolved)
-            if key in seen or not resolved.is_dir():
+            if key in seen:
                 continue
             if self.looks_like_source_root(resolved, explicit=explicit):
                 seen.add(key)
                 output.append(key)
         return output
+
+    def _discovery_token(self, relative_dirs: Sequence[str]) -> Tuple[object, ...]:
+        """Everything discovery reads from the process instead of the disk.
+
+        Held separately from the watch claims below: the token says "this is
+        still the same question", the claims say "and the answer has not moved".
+        """
+        names = (
+            self._merged(self.spec.source_envs, self._source_env_hints)
+            + self._merged(self.spec.project_root_envs, self._project_root_env_hints)
+            # expanduser() reads HOME, and the runtime root feeds the fallback
+            # project root.
+            + ("HOME", "JITTOR_TORCH_RUNTIME_ROOT")
+        )
+        if self.spec.module_env:
+            names += (self.spec.module_env,)
+        try:
+            cwd = os.getcwd()
+        except OSError:
+            cwd = None
+        return (
+            tuple((name, os.environ.get(name)) for name in dict.fromkeys(names)),
+            sys.argv[0] if sys.argv else "",
+            cwd,
+            tuple(relative_dirs),
+            tuple(self.module_names()),
+            self._discovery_generation,
+        )
+
+    def _discovery_watch(self, candidates) -> Tuple[Tuple[str, object], ...]:
+        """Witness for a scan result: one anchor signature per non-existing leaf.
+
+        Every name the scan decides on -- the candidates, their immediate
+        children, the module directories and the declared marker directories --
+        is reduced to the first existing ancestor, which is claimed by its
+        `stat` signature.  A candidate that exists anchors itself, so its own
+        `mtime` covers its children.
+        """
+        watch: List[Tuple[str, object]] = []
+        claimed = set()
+        details = self._detail_dirs()
+        for root, _explicit in candidates:
+            text = os.fspath(root)
+            for path in (text,) + tuple(
+                    os.path.join(text, name) for name in details):
+                anchor, signature = _nearest_existing(path)
+                if anchor is not None and anchor not in claimed:
+                    claimed.add(anchor)
+                    watch.append((anchor, signature))
+        return tuple(watch)
+
+    def source_roots(self, explicit_only: bool = False) -> List[str]:
+        explicit = self._explicit_source_candidates()
+        if explicit_only:
+            return self._accept_source_candidates(explicit)
+        relative_dirs = self._merged(
+            self.spec.relative_source_dirs, self._relative_source_dir_hints
+        )
+        token = self._discovery_token(relative_dirs)
+        memo = self._discovery_memo
+        if memo is not None and memo[0] == token:
+            claims = memo[1]
+            if all(_stat_signature(path) == signature
+                   for path, signature in claims):
+                return list(memo[2])
+        candidates = list(explicit)
+        for base in self.project_roots():
+            candidates.append((base, False))
+            candidates.extend((base / relative, False) for relative in relative_dirs)
+        # Claim the filesystem *before* deciding on it: a change that lands
+        # during the scan then leaves claims that no longer match, and the
+        # next lookup rescans instead of trusting a verdict that predates it.
+        claims = self._discovery_watch(candidates)
+        found = self._accept_source_candidates(candidates)
+        self._discovery_memo = (token, claims, tuple(found))
+        return list(found)
 
     def has_public_api(self, module: object) -> bool:
         return any(callable(getattr(module, name, None)) for name in self.spec.public_functions)
@@ -807,6 +938,7 @@ class ExternalBackend:
     def invalidate(self) -> None:
         with self._lock:
             self._cache.clear()
+            self._discovery_memo = None
 
 
 def register_external_backend(backend, transaction=None) -> ExternalBackend:

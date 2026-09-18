@@ -579,6 +579,156 @@ class TestSDPA(Base):
                 os.environ.pop(name, None)
         self.assertEqual(after, before + 1)
 
+    def test_flash_backend_environment_key_is_reused_until_the_epoch_moves(self):
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
+
+        if flashattn_jittor.backend_environment_epoch() is None:
+            self.skipTest("Python audit hooks are unavailable")
+        first = flashattn_jittor._backend_environment_key()
+        # Identity, not equality: a fresh read always builds a new tuple, so
+        # the same object is what says the snapshot was reused.
+        self.assertIs(flashattn_jittor._backend_environment_key(), first)
+        flashattn_jittor.invalidate_backend_environment()
+        second = flashattn_jittor._backend_environment_key()
+        self.assertIsNot(second, first)
+        self.assertEqual(second, first)
+
+    def test_flash_backend_environment_key_follows_watched_writes(self):
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
+
+        if flashattn_jittor.backend_environment_epoch() is None:
+            self.skipTest("Python audit hooks are unavailable")
+        name = "JITTOR_FLASH_ATTN_JITTOR_SRC"
+        old_value = os.environ.get(name)
+        try:
+            os.environ[name] = "/snapshot-test-a"
+            before = flashattn_jittor._backend_environment_key()
+            os.environ[name] = "/snapshot-test-b"
+            after = flashattn_jittor._backend_environment_key()
+        finally:
+            if old_value is not None:
+                os.environ[name] = old_value
+            else:
+                os.environ.pop(name, None)
+        self.assertIn((name, "/snapshot-test-a"), before)
+        self.assertIn((name, "/snapshot-test-b"), after)
+        self.assertNotEqual(before, after)
+
+    def test_flash_backend_epoch_hook_does_not_rederive_watched_names(self):
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
+
+        if flashattn_jittor._BACKEND_ENV_EPOCH_STATE is None:
+            self.skipTest("Python audit hooks are unavailable")
+        backend = flashattn_jittor._EXTERNAL_BACKEND
+        real = backend.environment_names
+        rebuilt = []
+
+        def counting():
+            rebuilt.append(1)
+            return real()
+
+        with mock.patch.object(backend, "environment_names", counting):
+            # The first call may rebuild; every later one must read the policy
+            # generation instead of re-deriving the name sets.
+            flashattn_jittor.backend_environment_epoch()
+            rebuilt.clear()
+            for _ in range(3):
+                flashattn_jittor.backend_environment_epoch()
+        self.assertEqual(rebuilt, [])
+
+    def test_flash_backend_epoch_hook_rebuilds_when_discovery_names_widen(self):
+        from jittor.compat.external_backend import ExternalBackend
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
+
+        state = flashattn_jittor._BACKEND_ENV_EPOCH_STATE
+        if state is None:
+            self.skipTest("Python audit hooks are unavailable")
+        backend = flashattn_jittor._EXTERNAL_BACKEND
+        name = "JITTOR_FLASH_ATTN_WATCHED_NAME_WIDENING_TEST"
+        before = flashattn_jittor.backend_environment_epoch()
+        widened = list(backend._environment_name_hints) + [name]
+        with mock.patch.object(backend, "_environment_name_hints", widened), \
+                mock.patch.object(ExternalBackend, "discovery_generation",
+                                  new_callable=mock.PropertyMock(return_value=10 ** 6)):
+            self.assertGreater(
+                flashattn_jittor.backend_environment_epoch(), before)
+        # Leaving the patch has to restore the real watched set, not keep the
+        # widened one.
+        self.assertGreater(flashattn_jittor.backend_environment_epoch(), before)
+        self.assertNotIn(name, state["names"])
+
+    def test_external_backend_discovery_generation_tracks_policy_changes(self):
+        from jittor.compat.external_backend import ExternalBackend, ExternalBackendSpec
+
+        spec = ExternalBackendSpec(
+            name="discovery-generation-test", public_functions=("f",))
+        backend = ExternalBackend(spec)
+        self.assertEqual(backend.discovery_generation, 0)
+        backend.extend_discovery(
+            environment_names=("JITTOR_DISCOVERY_GENERATION_TEST",))
+        self.assertEqual(backend.discovery_generation, 1)
+        # Re-registering the same policy must not look like a change: the
+        # epoch hook rebuilds its watched set off this counter.
+        backend.extend_discovery(
+            environment_names=("JITTOR_DISCOVERY_GENERATION_TEST",))
+        self.assertEqual(backend.discovery_generation, 1)
+
+    def test_external_backend_discovery_memo_follows_the_filesystem(self):
+        from jittor.compat.external_backend import ExternalBackend, ExternalBackendSpec
+
+        def official(p):
+            return (p / "csrc" / "flash_attn" / "flash_api.cpp").is_file()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp).resolve()
+            env = "JITTOR_DISCOVERY_MEMO_ROOT_TEST"
+            spec = ExternalBackendSpec(
+                name="discovery-memo-test",
+                public_functions=("f",),
+                relative_source_dirs=("flash-attention", "third_party/flash-attention"),
+                module_names=("flashattn_jittor",),
+                source_root_names=("flash-attention",),
+                source_marker_dirs=("csrc/flash_attn",),
+                project_root_envs=(env,),
+                source_predicates=(official,),
+            )
+            backend = ExternalBackend(spec)
+            tree = root / "flash-attention"
+            found = [os.fspath(tree)]
+            with mock.patch.dict(os.environ, {env: os.fspath(root)}, clear=False):
+                self.assertEqual(backend.source_roots(), [])
+                # An unchanged tree must not walk at all. project_roots() only
+                # runs on a miss, so this is the memo short-circuiting.
+                with mock.patch.object(backend, "project_roots",
+                                       side_effect=AssertionError("re-walked")):
+                    self.assertEqual(backend.source_roots(), [])
+
+                # A directory that exists but is not yet a source root: the
+                # marker file lands one level deeper than the candidate, so only
+                # the candidate's own signature can notice it.
+                tree.mkdir()
+                self.assertEqual(backend.source_roots(), [])
+                (tree / "setup.py").write_text("", encoding="utf-8")
+                self.assertEqual(backend.source_roots(), found)
+
+                # Same again for a marker inside a declared marker directory.
+                (tree / "setup.py").unlink()
+                self.assertEqual(backend.source_roots(), [])
+                (tree / "csrc" / "flash_attn").mkdir(parents=True)
+                self.assertEqual(backend.source_roots(), [])
+                (tree / "csrc" / "flash_attn" / "flash_api.cpp").write_text(
+                    "", encoding="utf-8")
+                self.assertEqual(backend.source_roots(), found)
+
+            # The unwatched nested relative directory still invalidates: the
+            # leaf appears under an intermediate that did not exist before.
+            nested = root / "third_party" / "flash-attention"
+            nested.mkdir(parents=True)
+            (nested / "setup.py").write_text("", encoding="utf-8")
+            with mock.patch.dict(os.environ, {env: os.fspath(root)}, clear=False):
+                self.assertEqual(backend.source_roots(),
+                                 [found[0], os.fspath(nested)])
+
     def test_flash_backend_environment_epoch_survives_module_reload(self):
         from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 

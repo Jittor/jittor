@@ -4031,3 +4031,131 @@ own gates fail on this branch, and both were confirmed against a pristine
   state it does not model, which is why they pass it unclassified. They are
   dropped by the ledger instead, which is the same boundary the gate exists to
   police.
+
+## 43. A backend cache hit re-walked the project tree 2,268 times
+
+Section 42 closed with the remaining profile items and called the tail "an
+`os.environ`/`pathlib`/`stat` cluster of ~1.5 s inside kernel selection".
+Naming the call site rather than the cluster is what turned it into a fix.
+
+`probe_env_reads.py` attributes every `os.environ.get`/`stat`/`Path()` to its
+immediate caller. The top two callers were both the same chain, 127,008 times
+each: `compat/shim/backends/flash_attention/__init__.py:519`
+(`_backend_environment_key`) and `compat/external_backend.py:324`
+(`ExternalBackend.environment_key`). `probe_backend_env_key.py` then wraps every
+function on that chain and reports calls and the wall time each one owns, so the
+size of the prize is known before anything is written:
+
+| during one autocast VAE decode | calls | total | per call |
+| --- | --- | --- | --- |
+| `load_backend` (memoized hit) | 2,268 | **1,766.8 ms** | 779 us |
+| `_backend_config_key` | 2,268 | 1,527.8 ms | 674 us |
+| `ExternalBackend.source_roots` | 2,268 | 1,414.7 ms | 624 us |
+| `_stable_backend_environment_key` | 2,268 | 215.8 ms | 95 us |
+| `ExternalBackend.looks_like_source_root` | 2,268 | 247.8 ms | 109 us |
+| `backend_environment_epoch` | 4,536 | 89.4 ms | 19.7 us |
+
+`_try_flash_scaled_dot_product_attention` calls `load_backend_for()` per
+attention op, and the *memoized-hit* branch of the loader was spending 779 us
+re-proving that nothing had changed. Three separate defects, all on that branch:
+
+* **`backend_environment_epoch()` rebuilt its own watched set on every call.**
+  `_install_backend_environment_epoch_hook()` is the cheap invalidation token
+  every one of these lookups reads first, and it rebuilt
+  `frozenset(dict.fromkeys(...))` plus `os.fsencode` for ~30 names each time --
+  19.7 us to answer "has anything changed?". The watched set only moves when a
+  resolver registers discovery hints, so `ExternalBackend` now carries a
+  `discovery_generation` counter (bumped by `extend_discovery` and only when the
+  policy actually changed) and the hook rebuilds from that.
+* **The environment key was re-read even though the epoch already vouched for
+  it.** `_backend_environment_key()` reads ~60 variables. Holding that snapshot
+  while the epoch is unchanged is *exact*, not an approximation: the epoch counts
+  writes to a watched name, so a key captured at epoch N is still the live key
+  while the epoch reads N. The memo is inside `_backend_environment_key()` with
+  the epoch read *before* the variables -- stamp it afterwards and a write that
+  lands mid-read would be frozen in as a cache hit. When the audit hook is
+  unavailable the epoch is `None` and nothing is cached, so the fallback is the
+  old behaviour.
+* **Revalidating a *negative* source discovery re-walked the filesystem.** This
+  is the expensive one, and it only happens because the flash-attn backend is
+  *absent*: for a loaded backend the hit branch returns after the environment
+  key, but a miss also compares `_backend_config_key()`, whose second element is
+  a full `source_roots()` walk. That walk `resolve()`d 16 candidate directories
+  (16x `lstat` per component), `is_dir()`ed them, and ran the predicate -- 624 us
+  to conclude, for the 2,268th time, that there is no `flashattn_jittor` checkout
+  in the project.
+
+**The discovery memo and what makes it honest.** `source_roots()` now either
+answers from a memo or records a witness for its answer. The witness is one
+`stat` signature per *anchor*: for every name the scan decides on -- the
+candidates, their immediate children, the module directories and the declared
+`source_marker_dirs` -- the first existing ancestor. A directory's `mtime` moves
+when an entry is created, removed or renamed directly inside it, so an unchanged
+anchor signature means every deeper name is exactly as it was. On this tree the
+whole witness is **one** `stat` (the project root), because every candidate is a
+direct child of it; the unknown no longer costs a walk. The policy inputs the
+scan takes from the *process* rather than the disk (the source/project-root env
+values, `HOME`, the runtime root, `argv[0]`, `cwd`, the relative directory
+names, the module names, the discovery generation) are held as a separate token,
+and the claims are taken *before* the scan so a change landing mid-scan leaves
+stale claims and forces a rescan rather than a stale hit.
+
+The one thing a signature cannot see is a change to something a *custom*
+`source_predicate` reads that is not the existence of a name under the candidate
+-- which is why the built-in official predicate's two directories are declared in
+the spec as `source_marker_dirs` instead of being guessed at. The predicate
+itself is unchanged.
+
+**Result.** Same decode, same conditions:
+
+| | before | after |
+| --- | --- | --- |
+| `load_backend` (2,268 calls) | 1,766.8 ms | **121.8 ms** |
+| `ExternalBackend.source_roots` | 1,414.7 ms | 82.5 ms |
+| `_stable_backend_environment_key` | 215.8 ms | 15.5 ms |
+| `backend_environment_epoch` | 89.4 ms | 8.8 ms |
+| `_default_project_roots` / `looks_like_source_root` | 221.9 / 247.8 ms | 0 / 0 |
+
+Measured in isolation on this tree: `load_backend` on a hit 779 -> **20.7 us**,
+`backend_environment_epoch` 19.7 -> **0.37 us**, `_stable_backend_environment_key`
+95 -> **1.26 us**, and `source_roots` 1,237 us when it really rescans against
+16.5 us when it does not. End to end:
+
+| `probe_decode_cprofile.py autocast` | before | after |
+| --- | --- | --- |
+| decode | 11.50 s | **9.93 s** |
+| cProfile | 22.54 s (1.96x) | 19.09 s (1.92x) |
+| total function calls | 42,278,339 | 33,077,063 |
+
+`probe_vae_checksum.py autocast` gives 10.65 s, `sum=3.0456172000e+07`,
+`absmax=1.0`, `nonfinite=0` -- the same tensor as before the change. In the
+profile `os.__getitem__` falls from 558,688 calls to 318,280 and the
+`pathlib`/`posix.stat`/`os.path.join` frames leave the top thirty entirely.
+
+**Invalidation, checked rather than argued.** `probe_backend_env_key.py`-style
+one-liners against the live tree: creating `flash-attention/setup.py` in the
+project root makes `candidate_source_roots()` return it on the *next* call, and
+removing it takes it away again; `test_external_backend_discovery_memo_follows_the_filesystem`
+drives the same thing through a temporary tree and covers a marker file landing
+one level deeper than the candidate, and inside a declared marker directory.
+Five tests were added around the epoch and the memo, including one that asserts
+the hook does *not* re-derive its watched names while the policy is unchanged
+(identity, not equality -- a fresh read always builds new tuples).
+
+**Gates.** `tools/check_repo_layout.sh` passes. The red gates were re-checked
+against a pristine `git worktree` at the same commit, and none of them is
+affected by this change:
+
+* `tests/structure/test_packaging_structure.py` fails identically there, both
+  the package-set and the `MANIFEST.in` assertion.
+* `tests/structure/backends/comm/test_comm_resource_layout.py::test_legacy_runtime_resource_trees_are_absent`
+  fails in this working tree and **passes** in a fresh checkout: the assertion is
+  `not (ROOT / "python/jittor/extern").exists()`, and that directory is a local
+  build artifact of this tree. Not a function of this change either way.
+* `compat/tests/structure/test_compat_write_entry_points.py` -- the
+  `unclassified` and `stale` assertions fail there too. The `unclassified` list
+  is still exactly the pre-existing `compat/build/lib/**` artifact tree plus the
+  one known `torchaudio` entry, and the three new memos do not appear in it.
+* `tests/structure/test_opinfo_dtype_declaration.py` cannot be collected in this
+  venv at all (`No module named 'scipy'`), which aborts `pytest tests/structure`
+  at collection before anything runs.
