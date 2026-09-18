@@ -4576,11 +4576,32 @@ well as the op. Prefer a `consume` arm that touches every input and writes the
 same shape; the two readings differ by 0.95 s/decode here, which is larger than
 the effect section 45 was trying to size.
 
+**The non-attention gap is device-side, not per-op host cost.**
+`probe_decode_size_scaling.py` decodes the same model (same layer count) at the
+real latent and at two smaller ones, one process per runtime, minimum of three
+samples each:
+
+| latent `(T, H, W)` | shim | torch | gap |
+| --- | --- | --- | --- |
+| `(37, 32, 32)` -- the reference | 8.323 | 6.648 | **1.675** |
+| `(37, 16, 16)` | 0.931 | 0.764 | 0.167 |
+| `(9, 8, 8)` | 0.290 | 0.066 | 0.224 |
+
+A per-op host cost is fixed per layer and would hold the gap roughly constant as
+the elements shrink; instead the gap falls ~10x when the latent falls 4x in each
+spatial dimension. So the residual is **work that scales with the tensor sizes**
+-- kernel throughput for the decode's ordinary ops -- and the earlier
+per-op-bookkeeping fixes (sections 42, 43) are not where the rest of it lives.
+Two caveats: the VAE's chunked decode may also issue fewer ops at smaller
+sizes, and the `(9, 8, 8)` row sits at a ~0.2 s floor where launch latency
+rather than throughput dominates, so read the trend and not the last row.
+
 **What is left.** Two independent pieces, and the larger one is not attention:
 1.09 s of non-attention work (7.25 vs 6.16) on an identical graph, and 0.53 s of
-attention (kernel 0.29, wrapper 0.23). The non-attention gap is the next thing
-to attribute; it is a property of the shim's execution of the decode's ordinary
-convs, linears and norms, not of any attention backend.
+attention (kernel 0.29, wrapper 0.23), both device-side. The next thing to
+attribute is the non-attention device work; it is a property of the kernels
+jittor runs for the decode's ordinary convs, linears and norms, not of any
+attention backend and not of host bookkeeping.
 
 **Which side the non-attention gap is on is still open.**
 `probe_decode_host_vs_gpu.py` times the decode with and without the final
@@ -4595,5 +4616,5 @@ Both runtimes spend 97-99% of the wall inside the call, so nothing is being
 deferred to a late drain, and the shim's in-call time is **1.80 s above torch's**
 -- the whole gap and a little more. But this does *not* separate host from
 device: at ~1.3M frontend ops the launch queue is full, so a host-blocked
-measurement and a GPU-bound one look the same from here. Discriminating them
-needs the workload's size varied at fixed op count, which has not been run.
+measurement and a GPU-bound one look the same from here. The size sweep below
+settles it.
