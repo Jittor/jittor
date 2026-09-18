@@ -241,4 +241,11 @@ void adapt_storage_input(vector<Var*>& values, vector<VarPtr>& owners) {
 // already holding.
 EXTERN_LIB vector<Var*>* batch_released_vars;
 
+// Release a var's storage: unlink it from any share ring, clear `mem_ptr`,
+// `allocator` and `allocation`, and only then hand the block back. Clearing
+// first is what makes a concurrent second release a no-op instead of a double
+// free (KI-EXEC-007), so every path that drops a var's storage goes through
+// here rather than calling `allocator->free` itself.
+void free_var_mem(Var* v);
+
 } // jittor

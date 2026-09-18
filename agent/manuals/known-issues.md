@@ -870,24 +870,47 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
       | KI-EXEC-005 phase-7 change reverted | 8 / 10 |
       | that and the KI-EXEC-006 fix reverted | 10 / 10 |
 
-- Two candidate mechanisms, neither confirmed. The allocator itself is not the
-  suspect: `alloc` and `free` both hold the instance's `recursive_mutex`, and
-  the id table has its own.
-  1. **A torn read of the var's three storage fields.** `free_var_mem` reads
-     `mem_ptr`, `allocation` and `allocator` and then frees; anything that
-     retargets a var's storage between those reads and the call hands `free` an
-     `allocation` from one allocator and an `allocator` from another.
-     `sfrl_allocator.h` already names that hazard: "two SFRL allocators both
-     start at 1, and an id from one is not a valid handle for the other", and
-     there is one instance per device on an 8-device box.
-  2. **A free that does not go through `free_var_mem`.** `ArrayOp::run` frees
-     the output's previous allocation directly, and the failing op is an
-     `array`. It leaves `o->allocation` naming the freed id until three
-     statements later.
-  The way to tell them apart is to record, per allocation id, the site and
-  thread of the last free, and report both at the failure -- the same method
-  that settled KI-EXEC-006, where the counters at the moment of the free were
-  what identified the wrong predicate.
+- Mechanism, pinned 2026-09-18 by the id-space event log plus a backtrace at
+  the failing free (`KI007_TRACE=1`, which turns both on). The allocator is not
+  the suspect: `alloc` and `free` both hold the instance's `recursive_mutex`,
+  and the id table has its own. The ledger for the failing id:
+
+      set_occupied(size=16777216, thread=A)     <- A allocates the parameter
+      erase_occupied(size=16777216, thread=B)   <- B releases it
+      recycle(thread=B)
+      reissued(thread=B)                        <- the id is now another block's
+      ... then A frees the same id: "allocation not found"
+
+  and the backtrace on that second free:
+
+      VarHolder::sync -> Executor::run_sync -> run_exec_plan
+        -> migrate_to_cpu -> SFRLAllocator::free
+
+  So: thread B's slice assignment rebinds the holder, the old parameter var
+  becomes garbage and `free_var_mem` releases its storage -- while thread A's
+  batch is between planning and its migrate loop. `migrate_to_cpu` then reads
+  `var->mem_ptr`, `var->allocation` and `var->allocator`, which still name the
+  released block, and frees it a second time. `migrate_to_gpu` has the same
+  shape. This is [KI-EXEC-005]'s situation one level down: the same "a var the
+  batch requested was released mid-batch", reaching the allocator instead of
+  the phase-7 assert.
+- What the fix has to say. The batch's hold keeps the *Var* alive; it does not
+  keep the var's *storage*, and `free_var_mem` exists precisely to release
+  storage from a var that stays alive. So the missing invariant is that a var
+  whose storage the running batch will read must not have that storage
+  released -- the in-flight equivalent of what `_needed_by_backward` does for
+  the backward pass. Reordering the migrate (publish the new storage, then
+  release the old) closes the window *after* the copy but not the one before
+  it, and claiming the storage by nulling `mem_ptr` up front makes the var look
+  unbacked to anything that looks at it mid-migration. The invariant is the
+  fix; the ordering is not.
+- One thing already changed. `ArrayOp::run` used to free the output's previous
+  storage with its own copy of `free_var_mem`'s body, reading the three fields
+  and only overwriting them after the free. It now calls `free_var_mem`, which
+  clears them first, so a concurrent release finds nothing to give back. That
+  is correct on its own account and it is not the fix for this entry: the
+  failure rate is unchanged, because the second free comes from the migrate
+  loop, not from here.
 - Blocks [KI-EXEC-005]: the probe that would show whether the phase-7 change
   worked dies here first, before it reaches phase 7.
 
