@@ -721,6 +721,15 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
      backward-needed output of a source op). Breaks code generation: the fused
      source references `op3_outputstride0` and friends that were never
      declared. "Materialised" is not a valid verdict for a var in this position.
+  4. **`stop_fuse()` on the index grids** where the op builds them
+     (`jt.index` in `nn/functional/interpolation.py`). Fixes the crash -- it is
+     the documented way to say "this var keeps its own storage" -- and costs
+     the whole index grid, which is the size of the *output*, four times over.
+     Measured on one `interpolate(1x64x256x256 -> 512x512, bilinear)` with the
+     memory profiler on: peak 352.3 MB -> 620.8 MB, +76% for a single op. A
+     1024x1024 upsample of a batch would pay gigabytes. Not a general fix, and
+     the same objection applies to doing it inside `reindex_var` for every
+     caller.
 - What the shape of a real fix looks like, from those three: an op's outputs'
   *backward* liveness has to keep the op alive, the way a var's producer being
   forward-live keeps the var alive (`Node::free()`'s first guard). That is a
