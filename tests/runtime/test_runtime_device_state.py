@@ -2,6 +2,7 @@
 
 import ctypes
 import ctypes.util
+import functools
 import threading
 
 import jittor as jt
@@ -40,8 +41,20 @@ def test_python_flag_writes_reach_core_and_jit_owner():
     assert jt.flags.sync_run == saved
 
 
+@functools.lru_cache(maxsize=None)
 def _load_cudart():
-    """libcudart, or None where it cannot be loaded."""
+    """libcudart, or None where it cannot be loaded.
+
+    Asked for at run time, never during collection. A module-level
+    ``_CUDART = _load_cudart()`` dlopen'd the CUDA runtime -- and ran
+    ``ctypes.util.find_library``, which shells out to ``ldconfig``/``gcc`` -- on
+    every bare import of this file, on every machine, whether or not the one
+    test that needs the library ever runs. That is the collection-time backend
+    side effect ``tests/structure/test_pytest_contract.py`` forbids, and the
+    same rule the cross-device suites already follow
+    (see ``tests/backends/cuda/test_device_copy.py``). ``lru_cache`` keeps the
+    load to once per process, as the module-level constant did.
+    """
     for name in ("libcudart.so", "libcudart.so.12", "libcudart.so.13",
                  ctypes.util.find_library("cudart")):
         if not name:
@@ -53,9 +66,6 @@ def _load_cudart():
     return None
 
 
-_CUDART = _load_cudart()
-
-
 def _thread_cuda_device(lib):
     """The calling thread's own CUDA device, straight from the runtime."""
     index = ctypes.c_int(-1)
@@ -63,7 +73,6 @@ def _thread_cuda_device(lib):
     return index.value
 
 
-@pytest.mark.skipif(_CUDART is None, reason="libcudart is not loadable here")
 def test_current_device_binds_the_calling_thread():
     """A thread that never called cudaSetDevice must still run where jittor says.
 
@@ -78,6 +87,9 @@ def test_current_device_binds_the_calling_thread():
     rank 1 of a TP=2 run and never rank 0, whose threads default to the device
     it uses anyway.
     """
+    cudart = _load_cudart()
+    if cudart is None:
+        pytest.skip("libcudart is not loadable here")
     if jt.get_device_count() < 2:
         pytest.skip("needs a second accelerator to distinguish 0 from the ambient one")
     target = 1
@@ -89,7 +101,7 @@ def test_current_device_binds_the_calling_thread():
 
         def worker():
             seen["reported"] = jt.current_device()
-            seen["bound"] = _thread_cuda_device(_CUDART)
+            seen["bound"] = _thread_cuda_device(cudart)
 
         thread = threading.Thread(target=worker, name="device-probe")
         thread.start()
