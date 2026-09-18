@@ -890,9 +890,24 @@ def _copy_bounced_inputs_back():
 
 
 def _sync_after_launch_enabled():
+    """Whether to wait for the device after a launch.
+
+    Default: the conservative answer outside the shim, and no wait inside it.
+    The launch, its bounce copies and the ops that produce its operands are all
+    on ``_launch_stream()``, so the kernel is already ordered against them; the
+    wait was there because the bridge used to launch on the legacy stream, which
+    has no such order. Measured on the H3 VAE's kernel shape, the wait is 2.07 ms
+    of a 2.50 ms launch while the launch stream drains in 0.008 ms -- so it buys
+    nothing but latency. ``JITTOR_TRITON_SYNC_AFTER_LAUNCH=1`` restores it,
+    ``=0`` removes it everywhere; a launch that allocates global scratch still
+    waits, because ``drv.free`` returns that memory to the driver rather than to
+    a stream.
+    """
+    if _truthy_env("JITTOR_TRITON_SYNC_AFTER_LAUNCH"):
+        return True
     if _falsey_env("JITTOR_TRITON_SYNC_AFTER_LAUNCH"):
         return False
-    return True
+    return not _fast_sync_enabled()
 
 
 def _sync_before_launch_enabled():
@@ -1398,11 +1413,12 @@ def run(jitfn, args, kwargs, grid):
             except EXPECTED as exc:
                 swallowed("triton/backend.py run: drv.copy_dtod_async(orig_ptr, bbase, nbytes)", exc)
 
-    need_sync_after_launch = (
-        _sync_after_launch_enabled()
-        or bool(scratch_bases)
-        or bool(bounced)
-    )
+    # Only two things need the wait: a caller who asked for it, and global
+    # scratch, which `drv.free` hands back to the driver rather than to a stream.
+    # A bounce buffer does NOT: its copy-back is on the launch stream, and the
+    # only other access to a pooled buffer is `guard_acquire`'s memset of the
+    # *tail*, which is disjoint from the payload that copy-back reads.
+    need_sync_after_launch = _sync_after_launch_enabled() or bool(scratch_bases)
     if need_sync_after_launch:
         drv.synchronize()
     if _ptrtrace:
