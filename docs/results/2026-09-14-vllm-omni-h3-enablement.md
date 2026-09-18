@@ -4581,3 +4581,19 @@ the effect section 45 was trying to size.
 attention (kernel 0.29, wrapper 0.23). The non-attention gap is the next thing
 to attribute; it is a property of the shim's execution of the decode's ordinary
 convs, linears and norms, not of any attention backend.
+
+**Which side the non-attention gap is on is still open.**
+`probe_decode_host_vs_gpu.py` times the decode with and without the final
+`out.float().cpu()` + synchronise:
+
+| | inside `decode()` | wall |
+| --- | --- | --- |
+| shim | 8.23 | 8.30 |
+| torch | 6.43 | 6.65 |
+
+Both runtimes spend 97-99% of the wall inside the call, so nothing is being
+deferred to a late drain, and the shim's in-call time is **1.80 s above torch's**
+-- the whole gap and a little more. But this does *not* separate host from
+device: at ~1.3M frontend ops the launch queue is full, so a host-blocked
+measurement and a GPU-bound one look the same from here. Discriminating them
+needs the workload's size varied at fixed op count, which has not been run.
