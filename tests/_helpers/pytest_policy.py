@@ -574,7 +574,7 @@ _ACCELERATOR_EXECUTED = 0
 #: appears in the reason wins. "insufficient-devices" therefore has to precede
 #: "accelerator", because its reasons name the accelerator too.
 _SKIP_BUCKET_ORDER = ("insufficient-devices", "accelerator", "backend", "mpi",
-                      "torch", "network", "manual", "other")
+                      "torch", "network", "manual", "opt-in", "other")
 _SKIP_BUCKET_PATTERNS = {
     # Not the same fact as "this box has no accelerator", and the difference is
     # the whole point of counting it apart. A test that wants two devices skips
@@ -616,6 +616,15 @@ _SKIP_BUCKET_PATTERNS = {
     "torch": ("torch",),
     "network": ("download", "dataset", "network", "internet"),
     "manual": ("manual",),
+    # Deliberately not run unless asked for, and the reason says how to ask.
+    # These are explained skips -- a benchmark behind `performance_test=1`, a
+    # case whose assertion is an upper bound on wall clock (see the
+    # `load_sensitive` marker) -- but their wording names no hardware, so they
+    # landed in "other", and `other > 0` fails a gate run outright. Every file
+    # holding one therefore failed every gate that collected it, for doing
+    # exactly what it was written to do.
+    "opt-in": ("performance_test", "skip slow test", "upper bound on wall-clock",
+               "load_sensitive"),
 }
 
 

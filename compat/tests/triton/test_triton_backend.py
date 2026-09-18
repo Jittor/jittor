@@ -29,22 +29,20 @@ import numpy as np
 import jittor as jt
 
 
-def _real_triton_is_importable():
-    """A genuine upstream triton, not the shim this repo deploys under the name.
-
-    ``find_spec("triton")`` answers yes for the shim as well, and ``setUpModule``
-    then skips the *whole module* when ``import triton.language`` fails -- which
-    took the launch-device tests at the bottom, the ones that need no triton at
-    all, down with it.
-    """
-    try:
-        return importlib.util.find_spec("triton.language") is not None
-    except (ImportError, ValueError):
-        return False
-
+#: A genuine upstream triton, not the shim this repo deploys under the name.
+#:
+#: ``find_spec("triton")`` answers yes for the shim as well, and ``setUpModule``
+#: then skips the *whole module* when ``import triton.language`` fails -- which
+#: took the launch-device tests at the bottom, the ones that need no triton at
+#: all, down with it. Written inline rather than as a helper call: collection
+#: may not run this file's own functions (tests/structure/test_pytest_contract).
+try:
+    _HAVE_REAL_TRITON = importlib.util.find_spec("triton.language") is not None
+except (ImportError, ValueError):
+    _HAVE_REAL_TRITON = False
 
 _HAVE_CUDA = bool(_test_capability.check_accelerator('cuda', backend=jt).enabled)
-_HAVE = bool(_HAVE_CUDA and _real_triton_is_importable())
+_HAVE = bool(_HAVE_CUDA and _HAVE_REAL_TRITON)
 _shim = None
 triton = None
 tl = None

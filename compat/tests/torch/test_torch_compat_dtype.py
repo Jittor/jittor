@@ -232,13 +232,27 @@ class TestCastMethods(Base):
             self.ae(x.to(torch.int32).numpy(), self.x.astype("int32"), dev)
         both_devices(body)
 
-    def test_to_device_is_noop_on_dtype(self):
-        # torch's .to('cuda') / .to(dtype, device) -- jittor has a single global
-        # backend, so device moves are no-ops but dtype must still convert.
+    def test_to_keeps_the_dtype_a_device_move_does_not_name(self):
+        """``.to(device)`` moves and keeps the dtype; ``.to(dtype)`` converts.
+
+        This used to assert that ``.to("cuda")`` is a no-op because "jittor has
+        a single global backend". It is not one any more -- the frontend places
+        tensors for real -- and on a build with no accelerator the call raises
+        `Invalid cuda device index 0; visible device count is 0`, which is what
+        torch does there too (`Torch not compiled with CUDA enabled`). The
+        dtype half is the part that holds everywhere, so that is what is
+        asserted unconditionally.
+        """
         def body(dev):
             x = torch.tensor(self.x)
-            self.assertEqual(dts(x.to("cuda")), "float32", dev)
             self.assertEqual(dts(x.to(torch.float64)), "float64", dev)
+            if _DEVICES[-1][0] == "cuda":
+                moved = x.to("cuda")
+                self.assertEqual(dts(moved), "float32", dev)
+                self.assertEqual(moved.device.type, "cuda", dev)
+            else:
+                with self.assertRaises(RuntimeError):
+                    x.to("cuda")
         both_devices(body)
 
     def test_astype(self):

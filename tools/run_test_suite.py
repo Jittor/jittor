@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the complete repository test suite and report one combined result.
+"""Run the repository test suite at one of three tiers and report one result.
 
 Jittor's Torch compatibility mode is process-global: it changes lazy execution,
 reduction defaults and gradient semantics for everything in the interpreter.
@@ -9,9 +9,17 @@ its own pytest session, with its own JIT cache, and prints a combined summary.
 
 Usage::
 
-    python tools/run_test_suite.py                  # both sessions, CPU
+    python tools/run_test_suite.py --tier core       # ~1 min, both modes
+    python tools/run_test_suite.py --tier smoke      # what a pull request waits for
+    python tools/run_test_suite.py                   # the whole tree
     python tools/run_test_suite.py --session native
-    python tools/run_test_suite.py -- -x -k conv    # extra pytest arguments
+    python tools/run_test_suite.py -- -x -k conv     # extra pytest arguments
+
+The tiers answer different questions. ``core`` is for between edits: one file
+per fundamental, named in ``tests/_helpers/tiers.CORE_FILES``, serial, and
+runnable without pytest-xdist. ``smoke`` is the pull-request gate: the whole
+tree minus the files in ``SLOW_FILES``. ``full`` is everything. Only ``full``
+is a statement about the tree; the other two are statements about time.
 
 Runtime state (JIT caches, temporary files) is written under
 ``$JITTOR_LAB_ROOT/_state/test-suite`` so it never lands in the checkout.
@@ -112,8 +120,15 @@ def _session_environment(session, serial_compile=False):
     return environment
 
 
-def _session_arguments(session):
-    """The same selection `nox -s cpu` uses, from the same source."""
+def _session_arguments(session, tier="full"):
+    """The same selection `nox -s cpu` uses, from the same source.
+
+    The core tier is the exception: it names its files outright
+    (``tiers.CORE_FILES``) instead of taking the tree and removing things, so
+    the selection is what is listed and nothing else.
+    """
+    if tier == "core":
+        return list(_tiers().core_paths(session))
     return list(torch_arguments() if session == "torch" else native_arguments())
 
 
@@ -143,6 +158,7 @@ try:
 except ImportError:
     import importlib_metadata as metadata
 expected = sys.argv[1]
+source_python = sys.argv[2] if len(sys.argv) > 2 else ""
 try:
     dist = metadata.distribution("jittor-torch")
 except metadata.PackageNotFoundError:
@@ -152,6 +168,16 @@ if valid and expected:
     record = json.loads(dist.read_text("direct_url.json") or "{}")
     source = pathlib.Path(unquote(urlparse(record.get("url", "")).path)).resolve()
     valid = record.get("dir_info", {}).get("editable", False) and source == pathlib.Path(expected).resolve()
+# The other way to reach this checkout's frontend, and the property being
+# checked is the same one: that `import torch` resolves to *this* tree. A
+# source checkout puts `python/` on the path and reaches the compat package
+# through `python/jittor/compat`, which is a symlink into the checkout. That
+# is verifiable here without importing jittor or torch, which is what this
+# check is careful not to do -- and without it the suite cannot be run at all
+# from a plain checkout, only from an installed one.
+if not valid and expected and source_python:
+    linked = pathlib.Path(source_python) / "jittor" / "compat"
+    valid = linked.is_dir() and linked.resolve() == pathlib.Path(expected).resolve()
 if not valid:
     target = expected or "jittor-torch"
     print("Torch suite needs the matching frontend installation. Run:", file=sys.stderr)
@@ -164,7 +190,7 @@ if not valid:
     sys.exit(1)
 '''
         checked = run_python_child(
-            ["-c", check, expected], cwd=REPO_ROOT, env=environment,
+            ["-c", check, expected, source or ""], cwd=REPO_ROOT, env=environment,
             inherit=False, merge_stderr=True, timeout=30)
         if checked.returncode:
             return checked.returncode, checked.stdout
@@ -210,8 +236,29 @@ if not valid:
     return 1, "\n".join(outputs)
 
 
+def _has_pytest_timeout():
+    try:
+        import importlib.util
+        return importlib.util.find_spec("pytest_timeout") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _tiers():
+    sys.path.insert(0, str(REPO_ROOT / "tests"))
+    try:
+        from _helpers import tiers
+    finally:
+        sys.path.remove(str(REPO_ROOT / "tests"))
+    return tiers
+
+
 def _tier_arguments(tier):
-    """What the fast tier drops, from the same list the nox session reads."""
+    """What the fast tier drops, from the same list the nox session reads.
+
+    The core tier drops nothing: its files are the selection itself, so a
+    marker filter on top of them could only take coverage away silently.
+    """
     if tier != "smoke":
         return []
     return ["-m", "not slow"]
@@ -272,8 +319,13 @@ def _run(session, extra, quiet, tier="full", jobs=None, serial_compile=False):
     environment = _session_environment(session, serial_compile=serial_compile)
     _split_threads(environment, jobs)
     command = [PYTHON, "-m", "pytest"]
-    command += _session_arguments(session)
-    command += ["-p", "no:cacheprovider", "--timeout=900"]
+    command += _session_arguments(session, tier)
+    command += ["-p", "no:cacheprovider"]
+    # pytest-timeout is a declared dev tool, and the per-test bound is worth
+    # having; but it is a safety net, and a checkout without it should still be
+    # able to run its own tests rather than fail on the argument.
+    if _has_pytest_timeout():
+        command += ["--timeout=900"]
     command += _tier_arguments(tier)
     distribution = "loadgroup" if tier == "smoke" else "loadfile"
     command += _parallel_arguments(jobs, distribution=distribution)
@@ -298,9 +350,11 @@ def _run(session, extra, quiet, tier="full", jobs=None, serial_compile=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--session", choices=SESSIONS, action="append", default=None)
-    parser.add_argument("--tier", choices=("smoke", "full"), default="full",
-                        help="smoke drops the files recorded in "
-                             "tests/_helpers/tiers.SLOW_FILES")
+    parser.add_argument("--tier", choices=("core", "smoke", "full"), default="full",
+                        help="core runs only tests/_helpers/tiers.CORE_FILES "
+                             "(about a minute, both modes, serial by default); "
+                             "smoke drops the files recorded in "
+                             "tests/_helpers/tiers.SLOW_FILES; full is the tree")
     parser.add_argument("--jobs", type=int, default=None,
                         help="xdist workers per session (default: runtime gate "
                              "policy; use 0 for explicit serial mode)")
@@ -314,7 +368,10 @@ def main():
     sessions = options.session or list(SESSIONS)
     results = {}
     failures = []
-    jobs = _runtime_jobs(options.jobs)
+    # The core tier is small enough that workers buy nothing -- and staying
+    # serial keeps it runnable where pytest-xdist is not installed.
+    jobs = 0 if (options.tier == "core" and options.jobs is None) \
+        else _runtime_jobs(options.jobs)
     print("runtime workers: %d%s" % (
         jobs, " (explicit)" if options.jobs is not None else " (policy)"),
           flush=True)
