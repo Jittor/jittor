@@ -460,6 +460,58 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
 - Review/expiry condition: retain both default and explicit-dtype assertions until
   a public dtype-default decision changes them together
 
+## KI-DTYPE-003: a Python float against a float64 tensor arrives as float32
+
+- Severity: High -- silent loss of 29 mantissa bits in float64 arithmetic,
+  including in gradcheck, which is the tree's own correctness oracle.
+- Status: Open, found 2026-09-18. Distinct from [KI-DTYPE-002], which is about
+  an explicit `jt.array` of a NumPy array and has `dtype=` as an escape hatch.
+  This one has no escape hatch, because there is no construction to pass
+  `dtype=` to: the scalar is written inline.
+- Owner: dtype and compatibility maintainers
+- Mechanism, one line. `ArrayOp::ArrayOp(PyObject*)` in
+  `src/bindings/pyjt/py_array_op.cc`:
+
+      if (PyFloat_CheckExact(obj)) {
+          scalar.f32 = PyFloat_AS_DOUBLE(obj);     // <- narrowed here
+          args = {&scalar, {}, ns_float32};
+      }
+
+  Every Python float reaches a kernel as a float32 constant. `_is_scalar` then
+  correctly keeps it out of dtype promotion, so the *result* is float64 --
+  which is what makes this invisible: the dtype is right and the value is not.
+- Measured, both modes, CPU. `v = ones(1, float64)`:
+
+      expression        answer                    correct
+      v * 0.1           0.10000000149011611938    0.10000000000000000555
+      v + 0.1           1.1000000014901161194     1.1000000000000000888
+      v * (2/3)         0.6666666865348815918     0.66666666666666662966
+      v * 2 ** 0.5      1.4142135381698608398     1.4142135623730951455
+      v / 3.0           0.33333333333333331483    exact (3.0 is exact in f32)
+
+  Seven correct significant digits where sixteen were asked for. Real torch
+  2.13 answers all five exactly: a Python float is a *weak double* there -- it
+  takes the tensor's dtype but keeps its value until it does.
+- How it was found. `tests/ops/test_ops.py::TestCommonCPU::
+  test_reference_interpolate_bilinear_float64` was the last failure in the
+  OpInfo battery. `jt.nn.interpolate` scaled its sampling coordinates by
+  `hid * (h / H)`, and the Python float `h / H` reached the kernel as float32,
+  so a float64 image was resampled with float32 weights. That call site is
+  fixed (the coordinates are now scaled by the integer ratio and cast to the
+  image's dtype), but the call site was not the bug.
+- Why it is not a one-line fix. `ArrayOp(PyObject*)` is the only Python-float
+  conversion in the tree, and it serves `jt.array(0.5)` as well as `v * 0.5`.
+  Widening it there would make `jt.array(0.5).dtype` float64, which is a
+  visible change to native jittor's float32-by-default contract and not one to
+  make silently. The two call sites have to be told apart first -- either an
+  argument on the conversion, or the weak-scalar model torch uses, where the
+  scalar carries its value and adopts a dtype at the point of use.
+  `auto_convert_64_to_32` is not the discriminator: it reads 1 in both native
+  and Torch mode, so the compatibility frontend preserves float64 some other
+  way and this path is common to both.
+- Review/expiry condition: close when a Python float keeps its value against a
+  float64 operand in both modes, with the five expressions above as the test.
+
 ## KI-MEM-002: reading a device tensor relocates it to the host
 
 - Severity: High
