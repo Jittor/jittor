@@ -15,6 +15,8 @@ import ast
 from pathlib import Path
 import sys
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_ROOT = REPO_ROOT / "tests"
 
@@ -155,8 +157,18 @@ def test_local_runner_matches_gate_execution_contract():
         sys.path.remove(str(REPO_ROOT / "tools"))
     assert module._session_environment("native")[
         "JITTOR_TEST_REQUIRE_EXECUTION"] == "1"
-    assert module._parallel_arguments(2, distribution="loadgroup") == [
-        "-n", "2", "--dist", "loadgroup"]
+    # Both halves the docstring claims, and which one this checkout can be
+    # asked depends on a declared dev tool. Without pytest-xdist the runner
+    # must refuse rather than run serially and report a wall clock for a gate
+    # nobody runs; with it, the arguments are nox's smoke policy.
+    try:
+        import xdist  # noqa: F401
+    except ImportError:
+        with pytest.raises(SystemExit, match="pytest-xdist"):
+            module._parallel_arguments(2, distribution="loadgroup")
+    else:
+        assert module._parallel_arguments(2, distribution="loadgroup") == [
+            "-n", "2", "--dist", "loadgroup"]
 
 
 def test_standalone_runner_uses_runtime_worker_policy_when_jobs_omitted(monkeypatch):
