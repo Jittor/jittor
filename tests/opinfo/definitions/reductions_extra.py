@@ -57,8 +57,21 @@ def mindim_ref(x, dim, keepdim=False):
 
 
 def var_ref(x, dim=None, keepdim=False):
-    # jittor torch-compat var defaults to UNBIASED (Bessel correction) -> ddof=1.
-    return _atleast1d(np.var(x, axis=dim, ddof=1, keepdims=keepdim))
+    """``jt.var``: the population variance, ddof=0.
+
+    Not torch's default, and not this file's previous claim. ``jt.var``'s
+    signature is ``var(x, dim=None, dims=None, unbiased=False, ...)`` and its
+    docstring shows both answers for the same input; Bessel's correction is
+    what ``unbiased=True`` asks for. The reference used ddof=1, so the
+    comparison was off by exactly n/(n-1) -- 26.2448 against 27.3858 on 24
+    elements -- and read as a numerical defect. The torch-facing default
+    belongs at the compatibility boundary, which asserts it separately.
+
+    (``jt.std`` genuinely is unbiased -- it divides by ``dimsize - 1`` -- so
+    ``std_ref`` below keeps ddof=1. The two native ops disagree with each
+    other; each reference describes the op it checks.)
+    """
+    return _atleast1d(np.var(x, axis=dim, ddof=0, keepdims=keepdim))
 
 
 def std_ref(x, dim=None, keepdim=False):
@@ -82,11 +95,18 @@ def logsumexp_ref(x, dim, keepdim=False):
 
 
 def norm2_ref(x, p=2, dim=None, keepdim=False):
-    # torch/torch-compat norm: p=2 (Euclidean); dim=None reduces over the flattened
-    # tensor to a (1,)-shaped scalar, an int dim reduces that axis.
-    if dim is None:
-        return _atleast1d(np.sqrt(np.sum(np.square(x.reshape(-1)))))
-    return np.sqrt(np.sum(np.square(x), axis=dim, keepdims=keepdim))
+    """``jt.norm``: p=2 (Euclidean), reducing ``dim``, which defaults to -1.
+
+    Not torch's default. ``torch.norm(x)`` with no dim reduces the whole tensor
+    to a scalar; ``jt.norm``'s signature is ``norm(x, p=2, dim=-1, ...)`` and it
+    reduces the last axis (`python/jittor/_core/var.py`). This reference used to
+    describe torch's, so the op under test and the oracle were answering two
+    different questions and the comparison failed on shape -- (2, 3) against ()
+    -- rather than on a value. The torch-facing default is asserted at the
+    compatibility boundary, where it belongs.
+    """
+    axis = -1 if dim is None else dim
+    return np.sqrt(np.sum(np.square(x), axis=axis, keepdims=keepdim))
 
 
 # jittor's argmax/argmin return (indices, values) as a plain 2-tuple, which the
