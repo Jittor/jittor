@@ -8,6 +8,18 @@ import unittest
 import numpy as np
 
 
+#: ``_MISC_BINDINGS`` entries that core publishes but does not define. They are
+#: not a second implementation: the AMP family owns its own state, so core binds
+#: the owner's object rather than wrapping it, and "one owner" still holds --
+#: this map only says which module that owner is.
+_FOREIGN_OWNERS = {
+    "clear_autocast_cache": "jittor.compat.torch.amp",
+    "autocast_increment_nesting": "jittor.compat.torch.amp",
+    "autocast_decrement_nesting": "jittor.compat.torch.amp",
+    "is_autocast_available": "jittor.compat.torch.amp",
+}
+
+
 class TestCoreMiscOwner(unittest.TestCase):
     def test_a_published_objects_have_one_owner_and_pickle_identity(self):
         import torch
@@ -18,7 +30,8 @@ class TestCoreMiscOwner(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIs(getattr(torch, name), implementation)
                 self.assertIs(fidelity_of("torch." + name).implementation, implementation)
-                self.assertEqual(implementation.__module__, core.__name__)
+                self.assertEqual(implementation.__module__,
+                                 _FOREIGN_OWNERS.get(name, core.__name__))
                 self.assertIs(pickle.loads(pickle.dumps(implementation)), implementation)
         for storage in core._STORAGE_TYPES:
             self.assertIs(getattr(torch, storage.__name__), storage)
@@ -26,7 +39,15 @@ class TestCoreMiscOwner(unittest.TestCase):
         self.assertIs(torch.random.manual_seed, core.manual_seed)
         self.assertIs(torch.random.seed, core._torch_seed)
         self.assertIs(torch.Tensor.bincount, core.bincount)
-        self.assertEqual(fidelity_of("torch.set_autocast_enabled").level.value, "unimplemented")
+        # torch.set_autocast_enabled was a `return None` stub carrying an
+        # UNIMPLEMENTED record; it now moves the same per-device autocast state
+        # torch.autocast moves, and the record says so.
+        self.assertEqual(fidelity_of("torch.set_autocast_enabled").level.value, "approximate")
+        torch.set_autocast_enabled("cpu", True)
+        try:
+            self.assertTrue(torch.is_autocast_enabled("cpu"))
+        finally:
+            torch.set_autocast_enabled("cpu", False)
         self.assertEqual(fidelity_of("torch.use_deterministic_algorithms").level.value, "unimplemented")
 
     def test_b_values_limits_and_promotion(self):
@@ -44,7 +65,14 @@ class TestCoreMiscOwner(unittest.TestCase):
         np.testing.assert_array_equal(result.numpy(), [[4, 6], [5, 6]])
         self.assertIs(torch.promote_types(torch.float16, torch.bfloat16), torch.float32)
         self.assertIs(torch.result_type(x, 0.5), torch.float32)
-        self.assertFalse(torch.can_cast(torch.float64, torch.float32))
+        # can_cast asks whether the cast is allowed under type promotion, not
+        # whether it is lossless: narrowing a float to a smaller float is
+        # allowed, and float -> int is not. Verified against torch 2.13, which
+        # answers True for the first three of these and False for the last.
+        self.assertTrue(torch.can_cast(torch.float64, torch.float32))
+        self.assertTrue(torch.can_cast(torch.float32, torch.float64))
+        self.assertTrue(torch.can_cast(torch.int32, torch.float32))
+        self.assertFalse(torch.can_cast(torch.float32, torch.int32))
         self.assertEqual(torch.finfo(torch.float32).eps, np.finfo(np.float32).eps)
         self.assertEqual(torch.iinfo(torch.int64).min, np.iinfo(np.int64).min)
         self.assertTrue(torch.is_tensor(x))
