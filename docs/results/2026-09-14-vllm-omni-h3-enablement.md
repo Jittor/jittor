@@ -3258,9 +3258,19 @@ final=15.8s`), which is the same 2x.
 * **Triton suite.** `compat/tests/triton/test_triton_backend.py` is 5/15 before
   and after every change, with an identical failure fingerprint (same md5 of the
   mismatch lines) on the pre-fix core as well, so none of it is a regression.
-* **End-to-end.** TP1, 512x512, 8 steps, FLASH_ATTN: 84.6 s against the 118.9 s
-  recorded in section 36, and the clip is the expected pottery scene (124 frames,
-  512x512, stereo audio, frame mean/std in the reference range).
+* **End-to-end, both parallelisms.** `t2va`, pottery prompt, 512x512, 8 steps,
+  seed 42, FLASH_ATTN, through the server's own `/v1/videos` endpoint:
+
+  | | TP1 | TP2 |
+  | --- | --- | --- |
+  | inference | **85.7 s** (was 118.9) | **85.5 s** (was 130.1) |
+  | clip | 124 frames, 512x512, stereo audio | same |
+  | frame mean/std | [101.1, 73.3, 49.8] / 64.26 | [101.0, 73.3, 50.3] / 64.41 |
+
+  Both render the expected pottery scene, and TP1 is within 0.2 s of TP2. The
+  residual TP1-vs-TP2 pixel difference (max 179-232, mean 11-19 of 255) matches
+  the pre-fix validated pair (max 201-211, mean 10.0-10.4), so it is the inherent
+  TP1/TP2 parallelism difference and not something this change introduced.
 
 ### Two pre-existing findings this turned up (not addressed here)
 
