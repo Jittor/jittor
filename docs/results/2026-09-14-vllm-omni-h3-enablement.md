@@ -3838,3 +3838,101 @@ Two traps cost several runs here and are easy to repeat:
   it, jittor prunes it and the kernels never run. Accumulate or keep a list.
 
 Both make a probe report far too *little* work, and both look like a fast result.
+
+## 41. The fused linear that always took its fallback, and the scale type that hid it
+
+`nn.Linear`'s cuBLASLt route (`lt_linear_cuda`, repo `bde1b131`) folds the bias
+into the GEMM epilogue and picks the algorithm by timing. It was declared
+float32-only, and it was **not deployed into the lab's `site-packages/jittor`**
+at all -- the deployed tree is from 2026-09-11, three days before that commit --
+so nothing in the H3 runs had it. Two separate things were wrong, and the second
+one was hidden by the first.
+
+**The H3 VAE decode is a good test of it.** Per decode the decoder block makes
+11,466 `nn.Linear` calls in exactly three shapes -- `(1,1797,2048)` x 9135,
+`(1,1797,8192)` x 2268, `(1,1792,24)` x 63 -- and
+`install_h3_vae_optimizations` has already persisted those decoder-block weights
+and biases in float16. So the realistic case is an fp32 activation against an
+fp16 weight under an autocast scope, and the fused route needed to stop being
+float32-only and start being amp-aware.
+
+**The amp-awareness is not a style question.** Under `torch.autocast` the shim
+sets `jt.flags.amp_reg` rather than rewriting the call, so the operands stay
+float32 and the *op* decides the compute dtype. `jt.nn.matmul_transpose` reads
+the register and declares float16; a raw `jt.code` block declares only what it is
+handed. Measured on `(8,512,512) x (2048,512)^T`:
+
+| route | no scope | `amp_reg=prefer16` |
+| --- | --- | --- |
+| `jt.nn.linear` | float32 | **float16** |
+| `lt_linear_cuda` (float32-only) | float32 | **float32** |
+
+One linear layer at a time, that lifts a float16 graph back to float32.
+`compute_dtype_name` now reproduces `float_dtype` from `src/type/nano_string.h`
+-- `prefer32`, then `prefer16` (bfloat16 operands take bfloat16), then the
+operands' own width -- so the fused op answers what the portable op answers, and
+the fp16 case is a case of the same op rather than a second one.
+
+**The scale type was the silent part.** Wired up that way, the route was 2.4x
+*slower* than not having it, with numerically identical output:
+
+| autocast VAE decode | wall |
+| --- | --- |
+| fused route deployed | 42.06 s, 45.14 s, 48.75 s (nsys) |
+| route not deployed | 17.51 s, 17.55 s, 17.88 s (nsys) |
+
+The kernel census said why: `jt_lt_add_bias<__half>` ran 9,072 times per decode
+and the GEMMs were the plain `nvjet_hsh_*_TNT`, not the `*_bias_*` ones. That is
+the fallback, and the fallback is correct -- which is exactly why numerics could
+not see it. Instrumenting the generated kernel named it in one run:
+`cublasLtMatmulAlgoGetHeuristic` was returning `CUBLAS_STATUS_INVALID_VALUE`
+(st=7) with `found=0`, so `choice.usable` never became true and every call paid
+`cublasCreate` + `cublasGemmEx` + a separate bias kernel + `cublasDestroy`.
+
+The cause is one attribute: `cublasLtMatmulDescCreate(&op, CUBLAS_COMPUTE_32F, ct)`
+passed the *operand* type as the scale type. cuBLASLt wants `CUDA_R_32F` there
+whenever the compute type is a 32-bit float one -- the scale type follows the
+compute type and the float alpha/beta, not the data. A standalone bisect
+(the lab's `_state/h3/tools/ltprobe.cu`) shows it cleanly: with the operand type,
+every fp16 variant
+-- with the transposes, the epilogue, the bias pointer, the workspace
+preference, and with none of them -- answers INVALID_VALUE, while the identical
+fp32 descriptors answer `found=8`. With `CUDA_R_32F` the fp16 query returns
+`found=8` and the fp16 GEMM measures **0.117 ms against 0.687 ms fp32** on
+`(1797,2048,2048)`.
+
+**What it is now worth.** Per call on the three real shapes, min of 12, each
+call drained:
+
+| shape | portable | cuBLASLt | ratio |
+| --- | --- | --- | --- |
+| `(1797,2048,2048)` | 4.921 ms | 2.466 ms | 0.50 |
+| `(1797,2048,8192)` | 5.309 ms | 2.824 ms | 0.53 |
+| `(1797,8192,2048)` | 5.287 ms | 2.825 ms | 0.53 |
+
+and per decode it emits 13,540 fewer kernels. End to end, though:
+
+| VAE decode | before | after |
+| --- | --- | --- |
+| fp32 | 28.26 s | 27.12 s, sum bit-identical (`3.0466384000e+07`) |
+| autocast | 17.51 / 17.55 s | 17.57 / 18.52 s |
+
+**So the linear GEMMs are not on this decode's critical path.** Halving them
+moves nothing, which is consistent with section 40's census: the 2,268
+block-invocations per decode are dominated by elementwise and layout kernels, not
+by the six GEMMs each. The change is kept because it is correct, it removes
+13.5k launches, and it makes the fp32 route faster with bit-identical output --
+not because it closed a gap.
+
+Two things worth carrying forward:
+
+* **A correct fallback can hide a broken fast path indefinitely.** Numerics
+  cannot see it and neither can a wall clock unless you A/B the route, so the
+  question to ask of any "chosen by timing" path is what the timing loop
+  actually found. A one-line counter of how many calls took the tuned pick
+  against the fallback would have said it immediately; the kernel census said
+  it in one run, and only because the fallback has a kernel with its own name.
+* **Running a test file through `run_test_file.py` does not call `setUp`.** It
+  does `klass(method)` and calls the method, so every `self.<attr>` from
+  `setUp` is missing. Use pytest for `tests/`; the lab runner is for the
+  `compat/tests` files it was written for.
