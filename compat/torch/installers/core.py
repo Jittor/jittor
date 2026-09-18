@@ -603,8 +603,21 @@ def result_type(a, b):
 
 
 def can_cast(from_dtype, to_dtype):
+    """torch's ``canCast``: three refusals by category, not by width.
+
+    This is not numpy's "safe cast" rule. ``c10/core/ScalarType.h`` refuses
+    exactly complex -> non-complex, floating -> integral, and non-bool -> bool;
+    everything else is allowed, so ``can_cast(int64, int32)`` is True in torch
+    and was False here, and so was every other narrowing pair. Verified
+    against torch 2.13 over the whole 10x10 table.
+    """
     f, t = (_dtype_to_str(from_dtype), _dtype_to_str(to_dtype))
-    return _promote_pair(f, t) == t
+    source, target = _category(f), _category(t)
+    if source == 3 and target != 3:
+        return False
+    if source == 2 and target == 1:
+        return False
+    return not (source != 0 and target == 0)
 
 
 def set_default_dtype(d):
