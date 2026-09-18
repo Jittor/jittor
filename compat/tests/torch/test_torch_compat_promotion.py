@@ -187,12 +187,21 @@ class TestResultTypeAPI(Base):
         both_devices(body)
 
     def test_can_cast(self):
-        # torch.can_cast(from, to): True iff promote(from, to) == to.
+        """`canCast` is categorical, not numpy's width rule.
+
+        `c10/core/ScalarType.h` refuses exactly complex to non-complex,
+        floating to integral, and non-bool to bool, and allows everything else,
+        narrowing included -- checked against torch 2.13 over the whole table.
+        This file used to say `can_cast(int64, int32)` is False, which is
+        numpy's answer and was also what the implementation gave.
+        """
         self.assertTrue(torch.can_cast(torch.int32, torch.int64))
         self.assertTrue(torch.can_cast(torch.float32, torch.float64))
         self.assertTrue(torch.can_cast(torch.bool, torch.int32))
-        self.assertFalse(torch.can_cast(torch.float32, torch.int32))   # float -> int loses category
-        self.assertFalse(torch.can_cast(torch.int64, torch.int32))     # wider -> narrower
+        self.assertTrue(torch.can_cast(torch.int64, torch.int32))      # narrowing is allowed
+        self.assertTrue(torch.can_cast(torch.float64, torch.float16))
+        self.assertFalse(torch.can_cast(torch.float32, torch.int32))   # float -> integral
+        self.assertFalse(torch.can_cast(torch.int32, torch.bool))      # non-bool -> bool
 
 
 # ------------------------------------------------------------- binary-op promotion (values)
