@@ -3588,3 +3588,56 @@ remaining elementwise delta is **not** attributable to access width, is partly a
 fixed per-launch cost, and cannot be sized reliably on this box while
 `train_grpo.py --occupy-delay 0` is running. Re-measuring on a quiet device is the
 prerequisite for any further kernel work, not another codegen change.
+
+### The gap is one kernel family, and it is fp16 elementwise
+
+Splitting the two nsys reports by kernel family (three decodes each, same class,
+same latent, back-to-back on the same box) makes the whole delta one family:
+
+| family | shim | torch |
+| --- | --- | --- |
+| **elementwise** | **311,211 launches, 12.67 s (40.7 us avg)** | **206,963 launches, 4.69 s (22.7 us avg)** |
+| cuBLASLt | 27,406, 12.35 s | 27,405, 13.11 s |
+| flash attention | 6,804, 2.84 s | 6,804, 1.89 s |
+| `jittor::kernel` builtins | 64,392, 0.65 s | -- |
+| `kernel(float*, float*)` / `(int*, int*)` copies | 51,258 + 29,779, 0.09 s | -- |
+| memcpy/memset | 35,152, 0.29 s | 21,167, 0.49 s |
+| cublas sgemm | 378, 0.20 s | 378, 0.21 s |
+
+Everything except elementwise is at parity (the big gemms are even 0.76 s *cheaper*
+on the shim). The 7.98 s delta is elementwise, and it splits into two independent
+problems: **1.5x the launches** (311k against 207k) and **1.8x the per-kernel cost**
+(40.7 against 22.7 us).
+
+Grouping the shim's elementwise kernels by the pointer types in their signatures:
+
+| signature | launches | time |
+| --- | --- | --- |
+| fp16/bf16 only | 156,774 (50.4%) | **9.25 s** |
+| mixed fp16+fp32 (the casts) | 95,976 (30.8%) | 3.15 s |
+| fp32 only | 58,461 (18.8%) | 0.26 s |
+
+and by op, from the jit cache's own key names, the top kernels are all the VAE's
+plain arithmetic -- nothing exotic:
+
+| ops in the kernel | time | launches |
+| --- | --- | --- |
+| unary fp16 `sigmoid` + binary (SiLU) | 2.06 s | 6,804 |
+| unary fp32->fp16 `cast` | 2.06 s | 33,894 |
+| binary fp16 `add` | 1.94 s | 13,608 |
+| unary fp16->fp32 `cast` + binary | 0.83 s | 13,608 |
+| binary fp16 `multiply` | 0.72 s | 13,593 |
+| binary fp16 `add` (two more specialisations) | 1.27 s | 13,230 |
+| ternary (bool) + binary | 0.63 s | 6,804 |
+
+So the remaining gap is the cost of running ordinary fp16 elementwise maths:
+SiLU, the gated-residual adds and multiplies, and the per-use fp32->fp16 weight
+casts. torch pays 4.69 s for its share of the same maths; the shim pays 12.67 s,
+because it issues 1.5x the kernels and each costs 1.8x. Given the standalone
+measurement above that a `float4` kernel is only 1.10x a scalar one, the 1.8x is
+**not** access width -- with equal launch counts it is consistent with the shim's
+kernels doing the same work on average *smaller* tensors, so a fixed per-launch
+cost is amortised over less work. That is a launch-count and per-launch-overhead
+problem, and the two ways out are fewer launches (fuse the chain: `hidden +
+attn*scale` is three ops for what one fused kernel would do) or a cheaper launch
+-- not a wider access type.
