@@ -3681,3 +3681,60 @@ device to evaluate. Neither is a flag.
 | flash-attn vs cuDNN's | 2.84 against 1.89 s | bounded, needs a different backend |
 | bridge host work (guard copies, packing, waits) | hidden behind a busy device | already done |
 | per-launch device sync in the bridge | 2.65 -> 0.515 ms/launch | done (section 39) |
+
+### `--enforce-eager` is not the difference either
+
+Every phase table in sections 36-40 was taken with `--enforce-eager`, which
+`serve-vllmomni.sh` applies by default, and whose own comment calls `EAGER=0` "the
+lever to test against the per-step cost" (the H3 DiT is written for regional
+compilation). Running without it changes nothing:
+
+| phase | `--enforce-eager` | without it |
+| --- | --- | --- |
+| `diffuse` (8 steps) | 40.90 s | 41.16 s |
+| `video_vae.decode_latent` | 21.63 s | 21.09 s |
+| `audio_vae.decode_latent` | 6.01 s | 8.29 s |
+| `forward` | 77.67 s | 79.70 s |
+
+The differences are inside the co-tenant noise band (identical runs varied 77.7 to
+84.4 s). Part of the explanation is in the model: the H3 transformer opts *out* of
+compilation (`@torch.compiler.disable`), and the shim implements no `torch.compile`
+entry point at all, so the "regional compilation" the comment refers to is not a
+path this stack takes. Eager it is, and eager is what the comparison should use.
+
+### Every shortcut is now measured; the rest is feature work
+
+The routes tried, and what each measured:
+
+| route | result |
+| --- | --- |
+| 128-bit vectorized elementwise | 1.10x over scalar on identical buffers -- not the answer |
+| `auto_flush_ops` 512 -> 200,000 | 0.2% change in launch count -- closed |
+| jittor's fusion of the VAE's chains | works, broadcasts included -- not broken |
+| `EAGER=0` (no `--enforce-eager`) | no change outside the noise band -- closed |
+| bridge host work (guard copies, packing, waits) | done in sections 38-39, and hidden anyway |
+| per-launch device sync in the bridge | done in section 39 (2.65 -> 0.515 ms) |
+
+What is left is three things, none of them a flag or a small patch:
+
+1. **wider fusion coverage / fewer launch boundaries** -- jittor fuses the chains it
+   can, so this means either extending `ParallelPass`/the fusion pass, or removing
+   the Triton bridge's per-launch `jt.sync_all` submission. The latter is not
+   available either: the operands of a bridge launch are always freshly produced, so
+   their `location()` is `none` and the submission is genuinely required to
+   materialise them. Making the launch a graph node (the module docstring's
+   "phase 3") is the real fix and is a feature.
+2. **bias fusion into the gemm** -- torch gets `nvjet_hsh_..._bias_` because it calls
+   `cublasLtMatmul` with a bias epilogue; jittor issues plain `cublasGemm*` and adds
+   the bias afterwards, so `cublasLt` does not appear anywhere in the tree. Adding
+   that path is new library code, not a patch.
+3. **flash-attn against cuDNN's flash SDPA** -- 2.84 against 1.89 s, a backend choice
+   the model makes, not jittor's.
+
+So the honest end state of this investigation: the host side is finished and
+verified (sections 38-39), the kernel-side delta is localised to fp16 elementwise
+launches, and closing it requires one of the three features above -- not a
+configuration change, and not any of the four shortcut routes that were tested and
+ruled out. None of them can be evaluated on this box while a co-tenant's occupancy
+job pins every GPU at 100%, which is why the numbers above are counts (exact) and
+phase times (noisy) rather than trusted absolute timings.
