@@ -380,6 +380,11 @@ def _storage_reach_elements(var):
     that addresses past its own first element. Both exports used here are real,
     so the reach is exact.
     """
+    if not int(var.numel()):
+        # torch reports 0 bytes for `torch.empty(0)`'s storage. There is no last
+        # element to reach, and "offset plus one" would hand a caller sizing a
+        # buffer from `nbytes()` one element that is not there.
+        return 0
     hi = int(var._storage_offset())
     for size, step in zip([int(s) for s in var.shape], list(var._storage_strides())):
         if size <= 0:
@@ -877,7 +882,23 @@ def _set_(self, source, storage_offset=0, size=None, stride=None):
                 "the %d byte(s) this storage holds (the view would span "
                 "[%d, %d] bytes)"
                 % (size, stride, int(storage_offset), int(nbytes), start, start + n - 1))
-        seg = _as_byte_view(base)[start : start + n]
+        # These byte addresses count from the allocation's origin, and so does
+        # `nbytes`, but the bytes with a Python handle here are only the
+        # carrier's own: they *begin* at `base._storage_offset()`. Slicing them
+        # with an origin-relative address is off by exactly that offset, so a
+        # fused weight's tail re-read from its own storage sliced past the end
+        # and the gather below then indexed an empty tensor -- the out-of-bounds
+        # read `as_strided`'s check exists to refuse, arrived at the long way.
+        view = _as_byte_view(base)
+        origin = int(base._storage_offset()) * _storage_dsize(base)
+        avail = int(view.numel())
+        if start < origin or start + n > origin + avail:
+            raise ValueError(
+                "set_: bytes [%d, %d) of this storage are outside the tensor "
+                "that carries it (its own are [%d, %d)); the rest of a shared "
+                "allocation has no handle here and cannot be read from it"
+                % (start, start + n, origin, origin + avail))
+        seg = view[start - origin : start - origin + n]
         flat = (seg.view(self.dtype) if dsize != 1 else seg).reshape(-1)
         result = flat[_strided_index(size, stride, lo)].reshape(size)
     else:
@@ -908,6 +929,16 @@ def _as_strided(self, size, stride, storage_offset=0):
     # elements and the request genuinely cannot be served from them: rejecting
     # it is the honest answer, serving it by reading past them is not.
     n = int(flat.shape[0]) if len(flat.shape) else 1
+    # A zero-length axis addresses nothing, so no tensor is too small for it.
+    # torch requires `storage_offset + sum((size - 1) * stride) + 1` elements
+    # only when the view *has* elements and otherwise checks nothing but the
+    # sign of the offset: `arange(10).as_strided((0,), (1,), 10)`, a `(3, 0, 2)`
+    # shape and every view of an empty tensor come back empty. The span below
+    # drops `s <= 0` axes but keeps `storage_offset`, so an empty view read as
+    # one starting past the end and was refused -- and with it `x.set_(y)` for
+    # an empty `y`, which is how layerwise offload swaps a parameter for a
+    # zero-element placeholder.
+    empty = any(s == 0 for s in size)
     lo = hi = int(storage_offset)
     for s, st in zip(size, stride):
         if s <= 0:
@@ -917,11 +948,13 @@ def _as_strided(self, size, stride, storage_offset=0):
             hi += span
         else:
             lo += span
-    if lo < 0 or hi >= n:
+    if int(storage_offset) < 0 or (not empty and (lo < 0 or hi >= n)):
         raise ValueError(
             "as_strided: sizes %s, strides %s, storage_offset %d are too large "
             "for the %d element(s) this tensor can address (the view would span "
             "[%d, %d])" % (tuple(size), tuple(stride), int(storage_offset), n, lo, hi))
+    if empty:
+        return flat[:0].reshape(size)
     idx = None
     for d in range(len(size)):
         ar = _owner.jt.arange(size[d], dtype="int64") * stride[d]
