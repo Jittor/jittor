@@ -6,6 +6,32 @@ from jittor._runtime.dispatch import register_kernel, select_kernel
 from jittor._runtime.backend_libraries import get_library_ops
 
 
+#: The AMP register the generic ``(a * b).sum(axis)`` contraction runs under.
+#:
+#: ``keep_reduce`` is what keeps the *output* at the operands' dtype: without it
+#: ``reduce_dtype_infer`` widens any float reduce to float32, and a float16
+#: matmul would hand back float32.
+#:
+#: ``reduce16_no_fp32_acc`` used to be set beside it, and that bit is a
+#: different question -- it switches off the float32 *intermediate* in
+#: ``ReduceOp``'s constructor (``src/ops/reduce_op.cc:256``), so the K-long
+#: contraction was summed in float16/bfloat16 with nothing to compensate it.
+#: cuBLAS never does that: ``cublas_compute_type.h`` asks for
+#: ``CUBLAS_COMPUTE_32F`` for both half types, and
+#: ``src/runtime/float32_precision.h`` writes the rule down as "float16 and
+#: bfloat16 always accumulate in float32". So the same product was computed two
+#: ways depending only on whether a cuBLAS relay happened to take it -- on CPU,
+#: where it never does, a 128x512x128 float16 product was 1.674e-1 from the
+#: exact value against real torch 2.13's 7.759e-3, and bfloat16 was 1.242
+#: against 6.175e-2. Both are ~21x, and it grows with K.
+#:
+#: Dropping the bit costs a float32 buffer for the contracted operand. That is
+#: the already-slow fallback path; the accelerated relays never reach here.
+def _contraction_scope():
+    """``flag_scope`` for the generic contraction. One spelling, three callers."""
+    return jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce)
+
+
 def _broadcast_batch_dims(a, b):
     """Broadcast the leading batch dims of two tensors with equal ndim>=3 to a
     common shape (torch matmul/bmm semantics), leaving the trailing two (matrix)
@@ -93,6 +119,25 @@ def _cublas_batched_matmul(a, b, trans_a=False, trans_b=False):
     return get_library_ops("cublas").cublas_batched_matmul(a, b, trans_a, trans_b)
 
 
+def _amp_retypes_output_to_half():
+    """True when the AMP policy in force will give this product a half output.
+
+    Read off ``amp_reg``, which is the register dtype inference actually
+    consults, and not off ``auto_mixed_precision_level``, which is only one of
+    the two ways that register gets written. ``torch.autocast`` sets ``amp_reg``
+    directly -- ``compat/torch/grad.py::_refresh_amp_register`` -- and never
+    touches the level, so a guard on the level was blind to every autocast
+    region: a ``torch.autocast("cpu")`` training step died in the *backward*
+    with ``mkl_matmul_op.cc:30: support float32 only now``, which is precisely
+    the failure the comment in ``_supports_mkl`` predicts.
+
+    ``prefer16``, not "any non-zero register". Level 3 sets
+    ``keep_reduce | keep_white``, which does not retype anything to a half, and
+    declining oneDNN there was a 99x slowdown bought for nothing.
+    """
+    return bool(int(jt.flags.amp_reg) & jt.amp_flags.prefer16)
+
+
 def _supports_mkl(a, b, trans_a=False, trans_b=False):
     """oneDNN's 2-D relay: float32, and both operands actually dense.
 
@@ -124,7 +169,7 @@ def _supports_mkl(a, b, trans_a=False, trans_b=False):
         return False
     if not (a._storage_is_contiguous() and b._storage_is_contiguous()):
         return False
-    if jt.flags.auto_mixed_precision_level:
+    if _amp_retypes_output_to_half():
         # Same trap `MatmulTuner` declines for, and for the same reason: auto
         # mixed precision retypes the *output* to float16 while the operands
         # stay float32, so an op that is float32 through and through cannot
@@ -144,6 +189,12 @@ def _mkl_matmul(a, b, trans_a=False, trans_b=False):
 
 def _supports_mkl_batched(a, b, trans_a=False, trans_b=False):
     if a.dtype != b.dtype or _jittor_dtype_name(a.dtype) != "float32":
+        return False
+    if _amp_retypes_output_to_half():
+        # `MklBatchedMatmulOp::grad` builds its own op out of the cotangent the
+        # same way the 2-D one does, so it walks into the same assert. The two
+        # rows of the table have to decline together or `bmm` and `matmul` on
+        # identical operands stop agreeing about which relay they can use.
         return False
     ops = get_library_ops("mkl", load=True)
     return ops is not None and hasattr(ops, "mkl_batched_matmul")
@@ -256,8 +307,7 @@ def matmul_transpose(a, b):
         return fast if restore is None else fast.reshape(restore)
 
     shape = list(a.shape)[:-1] + list(b.shape)
-    with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce
-                      | jt.amp_flags.reduce16_no_fp32_acc):
+    with _contraction_scope():
         a = a.broadcast(shape, [len(shape) - 2])
         b = b.broadcast(shape)
         out = (a * b).sum(len(shape) - 1)
@@ -274,12 +324,11 @@ def bmm_transpose(a, b):
             "dim and a matrix), but got a:%s%s and b:%s%s"
             % (a.dtype, list(a.shape), b.dtype, list(b.shape)))
     _check_matmul_shapes(a, b, trans_b=True, op="bmm_transpose")
-    # The amp_reg scope is matmul's and matmul_transpose's too. It is what tells
-    # the reduce in the generic path below to keep its input dtype rather than
-    # accumulate in float32, so leaving it off here made the same product depend
-    # on which of the two names the caller reached for.
-    with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce
-                      | jt.amp_flags.reduce16_no_fp32_acc):
+    # The same scope as `matmul` and `matmul_transpose`. It is what tells the
+    # reduce in the generic path below to hand back the operands' dtype rather
+    # than the float32 it accumulates in, so leaving it off here made the same
+    # product depend on which of the three names the caller reached for.
+    with _contraction_scope():
         kernel = select_kernel("batched_matmul", a, b, 0, 1)
         if kernel is not None:
             return kernel(a, b, 0, 1)
@@ -451,8 +500,7 @@ def matmul(a, b):
         assert c.shape == [8, 10, 3, 5]
     """
     _check_matmul_shapes(a, b)
-    with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce
-                      | jt.amp_flags.reduce16_no_fp32_acc):
+    with _contraction_scope():
         len_a = len(a.shape)
         len_b = len(b.shape)
         if len_b == 1:

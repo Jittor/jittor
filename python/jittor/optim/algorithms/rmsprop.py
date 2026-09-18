@@ -4,7 +4,7 @@ import jittor as jt
 
 from ..base import (
     Optimizer, _grad_matches_param, _param_requires_grad,
-    _update_preserve_dtype,
+    _state_buffer, _update_preserve_dtype,
 )
 
 class RMSprop(Optimizer):
@@ -28,12 +28,12 @@ class RMSprop(Optimizer):
         for pg in self.param_groups:
             values = pg["values"] = []
             for p in pg["params"]:
-                values.append(jt.zeros(p.shape, p.dtype).stop_grad())
+                values.append(_state_buffer(p))
 
     def add_param_group(self, group):
         values = group["values"] = []
         for p in group["params"]:
-            values.append(jt.zeros(p.shape, p.dtype).stop_grad())
+            values.append(_state_buffer(p))
         self.param_groups.append(group)
 
     def step(self, loss=None, retain_graph=False):

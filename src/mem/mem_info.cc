@@ -324,4 +324,28 @@ MemInfo::MemInfo() {
 
 MemInfo mem_info;
 
+static void device_pool_bytes(int device, int64& used, int64& reserved) {
+    used = reserved = 0;
+    const bool host = device < 0;
+    for (auto& a : SFRLAllocator::sfrl_allocators) {
+        if (a->is_cuda() == host) continue;
+        // The host pools answer to device -1 whatever index they report.
+        if (!host && a->device() != device) continue;
+        used += a->used_memory;
+        reserved += a->used_memory + a->unused_memory;
+    }
+}
+
+int64 device_memory_used(int device) {
+    int64 used = 0, reserved = 0;
+    device_pool_bytes(device, used, reserved);
+    return used;
+}
+
+int64 device_memory_reserved(int device) {
+    int64 used = 0, reserved = 0;
+    device_pool_bytes(device, used, reserved);
+    return reserved;
+}
+
 } // jittor

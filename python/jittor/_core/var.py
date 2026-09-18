@@ -199,7 +199,20 @@ Var.to_device = to_device
 
 def _copy_to_cpu(self):
     '''Return a differentiable, independently allocated host copy.'''
-    return _core_to_device(self, -1)
+    out = _core_to_device(self, -1)
+    # Until it is materialized there is no allocation for :meth:`location` to
+    # ask about, so :attr:`device` falls back to "where will this land" -- and
+    # ``device_id`` cannot answer for this one, because a host copy
+    # deliberately *keeps* the device it came from so it can go back there.
+    # Without this mark a fresh ``x.cuda(3).cpu()`` reported ``cuda:3`` right
+    # up to the sync that put it in host memory, which is the one reading a
+    # caller uses it for. It is only consulted while ``location()`` is
+    # ``"none"``; once the copy runs, the allocator is the authority.
+    try:
+        out._pending_host_copy = True
+    except (AttributeError, TypeError):
+        pass
+    return out
 
 Var._copy_to_cpu = _copy_to_cpu
 
@@ -224,6 +237,10 @@ def _device(self):
         return "cuda:%d" % ori_int(self.device_id)
     # Not materialized: no allocation exists to ask, so report the placement it
     # will get. A test that wants the settled answer syncs first.
+    if getattr(self, "_pending_host_copy", False):
+        # ...except for a pending `.cpu()`, whose destination is already
+        # decided. See _copy_to_cpu.
+        return "cpu"
     import jittor as _jt
     if not _jt.flags.use_cuda:
         return "cpu"

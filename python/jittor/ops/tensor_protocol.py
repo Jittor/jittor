@@ -91,6 +91,37 @@ def _dtype_spec(value):
     return None
 
 
+def _var_device_spelling(var):
+    """The ``"cpu"``/``"cuda:N"``/``"npu:N"`` ``x.to(other)`` should copy from.
+
+    ``location()`` alone is not enough: it reports ``"none"`` for a Var whose
+    data has not been produced yet, and reading only it made
+    ``jt.ones(2).to(jt.ones(2).cuda(7))`` drop the device outright -- the
+    result stayed on the ambient device although the reference names cuda:7.
+    A pending Var still knows where it will land: its ``device_id``, its
+    ``_pending_host_copy`` mark for a ``.cpu()`` that has not run, and -- for
+    one that carries neither -- the dispatch context, which is where a
+    placement selector asks whether the ambient backend is the host.
+    ``jt.flags.use_cuda`` answers the same question but is a backend flag
+    read, which ``tests/structure/runtime/test_backend_op_registry_contract``
+    forbids in an operator domain: device selection goes through the
+    registered table, not around it.
+    """
+    import jittor as jt
+    where = var.location()
+    if where == "cpu" or (where == "none" and
+                          getattr(var, "_pending_host_copy", False)):
+        return "cpu"
+    selected = dispatch_context(var).backend
+    if selected == "cpu":
+        return "cpu"
+    backend = "npu" if selected == "acl" else "cuda"
+    index = _builtins.int(var.device_id)
+    if index < 0:
+        index = _builtins.int(jt.current_device())
+    return "%s:%d" % (backend, _builtins.max(index, 0))
+
+
 def _parse_to(args, kwargs):
     allowed = {"device", "dtype", "non_blocking", "copy"}
     unknown = set(kwargs) - allowed
@@ -111,12 +142,7 @@ def _parse_to(args, kwargs):
                 raise TypeError("to(other) cannot be combined with device or dtype")
             target_dtype = _jittor_dtype_name(first.dtype)
             dtype_given = True
-            location = first.location()
-            if location == "cpu":
-                target_device = "cpu"
-            elif location == "device":
-                backend = "npu" if dispatch_context(first).backend == "acl" else "cuda"
-                target_device = "%s:%d" % (backend, first.device_id)
+            target_device = _var_device_spelling(first)
             device_given = target_device is not None
         else:
             first_device = _device_spec(first)
@@ -148,6 +174,19 @@ def _parse_to(args, kwargs):
 
     if dtype_given and _dtype_spec(target_dtype) is None:
         raise TypeError("to() expected dtype to be a dtype spelling")
+    if dtype_given and isinstance(target_dtype, str):
+        # Any string that is not a device spelling reaches here as a dtype, so
+        # a mistyped device (`x.to("cuda1")`, `x.to("gpu")`) used to surface as
+        # `jt.cast`'s "Wrong inputs arguments, Please refer to examples" -- an
+        # error that names neither the argument nor what was wrong with it.
+        import jittor as jt
+        try:
+            jt.NanoString(target_dtype.replace("torch.", ""))
+        except RuntimeError:
+            raise TypeError(
+                "to() expected a device, dtype, or Var, got %r; devices are "
+                "spelled 'cpu', 'cuda'/'cuda:N' and 'npu'/'npu:N'"
+                % (target_dtype,)) from None
     if device_given and _device_spec(target_device) is None:
         raise TypeError("to() expected device to be cpu, cuda, or npu")
     return target_device if device_given else None, \

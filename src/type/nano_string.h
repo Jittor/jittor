@@ -447,6 +447,29 @@ inline NanoString reduce_dtype_infer(NanoString op, NanoString x, bool preserve_
     if (is_float) {
         if ((amp_reg & amp_keep_reduce) || preserve_type)
             return float_dtype(dsize_, false, x==ns_bfloat16);
+        // A float16/bfloat16 *input* keeps its own dtype. The widening below
+        // is the identity for every other float width -- float32 gives
+        // float32 and float64 gives float64 -- so the only thing it ever did
+        // was hand a float32 back for a half input.
+        //
+        // `sum` and `mean` never saw it: `ReduceOp`'s constructor intercepts
+        // those two, reduces through a float32 intermediate and casts the
+        // result back, which is where the fp16/bf16 accumulation precision
+        // actually comes from. Everything else -- `max`, `min`, `prod` --
+        // reached here and came back float32, so on a half Var `x.max(-1)`
+        // and `x.prod(-1)` silently widened the graph where `x.sum(-1)` did
+        // not. torch 2.13 returns the input's dtype for all five, on both
+        // devices, and for `max`/`min` the question does not even arise: the
+        // result is one of the input's own elements, so there is nothing a
+        // wider output could hold. `prod` torch also computes at the element
+        // dtype -- `torch.full((40,), 4.0, dtype=float16).prod()` is `inf` on
+        // CPU and CUDA alike, which a float32 accumulator would not be.
+        //
+        // Restricted to the two half dtypes because `op.is_float()` also puts
+        // an integer input here: `mean` over int8 must still widen to float32,
+        // and `float_dtype` would read its 1-byte `dsize_` as a half.
+        if (x == ns_float16 || x == ns_bfloat16)
+            return float_dtype(dsize_, false, x == ns_bfloat16);
         return (dsize_ == 3) ? ns_float64 : ns_float32;
     } else {
         return x;

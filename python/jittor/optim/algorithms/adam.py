@@ -6,7 +6,7 @@ from ..._runtime.dispatch import register_kernel, select_kernel
 
 from ..base import (
     Optimizer, _grad_matches_param, _param_requires_grad,
-    _update_preserve_dtype,
+    _state_buffer, _update_preserve_dtype,
 )
 
 
@@ -83,15 +83,15 @@ class Adam(Optimizer):
             values = pg["values"] = []
             m = pg["m"] = []
             for p in pg["params"]:
-                values.append(jt.zeros(p.shape, p.dtype).stop_grad())
-                m.append(jt.zeros(p.shape, p.dtype).stop_grad())
+                values.append(_state_buffer(p))
+                m.append(_state_buffer(p))
 
     def add_param_group(self, group):
         values = group["values"] = []
         m = group["m"] = []
         for p in group["params"]:
-            values.append(jt.zeros(p.shape, p.dtype).stop_grad())
-            m.append(jt.zeros(p.shape, p.dtype).stop_grad())
+            values.append(_state_buffer(p))
+            m.append(_state_buffer(p))
         self.param_groups.append(group)
 
     def step(self, loss=None, retain_graph=False):
@@ -135,15 +135,15 @@ class AdamW(Optimizer):
             values = pg["values"] = []
             m = pg["m"] = []
             for p in pg["params"]:
-                values.append(jt.zeros(p.shape, p.dtype).stop_grad())
-                m.append(jt.zeros(p.shape, p.dtype).stop_grad())
+                values.append(_state_buffer(p))
+                m.append(_state_buffer(p))
 
     def add_param_group(self, group):
         values = group["values"] = []
         m = group["m"] = []
         for p in group["params"]:
-            values.append(jt.zeros(p.shape, p.dtype).stop_grad())
-            m.append(jt.zeros(p.shape, p.dtype).stop_grad())
+            values.append(_state_buffer(p))
+            m.append(_state_buffer(p))
         self.param_groups.append(group)
 
     def step(self, loss=None, retain_graph=False):
