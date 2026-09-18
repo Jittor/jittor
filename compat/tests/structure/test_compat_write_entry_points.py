@@ -251,9 +251,12 @@ CLASSIFIED = {
     # Module.to(device="cuda") turns CUDA on because the caller asked, after the
     # install has finished.
     (C + "torch/installers/nn/module_methods.py", "_module_to", "flags"): "runtime",
-    # Scoped: __enter__/__exit__ restore the entry value themselves.
-    (C + "torch/grad.py", "__enter__", "flags"): "runtime",
-    (C + "torch/grad.py", "__exit__", "flags"): "runtime",
+    # Scoped: the autocast region records jt.flags.amp_reg on the way in
+    # (`baseline_reg`) and puts it back when the last region closes, so this is
+    # the caller's own request with a scope, not install state. grad.py used to
+    # be here for the same reason and is not any more: its __enter__/__exit__
+    # delegate to a jt.flag_scope instead of writing the flag themselves.
+    (C + "torch/amp.py", "_refresh_amp_register", "flags"): "runtime",
     # node_order is set and restored inside one optimizer step.
     (C + "torch/optimizer_api.py", "_adam_step", "flags"): "runtime",
     (C + "torch/optimizer_api.py", "_step_with_closure", "flags"): "runtime",
