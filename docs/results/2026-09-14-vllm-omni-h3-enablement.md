@@ -3043,7 +3043,9 @@ kernel looks right, check the layouts the model actually hands over -- views,
 Asked whether the server is slower than the diffusers path, the phases were
 measured on both. The two are **not** comparable as configured -- the diffusers
 harness runs the video VAE in float16 while vLLM-Omni's H3 VAE is loaded and
-decoded in float32 -- and once that is equalised the ordering reverses.
+decoded in float32 -- and once that is equalised the server is still ahead of
+neither: it is 1.35-1.55x slower on the VAE at matched precision (section
+below). The gap is real, and it is mostly the VAE.
 
 `t2va`, the pottery prompt, 8 steps, 512x512, seed 0, jittor shim on both sides.
 vLLM-Omni is TP1 with the recipe's default offload; the server emits these with
@@ -3053,29 +3055,50 @@ vLLM-Omni is TP1 with the recipe's default offload; the server emits these with
 | --- | --- | --- | --- |
 | text encoder | 3.91 | 3.75 | 8.65 |
 | denoise | 35.63 | 37.36 | 42.25 |
-| **video VAE decode** | **15.75** | **335.64** | **67.11** |
+| **video VAE decode** | **15.75** | **335.64** (offload artifact) | **67.11** |
 | audio VAE decode | 6.04 | 5.59 | 12.50 |
 | total | 102.85 | 420.98 | 130.92 |
 
 Flipping only `--vae-dtype` on the diffusers harness moves `vae.video` from
-15.75 s to 335.64 s and leaves every other phase alone, so the VAE precision is
-the whole of the difference between those two columns. Read across:
+15.75 s to 335.64 s and leaves every other phase alone. That 335.64 s is **not**
+a decode cost, and reading it as one is how an earlier version of this section
+reached the wrong conclusion: the same latent decoded standalone takes 30.14 s
+under the same fp32 VAE (row below). What the harness pays there is its
+auto-CPU-offload (`--offload-margin 12GB`) working against a VAE that just
+doubled in size -- an offload effect, not arithmetic.
 
-* at **equal precision** (last two columns) vLLM-Omni is 3.2x faster overall and
-  its video decode is 5x faster than the diffusers path's. The server's VAE
-  carries `install_h3_vae_optimizations` -- fp16 decoder-block Linears under the
-  decode's CUDA autocast, plus fused qk-norm-rope / scaled-residual / silu-and-mul
-  -- which dispatches on sm_90 + triton and is therefore active here;
-* vLLM-Omni's *default* only looks slower because it decodes in fp32, which is
-  its own choice for fidelity. It is not exposed as a serve flag, so it is not
-  something a lab run can turn down;
-* the phases where vLLM-Omni is ahead of even the fp16 diffusers run are the
-  VAE; the three where it is behind are the text encoder (8.65 vs 3.91: its
+### The VAE at matched precision
+
+No serve flag exposes vLLM-Omni's VAE dtype (both H3 VAEs hard-code float32 at
+load and the decode re-upcasts), so the two modules were driven directly on the
+same latent -- the one a live server request decoded -- in `probe_vae_precision.py`:
+
+| video VAE decode of `(1, 24, 37, 32, 32)`, same shim | fp32 | fp16 | bf16 |
+| --- | --- | --- | --- |
+| vLLM-Omni `MiniMaxH3VideoVAE` | 40.82 | 31.20 | 28.92 |
+| diffusers `AutoencoderKLMiniMaxH3` | 30.14 | 20.07 | -- |
+
+Read across:
+
+* **at matched precision the server's video VAE is 1.35x (fp32) and 1.55x (fp16)
+  slower than the diffusers one.** So the answer to "is the server slower than
+  the diffusers path" is yes, and the VAE is where. The earlier claim in this
+  section that equal precision puts the server 3.2x ahead is withdrawn: it
+  compared vLLM-Omni's fp32 decoder (which keeps fp16 decoder-block Linears under
+  the decode's autocast plus fused qk-norm-rope / scaled-residual / silu-and-mul)
+  against the diffusers *pipeline* fp32 figure of 335.64 s, which is the offload
+  artifact above;
+* vLLM-Omni's default decodes in fp32, worth another 1.3x over its own fp16 on
+  this latent. That is its own choice for fidelity and is not exposed as a serve
+  flag;
+* the other phases, same round: the text encoder is 8.65 s against 3.91 (its
   encoder is layerwise-offloaded, and that offload is forced -- a no-offload TP1
-  run OOMs, 51.5 GB encoder + DiT + fp32 VAE against 95 GB), the denoise
-  (42.25 vs 35.63, 1.19x) and the audio VAE (12.50 vs 6.04: the audio decode is
+  run OOMs, 51.5 GB encoder + DiT + fp32 VAE against 95 GB), the denoise 42.25
+  against 35.63 (1.19x) and the audio VAE 12.50 against 6.04 (the audio decode is
   wrapped in `_AudioVAEDeterminismContext`, which disables flash/mem-efficient
   SDPA and cuDNN for reproducible soundtracks).
 
-For the like-for-like shim-vs-torch ratios the earlier sections still stand
-(DiT 1.11x, end to end 1.22x, both measured at one precision on one stack).
+Net for the request as configured -- diffusers harness at fp16 (102.85 s) against
+the server at its defaults (130.92 s) -- is about 27%, and the VAE accounts for
+most of it. For the like-for-like shim-vs-torch ratios the earlier sections still
+stand (DiT 1.11x, end to end 1.22x, both measured at one precision on one stack).
