@@ -93,7 +93,13 @@ void free_var(Var* v) {
     }
 }
 
+vector<Var*>* batch_released_vars = nullptr;
+
 void free_var_mem(Var* v) {
+    // See var.h. The executor asks "did this var's storage go while my batch
+    // was running", and the only place that can answer is here.
+    if (PREDICT_BRANCH_NOT_TAKEN(batch_released_vars != nullptr))
+        batch_released_vars->push_back(v);
     if (PREDICT_BRANCH_NOT_TAKEN(v->share_next != nullptr))
         share_group_unlink(v);
     if (save_mem)

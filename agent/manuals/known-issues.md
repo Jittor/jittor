@@ -825,14 +825,83 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   underflow now names the node and its counts rather than asserting a number
   inside a template.
 
+## KI-EXEC-007: four threads writing one parameter free an allocation twice
+
+- Severity: High -- a supported operation aborts, reproducibly, in the exact
+  pattern a multi-threaded weight loader uses.
+- Status: Open, found 2026-09-18 while building a reproduction for
+  [KI-EXEC-005]. Not caused by any change on this branch: reverting both the
+  KI-EXEC-006 fix and the KI-EXEC-005 phase-7 change makes it *more* frequent,
+  not less (below).
+- Owner: memory maintainers
+- Reproduction, ~25 lines, no torch, CUDA:
+
+      param = jt.zeros((4 * 4096, 256), "float32")
+      # four threads, each 30 rounds:
+      #   host = jt.array(np.random.rand(4096, 256).astype("float32"))
+      #   param[tid * 4096:(tid + 1) * 4096] = host
+      #   param.sync()
+
+  This is the pattern KI-EXEC-005 names as its own reproduction, so it is a
+  supported one. Checked in as
+  `agent/skills/jittor-allocator-flag-matrix/probe_shared_param_threads.py`.
+- Failure:
+
+      sfrl_allocator.cc:82: allocation not found: 3 [check failed: block != nullptr]
+      op: array   in: float32[16384,256,]   out: float32[4096,256,]
+
+  i.e. `SFRLAllocator::free` was handed an `allocation` handle that its id
+  space does not have registered -- the id was already freed, or it belongs to
+  a different allocator instance.
+- It needs contention, not just threads. Five runs each:
+
+      | threads | runs failed |
+      | --- | --- |
+      | 1 | 0 / 5 |
+      | 2 | 0 / 5 |
+      | 4 | 4 / 5 |
+
+- And it is not this branch's doing. Same probe, twenty runs at four threads,
+  rebuilding between each state:
+
+      | core | runs failed |
+      | --- | --- |
+      | this branch | 10 / 20 |
+      | KI-EXEC-005 phase-7 change reverted | 8 / 10 |
+      | that and the KI-EXEC-006 fix reverted | 10 / 10 |
+
+- Two candidate mechanisms, neither confirmed. The allocator itself is not the
+  suspect: `alloc` and `free` both hold the instance's `recursive_mutex`, and
+  the id table has its own.
+  1. **A torn read of the var's three storage fields.** `free_var_mem` reads
+     `mem_ptr`, `allocation` and `allocator` and then frees; anything that
+     retargets a var's storage between those reads and the call hands `free` an
+     `allocation` from one allocator and an `allocator` from another.
+     `sfrl_allocator.h` already names that hazard: "two SFRL allocators both
+     start at 1, and an id from one is not a valid handle for the other", and
+     there is one instance per device on an 8-device box.
+  2. **A free that does not go through `free_var_mem`.** `ArrayOp::run` frees
+     the output's previous allocation directly, and the failing op is an
+     `array`. It leaves `o->allocation` naming the freed id until three
+     statements later.
+  The way to tell them apart is to record, per allocation id, the site and
+  thread of the last free, and report both at the failure -- the same method
+  that settled KI-EXEC-006, where the counters at the moment of the free were
+  what identified the wrong predicate.
+- Blocks [KI-EXEC-005]: the probe that would show whether the phase-7 change
+  worked dies here first, before it reaches phase 7.
+
 ## KI-EXEC-005: a var released by another thread mid-batch fails the batch
 
 - Severity: High -- a supported operation aborts. Rare, and the workaround
   (serialise the threads) is practical, but the pattern is exactly a
   multi-threaded weight loader and the sync that dies asked for nothing
   unusual.
-- Status: Open. Partly addressed 2026-09-18 -- the batch no longer counts its
-  own hold as a consumer -- and still reproducible at a lower rate.
+- Status: Open, and now **unverifiable** rather than merely rare. The batch
+  stopped counting its own hold as a consumer, and phase 7 now reads the event
+  instead of the count (below); but the probe that would show whether that
+  worked dies in [KI-EXEC-007] first, in the allocator, before it reaches
+  phase 7. Both changes are in; neither is measured against this failure.
 - Owner: executor maintainers
 - Reproduction: four Python threads, each `jt.array(chunk)` then
   `param[tid*N:(tid+1)*N] = host` then `param.sync()`, 30 rounds, on one shared
@@ -854,19 +923,24 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   liveness the clause reads, so the clause stopped firing and a legitimate
   release began failing the batch instead. Subtracting the hold
   (`ExecPlan::batch_hold_per_var`) restores the intent and removes most of it.
-- What is left, and the shape of the fix. A var carries backward liveness from
-  consumers as well as from holders, so subtracting the batch's own hold does
-  not always bring the count to zero, and the residual 1-in-20 remains. The
-  counter is the wrong thing to read: what phase 7 actually wants to know is
-  *was this var's storage released while this batch was in flight*, and that is
-  a fact about an event, not about a count. Recording the event answers it
-  exactly -- `free_var_mem` appends the Var to a per-executor list while a batch
-  is running (the list is only touched when one is, so the ordinary path pays
-  nothing), and phase 7 tolerates precisely the requested vars on it. The
-  alternative, serialising the entry points a threaded loader drives, is what
-  section 23 of the vLLM enablement results proposed before section 29's fix
-  superseded it; it moves the cost to every caller instead of to the batch that
-  needs the answer.
+- What changed, 2026-09-18. A var carries backward liveness from consumers as
+  well as from holders, so subtracting the batch's own hold does not always
+  bring the count to zero, and the residual 1-in-20 remained. The counter was
+  the wrong thing to read: what phase 7 asks is *was this var's storage
+  released while this batch was in flight*, and that is a fact about an event.
+  `batch_released_vars` (var.h) records the event at the one place that can see
+  it -- `free_var_mem` -- and only while a batch is running, so the ordinary
+  free path pays one predictable branch and no allocation; phase 7 tolerates
+  precisely the vars on it. The count stays alongside it: it is the cheaper
+  test and it covers a release that happened before the batch began.
+  The alternative, serialising the entry points a threaded loader drives, is
+  what section 23 of the vLLM enablement results proposed before section 29's
+  fix superseded it; it moves the cost to every caller instead of to the batch
+  that needs the answer.
+- What is left: a measurement. The change is a strict widening of an assert, so
+  it cannot fail anything that passed -- the core tier is 310 passed with it --
+  but "it fixes the 1-in-20" is not claimed, because [KI-EXEC-007] aborts the
+  probe earlier. Close that first, then re-run the loader probe.
 - Not covered by a test. `ceae1910` changed five core files and shipped with no
   in-repo regression case; its evidence is `probe_loader_race.py`, which lives
   outside the tree. `tests/core/test_executor_entry_lock.py` is a different
