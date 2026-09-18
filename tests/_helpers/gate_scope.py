@@ -106,7 +106,38 @@ def excluded_paths():
 
 
 def _ignores(paths):
-    return tuple("--ignore=" + path for path in paths)
+    return tuple("--ignore=" + runnable(path) for path in paths)
+
+
+#: How a path under `compat/` has to be spelled for pytest to run it.
+#:
+#: `compat/` is its own distribution: it carries a `jittor.compat` package whose
+#: `__init__.py` imports relatively out of `jittor`, and its own pytest ini.
+#: Named by that path from the repository root, pytest imports it as a
+#: top-level `compat` -- `ImportError: attempted relative import beyond
+#: top-level package`, 140 errors in the torch session before a test runs.
+#: Named through `python/jittor/compat`, the symlink a source checkout already
+#: relies on, the same files run: pytest finds `compat/pyproject.toml` as the
+#: inifile and the package is imported as `jittor.compat`, which is its name.
+#: `docs/development/test-system.md` has told people this for a while; the gate
+#: arguments themselves did not follow it.
+_COMPAT_LINK = "python/jittor/"
+
+
+def runnable(path):
+    """``path`` spelled the way pytest can actually be pointed at it."""
+    from pathlib import Path
+
+    if not path.startswith("compat/"):
+        return path
+    root = Path(__file__).resolve().parents[2]
+    linked = _COMPAT_LINK + path
+    return linked if (root / linked).exists() else path
+
+
+def canonical(path):
+    """The inverse: the repository-relative path, whatever spelling came in."""
+    return path[len(_COMPAT_LINK):] if path.startswith(_COMPAT_LINK + "compat/") else path
 
 
 def native_arguments():
@@ -125,13 +156,15 @@ def native_arguments():
                            if child.name != "__pycache__")
         else:
             ignored.append(path)
-    return TEST_ROOTS + _ignores(tuple(sorted(ignored)) + excluded_paths())
+    return tuple(runnable(path) for path in TEST_ROOTS) \
+        + _ignores(tuple(sorted(ignored)) + excluded_paths())
 
 
 def torch_arguments():
     """pytest arguments for the session that owns Torch compatibility mode."""
     excluded = excluded_paths()
-    selected = tuple(path for path in TORCH_MODE_PATHS if path not in excluded)
+    selected = tuple(runnable(path) for path in TORCH_MODE_PATHS
+                     if path not in excluded)
     return selected + _ignores(excluded + NATIVE_MODE_PATHS)
 
 
@@ -144,7 +177,7 @@ def selected_files(repo_root, arguments):
 
     root = Path(repo_root)
     ignored = tuple(
-        argument[len("--ignore="):] for argument in arguments
+        canonical(argument[len("--ignore="):]) for argument in arguments
         if argument.startswith("--ignore=")
     )
     selected = tuple(
@@ -157,7 +190,10 @@ def selected_files(repo_root, arguments):
         for candidate in candidates:
             if not candidate.is_file():
                 continue
-            relative = candidate.relative_to(root).as_posix()
+            # Resolved, so a file reached through `python/jittor/compat` is
+            # reported under `compat/`: the arguments are spelled for pytest,
+            # the answer is about the repository.
+            relative = candidate.resolve().relative_to(root.resolve()).as_posix()
             if any(relative == item or relative.startswith(item.rstrip("/") + "/")
                    for item in ignored):
                 continue

@@ -377,6 +377,15 @@ CORE_FILES = (
      "提升点阵与 result_type/can_cast,对的是 c10 的文档规则"),
     ("compat/tests/torch/test_tensor_state.py", 0.1,
      "张量状态与 requires_grad 的读写"),
+
+    # compat 有两种测试,两种都要在这一层里有一条。上面是行为
+    # (`compat/tests/torch`,在 Torch 模式下真的跑张量);下面是结构契约
+    # (`compat/tests/structure`,断言谁拥有哪个名字、发布到哪个命名空间)。
+    # 结构那类不跑数值,却是唯一能在安装期就抓到「装错地方」的检查,而且便宜。
+    ("compat/tests/structure/test_torch_compat_structure.py", 3.0,
+     "命名空间归属与 sys.modules 发布的白名单:谁被允许写进 torch 这个名字"),
+    ("compat/tests/structure/test_compat_layering.py", 0.5,
+     "分层方向:compat 可以依赖 jittor,反过来不行"),
 )
 
 #: Wall-clock budget for the core tier, in seconds, covering both process
@@ -392,25 +401,10 @@ CORE_BUDGET_SECONDS = 120.0
 CORE_STARTUP = 15.0
 
 
-#: How the compat files are spelled when pytest is pointed at them.
-#:
-#: `compat/` is its own distribution and carries its own `__init__.py` and its
-#: own pytest ini. Named by that path from the repository root, pytest takes the
-#: repository's ini and imports `compat/conftest.py` as the top-level package
-#: `compat`, whose first line is a relative import out of `jittor` -- 27 errors
-#: before a single test runs. Named through `python/jittor/compat`, the symlink
-#: a source checkout already relies on, pytest finds `compat/pyproject.toml` as
-#: the inifile and the same files pass. The tier uses the spelling that runs.
-_COMPAT_LINK = "python/jittor/"
-
-
 def _runnable(path):
-    from pathlib import Path
-    if not path.startswith("compat/"):
-        return path
-    linked = _COMPAT_LINK + path
-    root = Path(__file__).resolve().parents[2]
-    return linked if (root / linked).exists() else path
+    """The spelling pytest can be pointed at; see ``gate_scope.runnable``."""
+    from _helpers.gate_scope import runnable
+    return runnable(path)
 
 
 def core_paths(session=None, runnable=True):
