@@ -3547,3 +3547,44 @@ class, guard on against guard off) keep their direction, not their absolute size
 **How to apply:** never read `utilization.gpu` as evidence on this box -- check
 `nvidia-smi --query-compute-apps` for foreign pids first -- and treat any
 absolute timing taken while `train_grpo.py --occupy-delay 0` is alive as noisy.
+
+### The vectorization "prize" is ~1.1x, so that is not the answer either
+
+Section 40 proposed a vectorized elementwise path as the largest remaining item.
+Measured directly, with two standalone CUDA kernels doing the identical f32->f16
+cast on the same buffers (`probe_vec_cast_prize.py`, `tools/veccast.cu`), the
+`float4`/`__float22half2_rn` version is only **1.10x** the scalar one:
+
+| 4.19M fp32 elements (16 MiB in, 8 MiB out) | us | effective |
+| --- | --- | --- |
+| scalar loop | 34.5 | 730 GB/s |
+| `float4` -> 2x `__half2` | 31.3 | 803 GB/s |
+| jittor's own `x.float16()` | *invalid* | *lazy -- nothing executed in the timed loop* |
+
+(That last row is the same trap as in section 37: timing an op that was never
+forced to materialise measures op construction, not the kernel.)
+
+A grid sweep on the same kernel shows why access width is not the problem -- the
+cost is launch/tail dominated and *flat* in size until the tensor is large:
+
+| elements | 256 blocks | 2048 blocks | 8192 blocks |
+| --- | --- | --- | --- |
+| 1,024 | 13.90 | 16.55 | 37.54 |
+| 65,536 | 14.06 | 16.72 | 37.57 |
+| 262,144 | 14.53 | 17.05 | 37.97 |
+| 4,194,304 | 20.15 | 34.47 | 44.49 |
+
+So ~14 us is fixed per launch no matter the payload, and the grid size matters more
+than the access width (16 MiB: 20.2 us at 256 blocks against 34.5 us at 2048).
+jittor's own heuristic is adaptive rather than the flat 2048 blocks assumed above
+(`tn0 = nbits(min(2^21, num)) - 2`, so a 4 KiB cast launches one block of 512
+threads), which leaves only a modest grid-configuration effect for large tensors --
+and a per-call average of 61 us in the profile that a raw launch of the *largest*
+tensor in the mix does not reach (34.5 us), pointing at the fixed per-launch cost
+times the count rather than at the kernel's throughput.
+
+Together with the co-tenant caveat above, the honest position is that the
+remaining elementwise delta is **not** attributable to access width, is partly a
+fixed per-launch cost, and cannot be sized reliably on this box while
+`train_grpo.py --occupy-delay 0` is running. Re-measuring on a quiet device is the
+prerequisite for any further kernel work, not another codegen change.
