@@ -3513,3 +3513,37 @@ It does wrap the worker and the profile is collected, but **`stop-vllmomni.sh`
 kills the tree hard and nsys never writes the `.nsys-rep`** (it leaves an
 `nsys --start-agent` orphan holding the session). Stop the server with SIGINT and
 wait for the wrapper to exit instead, or the run is lost.
+
+### Correction: the "GPU 100% busy" reading in section 40 is not a measurement
+
+The claim above that a request runs at 100% GPU utilisation rests on sampling
+`nvidia-smi --query-gpu=utilization.gpu` during a request. That gauge is useless
+on this box: **all eight GPUs read 100% utilisation while idle**, because another
+tenant's occupancy job is spinning on them --
+
+    pid 1553  tmux new-session -d -s gpu_occupy
+              .../vllm_latest/bin/python -u /tmp/train_grpo.py --occupy-delay 0
+
+up 12 days, ~552 MiB per GPU, no compute apps of ours. So the sample says nothing
+about where *our* request's time goes.
+
+What survives is the part that did not use the gauge:
+
+* the guard A/B is a wall-clock measurement, and it stands -- removing 11.6 s of
+  bridge host time made the request **slower** (77.7 -> 84.4 s), which is evidence
+  that the bridge's host work is not the pipeline's bottleneck. That reasoning does
+  not need the utilisation gauge.
+* the "9.7 s of GPU in a 12 s decode" figure for the standalone VAE class comes
+  from nsys *kernel durations*, not the gauge, so it also stands: that decode is
+  ~80% device-resident with ~2.3 s of host time.
+
+Everything else measured on this box carries a co-tenant caveat: a spinning job
+shares the SMs, which is why identical server runs varied by 4 s (77.7 to 84.4),
+why a bare launch-plus-sync measured ~2.4 ms in one probe, and why absolute GPU
+times here should be read as upper bounds rather than as the part's capability.
+Comparisons made back-to-back on the same box (shim against torch on the same
+class, guard on against guard off) keep their direction, not their absolute size.
+
+**How to apply:** never read `utilization.gpu` as evidence on this box -- check
+`nvidia-smi --query-compute-apps` for foreign pids first -- and treat any
+absolute timing taken while `train_grpo.py --occupy-delay 0` is alive as noisy.
