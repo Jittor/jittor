@@ -3,6 +3,7 @@ from importlib import import_module
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
 from ...types import _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
+from ....stub_policy import degraded as _degraded, unimplemented as _unimplemented
 from ..core import _promote_pair
 
 _owner = import_module(__package__)
@@ -576,7 +577,20 @@ def _to(self, *args, **kwargs):
     # device passed as a keyword (torch's .to(device=..., dtype=...))
     if "device" in kwargs:
         dev = kwargs["device"]
-    for a in list(args) + list(kwargs.values()):
+    # Only the two keywords that can *carry* a device or a dtype join the
+    # positional scan. Sweeping every keyword value into it dragged
+    # `memory_format="contiguous_format"` through the string branch below,
+    # where an unrecognised string is now an error rather than a silent drop.
+    _KNOWN_TO_KEYWORDS = ("device", "dtype", "non_blocking", "copy",
+                          "memory_format")
+    unknown = [name for name in kwargs if name not in _KNOWN_TO_KEYWORDS]
+    if unknown:
+        raise TypeError("to() got an unexpected keyword argument %r"
+                        % (sorted(unknown)[0],))
+    scanned = list(args)
+    if kwargs.get("dtype") is not None:
+        scanned.append(kwargs["dtype"])
+    for a in scanned:
         if isinstance(a, _owner.dtype):
             ds = a.name
         elif isinstance(a, _owner.device):
@@ -585,7 +599,7 @@ def _to(self, *args, **kwargs):
             # .to(other) copies other's dtype AND device.
             ds = _jittor_dtype_name(a.dtype)
             dev = a.device
-        elif isinstance(a, int) and not isinstance(a, bool):
+        elif _owner._is_index(a):
             # A bare int can only mean a device index, and it used to match none
             # of these branches and be **dropped**: `.to(1)` returned the tensor
             # unchanged, so a fresh tensor stayed wherever it was built -- the
@@ -597,13 +611,35 @@ def _to(self, *args, **kwargs):
             # consumer that indexes with it. torch raises on an int here; being
             # more useful than the reference is fine, silently ignoring the
             # argument is not.
-            dev = "cuda:%d" % a
+            # `numbers.Integral` rather than `int`, so a numpy integer -- what
+            # `np.arange(world_size)[rank]` or a parsed config gives you -- is
+            # read the same way instead of falling off the end of the chain.
+            dev = "cuda:%d" % int(a)
         elif isinstance(a, str):
             bare = a.replace("torch.", "")
             if bare in _owner.dtype._registry:
                 ds = bare
             elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
                 dev = bare
+            else:
+                # An unrecognised string used to fall off the end of this
+                # chain and be **dropped**: `x.to("cuda1")` -- any typo, or a
+                # device type this layer does not serve -- returned the tensor
+                # unchanged on the ambient device, with no error, while the
+                # caller believed it had moved. A string that is not a device
+                # type at all is refused by `device()` with torch's own
+                # message; one that is a real torch device this layer cannot
+                # place a tensor on goes through the stub policy, so it fails
+                # loudly by default and is still escapable with
+                # JITTOR_TORCH_ALLOW_STUB=1 for the meta-device flows that
+                # only ever read the result back.
+                _owner.device(bare.split(":")[0])
+                _unimplemented(
+                    "torch.Tensor.to(%r)" % (a,),
+                    "hand back a tensor that is still on its old device while "
+                    "reporting that the move to %r succeeded" % (a,),
+                    "This layer places tensors on cpu, cuda and npu only.",
+                    stub_result=None)
     if dev is None:
         dev = self.device
     out = self.clone() if copy else self
@@ -616,12 +652,12 @@ def _to(self, *args, **kwargs):
     elif _owner._device_is_cuda(dev):
         if out.placement_backend >= 0:
             return _owner._make_cuda_resident(out, force=True, device=dev)
-        src_index = getattr(self, "device_id", -1)
         out = _owner._make_cuda_resident(out, force=True)
         # .to("cuda:N") copies across devices when N is not where the Var
-        # already is; a bare .to("cuda") leaves the tensor on its own
-        # device, as in torch.
-        moved = _owner._move_to_cuda_index(out, dev, src_index)
+        # already is; a bare .to("cuda") names the *current* device, as in
+        # torch -- not "wherever it already is".
+        moved = _owner._move_to_cuda_index(
+            out, dev, _owner.current_accelerator_index())
         if moved is not out and getattr(out, "_torch_0d", False):
             moved._torch_0d = True
         out = moved
@@ -677,13 +713,21 @@ def _var_cpu(self, *a, **k):
 
 
 def _var_cuda(self, device=None, *a, **k):
+    # `.cuda()` with no argument is `.to("cuda")`, and a bare "cuda" is the
+    # *current* device in torch. Passing `device=None` down instead made the
+    # placed branch below read the Var's own device and keep it there, so
+    # `x_on_cuda1.cuda()` with current_device()==0 stayed on cuda:1 while
+    # `x_on_cuda1.to("cuda")` -- the same request, one line apart -- moved to
+    # cuda:0. See types.current_accelerator_index.
+    if device is None:
+        device = "cuda"
     if self.placement_backend >= 0:
         return _owner._make_cuda_resident(self, force=True, device=device)
     _owner._set_use_cuda()
-    src_index = getattr(self, "device_id", -1)
     out = _owner._make_cuda_resident(self, force=True)
-    # .cuda(N) is .to("cuda:N"); .cuda() keeps the tensor where it is.
-    out = _owner._move_to_cuda_index(out, device, src_index)
+    # .cuda(N) is .to("cuda:N"); a bare .cuda() is the current device.
+    out = _owner._move_to_cuda_index(
+        out, device, _owner.current_accelerator_index())
     if getattr(self, "_torch_0d", False):
         out._torch_0d = True
     return out
@@ -758,19 +802,70 @@ def _stride(self, dim=None):
     return st[dim]
 
 
+#: Set on the host tensor ``pin_memory()`` hands back, and read by
+#: ``is_pinned()``. A plain attribute, so a clone or a slice of a pinned
+#: tensor is not itself pinned -- which is also torch's answer.
+_PINNED_ATTRIBUTE = "_jittor_torch_pinned"
+
+
 def _is_pinned(self, device=None):
-    """torch.Tensor.is_pinned -- jittor has no page-locked allocator."""
-    return False
+    """torch.Tensor.is_pinned -- did ``pin_memory()`` produce this tensor?
+
+    It used to be ``return False`` unconditionally, next to a ``pin_memory()``
+    that returned ``self``. So the pair contradicted each other on the one
+    invariant every caller checks: ``x.pin_memory().is_pinned()`` was False,
+    and a staging loop that pins once and asserts it reported that pinning had
+    silently failed. The buffer is host memory but not page-locked (jittor has
+    no page-locked allocator), which is what the fidelity record says; the
+    predicate now at least agrees with the method next to it.
+    """
+    return bool(getattr(self, _PINNED_ATTRIBUTE, False))
 
 
 def _pin_memory(self, device=None):
-    """torch.Tensor.pin_memory -- jittor has no page-locked allocator.
+    """torch.Tensor.pin_memory -- a host copy, not a page-locked one.
 
-    Returns ``self``: there is no pinned copy to make. vLLM-Omni's residency
-    manager uses the result only as the host backing buffer, so the values are
-    what matter, not the page-locking.
+    Two things used to be wrong rather than merely approximate:
+
+    * it returned ``self``, so ``x.pin_memory()`` on a **CUDA** tensor handed
+      back the CUDA tensor and called it host memory. torch raises there
+      ("only dense CPU tensors can be pinned"), and code that pins a staging
+      buffer and then DMAs into it was quietly given device memory;
+    * the result was the same object as the source, so writing into the
+      "pinned" copy wrote into the tensor it was copied from.
+
+    Now it always returns an independent **host-resident** copy, and
+    ``is_pinned()`` agrees with it. That copy is not page-locked, so a
+    ``non_blocking`` host-to-device transfer out of it is still synchronous --
+    the semantics callers read (host residency, ``is_pinned()``, independence)
+    hold; the overlap does not. Registered APPROXIMATE with that wording.
     """
-    return self
+    if _is_cuda(self):
+        # torch refuses here ("only dense CPU tensors can be pinned"), but it
+        # can afford to: in torch the tensor a caller pins is already on the
+        # host, while under this facade a tensor built with no `device=` is on
+        # the accelerator, because that is what jittor's ambient placement
+        # means. Refusing would abort ordinary staging code that runs on
+        # torch. Copying it to the host is what the caller asked for and
+        # nothing about the result is misreported -- but it is a difference,
+        # so it goes on the record once.
+        _degraded(
+            "torch.Tensor.pin_memory",
+            "a tensor already on an accelerator is copied to the host rather "
+            "than refused, because this facade places a device-less tensor on "
+            "the accelerator where torch places it on the host")
+    if getattr(self, _PINNED_ATTRIBUTE, False):
+        return self
+    out = _var_cpu(self)
+    if out is self:
+        out = _var_cpu(self.clone())
+    try:
+        setattr(out, _PINNED_ATTRIBUTE, True)
+    except (AttributeError, TypeError) as exc:
+        _owner.swallowed("torch/installers/tensor/method_api.py _pin_memory: "
+                         "setattr(out, _PINNED_ATTRIBUTE, True)", exc,
+                         "is_pinned() will report False for a tensor pin_memory() produced")
+    return out
 
 
 def _as_byte_view(var):

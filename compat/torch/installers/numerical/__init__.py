@@ -17,7 +17,7 @@ from collections import namedtuple as _namedtuple
 
 from ...functional import _diff, _isin, _repeat_interleave, _trapz
 
-from ...grad import _AutocastContext
+from ...amp import autocast as _autocast
 
 from ...nested import _NestedTensor
 
@@ -36,16 +36,10 @@ register_fidelity(
     "and advanced batching arguments retain existing compatibility limitations",
 )
 
-autocast = _AutocastContext
-
-register_fidelity(
-    "torch.autocast",
-    autocast,
-    Fidelity.APPROXIMATE,
-    "matches Torch context/decorator enable semantics on supported CPU/CUDA "
-    "paths; cache, device-specific dtype, and unsupported dtype diagnostics "
-    "remain compatibility-layer limitations",
-)
+#: ``torch.autocast`` is owned by :mod:`jittor.compat.torch.grad`, which also
+#: registers its fidelity; this installer only binds the name. Registering it a
+#: second time here overwrote the owner's record with a vaguer one.
+autocast = _autocast
 
 _native_all = jt.all
 
@@ -225,8 +219,8 @@ register_fidelity(
 )
 
 _RANDINT_LIKE_FIDELITY_DETAIL = (
-    "matches Torch integer bounds and shape, with optional dtype casting, for "
-    "supported tensors but omits device and requires_grad keyword semantics"
+    "matches Torch integer bounds, shape, dtype, device inheritance, the "
+    "device= override and requires_grad; the generator= keyword is ignored"
 )
 
 from .factories import randint_like
@@ -1168,8 +1162,8 @@ def install(ctx):
     _bind_missing(g, "eye", eye)
     register_fidelity(
         "torch.eye", eye, Fidelity.APPROXIMATE,
-        "Values and dtype are supported; layout, device, out, and pin_memory "
-        "arguments are not implemented.")
+        "Values, dtype, device and requires_grad are supported; layout, out "
+        "and pin_memory arguments are not implemented.")
     # torch.narrow(input, dim, start, length) / torch.tile(input, dims) --
     # function forms mirroring the Var methods (added in _install_tensor_methods).
     _bind_missing(g, "narrow", narrow)

@@ -248,6 +248,8 @@ class TestTorchCompatStructure(unittest.TestCase):
         expected = {
             "_clip_grad_norm_device": grad._clip_grad_norm_device,
             "_GradScaler": grad._GradScaler,
+            "autocast": grad.autocast,
+            "GradScaler": grad.GradScaler,
             "_install_lr_scheduler": lr_scheduler._install_lr_scheduler,
             "_install_optimizers": optimizers._install_optimizers,
             "_install_safetensors_shim": serialization._install_safetensors_shim,
@@ -264,7 +266,10 @@ class TestTorchCompatStructure(unittest.TestCase):
         expected = {
             compat.dtype: "jittor.compat.torch.types",
             compat.device: "jittor.compat.torch.types",
-            compat._GradScaler: "jittor.compat.torch.grad",
+            # The AMP family moved out of grad.py when its stubs became real
+            # implementations and the module hit its 800-line budget.
+            compat._GradScaler: "jittor.compat.torch.grad_scaler",
+            compat._AutocastContext: "jittor.compat.torch.amp",
             compat._NestedTensor: "jittor.compat.torch.nested",
             compat._TorchSize: "jittor.compat.torch.nested",
             compat._torch_norm_impl: "jittor.compat.torch.functional",
@@ -411,8 +416,10 @@ class TestTorchCompatStructure(unittest.TestCase):
     def test_domain_modules_import_the_root_directly(self):
         package_root = Path(types.__file__).resolve().parent
         for name in (
+            "amp.py",
             "functional.py",
             "grad.py",
+            "grad_scaler.py",
             "lr_scheduler.py",
             "nested.py",
             "optimizers.py",

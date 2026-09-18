@@ -140,6 +140,78 @@ class TestDeviceApi(_Case):
             (base > zero).numpy(), np.array([False, True, False]))
 
 
+class TestDeviceObject(_Case):
+    """``torch.device`` itself: what it accepts and what it must refuse.
+
+    Every refusal here used to be an acceptance that placed the tensor
+    somewhere other than where the caller said.
+    """
+
+    def test_a_bare_int_is_an_accelerator_index(self):
+        # `torch.device(1)` is cuda:1 in torch. It used to fall into the
+        # "anything else is the CPU" branch and become `device(type='cpu')`,
+        # so `x.to(torch.device(1))` moved the tensor to the *host* while the
+        # caller had asked for a second accelerator, with no error -- the
+        # torch.device spelling of the `Tensor.to(1)` hole of section 31.
+        self.assertEqual(torch.device(2), torch.device("cuda", 2))
+        self.assertEqual(torch.device(0).type, "cuda")
+        self.assertEqual(torch.device(2).index, 2)
+
+    def test_type_and_index_attributes(self):
+        self.assertEqual(torch.device("cuda:1").type, "cuda")
+        self.assertEqual(torch.device("cuda:1").index, 1)
+        self.assertIsNone(torch.device("cuda").index)
+        self.assertEqual(torch.device("cpu").type, "cpu")
+        self.assertIsNone(torch.device("cpu").index)
+        self.assertEqual(torch.device("cpu", 0).index, 0)
+        self.assertEqual(str(torch.device("cuda:1")), "cuda:1")
+        self.assertEqual(str(torch.device("cuda")), "cuda")
+        self.assertEqual(repr(torch.device("cuda", 3)),
+                         "device(type='cuda', index=3)")
+
+    def test_construction_from_another_device(self):
+        self.assertEqual(torch.device(torch.device("cuda:1")),
+                         torch.device("cuda", 1))
+
+    def test_equality_and_hash_distinguish_the_index(self):
+        self.assertEqual(torch.device("cuda:1"), torch.device("cuda", 1))
+        self.assertEqual(hash(torch.device("cuda:1")),
+                         hash(torch.device("cuda", 1)))
+        # A bare "cuda" is "the current device", not device 0, and torch keeps
+        # the two distinct objects distinct.
+        self.assertNotEqual(torch.device("cuda"), torch.device("cuda:0"))
+        self.assertNotEqual(hash(torch.device("cuda")),
+                            hash(torch.device("cuda:0")))
+        self.assertNotEqual(torch.device("cuda:1"), torch.device("cuda:2"))
+
+    def test_a_device_that_is_not_one_is_refused(self):
+        # Accepting it was not harmless: `_device_is_cuda`/`_device_is_cpu`
+        # both answer False for an unknown type, so the tensor silently stayed
+        # on the ambient device.
+        with self.assertRaises(RuntimeError):
+            torch.device("bogus:0")
+        with self.assertRaises(RuntimeError):
+            torch.device("cuda1")
+        with self.assertRaises(RuntimeError):
+            torch.device("cuda", -1)
+        with self.assertRaises(RuntimeError):
+            torch.device("cuda:-1")
+
+    def test_to_refuses_a_device_string_that_is_not_a_device(self):
+        x = torch.ones(2)
+        with self.assertRaises(RuntimeError):
+            x.to("cuda1")
+        # ...and the tensor was not moved by the attempt
+        self.assertEqual(x.device, torch.device("cuda", 0))
+
+    def test_to_refuses_a_device_this_layer_cannot_place_on(self):
+        # A real torch device type that jittor has no storage for must fail
+        # loudly rather than hand back a tensor that is still on cuda:0 while
+        # the caller believes it is somewhere else.
+        with self.assertRaises(NotImplementedError):
+            torch.ones(2).to("mps")
+
+
 class TestMultiDeviceFacade(_Case):
     min_devices = 2
 
@@ -274,6 +346,304 @@ class TestMultiDeviceFacade(_Case):
         layer.cuda(1)
         self.assertIs(layer.weight, w)
         self.assertEqual(layer.weight.device.index, 1)
+
+    def test_module_move_accepts_every_device_spelling(self):
+        """`Module.to`/`Module.cuda` take what torch's signatures take.
+
+        Only the ``int`` spelling of ``Module.cuda`` was read and
+        ``Module.to`` read no int at all, so ``model.to(1)``,
+        ``model.cuda(torch.device("cuda", 1))`` and ``model.cuda("cuda:1")``
+        all fell through to "the current device": the model landed on cuda:0
+        while the caller had named cuda:1, and nothing said so.
+        """
+        for spelling in (1, "cuda:1", torch.device("cuda", 1),
+                         torch.device(1)):
+            layer = torch.nn.Linear(4, 2)
+            layer.register_buffer("tally", torch.zeros(2))
+            weight = layer.weight
+            layer.to(spelling)
+            self.assertIs(layer.weight, weight, spelling)
+            self.assertEqual(layer.weight.device.index, 1, spelling)
+            self.assertEqual(layer.tally.device.index, 1, spelling)
+        for spelling in (1, "cuda:1", torch.device("cuda", 1)):
+            layer = torch.nn.Linear(4, 2)
+            layer.cuda(spelling)
+            self.assertEqual(layer.weight.device.index, 1, spelling)
+        with self.assertRaises(ValueError):
+            torch.nn.Linear(2, 2).cuda("cpu")
+
+    def test_module_to_moves_buffers_and_then_back(self):
+        layer = torch.nn.Linear(4, 2)
+        layer.register_buffer("tally", torch.ones(2))
+        layer.to("cuda:1")
+        self.assertEqual(layer.weight.device.index, 1)
+        self.assertEqual(layer.tally.device.index, 1)
+        layer.cpu()
+        self.assertEqual(layer.weight.device.type, "cpu")
+        self.assertEqual(layer.tally.device.type, "cpu")
+        layer.to(device="cuda:1", dtype=torch.float16)
+        self.assertEqual(layer.weight.device.index, 1)
+        self.assertEqual(layer.weight.dtype, torch.float16)
+
+    def test_an_optimizer_survives_the_module_moving_under_it(self):
+        """torch's Module.to is in place, so the optimizer keeps its objects.
+
+        The parameters an optimizer holds are the very objects
+        ``Module.to("cuda:1")`` migrates, so it must keep stepping and its own
+        state must end up on the parameters' new device. (Real torch 2.13
+        raises here once the state exists: ``Adam`` created ``exp_avg`` on the
+        CPU and never moves it. This layer keeps running because the state is
+        rebuilt on the parameter's device, which is a superset of torch's
+        behaviour, not a placement difference -- the check below is that
+        nothing ends up on two devices at once.)
+        """
+        layer = torch.nn.Linear(4, 2)
+        optimizer = torch.optim.SGD(layer.parameters(), lr=0.1, momentum=0.9)
+        held = optimizer.param_groups[0]["params"][0]
+        layer.cuda(1)
+        self.assertIs(optimizer.param_groups[0]["params"][0], held)
+        self.assertIs(held, layer.weight)
+        self.assertEqual(held.device.index, 1)
+        x = torch.randn(3, 4, device="cuda:1")
+        layer(x).sum().backward()
+        self.assertEqual(layer.weight.grad.device.index, 1)
+        optimizer.step()
+        self.assertEqual(layer.weight.device.index, 1)
+        for state in optimizer.state.values():
+            for value in state.values():
+                if isinstance(value, jt.Var):
+                    self.assertEqual(value.device.index, 1)
+        # the step really ran on device 1 and produced finite numbers
+        self.assertTrue(bool(np.isfinite(layer.weight.detach().cpu().numpy()).all()))
+
+    def test_to_in_every_spelling_torch_accepts(self):
+        source = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+        self.assertEqual(source.to("cuda:1").device.index, 1)
+        self.assertEqual(source.to(torch.device("cuda", 1)).device.index, 1)
+        self.assertEqual(source.to(torch.device(1)).device.index, 1)
+        self.assertEqual(source.to(device="cuda:1").device.index, 1)
+        self.assertEqual(source.to("cuda:1", non_blocking=True).device.index, 1)
+        self.assertEqual(source.to("cuda:1", torch.float16).device.index, 1)
+        self.assertEqual(source.to("cuda:1", torch.float16).dtype, torch.float16)
+        both = source.to(device="cuda:1", dtype=torch.float16)
+        self.assertEqual((both.device.index, both.dtype), (1, torch.float16))
+        # .to(other) takes the other's dtype AND device
+        other = torch.ones(3, dtype=torch.float64, device="cuda:1")
+        like = source.to(other)
+        self.assertEqual((like.device.index, like.dtype), (1, torch.float64))
+        # dtype alone leaves the device where it is
+        on_one = source.to("cuda:1")
+        self.assertEqual(on_one.to(torch.float16).device.index, 1)
+        # device=None is "leave it alone", not "move it to the default"
+        self.assertEqual(on_one.to(device=None).device.index, 1)
+        # copy= gives an independent tensor on the same device
+        copied = on_one.to("cuda:1", copy=True)
+        self.assertIsNot(copied, on_one)
+        self.assertEqual(copied.device.index, 1)
+        np.testing.assert_array_equal(copied.cpu().numpy(), on_one.cpu().numpy())
+        # memory_format: the one jittor has is accepted, the one it does not
+        # is refused rather than silently ignored
+        self.assertEqual(
+            source.to("cuda:1", memory_format=torch.contiguous_format).device.index, 1)
+        with self.assertRaises(NotImplementedError):
+            source.to("cuda:1", memory_format=torch.channels_last)
+        with self.assertRaises(TypeError):
+            source.to("cuda:1", not_a_keyword=1)
+
+    def test_cuda_and_cpu_in_every_spelling(self):
+        source = torch.arange(4, dtype=torch.float32)
+        self.assertEqual(source.cuda(1).device.index, 1)
+        self.assertEqual(source.cuda(device=1).device.index, 1)
+        self.assertEqual(source.cuda(device="cuda:1").device.index, 1)
+        self.assertEqual(source.cuda(torch.device("cuda", 1)).device.index, 1)
+        self.assertEqual(source.cuda(1, non_blocking=True).device.index, 1)
+        on_one = source.cuda(1)
+        self.assertEqual(on_one.cuda(0).device.index, 0)
+        self.assertEqual(on_one.get_device(), 1)
+        self.assertTrue(on_one.is_cuda)
+        host = on_one.cpu()
+        self.assertEqual(host.device.type, "cpu")
+        self.assertEqual(host.get_device(), -1)
+        self.assertFalse(host.is_cuda)
+        self.assertTrue(host.is_cpu)
+        np.testing.assert_array_equal(host.numpy(), source.cpu().numpy())
+
+    def test_new_and_like_families_inherit_the_reference_device(self):
+        source = torch.ones(2, device="cuda:1", dtype=torch.float64)
+        for built in (source.new_zeros(3), source.new_ones(3),
+                      source.new_empty(3), source.new_full((3,), 2.0),
+                      source.new_tensor([1.0, 2.0])):
+            self.assertEqual(built.device.index, 1)
+        self.assertEqual(source.new_zeros(3).dtype, torch.float64)
+        self.assertEqual(source.new_zeros(3, device="cuda:0").device.index, 0)
+        self.assertEqual(source.new_zeros(3, device="cpu").device.type, "cpu")
+        for built in (torch.zeros_like(source), torch.ones_like(source),
+                      torch.empty_like(source), torch.full_like(source, 3.0),
+                      torch.rand_like(source), torch.randn_like(source),
+                      torch.randint_like(source, 0, 4)):
+            self.assertEqual(built.device.index, 1)
+        # randint_like was the one hole: it built the sample with a bare
+        # jt.randint on the *ambient* device and ignored device= entirely.
+        self.assertEqual(torch.randint_like(source, 0, 4).dtype, torch.float64)
+        self.assertEqual(
+            torch.randint_like(source, 0, 4, device="cuda:0").device.index, 0)
+        self.assertEqual(torch.zeros_like(source, device="cuda:0").device.index, 0)
+        self.assertEqual(torch.zeros_like(source, device="cpu").device.type, "cpu")
+
+    def test_set_device_refuses_a_device_that_is_not_cuda(self):
+        # It used to return None for a CPU device: the call reported success
+        # and changed nothing, so a caller that meant to leave CUDA carried on
+        # issuing work to whatever device was current.
+        with self.assertRaises(ValueError):
+            torch.cuda.set_device("cpu")
+        with self.assertRaises(ValueError):
+            torch.cuda.set_device(torch.device("cpu"))
+        self.assertEqual(torch.cuda.current_device(), 0)
+        # None means "the current device", i.e. a no-op, as in torch.
+        self.assertIsNone(torch.cuda.set_device(None))
+        self.assertEqual(torch.cuda.current_device(), 0)
+
+    def test_set_default_device_gives_the_current_device_back(self):
+        """Clearing the default must not strand jittor's current device.
+
+        `set_default_device("cuda:1")` moves jittor's current device, because
+        that is what "new tensors land here" means here. Clearing the default
+        used to leave the index behind: the next tensor built after CUDA came
+        back on -- through `.cuda()`, say -- landed on cuda:1 while
+        `get_default_device()` had already said "cpu".
+        """
+        self.assertEqual(torch.cuda.current_device(), 0)
+        torch.set_default_device("cuda:1")
+        try:
+            self.assertEqual(torch.ones(3).device.index, 1)
+        finally:
+            torch.set_default_device(None)
+        self.assertEqual(torch.cuda.current_device(), 0)
+        self.assertEqual(torch.ones(2).cuda().device.index, 0)
+        torch.set_default_device("cuda:1")
+        try:
+            self.assertEqual(torch.ones(3).device.index, 1)
+        finally:
+            torch.set_default_device("cpu")
+        self.assertEqual(torch.cuda.current_device(), 0)
+
+    def test_device_properties_are_per_device(self):
+        """Every props query answers for the ordinal it was handed.
+
+        The whole family cached one device-0 answer under a single key and
+        returned it for every index, so `get_device_name(1)` reported device
+        0's name -- indistinguishable on a uniform box and simply wrong on a
+        mixed one.
+        """
+        last = torch.cuda.device_count() - 1
+        for index in (0, 1, last):
+            props = torch.cuda.get_device_properties(index)
+            self.assertEqual(props.index, index)
+            self.assertGreater(props.total_memory, 0)
+            self.assertEqual(props.name, torch.cuda.get_device_name(index))
+            self.assertEqual((props.major, props.minor),
+                             torch.cuda.get_device_capability(index))
+            self.assertEqual(torch.cuda.mem_get_info(index)[1], props.total_memory)
+        # A bare device argument means the *current* device, not device 0.
+        torch.cuda.set_device(1)
+        try:
+            self.assertEqual(torch.cuda.get_device_properties().index, 1)
+            self.assertEqual(torch.cuda.get_device_properties(None).index, 1)
+        finally:
+            torch.cuda.set_device(0)
+        self.assertEqual(torch.cuda.get_device_properties().index, 0)
+
+    def test_can_device_access_peer(self):
+        # Was absent entirely: an AttributeError where a serving stack decides
+        # between a peer copy and a host bounce aborts the run.
+        self.assertIsInstance(torch.cuda.can_device_access_peer(0, 1), bool)
+        self.assertFalse(torch.cuda.can_device_access_peer(0, 0))
+
+    def test_memory_is_accounted_per_device(self):
+        """`memory_allocated(N)` is device N's, not the process-wide total.
+
+        It read `MemInfo.total_cuda_used`, which sums *every* device's pool:
+        with 256 MiB allocated on cuda:1, `memory_allocated(0)` also said
+        256 MiB. A budget planner sizing a KV cache from that number plans
+        against a device that does not exist.
+        """
+        megabyte = 1024 * 1024
+        torch.cuda.reset_peak_memory_stats(0)
+        torch.cuda.reset_peak_memory_stats(1)
+        before = (torch.cuda.memory_allocated(0), torch.cuda.memory_allocated(1))
+        block = torch.zeros(64, 1024, 1024, device="cuda:1")   # 256 MiB
+        torch.cuda.synchronize()
+        grew = (torch.cuda.memory_allocated(0) - before[0],
+                torch.cuda.memory_allocated(1) - before[1])
+        self.assertGreater(grew[1], 200 * megabyte)
+        self.assertLess(grew[0], 200 * megabyte)
+        self.assertGreaterEqual(torch.cuda.memory_reserved(1),
+                                torch.cuda.memory_allocated(1))
+        self.assertGreaterEqual(torch.cuda.max_memory_allocated(1),
+                                torch.cuda.memory_allocated(1))
+        stats = torch.cuda.memory_stats(1)
+        self.assertGreater(stats["allocated_bytes.all.current"], 200 * megabyte)
+        del block
+        gc.collect()
+        jt.sync_all(True)
+
+    def test_a_stream_belongs_to_a_device_and_selects_it(self):
+        """torch's stream context is also a device context.
+
+        `current_stream(1)`/`default_stream(1)` ignored the argument and
+        handed back the one process-wide stream, whose `.device` read cuda:0;
+        and entering `with torch.cuda.stream(s)` for a stream on cuda:1 left
+        the current device alone, so work issued inside it was placed on
+        whatever device was current outside.
+        """
+        self.assertEqual(torch.cuda.current_stream(1).device,
+                         torch.device("cuda", 1))
+        self.assertEqual(torch.cuda.default_stream(1).device,
+                         torch.device("cuda", 1))
+        self.assertEqual(torch.cuda.current_stream(0).device,
+                         torch.device("cuda", 0))
+        side = torch.cuda.Stream(device=1)
+        self.assertEqual(side.device, torch.device("cuda", 1))
+        with torch.cuda.stream(side):
+            self.assertEqual(torch.cuda.current_device(), 1)
+            self.assertIs(torch.cuda.current_stream(), side)
+            self.assertEqual(torch.ones(2).device.index, 1)
+        self.assertEqual(torch.cuda.current_device(), 0)
+        self.assertEqual(torch.ones(2).device.index, 0)
+
+    def test_pin_memory_and_is_pinned_agree(self):
+        """`x.pin_memory()` is a host buffer, and `is_pinned()` says so.
+
+        `pin_memory()` returned `self` next to an `is_pinned()` that was a
+        bare `return False`, so the pair contradicted each other on the one
+        invariant every caller checks -- and on a CUDA tensor `pin_memory()`
+        handed back the CUDA tensor and called it host memory.
+        """
+        host = torch.ones(4, device="cpu")
+        self.assertFalse(host.is_pinned())
+        pinned = host.pin_memory()
+        self.assertTrue(pinned.is_pinned())
+        self.assertEqual(pinned.device.type, "cpu")
+        self.assertIsNot(pinned, host)
+        np.testing.assert_array_equal(pinned.numpy(), host.numpy())
+        # already pinned: no second copy
+        self.assertIs(pinned.pin_memory(), pinned)
+        # a pinned buffer is still an ordinary host tensor to move from
+        self.assertEqual(pinned.to("cuda:1", non_blocking=True).device.index, 1)
+        # torch refuses to pin a device tensor. This facade cannot: a tensor
+        # built with no `device=` is already on an accelerator here, where
+        # torch would have it on the host, so refusing would abort ordinary
+        # staging code. It copies to the host instead -- which is what pinning
+        # is for -- and nothing about the result is misreported.
+        for on_device in (torch.ones(4, device="cuda:0"),
+                          torch.ones(4, device="cuda:1")):
+            self.assertFalse(on_device.is_pinned())
+            staged = on_device.pin_memory()
+            self.assertEqual(staged.device.type, "cpu")
+            self.assertTrue(staged.is_pinned())
+            self.assertFalse(on_device.is_pinned())
+            np.testing.assert_array_equal(staged.numpy(),
+                                          on_device.cpu().numpy())
 
 
 if __name__ == "__main__":

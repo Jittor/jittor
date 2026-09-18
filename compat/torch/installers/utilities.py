@@ -8,9 +8,19 @@ from ..context import get_install_context, registry_for
 from ..fidelity import Fidelity, register_fidelity
 from .._placeholder_context import _PlaceholderContext
 
-from ..grad import (
-    _amp_passthrough_decorator, _AutocastContext,
-    _GradScaler,
+from ..grad_scaler import _GradScaler
+from ..amp import (
+    autocast as _autocast,
+    autocast_decorator as _autocast_decorator,
+    custom_fwd as _custom_fwd,
+    custom_bwd as _custom_bwd,
+    cuda_custom_fwd as _cuda_custom_fwd,
+    cuda_custom_bwd as _cuda_custom_bwd,
+    is_autocast_available as _is_autocast_available,
+    amp_definitely_not_available as _amp_definitely_not_available,
+    _amp_cast,
+    _CudaAutocast, _CpuAutocast, _CudaGradScaler, _CpuGradScaler,
+    OptState as _OptState,
 )
 from ..library import Tag
 from ..nested import (
@@ -612,6 +622,81 @@ def _register_utility_fidelity(ctx):
                               Fidelity.UNIMPLEMENTED if placeholder else Fidelity.APPROXIMATE, detail)
 
 
+
+#: ``torch.amp`` is a package: ``from torch.amp.autocast_mode import autocast``
+#: and ``from torch.amp.grad_scaler import GradScaler`` are both spellings that
+#: appear in the wild (apex, deepspeed and diffusers all use one of them), and
+#: ``torch.cuda.amp``/``torch.cpu.amp`` carry the legacy device-pinned classes.
+#: This builds the whole tree from the one set of owner objects in
+#: :mod:`jittor.compat.torch.grad` so every path resolves to the same class.
+def _install_amp_namespace(g, _modules):
+    amp = _types2.ModuleType("torch.amp")
+    amp.__path__ = []
+    amp.__package__ = "torch.amp"
+    amp.autocast = _autocast
+    amp.GradScaler = _GradScaler
+    amp.custom_fwd = _custom_fwd
+    amp.custom_bwd = _custom_bwd
+    amp.is_autocast_available = _is_autocast_available
+    amp.__all__ = ["autocast", "custom_bwd", "custom_fwd",
+                   "is_autocast_available", "GradScaler"]
+
+    autocast_mode = _types2.ModuleType("torch.amp.autocast_mode")
+    autocast_mode.autocast = _autocast
+    autocast_mode.custom_fwd = _custom_fwd
+    autocast_mode.custom_bwd = _custom_bwd
+    autocast_mode.is_autocast_available = _is_autocast_available
+    autocast_mode.autocast_decorator = _autocast_decorator
+    autocast_mode._cast = _amp_cast
+    autocast_mode.__all__ = ["autocast", "custom_fwd", "custom_bwd",
+                             "autocast_decorator", "is_autocast_available"]
+    amp.autocast_mode = autocast_mode
+
+    grad_scaler = _types2.ModuleType("torch.amp.grad_scaler")
+    grad_scaler.GradScaler = _GradScaler
+    grad_scaler.OptState = _OptState
+    grad_scaler.__all__ = ["GradScaler", "OptState"]
+    amp.grad_scaler = grad_scaler
+
+    _modules["torch.amp"] = amp
+    _modules["torch.amp.autocast_mode"] = autocast_mode
+    _modules["torch.amp.grad_scaler"] = grad_scaler
+    g.amp = amp
+
+    for device_name, autocast_class, scaler_class in (
+            ("cuda", _CudaAutocast, _CudaGradScaler),
+            ("cpu", _CpuAutocast, _CpuGradScaler)):
+        root = getattr(g, device_name, None)
+        if root is None:
+            continue
+        dotted = "torch." + device_name + ".amp"
+        device_amp = _types2.ModuleType(dotted)
+        device_amp.__path__ = []
+        device_amp.__package__ = dotted
+        device_amp.autocast = autocast_class
+        device_amp.GradScaler = scaler_class
+        device_amp.autocast_mode = _types2.ModuleType(dotted + ".autocast_mode")
+        device_amp.autocast_mode.autocast = autocast_class
+        device_amp.grad_scaler = _types2.ModuleType(dotted + ".grad_scaler")
+        device_amp.grad_scaler.GradScaler = scaler_class
+        device_amp.grad_scaler.OptState = _OptState
+        if device_name == "cuda":
+            # torch keeps custom_fwd/custom_bwd only on the CUDA legacy module.
+            device_amp.custom_fwd = _cuda_custom_fwd
+            device_amp.custom_bwd = _cuda_custom_bwd
+            common = _types2.ModuleType("torch.cuda.amp.common")
+            common.amp_definitely_not_available = _amp_definitely_not_available
+            common.__all__ = ["amp_definitely_not_available"]
+            device_amp.common = common
+            device_amp.amp_definitely_not_available = _amp_definitely_not_available
+            _modules["torch.cuda.amp.common"] = common
+        root.amp = device_amp
+        _modules[dotted] = device_amp
+        _modules[dotted + ".autocast_mode"] = device_amp.autocast_mode
+        _modules[dotted + ".grad_scaler"] = device_amp.grad_scaler
+
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -669,24 +754,7 @@ def install(ctx):
         _tb.SummaryWriter = SummaryWriter
         _modules["torch.utils.tensorboard"] = _tb
 
-    _amp = _types2.ModuleType("torch.amp")
-    _amp.autocast = _AutocastContext
-    _amp.GradScaler = _GradScaler
-    _amp.custom_fwd = _amp_passthrough_decorator
-    _amp.custom_bwd = _amp_passthrough_decorator
-    _modules["torch.amp"] = _amp
-    g.amp = _amp
-    try:
-        if hasattr(g, "cuda"):
-            if not hasattr(g.cuda, "amp"):
-                g.cuda.amp = _types2.ModuleType("torch.cuda.amp")
-            g.cuda.amp.autocast = _amp.autocast
-            g.cuda.amp.GradScaler = _GradScaler
-            g.cuda.amp.custom_fwd = _amp_passthrough_decorator
-            g.cuda.amp.custom_bwd = _amp_passthrough_decorator
-            _modules["torch.cuda.amp"] = g.cuda.amp
-    except EXPECTED as exc:
-        swallowed("torch/installers/utilities.py install: if hasattr(g, 'cuda'):", exc)
+    _install_amp_namespace(g, _modules)
 
     # `import jittor as torch; torch.utils.data.Dataset` (attribute access, used by some
     # HF/training code as a base class) needs a `utils` namespace on the jittor module --

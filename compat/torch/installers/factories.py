@@ -29,6 +29,19 @@ def _set_use_cuda():
     set_flag(jt.flags, "use_cuda", 1)
 
 
+#: Every factory published through `_invoke_factory`, which is what carries a
+#: `device=` into the native placement scope. A name that `_wrap_constructors`
+#: adapts but that is missing here reaches `_constructor_adapter` directly,
+#: and that function *drops* `device` (it is in `_DROP`) on the assumption
+#: that the placement is already established -- so the tensor would be built
+#: on the ambient device with no error.
+#:
+#: `eye` is deliberately **not** here: its owner is
+#: `installers.numerical.eye`, which `_bind_missing` publishes as the module
+#: level `torch.eye` and which `test_torch_numerical_fidelity` pins by
+#: identity. Routing it through this module would rebind `torch.eye` to a
+#: wrapper and break that ownership, so `device=` is honoured in the owner
+#: instead -- it enters its own `tensor_frontend(..., device=device)`.
 _FACTORY_NAMES = (
     "arange", "bernoulli", "empty", "empty_like", "full", "full_like",
     "linspace", "multinomial", "normal", "ones", "ones_like", "rand",
@@ -51,7 +64,7 @@ def _invoke_factory(name, args, kwargs):
     if implementation is None:
         raise RuntimeError("torch.%s is not installed" % name)
     from ..frontend import tensor_frontend
-    like = args[0] if args and (name.endswith("_like") or name in _TENSOR_ARGUMENT) else None
+    like = args[0] if args and (name.endswith("_like") or name in _TENSOR_FIRST_ARGUMENT) else None
     with tensor_frontend(context.target_namespace.Var, device=kwargs.get("device"), like=like):
         return implementation(*args, **kwargs)
 
@@ -182,6 +195,13 @@ def _install_empty_like(root):
 _DROP = ("device", "requires_grad", "layout", "pin_memory", "memory_format", "out", "non_blocking")
 _DEFAULT_FLOAT_FACTORIES = {"zeros", "ones", "empty", "rand", "randn", "eye", "linspace"}
 _TENSOR_ARGUMENT = ("tril", "triu")
+#: Factories whose first positional argument is the tensor the result should
+#: follow, so it is the placement reference when no `device=` is given. The
+#: samplers belong here as much as `tril`/`triu` do: `torch.multinomial` builds
+#: its own working buffers, and with no reference they landed on the ambient
+#: device -- `torch.multinomial(weights_on_cuda1, 2)` died with "Expected all
+#: tensor inputs on the same backend and device" instead of sampling.
+_TENSOR_FIRST_ARGUMENT = _TENSOR_ARGUMENT + ("multinomial", "bernoulli")
 
 
 def _shape_dim(v):
@@ -281,10 +301,16 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
 
 
 def _wrap_constructors(g):
+    # Keep this a subset of _FACTORY_NAMES, minus `eye` (see the note there):
+    # a name here but not there is published without the placement wrapper,
+    # and a name there but not here hands torch's `device=`/`requires_grad=`
+    # straight to a jittor factory that has no such parameter
+    # (`torch.randperm(4, device="cuda:1")` raised "randperm() got an
+    # unexpected keyword argument 'device'").
     for name in ("zeros", "ones", "empty", "full", "arange", "rand", "randn",
-                 "randint", "eye", "linspace", "zeros_like", "ones_like",
-                 "empty_like", "full_like", "randn_like", "rand_like", "tril",
-                 "triu", "normal"):
+                 "randint", "randperm", "linspace", "zeros_like",
+                 "ones_like", "empty_like", "full_like", "randn_like",
+                 "rand_like", "tril", "triu", "normal"):
         original = getattr(g, name, None)
         if original is None or original is FACTORY_APIS.get(name):
             continue
