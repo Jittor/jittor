@@ -258,8 +258,17 @@ class digamma(Function):
     digamma(x) = psi(x) = d/dx[ln(gamma(x))]
     '''
     def __init__(self):
+        # Templated on the accumulation type, not fixed to `float`. The series
+        # below is PyTorch's `calc_digamma`, and it was written with `float`
+        # constants and `logf`/`truncf`, so a float64 Var was narrowed, computed
+        # and widened back: 3.25e-7 from scipy at *both* float32 and float64,
+        # identical, which is what gave it away. The caller picks `double` for a
+        # wide input and keeps `float` for the narrow ones, so fp16/bf16 are
+        # unchanged.
         self.cpu_header = '''
         #include <cmath>
+        #include <limits>
+        #include <type_traits>
         #define C10_HOST_DEVICE
         template <typename T>
         C10_HOST_DEVICE static inline T polevl(const T x, const T A[], size_t len) {
@@ -270,36 +279,37 @@ class digamma(Function):
         return result;
         }
 
-        static inline float calc_digamma(float x) {
+        template <typename T>
+        static inline T calc_digamma(T x) {
         // See [C++ Standard Reference: Gamma Function]
-        static float PSI_10 = 2.25175258906672110764f;
+        const T PSI_10 = T(2.25175258906672110764);
         if (x == 0) {
             // As per C++ standard for gamma related functions and SciPy,
             // If the argument is ±0, ±∞ is returned
-            return std::copysign(INFINITY, -x);
+            return std::copysign(std::numeric_limits<T>::infinity(), -x);
         }
 
-        bool x_is_integer = x == truncf(x);
+        bool x_is_integer = x == std::trunc(x);
         if (x < 0) {
             if (x_is_integer) {
             // As per C++ standard for gamma related functions and SciPy,
             // If the argument is a negative integer, NaN is returned
-            return std::numeric_limits<float>::quiet_NaN();
+            return std::numeric_limits<T>::quiet_NaN();
             }
             // Extracts the fractional part of x as r, since tan(pi * r) is more numerically
             // accurate than tan(pi * x). While these operations are mathematically equivalent
             // since both x and r are in radians and tan() has a periodicity of pi, in practice
             // the computation of pi * x is a source of error (when |x| > 1).
-            double q, r;
+            T q, r;
             r = std::modf(x, &q);
-            float pi_over_tan_pi_x = (float)(M_PI / tan(M_PI * r));
-            return calc_digamma(1 - x) - pi_over_tan_pi_x;
+            T pi_over_tan_pi_x = T(M_PI) / std::tan(T(M_PI) * r);
+            return calc_digamma<T>(T(1) - x) - pi_over_tan_pi_x;
         }
 
         // Push x to be >= 10
-        float result = 0;
+        T result = 0;
         while (x < 10) {
-            result -= 1 / x;
+            result -= T(1) / x;
             x += 1;
         }
         if (x == 10) {
@@ -307,30 +317,33 @@ class digamma(Function):
         }
 
         // Compute asymptotic digamma
-        static const float A[] = {
-            8.33333333333333333333E-2f,
-            -2.10927960927960927961E-2f,
-            7.57575757575757575758E-3f,
-            -4.16666666666666666667E-3f,
-            3.96825396825396825397E-3f,
-            -8.33333333333333333333E-3f,
-            8.33333333333333333333E-2f,
+        static const T A[] = {
+            T(8.33333333333333333333E-2),
+            T(-2.10927960927960927961E-2),
+            T(7.57575757575757575758E-3),
+            T(-4.16666666666666666667E-3),
+            T(3.96825396825396825397E-3),
+            T(-8.33333333333333333333E-3),
+            T(8.33333333333333333333E-2),
         };
 
-        float y = 0;
-        if (x < 1.0e17f) {
-            float z = 1 / (x * x);
+        T y = 0;
+        if (x < T(1.0e17)) {
+            T z = T(1) / (x * x);
             y = z * polevl(z, A, 6);
         }
-        return result + logf(x) - (0.5f / x) - y;
+        return result + std::log(x) - (T(0.5) / x) - y;
         }
         '''
         self.cpu_src = '''
         @alias(x, in0)
         @alias(di_x, out0)
+        // A wide input is accumulated in double; anything narrower keeps the
+        // float path it always had.
+        using acc_t = typename std::conditional<(sizeof(x_p[0]) >= 8), double, float>::type;
         int numel = x_shape0 * x_stride0;
         for(int i=0;i<numel;i++)
-            di_x_p[i] = calc_digamma(x_p[i]);
+            di_x_p[i] = calc_digamma<acc_t>((acc_t)x_p[i]);
         '''
         self.cuda_header = _cuda_gamma.DIGAMMA_CUDA_HEADER
         self.cuda_src = _cuda_gamma.DIGAMMA_CUDA_SRC
