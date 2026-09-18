@@ -522,9 +522,24 @@ struct VarHolder {
      * a device kernel. Triton's bridge syncs once per launch and then reads one
      * pointer per operand, so the syncing accessor repeated that sync for every
      * argument of every launch.
+     *
+     * ``allocator`` is null until this Var is allocated (see ``var.h``), and the
+     * residency test below dereferences it. So a holder that has never been
+     * materialised -- freshly built, or waiting on a producer that has not run
+     * -- must materialise here: reading the pointer of such a holder is a null
+     * dereference, which is exactly how this accessor first failed when the
+     * bridge started preferring it.  ``device_raw_ptr`` never met that case
+     * because its own ``sync`` always allocates first.
+     *
+     * The test is ``mem_ptr`` rather than ``allocator``: allocation and pointer
+     * are set together, and a freed Var may keep the allocator while its
+     * pointer is gone.  Either way the answer is "materialise once" -- true for
+     * at most one read, because allocation is fixed once it has happened.  A
+     * zero-element Var, whose pointer stays null, simply answers 0.
      */
     // @pyjt(__get__device_ptr_ready)
     inline uint64 device_ptr_ready() {
+        if (!var->mem_ptr) sync(true, false);
         #ifdef HAS_ACCELERATOR
         if (!var->allocator->is_cuda())
             migrate_to_gpu(var, get_allocator(migration_device(), false));

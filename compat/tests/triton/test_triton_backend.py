@@ -547,5 +547,53 @@ class TestGuardedBounceRequiresContiguous(unittest.TestCase):
                 self.assertEqual(tb._tensor_is_contiguous(candidate), expected)
 
 
+class TestLaunchFollowsItsProducers(unittest.TestCase):
+    """Operands produced immediately before a launch must be the ones it reads.
+
+    The barrier ``run`` puts before packing submits the operand graph without
+    waiting for it (`jt.sync_all(device_sync=False)`, which still plans,
+    allocates and enqueues). Correctness therefore rests on *stream order*:
+    jittor schedules its ops on ``cudaStreamPerThread`` and the bridge launches
+    on that same stream (``_launch_stream``), so the kernel cannot start before
+    the ops that write its operands have.
+
+    If that stops holding -- a launch sent to another stream, or a barrier that
+    stops submitting -- the kernel reads whatever the operand's buffer held
+    before, which here is the *previous* iteration's value, and the launch still
+    returns cleanly with a plausible-looking answer.
+    """
+
+    def _prepare(self):
+        global triton, tl
+        if triton is None or tl is None:
+            setUpModule()
+        if not _shim.activate_bridge():
+            self.skipTest("jittor Triton bridge is unavailable")
+
+    def test_each_launch_reads_the_value_its_producer_just_wrote(self):
+        self._prepare()
+        n, BLOCK = 4096, 1024
+        rs = np.random.RandomState(7)
+        xn, yn = rs.randn(n).astype("float32"), rs.randn(n).astype("float32")
+        y = jt.array(yn)
+        grid = (triton.cdiv(n, BLOCK),)
+
+        # `x` is a fresh pending op every step, so nothing else materialises it;
+        # a kernel that ran before its producer would sum the *previous* step's
+        # `x`. The output is fresh per step too: this test is about operand
+        # freshness, and re-reading one output Var across launches mixes in a
+        # separate (pre-existing) staleness of jittor's view of a buffer a
+        # kernel wrote through its own pointer.
+        for step in range(1, 6):
+            x = jt.array(xn) * float(step)
+            out = jt.empty(n, dtype="float32")
+            add_kernel[grid](x, y, out, n, BLOCK=BLOCK)
+            jt.sync_all(True)
+            got = np.asarray(out.numpy(), dtype=np.float64)
+            np.testing.assert_allclose(
+                got, xn.astype(np.float64) * step + yn, atol=1e-5,
+                err_msg="step %d: the launch read a stale operand" % step)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

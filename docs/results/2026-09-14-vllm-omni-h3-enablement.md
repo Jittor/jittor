@@ -3146,3 +3146,134 @@ This is the one place in this whole enablement where the shim is behind torch by
 more than a small factor, and it is worth stating plainly: at matched precision
 and matched op the server's video VAE runs 3-13x slower than real torch, and the
 fp16 path is the reason.
+
+## 38. The fp16 VAE gap was the Triton bridge: a device sync per operand
+
+Section 37 established that the server's fp16 VAE decode is the slow one and left
+the cost unattributed. It is the Triton bridge, and it is three separate defects
+-- one of them a silently stale deployed binary.
+
+### What the profile says
+
+`JITTOR_TRITON_STATS=1` on one autocast decode (`probe_decode_nsys.py autocast`)
+reports, over its two decodes and 9,072 launches:
+
+```
+launches=9072 total=131.3s sync=45.8s pack=42.9s launch=0.1s final=42.4s
+avg=0.0145s | ptr=41.5s/36288 alloc=0.0s/3 memset=0.3s dtod=0.2s
+```
+
+`ptr` is 41.5 s over 36,288 calls -- **1.14 ms to read one device pointer**. nsys
+agrees on the mechanism without a per-op Python tax: the autocast decode issues
+63,816 `cudaDeviceSynchronize`, 54,444 `cudaMemcpy` and 27,216 `cudaMemset`,
+against fp32's 312 / 12 / 0. Four pointer reads + one `jt.sync_all` + two
+`drv.synchronize` per launch is 7 x 9,072 = 63,504, which is the 63,816.
+
+So the GPU is not the problem: nsys puts autocast's kernel time *below* fp32's
+(32.1 s against 60.6 s over the same two decodes) while GPU busy-ness falls from
+87% to 19%. fp32 never launches Triton at all -- which is why only autocast moved.
+
+### Defect 1: the deployed core predated `Var.device_ptr_ready`
+
+`compat/triton/backend.py::_tensor_ptr` prefers `v.device_ptr_ready`, added in
+commit `c34b1240` ("H3 VAE 解码 671s -> 9.5s") for exactly this loop. The lab's
+`jittor_core.so` (built 2026-09-17) exported `device_raw_ptr` but not
+`device_ptr_ready` -- `strings <so> | grep -c ptr_ready` was 0 -- so the shim fell
+back to the accessor that calls `sync(true, false)`, i.e. a full device drain for
+every operand of every launch.
+
+Rebuilding exposed a real bug in that upstream accessor: `Var::allocator` is null
+until `Var::alloc`, and the residency test dereferences it, so reading the pointer
+of a never-materialised holder was a null dereference. Importing such a core
+segfaults inside the generated getter with no traceback. Fixed by materialising
+once when there is nothing to point at:
+
+```cpp
+inline uint64 device_ptr_ready() {
+    if (!var->mem_ptr) sync(true, false);
+    ...
+}
+```
+
+Nothing covered the accessor, which is why it shipped broken:
+`tests/backends/cuda/test_device_ptr_ready.py` now does (fresh holder, device
+pointer identity, host-resident migration).
+
+### Defect 2: the over-read guard copied back with blocking `cudaMemcpy`
+
+The guard bounces each contiguous, exactly-sized operand into a zeroed-slack
+buffer and copies the payload back afterwards. Both directions used `cudaMemcpy`
+(host-blocking) and the copy-back added its own `drv.synchronize()`, so four
+bounced operands meant four device drains plus an extra full-device wait per
+launch. The copies are strictly ordered around the kernel anyway -- copy-in,
+kernel and copy-back are all on `_launch_stream()` -- so they now go through
+`cudaMemcpyAsync` on that stream, before the single wait.
+
+### Defect 3: the barrier before packing waited for the device
+
+`run()` did `jt.sync_all(True)` before reading pointers, which submits the operand
+graph *and* waits for it. jittor puts its own launches on `cudaStreamPerThread`,
+and the bridge launches on that same stream, so the kernel is already ordered
+behind its producers; waiting only idles the device with nothing to overlap. In
+the shim's fast-sync mode it is now `jt.sync_all(False)`, which still plans,
+allocates and enqueues and skips only the trailing device wait.
+`TestLaunchFollowsItsProducers` pins the invariant this rests on, reading the
+operand's device buffer back with `cudaMemcpy` to prove each launch saw the value
+its producer had just written.
+
+### Measured effect
+
+Per launch of the VAE's own kernel shape (8,192 x 8 x 64 fp16 q/k plus a 48-wide
+cos/sin, `probe_triton_bridge_launch_cost.py`):
+
+| build | ms/launch |
+| --- | --- |
+| baseline | 16.65 |
+| + `device_ptr_ready` | 4.86 |
+| + async bounce copy-back | 2.72 |
+| guard disabled (floor) | 2.55 |
+
+The same decode, same protocol, `probe_vae_checksum.py` / `probe_autocast_env.py`
+(fp32 then autocast, three decodes per regime, warm caches):
+
+| | fp32 | autocast fp16 |
+| --- | --- | --- |
+| baseline | 28.1 s | 84.4 s |
+| + per-op import caches | 28.1 s | 79.7 s |
+| + `device_ptr_ready` | 28.1 s | 51.3 s |
+| + async bounce copy-back | 28.1 s | 47.5 s |
+| + non-waiting operand barrier | 28.3 s | 30.1-32.5 s |
+
+fp32 is untouched throughout, as it must be -- it never enters the bridge. The
+bridge's own totals fall from 131.3 s to 59.4 s (`sync=41.9s pack=1.5s
+final=15.8s`), which is the same 2x.
+
+### Verification
+
+* **Values.** The decode is not bit-reproducible, so the check is tolerance-based
+  and controlled: two runs of one build already differ (fp32, which never enters
+  the bridge, by max 3.2e-06; autocast by 2.0e-03). The barrier change moves
+  autocast by 4.4e-03 -- the same order, with no non-finite values. Operand
+  freshness is proven directly, not by readback (see `TestLaunchFollowsItsProducers`).
+* **Triton suite.** `compat/tests/triton/test_triton_backend.py` is 5/15 before
+  and after every change, with an identical failure fingerprint (same md5 of the
+  mismatch lines) on the pre-fix core as well, so none of it is a regression.
+* **End-to-end.** TP1, 512x512, 8 steps, FLASH_ATTN: 84.6 s against the 118.9 s
+  recorded in section 36, and the clip is the expected pottery scene (124 frames,
+  512x512, stereo audio, frame mean/std in the reference range).
+
+### Two pre-existing findings this turned up (not addressed here)
+
+* **`jt.zeros` is a zero-stride broadcast view.** `jt.zeros(n)._storage_strides()`
+  is `[0]` where `jt.array(np.zeros(n))` gives `[1]`. A kernel writing through a
+  raw device pointer then fills the allocation correctly -- the device buffer
+  verifies bit-exact against the reference -- but jittor's *readback* honours the
+  stride and returns element 0 broadcast. That is what the triton suite's 9
+  `TestTritonBackend` cases actually hit (their outputs are `jt.zeros`), and it
+  predates all of this. The bridge does not validate an output operand's layout;
+  a non-contiguous output is neither bounced nor refused.
+* **TP2 startup needs a working `mpicc` first on `PATH`.** jittor's `setup_mpi`
+  probes `mpicc --showme:compile`; `/jizhicfs/leoyizhang/anaconda3/bin/mpicc` is
+  broken (`x86_64-conda-linux-gnu-cc: command not found`) and now that the probe
+  cache is cold it aborts startup instead of warning. Putting
+  `/usr/local/openmpi/bin` first resolves it.
