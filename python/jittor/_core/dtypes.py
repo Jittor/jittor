@@ -1,4 +1,5 @@
 """Native dtype names at Python, NumPy and code-generation boundaries."""
+import sys
 from typing import Tuple
 
 _python_dtype_types: Tuple[type, ...] = ()
@@ -16,7 +17,7 @@ def register_dtype_type(dtype_type):
 def is_dtype(value):
     if isinstance(value, (str,) + _python_dtype_types):
         return True
-    import sys
+    # `import sys` used to sit here, on a path `jt.empty` hits once per allocation.
     core = sys.modules.get("jittor_core")
     native_type = getattr(core, "NanoString", None)
     return native_type is not None and isinstance(value, native_type)

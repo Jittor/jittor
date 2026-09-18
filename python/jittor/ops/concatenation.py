@@ -9,6 +9,34 @@ from .._runtime.dispatch import select_kernel
 
 _MAX_DIRECT_INPUTS = 64
 
+#: `jittor` and `placement_scope_like` are imported lazily inside these helpers so
+#: the module stays importable during jittor's own bootstrap, but concatenation
+#: is one of the most-called ops in the tree and a function-local import pays the
+#: import machinery on every call (nine per `torch.cat`, measured: ~10 us of pure
+#: host overhead that no amount of GPU work can hide). Resolve each once instead.
+_jittor = None
+_placement_scope_like = None
+
+
+def _jt():
+    """`import jittor`, resolved on first use and then reused."""
+    global _jittor
+    module = _jittor
+    if module is None:
+        import jittor as module
+        _jittor = module
+    return module
+
+
+def _placement_scope(x):
+    """`placement_scope_like`, resolved on first use and then reused."""
+    global _placement_scope_like
+    fn = _placement_scope_like
+    if fn is None:
+        from .._core.var import placement_scope_like as fn
+        _placement_scope_like = fn
+    return fn(x)
+
 
 @contextmanager
 def _allocate_where_the_inputs_are(x):
@@ -31,12 +59,11 @@ def _allocate_where_the_inputs_are(x):
     scope restores the flag to -1 and leaves the backend device where it left
     it. Restore it by hand instead.
     """
-    import jittor as jt
-    from .._core.var import placement_scope_like
+    jt = _jt()
 
     device_id = int(getattr(x, "device_id", -1))
     previous = int(jt.current_device())
-    with placement_scope_like(x):
+    with _placement_scope(x):
         if device_id < 0 or device_id == previous:
             yield
             return
@@ -49,7 +76,7 @@ def _allocate_where_the_inputs_are(x):
 
 
 def _merge_dtypes(dtypes):
-    import jittor as jt
+    jt = _jt()
     dtype = dtypes[0]
     for item in dtypes[1:]:
         dtype = jt.binary_dtype_infer("add", dtype, item)
@@ -57,7 +84,7 @@ def _merge_dtypes(dtypes):
 
 
 def _concat_direct(arr, dim, dtype):
-    import jittor as jt
+    jt = _jt()
     output_shape = list(arr[0].shape)
     output_shape[dim] = sum(value.shape[dim] for value in arr)
     # Allocate where the inputs are: `jt.empty` follows the ambient placement
@@ -92,7 +119,7 @@ def _concat_bounded(arr, dim, dtype):
 
 def concat(arr, dim=0):
     """Concatenate a sequence of Vars along ``dim``."""
-    import jittor as jt
+    jt = _jt()
 
     # `amp_reg=4` here was an ASSIGNMENT, not a bit set: for the whole body it
     # replaced whatever AMP policy the caller had configured with "keep_reduce
