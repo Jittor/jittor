@@ -674,6 +674,48 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   Nothing here identifies *which* tensors outlive their segment; that needs
   `use_stat_allocator` lifetimes and was not done.
 
+## KI-EXEC-006: a second backward over a retained graph can find an input gone
+
+- Severity: High -- a supported operation aborts, and until 2026-09-18 it did
+  so as a segfault with nothing naming the var.
+- Status: Open. Diagnosed and made diagnosable 2026-09-18; the lifetime itself
+  is unchanged.
+- Owner: executor maintainers
+- Reproduction, three lines, deterministic, CPU, no threads:
+
+      x = jt.array(np.random.rand(1, 1, 3, 3).astype("float32"))
+      out = jt.nn.interpolate(x, size=(4, 4), mode="bilinear",
+                              align_corners=False).reshape(-1)
+      out.numpy()                                   # materialise the forward
+      jt.grad(out[0], [x], retain_graph=True)[0].numpy()   # fine
+      jt.grad(out[1], [x], retain_graph=True)[0].numpy()   # was a segfault
+
+  Found by `tests/ops/test_ops.py::TestGradientsCPU::test_gradcheck_interpolate
+  _bilinear`, whose gradcheck materialises the output (a dtype test) before
+  differentiating it element by element. That file is a Torch-mode path, so it
+  had not run in the sweeps.
+- Mechanism. `jt.nn.interpolate`'s bilinear path gathers with `reindex_var`,
+  whose index operands come from `jt.index` -- a source op with no inputs.
+  `Op::init` treats an input-less op as recomputable and so does not mark its
+  outputs `_needed_by_backward` (op.cc), which is what keeps
+  `release_pending_liveness` from freeing a var's memory. Materialising the
+  forward ends the batch, nothing is pending on the index vars, and their
+  storage goes. The recomputation that would have justified it is gone too:
+  `release_inputs` has removed the producer edge, so the vars have no producer
+  and cannot be rebuilt. The second backward then asks a kernel to read them.
+- What changed: the launch now says so. `check_input_is_backed` reports the var
+  and the op instead of dereferencing a null allocator inside the generated
+  kernel. `exec_plan.cc` and `fuser.cc` also stopped reading `v->input()`
+  without checking it -- a var in a batch need not have a producer, for exactly
+  the reason above, and four sites in the planner would have faulted on the
+  null one.
+- The open part is which invariant to restore. A var that has consumers and no
+  producer cannot be recomputed, so freeing its storage is only safe if nothing
+  will read it again; `retain_graph=True` says something will. Marking every
+  source output `_needed_by_backward` would pin every index and constant var in
+  memory for the graph's lifetime, which is the memory the flag exists to
+  avoid, so the fix belongs with whoever owns that tradeoff.
+
 ## KI-EXEC-005: a var released by another thread mid-batch fails the batch
 
 - Severity: High -- a supported operation aborts. Rare, and the workaround

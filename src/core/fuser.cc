@@ -104,8 +104,13 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
             for (auto e : op->_inputs) {
                 auto var = e.node->var();
                 uint self_index = e.back_index;
-                if ((forward && self_index + 1 < var->_outputs.size()) ||
-                    (!forward && self_index > 0)) {
+                // The upper bound belongs on both directions. Backward only
+                // asked for `self_index > 0`, which says nothing about the end
+                // of a list that `erase_output` can have shortened since this
+                // edge recorded its index.
+                if (self_index < var->_outputs.size() &&
+                    ((forward && self_index + 1 < var->_outputs.size()) ||
+                     (!forward && self_index > 0))) {
                     auto& self = var->_outputs[self_index];
                     auto& sibling = var->_outputs[forward ? self_index + 1 : self_index - 1];
                     Op* other = sibling.node->op();
@@ -129,8 +134,21 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         } else {
             for (auto e : op->_inputs) {
                 auto var = e.node->var();
-                if (var && var->tflag == tt)
-                    func(var, var->input(), 1, e.reverse().index < 0);
+                if (!var || var->tflag != tt) continue;
+                // The producer, not "whatever `input()` answers": a var in this
+                // batch need not have one. A leaf has none, and a var whose
+                // producer edge was released -- `release_inputs` runs when a
+                // finished var's producer is no longer pending, which a
+                // materialised forward followed by a second `jt.grad(...,
+                // retain_graph=True)` reaches -- has none either. The callback
+                // immediately asks for `other->batch_index_at(tt)`, so a null
+                // producer segfaults in the planner, far from the release that
+                // caused it. The forward walk above already filters its
+                // neighbours this way, and the two passes have to agree on
+                // which edges exist or pass 2's consumer counts go negative.
+                Op* other = var->input();
+                if (other && other->tflag == tt)
+                    func(var, other, 1, e.reverse().index < 0);
             }
         }
     };
@@ -152,6 +170,11 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
             unvisited_consumers[i]++;
             if (is_control_dep) return;
             if (var->flag(VarFlags::_force_fuse)) {
+                // `front()` on an op with no outputs is undefined, and an op
+                // can have none: `erase_output` removes the last one when a
+                // consumer releases its inputs. Such an op produces nothing
+                // this batch could fuse with, so there is no shape to agree on.
+                if (other->outputs().size() == 0) return;
                 auto shape = other->outputs().front()->shape;
                 if (!forced_shape.size()) {
                     forced_shape = shape;
@@ -222,6 +245,17 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         int all_consumers_fusable = 1;
         int all_consumers_reduce = 1;
         Op* producer = var->input();
+        // A var in the batch need not have a producer: a leaf has none, and so
+        // does one whose producer edge `release_inputs` has removed -- which is
+        // what a materialised forward followed by a second backward over the
+        // retained graph reaches. Nothing in this batch writes it, so it cannot
+        // be fused away, exactly like the vars above that are not in the batch
+        // at all. Reading `producer->batch_index_at(tt)` off a null producer
+        // segfaults in the planner, a long way from the release that caused it.
+        if (!producer || producer->tflag != tt) {
+            var_fused[i] = 1;
+            continue;
+        }
         int root = find_father(producer->batch_index_at(tt));
         for (auto o : var->_outputs) {
             if (o.index < 0) continue;  // control edge, carries no data

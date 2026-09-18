@@ -42,6 +42,18 @@ DECLARE_FLAG(int, use_cuda_managed_allocator);
 #endif
 
 
+// Every input a launch is about to read has to have memory. Reported here,
+// where the var and its op are still in hand, rather than as a null
+// dereference inside the generated kernel.
+static inline void check_input_is_backed(Var* v, Op* op) {
+    if (PREDICT_BRANCH_NOT_TAKEN(!v->mem_ptr && v->size != 0
+                                 && !v->flag(VarFlags::_is_swapped)))
+        LOGf << "input" << v << "of" << op->name()
+             << "has no memory at launch time. Its storage was released while a"
+             << "graph that still reads it was retained; see KI-EXEC-006.";
+}
+
+
 static inline void propergate_needed_flags(FusedOp& fused_op) {
     auto& ops = fused_op.ops;
     for (int i=ops.size()-1; i>=0; i--) {
@@ -317,6 +329,16 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 sync_times++;
             }
             for (Var* v : op->inputs()) {
+                // An input with no allocator has no memory to read, and the
+                // launch below would dereference the null one -- a segfault
+                // inside the kernel, with nothing naming the var. It happens:
+                // a source op's outputs are not marked `_needed_by_backward`
+                // (op.cc treats an input-less op as recomputable), so their
+                // memory is released once nothing is pending, and a second
+                // backward over a retained graph asks for them again after
+                // `release_inputs` has removed the producer that could have
+                // rebuilt them. See KI-EXEC-006.
+                check_input_is_backed(v, op);
                 if (v->allocator->is_cuda() && !op->flag(OpFlags::_manual_device))
                     migrate_to_cpu(v, allocator);
             }
@@ -328,6 +350,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         } else {
             for (Var* v : op->inputs()) {
                 if (op->flag(OpFlags::_no_input_storage)) break;
+                check_input_is_backed(v, op);
                 // device_copy deliberately accepts a host-resident input and
                 // owns its H2D transfer. Migrating it here first would mutate
                 // the source of x.cpu().cuda(), violating copy semantics.
