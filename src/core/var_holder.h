@@ -11,6 +11,12 @@
 #include "ops/composite/array_op.h"
 #include "mem/allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
+// `migration_device()` below calls `current_device()`. It arrives transitively
+// through cuda_dual_allocator.h only under HAS_ACCELERATOR, so a CPU build lost
+// the declaration and failed with "'current_device' was not declared in this
+// scope". device.h provides the accelerator declarations *and* the CPU stubs,
+// so include it unconditionally.
+#include "runtime/device.h"
 #include "runtime/holder_state.h"
 
 namespace jittor {
