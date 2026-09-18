@@ -3450,3 +3450,48 @@ call). The 8.7 s GPU delta is entirely in the small stuff:
 
 So the honest position is that the remaining gap is three kernel-level items, of
 which the first is the largest and needs a new codegen path rather than a fix.
+
+### Which torch references this box can and cannot produce
+
+Getting a torch number for every phase turns out to be environment-limited, and it
+is worth writing down so nobody re-runs these:
+
+* **torch + vLLM-Omni: impossible here.** `venv-oracle-cu129`'s `vllm` wheel is
+  built against CUDA 13 (`libcudart.so.13`), and only 12.9 is installed, so
+  `import vllm_omni` fails outright. The checkpoint's own decoder class is the
+  stand-in for the VAE (`MiniMaxH3VideoVAE.decode_latent` calls exactly
+  `model.decode_base`), and that is what sections 38-40 measure against.
+* **torch + the diffusers pipeline: blocked.** `run-oracle-cu129.sh` defaults to
+  `--attn-backend flash` and the oracle venv has no usable `flash-attn`
+  (`Please install flash-attn>=2.6.3`), so the run dies at
+  `set_attention_backend`. A torch phase breakdown with a *matched* attention
+  backend (the shim runs the bridged official flash-attn) is therefore not
+  available, which is why there is no torch column for the denoise or the VAE in
+  the phase table above.
+* **torch + the diffusers VAE class: OOMs.** ~88 GiB for a decode the shim does in
+  3.4 s, at the 256x256 latent as well as 512x512, on a 95 GiB card.
+
+So the trustworthy torch baseline is the VAE class (28.55 s fp32 / 6.17 s
+autocast), and the phase-level torch reference is missing for environmental
+reasons rather than for want of trying.
+
+### Closing the rest is a kernel library, not a fix
+
+The remaining delta needs per-op vectorized kernels for the CUDA backend, and it
+is worth being precise about why no smaller change gets there. jittor's
+`ParallelPass` turns an elementwise loop into a thread-strided scalar loop whose
+*body* is generated C++ text (`yp[id1] = op(xp[id1])`). Rewriting the loop's index
+math cannot vectorize a body whose `op` is arbitrary -- `exp`, a comparison, a
+reduce -- which is exactly why torch's fast paths say `vectorized`: they are
+hand-written per-op functors (`vectorized_layer_norm_kernel`,
+`gpu_kernel_impl_nocast` with vectorized elementwise functors). `VectorizePass` is
+not that; it emits `#pragma vector` for icc and lets a C compiler do the work, and
+`float4`/`half2` appear nowhere in `src/codegen/`. `src/type/fp16_compute.h` shows
+the shape of the work -- it has vectorized `vload`/`vfill` for *bulk copies* -- but
+nothing for computed loops.
+
+The measured prizes, per elementwise family, are modest individually and real
+together: the f32->f16 cast 2.06 -> ~0.95 s, flash-attn 2.84 -> ~1.89 s (cuDNN's),
+and the bias adds folded into the gemm as torch does. On the VAE class that is
+~2.9 s of a 29.1 s GPU budget, and the same codegen serves the denoise, which is
+53% of the request.
