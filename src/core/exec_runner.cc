@@ -452,8 +452,18 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     // == phase 7: finish the batch ==
     LOGvv << "All" << plan.op_num << "ops finished, return vars:" << vars;
     // a zero-sized var has no memory to point at (see the size==0 branch in
-    // the raw allocators), which is not the same as an unallocated var
-    for (Var* v : vars) ASSERT(v->mem_ptr || v->size == 0 || v->flag(VarFlags::_is_swapped) || !v->liveness.backward.active()) << v;
+    // the raw allocators), which is not the same as an unallocated var.
+    //
+    // The last clause is "nobody needs this any more, so its memory was
+    // allowed to go" -- which another thread can make true mid-batch by
+    // rebinding the holder this var was reached through. `run_sync`'s batch
+    // hold (added with the fix for the `fused_op.cc` outputs assert) counts
+    // towards that liveness without being a consumer of it, so without this
+    // subtraction the clause can never fire again and a var released while the
+    // batch ran fails here instead. Measured on a four-thread loader probe:
+    // 2/15 runs, against 0/15 with the hold compiled out.
+    const int held = plan.batch_hold_per_var;
+    for (Var* v : vars) ASSERT(v->mem_ptr || v->size == 0 || v->flag(VarFlags::_is_swapped) || v->liveness.backward.count() <= held) << v;
     // clean fetcher free buffer
     fetcher_to_free.clear();
     if (device_sync && !runtime_use_cuda())

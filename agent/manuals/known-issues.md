@@ -674,6 +674,49 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   Nothing here identifies *which* tensors outlive their segment; that needs
   `use_stat_allocator` lifetimes and was not done.
 
+## KI-EXEC-005: a var released by another thread mid-batch fails the batch
+
+- Severity: Medium (rare, but it aborts a sync that asked for nothing unusual;
+  the shape is exactly a multi-threaded weight loader)
+- Status: Open. Partly addressed 2026-09-18 -- the batch no longer counts its
+  own hold as a consumer -- and still reproducible at a lower rate.
+- Owner: executor maintainers
+- Reproduction: four Python threads, each `jt.array(chunk)` then
+  `param[tid*N:(tid+1)*N] = host` then `param.sync()`, 30 rounds, on one shared
+  `param`. Measured on this box (8x H-series, 4 threads, 30 rounds per run):
+
+  | core | runs failed |
+  | --- | --- |
+  | as merged (`ceae1910`) | 2 / 15 |
+  | same, batch hold compiled out | 0 / 15 |
+  | with the phase-7 discount below | 1 / 20 |
+
+- Failure: `exec_runner.cc: [check failed: v->mem_ptr || v->size == 0 ||
+  v->flag(_is_swapped) || ...]` at phase 7, on the shared parameter var.
+- Mechanism. Thread B's slice assignment rebinds the holder, so the var thread
+  A's batch requested becomes garbage while that batch runs and its memory is
+  released -- which is what the last clause of the assert was written to
+  tolerate ("nobody needs this any more"). `ceae1910` added a `VarPtr` per plan
+  var for the batch's duration, and that hold counts towards the same backward
+  liveness the clause reads, so the clause stopped firing and a legitimate
+  release began failing the batch instead. Subtracting the hold
+  (`ExecPlan::batch_hold_per_var`) restores the intent and removes most of it.
+- What is left. A var can carry backward liveness from a consumer as well as
+  from a holder, so the subtraction does not always bring the count to the
+  batch's own contribution, and the residual 1-in-20 remains. Deciding the
+  invariant a requested var actually has under concurrent holder rebinding is
+  the open part: either the batch records that *this* var's memory went during
+  *this* batch (a bit set in `free_var_mem`, cleared on allocation), or the
+  shim serialises the entry points a threaded loader drives, which is what
+  section 23 of the vLLM enablement results proposed before section 29's fix
+  superseded it.
+- Not covered by a test. `ceae1910` changed five core files and shipped with no
+  in-repo regression case; its evidence is `probe_loader_race.py`, which lives
+  outside the tree. `tests/core/test_executor_entry_lock.py` is a different
+  property (threads inside the executor's call, each syncing its own graph).
+  A gate for this one needs the race to be deterministic first -- at 1-in-20 it
+  would be a flaky gate, which is worse than none.
+
 ## KI-EXEC-003: cuDNN autotuning is not isolated from execution scheduling
 
 - Severity: High (silent, deterministic change to training numerics)

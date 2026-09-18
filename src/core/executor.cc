@@ -332,6 +332,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     vector<VarPtr> batch_hold;
     batch_hold.reserve(plan.all_vars.size());
     for (Var* v : plan.all_vars) batch_hold.emplace_back(v);
+    // What phase 7 has to discount: this hold is bookkeeping, not a consumer.
+    plan.batch_hold_per_var = 1;
     ExecutionBackendScope backend_scope(plan.backend);
 
     // The fusion verdict goes to FusedOp as the vector it already is, instead
