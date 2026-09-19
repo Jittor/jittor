@@ -334,6 +334,7 @@ include docs/notes/complex-dtype.md
 include docs/notes/device-placement.md
 include docs/notes/float32-precision-policy.md
 include docs/notes/index.md
+include docs/notes/mixed-precision.md
 include docs/notes/numerics-contract.md
 include docs/notes/pipelined-execution.md
 include docs/performance/benchmarking.md
