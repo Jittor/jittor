@@ -187,6 +187,40 @@ class TestAutocast(StubPolicyBase):
             out = torch.nn.functional.linear(x, weight, bias)
         self.assertEqual(str(out.dtype), "float16")
 
+    def test_autocast_conv3d_keeps_the_compute_dtype_through_a_float32_bias(self):
+        """A convolution adds its own bias; a float32 bias must not undo it.
+
+        The same rule as `linear` above and the same mechanism: the shim's
+        torch-parity promotion makes ``f16 + f32 -> f32``, so the float32 bias
+        a torch module keeps lifted the convolution's result -- and every layer
+        behind it -- back to float32.  torch's autocast casts the convolution's
+        bias along with its other operands.  Measured on the MiniMax-H3 video
+        VAE decode: all 63 ``Conv3d`` calls returned float32 this way, which was
+        the non-attention half of the decode's gap against torch.
+        """
+        x = jt.random((1, 4, 4, 8, 8), dtype="float32")
+        weight = jt.random((8, 4, 3, 3, 3), dtype="float32")
+        bias = jt.random((8,), dtype="float32")
+        with torch.autocast("cuda", dtype=torch.float16):
+            out = torch.nn.functional.conv3d(x, weight, bias, padding=1)
+        self.assertEqual(str(out.dtype), "float16")
+
+    def test_autocast_conv2d_module_keeps_the_compute_dtype_through_a_bias(self):
+        module = torch.nn.Conv2d(4, 8, 3, padding=1, bias=True)
+        x = jt.random((1, 4, 8, 8), dtype="float32")
+        with torch.autocast("cuda", dtype=torch.float16):
+            out = module(x)
+        # The module hands back a shim tensor, whose dtype prints torch-style.
+        self.assertEqual(str(out.dtype).replace("torch.", ""), "float16")
+
+    def test_autocast_conv_is_not_changed_without_amp(self):
+        """No register, no cast: the bias add stays float32."""
+        x = jt.random((1, 4, 4, 8, 8), dtype="float32")
+        weight = jt.random((8, 4, 3, 3, 3), dtype="float32")
+        bias = jt.random((8,), dtype="float32")
+        out = torch.nn.functional.conv3d(x, weight, bias, padding=1)
+        self.assertEqual(str(out.dtype), "float32")
+
     def test_autocast_rejects_a_dtype_it_cannot_express(self):
         self.assertRefuses(
             lambda: torch.autocast("cuda", dtype="float8_e4m3fn"),

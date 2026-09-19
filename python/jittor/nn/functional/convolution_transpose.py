@@ -3,6 +3,8 @@
 import jittor as jt
 from jittor._runtime.dispatch import select_kernel
 
+from ._amp import bias_for_compute_dtype
+
 def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
     if groups == 1:
         x = input
@@ -43,7 +45,7 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
             f'i4*{stride_w}-{padding_w}+i6*{dilation_w}', # Wid+KWid
         ])
         if isinstance(bias, jt.Var):
-            b = bias.broadcast(y.shape, [0,2,3])
+            b = bias_for_compute_dtype(y, bias).broadcast(y.shape, [0,2,3])
             y = y + b
         else:
             assert not bias, "Bias should be none or jittor var"
@@ -97,7 +99,7 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
             f'i5*{stride[1]}-{padding[1]}+i7*{dilation[1]}', # Wid+KWid
         ])
         if bias is not None:
-            b = bias.broadcast(y.shape, [0,2,3])
+            b = bias_for_compute_dtype(y, bias).broadcast(y.shape, [0,2,3])
             y = y + b
         return y
 
@@ -145,7 +147,7 @@ def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_paddi
         f'i5*{stride_w}-{padding_w}+i8*{dilation_w}', # Wid+KWid
     ])
     if isinstance(bias, jt.Var):
-        b = bias.broadcast(y.shape, [0,2,3,4])
+        b = bias_for_compute_dtype(y, bias).broadcast(y.shape, [0,2,3,4])
         y = y + b
     else:
         assert not bias, "Bias should be none or jittor var"

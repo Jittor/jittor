@@ -456,6 +456,7 @@ class ConvTranspose1d(nn.Module):
             self.bias = None
     def execute(self, x):
         import jittor as _jt2
+        from jittor.nn.functional._amp import bias_for_compute_dtype
         x2 = x.unsqueeze(2)                       # (N,Cin,1,L)
         w2 = self.weight.unsqueeze(2)             # (Cin,Cout/g,1,K)
         y = _jt2.nn.conv_transpose2d(
@@ -463,7 +464,11 @@ class ConvTranspose1d(nn.Module):
             (0, self.output_padding), self.groups, (1, self.dilation))
         y = y.squeeze(2)                          # (N,Cout,Lout)
         if self.bias is not None:
-            y = y + self.bias.broadcast(y.shape, [0, 2])
+            # The bias is added here rather than inside the fused conv, so it
+            # needs the amp cast itself: a float32 bias would otherwise lift
+            # the fp16 result back to float32. See
+            # `jittor.nn.functional._amp`.
+            y = y + bias_for_compute_dtype(y, self.bias).broadcast(y.shape, [0, 2])
         return y
 
 

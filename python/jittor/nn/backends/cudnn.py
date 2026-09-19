@@ -6,6 +6,7 @@ import os
 import jittor as jt
 from jittor._runtime.dispatch import optional_kernel, register_kernel
 from jittor._runtime.backend_libraries import get_library_ops
+from jittor.nn.functional._amp import bias_for_compute_dtype
 
 from jittor.backends.cuda.kernels.nn.channel_bias_cuda import _channel_bias_add_cuda
 
@@ -41,7 +42,8 @@ def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups,
     y = get_library_ops("cudnn").cudnn_conv(x, weight, sh, sw, ph, pw, dh, dw, groups)
     if bias is not None:
         fast = _channel_bias_add_cuda(y, bias)
-        y = fast if fast is not None else y + bias.broadcast(y.shape, [0, 2, 3])
+        y = fast if fast is not None else y + bias_for_compute_dtype(
+            y, bias).broadcast(y.shape, [0, 2, 3])
     return y
 
 # Same story for the transpose: the forward *is* the conv-backward-x op, and
