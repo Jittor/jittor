@@ -16,12 +16,32 @@
 
 namespace jittor {
 
-// Operators one fused kernel may hold. 0 is unbounded, which is what has always
-// shipped; see pass 3 below for the graph that made the question worth asking.
-DEFINE_FLAG(int, fuse_op_limit, 0,
-    "Operators one fused kernel may hold. Fusing a long elementwise chain into "
-    "one kernel saves memory traffic, but a very wide kernel has to keep every "
-    "live intermediate in registers. 0 is unbounded.");
+// Operators one fused kernel may hold, for a chain of half-precision vars.
+//
+// Measured on the MiniMax-H3 video VAE decode under `autocast(float16)`, which
+// is the graph that made the question worth asking (section 47 of
+// docs/results/2026-09-14-vllm-omni-h3-enablement.md). Unbounded, that decode
+// builds kernels of up to 361 operators and takes 15.97 s; the same decode in
+// float32 caps itself at 17 operators and takes 8.32 s. The bound, by value:
+//
+//   limit    0     128    64     32     24     16     8
+//   decode   15.97 12.53  10.67  9.65   9.21   8.87   8.62
+//
+// 16 is the default because it takes 93% of the regression and costs nothing
+// measurable anywhere else. Going further is available and is not free: at 8
+// the float32 arm of the same decode drifts 8.32 -> 8.42.
+//
+// The bound applies to half-precision chains only, and that restriction is the
+// reason it is free. Applied to every dtype it costs 8.1% on a 40-operator
+// float32 elementwise chain (3.649 -> 3.944 ms) and 1.8% on a convolutional
+// training step, for no benefit -- a float32 chain stops itself, because the
+// casts that break it are there. Under `autocast` the chain is uniformly half
+// precision and nothing breaks it. 0 is unbounded, the behaviour before this.
+DEFINE_FLAG(int, fuse_op_limit, 16,
+    "Operators one fused kernel may hold when the vars between them are half "
+    "precision. Fusing a long elementwise chain into one kernel saves memory "
+    "traffic; a very wide one has to keep every live intermediate in registers, "
+    "and under autocast nothing breaks the chain. 0 is unbounded.");
 
 // count_fuse decides, for one execution batch, which ops end up inside the
 // same fused op and which intermediate vars survive as real memory.
@@ -221,13 +241,13 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
 
     // Pass 3: union neighbours that sit on the same fuse level.
     //
-    // `group_size` bounds how many operators one fused kernel may hold. There
-    // was no bound: the MiniMax-H3 video VAE decode under `autocast(float16)`
-    // produced kernels of 361 operators (mean width 16.47 against 2.90 for the
-    // same graph in float32), because a uniformly half-precision chain has no
-    // dtype boundary to break it while the float32 one is cut by the shim's
-    // promotion. `fuse_op_limit` is 0 -- unbounded, the behaviour that has
-    // always shipped -- until the measurement that sets it says otherwise.
+    // `group_size` bounds how many operators one fused kernel may hold; see
+    // `fuse_op_limit` at the top of this file for the measurements that set it.
+    // There was no bound at all, and the MiniMax-H3 video VAE decode under
+    // `autocast(float16)` built kernels of 361 operators that way -- mean width
+    // 16.47 against 2.90 for the same graph in float32, and 15.97 s against
+    // 8.32 s -- because a uniformly half-precision chain has no dtype boundary
+    // to break it while the float32 one is cut by the shim's promotion.
     vector<int> group_size(ops.size(), 1);
     vector<char> forced_material(vars.size(), 0);
     for (uint i = 0; i < ops.size(); i++) {
@@ -242,16 +262,46 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
             int root = find_father(i);
             int other_root = find_father(other_id);
             if (root == other_root) return;
-            if (fuse_op_limit > 0 &&
+            // Half precision only. A float32 chain stops itself -- on the H3
+            // decode float32 never exceeds 17 operators, and bounding it costs
+            // 8.1% on a 40-operator float32 elementwise chain (3.649 -> 3.944
+            // ms) for nothing. Half precision is where the runaway is, and the
+            // reason is not the dtype as such: under `autocast` the chain is
+            // uniformly float16, so none of the casts that break a mixed chain
+            // into pieces are there.
+            bool half = var->dtype() == ns_float16 || var->dtype() == ns_bfloat16;
+            if (half && fuse_op_limit > 0 &&
                     group_size[root] + group_size[other_root] > fuse_op_limit) {
-                // The two ops stay in different kernels, so the var between
-                // them has to exist in memory. Without this the verdict loop
-                // below could still mark it fused-away -- it decides from the
-                // edges, not from the grouping -- and a group whose every
-                // output was fused away reaches the executor with none at all
+                // Producer/consumer only, and the restriction is load-bearing
+                // twice over.
+                //
+                // It is what the mark is for. The two ops stay in different
+                // kernels, so the var between them has to exist in memory. The
+                // verdict loop does set it to 1 on the root mismatch -- and
+                // then, if every individual edge was fusable, falls into its
+                // `else if (var_fused[i])` arm and re-decides that 1 into a 2
+                // or a 3, i.e. recompute the producer inside each consumer
+                // instead of writing it out. A group whose every output went
+                // that way reaches the executor with no outputs at all
                 // (`fused_op.cc: [check failed: outputs().size()]`, which is
-                // what `fuse_op_limit=16` hit).
-                forced_material[var->batch_index_at(tt)] = 1;
+                // what `fuse_op_limit=16` hit). Forcing 1 here is what that
+                // arm cannot undo.
+                //
+                // It is also the only safe spelling. `relation == 0` is the
+                // sibling walk, whose `var` is an *input* of `op` -- and that
+                // is the one branch of for_each_neighbor that does not filter
+                // on `var->tflag == tt`, because until this flag existed
+                // nothing on that path asked for a batch index. It can hand us
+                // a var outside the batch: `build_exec_plan` enqueues an input
+                // node only when it is unfinished, so an already-computed
+                // shared input is never stamped, and `batch_index_at` asserts
+                // rather than returning a stale index. Nothing is lost by
+                // skipping it -- separating two *consumers* of a var cannot
+                // empty a group's outputs, and the verdict loop materialises
+                // that var on its own, since one of the two consumers now
+                // fails the `find_father(consumer) != root` test.
+                if (relation == 1)
+                    forced_material[var->batch_index_at(tt)] = 1;
                 return;
             }
             father[other_root] = root;

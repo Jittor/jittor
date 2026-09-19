@@ -4707,12 +4707,115 @@ histogram was the check, and it did not move.
 **Where the width does come from:** `count_fuse`'s union-find group size in
 `src/core/fuser.cc`. Pass 3 unions every neighbour pair on the same fuse level
 with no bound at all, so one fused kernel can hold an arbitrarily long chain.
-`fuse_op_limit` (new flag, default 0 = unbounded = the behaviour that has always
-shipped) is the bound. A var the limit refuses to merge across has to be written
-out: without that the group's every output can be fused away and the executor
-reaches `fused_op.cc` with none at all -- `fuse_op_limit=16` hit exactly that,
-which is why the flag lands with a forced-materialisation path rather than as a
-bare comparison.
+`fuse_op_limit` is the bound, and it closes most of the gap:
+
+| limit | 0 (unbounded) | 128 | 64 | 32 | 24 | 16 | 8 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| decode | 15.97 s | 12.53 | 10.67 | 9.65 | 9.21 | **8.87** | 8.62 |
+
+16 is the default: it takes 93% of the regression and costs nothing measurable
+anywhere else. 8 is available and is not free -- the float32 arm of the same
+decode drifts 8.32 -> 8.42 there.
+
+**The bound is restricted to half-precision chains, and that restriction is why
+it is free.** Applied to every dtype it costs 8.1% on a 40-operator float32
+elementwise chain (3.649 -> 3.944 ms) and 1.8% on a convolutional training step,
+for no benefit at all: a float32 chain stops itself, because the dtype casts that
+break it are already there -- on this decode it never exceeds 17 operators. Under
+`autocast` the chain is uniformly half precision, so none of those casts exist to
+break it. The guard is `var->dtype() == ns_float16 || var->dtype() == ns_bfloat16`
+on the var between the two ops being merged.
+
+A var the limit refuses to merge across has to be written out: without that the
+group's every output can be fused away and the executor reaches `fused_op.cc`
+with none at all -- `fuse_op_limit=16` hit exactly that, which is why the flag
+lands with a forced-materialisation path rather than as a bare comparison.
+
+**Where it leaves the decode.** At the shipped defaults -- bias cast on,
+`fuse_op_limit=16` -- against real torch 2.13 on the same latent, both decoding
+under `autocast(float16)`:
+
+| | decode | vs torch |
+| --- | --- | --- |
+| torch | 6.64 s | -- |
+| shim, before this section | 15.97 s | 2.40x |
+| **shim, now** | **8.86 s** | **1.33x** |
+
+and the numbers agree: `max abs 3.14e-02`, `mean abs 1.17e-03`,
+`cos 0.99999898` over `(1, 3, 124, 512, 512)`. That mean sits inside the
+~1.5e-3 rms shim-torch difference section 44 records as the standing gap, so
+this is parity at the tolerance the frontend already has, not a new divergence.
+The remaining 1.33x is the pre-existing residual sections 45 and 46 attribute --
+1.09 s of non-attention device work and 0.53 s of attention -- and is not
+autocast-related.
+
+(The `max rel 6.7e+03` that comparison also prints is a division by a
+near-zero reference element, not a signal; on a tensor with values at 1e-6 the
+relative measure means nothing and the absolute one is what to read.)
+
+### Across settings: three dtypes, two sizes, bound on and off
+
+One row is not a parity claim, so the same decode was run across the axes that
+can move either number: `autocast` dtype, latent size, and the bound itself.
+The oracle records real torch 2.13's answer for each cell first, then the shim
+compares against it (`.resume-parity-settings.py`). `half_t` is the reference
+latent cut to `T=16` of its 37.
+
+| setting | limit 0 | limit 16 | torch | vs torch | cos |
+| --- | --- | --- | --- | --- | --- |
+| fp16 full | 15.98 s | **8.87 s** | 6.64 s | 1.34x | 0.99999898 |
+| fp16 half_t | 6.85 | **3.81** | 2.86 | 1.33x | 0.99999897 |
+| bf16 full | 15.98 | **8.88** | 6.65 | 1.34x | 0.99998433 |
+| bf16 half_t | 6.87 | **3.83** | 2.85 | 1.34x | 0.99998423 |
+| fp32 full | 25.95 | **25.94** | 28.69 | **0.90x** | 0.99999995 |
+| fp32 half_t | 11.12 | **11.12** | 12.29 | **0.90x** | 0.99999995 |
+
+Three things this settles that the single row could not:
+
+* **The bound works in every half-precision cell, not just the one it was cut
+  on.** ~1.8x in all four, at both sizes and in both dtypes.
+* **The dtype guard holds at every size.** float32 moves by 0.01 s at the
+  reference latent and by nothing at all at the smaller one. The guard was
+  argued from a synthetic chain; this is the real model agreeing.
+* **bf16 is not the outlier it looked like it would be.** `lt_linear_cuda`'s
+  `_supports` rejects bfloat16 outright, so every bf16 linear takes the
+  portable matmul-plus-broadcast-add path, and disabling that path for fp16
+  cost 8 s (15.98 -> 24.05, below). The prediction from those two facts was
+  that bf16 would be markedly slower. It is 8.88 against fp16's 8.87. The 8 s
+  was measured *under the unbounded fuser*, where the portable path's extra
+  elementwise operators were swept into the runaway kernels; with the bound
+  that cost is not there. The gate stays as it is, and the cost of extending
+  cuBLASLt to bf16 would be spent on nothing.
+
+float32 is also 10% *faster* than torch at both sizes, which is consistent with
+section 39's reading that the fp32 path was never the problem.
+
+**The bound does not change the answer, and the first check that said otherwise
+was the wrong check.** The sweep flags a bound-on/off drift in all four
+half-precision cells (1.6e-07..8.3e-07) against a 1e-9 threshold. Both halves of
+that are wrong: the threshold was calibrated against nothing, and the quantity
+compared was two aggregate *mean-abs-vs-torch scalars* rather than the arrays
+themselves. The measurement that settles it decodes the same setting twice with
+the bound unchanged and compares that to bound-on against bound-off
+(`probe_bound_vs_noise.py`):
+
+| | repeat, same setting | bound on vs off | ratio |
+| --- | --- | --- | --- |
+| fp16 | 3.005e-04 | 2.860e-04 | 0.95 |
+| bf16 | 3.194e-04 | 2.973e-04 | 0.93 |
+| fp32 | 5.135e-07 | 5.142e-07 | 1.00 |
+
+Running the identical setting twice moves the decode *more* than the bound does,
+in every dtype. This decode is not bit-reproducible (section 38), so a
+bit-identity claim is the wrong shape for it: `tests/codegen/test_fuse_op_limit.py`
+asserts bit-identity on a synthetic elementwise chain, where it holds and is
+worth pinning, and the real model's claim is this one -- below its own noise
+floor.
+
+**How to apply:** do not assert a fixed tolerance on this decode without
+measuring the repeat-noise first. A threshold picked in advance says more about
+the person picking it than about the change under test, and here it would have
+reported a numerics regression in a change that has none.
 
 **Ruled out along the way**, each measured rather than reasoned about:
 
@@ -4724,36 +4827,92 @@ bare comparison.
   error the distorted profiler timings would have led to.
 * *Launch count, operator count, op mix.* Identical between the modes.
 
-**Still open:** `fuse_op_limit` is 0, so nothing in this tree removes the 2x yet.
-This section explains it; it does not claim to have removed it.
+**Open:** everything above is one graph on one box, and the bound is a
+framework-wide fusion default. The half-precision guard is what the claim that it
+is free rests on, and `tests/codegen/test_fuse_op_limit.py` pins it on a
+synthetic 60-operator elementwise chain, reading each kernel's width back out of
+its JIT key (`__get_fused_src` splices one `opkey<N>:` per operator into the
+name, so counting them counts the operators): the bound must not change the
+answer in any of the three dtypes, it must more than halve the width of a
+float16 or bfloat16 chain, and it must leave a float32 chain's width exactly
+where it was *at limit 1* -- the value that refuses every merge it is allowed
+to see, so a float32 chain surviving it cannot be explained by the chain being
+short or by the bound never being reached. That is the guard, not the chain
+stopping itself, and `tests/core/test_fuser.py` separately pins the one thing
+this file cannot: that the default ships greater than 0, since every case here
+sets the flag by hand and a default flipped back to 0 would leave the suite
+green while the H3 decode regressed.
 
-To finish it, in order (the first step is the copy-deploy trap from
-`HANDOFF-AMP-BIAS.md` -- editing the repo changes nothing until the file reaches
-the deployed tree, and a `src/` edit means a core rebuild):
+The assertion is a reduction, not the literal limit, and the reason is worth
+keeping: a kernel's reported width is its union-find group *plus* the producers
+the planner shares into it, so `fuse_op_limit=8` legitimately leaves kernels of
+12 on this chain. Those are two different numbers, and conflating them is what
+produced the wrong first attribution above.
+
+Two of the three things this paragraph used to list as unmeasured now are. The
+decode has been run at the *shipped* default rather than under a flag set by
+hand -- 8.89 s, `cos 0.99999898`, which is the sweep's fp16 cell reproduced by
+a different probe -- and the cross-setting table above covers three dtypes and
+two sizes with the bound on and off.
+
+What is still unmeasured: a plain fp32 training step end to end, and the
+ordinary gates on a machine that is not this one. Everything here is one model
+on one box with a co-tenant, so the ratios are the estimators to quote and the
+absolute times are upper bounds (section 40's correction).
+
+### The refusal path had to be narrowed to producer/consumer edges
+
+Found by reading rather than by running, and fixed before it was ever hit.
+
+Marking the refused var for materialisation was spelled on *every* refused edge,
+and pass 3 is the only caller of `for_each_neighbor` that asks for siblings.
+That sibling branch is the one path in the function which does not filter on
+`var->tflag == tt`, because until this flag existed nothing on it wanted a batch
+index -- `edge_fusable`'s `relation == 0` arm reads dtypes, shapes and op types
+and no indices. Its `var` is an *input* of the op, and `build_exec_plan`
+enqueues an input node only when it is unfinished, so an already-computed shared
+input is never stamped and `Node::batch_index_at` asserts on it rather than
+returning a stale index. A finished half-precision var read by two ops of one
+batch would have taken down the planner.
+
+Narrowing the mark to `relation == 1` removes that and loses nothing. Separating
+two *consumers* of a var cannot empty a group's outputs, and the verdict loop
+materialises that var by itself -- one of the two consumers now fails its
+`find_father(consumer) != root` test. The mark earns its keep only on a
+producer/consumer edge, where `all_consumers_fusable` stays 1 and the loop's
+`else if (var_fused[i])` arm re-decides the 1 into a 2 or a 3, i.e. recompute
+instead of write out.
+
+That re-decision is the whole failure, and `FusedOp::var_stays_in_memory` is why:
+it is `var_fused[...] == 1` exactly, so a 2 or a 3 takes the var out of the
+segment's `_outputs`. Split a fusable chain in the middle and the upstream group
+can be a single operator whose single output is precisely the var that just
+became a share -- a segment with nothing to write, which is the
+`ASSERT(outputs().size())` at `fused_op.cc:163`. The mark is the one thing that
+arm cannot undo.
+
+`test_a_refused_sibling_edge_on_a_finished_input` covers it: a `sync()`ed
+float16 var, two consumers, and `fuse_op_limit=2` so the sibling merge between
+them is certain to be refused. **Unrun** -- it was written while this box was
+unreachable.
+
+Reproducing a row of the sweep is the copy-deploy trap from
+`HANDOFF-AMP-BIAS.md`: editing the repo changes nothing until the file reaches the
+deployed tree, and a `src/` edit means a core rebuild.
 
 ```bash
 D=/root/jittor-lab/_state/h3/venv-jittor/lib/python3.12/site-packages/jittor
-cp src/core/fuser.cc                        "$D/src/core/fuser.cc"
-cp python/jittor/_runtime/flag_policy.py    "$D/_runtime/flag_policy.py"
+cp src/core/fuser.cc "$D/src/core/fuser.cc"      # then rebuild the deployed core
 cd /root/jittor-lab/minimax-h3 && source ./env-jittor.sh
 CUDA_VISIBLE_DEVICES=2 "$VENV/bin/python" -u probe_share_limit.py    # no grep: it buffers
 ```
 
-The lab's probe still sweeps `fuse_share_limit`, which no longer exists; its
-three limits become `fuse_op_limit` values (0 for the unbounded column, 16 and 32
-for the bounded ones). What to look at:
-
-* `=0` reproduces 8.3 / 16.0 -- nothing else moved underneath;
-* a bounded column must take the cast-on mean width **down from 16.47**. That is
-  the check that failed for the share cutoff, so run it first: if the width does
-  not move, the bound is not reaching `count_fuse`'s groups either;
-* the cast-off column must not regress -- forcing a materialisation costs memory
-  and bandwidth where the chain is short, and 8.3 s is the number to protect.
-
-Then the same A/B has to run on the *native* side (`tests/` core tier, and a plain
-fp32 training step) before the bound can ship: cutting a chain that used to be
-free costs a write-out, and the limit value is inherited from where the pathology
-starts rather than measured.
+The lab's probe is named for the share limit it used to sweep, and that flag no
+longer exists; its three limits are now `fuse_op_limit` values. What to look at,
+in this order: `=0` must reproduce 8.3 / 16.0; a bounded column must take the
+cast-on mean width **down from 16.47** (that is the check the share cutoff
+failed); the cast-off column must not regress past 8.3 (it is what puts the
+default at 16 rather than 8).
 
 ### One more divergence found on the way
 
