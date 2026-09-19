@@ -37,6 +37,24 @@ def _class_callables(cls):
 
 
 
+def _is_build_output(root, relative):
+    """``build/lib/...`` is a copy of this tree, not this tree.
+
+    ``pip install -e compat`` leaves ``compat/build/lib/jittor/compat/*.py``
+    behind, and ``compat_root`` is exactly the compat distribution root, so a
+    bare ``rglob`` reads the copy as source and every whitelist below gains a
+    second entry per file. The gate in ``tools/lint/check_import_layering.py``
+    skips the same shape. A directory named build/dist counts only when it is
+    not itself a package, so a real ``build`` package would still be walked.
+    """
+    for depth, part in enumerate(relative.parts[:-1]):
+        if part in ("build", "dist"):
+            prefix = Path(*relative.parts[:depth + 1])
+            if not (root / prefix / "__init__.py").is_file():
+                return True
+    return False
+
+
 def _native_packages(repo_root):
     """The packages the core distribution actually declares.
 
@@ -69,7 +87,10 @@ class TestTorchCompatStructure(unittest.TestCase):
         import_fallbacks = []
 
         for path in sorted(compat_root.rglob("*.py")):
-            if path.relative_to(compat_root).parts[0] == "tests":
+            relative = path.relative_to(compat_root)
+            if relative.parts[0] == "tests":
+                continue
+            if _is_build_output(compat_root, relative):
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             parents = {}
