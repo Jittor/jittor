@@ -7,8 +7,9 @@ axes the team signs off on:
 * 支持的模型/case 清单 -- which cases the repo covers, and whether each ran;
 * 精度 -- max abs / max scaled-relative error of every output and gradient
   against the independent PyTorch oracle, from the *same* weights and inputs;
-* 显存 -- peak device memory of the child process, sampled externally so the
-  number means the same thing on both runtimes;
+* 显存 -- device memory of the child process on the same two axes for both
+  runtimes: live bytes, and the runtime's own pool. Each runtime is asked
+  through its per-device API so the pair means the same thing on both sides;
 * 速度 -- minimum wall time over repeated samples, and the jittor/torch ratio.
 
 The single-case execution is delegated to the project's own
@@ -22,12 +23,15 @@ Usage:
         --device cuda --repeats 5 --out <dir>
 
 Notes / honest limits:
-* Peak memory is asked of each runtime, not sampled externally: on this box
-  `nvidia-smi --query-compute-apps` does not list the process, and per-GPU
-  `memory.used` includes co-tenants. Real PyTorch reports its true peak; Jittor
-  needs `profile_memory_enable` and reports *current* device use, which a
-  sampler thread turns into a peak. Jittor's profiling can perturb timing, so
-  the memory pass is a separate run from the timing pass.
+* Device memory is asked of each runtime rather than sampled externally: on this
+  box `nvidia-smi --query-compute-apps` does not list the process, and per-GPU
+  `memory.used` includes co-tenants. Both runtimes are asked for live bytes and
+  for their own pool, so `*_peak_bytes` is finally like-for-like. It used to
+  pair torch's `max_memory_allocated` against Jittor's `total_cuda_used`, which
+  is used+cached-free summed over every device -- reserved against live -- and
+  that inflated the Jittor side. Numbers in reports written before this change
+  are that old pair and must not be quoted as a memory ratio. Jittor's profiling
+  can perturb timing, so the memory pass is a separate run from the timing pass.
 * Wall clock on this box is contention-sensitive. Quote the minimum and keep
   the CPU/GPU and the case identical between the two runtimes.
 """
@@ -45,47 +49,74 @@ REPO = HERE.parents[4]
 RUNNER = REPO / "compat" / "tests" / "torch" / "_ecosystem_runner.py"
 RESULT_RE = re.compile(r"^ECOSYSTEM_RESULT (\{.*\})$", re.M)
 PEAK_RE = re.compile(r"^MEMORY_PEAK_BYTES (-?\d+)$", re.M)
+RESERVED_RE = re.compile(r"^MEMORY_RESERVED_BYTES (-?\d+)$", re.M)
+UNMEASURABLE_RE = re.compile(r"^MEMORY_UNMEASURABLE (.+)$", re.M)
 
 #: Runs a case while sampling the runtime's own device-memory accounting.
 #:
 #: Neither external sampler works on this box: `nvidia-smi --query-compute-apps`
 #: does not list the process (container pid mapping), and per-GPU `memory.used`
-#: includes co-tenants. So ask each runtime instead. Real PyTorch knows its true
-#: peak; Jittor needs `profile_memory_enable` and then reports current device use,
-#: which a sampler thread turns into a peak. Jittor's memory profiling can
-#: perturb timing, so the run that measures memory is *separate* from the run
-#: that measures speed.
+#: includes co-tenants. So ask each runtime instead, and ask both for the *same
+#: two numbers*: live bytes (torch `memory_allocated`, Jittor
+#: `device_memory_used`) and pool bytes (torch `memory_reserved`, Jittor
+#: `device_memory_reserved`).
+#:
+#: Do not use `jt.get_mem_info().total_cuda_used` here. It is used+cached-free
+#: summed over *every* device (mem_info.cc:316-322), so pairing it with torch's
+#: `max_memory_allocated` compares reserved against live and makes Jittor look
+#: several times larger than it is. Jittor's per-device calls are the pair that
+#: matches; when the jittor under test predates them, report *no* number rather
+#: than one that means something else.
+#:
+#: Jittor's memory profiling can perturb timing, so the run that measures memory
+#: is *separate* from the run that measures speed.
 _MEMORY_WRAPPER = r'''
 import os, runpy, sys, threading, time
 
 # Resolve the runtime exactly as `_ecosystem_runner._import_torch` does, and do
 # it here in the main thread: the sampler must not be the first thing to import
 # `torch`, or the shim's "import Jittor before torch" rule is violated.
+unmeasurable = None
+
 if os.environ.get("VERIFY_RUNTIME") == "jittor":
     os.environ["JITTOR_TORCH_SHIM"] = "1"
     import jittor as jt
     import torch
     jt.flags.profile_memory_enable = 1
+    if hasattr(jt.core, "device_memory_used"):
+        device = int(jt.current_device())
 
-    def read():
-        return int(jt.get_mem_info().total_cuda_used)
+        def read():
+            return (int(jt.core.device_memory_used(device)),
+                    int(jt.core.device_memory_reserved(device)))
+    else:
+        unmeasurable = (
+            "jittor has no device_memory_used; its only counter "
+            "(get_mem_info().total_cuda_used) is used+cached-free summed over "
+            "every device, which cannot be compared with torch's "
+            "max_memory_allocated")
 else:
     os.environ.pop("JITTOR_TORCH_SHIM", None)
     import torch
 
     def read():
-        return int(torch.cuda.max_memory_allocated())
+        return (int(torch.cuda.max_memory_allocated()),
+                int(torch.cuda.max_memory_reserved()))
 
-peak = []
+live = []
+pool = []
 stop = threading.Event()
 
 
 def sampler():
     while not stop.is_set():
         try:
-            peak.append(read())
+            a, b = read()
         except Exception:
-            pass
+            time.sleep(0.01)
+            continue
+        live.append(a)
+        pool.append(b)
         time.sleep(0.01)
 
 
@@ -98,7 +129,13 @@ try:
 finally:
     stop.set()
     thread.join(timeout=2)
-    print("MEMORY_PEAK_BYTES %d" % (max(peak) if peak else -1))
+    if unmeasurable:
+        print("MEMORY_PEAK_BYTES -1")
+        print("MEMORY_RESERVED_BYTES -1")
+        print("MEMORY_UNMEASURABLE " + unmeasurable)
+    else:
+        print("MEMORY_PEAK_BYTES %d" % (max(live) if live else -1))
+        print("MEMORY_RESERVED_BYTES %d" % (max(pool) if pool else -1))
 '''
 
 
@@ -131,15 +168,28 @@ def _run_case(runner_python, case, out_npz, env, device, repeats, seed,
 
 
 def _peak_memory_bytes(runner_python, runtime, case, env, device, seed, npz):
-    """Peak device memory in bytes for one case in one runtime, or -1."""
+    """Device memory for one case in one runtime.
+
+    Returns ``{"live": bytes, "reserved": bytes, "note": str|None}``. ``live`` is
+    the axis the two runtimes can be compared on; ``reserved`` is each runtime's
+    own pool and is reported beside it, never instead of it. Either is -1 when
+    the runtime could not answer, with ``note`` saying why.
+    """
     cmd = [runner_python, "-c", _MEMORY_WRAPPER, str(RUNNER), case, str(npz),
            "--runtime", runtime, "--device", device, "--repeats", "1",
            "--seed", str(seed)]
     run_env = dict(env, VERIFY_RUNTIME=runtime)
     proc = subprocess.run(cmd, env=run_env, stdout=subprocess.PIPE,
                           stderr=subprocess.STDOUT, text=True)
-    match = PEAK_RE.search(proc.stdout or "")
-    return int(match.group(1)) if match else -1
+    text = proc.stdout or ""
+    peak = PEAK_RE.search(text)
+    reserved = RESERVED_RE.search(text)
+    note = UNMEASURABLE_RE.search(text)
+    return {
+        "live": int(peak.group(1)) if peak else -1,
+        "reserved": int(reserved.group(1)) if reserved else -1,
+        "note": note.group(1) if note else None,
+    }
 
 
 def _compare(reference_path, candidate_path):
@@ -244,7 +294,8 @@ def main() -> int:
                 options.repeats, options.seed, weights=weights)
             rows, worst_abs, worst_rel, worst_key, worst_abs_key, missing = (
                 _compare(ref_npz, cand_npz))
-            ref_mem = cand_mem = -1
+            mem = {"live": -1, "reserved": -1, "note": None}
+            ref_mem = cand_mem = mem
             if options.memory:
                 ref_mem = _peak_memory_bytes(
                     options.oracle_python, "torch", name, env, options.device,
@@ -264,8 +315,11 @@ def main() -> int:
                 "jittor_seconds": cand.get("seconds"),
                 "speed_ratio": (cand.get("seconds") / ref["seconds"]
                                 if ref.get("seconds") else None),
-                "torch_peak_bytes": ref_mem,
-                "jittor_peak_bytes": cand_mem,
+                "torch_peak_bytes": ref_mem["live"],
+                "torch_reserved_bytes": ref_mem["reserved"],
+                "jittor_peak_bytes": cand_mem["live"],
+                "jittor_reserved_bytes": cand_mem["reserved"],
+                "memory_note": cand_mem["note"] or ref_mem["note"],
                 "jittor_fallback_count": cand.get("fallback_count"),
                 "device_agreement": ref.get("device") == cand.get("device"),
             })

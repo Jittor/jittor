@@ -55,16 +55,21 @@ oracle 产出权重和参考值，shim 从同一份权重重算。
 | --- | --- | --- | --- |
 | **支持的模型清单** | `_ecosystem_cases.CASES` 里该库注册的 case | 每个 case 都能跑；跑不了的写明缺什么依赖 | case 名 + 依赖 |
 | **精度** | 同权重、同输入、同 device，两个解释器；逐输出/逐梯度比 | 误差不超过门禁容差；**相对误差用全场最大量级做 floor** | worst abs / worst rel |
-| **显存** | 子进程 device 峰值，外部采样 | 与 oracle 同量级；不出现隐式 fp32 放大 | shim vs oracle MiB |
+| **显存** | 两侧都问运行时自己的 per-device 计数器：live（torch `memory_allocated` / jittor `device_memory_used`）与 pool（`memory_reserved` / `device_memory_reserved`） | 两个口径分别比；**绝不把 reserved 对 allocated** | live MiB、pool MiB |
 | **速度** | 重复交错采样，**取最小值** | 记录 ratio；**PR 门禁只报告不断言墙钟** | ratio |
 
 两条容易踩的口径：
 
 1. **精度的相对误差别按数组自己的量级除。** 一个接近 0 的梯度会报出 ~1 的相对误差，
    而绝对误差其实只有 1e-5——把正确结果读成失败。用整个场的最大量级做分母。
-2. **显存只能外部采样。** shim 的 `torch.cuda.max_memory_allocated()` 目前恒返回 0
-   （本机实测），所以它不能当 shim 侧的峰值；用 `nvidia-smi` 按 pid 采样，两侧才是
-   同一把尺子，代价是采样可能漏掉真峰（报告里注明是下界）。
+2. **显存必须同口径比，两侧都问运行时自己。** 不外部采样：
+   `nvidia-smi --query-compute-apps` 在本机不列出该进程（容器 pid 映射），按 GPU 的
+   `memory.used` 又含同租户。两侧都问运行时自己：torch 用 `max_memory_allocated` /
+   `max_memory_reserved`；shim 侧 `torch.cuda.max_memory_allocated()` 恒为 0（本机实测），
+   要用 `jt.core.device_memory_used(N)` / `device_memory_reserved(N)`。
+   **不要**用 `jt.get_mem_info().total_cuda_used`：它是 used+cached-free 且对所有设备求和
+   （`mem_info.cc`），跟 `max_memory_allocated` 比是 reserved 对 allocated，会把 jittor
+   凭空放大——2026-09-19 的 transformers runbook 就是这么写的，见其「显存列是旧口径」。
 
 ## 四、跑四轴
 

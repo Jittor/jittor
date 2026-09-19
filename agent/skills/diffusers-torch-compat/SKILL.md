@@ -232,10 +232,15 @@ REAL_TORCH_PYTHON=/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
   对拍（`--weights` 复用 oracle 落盘的 `.weights.npz`）。
 - 速度：`--repeats 5`，报最小值。tiny case（dit）受 dispatch 主导，比值 2.89x 只作说明；
   `large_diffusers_unet2d` 是唯一非 dispatch 主导的读数，1.30x。墙钟不在 PR 门禁里断言。
-- **显存不可直接比**（原文已声明）：torch 侧报真实 allocator peak，jittor 侧是
-  `profile_memory_enable` 下采样到的 sync 后 allocator 用量。三个 case 里 jittor 峰值
-  有小于（dit/unet2d）也有大于（large 3.78 GiB > 1.10 GiB）torch 的，不据此声称任何
-  一方省显存或 parity。
+- **显存列是旧口径（2026-09-19 复核）**：上表 `torch peak` 是
+  `torch.cuda.max_memory_allocated`（**活跃**字节，单卡），`jittor peak` 当时取的是
+  `jt.get_mem_info().total_cuda_used`（**活跃+缓存空闲**，且对所有设备求和）——reserved 对
+  allocated，不是同一量纲。工具已改为两侧都报 live 与 pool 两个数（jittor 侧用
+  `device_memory_used` / `device_memory_reserved`），**上表两列相除的倍数不要继续引用**。
+  在 transformers 的同口径复核里，换成 like-for-like 只把倍数挪动约 10%、**没有**消掉差距
+  （live 2.88x、pool 2.76x），所以「口径不同」不足以解释 `large_diffusers_unet2d` 的
+  1.10 GiB -> 3.78 GiB；但 diffusers 这三个 case 尚未按新口径重测，在重测之前两侧都
+  不下结论（既不说 jittor 占更多，也不说 parity）。
 - 本次全程耗时 ~23.5 min，主要花在首次 JIT 内核编译与官方 flash 扩展构建（fresh
   `JITTOR_HOME`），非 case 本身。
 

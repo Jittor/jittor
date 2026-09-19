@@ -79,7 +79,7 @@ CUDA，两侧同 device，速度取重复最小值，`fallback_count` 见各 run
 | 仓库 | 跑通的 case | 精度（最差，对全场量级） | 速度 jt/torch | 备注 |
 | --- | --- | --- | --- | --- |
 | transformers | tiny 5/6，large 5/5 | ≤3.6e-4 / ≤1.51e-3 | 1.71–3.21x / 1.03–1.19x | `transformers_t5` CUDA 挂在 **oracle 侧** apex |
-| diffusers | 3/3 | 4.93e-5–6.77e-4 | 1.30–2.89x | 大 case 显存 jt 3.78 GiB > torch 1.10 GiB |
+| diffusers | 3/3 | 4.93e-5–6.77e-4 | 1.30–2.89x | 大 case 显存 jt 3.78 GiB > torch 1.10 GiB（**旧口径**，见下） |
 | peft | 1/1 | 2.745e-4（abs 1.209e-2） | 2.04x | 需 transformers 4.x 包站 |
 | ms-swift | 1/1 | 2.745e-4 | 2.05x | 同上 |
 | mmcv | 1/1 | 2.514e-7 | 0.998x | 用 mmcv-lite（完整 mmcv 需 CUDA 编译） |
@@ -95,13 +95,34 @@ CUDA，两侧同 device，速度取重复最小值，`fallback_count` 见各 run
 小 case 的 speed ratio（2–3x）是 dispatch-bound，不代表真实尺寸；transformers 的 large
 tier（1.03–1.19x）才是可引用的形态。
 
-## 显存这一条不能直接比
+## 显存：口径是错的，而且差额是真的
 
-两侧报的不是同一个量：真 torch 报 allocator 的真实峰值，Jittor 报的是
-`get_mem_info().total_cuda_used`（需要 `profile_memory_enable`，且**同步后才更新**）经
-采样取的最大值。本机两个外部手段都不可用：`nvidia-smi --query-compute-apps` 看不到进程
-（容器 pid 映射），按 GPU 的 `memory.used` 又含同租户。所以四轴里**显存只有原始数，不做
-parity 断言**；要同口径必须用 NVML 进程级峰值。
+工具原本两侧各问各的，问的不是同一个量：oracle 侧 `torch.cuda.max_memory_allocated`
+（**活跃**字节，单卡），Jittor 侧 `get_mem_info().total_cuda_used`——它是**活跃+缓存空闲**，
+且 `mem_info.cc:316-322` 对**所有**设备求和。reserved 对 allocated。
+
+工具已改为两侧都报 live 与 pool 两个数：torch 用 `max_memory_allocated` /
+`max_memory_reserved`，Jittor 用 `device_memory_used(N)` / `device_memory_reserved(N)`
+（jittor 早有这两个 per-device API）。被测 jittor 太老、没有这两个 API 时，报告
+`jittor_peak_bytes = -1` 并附 `memory_note` 说明原因，而**不是**拿 reserved 顶上——
+deployed 那份 2026-09-11 拷贝就落在这一支。
+
+改正之后，「所以显存不能比」这个结论是**错的**。`large_transformers_bert` 同口径实测
+（GPU 2，同权重同输入，仓库 checkout，`fuse_op_limit` 0 与 16 数字相同）：
+
+| 口径 | torch | jittor | 比 |
+| --- | --- | --- | --- |
+| live（`max_memory_allocated` / `device_memory_used`） | 2129.5 MiB | 6131.2 MiB | 2.88x |
+| pool（`max_memory_reserved` / `device_memory_reserved`） | 2386.0 MiB | 6588.0 MiB | 2.76x |
+| 旧工具那一对（allocated / `total_cuda_used`） | 2129.5 MiB | 6588.0 MiB | 3.09x |
+
+Jittor 的缓存空闲只有 456.8 MiB（pool 的 7%），所以这**不是**分配器攒着不放：Jittor 在这个
+case 上真持有约 **2.9 倍**的活跃显存。换口径只把 3.09x 挪到 2.88x，没消掉。**这是一条待查的
+jittor 问题，不是口径噪声**；上表 diffusers 的 1.10 -> 3.78 GiB 尚未按新口径重测，重测前
+对 diffusers 不下结论。
+
+（外部采样仍然不可用：`nvidia-smi --query-compute-apps` 看不到进程（容器 pid 映射），
+按 GPU 的 `memory.used` 又含同租户。所以只能问运行时自己，才更要保证问的是同一个量。）
 
 ## 顺带发现的真实缺陷
 

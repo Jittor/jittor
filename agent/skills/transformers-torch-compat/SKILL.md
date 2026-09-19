@@ -271,11 +271,30 @@ worst rel 全部 ≤ 3.6e-4，远低于加速卡容差 `5e-3/2e-2`。
 （absolute 误差看着大只是因为该档张量幅值大；全场相对误差最大 1.51e-3，仍在容差内。整档
 墙钟：parity 15m39s、large 7m56s，含首次 JIT 编译；表内是 min-over-repeats。）
 
-**显存口径警告（两个数不可直接比）**：oracle 报真 torch allocator 峰值
-（`torch.cuda.max_memory_allocated`）；jittor 报 `profile_memory_enable=1` 下、sync 后由采样线程
-读 `jt.get_mem_info().total_cuda_used` 取到的最大采样值（工具 `_MEMORY_WRAPPER`）。两者定义不同，
-large 档 jittor 数系统性偏大（~2.3–2.8x）**不能**读成 jittor 真占用更多显存，也不能据此声称显存
-对等。上表只报原始数字（工具原单位字节，见 `verify-report.json`），此处换算为 MiB。
+**显存列是旧口径，且旧结论是错的（2026-09-19 复核）**：上表两列由当时的工具产出——
+oracle 报 `torch.cuda.max_memory_allocated`（**活跃**字节，单卡），jittor 报
+`jt.get_mem_info().total_cuda_used`（**活跃+缓存空闲**，且 `mem_info.cc` 对**所有**设备求和）。
+那是 reserved 对 allocated，不是同一个量纲，工具已改为两侧都报 live 与 pool 两个数
+（`verify_repo.py` 的 `_MEMORY_WRAPPER`，jittor 侧用 `device_memory_used` /
+`device_memory_reserved`）。**不要**继续引用上表两列相除的倍数；下表数字待用新工具重测。
+
+但是：当时写的「两个数不可直接比、所以不能读成 jittor 真占更多显存」**结论也是错的**。
+`large_transformers_bert` 上按同口径实测（GPU 2，同权重同输入，`repeats=1`，仓库 checkout）：
+
+| 口径 | torch | jittor | 比 |
+| --- | --- | --- | --- |
+| live（`max_memory_allocated` / `device_memory_used`） | 2129.5 MiB | 6131.2 MiB | **2.88x** |
+| pool（`max_memory_reserved` / `device_memory_reserved`） | 2386.0 MiB | 6588.0 MiB | **2.76x** |
+| 旧工具那一对（allocated / `total_cuda_used`） | 2129.5 MiB | 6588.0 MiB | 3.09x |
+
+jittor 的缓存空闲只有 `6588.0 - 6131.2 = 456.8 MiB`（占 pool 的 7%），所以这**不是**分配器
+攒着不放的假象：jittor 在这个 case 上真实持有的活跃显存约为 torch 的 **2.9 倍**。把口径换成
+like-for-like 只把 3.09x 挪到 2.88x，没有消掉它。`fuse_op_limit` 0 与 16 两档数字完全一致
+（6588.0 / 6131.2），所以 §47 的融合宽度上限不是这里的杠杆。
+
+数字随 jittor 版本变：deployed 那份（2026-09-11 拷贝，`total_cuda_used=5870.0 MiB`）比仓库
+checkout 低 12%，但量级相同。**显存这条应当被当作一个待查的 jittor 问题**，不是口径噪声。
+
 
 ### 未跑与失败
 
