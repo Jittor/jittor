@@ -205,11 +205,13 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
         od = (D+padding[0]*2-Kd*dilation[0]+dilation[0]-1)//stride[0]+1
         oh = (H+padding[1]*2-Kh*dilation[1]+dilation[1]-1)//stride[1]+1
         ow = (W+padding[2]*2-Kw*dilation[2]+dilation[2]-1)//stride[2]+1
-        # The same register scope conv2d uses: without `keep_reduce` the
-        # reduction widens the fp16 product back to float32 under `amp_prefer16`,
-        # so this generic path ignored the register that the cuDNN path honours.
-        with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce
-                      | jt.amp_flags.reduce16_no_fp32_acc):
+        # The same register scope conv2d uses, for the same reasons: without
+        # `keep_reduce` the reduction widens the fp16 product back to float32
+        # under `amp_prefer16`, so this generic path ignored the register the
+        # cuDNN path honours -- and `reduce16_no_fp32_acc` is not the answer to
+        # that, because it also switches off the float32 accumulator. See the
+        # conv2d scope above and `nn/functional/matrix.py::_contraction_scope`.
+        with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce):
             xx = x.reindex([N,out_channels,C,od,oh,ow,Kd,Kh,Kw], [
                     'i0', # Nid
                     'i2', # Cid
