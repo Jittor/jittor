@@ -1,5 +1,5 @@
 """Torch tensor methods ownership."""
-from ...fidelity import Fidelity, register_api_bindings
+from ...fidelity import Fidelity, register_api_bindings, register_fidelity
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from .method_api import (
@@ -489,6 +489,19 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         Var.is_pinned = _is_pinned
     if not hasattr(Var, "pin_memory"):
         Var.pin_memory = _pin_memory
+    # These two used to contradict each other -- `pin_memory()` returned
+    # `self` (a device tensor, on an accelerator) while `is_pinned()` was a
+    # bare `return False` -- so state the one restriction that is left.
+    register_fidelity(
+        "torch.Tensor.pin_memory", _pin_memory, Fidelity.APPROXIMATE,
+        "Returns an independent host-resident copy that is_pinned() reports as "
+        "pinned; jittor has no page-locked allocator, so a non_blocking "
+        "host-to-device transfer out of it is still synchronous, and a tensor "
+        "already on an accelerator is copied rather than refused.")
+    register_fidelity(
+        "torch.Tensor.is_pinned", _is_pinned, Fidelity.APPROXIMATE,
+        "True exactly for a tensor pin_memory() produced; the buffer is host "
+        "memory but not page-locked.")
 
     # torch's Tensor.where(condition, other): elements of *self* where condition is
     # True, else from `other`. jittor's native Var.where treats *self* as the condition

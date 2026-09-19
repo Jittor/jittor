@@ -195,6 +195,9 @@ _MISC_EXPORTS = tuple(misc.tensor_ops.__all__) + (
 _publish(globals(), misc, _MISC_EXPORTS)
 from . import sparse
 from . import optim
+# Mixed-precision policy (the loss scaler). Imported after optim, which it
+# steps and whose gradients it unscales.
+from . import amp
 from . import dataset
 from . import init
 from . import autograd
@@ -362,6 +365,7 @@ _ROOT_EXPORTS = (
     "init", "jittor_core", "kron", "linalg", "logsumexp", "lr_scheduler",
     "math_util", "matmul", "misc", "mkl_ops", "mpi", "mpi_ops", "nn",
     "numpy2cupy", "optim", "ops", "rank", "sparse", "tensordot",
+    "amp",
     "world_size", "config", "capability", "introspection", "graph_replay",
 )
 

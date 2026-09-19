@@ -132,14 +132,19 @@ def median_ref(x, dim=None, keepdim=False):
         xf = x.reshape(-1)
         s = np.sort(xf)
         kpos = (xf.shape[0] - 1) // 2
-        return np.ascontiguousarray(s[kpos])   # shape (); see _refs.reduce_ref
+        # `asarray`, not `ascontiguousarray`: the latter promotes a numpy scalar
+        # to shape (1,), which is what the comment here used to claim was ().
+        # `jt.median(x)` is 0-d, as torch's is, so the reference has to be too.
+        return np.asarray(s[kpos])
     s = np.sort(x, axis=dim)
     nd = x.ndim
     dd = dim if dim >= 0 else dim + nd
     kpos = (x.shape[dd] - 1) // 2
     sl = [slice(None)] * nd
     sl[dd] = slice(kpos, kpos + 1) if keepdim else kpos
-    return np.ascontiguousarray(s[tuple(sl)])
+    # `asarray` here too: reducing the only axis of a 1-D input without keepdim
+    # leaves a numpy scalar, and `ascontiguousarray` would make it (1,).
+    return np.asarray(s[tuple(sl)])
 
 
 # ---------------------------------------------------------------- op wrappers

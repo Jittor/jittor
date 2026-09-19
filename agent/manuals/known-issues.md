@@ -460,6 +460,67 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
 - Review/expiry condition: retain both default and explicit-dtype assertions until
   a public dtype-default decision changes them together
 
+## KI-DTYPE-003: a Python float against a float64 tensor arrives as float32
+
+- Severity: High -- silent loss of 29 mantissa bits in float64 arithmetic,
+  including in gradcheck, which is the tree's own correctness oracle.
+- Status: Open, found 2026-09-18. Distinct from [KI-DTYPE-002], which is about
+  an explicit `jt.array` of a NumPy array and has `dtype=` as an escape hatch.
+  This one has no escape hatch, because there is no construction to pass
+  `dtype=` to: the scalar is written inline.
+- Owner: dtype and compatibility maintainers
+- Mechanism, one line. `ArrayOp::ArrayOp(PyObject*)` in
+  `src/bindings/pyjt/py_array_op.cc`:
+
+      if (PyFloat_CheckExact(obj)) {
+          scalar.f32 = PyFloat_AS_DOUBLE(obj);     // <- narrowed here
+          args = {&scalar, {}, ns_float32};
+      }
+
+  Every Python float reaches a kernel as a float32 constant. `_is_scalar` then
+  correctly keeps it out of dtype promotion, so the *result* is float64 --
+  which is what makes this invisible: the dtype is right and the value is not.
+- Measured, both modes, CPU. `v = ones(1, float64)`:
+
+      expression        answer                    correct
+      v * 0.1           0.10000000149011611938    0.10000000000000000555
+      v + 0.1           1.1000000014901161194     1.1000000000000000888
+      v * (2/3)         0.6666666865348815918     0.66666666666666662966
+      v * 2 ** 0.5      1.4142135381698608398     1.4142135623730951455
+      v / 3.0           0.33333333333333331483    exact (3.0 is exact in f32)
+
+  Seven correct significant digits where sixteen were asked for. Real torch
+  2.13 answers all five exactly: a Python float is a *weak double* there -- it
+  takes the tensor's dtype but keeps its value until it does.
+- How it was found. `tests/ops/test_ops.py::TestCommonCPU::
+  test_reference_interpolate_bilinear_float64` was the last failure in the
+  OpInfo battery. `jt.nn.interpolate` scaled its sampling coordinates by
+  `hid * (h / H)`, and the Python float `h / H` reached the kernel as float32,
+  so a float64 image was resampled with float32 weights. That call site is
+  fixed (the coordinates are now scaled by the integer ratio and cast to the
+  image's dtype), but the call site was not the bug.
+- Why it is not a one-line fix. `ArrayOp(PyObject*)` is the only Python-float
+  conversion in the tree, and it serves `jt.array(0.5)` as well as `v * 0.5`.
+  Widening it there would make `jt.array(0.5).dtype` float64, which is a
+  visible change to native jittor's float32-by-default contract and not one to
+  make silently. The two call sites have to be told apart first -- either an
+  argument on the conversion, or the weak-scalar model torch uses, where the
+  scalar carries its value and adopts a dtype at the point of use.
+  `auto_convert_64_to_32` is not the discriminator: it reads 1 in both native
+  and Torch mode, so the compatibility frontend preserves float64 some other
+  way and this path is common to both.
+- Half precision is *not* affected, and that has been measured rather than
+  assumed: float32 is wider than both float16 and bfloat16, so the narrowed
+  scalar still carries every bit the tensor can hold, and `v * 0.1`,
+  `v + 0.1`, `v * (2/3)` and `v * 2 ** 0.5` at fp16 and bf16 are bit-identical
+  to torch on both devices. Those four are pinned in
+  `TestHalfPythonScalar` (tests/type/test_half_precision_parity.py) so that
+  whoever builds the weak-scalar model keeps them true. This is a float64
+  problem, and a float32 one only where the scalar is inexact at float32.
+- Review/expiry condition: close when a Python float keeps its value against a
+  float64 operand in both modes, with the five expressions above as the test,
+  and the four half expressions still bit-identical to torch.
+
 ## KI-MEM-002: reading a device tensor relocates it to the host
 
 - Severity: High
@@ -673,6 +734,251 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   absolute gap will grow with batch and resolution, the ratio need not.
   Nothing here identifies *which* tensors outlive their segment; that needs
   `use_stat_allocator` lifetimes and was not done.
+
+## KI-EXEC-006: a second backward over a retained graph found an input gone
+
+- Severity: High -- a supported operation aborted, and until 2026-09-18 it did
+  so as a segfault with nothing naming the var.
+- Status: **Fixed** 2026-09-18 in `src/core/node.cc`. Kept here because the
+  three dead ends below are worth not repeating and because the fix changes the
+  liveness model, not a call site.
+- Reproduction, three lines, deterministic, CPU, no threads:
+
+      x = jt.array(np.random.rand(1, 1, 3, 3).astype("float32"))
+      out = jt.nn.interpolate(x, size=(4, 4), mode="bilinear",
+                              align_corners=False).reshape(-1)
+      out.numpy()                                   # materialise the forward
+      jt.grad(out[0], [x], retain_graph=True)[0].numpy()   # fine
+      jt.grad(out[1], [x], retain_graph=True)[0].numpy()   # was a segfault
+
+  Found by `tests/ops/test_ops.py::TestGradientsCPU::test_gradcheck_interpolate
+  _bilinear`, whose gradcheck materialises the output (a dtype test) before
+  differentiating it element by element.
+- What it cost, which is why it was worth the chase. The abort did not stay in
+  its own test: the broken graph stayed in the process, and `sync_all()` --
+  which `flag_scope` calls whenever the device changes -- re-ran the same dead
+  fused op for the rest of the session. Measured on the OpInfo battery: with
+  `interpolate_bilinear` deselected, `gradcheck_inv` and `gradcheck_log1p` pass;
+  run it first and both fail, and so does every test after it. The battery's
+  "14 failures" was one bug and ~350 poisoned tests, and the run that reported
+  them was 1.55 s rather than 14.69 s because nothing after the first failure
+  did any work.
+- Mechanism. `jt.nn.interpolate`'s bilinear path gathers with `reindex_var`,
+  whose index operands come from `jt.index` -- a source op with no inputs. Those
+  vars are **fused away**: they hold no storage and the kernel recomputes them
+  from their producer on every use. Materialising the forward drops the last
+  *forward* need for the producer, `Node::free()` takes it, and the only
+  producer edge goes. What is left is a var that is alive, carries
+  `_needed_by_backward`, has `mem_ptr == nullptr`, and has no producer. The
+  planner takes it for a batch input that already exists, and the launch finds
+  it unbacked. `free_var_mem` is never called on it: there was never any
+  storage to free.
+- The fix, in `Node::free()`. An op's outputs' *backward* need keeps the op
+  alive, the way a var's producer being forward-live keeps the var alive.
+  Three parts, and all three are load-bearing:
+  1. `needs_recompute(v)`: `mem_ptr == nullptr` **and**
+     `_needed_by_backward` **and** `backward.active()`. Each reading rules out
+     a case the others let through -- see the comment at the function, which
+     names the var in this graph that each one excludes.
+  2. The var-side guard keeps the op's output *tuple* whole. An op kept with
+     only some of its outputs is a half-op: its jit source still names the
+     freed vars, and the code generator then reports "op 10 index names 4 vars
+     in its jit source but has 0 inputs and 2 outputs" (that message is new
+     too; it was `ASSERT(member.size() <= var_num)`).
+  3. The guard's second clause is now `!is_finished() && pending.active()`
+     rather than `!is_finished()`. A var internal to a `FusedOp` never becomes
+     finished -- `exec_runner.cc` finishes `op->outputs()` only -- so without
+     this the retained op pins a var that can never be freed, which is what
+     made attempt 2 leak.
+  One further change fell out of it, in `finish_pending_liveness`: rule b3's
+  withdrawal is now guarded by `liveness.backward.active()`. A node with no
+  backward liveness has no contribution to withdraw, and withdrawing anyway is
+  a second release against one owner. Reaching that needs a var that goes
+  backward-dead and is *then* finished, which cannot happen while such a var is
+  freed on the spot -- so this bug was unreachable until the retention above
+  made it reachable, and it aborted the process at teardown.
+- Measured after the fix:
+  * the three-line reproduction runs 16 successive retained gradients;
+  * 30 repetitions of the double-backward shape leave **0 lived ops, 0 lived
+    vars** (attempt 2 left 652 ops / 938 vars, growing without bound);
+  * a plain training loop stays flat at 25 ops / 31 vars from step 5 to 30;
+  * `tools/run_test_suite.py --tier core`: 310 passed, 0 failed, both sessions.
+- Three fixes tried and ruled out first, each measured. They are why the fix
+  looks the way it does:
+  1. **Mark source outputs `_needed_by_backward`** (drop `_inputs.size()==0`
+     from `manual_set_vnbb` in op.cc). No effect -- the var already carries the
+     flag, and the flag protects storage, which this var never had.
+  2. **Keep the source op alive whenever an output is needed backward.** Fixes
+     the crash and retains 92k ops: almost every backward-needed var *has*
+     storage, so the predicate has to exclude those, which is part 1 above.
+     Narrowing it to this var's state still left 652 lived ops through the
+     retention cycle that part 3 above removes.
+  3. **Force the var to materialise in the fuser** (`var_fused = 1` for a
+     backward-needed output of a source op). Breaks code generation: the fused
+     source references `op3_outputstride0` and friends that were never
+     declared. "Materialised" is not a valid verdict for a var in this position.
+  4. **`stop_fuse()` on the index grids** where the op builds them
+     (`jt.index` in `nn/functional/interpolation.py`). Fixes the crash -- it is
+     the documented way to say "this var keeps its own storage" -- and costs
+     the whole index grid, which is the size of the *output*, four times over.
+     Measured on one `interpolate(1x64x256x256 -> 512x512, bilinear)` with the
+     memory profiler on: peak 352.3 MB -> 620.8 MB, +76% for a single op. A
+     1024x1024 upsample of a batch would pay gigabytes. Not a general fix, and
+     the same objection applies to doing it inside `reindex_var` for every
+     caller.
+- What else changed on the way, and stays. `check_input_is_backed` reports the
+  var and the op instead of dereferencing a null allocator inside the generated
+  kernel. `exec_plan.cc` and `fuser.cc` stopped reading `v->input()` without
+  checking it -- a var in a batch need not have a producer, and four sites in
+  the planner would have faulted on the null one. The backward-liveness
+  underflow now names the node and its counts rather than asserting a number
+  inside a template.
+
+## KI-EXEC-007: four threads writing one parameter free an allocation twice
+
+- Severity: High -- a supported operation aborts, reproducibly, in the exact
+  pattern a multi-threaded weight loader uses.
+- Status: Open, found 2026-09-18 while building a reproduction for
+  [KI-EXEC-005]. Not caused by any change on this branch: reverting both the
+  KI-EXEC-006 fix and the KI-EXEC-005 phase-7 change makes it *more* frequent,
+  not less (below).
+- Owner: memory maintainers
+- Reproduction, ~25 lines, no torch, CUDA:
+
+      param = jt.zeros((4 * 4096, 256), "float32")
+      # four threads, each 30 rounds:
+      #   host = jt.array(np.random.rand(4096, 256).astype("float32"))
+      #   param[tid * 4096:(tid + 1) * 4096] = host
+      #   param.sync()
+
+  This is the pattern KI-EXEC-005 names as its own reproduction, so it is a
+  supported one. Checked in as
+  `agent/skills/jittor-allocator-flag-matrix/probe_shared_param_threads.py`.
+- Failure:
+
+      sfrl_allocator.cc:82: allocation not found: 3 [check failed: block != nullptr]
+      op: array   in: float32[16384,256,]   out: float32[4096,256,]
+
+  i.e. `SFRLAllocator::free` was handed an `allocation` handle that its id
+  space does not have registered -- the id was already freed, or it belongs to
+  a different allocator instance.
+- It needs contention, not just threads. Five runs each:
+
+      | threads | runs failed |
+      | --- | --- |
+      | 1 | 0 / 5 |
+      | 2 | 0 / 5 |
+      | 4 | 4 / 5 |
+
+- And it is not this branch's doing. Same probe, twenty runs at four threads,
+  rebuilding between each state:
+
+      | core | runs failed |
+      | --- | --- |
+      | this branch | 10 / 20 |
+      | KI-EXEC-005 phase-7 change reverted | 8 / 10 |
+      | that and the KI-EXEC-006 fix reverted | 10 / 10 |
+
+- Mechanism, pinned 2026-09-18 by the id-space event log plus a backtrace at
+  the failing free (`KI007_TRACE=1`, which turns both on). The allocator is not
+  the suspect: `alloc` and `free` both hold the instance's `recursive_mutex`,
+  and the id table has its own. The ledger for the failing id:
+
+      set_occupied(size=16777216, thread=A)     <- A allocates the parameter
+      erase_occupied(size=16777216, thread=B)   <- B releases it
+      recycle(thread=B)
+      reissued(thread=B)                        <- the id is now another block's
+      ... then A frees the same id: "allocation not found"
+
+  and the backtrace on that second free:
+
+      VarHolder::sync -> Executor::run_sync -> run_exec_plan
+        -> migrate_to_cpu -> SFRLAllocator::free
+
+  So: thread B's slice assignment rebinds the holder, the old parameter var
+  becomes garbage and `free_var_mem` releases its storage -- while thread A's
+  batch is between planning and its migrate loop. `migrate_to_cpu` then reads
+  `var->mem_ptr`, `var->allocation` and `var->allocator`, which still name the
+  released block, and frees it a second time. `migrate_to_gpu` has the same
+  shape. This is [KI-EXEC-005]'s situation one level down: the same "a var the
+  batch requested was released mid-batch", reaching the allocator instead of
+  the phase-7 assert.
+- What the fix has to say. The batch's hold keeps the *Var* alive; it does not
+  keep the var's *storage*, and `free_var_mem` exists precisely to release
+  storage from a var that stays alive. So the missing invariant is that a var
+  whose storage the running batch will read must not have that storage
+  released -- the in-flight equivalent of what `_needed_by_backward` does for
+  the backward pass. Reordering the migrate (publish the new storage, then
+  release the old) closes the window *after* the copy but not the one before
+  it, and claiming the storage by nulling `mem_ptr` up front makes the var look
+  unbacked to anything that looks at it mid-migration. The invariant is the
+  fix; the ordering is not.
+- One thing already changed. `ArrayOp::run` used to free the output's previous
+  storage with its own copy of `free_var_mem`'s body, reading the three fields
+  and only overwriting them after the free. It now calls `free_var_mem`, which
+  clears them first, so a concurrent release finds nothing to give back. That
+  is correct on its own account and it is not the fix for this entry: the
+  failure rate is unchanged, because the second free comes from the migrate
+  loop, not from here.
+- Blocks [KI-EXEC-005]: the probe that would show whether the phase-7 change
+  worked dies here first, before it reaches phase 7.
+
+## KI-EXEC-005: a var released by another thread mid-batch fails the batch
+
+- Severity: High -- a supported operation aborts. Rare, and the workaround
+  (serialise the threads) is practical, but the pattern is exactly a
+  multi-threaded weight loader and the sync that dies asked for nothing
+  unusual.
+- Status: Open, and now **unverifiable** rather than merely rare. The batch
+  stopped counting its own hold as a consumer, and phase 7 now reads the event
+  instead of the count (below); but the probe that would show whether that
+  worked dies in [KI-EXEC-007] first, in the allocator, before it reaches
+  phase 7. Both changes are in; neither is measured against this failure.
+- Owner: executor maintainers
+- Reproduction: four Python threads, each `jt.array(chunk)` then
+  `param[tid*N:(tid+1)*N] = host` then `param.sync()`, 30 rounds, on one shared
+  `param`. Measured on this box (8x H-series, 4 threads, 30 rounds per run):
+
+  | core | runs failed |
+  | --- | --- |
+  | as merged (`ceae1910`) | 2 / 15 |
+  | same, batch hold compiled out | 0 / 15 |
+  | with the phase-7 discount below | 1 / 20 |
+
+- Failure: `exec_runner.cc: [check failed: v->mem_ptr || v->size == 0 ||
+  v->flag(_is_swapped) || ...]` at phase 7, on the shared parameter var.
+- Mechanism. Thread B's slice assignment rebinds the holder, so the var thread
+  A's batch requested becomes garbage while that batch runs and its memory is
+  released -- which is what the last clause of the assert was written to
+  tolerate ("nobody needs this any more"). `ceae1910` added a `VarPtr` per plan
+  var for the batch's duration, and that hold counts towards the same backward
+  liveness the clause reads, so the clause stopped firing and a legitimate
+  release began failing the batch instead. Subtracting the hold
+  (`ExecPlan::batch_hold_per_var`) restores the intent and removes most of it.
+- What changed, 2026-09-18. A var carries backward liveness from consumers as
+  well as from holders, so subtracting the batch's own hold does not always
+  bring the count to zero, and the residual 1-in-20 remained. The counter was
+  the wrong thing to read: what phase 7 asks is *was this var's storage
+  released while this batch was in flight*, and that is a fact about an event.
+  `batch_released_vars` (var.h) records the event at the one place that can see
+  it -- `free_var_mem` -- and only while a batch is running, so the ordinary
+  free path pays one predictable branch and no allocation; phase 7 tolerates
+  precisely the vars on it. The count stays alongside it: it is the cheaper
+  test and it covers a release that happened before the batch began.
+  The alternative, serialising the entry points a threaded loader drives, is
+  what section 23 of the vLLM enablement results proposed before section 29's
+  fix superseded it; it moves the cost to every caller instead of to the batch
+  that needs the answer.
+- What is left: a measurement. The change is a strict widening of an assert, so
+  it cannot fail anything that passed -- the core tier is 310 passed with it --
+  but "it fixes the 1-in-20" is not claimed, because [KI-EXEC-007] aborts the
+  probe earlier. Close that first, then re-run the loader probe.
+- Not covered by a test. `ceae1910` changed five core files and shipped with no
+  in-repo regression case; its evidence is `probe_loader_race.py`, which lives
+  outside the tree. `tests/core/test_executor_entry_lock.py` is a different
+  property (threads inside the executor's call, each syncing its own graph).
+  A gate for this one needs the race to be deterministic first -- at 1-in-20 it
+  would be a flaky gate, which is worse than none.
 
 ## KI-EXEC-003: cuDNN autotuning is not isolated from execution scheduling
 
@@ -1897,6 +2203,30 @@ about whether to take it.
   `gx` relative error 1.0 on a batched `nn.Linear`). `MklMatmulOp`,
   `MklConvOp` and `MklConvBackwardXOp` all needed `grad()` and the
   `_needed_by_backward` flags added.
+- Measured 2026-09-17, by trying it: dropping the tuner's `fop->has(...)`
+  requirement on the two expands (they are still `BroadcastToOp` producers,
+  still carrying `x` and `bcast_mask` -- they are merely no longer *members*
+  of the fused op) does make the relay fire again. It then aborts inside the
+  relay machinery, which requires the relay op's operands to be fused-op
+  members in two separate places:
+  * `src/codegen/opt/var_relay.cc:66`, `ASSERT(q.size()==2*group.size())`
+    ("currently, we only support single op relay") -- the backward BFS from
+    the relay source stops at fused-op nodes, so it reaches exactly the relay
+    op and its output *only* when every operand is inside the fused op.
+    Observed failure: `var_relay.cc:66: [check failed: q.size()==2*group.size()]`
+    on `tests/ops/test_matmul.py::TestMatmul::test_matmul_type`.
+  * the `oprcs` loop below it, `ASSERT(fnodes.count(v))`, because
+    `relayed_members[i]` is a *fused-op node id*: that is the channel through
+    which the generated kernel hands an operand to the relay op. An operand
+    that is not a fused var has no id to put there.
+  With the expand a storage descriptor, the fused op's inputs are the stride-0
+  views and the underlying 2-D operands are not fused vars at all, so neither
+  requirement can be met by re-pointing the tuner. Two ways out, both real
+  work: (a) let a view expand join the fused op (`count_fuse` refuses every
+  edge touching an `OpType::other` op before it looks at `_force_fuse`), which
+  would also address KI-CODEGEN-001's per-element index cost; or (b) extend
+  the relay to carry operands that live outside the fused op -- a new sentinel
+  in `relayed_members` plus the execution support to pass such a var.
 - Why reviving the relay is not a one-line change: the relay substitutes a
   fused-op var into the relay op's members at run time
   (`OpRelayContext::set_var_member`). The fused op's vars are now the expanded

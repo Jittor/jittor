@@ -976,7 +976,15 @@ class VarDataset(Dataset):
         b = collate_batch(batch)
         for i in range(len(self.args)):
             x = b[i]
-            if jt.is_var(self.args[i]) and self.args[i].ndim == 1:
+            # A 1-D source must not give the batch a trailing axis. Indexing
+            # one answers with a 0-d element now, so collation already yields
+            # `[batch]` and there is nothing to remove -- squeezing anyway ate
+            # the *batch* axis at batch_size=1 (`squeeze` reaches rank 0 now;
+            # it used to stop at `[1]` and hide this). Kept as a guard rather
+            # than deleted: if an element ever regains its trailing axis, the
+            # batch must still not.
+            if (jt.is_var(self.args[i]) and self.args[i].ndim == 1
+                    and x.ndim > 1 and x.shape[-1] == 1):
                 x.assign(x.squeeze(-1))
         return b
 

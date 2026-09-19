@@ -45,12 +45,42 @@
 - 不在主仓库顶层创建 `jittor_fsdp2`、`*_work`、`*_probe` 等实验目录，也不把
   下游兼容文件放进 `python/jittor/` 根目录。
 
+## 单测分层
+
+一次全量跑完十几分钟起，拿它当「刚改的东西坏没坏」的答案太贵。三层回答三个问题：
+
+| 层 | 问题 | 选择方式 | 实测 |
+| --- | --- | --- | --- |
+| `core` | 改完一处，有没有立刻坏 | `tests/_helpers/tiers.CORE_FILES` 白名单 | 44 s，双进程模式 |
+| `smoke` | 一个 PR 该等多久 | 整棵树减去 `tiers.SLOW_FILES` | 约 390 s |
+| `full` | 这棵树到底什么状态 | 整棵树 | 十几分钟起 |
+
+```bash
+python tools/run_test_suite.py --tier core    # 改完就跑，默认串行
+python tools/run_test_suite.py --tier smoke   # 提 PR 前
+python tools/run_test_suite.py                # 全量，按需，不要每次都跑
+```
+
+- **不要动不动跑全量。** 改完先 `--tier core`；只有在定位面广、或要给出「这棵树现在
+  什么状态」这种结论时才跑 `full`。
+- `core` 是白名单，`smoke` 是黑名单，因为漏掉一个文件的后果不同：`smoke` 漏了是
+  覆盖的洞，`core` 漏了只是晚几分钟发现。往 `core` 加文件是在花所有人每一次编辑的
+  时间，条目必须写清实测秒数和它守的基本面，由 `tests/structure/test_gate_tiers.py`
+  检查。
+- compat 有两种测试，`core` 两种各有一条：行为（`compat/tests/torch`，Torch 模式下
+  真的跑张量）和结构契约（`compat/tests/structure`，断言名字归属与命名空间发布）。
+- 预算按**算术**校验（各文件实测秒数求和 vs 预算），不断言墙上时钟——后者在忙机器上
+  失败的样子和真回归一模一样。
+
 提交前运行：
 
 ```bash
 bash tools/check_repo_layout.sh
-python -m pytest -q tests/structure
+JITTOR_TORCH_SHIM=1 PYTHONPATH=python python -m pytest -q tests/structure
 ```
+
+`tests/structure` 属于 Torch 模式路径（见 `tests/_helpers/process_modes.py`），
+不带 `JITTOR_TORCH_SHIM=1` 会直接被 pytest 策略拒绝收集。
 
 顶层或文档结构有意调整时，同步更新结构门禁。只暂存当前任务涉及的文件，不使用
 `git add -A`；完成后提交，提交信息用简明中文。
@@ -58,8 +88,9 @@ python -m pytest -q tests/structure
 ## Documentation Ownership
 
 - 根目录只保留一份双语 [`README.md`](README.md)。不要新增生成版或按语言复制的 README。
-- 长期架构决策放在 `docs/architecture/`，测试契约放在 `docs/testing/`，开发指南和
-  已知问题放在 `docs/development/`，研究提案放在 `docs/research/`。
+- 长期机制说明放在 `docs/notes/`，仓库布局、源码架构、测试体系与已知问题放在
+  `docs/development/`，研究提案放在 `docs/research/`。整改期的过程文档在
+  `refactor-wip/`，收口后整个目录删除。
 - [`agent/manuals/project-context.md`](agent/manuals/project-context.md) 只做当前状态索引；
   环境规则与问题总账分别维护在
   [`agent/manuals/environment.md`](agent/manuals/environment.md) 和

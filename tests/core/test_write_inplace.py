@@ -68,8 +68,16 @@ class TestWriteInplace(unittest.TestCase):
         self.assertIn("dense", str(caught.exception))
 
 
-@unittest.skipIf(not _test_capability.machine_has_accelerator("cuda"),
-                 "no CUDA device")
+# `check_accelerator(...).enabled`, not `machine_has_accelerator`: the
+# question a gate asks is whether CUDA is usable in *this build*, not
+# whether the machine has a card. The helper's own docstring says so --
+# it is "the question to ask before reporting that something is
+# unverifiable here". A CPU-only build on a GPU box answered yes, the
+# class ran, and `jt.flags.use_cuda = 1` raised `No CUDA found`. It also
+# keeps the loud path: a CUDA build that FAILED still asserts rather
+# than skipping (see tests/_helpers/capability.py).
+@unittest.skipIf(not _test_capability.check_accelerator("cuda", backend=jt).enabled,
+                 "no usable CUDA in this build")
 class TestWriteInplaceCuda(TestWriteInplace):
     """The same contract on the accelerator.
 

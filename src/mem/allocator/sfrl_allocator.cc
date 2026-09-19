@@ -9,6 +9,9 @@
 // ***************************************************************
 
 #include <mutex>
+#include <sstream>
+#include "utils/log.h"
+#include <thread>
 #include "mem/allocator/sfrl_allocator.h"
 #include "runtime/device.h"
 #include "runtime/backend.h"
@@ -41,20 +44,29 @@ pair<size_t, size_t> CachingBlockPool::get_key(CachingBlock* block) {
     return std::make_pair((size_t)block->size, (size_t)(block->origin_size * ID_LIMIT + block->id));
 }
 
+// TEMP DIAGNOSTIC (KI-EXEC-007): gate for the per-id event log below.
+static bool ki007_trace_on() {
+    static const bool on = getenv("KI007_TRACE") != nullptr;
+    return on;
+}
+
 //BlockIdSpace
 size_t BlockIdSpace::new_block_id() {
     std::lock_guard<std::mutex> lock(mutex);
     if (!free_ids.empty()) {
         size_t id = free_ids.back();
         free_ids.pop_back();
+        if (PREDICT_BRANCH_NOT_TAKEN(ki007_trace_on())) note(id, "reissued", 0);
         return id;
     }
     ASSERT(tot_block_id < ID_LIMIT - 1) << "block id limit extended.";
+    if (PREDICT_BRANCH_NOT_TAKEN(ki007_trace_on())) note(tot_block_id+1, "fresh_id", 0);
     return ++tot_block_id;
 }
 
 void BlockIdSpace::recycle_block_id(size_t id) {
     std::lock_guard<std::mutex> lock(mutex);
+    if (PREDICT_BRANCH_NOT_TAKEN(ki007_trace_on())) note(id, "recycle", 0);
     free_ids.push_back(id);
 }
 
@@ -64,9 +76,20 @@ void BlockIdSpace::recycle_block_id(size_t id) {
 void BlockIdSpace::set_occupied(size_t id, CachingBlock* block) {
     std::lock_guard<std::mutex> lock(mutex);
     ASSERT(id > 0 && id < ID_LIMIT) << "allocation id out of range:" << id;
+    if (PREDICT_BRANCH_NOT_TAKEN(ki007_trace_on()))
+        note(id, "set_occupied", block->size);
     if (occupied_id_mapper.size() <= id)
         occupied_id_mapper.resize(id+1, nullptr);
     occupied_id_mapper[id] = block;
+}
+
+// Caller holds `mutex`.
+void BlockIdSpace::note(size_t id, const char* what, size_t size) {
+    std::stringstream line;
+    line << what << "(size=" << size << ", thread=" << std::this_thread::get_id() << ")";
+    auto& events = id_events[id];
+    if (events.size() >= 8) events.erase(events.begin());
+    events.push_back(line.str());
 }
 
 // Ids start at 1, so slot 0 is never a live allocation; validating the range
@@ -79,7 +102,28 @@ CachingBlock* BlockIdSpace::get_occupied(size_t allocation) {
         << "allocation id out of range:" << allocation;
     CachingBlock* block = allocation < occupied_id_mapper.size()
         ? occupied_id_mapper[allocation] : nullptr;
-    ASSERT(block != nullptr) << "allocation not found:" << allocation;
+    if (PREDICT_BRANCH_NOT_TAKEN(block == nullptr)) {
+        std::stringstream extra;
+        extra << "allocation not found:" << allocation
+            << " (table size " << occupied_id_mapper.size()
+            << ", ids handed out " << tot_block_id
+            << ", recycled ids waiting " << free_ids.size() << ")";
+        if (ki007_trace_on()) {
+            auto it = id_events.find(allocation);
+            if (it == id_events.end())
+                extra << " -- this id space has no record of it at all,"
+                         " so it was never handed out here";
+            else
+                for (auto& e : it->second) extra << "\n    " << e;
+            // Who is issuing *this* free. The ledger says who released the id
+            // before; this says who is releasing it again, and the two
+            // together are what pinned KI-EXEC-007.
+            print_trace();
+        } else {
+            extra << ". Set KI007_TRACE=1 to record who released it.";
+        }
+        LOGf << extra.str();
+    }
     return block;
 }
 
@@ -88,6 +132,8 @@ CachingBlock* BlockIdSpace::erase_occupied(size_t allocation) {
     {
         std::lock_guard<std::mutex> lock(mutex);
         occupied_id_mapper[allocation] = nullptr;
+        if (PREDICT_BRANCH_NOT_TAKEN(ki007_trace_on()))
+            note(allocation, "erase_occupied", block->size);
     }
     recycle_block_id(allocation);
     return block;

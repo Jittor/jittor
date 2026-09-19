@@ -42,6 +42,18 @@ DECLARE_FLAG(int, use_cuda_managed_allocator);
 #endif
 
 
+// Every input a launch is about to read has to have memory. Reported here,
+// where the var and its op are still in hand, rather than as a null
+// dereference inside the generated kernel.
+static inline void check_input_is_backed(Var* v, Op* op) {
+    if (PREDICT_BRANCH_NOT_TAKEN(!v->mem_ptr && v->size != 0
+                                 && !v->flag(VarFlags::_is_swapped)))
+        LOGf << "input" << v << "of" << op->name()
+             << "has no memory at launch time. Its storage was released while a"
+             << "graph that still reads it was retained; see KI-EXEC-006.";
+}
+
+
 static inline void propergate_needed_flags(FusedOp& fused_op) {
     auto& ops = fused_op.ops;
     for (int i=ops.size()-1; i>=0; i--) {
@@ -194,9 +206,31 @@ DEFINE_FLAG(int, keep_graph, 0, "Leave a batch's nodes unfinished so the same gr
 DEFINE_FLAG(int, auto_graph_replay, 1, "Re-run a repeated inference graph instead of rebuilding it every call. Applies only under no_grad, only to a call whose inputs are Vars whose total size is under `auto_graph_replay_bytes`, and only after the same shapes have been seen twice in a row; anything else, and anything the capture cannot serve, runs normally. 0 disables it.");
 DEFINE_FLAG(int64, auto_graph_replay_bytes, 64<<10, "How large the inputs of a call may be before it is left to run normally. Replay removes graph construction, which costs the same whatever the tensors weigh -- so it wins exactly when the device work per operator is small, and loses when the step was never host-bound to begin with. Input size is the cheap proxy for that, and it also bounds what a capture can retain. Measured on the comparison shapes: at 1 MB the policy engaged for a 256x1024 mlp forward (about a dozen operators, nothing to rebuild) and made it 0.39 -> 0.93 ms, and for a 128-token prefill, 2.88 -> 3.26. At 64 KB it engages for the decode steps, where it is 1.97 -> 0.86 against PyTorch, and leaves the rest alone.");
 
+// Publishes this batch's record of released vars for the duration of the
+// batch, and takes it down on every exit path. See `batch_released_vars` in
+// var.h and phase 7 below.
+namespace {
+struct BatchReleaseRecord {
+    vector<Var*> released;
+    BatchReleaseRecord() {
+        std::lock_guard<std::recursive_mutex> guard(graph_mutation_mutex());
+        batch_released_vars = &released;
+    }
+    ~BatchReleaseRecord() {
+        std::lock_guard<std::recursive_mutex> guard(graph_mutation_mutex());
+        batch_released_vars = nullptr;
+    }
+    bool holds(Var* v) {
+        std::lock_guard<std::recursive_mutex> guard(graph_mutation_mutex());
+        return std::find(released.begin(), released.end(), v) != released.end();
+    }
+};
+}
+
 void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                    vector<Var*>& vars, bool device_sync, int entry_device) {
     ExecutionBackendScope backend_scope(plan.backend);
+    BatchReleaseRecord released_here;
     // == phase 6: execute the plan ==
     auto& ops = plan.ops;
     auto& queue = plan.queue;
@@ -317,6 +351,16 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 sync_times++;
             }
             for (Var* v : op->inputs()) {
+                // An input with no allocator has no memory to read, and the
+                // launch below would dereference the null one -- a segfault
+                // inside the kernel, with nothing naming the var. It happens:
+                // a source op's outputs are not marked `_needed_by_backward`
+                // (op.cc treats an input-less op as recomputable), so their
+                // memory is released once nothing is pending, and a second
+                // backward over a retained graph asks for them again after
+                // `release_inputs` has removed the producer that could have
+                // rebuilt them. See KI-EXEC-006.
+                check_input_is_backed(v, op);
                 if (v->allocator->is_cuda() && !op->flag(OpFlags::_manual_device))
                     migrate_to_cpu(v, allocator);
             }
@@ -328,6 +372,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         } else {
             for (Var* v : op->inputs()) {
                 if (op->flag(OpFlags::_no_input_storage)) break;
+                check_input_is_backed(v, op);
                 // device_copy deliberately accepts a host-resident input and
                 // owns its H2D transfer. Migrating it here first would mutate
                 // the source of x.cpu().cuda(), violating copy semantics.
@@ -452,8 +497,28 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     // == phase 7: finish the batch ==
     LOGvv << "All" << plan.op_num << "ops finished, return vars:" << vars;
     // a zero-sized var has no memory to point at (see the size==0 branch in
-    // the raw allocators), which is not the same as an unallocated var
-    for (Var* v : vars) ASSERT(v->mem_ptr || v->size == 0 || v->flag(VarFlags::_is_swapped) || !v->liveness.backward.active()) << v;
+    // the raw allocators), which is not the same as an unallocated var.
+    //
+    // The last clause is "nobody needs this any more, so its memory was
+    // allowed to go" -- which another thread can make true mid-batch by
+    // rebinding the holder this var was reached through.
+    //
+    // It used to be spelled as a count: `backward.count() <= batch_hold_per_var`,
+    // subtracting `run_sync`'s own hold so that the clause could still fire.
+    // That is an approximation, because a var carries backward liveness from
+    // its consumers as well as from its holders, so the subtraction does not
+    // always reach zero -- and a 1-in-20 failure survived it (KI-EXEC-005).
+    // The question phase 7 is actually asking is whether *this batch* saw the
+    // storage go, which is a fact about an event; `batch_released_vars`
+    // records the event, at the one place that can (`free_var_mem`), and only
+    // while a batch is running. The count stays as well: it is the cheaper
+    // test and it covers the case where the release happened before the batch
+    // began.
+    const int held = plan.batch_hold_per_var;
+    for (Var* v : vars)
+        ASSERT(v->mem_ptr || v->size == 0 || v->flag(VarFlags::_is_swapped)
+               || v->liveness.backward.count() <= held
+               || released_here.holds(v)) << v;
     // clean fetcher free buffer
     fetcher_to_free.clear();
     if (device_sync && !runtime_use_cuda())

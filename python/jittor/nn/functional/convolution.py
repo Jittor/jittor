@@ -101,8 +101,16 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     if groups == 1:
         N,C,H,W = x.shape
         oh, ow = out_height, out_width
-        with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce
-                      | jt.amp_flags.reduce16_no_fp32_acc):
+        # `keep_reduce` alone: the reduce below keeps the input's dtype, but it
+        # still takes the float32 intermediate that `ReduceOp` inserts for a
+        # half input. `reduce16_no_fp32_acc` sat here too and switched that
+        # intermediate off, so this fallback summed C*Kh*Kw float16 products in
+        # float16 -- 4608 terms for a plain 3x3 conv with 512 input channels --
+        # while cuDNN and the cuBLAS relays for the same convolution accumulate
+        # in float32 (`cublas_compute_type.h`, `float32_precision.h`). See
+        # `nn/functional/matrix.py::_contraction_scope`, which is the same bit
+        # for the same reason.
+        with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce):
             xx = x.reindex([N,out_channels,C,oh,ow,Kh,Kw], [
                     'i0', # Nid
                     'i2', # Cid

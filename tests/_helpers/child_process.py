@@ -170,11 +170,19 @@ def child_env(extra=None, inherit=True, without_torch_mode=False,
     # find it if the directory holding it is on the child's path. The parent
     # has it on ``sys.path``; sys.path does not travel to a child.
     support = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # And the adapters distribution, for the same reason as `support`: its
+    # tests import `jittor_adapters`, which lives in `adapters/` and is a
+    # separate distribution -- present in the tree, not installed in a source
+    # checkout. Without it every file under `adapters/tests` errors at
+    # collection with `No module named 'jittor_adapters'`, which is how the
+    # torch session reported six files it could have run.
+    adapters = os.path.join(os.path.dirname(support), "adapters")
+    roots = [pinned, support] + ([adapters] if os.path.isdir(adapters) else [])
     if pinned is not None:
         existing = env.get("PYTHONPATH", "")
-        parts = [pinned, support] + [
+        parts = roots + [
             part for part in existing.split(os.pathsep)
-            if part and part not in (pinned, support)
+            if part and part not in roots
         ]
         env["PYTHONPATH"] = os.pathsep.join(parts)
     return env

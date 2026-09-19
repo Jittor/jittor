@@ -327,10 +327,16 @@ op_db = [
     # ---- classification losses (int64 target held fixed; only logits differentiated) ----
     OpInfo("cross_entropy", op=F.cross_entropy, ref=cross_entropy_ref,
            sample_inputs_func=sample_cross_entropy),
-    # label_smoothing path goes through gather backward; gradgrad not guaranteed there.
-    OpInfo("cross_entropy", variant_test_name="label_smoothing",
-           op=F.cross_entropy, ref=cross_entropy_ref,
-           sample_inputs_func=sample_cross_entropy_smoothing, supports_gradgrad=False),
+    # `label_smoothing` is deliberately not a parameter of the native op: see
+    # the note under `cross_entropy_loss` in python/jittor/nn/functional/loss.py
+    # ("Torch mode may wrap this object for extra keyword features such as
+    # label smoothing"). This battery drives the native ops, so the entry asked
+    # `jt.nn.functional.cross_entropy` for a keyword it does not take and
+    # failed with `TypeError: got an unexpected keyword argument` on both
+    # devices and both dtypes -- a statement about the wrapper, made in the
+    # wrong session. The compat side owns and checks it:
+    # compat/tests/torch/_torch_compat_checks.py pins both the plain and the
+    # weighted result against torch.
     # nll consumes log-probs linearly (2nd deriv 0); fancy-index backward -> no gradgrad.
     OpInfo("nll_loss", op=F.nll_loss, ref=nll_loss_ref,
            sample_inputs_func=sample_nll_loss, supports_gradgrad=False),

@@ -50,6 +50,23 @@ def _complex64_to_real2_raw(z):
 
 def _real2_to_complex64_raw(x):
     assert x.shape[-1] == 2, f"view_as_complex expects last dim 2, got shape {x.shape}"
+    # The pair this reads is float32, because the complex dtype it builds is
+    # complex64 and jittor has no complex128 (KI-COMPLEX-001, and
+    # docs/notes/complex-dtype.md for what registering one would take). A
+    # float64 pair therefore has nowhere to go, and saying so here names the
+    # dtype and the operation -- `reinterpret_view` further down could only
+    # report the arithmetic: "byte size mismatch, input [8,2] float64 target
+    # [8] complex64".
+    # `_jittor_dtype_name`, not `str(x.dtype)`: in Torch-compatibility mode the
+    # Var that arrives here is a `torch.Tensor`, whose `dtype` stringifies as
+    # "torch.float32". The check was reporting a float32 pair as the wrong
+    # dtype -- "needs a float32 pair, got torch.float32" -- and refusing every
+    # `view_as_complex` under the shim, which is the whole FFT surface.
+    if _jittor_dtype_name(x.dtype) != "float32":
+        raise NotImplementedError(
+            "view_as_complex builds complex64 and needs a float32 pair, got %s. "
+            "jittor has no complex128 (KI-COMPLEX-001); cast the input with "
+            ".float32() if the precision is not needed." % x.dtype)
     reinterpret_view = getattr(jt, "reinterpret_view", None)
     if reinterpret_view is not None:
         return reinterpret_view(x, list(x.shape[:-1]) or [1], "complex64")

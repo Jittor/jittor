@@ -16,10 +16,6 @@ from ...context import get_install_context
 from ...fidelity import Fidelity, register_fidelity
 from ....stub_policy import unimplemented as _unimplemented
 
-from ...grad import (
-    _amp_passthrough_decorator, _AutocastContext,
-    _GradScaler,
-)
 from ...types import (
     device, dtype, _cuda_index_of, _device_is_cpu,
 )
@@ -44,20 +40,34 @@ def _cuda_driver():
 
 
 def _cuda_device_index(device=None):
-    if isinstance(device, str) and ":" in device:
-        try:
-            return int(device.split(":", 1)[1])
-        except EXPECTED as exc:
-            swallowed("torch/installers/cuda/api.py _cuda_device_index: return int(device.split(':', 1)[1])", exc)
-            return 0
-    if isinstance(device, int):
-        return device
-    idx = getattr(device, "index", None)
-    return int(idx) if idx is not None else 0
+    """The ordinal a ``torch.cuda`` device argument names.
+
+    ``None``/a bare "cuda" means the *current* device, as in torch -- not
+    device 0. Returning 0 for them made every per-device query answer for
+    device 0 on a rank whose current device was something else.
+    """
+    if device is None:
+        return current_device()
+    index = _cuda_index_of(device)
+    if index is not None:
+        return index
+    if _device_is_cpu(device):
+        raise ValueError("Expected a cuda device, but got: %s" % (device,))
+    # A bare "cuda" / torch.device("cuda") names no particular device.
+    return current_device()
 
 
 def _cuda_device_name(device=None):
-    name = _cuda_props_cache.get("name")
+    """The marketing name of one device, queried per ordinal.
+
+    The whole props family used to cache a single answer under one key and
+    hand it back for every index, so ``get_device_name(1)`` reported device
+    0's name -- indistinguishable on a uniform box and simply wrong on a
+    mixed one. Each entry is now keyed by the ordinal it was read from.
+    """
+    index = _cuda_device_index(device)
+    key = ("name", index)
+    name = _cuda_props_cache.get(key)
     if name is not None:
         return name
     name = "CUDA"
@@ -65,7 +75,7 @@ def _cuda_device_name(device=None):
         lib, ctypes = _cuda_driver()
         if lib is not None:
             dev = ctypes.c_int(0)
-            lib.cuDeviceGet(ctypes.byref(dev), _cuda_device_index(device))
+            lib.cuDeviceGet(ctypes.byref(dev), index)
             buf = ctypes.create_string_buffer(256)
             lib.cuDeviceGetName(buf, len(buf), dev)
             got = buf.value.decode("utf-8", "ignore")
@@ -73,17 +83,20 @@ def _cuda_device_name(device=None):
                 name = got
     except EXPECTED as exc:
         swallowed("torch/installers/cuda/api.py _cuda_device_name: lib, ctypes = _cuda_driver()", exc)
-    _cuda_props_cache["name"] = name
+    _cuda_props_cache[key] = name
     return name
 
 
-def _cuda_capability():
-    """(major, minor) compute capability of the active CUDA device.
+def _cuda_capability(device=None):
+    """(major, minor) compute capability of one CUDA device.
 
-    Queried once from the CUDA driver (compute-capability of device 0); falls
-    back to (8, 0) when the driver query is unavailable (e.g. Ascend NPU).
+    Queried from the CUDA driver for the ordinal asked for -- it used to
+    always read device 0 and cache that one answer -- and falls back to
+    (8, 0) when the driver query is unavailable (e.g. Ascend NPU).
     """
-    cc = _cuda_props_cache.get("cap")
+    index = _cuda_device_index(device)
+    key = ("cap", index)
+    cc = _cuda_props_cache.get(key)
     if cc is not None:
         return cc
     cc = (8, 0)
@@ -91,18 +104,18 @@ def _cuda_capability():
         lib, ctypes = _cuda_driver()
         if lib is not None:
             dev = ctypes.c_int(0)
-            lib.cuDeviceGet(ctypes.byref(dev), 0)
+            lib.cuDeviceGet(ctypes.byref(dev), index)
             maj = ctypes.c_int(0); mino = ctypes.c_int(0)
             lib.cuDeviceComputeCapability(ctypes.byref(maj), ctypes.byref(mino), dev)
             if maj.value > 0:
                 cc = (maj.value, mino.value)
     except EXPECTED as exc:
         swallowed("torch/installers/cuda/api.py _cuda_capability: lib, ctypes = _cuda_driver()", exc)
-    _cuda_props_cache["cap"] = cc
+    _cuda_props_cache[key] = cc
     return cc
 
 
-def _cuda_sm_count():
+def _cuda_sm_count(device=None):
     """SM (multiprocessor) count of CUDA device 0, queried via the driver.
 
     Triton-based libraries (e.g. flex_gemm's autotuner) size their grids by
@@ -110,7 +123,9 @@ def _cuda_sm_count():
     affects performance/occupancy, not correctness, so we default to 132 (an
     H100-class count) when the driver can't be queried.
     """
-    n = _cuda_props_cache.get("sm")
+    index = _cuda_device_index(device)
+    key = ("sm", index)
+    n = _cuda_props_cache.get(key)
     if n is not None:
         return n
     n = 132
@@ -118,7 +133,7 @@ def _cuda_sm_count():
         lib, ctypes = _cuda_driver()
         if lib is not None:
             dev = ctypes.c_int(0)
-            lib.cuDeviceGet(ctypes.byref(dev), 0)
+            lib.cuDeviceGet(ctypes.byref(dev), index)
             val = ctypes.c_int(0)
             CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT = 16
             lib.cuDeviceGetAttribute(ctypes.byref(val), CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, dev)
@@ -126,12 +141,14 @@ def _cuda_sm_count():
                 n = val.value
     except EXPECTED as exc:
         swallowed("torch/installers/cuda/api.py _cuda_sm_count: lib, ctypes = _cuda_driver()", exc)
-    _cuda_props_cache["sm"] = n
+    _cuda_props_cache[key] = n
     return n
 
 
-def _cuda_total_memory():
-    total = _cuda_props_cache.get("total_memory")
+def _cuda_total_memory(device=None):
+    index = _cuda_device_index(device)
+    key = ("total_memory", index)
+    total = _cuda_props_cache.get(key)
     if total is not None:
         return total
     total = 64 * 1024 ** 3
@@ -139,7 +156,7 @@ def _cuda_total_memory():
         lib, ctypes = _cuda_driver()
         if lib is not None:
             dev = ctypes.c_int(0)
-            lib.cuDeviceGet(ctypes.byref(dev), 0)
+            lib.cuDeviceGet(ctypes.byref(dev), index)
             val = ctypes.c_size_t(0)
             fn = getattr(lib, "cuDeviceTotalMem_v2", None) or getattr(lib, "cuDeviceTotalMem", None)
             if fn is not None:
@@ -148,7 +165,7 @@ def _cuda_total_memory():
                 total = int(val.value)
     except EXPECTED as exc:
         swallowed("torch/installers/cuda/api.py _cuda_total_memory: lib, ctypes = _cuda_driver()", exc)
-    _cuda_props_cache["total_memory"] = total
+    _cuda_props_cache[key] = total
     return total
 
 
@@ -159,12 +176,17 @@ class _DeviceProps:
     ``name``, ``major``/``minor``, ``total_memory``, ``multi_processor_count``
     (alias ``multiprocessor_count``), ``warp_size``, ``max_threads_per_*``.
     """
-    def __init__(self):
-        cap = _cuda_capability()
-        self.name = "Ascend910B/NPU" if getattr(jt.compiler, "has_acl", 0) else _cuda_device_name()
+    def __init__(self, device=None):
+        # The ordinal is resolved once and every field read from *it*: these
+        # used to be four independent device-0 queries, so
+        # `get_device_properties(1)` described device 0.
+        index = _cuda_device_index(device)
+        cap = _cuda_capability(index)
+        self.index = index
+        self.name = "Ascend910B/NPU" if getattr(jt.compiler, "has_acl", 0) else _cuda_device_name(index)
         self.major, self.minor = cap
-        self.total_memory = _cuda_total_memory()
-        self.multi_processor_count = _cuda_sm_count()
+        self.total_memory = _cuda_total_memory(index)
+        self.multi_processor_count = _cuda_sm_count(index)
         self.multiprocessor_count = self.multi_processor_count
         self.warp_size = 32
         self.max_threads_per_multi_processor = 2048
@@ -324,11 +346,13 @@ class CudaRuntimeState:
     def __init__(self):
         import os
         self.stream_state = threading.local()
-        self.default_stream = _Stream()
+        #: One logical default stream per device ordinal (see _device_stream).
+        self.device_default_streams = {}
+        #: Sampled live-byte high-water mark per device ordinal.
+        self.device_mem_peak = {}
         self.nvtx_state = threading.local()
         self.nvtx_handles = itertools.count(1)
         self.native_nvtx = [None]
-        self.mem_peak = [0]
         self.memgetinfo = [None]
         self.matmul_precision = "highest"
         self.cudnn_precision = "high"
@@ -401,9 +425,23 @@ def current_device():
 
 
 def set_device(device=None, *a, **k):
-    """torch.cuda.set_device: make a device current, in place."""
-    if device is None or _device_is_cpu(device):
+    """torch.cuda.set_device: make a device current, in place.
+
+    A device that is not a CUDA one is refused, as in torch
+    (``ValueError: Expected a cuda device, but got: cpu``). It used to return
+    ``None`` for it: ``torch.cuda.set_device("cpu")`` reported success and
+    changed nothing, so a caller that meant to leave CUDA carried on issuing
+    work to whatever device was current.
+    """
+    if device is None:
+        # torch resolves an omitted index to the current device, i.e. a no-op.
         return None
+    if _device_is_cpu(device) or (
+            getattr(device, "type", None) not in (None, "cuda", "npu")
+            and not isinstance(device, str)):
+        raise ValueError("Expected a cuda device, but got: %s" % (device,))
+    if isinstance(device, str) and device.split(":")[0] not in ("cuda", "npu"):
+        raise ValueError("Expected a cuda device, but got: %s" % (device,))
     index = _cuda_index_of(device)
     if index is None:
         # A bare "cuda"/torch.device("cuda") names no particular device.
@@ -471,21 +509,12 @@ def _empty_cache():
             swallowed("torch/installers/cuda/api.py _empty_cache: jt.gc()", exc)
 
 
-def _device_name(*a, **k):
+def _device_name(device=None, *a, **k):
     try:
-        return "Ascend910B/NPU" if getattr(jt.compiler, "has_acl", 0) else _cuda_device_name(a[0] if a else None)
+        return "Ascend910B/NPU" if getattr(jt.compiler, "has_acl", 0) else _cuda_device_name(device)
     except EXPECTED as exc:
         swallowed("torch/installers/cuda/api.py _device_name: return 'Ascend910B/NPU' if getattr(jt.compiler, 'has_ac...", exc)
         return "CUDA"
-
-
-class _amp:
-    @staticmethod
-    def autocast(device_type="cuda", *a, **k):
-        return _AutocastContext(device_type, *a, **k)
-    GradScaler = _GradScaler
-    custom_fwd = staticmethod(_amp_passthrough_decorator)
-    custom_bwd = staticmethod(_amp_passthrough_decorator)
 
 
 class _CudaTypedTensorMeta(type):
@@ -591,8 +620,32 @@ class _Event:
         return (end_event._time - self._time) * 1000.0
 
 
-def _current_stream(*a, **k):
-    return getattr(_cuda_runtime().stream_state, "current", _cuda_runtime().default_stream)
+def _device_stream(device, attribute):
+    """One logical stream per device, created on first use.
+
+    ``current_stream(1)``/``default_stream(1)`` used to ignore the argument and
+    hand back the one process-wide stream object, whose ``.device`` read
+    ``cuda:0``. A caller that records an event on it, or reads
+    ``stream.device`` to decide where to launch, was then told a device the
+    stream does not belong to. The streams are still logical -- jittor
+    serialises them onto one physical backend stream -- but their identity and
+    their device are now the ones asked for.
+    """
+    index = _cuda_device_index(device)
+    table = getattr(_cuda_runtime(), attribute)
+    stream = table.get(index)
+    if stream is None:
+        stream = _Stream(device=index)
+        table[index] = stream
+    return stream
+
+
+def _current_stream(device=None, *a, **k):
+    current = getattr(_cuda_runtime().stream_state, "current", None)
+    if current is not None and (
+            device is None or _cuda_device_index(device) == current.device.index):
+        return current
+    return _device_stream(device, "device_default_streams")
 
 
 def _set_stream(stream):
@@ -605,19 +658,36 @@ def _set_stream(stream):
 
 
 class _StreamContext:
+    """``with torch.cuda.stream(s):`` -- s is current, and so is s's device.
+
+    torch's stream context is also a device context: entering a stream that
+    belongs to cuda:1 makes cuda:1 current for the block and restores the
+    caller's device on the way out. This used to change only the logical
+    stream, so work issued inside ``with torch.cuda.stream(side_stream_on_1)``
+    was still placed on whatever device was current outside it.
+    """
     def __init__(self, stream):
         if stream is not None and not isinstance(stream, _Stream):
             raise TypeError("stream expects a torch.cuda.Stream or None")
         self.stream = stream
         self.previous = None
+        self.previous_index = -1
     def __enter__(self):
         if self.stream is not None:
             self.previous = _current_stream()
+            index = getattr(self.stream.device, "index", None)
+            if index is not None and index >= 0:
+                self.previous_index = current_device()
+                if self.previous_index != index:
+                    set_device(index)
             _set_stream(self.stream)
         return self
     def __exit__(self, *exc):
         if self.stream is not None:
             _set_stream(self.previous)
+            if self.previous_index >= 0 and self.previous_index != current_device():
+                set_device(self.previous_index)
+            self.previous_index = -1
         return False
 
 
@@ -685,30 +755,65 @@ def _nvtx_range(message, *args, **kwargs):
         _nvtx_range_pop()
 
 
-def _mem_used(*a, **k):
+def _mem_device_key(device=None):
+    """The ordinal a memory query is about, or -1 for the host pools."""
+    if not jt.flags.use_cuda:
+        return -1
+    if device is not None and _device_is_cpu(device):
+        return -1
+    return _cuda_device_index(device)
+
+
+def _mem_bytes(index, reserved=False):
+    """Live (or pool-held) bytes on one device, from jittor's own accounting.
+
+    ``MemInfo.total_cuda_used`` sums *every* device's pool, so the whole family
+    answered the same process-wide number whatever ordinal it was handed:
+    with 256 MiB allocated on cuda:1, ``memory_allocated(0)`` also said
+    256 MiB. ``jt.core.device_memory_used``/``_reserved`` are per ordinal.
+    """
     try:
-        mi = jt.get_mem_info()
-        used = int(mi.total_cuda_used if jt.flags.use_cuda else mi.total_cpu_used)
+        reader = jt.core.device_memory_reserved if reserved else jt.core.device_memory_used
+        return int(reader(int(index)))
     except EXPECTED as exc:
-        swallowed("torch/installers/cuda/api.py _mem_used: mi = jt.get_mem_info()", exc)
-        used = 0
-    if used > _cuda_runtime().mem_peak[0]:
-        _cuda_runtime().mem_peak[0] = used
-    return used
+        swallowed("torch/installers/cuda/api.py _mem_bytes: jt.core.device_memory_*", exc,
+                  "falling back to the process-wide total, which is not per device")
+        try:
+            mi = jt.get_mem_info()
+            return int(mi.total_cuda_used if index >= 0 else mi.total_cpu_used)
+        except EXPECTED as inner:
+            swallowed("torch/installers/cuda/api.py _mem_bytes: mi = jt.get_mem_info()", inner)
+            return 0
 
 
-def _mem_max(*a, **k):
-    _mem_used()
-    return _cuda_runtime().mem_peak[0]
+def _mem_sample(index, value):
+    """Record ``value`` against ``index``'s high-water mark and return it."""
+    peaks = _cuda_runtime().device_mem_peak
+    if value > peaks.get(index, 0):
+        peaks[index] = value
+    return value
 
 
-def _reset_peak(*a, **k):
-    try:
-        mi = jt.get_mem_info()
-        _cuda_runtime().mem_peak[0] = int(mi.total_cuda_used if jt.flags.use_cuda else mi.total_cpu_used)
-    except EXPECTED as exc:
-        swallowed("torch/installers/cuda/api.py _reset_peak: mi = jt.get_mem_info()", exc)
-        _cuda_runtime().mem_peak[0] = 0
+def _mem_used(device=None, *a, **k):
+    index = _mem_device_key(device)
+    return _mem_sample(index, _mem_bytes(index))
+
+
+def _mem_reserved(device=None, *a, **k):
+    index = _mem_device_key(device)
+    _mem_sample(index, _mem_bytes(index))
+    return _mem_bytes(index, reserved=True)
+
+
+def _mem_max(device=None, *a, **k):
+    index = _mem_device_key(device)
+    _mem_sample(index, _mem_bytes(index))
+    return _cuda_runtime().device_mem_peak.get(index, 0)
+
+
+def _reset_peak(device=None, *a, **k):
+    index = _mem_device_key(device)
+    _cuda_runtime().device_mem_peak[index] = _mem_bytes(index)
 
 
 def _cuda_mem_get_info_fn():
@@ -740,22 +845,32 @@ def _cuda_mem_get_info_fn():
     return fn
 
 
-def _mem_get_info(*a, **k):
+def _mem_get_info(device=None, *a, **k):
+    """torch.cuda.mem_get_info(device): the driver's free/total for *that* card.
+
+    ``cudaMemGetInfo`` reports the *current* device, so asking about another
+    one has to make it current for the call -- it used to ignore the argument
+    and report whichever device happened to be current, i.e. device 0's free
+    memory presented as device N's.
+    """
     fn = _cuda_mem_get_info_fn()
+    index = _cuda_device_index(device)
     if fn:
-        got = fn()
+        previous = current_device()
+        try:
+            if index != previous:
+                set_device(index)
+            got = fn()
+        finally:
+            if index != previous:
+                set_device(previous)
         if got and got[1] > 0:
             return got
     # No cudart to ask: fall back to jittor's own accounting. This knows the
     # device total exactly and jittor's live bytes, but not the context's or
     # another process's, so it reads slightly optimistic rather than fictional.
-    try:
-        mi = jt.get_mem_info()
-        total = int(mi.total_cuda_ram)
-        return (max(0, total - int(mi.total_cuda_used)), total)
-    except EXPECTED as exc:
-        swallowed("torch/installers/cuda/api.py _mem_get_info: mi = jt.get_mem_info()", exc)
-        return (0, 0)
+    total = _cuda_total_memory(index)
+    return (max(0, total - _mem_bytes(index, reserved=True)), total)
 
 
 class CUDAPluggableAllocator:
@@ -931,6 +1046,33 @@ def _set_float32_matmul_precision(precision):
     _set_precision_tier("matmul", precision)
 
 
+def _api_cuda_can_device_access_peer(device, peer_device):
+    """torch.cuda.can_device_access_peer: whether device can read peer's memory.
+
+    Asked of the CUDA driver (``cuDeviceCanAccessPeer``), so it answers for the
+    pair actually named. It was simply absent, and an ``AttributeError`` at the
+    point where a serving stack decides between a peer copy and a host bounce
+    is not a graceful degradation -- it aborts the run.
+    """
+    first, second = _cuda_device_index(device), _cuda_device_index(peer_device)
+    if first == second:
+        return False
+    lib, ctypes = _cuda_driver()
+    if lib is None:
+        raise RuntimeError(
+            "torch.cuda.can_device_access_peer(%r, %r): the CUDA driver is not "
+            "loadable here, so peer access cannot be determined"
+            % (device, peer_device))
+    src, dst, out = ctypes.c_int(0), ctypes.c_int(0), ctypes.c_int(0)
+    lib.cuDeviceGet(ctypes.byref(src), first)
+    lib.cuDeviceGet(ctypes.byref(dst), second)
+    if lib.cuDeviceCanAccessPeer(ctypes.byref(out), src, dst) != 0:
+        raise RuntimeError(
+            "torch.cuda.can_device_access_peer(%r, %r): the driver refused the "
+            "query" % (device, peer_device))
+    return bool(out.value)
+
+
 def _api_cuda_is_initialized(*a, **k):
     return bool(is_available() and getattr(jt.flags, 'use_cuda', 0))
 
@@ -939,7 +1081,16 @@ def _api_cuda__is_in_bad_fork(*a, **k):
     return False
 
 
-def _api_cuda_synchronize(*a, **k):
+def _api_cuda_synchronize(device=None, *a, **k):
+    """torch.cuda.synchronize(device).
+
+    ``jt.sync_all(True)`` waits for every device this run touched, which is a
+    superset of what torch's per-device synchronize promises, so the argument
+    is validated (a non-CUDA device is refused, as in torch) and then the
+    stronger wait is performed. Reported as APPROXIMATE for that reason.
+    """
+    if device is not None:
+        _cuda_device_index(device)
     return jt.sync_all(True)
 
 
@@ -955,20 +1106,24 @@ def _api_cuda_is_bf16_supported():
     return True
 
 
-def _api_cuda_get_device_capability(*a, **k):
-    return _cuda_capability()
+def _api_cuda_get_device_capability(device=None, *a, **k):
+    return _cuda_capability(device)
 
 
-def _api_cuda_get_device_properties(*a, **k):
-    return _DeviceProps()
+def _api_cuda_get_device_properties(device=None, *a, **k):
+    return _DeviceProps(device)
 
 
-def _api_cuda_default_stream(*a, **k):
-    return _cuda_runtime().default_stream
+def _api_cuda_default_stream(device=None, *a, **k):
+    return _device_stream(device, "device_default_streams")
 
 
-def _api_cuda_memory_stats(*a, **k):
-    return {'allocated_bytes.all.current': _mem_used(), 'allocated_bytes.all.peak': _cuda_runtime().mem_peak[0]}
+def _api_cuda_memory_stats(device=None, *a, **k):
+    index = _mem_device_key(device)
+    current = _mem_used(device)
+    return {'allocated_bytes.all.current': current,
+            'allocated_bytes.all.peak': _cuda_runtime().device_mem_peak.get(index, current),
+            'reserved_bytes.all.current': _mem_bytes(index, reserved=True)}
 
 
 def _api_cuda_ipc_collect(*a, **k):
@@ -1225,15 +1380,21 @@ def _api_accelerator_current_accelerator(*a, **k):
 _CUDA_FIDELITY_DETAILS = {
     _Stream: "Logical streams share native execution; no independent CUDA stream handle.",
     _StreamContext: "Thread-local logical stream selection; native execution remains serialized.",
-    _current_stream: "Thread-local logical stream identity; device argument is not implemented.",
+    _current_stream: "Thread-local logical stream identity, one logical stream per device; native execution remains serialized.",
     _set_stream: "Selects a logical stream; does not rebind the native backend stream.",
-    _api_cuda_default_stream: "One installation-owned logical default stream, not one per device.",
+    _api_cuda_default_stream: "One logical default stream per device ordinal; native execution remains serialized.",
     _Event: "Host timestamps after synchronization; not native CUDA event timing.",
-    _mem_used: "Native live-byte accounting; reserved/cached aliases do not report pool reservation.",
-    _mem_max: "High-water mark sampled at memory queries, not every allocation.",
-    _reset_peak: "Resets the sampled live-byte high-water mark.",
-    _api_cuda_memory_stats: "Current and sampled peak live bytes only; other PyTorch counters absent.",
-    _mem_get_info: "cudaMemGetInfo when available; native live-byte fallback excludes other processes.",
+    _mem_used: "Per-device live bytes from jittor's own pools; excludes the CUDA context and other processes.",
+    _mem_reserved: "Per-device bytes held by jittor's pools (live plus cached); not the driver's view of the card.",
+    _mem_max: "Per-device high-water mark sampled at memory queries, not at every allocation.",
+    _reset_peak: "Resets one device's sampled live-byte high-water mark.",
+    _api_cuda_memory_stats: "Current and sampled peak live bytes plus pool reservation, per device; other PyTorch counters absent.",
+    _mem_get_info: "cudaMemGetInfo on the device asked about; the fallback reports jittor's pools only, so it excludes other processes.",
+    _api_cuda_synchronize: "Waits for every device this run touched, which is stronger than torch's per-device synchronize.",
+    _api_cuda_can_device_access_peer: "Answered by the CUDA driver for the named pair; raises where the driver cannot be loaded rather than guessing.",
+    _device_name: "Queried per device ordinal from the CUDA driver, cached per ordinal.",
+    _api_cuda_get_device_capability: "Queried per device ordinal from the CUDA driver; falls back to (8, 0) where the driver query is unavailable.",
+    _api_cuda_get_device_properties: "Name, compute capability, total memory and SM count are real and per ordinal; the remaining fields are class defaults.",
     _empty_cache: "Environment-selected no-op, GC or synchronized GC; default is a memory hint.",
     _get_float32_matmul_precision: "Frontend-owned CUDA matmul policy; native Jittor and cuDNN policies are independent.",
     _set_float32_matmul_precision: "Frontend-owned highest/high/medium CUDA matmul accumulation; does not change cuDNN or native Jittor.",

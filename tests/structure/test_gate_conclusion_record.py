@@ -32,6 +32,8 @@ import sys
 import tempfile
 import unittest
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_ROOT = REPO_ROOT / "tests"
@@ -41,6 +43,20 @@ if str(TEST_ROOT) not in sys.path:
     sys.path.insert(0, str(TEST_ROOT))
 
 from _helpers.child_process import run_python_child  # noqa: E402
+
+
+def _requires_xdist():
+    """The parallel half of this file needs the distribution it is about.
+
+    `run_python_child` runs the fixture suite under `sys.executable`, so the
+    import that matters is this interpreter's. pytest-xdist is a declared dev
+    tool (requirements/dev-tools.txt) and the gates install it; a checkout
+    without it cannot answer the question these two cases ask, and saying so is
+    not the same as answering "yes".
+    """
+    pytest.importorskip(
+        "xdist",
+        reason="pytest-xdist (requirements/dev-tools.txt) is not installed here")
 
 _FIXTURE_TESTS = {
     "test_one.py": "def test_a():\n    pass\n\n\ndef test_b():\n    pass\n",
@@ -86,6 +102,7 @@ def _record(directory, extra_arguments):
 class TestGateConclusionRecord(unittest.TestCase):
     def test_a_parallel_session_records_what_it_collected(self):
         """The regression: ``collected`` was empty for every ``-n`` run."""
+        _requires_xdist()
         with tempfile.TemporaryDirectory(prefix="gate-conclusion-") as raw:
             directory = Path(raw)
             _write_fixture_suite(directory)
@@ -121,6 +138,7 @@ class TestGateConclusionRecord(unittest.TestCase):
         worker dies, a distribution mode drops an item). Before the fix this
         comparison printed ``IDENTICAL`` and exited zero.
         """
+        _requires_xdist()
         with tempfile.TemporaryDirectory(prefix="gate-conclusion-") as raw:
             directory = Path(raw)
             _write_fixture_suite(directory)

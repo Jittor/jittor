@@ -1178,6 +1178,15 @@ only holds when the ambient device happens to be 1 -- which a full file-order
 run arranges and an isolated run does not. It is a separate bug from this one
 and is not touched here.
 
+> **Closed 2026-09-17 (follow-up): it was the assertion, not the
+> implementation.** Real PyTorch 2.13, run on this machine
+> (`/jizhicfs/leoyizhang/anaconda3/envs/vllm_latest/bin/python`), moves a
+> `cuda:1` tensor to `cuda:0` for a bare `.to("cuda")` when
+> `current_device()` is 0 -- a device without an index *is* the current one,
+> not "wherever it already is". The mechanism diagnosed above is therefore
+> the correct one, and the test now asserts `jt.current_device()`. The file
+> passes 16/16 in isolation.
+
 ## 17. The extension build cache ignored header edits, and served a stale `.so`
 
 Chasing section 13 cost two things that were *not* the bug, and both came from
@@ -2626,7 +2635,10 @@ the same family as sections 26/27, but the fault that survives is still open.
   "15/16, isolated-run-only" failure of section 16 -- a bare `"cuda"` resolves to
   the ambient device, which in isolation is still 0), and an early abort would
   hide anything added after it. Whole file, through the installed package:
-  `1 failed, 15 passed`, failing at the bare-`"cuda"` line; a sentinel print on
+  `1 failed, 15 passed`, failing at the bare-`"cuda"` line -- **superseded
+  2026-09-17: that assertion was wrong, not the implementation (see the note
+  closing section 16), and the file now passes 16/16 in isolation**; a
+  sentinel print on
   either side of the new block confirmed it executes and passes (it is what
   located the failure at that later line rather than at the new assertions).
   Note the shim's test files cannot be collected from the repo root

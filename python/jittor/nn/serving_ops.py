@@ -86,7 +86,16 @@ def rms_norm(x, weight, eps=1e-6):
     if fused is not None:
         return fused
     dtype = x.dtype
-    value = x.float32()
+    # The upcast protects a *narrow* input: fp16/bf16 accumulate the sum of
+    # squares badly, so the normalisation is computed in float32 and cast back.
+    # It must not be applied to a wider one -- `x.float32()` on a float64 input
+    # threw away the precision the caller asked for, and the op came back 7.6e-8
+    # from the closed form where real torch is 1.1e-16. It also made a float64
+    # gradcheck meaningless: the forward is a step function at float32
+    # resolution, so a 1e-6 finite difference measures rounding, and the
+    # numerical Jacobian disagreed with the analytical one by 1.8x on an op
+    # whose backward is correct.
+    value = x if _jittor_dtype_name(dtype) in ("float32", "float64") else x.float32()
     scale = jt.rsqrt((value * value).mean(-1, keepdims=True) + eps)
     return (value * scale).cast(dtype) * weight
 

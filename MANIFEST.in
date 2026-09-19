@@ -303,6 +303,8 @@ include docs/community/AWESOME-JITTOR-LIST.cn.md
 include docs/community/AWESOME-JITTOR-LIST.md
 include docs/community/index.md
 include docs/compatibility/index.md
+include docs/compatibility/torch-architecture.md
+include docs/compatibility/torch-lowering.md
 include docs/compatibility/torch-shim.md
 include docs/compatibility/torch.md
 include docs/conf.py
@@ -316,6 +318,7 @@ include docs/development/known-issues/parallel-compiler-segfault.md
 include docs/development/npu-validation-templates.md
 include docs/development/repository-layout.md
 include docs/development/source-architecture.md
+include docs/development/static-graph-replay.md
 include docs/development/storage-layout.md
 include docs/development/test-system.md
 include docs/guides/ascend-910b.md
@@ -331,6 +334,7 @@ include docs/notes/complex-dtype.md
 include docs/notes/device-placement.md
 include docs/notes/float32-precision-policy.md
 include docs/notes/index.md
+include docs/notes/mixed-precision.md
 include docs/notes/numerics-contract.md
 include docs/notes/pipelined-execution.md
 include docs/performance/benchmarking.md
@@ -338,6 +342,16 @@ include docs/performance/index.md
 include docs/performance/library-standing.md
 include docs/releases/2.0.md
 include docs/releases/index.md
+include docs/results/2026-09-12-cuda-metaop-launch-index-scalar.md
+include docs/results/2026-09-12-minimax-h3-torch-compat.md
+include docs/results/2026-09-13-host-path-per-node-cost.md
+include docs/results/2026-09-14-autocast-conv-mixed-dtype.md
+include docs/results/2026-09-14-exit-heap-corruption.md
+include docs/results/2026-09-14-jittor-vs-pytorch.md
+include docs/results/2026-09-14-vllm-omni-h3-enablement.md
+include docs/results/index.md
+include docs/slides/jittor-overview.html
+include docs/slides/计图介绍.pptx
 include docs/tutorials/index.md
 include examples/README.md
 include examples/gan/README.md
@@ -657,6 +671,8 @@ include src/runtime/executor_entry.h
 include src/runtime/file_rendezvous.h
 include src/runtime/float32_precision.cc
 include src/runtime/float32_precision.h
+include src/runtime/graph_capture.cc
+include src/runtime/graph_capture.h
 include src/runtime/holder_state.cc
 include src/runtime/holder_state.h
 include src/runtime/init.cc

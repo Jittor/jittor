@@ -60,6 +60,11 @@ struct ExecPlan {
     // inside it (and under which output index), instead of asking the var,
     // whose `_inputs` may have been cleared by now.
     unordered_map<Var*, pair<Op*, int>> var_producer;
+    // Backward liveness `Executor::run_sync` contributes to every var above,
+    // for the batch's duration -- one per var once the hold is taken, zero
+    // before that and for a plan built by anything else. Phase 7 subtracts it
+    // before asking whether anyone still needs a var; see the assert there.
+    int batch_hold_per_var = 0;
     // ops.size(), kept because the Runner reports it after `ops` has been
     // consumed.
     int op_num = 0;

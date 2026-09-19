@@ -144,10 +144,16 @@ class TestTheBundleItPublishes(unittest.TestCase):
         import types
 
         flash_attn.install()
+        # Everything the install owns, taken after it ran: this test may only
+        # remove what it adds. Deleting every `vllm.*` name took the bundle
+        # `install()` published with it, and its runtime hook then had no
+        # module left to roll back -- reported by the next file's fixture as
+        # "runtime hook lost module", one file away from the cause.
+        published = {name for name in sys.modules
+                     if name == "vllm" or name.startswith("vllm.")}
         # In a real run vLLM itself owns the parent package; here it only has
         # to exist for the import machinery to descend past it.
-        created = "vllm" not in sys.modules
-        if created:
+        if "vllm" not in sys.modules:
             parent = types.ModuleType("vllm")
             parent.__path__ = []
             sys.modules["vllm"] = parent
@@ -156,10 +162,10 @@ class TestTheBundleItPublishes(unittest.TestCase):
                 "vllm.vllm_flash_attn.layers.rotary")
             self.assertTrue(callable(rotary.apply_rotary_emb))
         finally:
-            if created:
-                for name in list(sys.modules):
-                    if name == "vllm" or name.startswith("vllm."):
-                        del sys.modules[name]
+            for name in list(sys.modules):
+                if (name == "vllm" or name.startswith("vllm.")) \
+                        and name not in published:
+                    del sys.modules[name]
 
 
 if __name__ == "__main__":

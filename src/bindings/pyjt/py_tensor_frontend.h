@@ -21,6 +21,11 @@ void reset_tensor_frontend_type(PyObject* token);
 PyObject* set_tensor_placement_context(int backend, int device=0);
 // @pyjt(_reset_tensor_placement)
 void reset_tensor_placement_context(PyObject* token);
+// The placement the caller asked for, as (backend, index), or None when the
+// caller asked for nothing. A `*_like` default reads it so that an explicit
+// request outranks the reference tensor's own device.
+// @pyjt(_current_tensor_placement)
+PyObject* current_tensor_placement_request();
 
 // @pyjt(_set_float32_precision)
 PyObject* set_float32_precision_context(int matmul, int cudnn);

@@ -95,6 +95,13 @@ def _shim_cpp_extension_available():
             return False
     except ImportError:
         return False
+    # ``torch/extension.h`` includes <pybind11/pybind11.h>, so an extension
+    # cannot be built at all without those headers. They are not part of
+    # jittor and not importable from every interpreter, and a missing build
+    # dependency is a skip, not six compile failures.
+    from jittor.compat.shim.cpp_extension import _find_pybind_include
+    if _find_pybind_include() is None:
+        return False
     return (_test_capability.check_accelerator("cuda", backend=jt).enabled
             and bool(jt.introspection.policy.startup.nvcc_path))
 
@@ -114,7 +121,8 @@ def _probe():
     if _probe_module is not None:
         return _probe_module
     if not _shim_cpp_extension_available():
-        raise unittest.SkipTest("needs deployed torch-shim + nvcc")
+        raise unittest.SkipTest(
+            "needs deployed torch-shim + nvcc + the pybind11 headers")
     if _device_count() < 2:
         raise unittest.SkipTest(
             "this machine has %d visible CUDA device(s), the test needs 2"

@@ -32,6 +32,15 @@ def isolated_hooks():
     loaded = set(patcher._ENTRY_POINTS_LOADED)
     original_finder = patcher._FINDER
     original_installed = bootstrap._installed
+    # Release before stripping, not only after. An earlier file in the same
+    # process may have left these owners' hooks installed, and a hook's
+    # rollback expects to find the module it published: deleting the module
+    # first and releasing at teardown made every one of them report "runtime
+    # hook lost module". Releasing here restores what they replaced, which is
+    # the clean slate this fixture strips down to anyway, and leaves teardown
+    # releasing only what the test itself installed.
+    transaction.release_runtime_hooks("vllm.activation")
+    transaction.release_runtime_hooks("vllm.flash_attention")
     existing = {k: v for k, v in sys.modules.items() if k == "vllm" or k.startswith("vllm.")}
     for key in existing:
         del sys.modules[key]

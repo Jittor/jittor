@@ -368,10 +368,39 @@ jt.cudnn.set_benchmark(0)     # 强制走确定性的启发式
 「多测几次」，而是**跨越改变驻留的 flag 的对照必须先把调优器按住，相对误差要除以它相对
 的那个元素**。详见 `KI-EXEC-003` 与[数值契约](../notes/numerics-contract.md)。）
 
+## 三层：core / smoke / full
+
+一次全量跑完是十几分钟起步,拿它当「我刚才改的东西有没有坏」的答案太贵,于是有三层,
+回答的是三个不同的问题:
+
+| 层 | 问题 | 选择方式 | 实测 |
+| --- | --- | --- | --- |
+| `core` | 改完一处,有没有立刻坏掉 | `tiers.CORE_FILES` 的**白名单**,每个基本面一个文件 | 44 s(双进程模式,串行) |
+| `smoke` | 一个 PR 该等多久 | 整棵树**减去** `tiers.SLOW_FILES` | 约 390 s(4 worker) |
+| `full` | 这棵树到底是什么状态 | 整棵树 | 十几分钟起 |
+
+只有 `full` 是关于这棵树的陈述,另外两层是关于时间的陈述 —— 这也是为什么 `core`
+用白名单而 `smoke` 用黑名单:`smoke` 漏掉一个文件是**覆盖的洞**,所以默认必须是包含;
+`core` 漏掉一个文件只是**发现得晚一点**,后面两层照样会红,所以可以是选择。
+
+`core` 刻意串行:它小到 worker 买不到什么,而且这样在没装 pytest-xdist 的检出上照样能跑。
+它的预算由 `tests/structure/test_gate_tiers.py` **按算术**校验(把每个文件的实测秒数加起来
+和预算比),不是去断言墙上时钟 —— 后者在忙机器上失败的样子和真回归一模一样。
+
+```bash
+python tools/run_test_suite.py --tier core    # 改完就跑这个
+python tools/run_test_suite.py --tier smoke   # 提 PR 前
+python tools/run_test_suite.py                # 全量,按需
+```
+
+往 `core` 里加文件,就是在花所有人的每一次编辑的时间;条目里要写清**实测秒数**和
+**它守的是哪个基本面**,两样都由结构测试检查。
+
 ## 命令
 
 ```bash
-# 完整双进程套件、仅原生收集、或单个模块
+# 三层,以及仅原生收集、单个模块
+python tools/run_test_suite.py --tier core
 python tools/run_test_suite.py
 python -m pytest --collect-only -q tests
 python -m pytest -v tests/ops/test_ops.py

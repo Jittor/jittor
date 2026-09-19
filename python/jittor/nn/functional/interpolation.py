@@ -89,15 +89,33 @@ def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
     if fast is not None:
         return fast
     nid, cid, hid, wid = jt.index((n, c, H, W))
+    # The sampling coordinates come from an int32 `jt.index` scaled by a Python
+    # float, and int32 * float promotes to float32 whatever the image is. So a
+    # float64 image was resampled with float32 weights: the reference test
+    # `interpolate_bilinear [cpu/float64]` came back accurate to 1.7e-7 --
+    # single-precision epsilon -- where it is checked at 1e-7. Doing the
+    # coordinate arithmetic in the image's own floating type fixes that, and
+    # leaves every narrower dtype where it was: float16 and bfloat16 want
+    # float32 coordinates, which is what torch computes them in too.
+    if img.dtype == "float64":
+        hid, wid = hid.float64(), wid.float64()
+    # Scale by the integer ratio rather than by a precomputed Python float.
+    # `hid * (h / H)` rounds `h / H` first and then multiplies, so the error is
+    # whatever that one division lost, scaled up by the index -- and the Python
+    # float is materialised as a float32 constant, so for a float64 image the
+    # rounding is a float32 rounding: 2/3 reached the kernel as 0.66666669.
+    # `hid * h / H` multiplies exactly (h and H are small integers) and rounds
+    # once, at the end. Same expression, and it is the order the reference
+    # implementations use.
     if align_corners:
-        x = hid * ((h - 1) / max(1, H - 1))
-        y = wid * ((w - 1) / max(1, W - 1))
+        x = hid * (h - 1) / max(1, H - 1)
+        y = wid * (w - 1) / max(1, W - 1)
     elif mode == "bicubic":
-        x = (hid + 0.5) * (h / H) - 0.5
-        y = (wid + 0.5) * (w / W) - 0.5
+        x = (hid + 0.5) * h / H - 0.5
+        y = (wid + 0.5) * w / W - 0.5
     elif mode == "nearest":
-        x = hid * (h / H)
-        y = wid * (w / W)
+        x = hid * h / H
+        y = wid * w / W
     elif mode == "area":
         """
         Area interpolation uses AdaptivePool2D to resize origin images.
@@ -125,17 +143,20 @@ def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
         return adaptive_output.reduce("sum", [4, 5]) / pixel_count[None, None, ...]
     else:
         if tf_mode:
-            x = hid * (h / H)
+            x = hid * h / H
             if H > h:
                 x = x.clamp(0, h - 1)
-            y = wid * (w / W)
+            y = wid * w / W
             if W > w:
                 y = y.clamp(0, w - 1)
         else:
-            x = hid * (h / H) + (h / H * 0.5 - 0.5)
+            # `(hid + 0.5) * h / H - 0.5`, not `hid * (h/H) + (h/H*0.5 - 0.5)`:
+            # algebraically the same, one rounding instead of three, and the
+            # same order as the reference.
+            x = (hid + 0.5) * h / H - 0.5
             if H > h:
                 x = x.clamp(0, h - 1)
-            y = wid * (w / W) + (w / W * 0.5 - 0.5)
+            y = (wid + 0.5) * w / W - 0.5
             if W > w:
                 y = y.clamp(0, w - 1)
     return _interpolate(img, x, y, (nid, cid), mode)

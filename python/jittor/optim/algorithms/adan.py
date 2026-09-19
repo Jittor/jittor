@@ -4,7 +4,7 @@ import jittor as jt
 
 from ..base import (
     Optimizer, _grad_matches_param, _param_requires_grad,
-    _update_preserve_dtype,
+    _state_buffer, _update_preserve_dtype,
 )
 
 class Adan(Optimizer):
@@ -45,10 +45,10 @@ class Adan(Optimizer):
             pg["d"] = []
             pg["pre_grad"] = []
             for p in pg["params"]:
-                pg["m"].append(jt.zeros(p.shape, p.dtype).stop_grad())
-                pg["v"].append(jt.zeros(p.shape, p.dtype).stop_grad())
-                pg["d"].append(jt.zeros(p.shape, p.dtype).stop_grad())
-                pg["pre_grad"].append(jt.zeros(p.shape, p.dtype).stop_grad())
+                pg["m"].append(_state_buffer(p))
+                pg["v"].append(_state_buffer(p))
+                pg["d"].append(_state_buffer(p))
+                pg["pre_grad"].append(_state_buffer(p))
 
 
     def add_param_group(self, group):
@@ -57,10 +57,10 @@ class Adan(Optimizer):
         group["d"] = []
         group["pre_grad"] = []
         for p in group["params"]:
-            group["m"].append(jt.zeros(p.shape, p.dtype).stop_grad())
-            group["v"].append(jt.zeros(p.shape, p.dtype).stop_grad())
-            group["d"].append(jt.zeros(p.shape, p.dtype).stop_grad())
-            group["pre_grad"].append(jt.zeros(p.shape, p.dtype).stop_grad())
+            group["m"].append(_state_buffer(p))
+            group["v"].append(_state_buffer(p))
+            group["d"].append(_state_buffer(p))
+            group["pre_grad"].append(_state_buffer(p))
         self.param_groups.append(group)
 
     def _global_max_grad_norm(self):

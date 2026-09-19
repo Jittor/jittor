@@ -287,10 +287,16 @@ template <> struct int_mapper<__nv_bfloat16> {
 
 template <> struct int_mapper<double> {
     typedef double src;
-    typedef long long target;
-    inline static __device__ target to_int(src a) { return __double_as_longlong(a); }
+    // `unsigned long long int`, not `long long`: the 64-bit `atomicCAS` takes
+    // the unsigned type and CUDA has no signed overload, exactly as the int64
+    // note further down says. With the signed typedef, `cuda_atomic_mul<double>`
+    // did not compile at all -- `prod()` over a float64 Var on CUDA failed in
+    // nvcc with "no instance of overloaded function atomicCAS matches the
+    // argument list", not at runtime.
+    typedef unsigned long long int target;
+    inline static __device__ target to_int(src a) { return (target)__double_as_longlong(a); }
     inline static __device__ target* to_intp(src* a) { return (target*)a; }
-    inline static __device__ src from_int(target a) { return __longlong_as_double(a); }
+    inline static __device__ src from_int(target a) { return __longlong_as_double((long long)a); }
 };
 
 template<class T> __device__
@@ -365,66 +371,147 @@ inline long long cuda_atomic_mul(long long* a, long long b) {
     return (long long)old;
 }
 
-#if CUDA_ARCH >= 800
-template<> __device__
-__half cuda_atomic_max(__half* a, __half b) {
-    auto old_f = *a;
-    auto old = int_mapper<__half>::to_int(old_f);
-    auto a_i = int_mapper<__half>::to_intp(a);
+// Self-contained half/bf16 max and min atomics. These four used to be
+// `template<>` specialisations of `cuda_atomic_max`/`min` behind
+// `#if CUDA_ARCH >= 800` -- and `CUDA_ARCH` is not a macro nvcc defines, which
+// the `_rmw` family below and `cuda_atomic_mul(__nv_bfloat16*)` above both say
+// in as many words. The block was compiled out, every call landed on the
+// generic template's `atomicMax`/`atomicMin`, and nvcc answered "no instance of
+// overloaded function atomicMax matches the argument list: (jittor::float16 *,
+// jittor::float16)". So a float16 or bfloat16 `max`/`min` *reduction* on CUDA
+// did not compile at all.
+//
+// It stayed invisible because `reduce_dtype_infer` widened a half reduce's
+// output to float32 before the kernel was ever requested, so the half kernel
+// was never built -- the wrong dtype was hiding a missing kernel. Ask for the
+// dtype torch returns and the compile error is what comes back.
+//
+// Non-template overloads, like `cuda_atomic_mul(__nv_bfloat16*)`: an exact
+// match is preferred over the template, so there is nothing left to specialise
+// into the wrong place. `__CUDA_ARCH__` goes *inside* the body, which is the
+// only form that works -- nvcc parses the file once per device arch and once
+// for the host, and a specialisation that exists in some of those passes and
+// not others is an ODR problem waiting to happen.
+//
+// The buffer holds raw IEEE values, not the ordered-int encoding the float and
+// double overloads above need: `float_atomic_fix_pass.cc` returns early for
+// these two dtypes ("float16 use atomicCAS, because no float16 atomicMax"), so
+// a CAS loop on the raw bits is what it is expecting to find.
+__device__
+inline __half cuda_atomic_max(__half* a, __half b) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
+    auto a_i = (unsigned short*)a;
+    unsigned short old = __half_as_ushort(*a);
     while (1) {
+        float o = __half2float(__ushort_as_half(old));
+        float v = __half2float(b);
+        // `shared_reduce_max`'s rule, written out for the same reason it is:
+        // this header is compiled where `JIT_cuda` is not defined, and
+        // `type/minmax_compute.h` is `__host__ __device__` only under it. A
+        // NaN on either side wins, which is what NumPy, torch 2.13 and
+        // `jittor::_max` all do.
+        float want = (o != o) ? o : ((v != v) ? v : (o > v ? o : v));
+        __half want_h = __float2half(want);
         auto assume = old;
-        if (old_f>=b) break;
-        old = atomicCAS(a_i, assume, int_mapper<__half>::to_int(b));
-        old_f = int_mapper<__half>::from_int(old);
+        if (__half_as_ushort(want_h) == old) break;
+        old = atomicCAS(a_i, assume, __half_as_ushort(want_h));
         if (assume==old) break;
     }
-    return old_f;
-}
-
-template<> __device__
-__half cuda_atomic_min(__half* a, __half b) {
-    auto old_f = *a;
-    auto old = int_mapper<__half>::to_int(old_f);
-    auto a_i = int_mapper<__half>::to_intp(a);
-    while (1) {
-        auto assume = old;
-        if (old_f<=b) break;
-        old = atomicCAS(a_i, assume, int_mapper<__half>::to_int(b));
-        old_f = int_mapper<__half>::from_int(old);
-        if (assume==old) break;
-    }
-    return old_f;
-}
+    return __ushort_as_half(old);
+#else
+    __half old = *a;
+    float o = __half2float(old), v = __half2float(b);
+    if (!(o != o) && ((v != v) || !(o > v))) *a = b;
+    return old;
 #endif
-#if CUDA_ARCH >= 800
-template<> __device__
-__nv_bfloat16 cuda_atomic_max(__nv_bfloat16* a, __nv_bfloat16 b) {
-    auto old_f = *a;
-    auto old = int_mapper<__nv_bfloat16>::to_int(old_f);
-    auto a_i = int_mapper<__nv_bfloat16>::to_intp(a);
-    while (1) {
-        auto assume = old;
-        if (old_f>=b) break;
-        old = atomicCAS(a_i, assume, int_mapper<__nv_bfloat16>::to_int(b));
-        old_f = int_mapper<__nv_bfloat16>::from_int(old);
-        if (assume==old) break;
-    }
-    return old_f;
 }
 
-template<> __device__
-__nv_bfloat16 cuda_atomic_min(__nv_bfloat16* a, __nv_bfloat16 b) {
-    auto old_f = *a;
-    auto old = int_mapper<__nv_bfloat16>::to_int(old_f);
-    auto a_i = int_mapper<__nv_bfloat16>::to_intp(a);
+__device__
+inline __half cuda_atomic_min(__half* a, __half b) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
+    auto a_i = (unsigned short*)a;
+    unsigned short old = __half_as_ushort(*a);
     while (1) {
+        float o = __half2float(__ushort_as_half(old));
+        float v = __half2float(b);
+        // `shared_reduce_min`'s rule, written out for the same reason it is:
+        // this header is compiled where `JIT_cuda` is not defined, and
+        // `type/minmax_compute.h` is `__host__ __device__` only under it. A
+        // NaN on either side wins, which is what NumPy, torch 2.13 and
+        // `jittor::_min` all do.
+        float want = (o != o) ? o : ((v != v) ? v : (o < v ? o : v));
+        __half want_h = __float2half(want);
         auto assume = old;
-        if (old_f<=b) break;
-        old = atomicCAS(a_i, assume, int_mapper<__nv_bfloat16>::to_int(b));
-        old_f = int_mapper<__nv_bfloat16>::from_int(old);
+        if (__half_as_ushort(want_h) == old) break;
+        old = atomicCAS(a_i, assume, __half_as_ushort(want_h));
         if (assume==old) break;
     }
-    return old_f;
+    return __ushort_as_half(old);
+#else
+    __half old = *a;
+    float o = __half2float(old), v = __half2float(b);
+    if (!(o != o) && ((v != v) || !(o < v))) *a = b;
+    return old;
+#endif
+}
+
+#ifndef IS_ROCM
+__device__
+inline __nv_bfloat16 cuda_atomic_max(__nv_bfloat16* a, __nv_bfloat16 b) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    auto a_i = (unsigned short*)a;
+    unsigned short old = __bfloat16_as_ushort(*a);
+    while (1) {
+        float o = __bfloat162float(__ushort_as_bfloat16(old));
+        float v = __bfloat162float(b);
+        // `shared_reduce_max`'s rule, written out for the same reason it is:
+        // this header is compiled where `JIT_cuda` is not defined, and
+        // `type/minmax_compute.h` is `__host__ __device__` only under it. A
+        // NaN on either side wins, which is what NumPy, torch 2.13 and
+        // `jittor::_max` all do.
+        float want = (o != o) ? o : ((v != v) ? v : (o > v ? o : v));
+        __nv_bfloat16 want_h = __float2bfloat16(want);
+        auto assume = old;
+        if (__bfloat16_as_ushort(want_h) == old) break;
+        old = atomicCAS(a_i, assume, __bfloat16_as_ushort(want_h));
+        if (assume==old) break;
+    }
+    return __ushort_as_bfloat16(old);
+#else
+    __nv_bfloat16 old = *a;
+    float o = __bfloat162float(old), v = __bfloat162float(b);
+    if (!(o != o) && ((v != v) || !(o > v))) *a = b;
+    return old;
+#endif
+}
+
+__device__
+inline __nv_bfloat16 cuda_atomic_min(__nv_bfloat16* a, __nv_bfloat16 b) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    auto a_i = (unsigned short*)a;
+    unsigned short old = __bfloat16_as_ushort(*a);
+    while (1) {
+        float o = __bfloat162float(__ushort_as_bfloat16(old));
+        float v = __bfloat162float(b);
+        // `shared_reduce_min`'s rule, written out for the same reason it is:
+        // this header is compiled where `JIT_cuda` is not defined, and
+        // `type/minmax_compute.h` is `__host__ __device__` only under it. A
+        // NaN on either side wins, which is what NumPy, torch 2.13 and
+        // `jittor::_min` all do.
+        float want = (o != o) ? o : ((v != v) ? v : (o < v ? o : v));
+        __nv_bfloat16 want_h = __float2bfloat16(want);
+        auto assume = old;
+        if (__bfloat16_as_ushort(want_h) == old) break;
+        old = atomicCAS(a_i, assume, __bfloat16_as_ushort(want_h));
+        if (assume==old) break;
+    }
+    return __ushort_as_bfloat16(old);
+#else
+    __nv_bfloat16 old = *a;
+    float o = __bfloat162float(old), v = __bfloat162float(b);
+    if (!(o != o) && ((v != v) || !(o < v))) *a = b;
+    return old;
+#endif
 }
 #endif
 
@@ -528,10 +615,14 @@ inline double cuda_atomic_min_rmw(double* a, double b) {
 }
 #endif
 
-// half / bf16: self-contained raw-value 16-bit CAS loop. Deliberately does NOT
-// reuse the cuda_atomic_max/min(__half/__nv_bfloat16) specializations above:
-// those are guarded by `#if CUDA_ARCH >= 800`, and CUDA_ARCH is not a macro nvcc
-// defines, so that block is compiled out (use __CUDA_ARCH__ here instead).
+// half / bf16: self-contained raw-value 16-bit CAS loop. These are now the same
+// shape as the cuda_atomic_max/min(__half/__nv_bfloat16) overloads above -- the
+// reason they had to be written out separately was that those were dead
+// (`#if CUDA_ARCH >= 800`, a macro nvcc does not define), which is fixed.
+// They stay separate because the _rmw family is called on setitem's raw output
+// buffer, where no encode/decode pass runs; the note above this section says
+// why that matters for float and double, and for these two dtypes the buffer is
+// raw either way.
 // atomicCAS(unsigned short*) needs sm_70+; on older arches fall back to a
 // (non-atomic) RMW so the build still succeeds.
 template<> __device__

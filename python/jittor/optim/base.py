@@ -1,4 +1,5 @@
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._runtime.dispatch import dispatch_context
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved.
 # Maintainers:
@@ -21,6 +22,87 @@ def _grad_matches_param(p, g):
 
 def _param_requires_grad(p):
     return bool(p.requires_grad)
+
+#: Group-dict keys that are not per-parameter state buffers.
+_NON_STATE_KEYS = frozenset(("params", "grads"))
+
+
+def _state_buffer(param):
+    """A zeroed per-parameter state buffer, on the parameter's own device.
+
+    ``jt.zeros(param.shape, param.dtype)`` allocates on the *ambient* device,
+    so an optimizer built for parameters that are not on it put its momentum /
+    moment buffers on the wrong card from the start. ``zeros_like`` follows the
+    parameter, which is what every other ``*_like`` in jittor does.
+    """
+    return jt.zeros_like(param).stop_grad()
+
+
+def _realign_state_buffers(param_groups):
+    """Move per-parameter optimizer state back onto its parameter's device.
+
+    ``Module.to("cuda:1")`` is in place, so an optimizer built before the move
+    keeps the very Parameter objects that moved -- but not its own buffers,
+    which were allocated where the parameters used to be. The next step then
+    handed a fused kernel a parameter on cuda:1 and a momentum buffer on
+    cuda:0 and died in the middle of training with "Expected all tensor inputs
+    on the same backend and device". torch gets away with it by creating its
+    state lazily at the first ``step()``, i.e. after the move; jittor
+    allocates at construction, so the alignment is checked here instead.
+
+    Runs over the group dicts generically: any list of Vars parallel to
+    ``params`` is state, whatever the algorithm calls it (``values``, ``m``,
+    ``v``, ``d``, ``pre_grad``, ...).
+    """
+    for group in param_groups:
+        params = group.get("params")
+        if not params:
+            continue
+        for key, buffers in group.items():
+            if key in _NON_STATE_KEYS or type(buffers) is not list:
+                continue
+            if len(buffers) != len(params):
+                continue
+            for param, buffer in zip(params, buffers):
+                if not isinstance(buffer, jt.Var) or not isinstance(param, jt.Var):
+                    continue
+                target = _effective_device(param)
+                if _effective_device(buffer) == target:
+                    continue
+                # `update` keeps the buffer's object identity, which a caller
+                # reading `optimizer.state[p][...]` and the algorithms' own
+                # in-place kernels both rely on.
+                buffer.update(buffer._copy_to_cpu() if target < 0
+                              else buffer.to_device(target))
+
+
+def _effective_device(var):
+    """Where ``var`` actually is: ``-1`` for the host, else the device index.
+
+    The raw fields cannot be compared directly. An explicitly placed Var says
+    so in ``placement_backend`` (0 is the host, and its ``device_id`` is -1);
+    an unplaced one follows the ambient ``use_cuda`` flag and its ``device_id``
+    only means something while that flag is on. Comparing the raw pair instead
+    read a host-resident `jt.array` (unplaced, ``device_id`` 0, under
+    ``use_cuda=0``) as being on a different device from its own zero buffer
+    (explicitly host-placed, ``device_id`` -1) and "moved" the buffer to
+    cuda:0 -- inside a CPU-only scope.
+    """
+    backend = var.placement_backend
+    if backend == 0:
+        return -1
+    if backend > 0:
+        return int(var.device_id)
+    # Unplaced: ask the dispatch table where this Var's ops would run, not the
+    # `use_cuda` flag. The two answer the same question, but a backend-flag
+    # read inside an operator domain is what
+    # `tests/structure/runtime/test_backend_op_registry_contract` forbids:
+    # device selection goes through the registered table, not around it.
+    if dispatch_context(var).backend == "cpu":
+        return -1
+    index = int(var.device_id)
+    return index if index >= 0 else int(jt.current_device())
+
 
 def _update_preserve_dtype(target, value):
     if _jittor_dtype_name(value.dtype) != _jittor_dtype_name(target.dtype):
@@ -299,6 +381,7 @@ class Optimizer(object):
         """
         if loss is not None:
             self.backward(loss, retain_graph)
+        _realign_state_buffers(self.param_groups)
         jt.flags.node_order = 1
 
     def post_step(self):

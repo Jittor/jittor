@@ -196,6 +196,66 @@ def _dtype_to_str(d, *, require_compute=True):
     return str(d)
 
 
+def kind_of(value):
+    return type(value).__name__
+
+
+def _check_type(name):
+    """The device type ``name`` designates, or a torch-shaped refusal."""
+    if name not in _DEVICE_TYPES:
+        raise RuntimeError(
+            "Expected one of %s device type at start of device string: %s"
+            % (", ".join(sorted(_DEVICE_TYPES)), name))
+    return name
+
+
+def _is_index(value):
+    """An integer that is an index, not a bool.
+
+    ``numbers.Integral`` rather than ``int``: a numpy integer is not an
+    ``int``, and ``torch.device(np.int64(1))`` works in torch.
+    """
+    import numbers
+    return isinstance(value, numbers.Integral) and not isinstance(value, bool)
+
+
+def _check_index(index):
+    """torch rejects a negative device index rather than storing it."""
+    if index is None:
+        return None
+    if not _is_index(index):
+        raise TypeError("torch.device(): device index must be an int, not %s"
+                        % (kind_of(index),))
+    if index < 0:
+        raise RuntimeError("Device index must not be negative")
+    return int(index)
+
+
+#: The device types ``torch.device`` accepts, plus jittor's own ``npu``
+#: spelling for Ascend. torch rejects anything else with "Expected one of
+#: cpu, cuda, ..."; accepting an unknown name is not harmless here, because
+#: ``_device_is_cuda``/``_device_is_cpu`` both answer False for it and the
+#: tensor then silently stays on the ambient device -- a typo like
+#: ``.to("cuda1")`` became "leave it where it is" with no error.
+_DEVICE_TYPES = frozenset((
+    "cpu", "cuda", "npu", "ipu", "xpu", "mkldnn", "opengl", "opencl", "ideep",
+    "hip", "ve", "fpga", "maia", "xla", "lazy", "vulkan", "mps", "meta", "hpu",
+    "mtia", "privateuseone",
+))
+
+#: The accelerator a bare index names. torch reads ``torch.device(1)`` as
+#: "index 1 of the current accelerator"; here that is CUDA, or Ascend on a
+#: build that has it.
+def _accelerator_type():
+    try:
+        if getattr(jt.compiler, "has_acl", 0):
+            return "npu"
+    except EXPECTED as exc:
+        swallowed("types.py _accelerator_type: jt.compiler.has_acl", exc,
+                  "a bare device index is read as CUDA")
+    return "cuda"
+
+
 class device:
     type: str
     index: typing.Optional[int]
@@ -203,16 +263,40 @@ class device:
 
     def __init__(self, type="cpu", index=None):
         if isinstance(type, device):
+            if index is not None:
+                raise RuntimeError(
+                    "torch.device(): a torch.device argument already carries "
+                    "its index; do not pass a second one")
             self.type, self.index = type.type, type.index
             return
+        # A bare int is an *index*, as in torch: `torch.device(1)` is
+        # `cuda:1`. It used to fall into the else-branch below and become
+        # `device(type='cpu')`, so `x.to(torch.device(1))` moved the tensor to
+        # the host while the caller had asked for a second accelerator -- the
+        # torch.device spelling of the `Tensor.to(1)` hole closed in section 31
+        # of docs/results/2026-09-14-vllm-omni-h3-enablement.md.
+        if isinstance(type, bool):
+            raise TypeError("torch.device(): a bool is not a device")
+        if _is_index(type):
+            self.type, self.index = _accelerator_type(), _check_index(type)
+            return
         if isinstance(type, str):
+            name = type
             if ":" in type:
-                t, i = type.split(":")
-                self.type, self.index = t, int(i)
-            else:
-                self.type, self.index = type, index
-        else:
-            self.type, self.index = "cpu", None
+                if index is not None:
+                    raise RuntimeError(
+                        "torch.device(): type (string) must not include an "
+                        "index because index was passed explicitly: " + type)
+                name, _, raw = type.partition(":")
+                try:
+                    index = int(raw)
+                except ValueError:
+                    raise RuntimeError("Invalid device string: '%s'" % (type,))
+            self.type, self.index = _check_type(name), _check_index(index)
+            return
+        raise TypeError(
+            "torch.device(): expected a string, an int or a torch.device, "
+            "not %s" % (kind_of(type),))
 
     def __str__(self):
         return self.type if self.index is None else f"{self.type}:{self.index}"
@@ -446,16 +530,44 @@ def _var_is_host_parked(v):
         return False
 
 
+def current_accelerator_index():
+    """The device a bare ``"cuda"`` / ``.cuda()`` / ``device=None`` names.
+
+    torch resolves all three to ``torch.cuda.current_device()``, measured
+    against real torch 2.13 with 8 devices::
+
+        torch.cuda.set_device(0); x = torch.ones(2, device="cuda:1")
+        x.cuda()        -> cuda:0
+        x.to("cuda")    -> cuda:0
+        torch.cuda.set_device(2)
+        x.cuda()        -> cuda:2
+
+    This layer used to answer it three different ways in three places:
+    ``Tensor.to("cuda")`` on a placed tensor went to the current device (via
+    ``_placement_request``), while ``Tensor.cuda()`` and
+    ``Module.cuda()``/``Module.to("cuda")`` kept the tensor on the device it
+    was already on. So the same question had two answers inside one
+    installation and neither path agreed with torch on all of them.
+    """
+    try:
+        index = int(jt.current_device())
+    except EXPECTED as exc:
+        swallowed("types.py current_accelerator_index: jt.current_device()", exc,
+                  "a bare 'cuda' is read as device 0")
+        return 0
+    return index if index >= 0 else 0
+
+
 def _move_to_cuda_index(v, dev, default_index=None):
     """Return ``v`` on the CUDA device ``dev`` names, copying when it is
     somewhere else.
 
-    ``dev`` without an index -- a bare "cuda" -- means "wherever it already
-    is", which is what torch's ``.to("cuda")`` does for an already-CUDA
-    tensor. Pass the *original* Var's device as ``default_index`` for that
-    case: the residency helpers rebuild a host-resident Var from scratch, and
-    a rebuilt Var takes the current device, so without this a ``cuda:1``
-    tensor comes back on ``cuda:0``."""
+    ``dev`` without an index -- a bare "cuda" -- names the *current* device, as
+    in torch; pass ``current_accelerator_index()`` as ``default_index`` for
+    that case. ``default_index`` exists at all because the residency helpers
+    rebuild a host-resident Var from scratch and a rebuilt Var takes the
+    current device, so a caller that does mean "put it back where it was" has
+    to say which device that is."""
     idx = _cuda_index_of(dev)
     if idx is None:
         idx = default_index

@@ -69,6 +69,11 @@ _OWNERSHIP = {
     common: {
         "_prod", "_flatten_var", "_ceil_div", "_pad_flat", "_param_numel",
         "_fsdp2_flat_enabled",
+        # The frozen-forward and gradient-shape helpers `shard` calls around
+        # `_execute_with_true_fsdp`, which arrived with PR 18031's memory and
+        # lifecycle group.
+        "_primary_input_requires_grad", "_materialize_frozen_output",
+        "_tensor_values", "_full_gradient_from_shard",
     },
     dtensor: {
         "DeviceMesh", "init_device_mesh", "Placement", "Replicate", "Shard",
@@ -171,6 +176,31 @@ _LEGACY_PICKLES = {
     "StateDictType": "gAJjaml0dG9yLnRvcmNoX2ZzZHAyX2NvbXBhdApTdGF0ZURpY3RUeXBlCnEALg==",
     "StateDictType_FULL_STATE_DICT": "gAJjaml0dG9yLnRvcmNoX2ZzZHAyX2NvbXBhdApTdGF0ZURpY3RUeXBlCnEAWAQAAABmdWxscQGFcQJScQMu",
 }
+
+
+
+def _native_packages(repo_root):
+    """The packages the core distribution actually declares.
+
+    `python/jittor/compat` is a development symlink to the top-level compat/
+    tree -- this distribution's own source -- and raw `find_packages` walks
+    straight through it. setup.py excludes it so the core wheel never ships
+    another distribution's packages, so read that exclusion out of setup.py
+    and ask discovery the question setup.py asks: dropping the exclusion is
+    then what fails, instead of the symlink.
+    """
+    from setuptools import find_packages
+
+    setup_tree = ast.parse((repo_root / "setup.py").read_text(encoding="utf-8"))
+    exclusions = [
+        tuple(ast.literal_eval(keyword.value))
+        for node in ast.walk(setup_tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == "find_packages" and ast.literal_eval(node.args[0]) == "python"
+        for keyword in node.keywords if keyword.arg == "exclude"
+    ]
+    assert exclusions == [("jittor.compat", "jittor.compat.*")], exclusions
+    return find_packages(where=str(repo_root / "python"), exclude=exclusions[0])
 
 
 class TestTorchFSDP2Structure(unittest.TestCase):
@@ -378,9 +408,13 @@ assert second is jittor.torch_fsdp2_compat
         ).encode()
         self.assertEqual(len(public), 79)
         self.assertEqual(len(callables), 70)
+        # Moved once since it was taken: `optimizer_step` gained the
+        # keyword-only `native_kind` with the FSDP2 memory and lifecycle group
+        # from PR 18031. No other public signature, qualname or enum member
+        # differs from the snapshot this digest replaced.
         self.assertEqual(
             hashlib.sha256(encoded).hexdigest(),
-            "ca8aea5689aa5280fcd65aa3157274e7f2cd0d2ee3e0d607ec14880d28e71e73",
+            "81c63656a535ca38f252286de574ec8fed3e1808643b2775d795824c5f181bf7",
         )
 
     def test_protocol_2_legacy_pickle_fixtures_load_canonical_objects(self):
@@ -567,7 +601,7 @@ assert value is fsdp2.DeviceMesh
         self.assertIn("jittor.compat.fsdp2", packages)
         self.assertIn("torch", packages)
         self.assertTrue((compat_root / "fsdp2/public_helpers.py").is_file())
-        self.assertNotIn("jittor.compat", find_packages(where=str(repo_root / "python")))
+        self.assertNotIn("jittor.compat", _native_packages(repo_root))
         self.assertNotIn("jittor._torch_fsdp2", packages)
         self.assertNotIn("jittor.torch_fsdp2_compat", packages)
 

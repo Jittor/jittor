@@ -99,11 +99,18 @@ class DecorateInfo:
         return True
 
 
-def skip(test_name=None, *, device_type=None, dtypes=None, reason="skipped"):
-    """A DecorateInfo that skips matching tests (records the reason verbatim)."""
+def skip(test_name=None, *, device_type=None, dtypes=None, reason="skipped",
+         active_if=True):
+    """A DecorateInfo that skips matching tests (records the reason verbatim).
+
+    ``active_if`` carries a fact about the machine rather than about the op --
+    an optional dependency that is or is not installed -- so the entry can stay
+    in the table while only applying where it is true.
+    """
     import unittest
     return DecorateInfo(unittest.skip(reason), test_name,
-                        device_type=device_type, dtypes=dtypes)
+                        device_type=device_type, dtypes=dtypes,
+                        active_if=active_if)
 
 
 def xfail(test_name=None, *, device_type=None, dtypes=None, reason, raises):

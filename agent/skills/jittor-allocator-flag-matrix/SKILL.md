@@ -5,6 +5,12 @@ description: 复现和证明 Jittor 分配器缺陷的手法：flag 矩阵、下
 
 # 分配器 flag 矩阵
 
+本目录两个探针：`probe_allocator_matrix.py`（flag 矩阵）和
+`probe_shared_param_threads.py`（并发）。后者是四线程写同一个参数的不同切片，
+`NT=4` 时 5 次里错 4 次、`NT=1`/`NT=2` 时从不出错——见 KI-EXEC-007。分配器 bug
+不只藏在 flag 组合里，也藏在线程数里：`alloc`/`free` 各自持锁并不等于安全，
+Var 的 `mem_ptr`/`allocation`/`allocator` 三个字段是分开读的。
+
 ## 为什么默认配置测不出分配器 bug
 
 `get_allocator()` 组出来的是一摞分配器。默认那摞最外层是 SFRL，它**总是**写回

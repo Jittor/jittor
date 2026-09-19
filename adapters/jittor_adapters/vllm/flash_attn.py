@@ -206,7 +206,18 @@ def install():
     interface.get_scheduler_metadata = _no_scheduler_metadata
     active_transaction().replace_module(sys.modules, _INTERFACE, interface)
     published.append(_INTERFACE)
-    install_permissive_package(_BUNDLE, sys.meta_path, transaction=active_transaction())
+    # The whole subtree, unlike torch.fx's named list: `vllm.vllm_flash_attn`
+    # is a compiled wheel a source checkout does not carry, so absence is the
+    # expected state for every name under it and there is no real analysis
+    # underneath that a stub could silently stand in for. The three entry
+    # points this module implements are published above and keep their real
+    # implementation -- the import machinery consults the module table before
+    # any finder. Without this the pieces the docstring calls permissive (the
+    # FA3 scheduler, the CUTE kernels, the fused rotary layers) raise
+    # ImportError at vLLM's module scope, which is what the allowlist added in
+    # 36c88b7a did to this caller.
+    install_permissive_package(_BUNDLE, sys.meta_path, allow=(_BUNDLE + ".*",),
+                               transaction=active_transaction())
     return tuple(published)
 
 

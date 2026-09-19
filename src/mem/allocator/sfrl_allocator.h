@@ -9,6 +9,8 @@
 // ***************************************************************
 #pragma once
 #include <mutex>
+#include <thread>
+#include <unordered_map>
 #include "mem/allocator.h"
 
 namespace jittor {
@@ -61,6 +63,10 @@ struct BlockIdSpace {
     // an id that was never handed out reads as "not found" instead of as
     // whatever the heap happened to hold.
     std::vector<CachingBlock*> occupied_id_mapper;
+    // TEMP DIAGNOSTIC (KI-EXEC-007): id -> the last few things that happened to
+    // it, newest last. Only written when KI007_TRACE is set.
+    std::unordered_map<size_t, std::vector<string>> id_events;
+    void note(size_t id, const char* what, size_t size);
 
     size_t new_block_id();
     void recycle_block_id(size_t id);

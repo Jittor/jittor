@@ -117,6 +117,15 @@ class Store:
         with self._condition:
             return all(name in self._data for name in names)
 
+    def arrive(self, key):
+        """Announce arrival: "I am here and I will ask you for nothing else."
+
+        Plain :meth:`set` for a store with no server. :class:`TCPStore`
+        overrides it, because there the order of the reply and the key matters
+        -- see :meth:`TCPStore.arrive`.
+        """
+        return self.set(key, b"1")
+
     def delete_key(self, key):
         with self._condition:
             return self._data.pop(_key_text(key), None) is not None
@@ -183,6 +192,32 @@ class _TCPStoreServer:
                 if not line:
                     return
                 request = json.loads(line.decode("utf8"))
+                if request.get("op") == "arrive":
+                    # Reply *first*, make the key visible *second*.
+                    #
+                    # The rank that hosts this server is also a rank: it enters
+                    # the NCCL collective as soon as it sees every peer's
+                    # marker, and the collective holds the GIL for its whole
+                    # duration, so from then on no thread in this process can
+                    # read a request or write a reply. If the key appeared
+                    # before this reply was flushed -- which is what `set`
+                    # does -- the peer could be left blocked in `readline` on a
+                    # reply nobody can ever write, while the collective waits
+                    # for that same peer. Flushing first means a marker the host
+                    # can see is a peer that has already been answered.
+                    #
+                    # Ordering for the caller is unchanged: this connection's
+                    # next request is only read after the key is stored, so
+                    # `arrive` followed by `wait` on the same client still sees
+                    # its own marker.
+                    key = request.get("key")
+                    reply = ({"ok": True, "result": None} if key is not None
+                             else {"ok": False, "error": "arrive needs a key"})
+                    stream.write((json.dumps(reply) + "\n").encode("utf8"))
+                    stream.flush()
+                    if key is not None:
+                        self.store.set(key, b"1")
+                    continue
                 try:
                     result = self._dispatch(request)
                     response = {"ok": True, "result": result}
@@ -366,6 +401,20 @@ class TCPStore(Store):
             "op": "check", "keys": [_key_text(key) for key in keys],
         }))
 
+    def arrive(self, key):
+        """Set ``key`` to ``b"1"``, with the reply flushed before it is set.
+
+        The difference from :meth:`set` is invisible to the caller and decisive
+        for the process hosting the server: see ``_serve_connection``. A rank
+        uses this for the marker another rank waits on before entering a
+        collective that holds the GIL.
+        """
+        if self._local():
+            return Store.arrive(self, key)
+        return self._client.request({
+            "op": "arrive", "key": _key_text(key),
+        })
+
     def delete_key(self, key):
         if self._local():
             return Store.delete_key(self, key)
@@ -520,6 +569,9 @@ class PrefixStore(Store):
 
     def check(self, keys):
         return self.store.check([self._key(key) for key in keys])
+
+    def arrive(self, key):
+        return self.store.arrive(self._key(key))
 
     def delete_key(self, key):
         return self.store.delete_key(self._key(key))

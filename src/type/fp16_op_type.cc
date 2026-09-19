@@ -114,8 +114,17 @@ struct FP16OpType : OpByType {
             {"erfinv", "(jittor::_erfinv($2))"},
             {"cast", "(($1)($2))"},
             {"pow", "std::pow(($2),($4))"},
-            {"maximum", "std::max<float>($1($2), $1($4))"},
-            {"minimum", "std::min<float>($1($2), $1($4))"},
+            // `jittor::_max`/`_min`, not `std::max`/`std::min`: the same
+            // NumPy/torch NaN rule the float32 table uses. `std::max(a, b)` is
+            // `a < b ? b : a`, so every comparison against a NaN is false and
+            // it returns whichever operand was written first -- `maximum(nan,
+            // 5)` was NaN and `maximum(5, nan)` was 5, where torch 2.13
+            // answers NaN both ways at every dtype, and a half `x.max()` over
+            // a Var containing a NaN dropped it entirely because the
+            // accumulator is always the first operand. See the note on
+            // `jittor::max(float16, float16)` in `type/fp16_compute.h`.
+            {"maximum", "jittor::_max<float32>(float32($2), float32($4))"},
+            {"minimum", "jittor::_min<float32>(float32($2), float32($4))"},
             {"mod", "$1(($2)-std::floor(($2)/($4))*($4))"},
             {"floor_divide", "$1(std::floor(($1($2))/($1($4))))"},
             {"init_maximum", "-32768.0f"},
@@ -212,7 +221,23 @@ struct FP16OpType : OpByType {
         int i = src.rfind("#include");
         if (i<0) i=0;
         i = src.find('\n', i) + 1;
-        src = src.substr(0, i) + "#include \"type/fp16_compute.h\"\n" + 
+        // `type/minmax_compute.h` goes in unconditionally beside it, because
+        // `jittor::_max`/`_min` can still arrive *after* this pass has run.
+        // `CommonOpType::post_pass` adds that header when it finds the name in
+        // the source, which works for float32 because its own `maximum` entry
+        // is spelled `jittor::_max`. This table's is `::max($1($2), $1($4))`,
+        // so the name is not there yet -- and then `AtomicTunerPass`, which
+        // runs later on the kernel IR, hoists the per-thread accumulator and
+        // emits `tmp=jittor::_max(...)` into a translation unit that has no
+        // declaration for it. Every float16/bfloat16 `max`/`min` *reduction*
+        // on CUDA failed to compile with `namespace "jittor" has no member
+        // "_max"`, which is why `x.max(-1)` on a half Var answered float32:
+        // `reduce_dtype_infer` widened it to float32 before the kernel was
+        // ever built, and the half kernel that would have been built instead
+        // did not exist. The header is `#pragma once` and declares two
+        // function templates.
+        src = src.substr(0, i) + "#include \"type/fp16_compute.h\"\n"
+            "#include \"type/minmax_compute.h\"\n" + 
             src.substr(i);
         return;
     }

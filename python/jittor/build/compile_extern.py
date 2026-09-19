@@ -692,38 +692,37 @@ def _init_nccl_from_store(nccl_module, store=None):
             store.set(unique_id_key, bytes(nccl_module.nccl_get_unique_id()))
         unique_id = store.get(unique_id_key)
 
-        # Rendezvous *before* the collective as well as after it.
+        # Rendezvous *before* the collective as well as after it, and only on
+        # the rank that hosts the store.
+        #
         # `nccl_init_with_unique_id` is a collective that parks until every rank
-        # arrives, and the pyjt wrapper holds the GIL while it does. The rank
-        # whose process hosts the store -- rank 0 runs its server threads -- then
-        # cannot answer a peer that is still in the store, and the peer's `get`
-        # sits unserved until its timeout. Observed on TP2 (2 ranks, TCPStore):
-        # rank 0 past its own `get` and inside `ncclCommInitRank` at 100% CPU,
-        # rank 1 blocked in the store client, and the run dying as "NCCL store
-        # rendezvous timeout: rank 1 waited 120 s" -- roughly one start in three.
-        # Waiting for every rank to have *read* the id before anyone enters the
-        # collective removes the overlap, and this wait costs nothing: it is a
-        # socket read, which releases the GIL, so the server keeps serving.
-        store.set("jittor/nccl/world/unique_id_read/{}".format(world_rank), b"1")
-        store.wait([
-            "jittor/nccl/world/unique_id_read/{}".format(rank)
-            for rank in range(world_size)
-        ])
-        # A second phase, because "everyone has read the id" is not enough: a
-        # peer's own barrier `wait` is answered by the store server *after* it
-        # sets that marker, so the rank that hosts the server could enter the
-        # collective with a peer's request still unanswered -- and inside the
-        # collective it cannot answer it, because the pyjt wrapper holds the GIL
-        # for the whole call. py-spy on a hung run shows exactly that: the server
-        # rank active+gil inside `nccl_init_with_unique_id`, the peer in
-        # `readinto` inside `store.wait`. Recording completion of the barrier
-        # itself closes the window: nobody enters the collective until every rank
-        # has finished every store request it is going to make.
-        store.set("jittor/nccl/world/unique_id_done/{}".format(world_rank), b"1")
-        store.wait([
-            "jittor/nccl/world/unique_id_done/{}".format(rank)
-            for rank in range(world_size)
-        ])
+        # arrives, and the pyjt wrapper holds the GIL while it does. Rank 0 runs
+        # the store's server threads in that same process, so while it is parked
+        # there no peer can be read from or replied to, and a peer still in the
+        # store waits out its timeout -- while the collective waits for that
+        # peer. Observed on TP2 (2 ranks, TCPStore) as "NCCL store rendezvous
+        # timeout: rank 1 waited 120 s", roughly one start in three.
+        #
+        # So rank 0 must not enter the collective until every peer has finished
+        # with the store. A barrier of `set` + `wait` on both sides cannot say
+        # that, however many phases it is given: a peer's own `wait` is a
+        # request that rank 0's server still owes a reply to, so each phase
+        # closes the previous window and opens an identical one. What closes it
+        # is `Store.arrive`, whose reply is flushed *before* the marker becomes
+        # visible: when rank 0 sees the last marker, every peer has already been
+        # answered and has nothing further to ask. The peers do not wait at all
+        # -- the collective is their barrier -- which is what leaves them with
+        # nothing outstanding.
+        arrived = "jittor/nccl/world/arrived/{}"
+        announce = getattr(store, "arrive", None)
+        if callable(announce):
+            announce(arrived.format(world_rank))
+        else:
+            store.set(arrived.format(world_rank), b"1")
+        if world_rank == 0:
+            store.wait([
+                arrived.format(rank) for rank in range(world_size)
+            ])
 
         nccl_module.nccl_init_with_unique_id(list(unique_id))
 

@@ -32,6 +32,25 @@ DeviceCopyOp::DeviceCopyOp(Var* x, int device) : x(x), device(device) {
         << "Invalid CUDA device index" << device >> ", visible device count is" << count;
     y = create_output(nullptr, x->dtype());
     y->set_flag(VarFlags::_is_scalar, x->flag(VarFlags::_is_scalar));
+    // `_is_scalar` is carried for dtype promotion -- `x.cuda(1) * 2` must keep
+    // promoting like `x * 2`. It must NOT also make the result a *movable*
+    // pending scalar: `Op::propagate_device` retargets one of those, and the
+    // pending subgraph behind it, onto whatever device the other operand is
+    // on, which silently undoes the copy the caller just asked for. Measured
+    // before this line existed, with 8 visible devices:
+    //
+    //     a = jt.ones(3).cuda(1); b = jt.ones(3).cuda(2)   # neither synced
+    //     (a + b).sync()      -> ran on cuda:1, and b.device read "cuda:1"
+    //
+    // i.e. an explicit `.cuda(2)` became cuda:1 with no error, while the same
+    // expression with the operands synced raises. `.cpu()` lost the same way:
+    // `jt.ones(3).cpu() + jt.ones(3).cuda(2)` put everything on cuda:0.
+    // `_placement_published` is exactly "this Var's device is a published
+    // fact", and it is what `is_pending_scalar` already tests. The accepted
+    // edge of docs/notes/device-placement.md section 3 -- an unsynced
+    // `jt.ones(n)` following its operand -- is untouched: that Var has no
+    // device_copy behind it and so never reaches this constructor.
+    y->set_flag(VarFlags::_placement_published);
     // The host copy is placed in host memory directly. The executor used to
     // allocate every output on the op's device and this one then threw that
     // block away after the D2H transfer, so `x.cpu()` transiently held twice

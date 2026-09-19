@@ -13,6 +13,7 @@ GPU 闲着。
 device-placement
 numerics-contract
 float32-precision-policy
+mixed-precision
 complex-dtype
 pipelined-execution
 ```
@@ -24,5 +25,6 @@ pipelined-execution
 | 张量在哪张卡上？`.cpu()` / `.cuda()` 怎么用 | [设备与放置](device-placement.md) |
 | CPU 和 CUDA 的结果对不上；NaN、无穷、次正规数、归约精度 | [数值契约](numerics-contract.md) |
 | TF32、fp32 矩阵乘精度、`float32_matmul_precision` | [float32 累加精度](float32-precision-policy.md) |
+| fp16 / bf16 训练怎么开、loss scale、`GradScaler` | [混合精度训练](mixed-precision.md) |
 | 复数支持到什么程度 | [复数 dtype](complex-dtype.md) |
 | 为什么 GPU 利用率上不去、`auto_flush_ops` 是什么 | [流水式惰性执行](pipelined-execution.md) |

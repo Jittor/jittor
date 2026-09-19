@@ -11,11 +11,9 @@
 #include "ops/composite/array_op.h"
 #include "mem/allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
-// `migration_device()` below calls `current_device()`. It arrives transitively
-// through cuda_dual_allocator.h only under HAS_ACCELERATOR, so a CPU build lost
-// the declaration and failed with "'current_device' was not declared in this
-// scope". device.h provides the accelerator declarations *and* the CPU stubs,
-// so include it unconditionally.
+// migration_device() calls current_device(); without this the declaration
+// only arrives through cuda_dual_allocator.h, whose whole body is inside
+// #ifdef HAS_ACCELERATOR, so a CPU-only core does not compile.
 #include "runtime/device.h"
 #include "runtime/holder_state.h"
 

@@ -221,6 +221,17 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                 for (Var* v : op->inputs()) {
                     if (v->tflag != tt) continue;
                     Op* opi = v->input();
+                    // A var in the batch need not have a producer in it. A leaf
+                    // has none, and neither does one whose producer edge
+                    // `release_inputs` removed -- which is what a materialised
+                    // forward followed by a second `jt.grad(..., retain_graph=
+                    // True)` reaches. Such a var is a boundary: it already
+                    // exists in memory and no segment of this batch writes it,
+                    // so it creates no dependency between segments. Reading
+                    // `batch_index_at` off the null producer segfaults in the
+                    // planner instead, a long way from the release that caused
+                    // it. Phase 2 above already skips exactly this way.
+                    if (!opi || opi->tflag != tt) continue;
                     // if those two ops are not fused
                     if (father[opi->batch_index_at(tt)] != root) {
                         deps[root]++;
@@ -304,6 +315,7 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                 for (Var* v : op->inputs()) {
                     if (v->tflag != tt) continue;
                     Op* opi = v->input();
+                    if (!opi || opi->tflag != tt) continue;   // boundary, see above
                     // if those two ops are fused
                     int opid = opi->batch_index_at(tt);
                     auto fopid = father[opid];
@@ -363,6 +375,7 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                         var_fused[vi] = 3;
                     }
                     Op* opi = v->input();
+                    if (!opi || opi->tflag != tt) continue;   // boundary, see above
                     int opid = opi->batch_index_at(tt);
                     int& dep = deps[opid];
                     if (shared_id[opid] != root) {
@@ -387,6 +400,8 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                     if (var_fused[vi] == 1)
                         continue;
                     Op* opi = v->input();
+                    // Balanced with the increment above: both skip a boundary.
+                    if (!opi || opi->tflag != tt) continue;
                     int opid = opi->batch_index_at(tt);
                     int& dep = deps[opid];
                     dep --;

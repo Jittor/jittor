@@ -83,7 +83,7 @@ def _dispatch_order(residency):
     # ordinary backend key in torch.  Query the policy for the tensor's actual
     # residency: a CPU autocast context must not affect a CUDA registration (or
     # vice versa), and an enabled=False nested context returns None here.
-    from .grad import autocast_dtype
+    from .amp import autocast_dtype
 
     if autocast_dtype(residency) is None:
         return order

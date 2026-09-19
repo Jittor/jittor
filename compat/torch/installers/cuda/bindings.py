@@ -16,7 +16,6 @@ from .api import (
     _PrecisionBackend,
     _Stream,
     _StreamContext,
-    _amp,
     _api_accelerator_current_accelerator,
     _api_accelerator_current_device_index,
     _api_accelerator_is_available,
@@ -39,6 +38,7 @@ from .api import (
     _api_cuda_backend_enable_math_sdp,
     _api_cuda_backend_enable_mem_efficient_sdp,
     _api_cuda_backend_sdp_kernel,
+    _api_cuda_can_device_access_peer,
     _api_cuda_default_stream,
     _api_cuda_get_device_capability,
     _api_cuda_get_device_properties,
@@ -93,6 +93,7 @@ from .api import (
     _has_torch_function,
     _mem_get_info,
     _mem_max,
+    _mem_reserved,
     _mem_used,
     _nvtx_mark,
     _nvtx_range,
@@ -161,9 +162,11 @@ def _install_cuda(g, registry=None):
     cuda.manual_seed_all = _api_cuda_manual_seed_all
     cuda.is_bf16_supported = _api_cuda_is_bf16_supported
     cuda.get_device_capability = _api_cuda_get_device_capability
+    cuda.can_device_access_peer = _api_cuda_can_device_access_peer
     cuda.get_device_name = _device_name
     cuda.get_device_properties = _api_cuda_get_device_properties
-    cuda.amp = _amp
+    # torch.cuda.amp is built as a real module (with autocast_mode/grad_scaler/
+    # common submodules) by the utilities installer, which runs after this one.
     # OpenMMLab imports these legacy CUDA tensor classes in type annotations.
     # Keep them distinct from the top-level CPU classes: a direct alias would
     # make a host tensor pass ``isinstance(x, torch.cuda.LongTensor)``.
@@ -205,11 +208,16 @@ def _install_cuda(g, registry=None):
     # memory logging printed 0). total_cuda_used on an accelerator, else total_cpu_used.
     # jittor doesn't expose a per-reset peak, so max_* track a process-lifetime high-water
     # mark we maintain here (still real, monotone -- better than a flat 0).
+    # Per device, not process-wide: MemInfo.total_cuda_used sums every card's
+    # pool, so this family used to give the same number for every ordinal.
+    # `allocated` is live bytes and `reserved`/`cached` is what the pools hold,
+    # which is the distinction torch draws and which these aliases used to
+    # flatten onto one reading.
     cuda.memory_allocated = _mem_used
     cuda.max_memory_allocated = _mem_max
-    cuda.memory_reserved = _mem_used
+    cuda.memory_reserved = _mem_reserved
     cuda.max_memory_reserved = _mem_max
-    cuda.memory_cached = _mem_used
+    cuda.memory_cached = _mem_reserved
     cuda.max_memory_cached = _mem_max
     cuda.reset_peak_memory_stats = _reset_peak
     cuda.reset_max_memory_allocated = _reset_peak
@@ -255,9 +263,6 @@ def _install_cuda(g, registry=None):
     g.cuda = cuda
     _modules["torch.cuda"] = cuda
     _modules["torch.cuda.memory"] = cuda.memory
-    if hasattr(cuda, "amp"):
-        _modules["torch.cuda.amp"] = cuda.amp
-
     for _dev_ns in ("mps", "cpu", "npu", "xpu", "mtia"):
         _mod = _modules.get("torch." + _dev_ns)
         if _mod is None:

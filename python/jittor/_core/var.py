@@ -199,7 +199,20 @@ Var.to_device = to_device
 
 def _copy_to_cpu(self):
     '''Return a differentiable, independently allocated host copy.'''
-    return _core_to_device(self, -1)
+    out = _core_to_device(self, -1)
+    # Until it is materialized there is no allocation for :meth:`location` to
+    # ask about, so :attr:`device` falls back to "where will this land" -- and
+    # ``device_id`` cannot answer for this one, because a host copy
+    # deliberately *keeps* the device it came from so it can go back there.
+    # Without this mark a fresh ``x.cuda(3).cpu()`` reported ``cuda:3`` right
+    # up to the sync that put it in host memory, which is the one reading a
+    # caller uses it for. It is only consulted while ``location()`` is
+    # ``"none"``; once the copy runs, the allocator is the authority.
+    try:
+        out._pending_host_copy = True
+    except (AttributeError, TypeError):
+        pass
+    return out
 
 Var._copy_to_cpu = _copy_to_cpu
 
@@ -224,6 +237,10 @@ def _device(self):
         return "cuda:%d" % ori_int(self.device_id)
     # Not materialized: no allocation exists to ask, so report the placement it
     # will get. A test that wants the settled answer syncs first.
+    if getattr(self, "_pending_host_copy", False):
+        # ...except for a pending `.cpu()`, whose destination is already
+        # decided. See _copy_to_cpu.
+        return "cpu"
     import jittor as _jt
     if not _jt.flags.use_cuda:
         return "cpu"
@@ -341,11 +358,16 @@ def placement_scope_like(x):
     allocates for that input then produces a tensor on the ambient device and
     `dispatch_context` rejects the op for mixing two placements. Allocating
     inside this scope keeps the result on `x`'s device.
+
+    The reference tensor is a *default*, so a placement the caller asked for
+    outranks it: `torch.zeros_like(gpu, device="cpu")` has already placed the
+    construction on the host, and re-scoping to the source's device would hand
+    back a CUDA tensor.
     """
     import jittor as jt
     # `int` is shadowed in this module by jittor's integer dtype constructor.
     backend = ori_int(x.placement_backend)
-    if backend < 0:
+    if backend < 0 or jt.core._current_tensor_placement() is not None:
         yield
         return
     token = jt.core._set_tensor_placement(backend, max(ori_int(x.device_id), 0))
@@ -370,6 +392,10 @@ def device_scope_like(x):
     kernel on one device reading another device's pointers, i.e. an illegal
     address.
 
+    An explicit request still wins over both: `device=` names the device the
+    caller wants, and the reference tensor only fills in for a caller who named
+    none.
+
     Two scopes, because a Var can be off the ambient device with nothing
     recording it: `placement_scope_like` covers an *explicit* placement, while a
     tensor moved with `.to_device(1)` keeps `placement_backend == -1` and needs
@@ -379,8 +405,9 @@ def device_scope_like(x):
     import jittor as jt
     device_id = ori_int(getattr(x, "device_id", -1))
     previous = ori_int(jt.current_device())
+    requested = jt.core._current_tensor_placement()
     with placement_scope_like(x):
-        if device_id < 0 or device_id == previous:
+        if requested is not None or device_id < 0 or device_id == previous:
             yield
             return
         jt.flags.device_id = device_id

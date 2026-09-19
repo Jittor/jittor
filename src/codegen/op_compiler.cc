@@ -948,7 +948,17 @@ static void fix_op_member(
         if (!member.size()) {
             continue;
         }
-        ASSERT(member.size() <= var_num);
+        // A fused op whose member list is longer than its edges is not a
+        // code-generation problem, it is a graph problem: the op was kept
+        // while some of its outputs were freed, so its jit source names vars
+        // that are no longer attached to it. Say which op and by how much,
+        // instead of asserting a number.
+        if (member.size() > var_num)
+            LOGf << "op" << i << op->name() << "names" << member.size()
+                << "vars in its jit source but has" << op->inputs().size()
+                << "inputs and" << op->outputs().size() << "outputs."
+                << "An op cannot be kept with only some of its outputs;"
+                << "see KI-EXEC-006. members:" << member;
         while (member.size() < var_num) {
             member.insert(member.end() - op->outputs().size(), "__fill__");
         }

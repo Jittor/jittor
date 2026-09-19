@@ -47,6 +47,24 @@ compares jittor's fft/ifft/rfft/irfft against ``np.fft.*``) and ``test_fft_op.py
 """
 from ._refs import *  # noqa: F401,F403  (make_tensor, SampleInput, refs, np, jt, nn, F)
 from ..core import OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo, skip, xfail
+from _helpers.cupy_bridge import cuda_numpy_code_available
+
+#: The DFT matrices are built with `jt.numpy_code`, and on CUDA `py_converter`
+#: hands that callback CuPy rather than numpy -- the arrays it stages are device
+#: memory, so there is no numpy fallback. CuPy is optional, so on a machine
+#: without it the CUDA half of these ops cannot run.
+_NEEDS_CUPY = skip(
+    device_type="cuda", active_if=not cuda_numpy_code_available(),
+    reason="CUDA numpy-code operators need CuPy, which is not installed here")
+
+#: A float64 input asks for a complex128 spectrum, and jittor has no complex128
+#: dtype at all -- registering one means extending the core's dtype size table
+#: first (KI-COMPLEX-001, docs/notes/complex-dtype.md). `view_as_complex` says
+#: so at the boundary now; there is nothing for the reference check to compare.
+_NO_COMPLEX128 = skip(
+    dtypes=("float64",),
+    reason="a float64 spectrum needs complex128, which jittor does not have "
+           "(KI-COMPLEX-001)")
 
 
 # ------------------------------------------------------------------- numpy refs
@@ -173,13 +191,16 @@ op_db = [
     # ---- forward pinned to numpy; strict xfail keeps the known backward gap visible ----
     OpInfo("fft", op=jt.fft.fft, ref=fft_ref,
            sample_inputs_func=sample_fft,
-           decorators=_complex_fft_grad_xfails("fft")),
+           decorators=_complex_fft_grad_xfails("fft"),
+           skips=(_NEEDS_CUPY, _NO_COMPLEX128)),
     OpInfo("ifft", op=jt.fft.ifft, ref=ifft_ref,
            sample_inputs_func=sample_fft,
-           decorators=_complex_fft_grad_xfails("ifft")),
+           decorators=_complex_fft_grad_xfails("ifft"),
+           skips=(_NEEDS_CUPY, _NO_COMPLEX128)),
     OpInfo("rfft", op=jt.fft.rfft, ref=rfft_ref,
            sample_inputs_func=sample_rfft,
-           decorators=_complex_fft_grad_xfails("rfft")),
+           decorators=_complex_fft_grad_xfails("rfft"),
+           skips=(_NEEDS_CUPY, _NO_COMPLEX128)),
 
     # ---- irfft: real output, real differentiated leaves -> FULL backward coverage ----
     # The op is wrapped so its differentiated inputs are the two real halves of the
@@ -197,6 +218,8 @@ op_db = [
         sample_inputs_func=sample_irfft,
         supports_autograd=False,
         skips=(
+            _NEEDS_CUPY,
+            _NO_COMPLEX128,
             skip(
                 "test_reference",
                 device_type="npu",

@@ -36,6 +36,31 @@ def _class_callables(cls):
             yield member
 
 
+
+def _native_packages(repo_root):
+    """The packages the core distribution actually declares.
+
+    `python/jittor/compat` is a development symlink to the top-level compat/
+    tree -- this distribution's own source -- and raw `find_packages` walks
+    straight through it. setup.py excludes it so the core wheel never ships
+    another distribution's packages, so read that exclusion out of setup.py
+    and ask discovery the question setup.py asks: dropping the exclusion is
+    then what fails, instead of the symlink.
+    """
+    from setuptools import find_packages
+
+    setup_tree = ast.parse((repo_root / "setup.py").read_text(encoding="utf-8"))
+    exclusions = [
+        tuple(ast.literal_eval(keyword.value))
+        for node in ast.walk(setup_tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == "find_packages" and ast.literal_eval(node.args[0]) == "python"
+        for keyword in node.keywords if keyword.arg == "exclude"
+    ]
+    assert exclusions == [("jittor.compat", "jittor.compat.*")], exclusions
+    return find_packages(where=str(repo_root / "python"), exclude=exclusions[0])
+
+
 class TestTorchCompatStructure(unittest.TestCase):
     def test_sys_modules_publication_has_an_exact_owner_whitelist(self):
         compat_root = Path(compat.__file__).resolve().parent.parent
@@ -131,10 +156,14 @@ class TestTorchCompatStructure(unittest.TestCase):
 
         self.assertEqual(import_fallbacks, [])
         self.assertEqual(sorted(assignments), sorted([
+            #: restores the module it displaced ...
+            ("external_backend.py", "_restore_source_import_state", "name"),
+            #: ... and, separately, the submodules that displacement took with it.
             ("external_backend.py", "_restore_source_import_state", "name"),
             ("external_backend.py", "import_local", "key"),
             ("external_backend.py", "publish_source_module", "name"),
-            ("shim/resources/stubs/torchaudio/__init__.py", "__getattr__", "<f-string>"),
+            #: the fabricated module's own `__name__`, built from the same parts.
+            ("shim/resources/stubs/torchaudio/__init__.py", "__getattr__", "<dynamic>"),
             ("shim/resources/stubs/torchdata/__init__.py", "__getattr__", "<f-string>"),
             ("shim/resources/torch/__init__.py", "<module>", "__name__"),
             ("shim/runtime.py", "_activate_once", repr("torch")),
@@ -219,6 +248,8 @@ class TestTorchCompatStructure(unittest.TestCase):
         expected = {
             "_clip_grad_norm_device": grad._clip_grad_norm_device,
             "_GradScaler": grad._GradScaler,
+            "autocast": grad.autocast,
+            "GradScaler": grad.GradScaler,
             "_install_lr_scheduler": lr_scheduler._install_lr_scheduler,
             "_install_optimizers": optimizers._install_optimizers,
             "_install_safetensors_shim": serialization._install_safetensors_shim,
@@ -235,7 +266,10 @@ class TestTorchCompatStructure(unittest.TestCase):
         expected = {
             compat.dtype: "jittor.compat.torch.types",
             compat.device: "jittor.compat.torch.types",
-            compat._GradScaler: "jittor.compat.torch.grad",
+            # The AMP family moved out of grad.py when its stubs became real
+            # implementations and the module hit its 800-line budget.
+            compat._GradScaler: "jittor.compat.torch.grad_scaler",
+            compat._AutocastContext: "jittor.compat.torch.amp",
             compat._NestedTensor: "jittor.compat.torch.nested",
             compat._TorchSize: "jittor.compat.torch.nested",
             compat._torch_norm_impl: "jittor.compat.torch.functional",
@@ -382,8 +416,10 @@ class TestTorchCompatStructure(unittest.TestCase):
     def test_domain_modules_import_the_root_directly(self):
         package_root = Path(types.__file__).resolve().parent
         for name in (
+            "amp.py",
             "functional.py",
             "grad.py",
+            "grad_scaler.py",
             "lr_scheduler.py",
             "nested.py",
             "optimizers.py",
@@ -397,7 +433,16 @@ class TestTorchCompatStructure(unittest.TestCase):
             with self.subTest(path=path.name):
                 self.assertNotIn(".runtime import", source)
                 self.assertNotIn("preserve_facade_origins", source)
-                self.assertIn("import jittor as jt", source)
+                # The property is "reaches jittor directly", and there are two
+                # spellings of it. `import jittor as jt` is the usual one;
+                # `from jittor.amp import GradScaler` is the other, and
+                # grad_scaler.py uses it because the scaling algorithm lives in
+                # the native package and this module only adds torch's
+                # signature to it. Matching the one spelling would have forced
+                # an unused import to satisfy a check about layering.
+                self.assertRegex(
+                    source, r"(?m)^(import jittor\b|from jittor[. ])",
+                    "%s does not import the jittor root directly" % name)
 
     def test_package_discovery_includes_only_canonical_compat_packages(self):
         package_root = Path(types.__file__).resolve().parent
@@ -406,8 +451,7 @@ class TestTorchCompatStructure(unittest.TestCase):
             self.skipTest("packaging metadata is only available in a source checkout")
         from setuptools import find_packages
 
-        native_packages = find_packages(where=str(repo_root / "python"))
-        self.assertNotIn("jittor.compat", native_packages)
+        self.assertNotIn("jittor.compat", _native_packages(repo_root))
         packages = ["jittor.compat"] + [
             "jittor.compat." + name
             for name in find_packages(where=str(repo_root / "compat"))

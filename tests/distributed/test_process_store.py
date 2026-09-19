@@ -12,6 +12,7 @@ import unittest
 from _helpers.child_process import (
     PYTHON,
     child_env,
+    default_timeout,
     run_python_child,
     source_python_dir,
 )
@@ -151,8 +152,22 @@ class TestCrossProcessStores(unittest.TestCase):
             raise AssertionError("child imported another checkout:\n" + completed.stdout)
 
     def _run_pair(self, source, rank_envs):
+        # The two ranks have to be alive at the same time, so they are launched
+        # by hand rather than through run_python_child() -- but the budget is
+        # still that helper's, for its reasons: a child that has to compile the
+        # core does not fit in a timeout tuned for a warm cache, and setUpClass'
+        # warm-up does not help when something invalidates the cache mid-run.
+        # A fixed 30 s turned that into ``-9 != 0`` with an empty output, which
+        # names neither the compile nor the rank that was still building.
+        #
+        # Wall clock is not what this test asserts: both stores above carry a
+        # 10 s timeout of their own, so a rendezvous that never completes still
+        # fails inside the child. This budget only turns a true hang into a
+        # failure instead of a hung session.
+        budget = default_timeout()
         processes = []
         outputs = []
+        killed = set()
         try:
             for rank, extra in enumerate(rank_envs):
                 env = dict(_BASE_ENV)
@@ -167,10 +182,11 @@ class TestCrossProcessStores(unittest.TestCase):
                     text=True,
                     start_new_session=True,
                 ))
-            for process in processes:
+            for rank, process in enumerate(processes):
                 try:
-                    output, _ = process.communicate(timeout=30)
+                    output, _ = process.communicate(timeout=budget)
                 except subprocess.TimeoutExpired:
+                    killed.add(rank)
                     os.killpg(os.getpgid(process.pid), signal.SIGKILL)
                     output, _ = process.communicate(timeout=5)
                 outputs.append(output)
@@ -180,6 +196,11 @@ class TestCrossProcessStores(unittest.TestCase):
                     os.killpg(os.getpgid(process.pid), signal.SIGKILL)
                     process.wait(timeout=5)
         for rank, (process, output) in enumerate(zip(processes, outputs)):
+            self.assertNotIn(
+                rank, killed,
+                "rank {} was still running after {} s and was killed; its "
+                "return code below is that kill, not its own exit:\n{}".format(
+                    rank, budget, output))
             self.assertEqual(process.returncode, 0, "rank {}:\n{}".format(rank, output))
             self.assertIn("DONE", output)
 

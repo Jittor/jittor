@@ -154,6 +154,47 @@ void Node::batch_index_mismatch(int64 stamp) const {
         << "traversal's numbering.";
 }
 
+// Can this var's value only be got back by running its producer again?
+//
+// A var the fuser inlined holds no storage of its own: the kernel recomputes
+// it from its producer on every use. Three readings say so together, and all
+// three are needed -- the counts below are from the bilinear `interpolate`
+// graph in KI-EXEC-006, logged at the moment its `index` op was freed.
+//
+//   * `mem_ptr == nullptr`: nothing to read. A materialised var fails here,
+//     which is what keeps this from firing on the ordinary case; testing only
+//     backward liveness is what retained 92k ops when this was first tried.
+//   * `_needed_by_backward`: the *value* will be read again. Without it this
+//     also fires on a var whose storage was dropped precisely because no
+//     gradient wants it -- in that graph, `broadcast_to`'s output had no
+//     storage and backward liveness 2 from its consumers, with the flag clear,
+//     and freeing its producer is correct.
+//   * `backward.active()`: it is not about to be freed along with the op.
+//     `free()` below takes an output with no backward liveness out with it, so
+//     a var in that state needs no producer to survive.
+//
+// Note what is *not* here: pending liveness. The var that exposed this had
+// forward 1, backward 9 and pending 5 when its producer was freed, so a test
+// for "not pending" never fired. Pending is a reason to keep the op, not to
+// let it go -- the op is what the pending work is waiting for.
+static bool needs_recompute(Var* v) {
+    return v->mem_ptr == nullptr
+        && v->flag(VarFlags::_needed_by_backward)
+        && v->liveness.backward.active();
+}
+
+// ... for any output of this op. An op kept with only some of its outputs is a
+// half-op: its jit source still names the vars that were freed, and
+// `fix_op_member` in the code generator then reports an op that "names 4 vars
+// in its jit source but has 0 inputs and 2 outputs". So the whole output tuple
+// stands or goes together.
+static bool outputs_need_recomputing(Node* op) {
+    for (auto out : op->_outputs)
+        if (out.node->is_var() && needs_recompute((Var*)out.node))
+            return true;
+    return false;
+}
+
 void Node::free() {
     CHECK_EXIST;
     // Same lock as the drain: this appends to `liveness_queue` and erases this
@@ -162,9 +203,39 @@ void Node::free() {
     std::lock_guard<std::recursive_mutex> guard(graph_mutation_mutex());
     // already scheduled for deletion in this free_buffer round
     if (flags.get(NodeFlags::_queued_for_free)) return;
-    // A var that still has an input op and is either alive forward or not yet
-    // finished is going to be recomputed or written; it is not garbage.
-    if (is_var() && _inputs.size() && (liveness.forward.active() || !is_finished())) {
+    // A var that still has an input op and is either alive forward or still
+    // going to be written is not garbage.
+    //
+    // The second clause used to read `!is_finished()`, a proxy for "is going
+    // to be written" that is wrong for one class of var: one the fuser
+    // inlined. `exec_runner.cc`'s fused branch calls `finish_pending_liveness`
+    // on `op->outputs()`, and a var internal to a `FusedOp` is not one of
+    // them, so it never becomes finished however many times its value is
+    // produced -- and an unfinished var is never freed, which is the retention
+    // cycle this fix would otherwise create. `liveness.pending.active()` says
+    // "going to be written" directly and says it correctly here. The clause is
+    // only reached for an unfinished var (for a finished one both spellings
+    // reduce to `forward.active()`), so nothing changes for a materialised one.
+    //
+    // The third clause is the one that keeps the op's output tuple whole. Its
+    // absence is how the first version of this fix failed: the op was kept, a
+    // sibling output that nothing needed backward was freed anyway, and the
+    // generated kernel then named four vars for an op that had two left
+    // ("op 10 index names 4 vars in its jit source but has 0 inputs and 2
+    // outputs"). It terminates because the var that forced the retention drops
+    // its own backward liveness before reaching `free()`, so by then the
+    // producer no longer needs recomputing and the whole group goes together.
+    if (is_var() && _inputs.size() &&
+        (liveness.forward.active() ||
+         (!is_finished() && liveness.pending.active()) ||
+         outputs_need_recomputing(_inputs.front().node))) {
+        return;
+    }
+    // The same statement from the op's side: freeing this op would erase the
+    // only producer edge and leave a var alive, unbacked and unrecomputable --
+    // which reached the launch as a null allocator until
+    // `check_input_is_backed` gave it a name (KI-EXEC-006).
+    if (!is_var() && outputs_need_recomputing(this)) {
         return;
     }
     // NOTE: an op with a live or unfinished output reaches this point, and
@@ -295,6 +366,16 @@ void Node::own_forward_liveness() {
 void Node::release_backward_liveness() {
     CHECK_EXIST;
     if (flags.get(NodeFlags::_queued_for_free)) return;
+    // The counter asserts this too, but from inside a template that knows only
+    // a number. Say which node, in what state: an underflow here is always a
+    // node that was released more times than it was owned, and the counts are
+    // what identify the missing owner.
+    if (PREDICT_BRANCH_NOT_TAKEN(!liveness.backward.active()))
+        LOGf << "backward liveness release without a matching owner on" << this
+            << "var" << is_var() << "finished" << is_finished()
+            << "f" << liveness.forward.count()
+            << "p" << liveness.pending.count()
+            << "inputs" << _inputs.size() << "outputs" << _outputs.size();
     bool became_dead = liveness.backward.release();
     if (became_dead) {
         int n = inputs().size(), i = 0;
@@ -353,7 +434,22 @@ void Node::finish_pending_liveness() {
         for (auto* in : inputs()) {
             liveness_queue.emplace_back(in, &Node::release_pending_liveness);
         }
-    if (is_var() || is_stop_grad()) {
+    // b3 withdrawn: a finished var whose producer is not forward-alive can no
+    // longer be recomputed, so the backward liveness it contributed to that
+    // producer goes away. `release_backward_liveness` knows about this
+    // withdrawal and skips its own when it sees a finished var, so the two
+    // must not both run -- and what decides which one applies is whether this
+    // node still holds the contribution at all. b3 is "output(b>0) contrib
+    // backward_liveness", so with `b == 0` there is nothing here to withdraw
+    // and this is a second release against one owner.
+    //
+    // Reaching that state needs a var that goes backward-dead and is then
+    // finished, in that order, which cannot happen while such a var is freed
+    // on the spot. Keeping a fused-away var alive for a retained graph
+    // (KI-EXEC-006) is exactly what makes it possible: `index`'s output
+    // withdrew at 4 -> 3 -> 2 -> 1 -> 0 as the gradients ran, and then
+    // withdrew a fifth time at teardown, aborting the process.
+    if ((is_var() || is_stop_grad()) && liveness.backward.active()) {
         int n = inputs().size(), i = 0;
         STACK_ALLOC(Node*, is, n);
         for (auto* in : inputs()) {

@@ -28,7 +28,7 @@ from ..factories import _install_random_and_linspace, _set_use_cuda, _wrap_const
 
 from ..numerical import log_softmax as _numerical_log_softmax, masked_select as _numerical_masked_select, softmax as _numerical_softmax
 
-from ...types import _DEVICE_CTX_STACK, _device_is_cpu, _device_is_cuda, _dtype_to_str, _make_cpu_resident, _make_cuda_resident, _mark_cpu_like, _var_has_cpu_residency_hint, _var_is_cpu_resident, device, dtype, _cuda_index_of, _move_to_cuda_index
+from ...types import _DEVICE_CTX_STACK, _device_is_cpu, _device_is_cuda, _dtype_to_str, _make_cpu_resident, _make_cuda_resident, _mark_cpu_like, _var_has_cpu_residency_hint, _var_is_cpu_resident, current_accelerator_index, device, dtype, _cuda_index_of, _is_index, _move_to_cuda_index
 
 from ...fidelity import Fidelity, register_fidelity
 

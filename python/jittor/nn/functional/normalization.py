@@ -210,6 +210,26 @@ def _ln_function_cls(dims, eps):
     # (overriding the composite path inside execute).
     class _LN(jt.Function):
         def execute(self, x):
+            # float16/bfloat16 are computed in float32 and handed back in
+            # float32; `_restore_half_dtype` at the caller narrows the result
+            # after the affine, which is where torch rounds too. `jt.mean`
+            # already accumulates a half reduction in float32
+            # (src/ops/reduce_op.cc), but it rounds the *result* back to the
+            # input's dtype, and everything between the two means ran at that
+            # width: the deviation, its square -- where a half has no exponent
+            # room to spare -- the variance, and the reciprocal square root.
+            # Measured against the closed form at float64 on the same rounded
+            # input, 16x1024 normal input: float16 3.02e-3 on CPU and 3.40e-3
+            # on CUDA where real torch 2.13 is 9.75e-4, bfloat16 4.02e-2 / 2.93e-2
+            # against torch's 3.87e-3. torch's fused kernel takes its statistics
+            # in `acc_type<T, true>`, which is float for both half types.
+            #
+            # float64 is NOT touched: upcasting is for a *narrow* input, and
+            # `x.float32()` on a wide one throws away what the caller asked for.
+            narrow = _jittor_dtype_name(x.dtype) in ("float16", "bfloat16")
+            self.narrow_dtype = x.dtype if narrow else None
+            if narrow:
+                x = x.float32()
             mean = jt.mean(x, dims=dims, keepdims=1)
             var = jt.mean((x - mean) * (x - mean), dims=dims, keepdims=1)
             rstd = jt.rsqrt(var + eps)
@@ -220,9 +240,21 @@ def _ln_function_cls(dims, eps):
         def grad(self, g):
             # dL/dx = rstd*(g - mean(g) - xhat*mean(g*xhat)) over the normalized dims
             xhat, rstd = self.xhat, self.rstd
+            # Same reason as the forward: the saved `xhat`/`rstd` are float32
+            # for a half input, so the seed joins them there rather than
+            # dragging the whole closed form down to the input's width.
+            if self.narrow_dtype is not None and \
+                    _jittor_dtype_name(g.dtype) != "float32":
+                g = g.float32()
             mg = jt.mean(g, dims=dims, keepdims=1)
             mgx = jt.mean(g * xhat, dims=dims, keepdims=1)
-            return rstd * (g - mg - xhat * mgx)
+            dx = rstd * (g - mg - xhat * mgx)
+            # The cotangent goes back to the Var the caller handed `apply()`,
+            # which is still the half one -- `x.float32()` above is inside the
+            # tape, not before it.
+            if self.narrow_dtype is not None:
+                dx = dx.cast(self.narrow_dtype)
+            return dx
     return _LN
 
 

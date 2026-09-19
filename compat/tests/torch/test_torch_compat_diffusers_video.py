@@ -25,8 +25,23 @@ class TestDiffusersVideoCompat(unittest.TestCase):
 
         self.assertIs(torch.torch, torch)
         self.assertIsInstance(torch.ones(1), torch.torch.Tensor)
-        self.assertEqual(torch.amp.custom_fwd(cast_inputs=torch.float32)(lambda v: v)(3), 3)
-        self.assertEqual(torch.cuda.amp.custom_bwd()(lambda v: v)(4), 4)
+        # custom_fwd/custom_bwd take torch's real contract now: device_type is a
+        # required keyword and the wrapper writes the region onto the context
+        # argument, so they are exercised the way an autograd Function uses them
+        # instead of as the ``lambda f: f`` this used to assert.
+        class _Ctx:
+            pass
+
+        fwd_ctx = _Ctx()
+        forward = torch.amp.custom_fwd(device_type="cuda",
+                                       cast_inputs=torch.float32)(
+            lambda ctx, v: v)
+        self.assertEqual(forward(fwd_ctx, 3), 3)
+        self.assertFalse(fwd_ctx._fwd_used_autocast)
+        bwd_ctx = _Ctx()
+        bwd_ctx._fwd_used_autocast = False
+        bwd_ctx._dtype = "float16"
+        self.assertEqual(torch.cuda.amp.custom_bwd(lambda ctx, v: v)(bwd_ctx, 4), 4)
         self.assertTrue(callable(torch.conv2d))
         self.assertTrue(callable(torch.conv3d))
 

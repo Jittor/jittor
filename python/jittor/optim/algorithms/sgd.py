@@ -6,7 +6,7 @@ from ..._runtime.dispatch import register_kernel, select_kernel
 
 from ..base import (
     Optimizer, _grad_matches_param, _param_requires_grad,
-    _update_preserve_dtype,
+    _state_buffer, _update_preserve_dtype,
 )
 
 def sgd_update(param, grad, velocity, *, lr, momentum=0, weight_decay=0,
@@ -26,8 +26,13 @@ def _momentum_buffer(param):
     which the fused optimizer kernels reject: they write their inputs in place
     and so require contiguous storage. Paying one materialisation at
     construction keeps the hot path free of the copy.
+
+    It is also built on the *parameter's* device rather than the ambient one
+    (`_state_buffer` -> `zeros_like`): an optimizer created for a model that
+    is already on cuda:1 used to put its velocity on cuda:0 and fail in the
+    fused kernel on the first step.
     """
-    return jt.zeros(param.shape, param.dtype).contiguous().stop_grad()
+    return _state_buffer(param).contiguous().stop_grad()
 
 
 def _acl_fused_sgd_updates(entries, lr, momentum, weight_decay, dampening, nesterov):
@@ -129,7 +134,25 @@ class SGD(Optimizer):
                 # which measured 1.11 ms of a 7.41 ms training step. A fused
                 # kernel does the whole list in one launch, which is what
                 # PyTorch's `foreach` SGD does.
-                fused = select_kernel("optim.sgd_fused", [item[0] for item in active])
+                # Every Var the kernel will dereference, not just the
+                # parameters. `_fused_sgd_cuda` declares `float* param[]`,
+                # `float* grad[]` and `float* vel[]` and is registered
+                # `dtypes=("float32",)`, and the dispatcher filters on the
+                # dtypes of the Vars it is *shown*. Shown the parameters alone,
+                # it selected the float32 kernel under
+                # `auto_mixed_precision_level` 4, 5 and 6 -- where the
+                # parameters stay float32 and dtype inference lowers the
+                # *gradients* to float16, which is the entire point of those
+                # levels -- and handed it a `__half*`. nvcc refused at the first
+                # optimizer step with "a value of type \"jittor::float16 *\"
+                # cannot be assigned to an entity of type \"float *\"" pointed
+                # at `src/ops/composite/code_op.cc`, so native mixed-precision
+                # training on CUDA did not run at all. On CPU there is no fused
+                # kernel to select and the same script trained.
+                fused = select_kernel(
+                    "optim.sgd_fused",
+                    [var for item in active for var in item
+                     if isinstance(var, jt.Var)])
             if fused is not None:
                 updates = fused(active, lr, momentum, weight_decay, dampening, nesterov)
                 for (p, _, v), (new_p, new_v) in zip(active, updates):

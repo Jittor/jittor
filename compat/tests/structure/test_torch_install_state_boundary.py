@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[3]
-GUIDE = ROOT / "docs/testing/torch-install-state-boundary.md"
+GUIDE = ROOT / "refactor-wip/testing/torch-install-state-boundary.md"
 HELPER = ROOT / "tests/_helpers/child_process.py"
 DIST_INSTALLER = ROOT / "compat/torch/installers/distributed.py"
 RUNTIME = ROOT / "compat/shim/runtime.py"

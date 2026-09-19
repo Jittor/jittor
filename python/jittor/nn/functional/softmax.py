@@ -1,6 +1,7 @@
 """Softmax-family implementations exposed through :mod:`jittor.nn`."""
 
 import jittor as jt
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 
 def _get_softmax_dim(ndim):
@@ -61,6 +62,15 @@ def logsumexp(x, dim, keepdims=False, keepdim=False):
     keep = keepdim or keepdims
     maximum = jt.max(x, dim, keepdims=True)
     result = (x - maximum).exp().sum(dim, keepdims=True).log() + maximum
+    # The shift-exp-sum-log chain runs in float32 for a half input -- `exp` is
+    # a white-list op, so it widens whatever it is handed -- and that is the
+    # right place to compute it. But the *result* has to come back at the
+    # input's dtype: torch 2.13's `logsumexp` answers float16 for a float16
+    # input and bfloat16 for a bfloat16 one, on CPU and CUDA, and this returned
+    # a float32, which then infects everything downstream of it.
+    if _jittor_dtype_name(x.dtype) in ("float16", "bfloat16") and \
+            _jittor_dtype_name(result.dtype) != _jittor_dtype_name(x.dtype):
+        result = result.cast(x.dtype)
     if keep:
         return result
     # `dim` may name several axes -- torch takes a tuple here, and einops

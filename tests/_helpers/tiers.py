@@ -310,6 +310,124 @@ MEASURED_2026_09_06 = {
 }
 
 
+
+# --------------------------------------------------------------------------
+# The core tier
+# --------------------------------------------------------------------------
+#
+# A third selection, and the only one in this file that is an *include* list.
+# The argument above -- "a hand-maintained include list drifts" -- is about a
+# tier that gates the tree, where drift means a hole. This one gates nothing:
+# it is the answer to "did I just break something fundamental", asked between
+# edits, and its failure mode is that it stops catching things early while the
+# fast and full tiers still catch them. That is a cost in minutes, not in
+# coverage, and it buys the thing a per-edit check has to have: an answer in
+# about a minute rather than seven.
+#
+# What belongs here is one file per fundamental, not one file per subsystem:
+# the graph and its execution, the array boundary, laziness, autograd, the
+# elementwise and broadcast paths, and on the compat side the frontend's
+# identity, its dtype and promotion rules, autograd through it, and where a
+# tensor is placed. What does not belong is anything whose failure the tier
+# above would report just as clearly ten minutes later.
+#
+# The seconds are measured the same way as the rest of this file --
+# ``--durations=0``, summed per file, serial -- and serial is also how the tier
+# is meant to run: it is small enough that workers buy nothing, and it stays
+# runnable on a checkout with no pytest-xdist.
+
+#: ``(path, seconds, why)``. Measured 2026-09-18, serial, warm cache, this box.
+CORE_FILES = (
+    # ---- native: the graph, and what every other test stands on -----------
+    ("tests/core/test_core.py", 1.2,
+     "融合、内存优化与 hold/lived 计数——执行器的核心不变量"),
+    ("tests/core/test_array.py", 4.2,
+     "numpy 与 Var 的边界：dtype、连续性、分配器"),
+    ("tests/core/test_fused_op.py", 0.3,
+     "融合算子自身的装载与输出分类"),
+    ("tests/core/test_clone.py", 1.4,
+     "clone 与 stop_grad 的图切分，以及它们对存活计数的影响"),
+    ("tests/autograd/test_grad.py", 0.6,
+     "反向的基本契约：梯度的形状、dtype 与断开时的零梯度"),
+    ("tests/autograd/test_autograd_engine.py", 1.1,
+     "反向引擎的图遍历与广播梯度"),
+    ("tests/ops/test_binary_op.py", 9.3,
+     "逐元素路径与 dtype 提升的全组合；本层最贵的一条,但它覆盖的是所有算子的公共底座"),
+    ("tests/ops/test_broadcast_to_op.py", 1.0,
+     "广播——7e83d6da 之后它同时是存储描述符,融合的边界条件都在这里"),
+    ("tests/nn/test_linear.py", 0.1,
+     "matmul + bias 这条最常走的组合路径"),
+    ("tests/runtime/test_runtime_device_state.py", 0.1,
+     "设备与流的绑定状态"),
+
+    # ---- torch mode: the frontend's identity and its numeric contract -----
+    ("compat/tests/torch/test_independent_frontend.py", 16.9,
+     "独立 Tensor 类型的身份：它是什么、原生 Var 不是什么"),
+    ("compat/tests/torch/test_torch_compat_nn.py", 7.4,
+     "nn 模块族的前向与参数归属"),
+    ("compat/tests/torch/test_torch_compat_autograd.py", 3.8,
+     "经由 shim 的反向语义"),
+    ("compat/tests/torch/test_install_context.py", 3.2,
+     "安装上下文与事务：装了什么、能不能回滚"),
+    ("compat/tests/torch/test_torch_compat_indexing.py", 12.4,
+     "索引、切片与 setitem——前端最常走的一族，且全部可在 CPU 上执行"),
+    ("compat/tests/torch/test_torch_compat_dtype.py", 1.4,
+     "dtype 对象与 torch 的精确对应"),
+    ("compat/tests/torch/test_torch_compat_promotion.py", 1.2,
+     "提升点阵与 result_type/can_cast,对的是 c10 的文档规则"),
+    ("compat/tests/torch/test_tensor_state.py", 0.1,
+     "张量状态与 requires_grad 的读写"),
+
+    # compat 有两种测试,两种都要在这一层里有一条。上面是行为
+    # (`compat/tests/torch`,在 Torch 模式下真的跑张量);下面是结构契约
+    # (`compat/tests/structure`,断言谁拥有哪个名字、发布到哪个命名空间)。
+    # 结构那类不跑数值,却是唯一能在安装期就抓到「装错地方」的检查,而且便宜。
+    ("compat/tests/structure/test_torch_compat_structure.py", 3.0,
+     "命名空间归属与 sys.modules 发布的白名单:谁被允许写进 torch 这个名字"),
+    ("compat/tests/structure/test_compat_layering.py", 0.5,
+     "分层方向:compat 可以依赖 jittor,反过来不行"),
+)
+
+#: Wall-clock budget for the core tier, in seconds, covering both process
+#: modes. Predicted arithmetically like the fast tier's, and checked by
+#: ``tests/structure/test_gate_tiers.py``; see CORE_STARTUP for the constant
+#: that is not divisible by anything.
+CORE_BUDGET_SECONDS = 120.0
+
+#: Interpreter start, jittor import and collection, per invocation. Generous on
+#: purpose, for the same reason ``MEASURED[...]["startup"]`` is: the prediction
+#: should sit above the measurement, not below it. Measured here: the native
+#: half ran 20.9 s of work in 24.0 s wall.
+CORE_STARTUP = 15.0
+
+
+def _runnable(path):
+    """The spelling pytest can be pointed at; see ``gate_scope.runnable``."""
+    from _helpers.gate_scope import runnable
+    return runnable(path)
+
+
+def core_paths(session=None, runnable=True):
+    """The core tier's files, for one process mode or both.
+
+    ``runnable=False`` gives the canonical repository paths, which is what a
+    structure check compares against the gate's own selection.
+    """
+    selected = tuple(path for path, _seconds, _why in CORE_FILES
+                     if session is None or session_of(path) == session)
+    return tuple(_runnable(path) for path in selected) if runnable else selected
+
+
+def core_seconds(session=None):
+    return sum(seconds for path, seconds, _why in CORE_FILES
+               if session is None or session_of(path) == session)
+
+
+def predicted_core_seconds():
+    """Both sessions, serial, plus one startup each."""
+    sessions = {session_of(path) for path, _s, _w in CORE_FILES}
+    return core_seconds() + CORE_STARTUP * len(sessions)
+
 def slow_paths():
     return tuple(path for path, _seconds, _reason in SLOW_FILES)
 

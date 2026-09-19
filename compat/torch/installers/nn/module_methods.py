@@ -13,8 +13,9 @@ from ...context import registry_for
 from ...fidelity import Fidelity, register_fidelity
 from ...nested import _torch_register_leaf
 from ...tensor_state import get_tensor_state
-from ...types import _device_is_cpu, _device_is_cuda, _make_cpu_resident, _make_cuda_resident, device, dtype, _cuda_index_of
+from ...types import _device_is_cpu, _device_is_cuda, _is_index, _make_cpu_resident, _make_cuda_resident, current_accelerator_index, device, dtype, _cuda_index_of
 from ....diagnostics import EXPECTED, swallowed
+from ....stub_policy import unimplemented as _unimplemented
 from .... import fsdp_hooks as _fsdp_hooks
 
 def _pipelining_from_environment():
@@ -724,13 +725,15 @@ def _module_to_conversion(ds, dev, copy, v):
     if _device_is_cpu(dev):
         out = _make_cpu_resident(out, inplace=(out is v))
     elif _device_is_cuda(dev):
-        src_index = getattr(v, "device_id", -1)
         out = _make_cuda_resident(out, force=True, inplace=(out is v))
-        # A bare .to("cuda") must not drag a parameter off the device
-        # it is already on; see _move_to_cuda_index.
+        # A bare .to("cuda")/.cuda() is the *current* device, as in torch --
+        # `model_on_cuda1.cuda()` with current_device()==0 lands on cuda:0.
+        # This used to fall back to the parameter's own device, which kept the
+        # model on cuda:1 and disagreed with `Tensor.to("cuda")` in the same
+        # installation. See types.current_accelerator_index.
         idx = _cuda_index_of(dev)
-        if idx is None and src_index is not None and src_index >= 0:
-            idx = src_index
+        if idx is None:
+            idx = current_accelerator_index()
         if idx is not None and isinstance(out, jt.Var):
             cur = getattr(out, "device_id", -1)
             if cur >= 0 and cur != int(idx):
@@ -754,7 +757,10 @@ def _module_to(self, *args, **kwargs):
     ds = None
     dev = kwargs.get("device")
     copy = bool(kwargs.get("copy", False))
-    for a in list(args) + list(kwargs.values()):
+    scanned = list(args)
+    if kwargs.get("dtype") is not None:
+        scanned.append(kwargs["dtype"])
+    for a in scanned:
         if isinstance(a, dtype):
             ds = a.name
         elif isinstance(a, device):
@@ -762,12 +768,32 @@ def _module_to(self, *args, **kwargs):
         elif isinstance(a, jt.Var):
             ds = _jittor_dtype_name(a.dtype)
             dev = a.device
+        elif isinstance(a, bool):
+            # torch's Module.to(non_blocking) flag; not a device.
+            continue
+        elif _is_index(a):
+            # `model.to(1)` is `model.to("cuda:1")` in torch. A bare int used
+            # to match none of these branches and be dropped, so the module
+            # stayed where it was and the caller was told nothing -- the
+            # Module-level twin of the `Tensor.to(1)` hole closed in section 31
+            # of docs/results/2026-09-14-vllm-omni-h3-enablement.md.
+            dev = device("cuda", int(a))
         elif isinstance(a, str):
             bare = a.replace("torch.", "")
             if bare in dtype._registry:
                 ds = bare
             elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
                 dev = bare
+            else:
+                # Same policy as Tensor.to: refuse rather than silently leave
+                # every parameter where it was.
+                device(bare.split(":")[0])
+                _unimplemented(
+                    "torch.nn.Module.to(%r)" % (a,),
+                    "leave every parameter and buffer on its old device while "
+                    "reporting that the move to %r succeeded" % (a,),
+                    "This layer places tensors on cpu, cuda and npu only.",
+                    stub_result=None)
     if _device_is_cuda(dev):
         jt.flags.use_cuda = 1
     if dev is not None or ds is not None:
@@ -783,14 +809,42 @@ def _module_to_empty(self, *, device, recurse=True):
     return _module_to(self, device=device)
 
 
+def _module_accelerator_device(kind, dev):
+    """The device ``Module.cuda``/``Module.npu`` was asked for.
+
+    torch's signature is ``cuda(device: int | torch.device | None)``. Only the
+    ``int`` spelling used to be read: ``model.cuda(torch.device("cuda", 1))``
+    and ``model.cuda("cuda:1")`` both fell through to a bare ``"cuda"``, which
+    means "the current device", so the model landed on device 0 while the
+    caller had named device 1 -- and nothing said so.
+    """
+    if dev is None:
+        return kind
+    if isinstance(dev, bool):
+        raise TypeError("Module.%s(): a bool is not a device" % (kind,))
+    if _is_index(dev):
+        return device(kind, int(dev))
+    if isinstance(dev, device):
+        resolved = dev
+    elif not isinstance(dev, str) and getattr(dev, "type", None) is not None:
+        # A device object from another library (a real torch.device in a mixed
+        # process); read its fields rather than its repr.
+        resolved = device(dev.type, getattr(dev, "index", None))
+    else:
+        resolved = device(dev)
+    if resolved.type not in ("cuda", "npu"):
+        raise ValueError("Expected a %s device, but got: %s" % (kind, dev))
+    return resolved
+
+
 def _module_cuda(self, dev=None):
     """Torch's ``Module.cuda``, optionally pinned to one device index."""
-    return _module_to(self, device("cuda", dev) if isinstance(dev, int) else "cuda")
+    return _module_to(self, _module_accelerator_device("cuda", dev))
 
 
 def _module_npu(self, dev=None):
     """Torch's ``Module.npu``, optionally pinned to one device index."""
-    return _module_to(self, device("npu", dev) if isinstance(dev, int) else "npu")
+    return _module_to(self, _module_accelerator_device("npu", dev))
 
 
 def _module_cpu(self):

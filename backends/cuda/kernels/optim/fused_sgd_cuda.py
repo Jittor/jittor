@@ -23,11 +23,19 @@ from jittor._runtime.dispatch import register_kernel
 _CHUNK = 96
 
 
-def _supports_fused_sgd(params, *args, **kwargs):
-    """float32, dense, and allocated: this writes raw pointers."""
-    if not params:
+def _supports_fused_sgd(tensors, *args, **kwargs):
+    """float32, dense, and allocated: this writes raw pointers.
+
+    `tensors` is every Var the kernel dereferences -- parameters, gradients and
+    velocities -- not the parameter list. The kernel's argument struct declares
+    all three families as `float*`, so a float16 gradient against a float32
+    parameter is a compile error, not a slow path, and that pair is exactly what
+    `auto_mixed_precision_level` 4/5/6 produce. See the call site in
+    `jittor/optim/algorithms/sgd.py`.
+    """
+    if not tensors:
         return False
-    for p in params:
+    for p in tensors:
         if not isinstance(p, jt.Var):
             return False
         if _jittor_dtype_name(p.dtype) != "float32":
