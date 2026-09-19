@@ -4855,6 +4855,17 @@ hand -- 8.89 s, `cos 0.99999898`, which is the sweep's fp16 cell reproduced by
 a different probe -- and the cross-setting table above covers three dtypes and
 two sizes with the bound on and off.
 
+**Gates.** `tests/core tests/autograd tests/ops/test_binary_op.py
+tests/nn/test_linear.py` at the shipped default: 532 passed, 33 skipped, 5
+xfailed, 1 xpassed, 190 subtests, no failures. The same selection before this
+section's work was 530 passed and 2 failed, and those two were
+`test_namespace_exports.py` -- the root stub missing `jt.amp`, left behind by
+the mixed-precision work and unrelated to fusion. Running the whole selection
+again with `fuse_op_limit=0` produced an identical failure set apart from
+`test_fuse_op_limit_ships_enabled`, which asserts the default is greater than 0
+and so fails by construction in an arm that forces it to 0. The bound changes
+nothing in the suite.
+
 What is still unmeasured: a plain fp32 training step end to end, and the
 ordinary gates on a machine that is not this one. Everything here is one model
 on one box with a co-tenant, so the ratios are the estimators to quote and the
