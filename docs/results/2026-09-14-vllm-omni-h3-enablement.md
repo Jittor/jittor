@@ -4678,9 +4678,17 @@ into a cascade of fused kernels of width 6, 8, 9, 11, 14 ... 361, each launched
 exactly 63 times -- the number of `Conv3d` sites. Ranked by time within cast-on,
 kernels of **width >= 20 carry 51.5%** of the decode: 8.4 s of a 7.65 s gap.
 
-The cause is in `exec_plan.cc`. A var the fuser decides to *share* is not written
-out; its producer is spliced into every consumer kernel and run again there. The
-cutoff that bounds this applied to weak shares only:
+The cost is in fusion, and specifically in **recompute**. A var the fuser decides
+to *share* is not written out; its producer is spliced into every consumer kernel
+and run again there, so the work grows with the length of the shared chain. In
+float32 the shim's promotion inserts dtype boundaries that break the chain at
+width 17; in float16 the chain is uniform and nothing breaks it. The bias fix did
+not cause the pathology, it removed the accident that was hiding it.
+
+**The first attribution was wrong, and measuring it is what showed that.** The
+share cutoff in `exec_plan.cc` looked like the cause -- it bounds exactly this
+recompute, and it applied to weak shares only, so a **strong** share (a broadcast
+producer, an all-reduce consumer set, a `_force_fuse` scalar) walked past it:
 
 ```cpp
 if (var_fused[vi] == 2) {                    // weak share
@@ -4689,17 +4697,22 @@ if (var_fused[vi] == 2) {                    // weak share
 }                                            // a var already at 3 walks past
 ```
 
-A **strong** share -- a broadcast producer, an all-reduce consumer set, a
-`_force_fuse` scalar -- went in unconditionally, on the reasoning that
-recomputing one of those is cheap. One is; three hundred are not, and nothing
-stopped a chain of them. In float32 the shim's promotion inserts dtype
-boundaries that break the chain at width 17; in float16 the chain is uniform and
-nothing breaks it. The bias fix did not cause the pathology, it removed the
-accident that was hiding it.
+Extending it to strong shares changed **nothing**. With the bound at 8 instead of
+unbounded the widths came back byte-identical -- mean 16.47, widest 361, 1,920,123
+operator-executions either way -- and the time did not move. So the wide kernels
+do not come from that path, and the flag was reverted rather than left in as an
+unmeasured knob. This is the section's own decision rule firing: the width
+histogram was the check, and it did not move.
 
-**The change:** `fuse_share_limit` (new flag, default 32 -- the number the weak
-cutoff already used) applies the bound to strong shares as well. 0 restores the
-old unbounded behaviour, so the two can be compared on one binary.
+**Where the width does come from:** `count_fuse`'s union-find group size in
+`src/core/fuser.cc`. Pass 3 unions every neighbour pair on the same fuse level
+with no bound at all, so one fused kernel can hold an arbitrarily long chain.
+`fuse_op_limit` (new flag, default 0 = unbounded = the behaviour that has always
+shipped) is the bound. A var the limit refuses to merge across has to be written
+out: without that the group's every output can be fused away and the executor
+reaches `fused_op.cc` with none at all -- `fuse_op_limit=16` hit exactly that,
+which is why the flag lands with a forced-materialisation path rather than as a
+bare comparison.
 
 **Ruled out along the way**, each measured rather than reasoned about:
 
@@ -4711,11 +4724,8 @@ old unbounded behaviour, so the two can be compared on one binary.
   error the distorted profiler timings would have led to.
 * *Launch count, operator count, op mix.* Identical between the modes.
 
-**Still unverified at the time of writing:** whether `fuse_share_limit=32` closes
-the gap while keeping the float16 dtypes. The change is in the tree and the A/B
-(`probe_share_limit.py`, three limits x both cast modes) has not run -- the box
-became unreachable mid-build. Until that number exists this section explains the
-2x; it does not claim to have removed it.
+**Still open:** `fuse_op_limit` is 0, so nothing in this tree removes the 2x yet.
+This section explains it; it does not claim to have removed it.
 
 To finish it, in order (the first step is the copy-deploy trap from
 `HANDOFF-AMP-BIAS.md` -- editing the repo changes nothing until the file reaches
@@ -4723,30 +4733,27 @@ the deployed tree, and a `src/` edit means a core rebuild):
 
 ```bash
 D=/root/jittor-lab/_state/h3/venv-jittor/lib/python3.12/site-packages/jittor
-cp src/core/exec_plan.cc                    "$D/src/core/exec_plan.cc"
+cp src/core/fuser.cc                        "$D/src/core/fuser.cc"
 cp python/jittor/_runtime/flag_policy.py    "$D/_runtime/flag_policy.py"
 cd /root/jittor-lab/minimax-h3 && source ./env-jittor.sh
 CUDA_VISIBLE_DEVICES=2 "$VENV/bin/python" -u probe_share_limit.py    # no grep: it buffers
 ```
 
-Expected shape of the answer, and what each outcome means:
+The lab's probe still sweeps `fuse_share_limit`, which no longer exists; its
+three limits become `fuse_op_limit` values (0 for the unbounded column, 16 and 32
+for the bounded ones). What to look at:
 
-* `fuse_share_limit=0` reproduces 8.3 / 16.0 -- the bound is what changed,
-  nothing else moved underneath;
-* `=32` brings the cast-on column toward the ~9.7 s that `no_fuse` already
-  reaches with correct dtypes, and ideally below it, since only the pathological
-  sharing is cut and ordinary fusion is kept;
-* the cast-off column must not regress: this bound applies to both, and 8.3 s is
-  the number to protect;
-* if `=32` does not move it, the width histogram is the check -- re-run
-  `probe_fp16_launch_counts.py` and look at mean width, which must fall from
-  16.47. If width falls and time does not, the wide kernels were not the cost
-  after all and section 47's attribution is wrong.
+* `=0` reproduces 8.3 / 16.0 -- nothing else moved underneath;
+* a bounded column must take the cast-on mean width **down from 16.47**. That is
+  the check that failed for the share cutoff, so run it first: if the width does
+  not move, the bound is not reaching `count_fuse`'s groups either;
+* the cast-off column must not regress -- forcing a materialisation costs memory
+  and bandwidth where the chain is short, and 8.3 s is the number to protect.
 
-Then the same A/B has to run on the *native* side (`tests/` core tier, and a
-plain fp32 training step) before the bound can ship: cutting a share that used to
-be free costs a materialisation, and 32 is inherited from the weak-share cutoff
-rather than measured.
+Then the same A/B has to run on the *native* side (`tests/` core tier, and a plain
+fp32 training step) before the bound can ship: cutting a chain that used to be
+free costs a write-out, and the limit value is inherited from where the pathology
+starts rather than measured.
 
 ### One more divergence found on the way
 
