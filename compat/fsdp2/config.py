@@ -33,16 +33,19 @@ class _Config:
 
 
 class StateDictConfig(_Config):
-    pass
+    def __init__(self, offload_to_cpu=False):
+        super().__init__(offload_to_cpu=bool(offload_to_cpu))
 
 
 class OptimStateDictConfig(_Config):
-    pass
+    def __init__(self, offload_to_cpu=True):
+        super().__init__(offload_to_cpu=bool(offload_to_cpu))
 
 
 class FullStateDictConfig(StateDictConfig):
     def __init__(self, offload_to_cpu=False, rank0_only=False):
-        super().__init__(offload_to_cpu=bool(offload_to_cpu), rank0_only=bool(rank0_only))
+        super().__init__(offload_to_cpu=bool(offload_to_cpu))
+        self.rank0_only = bool(rank0_only)
 
 
 class LocalStateDictConfig(StateDictConfig):
@@ -51,12 +54,15 @@ class LocalStateDictConfig(StateDictConfig):
 
 
 class ShardedStateDictConfig(LocalStateDictConfig):
-    pass
+    def __init__(self, offload_to_cpu=False, _use_dtensor=False):
+        super().__init__(offload_to_cpu=offload_to_cpu)
+        self._use_dtensor = bool(_use_dtensor)
 
 
 class FullOptimStateDictConfig(OptimStateDictConfig):
-    def __init__(self, offload_to_cpu=False, rank0_only=False):
-        super().__init__(offload_to_cpu=bool(offload_to_cpu), rank0_only=bool(rank0_only))
+    def __init__(self, offload_to_cpu=True, rank0_only=False):
+        super().__init__(offload_to_cpu=bool(offload_to_cpu))
+        self.rank0_only = bool(rank0_only)
 
 
 class LocalOptimStateDictConfig(OptimStateDictConfig):
@@ -65,7 +71,9 @@ class LocalOptimStateDictConfig(OptimStateDictConfig):
 
 
 class ShardedOptimStateDictConfig(LocalOptimStateDictConfig):
-    pass
+    def __init__(self, offload_to_cpu=True, _use_dtensor=False):
+        super().__init__(offload_to_cpu=offload_to_cpu)
+        self._use_dtensor = bool(_use_dtensor)
 
 
 class StateDictSettings:

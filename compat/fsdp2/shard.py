@@ -309,9 +309,12 @@ def _init_true_fsdp_state_impl(module, state):
     ws = common._world_size() if group is None else group.size()
     rank = common._rank() if group is None else group.rank()
     entries = []
+    ignored_ids = {
+        id(param) for param in getattr(state, "ignored_params", ())
+    }
     params = [
         item for item in _named_parameters_with_owner(module, recurse=True)
-        if not is_fsdp_managed_param(item[3])
+        if not is_fsdp_managed_param(item[3]) and id(item[3]) not in ignored_ids
     ]
     total_numel = sum(common._param_numel(param) for _, _, _, param in params)
     if common._fsdp2_flat_enabled(ws, total_numel) and params and len({_jittor_dtype_name(param.dtype) for _, _, _, param in params}) == 1:

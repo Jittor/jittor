@@ -44,6 +44,28 @@ pytestmark = pytest.mark.xdist_group("fsdp2_compat_module_state")
 
 
 class TestFSDP2Compat(unittest.TestCase):
+    def test_ignored_params_remain_unmanaged_during_initialization(self):
+        module = torch.nn.Linear(4, 4, bias=True)
+        ignored = module.bias
+        state = fsdp_shard.common.StateRecord(
+            mesh=None,
+            shard_group=None,
+            replicate_group=None,
+            ignored_params=(ignored,),
+        )
+        with mock.patch.object(fsdp_shard.common, "_in_true_distributed",
+                               return_value=True), \
+             mock.patch.object(fsdp_shard.common, "_world_size",
+                               return_value=1), \
+             mock.patch.object(fsdp_shard.common, "_rank", return_value=0):
+            fsdp_shard._init_true_fsdp_state(module, state)
+
+        self.assertTrue(state.true_fsdp_initialized)
+        self.assertEqual([entry.attr for entry in state.true_fsdp_params],
+                         ["weight"])
+        self.assertIs(module.bias, ignored)
+        self.assertIsNot(module.weight, ignored)
+
     def test_parameter_trainability_uses_torch_requires_grad(self):
         parameter = torch.nn.Parameter(torch.ones(4))
         parameter.requires_grad_(False)
