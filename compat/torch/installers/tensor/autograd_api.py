@@ -240,9 +240,19 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
         if id(p) not in opt_ids:
             # non-optimizer leaf (retain_grad screenspace etc.): accumulate
             # onto .grad like torch (zeroed externally / per render).
+            #
+            # In place, the way torch's AccumulateGrad does it: when .grad
+            # already exists, torch adds into that very tensor. Rebuilding it
+            # with ``prev + gr`` is numerically identical but hands back a new
+            # object, and a caller that already holds the previous ``.grad``
+            # (a training loop keeping ``[p.grad for p in model.parameters()]``,
+            # for instance) then keeps a full gradient set alive per step. That
+            # is a memory regression against torch, not a rounding detail.
             prev = getattr(p, "_torch_grad", None)
-            object.__setattr__(p, "_torch_grad",
-                               gr if prev is None else (prev + gr))
+            if prev is None:
+                object.__setattr__(p, "_torch_grad", gr)
+            else:
+                prev.add_(gr)
     # fill each optimizer's pg["grads"] so its step(loss=None) consumes them
     if _fsdp2_backward is not None and fsdp_opts:
         _fsdp2_backward.fill_fsdp_optimizer_grads_from_grad_map(fsdp_opts, grad_by_id)

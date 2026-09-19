@@ -431,7 +431,13 @@ def _run(policy_stack):
                     [step_loss] + gradients,
                     device_sync=options.device != "cpu",
                 )
-            return step_loss, gradients
+            # Only the loss is handed back. These are per-step tensors, and a
+            # caller that keeps them alive holds one step's whole gradient set
+            # per step wherever the runtime returns a fresh ``.grad`` object
+            # instead of accumulating into the existing one. `gradients` exists
+            # to force the lazy graph and dies with this call; the parameters
+            # keep their own ``.grad`` regardless.
+            return step_loss
 
         resident_values = [timing_loss_weights]
         for slot in timing_slots:

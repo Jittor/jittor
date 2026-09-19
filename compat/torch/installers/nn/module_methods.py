@@ -884,7 +884,7 @@ def _zero_grad(self, set_to_none=True):
     # The bridged optimizer runs first: its zero_grad clears the torch-visible
     # .grad as a side effect, so doing it afterwards would undo the zero tensors
     # that set_to_none=False is required to leave behind.
-    from ...tensor_state import compatibility_owner, latest_optimizer
+    from ...tensor_state import latest_optimizer
     opt = latest_optimizer(jt)
     if opt is not None:
         try:
@@ -898,13 +898,16 @@ def _zero_grad(self, set_to_none=True):
                 if grad is not None:
                     object.__setattr__(p, "_torch_grad", None)
             elif grad is not None:
-                # Through the torch frontend, not ``jt.zeros``: the latter
-                # builds a native Var, and the published ``.grad`` would stop
-                # being a Tensor -- its dtype would print as "float32" where
-                # the parameter's prints as "torch.float32", and every Tensor
-                # method on it would vanish.
-                object.__setattr__(
-                    p, "_torch_grad", compatibility_owner(jt).zeros_like(grad))
+                # In place, so ``.grad`` stays the *same object* the way torch
+                # leaves it: torch's ``zero_grad(set_to_none=False)`` zeroes the
+                # existing tensor, and callers rely on that identity. Handing
+                # back a fresh ``zeros_like`` is numerically identical but makes
+                # ``[p.grad for p in model.parameters()]`` hold one gradient set
+                # per step instead of one in total. Zeroing in place also avoids
+                # the ``jt.zeros`` trap recorded here before: that built a native
+                # Var, whose dtype prints as "float32" where the parameter's
+                # prints as "torch.float32", and which loses every Tensor method.
+                grad.zero_()
     except EXPECTED as exc:
         swallowed("torch/installers/nn.py _zero_grad: for p in self.parameters():", exc)
     return None
