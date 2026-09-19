@@ -639,9 +639,15 @@ class TestLaunchFollowsItsProducers(unittest.TestCase):
 
     def _prepare(self):
         global triton, tl
+        if not _HAVE:
+            # Every other class in this file carries `skipUnless(_HAVE, ...)`;
+            # this one asks `_shim.activate_bridge()` instead, and `_shim` is
+            # None until real triton imports -- so without a triton install the
+            # guard was an AttributeError rather than a skip.
+            self.skipTest("real upstream triton + CUDA not available")
         if triton is None or tl is None:
             setUpModule()
-        if not _shim.activate_bridge():
+        if _shim is None or not _shim.activate_bridge():
             self.skipTest("jittor Triton bridge is unavailable")
 
     def test_each_launch_reads_the_value_its_producer_just_wrote(self):
