@@ -5,10 +5,21 @@ from contextlib import contextmanager
 from functools import update_wrapper
 from types import MethodType
 
+#: Resolved on first use, then reused. These two helpers sit on the per-op path
+#: (`torch.cat` alone re-imported them 91 times, ~110 us of its 340 us), and a
+#: function-local `import` pays the import machinery on every call. The import
+#: stays lazy so this module is still importable before the install context
+#: exists.
+_get_install_context = None
+
 
 def _frontend_precision_policy(cls):
     """Read this frontend's two native accumulation tiers without flag writes."""
-    from .context import get_install_context
+    global _get_install_context
+    get_install_context = _get_install_context
+    if get_install_context is None:
+        from .context import get_install_context as get_install_context
+        _get_install_context = get_install_context
     state = get_install_context(cls._frontend_backend).state.get("cuda_runtime")
     if state is None:
         # Type creation precedes CUDA facade publication during installation.

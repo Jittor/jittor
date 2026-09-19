@@ -27,10 +27,14 @@ aliasing tricks.
 
 Correctness model (phase 1)
 ---------------------------
-The launch is bracketed by ``jt.sync_all(True)`` (so every input/output ``Var``
-is materialised and its device pointer valid) and a ``cuCtxSynchronize`` afterwards.
-This serialises at the boundary — correct but not maximally pipelined; phase 3
-moves the launch onto jittor's own stream as a graph node. See the plan.
+The launch is bracketed by a jittor barrier before it (so every input/output
+``Var`` has been materialised and its device pointer is valid) and a device wait
+after it. In bridge mode the barrier only *submits* the operand graph: jittor
+schedules its own ops on ``cudaStreamPerThread`` and the bridge launches on that
+same stream (see ``_launch_stream``), so producers, bounce copies and kernel are
+already ordered against each other without waiting. The trailing device wait is
+what remains of the old serialisation, and removing it is the "launch as a graph
+node" work the plan describes.
 
 This module is imported lazily (only when bridge mode is actually used), so
 importing :mod:`jittor.compat.triton` never imports jittor or triton eagerly.
@@ -211,8 +215,9 @@ class _Driver:
             rt.cudaFree.restype = ctypes.c_int
             rt.cudaMemset.argtypes = [c_vp, ctypes.c_int, ctypes.c_size_t]
             rt.cudaMemset.restype = ctypes.c_int
-            rt.cudaMemcpy.argtypes = [c_vp, c_vp, ctypes.c_size_t, ctypes.c_int]
-            rt.cudaMemcpy.restype = ctypes.c_int
+            rt.cudaMemcpyAsync.argtypes = [c_vp, c_vp, ctypes.c_size_t,
+                                           ctypes.c_int, c_vp]
+            rt.cudaMemcpyAsync.restype = ctypes.c_int
             rt.cudaSetDevice.argtypes = [ctypes.c_int]
             rt.cudaSetDevice.restype = ctypes.c_int
             rt.cudaGetDevice.argtypes = [ctypes.POINTER(ctypes.c_int)]
@@ -412,14 +417,27 @@ class _Driver:
     #: cudaMemcpyKind.cudaMemcpyDeviceToDevice
     _MEMCPY_D2D = 3
 
-    def copy_dtod(self, dst_ptr_int, src_ptr_int, nbytes):
+    def copy_dtod_async(self, dst_ptr_int, src_ptr_int, nbytes, stream=None):
+        """DtoD copy issued on ``stream`` -- by default the triton launch stream.
+
+        The guard's bounce copies are strictly ordered around the kernel: the
+        host writes the payload into the guarded buffer, the kernel reads (and
+        for an output writes) it, then the payload is copied back. Issuing all
+        three on one stream is enough for that ordering, so nothing needs to
+        wait in between -- which is what the blocking ``cudaMemcpy`` did. Each
+        blocking copy drains the device, and on MiniMax-H3's video VAE (4
+        bounced operands, 9,072 launches) the copy-back alone was 2.4 ms of a
+        5.0 ms launch.
+        """
         if nbytes <= 0:
             return
-        r = self.rt.cudaMemcpy(ctypes.c_void_p(int(dst_ptr_int)),
-                               ctypes.c_void_p(int(src_ptr_int)),
-                               ctypes.c_size_t(int(nbytes)), self._MEMCPY_D2D)
+        handle = ctypes.c_void_p(int(_launch_stream() if stream is None else stream))
+        r = self.rt.cudaMemcpyAsync(ctypes.c_void_p(int(dst_ptr_int)),
+                                    ctypes.c_void_p(int(src_ptr_int)),
+                                    ctypes.c_size_t(int(nbytes)),
+                                    self._MEMCPY_D2D, handle)
         if r != 0:
-            raise JittorTritonError("cudaMemcpy(D2D) -> cudaError %d" % r)
+            raise JittorTritonError("cudaMemcpyAsync(D2D) -> cudaError %d" % r)
 
     # ------------------------------------------------------------------ #
     #  guarded bounce-buffer pool (over-read tolerance — see run())
@@ -627,6 +645,66 @@ def _tensor_is_cuda(v):
     return dev is not None and "cuda" in str(dev).lower()
 
 
+def _tensor_is_contiguous(v):
+    """Whether an operand's layout is flat, i.e. whether it may be bounced.
+
+    The guard path copies an operand with one flat ``copy_dtod_async`` of
+    ``numel * elsize`` bytes taken from ``data_ptr()`` and then hands the kernel
+    the *bounce* pointer, while the caller's own stride arguments still describe
+    the original layout. That is only self-consistent for a contiguous operand.
+
+    On a non-contiguous operand the copy picks up the wrong elements -- a
+    row-strided ``[M, H]`` view of a ``[M, k*H]`` buffer copies the first ``M*H``
+    elements of the parent rather than the view's rows -- and the kernel then
+    walks off the copied payload with the caller's strides, reading the zeroed
+    guard. The launch succeeds and returns silently wrong numbers.
+
+    Measured, MiniMax-H3's AdaLN modulation (``minimax_h3_modulation.py``): the
+    DiT passes ``chunk`` views with row stride ``6 * hidden``, and the fused
+    ``rms_norm_indexed_scale_shift`` then diverged from its own eager reference
+    by 40 (cos 0.985) where the contiguous call agreed bitwise.
+
+    Two operand flavours reach the launch: the shim's torch-shaped ``Tensor``
+    (``is_contiguous``) and a raw jittor ``Var`` (``_storage_is_contiguous``).
+    Only a genuine ``bool`` is trusted from either -- jittor's ``Var.__getattr__``
+    synthesises a proxy for unknown names, so a plain ``getattr`` probe can
+    return something that merely looks callable. Strides are the last resort, and
+    an operand whose layout cannot be established is reported as non-contiguous:
+    skipping the bounce only risks a masked over-read reaching the allocator's
+    slack instead of the guard, whereas bouncing something strided corrupts
+    results.
+    """
+    for name in ("_storage_is_contiguous", "is_contiguous"):
+        accessor = getattr(v, name, None)
+        if accessor is None:
+            continue
+        try:
+            result = accessor() if callable(accessor) else accessor
+        except EXPECTED as exc:
+            swallowed("triton/backend.py _tensor_is_contiguous: %s" % name, exc)
+            continue
+        if isinstance(result, bool):
+            return result
+    strides = getattr(v, "stride", None)
+    try:
+        shape = [int(s) for s in v.shape]
+        got = strides() if callable(strides) else getattr(v, "_storage_strides")
+        got = [int(s) for s in (got() if callable(got) else got)]
+    except EXPECTED as exc:
+        swallowed("triton/backend.py _tensor_is_contiguous: shape/stride", exc)
+        return False
+    if len(shape) != len(got):
+        return False
+    # Row-major check: walking inward, each kept dim's stride must be the product
+    # of the sizes already passed. Size-1 dims carry no information.
+    want = 1
+    for size, stride in zip(reversed(shape), reversed(got)):
+        if size > 1 and stride != want:
+            return False
+        want *= max(size, 1)
+    return True
+
+
 def _ptr_sig(var):
     name = _dtype_name(var.dtype)
     code = _DT.get(name)
@@ -814,9 +892,24 @@ def _copy_bounced_inputs_back():
 
 
 def _sync_after_launch_enabled():
+    """Whether to wait for the device after a launch.
+
+    Default: the conservative answer outside the shim, and no wait inside it.
+    The launch, its bounce copies and the ops that produce its operands are all
+    on ``_launch_stream()``, so the kernel is already ordered against them; the
+    wait was there because the bridge used to launch on the legacy stream, which
+    has no such order. Measured on the H3 VAE's kernel shape, the wait is 2.07 ms
+    of a 2.50 ms launch while the launch stream drains in 0.008 ms -- so it buys
+    nothing but latency. ``JITTOR_TRITON_SYNC_AFTER_LAUNCH=1`` restores it,
+    ``=0`` removes it everywhere; a launch that allocates global scratch still
+    waits, because ``drv.free`` returns that memory to the driver rather than to
+    a stream.
+    """
+    if _truthy_env("JITTOR_TRITON_SYNC_AFTER_LAUNCH"):
+        return True
     if _falsey_env("JITTOR_TRITON_SYNC_AFTER_LAUNCH"):
         return False
-    return True
+    return not _fast_sync_enabled()
 
 
 def _sync_before_launch_enabled():
@@ -1259,8 +1352,19 @@ def _run(jitfn, args, kwargs, grid):
     # Materialise the graph exactly once, then every operand's device pointer is
     # read without syncing again. Leaving that to the per-argument accessor is
     # what made a 710 s VAE decode: see `_tensor_ptr`.
+    #
+    # In the fast path this is a *submission*, not a wait. jittor puts its own
+    # launches, copies and library calls on `cudaStreamPerThread`, and the
+    # bridge launches the kernel on that same stream (see `_launch_stream`), so
+    # the kernel and its bounce copies are already ordered behind the ops that
+    # produce the operands. Waiting here would only idle the device: the
+    # producers are submitted by this very call and there is nothing else on the
+    # stream to overlap them with. On MiniMax-H3's video VAE the waiting form
+    # measured 41.9 s of a 59.4 s bridge total -- four times the next-largest
+    # phase. `sync_all(False)` still plans, allocates and enqueues; it skips
+    # only the trailing device wait (`sync_all` in `core/var_holder.cc`).
     if any(_is_tensor(v) for (_, _, v) in runtime_vals):
-        jt.sync_all(True)
+        jt.sync_all(not _fast_sync_enabled())
     if _sync_before_launch_enabled():
         jt.sync_all(True)
     _stats_t1 = time.perf_counter() if _stats_on() else 0.0
@@ -1283,13 +1387,18 @@ def _run(jitfn, args, kwargs, grid):
             else:
                 ptr = _tensor_ptr(val)
                 nbytes = _tensor_nbytes(val, sig) if _guard_enabled() else 0
-                if (not _looks_like_output_arg(name)) and 0 < nbytes <= _guard_max_payload():
+                # Only a contiguous operand can be bounced: the copy is a flat
+                # memcpy of the payload and the kernel keeps the caller's
+                # strides, so a strided view would be copied wrongly and then
+                # read out of the copied buffer (see `_tensor_is_contiguous`).
+                if (not _looks_like_output_arg(name)) and 0 < nbytes <= _guard_max_payload() \
+                        and _tensor_is_contiguous(val):
                     # bounce through a guarded buffer so a masked over-read past the
                     # operand's end hits zeroed slack instead of an unmapped page.
                     try:
                         bbase, bcap = drv.guard_acquire(nbytes, _guard_bytes())
                         _t_dtod = time.perf_counter()
-                        drv.copy_dtod(bbase, ptr, nbytes)
+                        drv.copy_dtod_async(bbase, ptr, nbytes)
                         if _stats_on():
                             _STATS["dtod_t"] += time.perf_counter() - _t_dtod
                         bounced.append((ptr, bbase, nbytes, bcap))
@@ -1353,11 +1462,35 @@ def _run(jitfn, args, kwargs, grid):
     _stats_t2 = time.perf_counter() if _stats_on() else 0.0
     drv.launch(func, g, block, info["shared"], params)
     _stats_t3 = time.perf_counter() if _stats_on() else 0.0
-    need_sync_after_launch = (
-        _sync_after_launch_enabled()
-        or bool(scratch_bases)
-        or (bounced and _copy_bounced_inputs_back())
-    )
+
+    # -- copy bounced tensors' results back into their Vars -------------------- #
+    # The kernel wrote into the bounce buffers' payload region (a masked store
+    # never touches the guard tail), so DtoD the payload back to where the caller
+    # will read it. Inputs copy back byte-identical (a no-op functionally).
+    #
+    # These copies are issued on the launch stream, *before* the wait below, so
+    # the order kernel -> copy-back is stream order rather than a device sync.
+    # They used to be blocking ``cudaMemcpy`` calls guarded by their own
+    # ``drv.synchronize``: four shipped operands meant four pipeline drains plus
+    # an extra full-device wait per launch, which measured 2.4 ms of a 5.0 ms
+    # launch on MiniMax-H3's video VAE.
+    _copy_back = bool(bounced) and _copy_bounced_inputs_back()
+    if _copy_back:
+        for (orig_ptr, bbase, nbytes, _bcap) in bounced:
+            try:
+                _t_dtod = time.perf_counter()
+                drv.copy_dtod_async(orig_ptr, bbase, nbytes)
+                if _stats_on():
+                    _STATS["dtod_t"] += time.perf_counter() - _t_dtod
+            except EXPECTED as exc:
+                swallowed("triton/backend.py run: drv.copy_dtod_async(orig_ptr, bbase, nbytes)", exc)
+
+    # Only two things need the wait: a caller who asked for it, and global
+    # scratch, which `drv.free` hands back to the driver rather than to a stream.
+    # A bounce buffer does NOT: its copy-back is on the launch stream, and the
+    # only other access to a pooled buffer is `guard_acquire`'s memset of the
+    # *tail*, which is disjoint from the payload that copy-back reads.
+    need_sync_after_launch = _sync_after_launch_enabled() or bool(scratch_bases)
     if need_sync_after_launch:
         drv.synchronize()
     if _ptrtrace:
@@ -1374,18 +1507,7 @@ def _run(jitfn, args, kwargs, grid):
     if not _fast_sync_enabled():
         jt.sync_all(True)
 
-    # -- copy bounced tensors' results back into their Vars, recycle guards ---- #
-    # The kernel wrote into the bounce buffers' payload region (a masked store
-    # never touches the guard tail), so DtoD the payload back to where the caller
-    # will read it. Inputs copy back byte-identical (a no-op functionally).
     if bounced:
-        if _copy_bounced_inputs_back():
-            for (orig_ptr, bbase, nbytes, bcap) in bounced:
-                try:
-                    drv.copy_dtod(orig_ptr, bbase, nbytes)
-                except EXPECTED as exc:
-                    swallowed("triton/backend.py run: drv.copy_dtod(orig_ptr, bbase, nbytes)", exc)
-            drv.synchronize()
         for (_orig_ptr, bbase, _nbytes, bcap) in bounced:
             drv.guard_release(bbase, bcap)
 

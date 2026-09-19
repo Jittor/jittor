@@ -2921,3 +2921,932 @@ same scene and the same overlaid text, see
 `runs/sheet-8step-tp1-vs-tp2.png`). Pixel-identical output between a weight-sharded
 bf16 TP and a single GPU is not something a chaotic 8-step sampler can give, so
 "correct" here means numerically equivalent per step, same content overall.
+
+## 35. The pink title card: the over-read guard bounced a strided operand
+
+The server path rendered a pink card with gibberish glyphs for the pottery
+prompt at every TP and every step count, while the diffusers path -- same shim,
+same weights, same prompt, same 8 steps and 512x512 -- rendered the prompted
+scene. TP1 and TP2 agreed with each other, which is why this read as a TP
+problem for as long as it did.
+
+### What the card was not
+
+Every candidate below was *measured* on the server's own configuration before the
+real cause was reached. Each row is a lab probe, not a reading of the code.
+
+| suspect | probe | result |
+| --- | --- | --- |
+| text conditioning | `probe_vllm_encoder_cond.py`, `probe_capture_server_cond.py` vs `oracle-512.cond.npy` | matches to bf16 slop (cos 0.9999960, rms 0.0374); the diffs path's own parity is 0.0372. Holds with the encoder offloaded and with the DiT offloaded. `encoder_hidden` reaches the DiT as `prompt_embeds` bitwise |
+| initial noise | `probe_server_noise.py` vs the captured `dit_x`/`dit_audio_x` | reproduced bit-for-bit from `seed=0` (max\|d\| = 0), right shape, scale, tags and padding |
+| sigma schedule, sampler | `minimax_h3_time_shift_sigmas` vs `MiniMaxH3Scheduler`; `minimax_h3_rf_v_to_x0` + `euler_eta0_step` vs `MiniMaxH3Scheduler.step` | identical at shift 12/3 for 2/6/8/50 steps; same `x0 = x_t + sigma*v`, `x_next = r*x_t + (1-r)*x0` |
+| DiT weights | `probe_ckpt_layout.py` | `FL2VA/transformer` (native) and `transformer` (diffusers) agree exactly under the documented transforms (qkv grouped->qkv, `fc1` gate-first); no "Skipping" warnings |
+| row packing | `probe_index_add_bf16.py` | `index_add_` correct in bf16/fp16/fp32, with duplicate indices and slice destinations |
+| attention | `probe_sdpa_parity.py`, `probe_varlen_parity.py` | dense 4-D SDPA and packed `flash_attn_varlen_func` at `cu_seqlens=[0,10175,10176]` both match float64; varlen is bit-identical to the dense flash entry |
+| DiT inputs | `probe_capture_server_cond.py` + checkpoint matmuls | `condition_proj`, the token refiner (replayed from the diffusers checkpoint, cos 0.99998), both patch projections, the `_embed` assembly and `t_emb` (t=0 at step 0) all reproduce |
+| fused qk-norm+RoPE | `probe_fused_qk_rope.py` | the Triton kernel matches its eager reference and a half-split torch chain |
+| fused AdaLN modulation | `probe_modulation_ops.py` | all three kernels match their CPU eager branches **on contiguous inputs** |
+
+The last row is the one that was wrong, and the last two words are the whole
+story.
+
+### Root cause: the guard's flat copy is only valid for a contiguous operand
+
+`compat/triton/backend.py` routes small tensor arguments through a guarded
+bounce buffer so that a masked over-read lands in zeroed slack instead of an
+unmapped page (`jittor` Vars are exactly sized, unlike a torch caching
+allocator's rounded-up blocks). The copy is one flat `copy_dtod` of
+`numel * elsize` bytes taken from `data_ptr()`, after which the kernel is given
+the *bounce* pointer -- while the caller's own stride arguments still describe
+the original layout. `_tensor_nbytes` sized it from the element count, with the
+comment "contiguous tensors, which triton requires for these kernels anyway".
+
+MiniMax-H3's DiT does not hand it contiguous tensors. `MiniMaxH3AdalnProj`
+returns `tuple(x.chunk(expand_ratio, dim=-1))` of an `[M*3, 6*H]` projection, so
+`shift_msa`/`scale_msa`/`gate_msa` are views with row stride `6 * H = 32256`,
+not `H = 5376`. The bounce copied the first `numel` elements of the parent
+buffer instead of the view's rows, and the kernel then walked past the copied
+payload with stride 32256 into the zeroed guard. The launch succeeded and the
+numbers were silently wrong -- in `rms_norm_indexed_scale_shift`,
+`indexed_gate_rms_norm_scale_shift` and `indexed_gate`, twice per block, in all
+50 blocks, at every step.
+
+Measured directly (`probe_modulation_strides2.py`, same values, four layouts):
+
+| shift / scale layout | fused op vs float64 |
+| --- | --- |
+| both contiguous | cos 0.99999863, max\|d\| 0.124 |
+| shift strided (offset 0), scale contiguous | cos 0.99293, max\|d\| 2.39 |
+| shift contiguous, scale strided (offset `H`) | cos 0.99325, max\|d\| 21.96 |
+| both strided -- the DiT's real call | cos 0.98616, max\|d\| 21.21 |
+
+and the op's *own CPU eager branch* handles those same strided tensors correctly
+(cos 0.99999754), which is why comparing the Triton path against its eager
+reference with contiguous random data had passed. The error is small per step and
+systematic, so the sampler compounds it: at 2 steps the frames are a blur, at 8 a
+wooden disc on a pink field, at 50 a pink card with glyphs -- the conditioning
+being correct, the model simply degenerates. It is identical on both ranks,
+which is exactly why TP1 and TP2 "agreed" while both were wrong.
+
+### The fix
+
+`_tensor_is_contiguous` in `compat/triton/backend.py`, and the bounce is taken
+only for operands it accepts. It reads `Var._storage_is_contiguous` for jittor
+Vars and `is_contiguous()` for the shim's torch-shaped tensors, falls back to a
+row-major stride check, and trusts only a genuine `bool` -- `Var.__getattr__`
+synthesises a proxy for unknown names. An undetermined layout is reported as
+non-contiguous: skipping the bounce only risks a masked over-read reaching the
+allocator's slack, whereas bouncing something strided corrupts results. The guard
+itself is unchanged for the operands it was written for (weights, index and
+segment tables, all contiguous).
+
+### Verification
+
+* `probe_modulation_strides2.py`: all four layouts now cos 0.99999863,
+  max\|d\| 0.124 -- identical to the contiguous case.
+* Block-level A/B on the rows a live request produced
+  (`probe_dit_block_parity.py`, vLLM-Omni's block 0 vs diffusers' block 0):
+
+  | stage | before | after |
+  | --- | --- | --- |
+  | adaln shift/scale/gate | cos 0.9999976 | unchanged |
+  | norm1 + modulation | cos 0.84167 | **0.99998** |
+  | attention output | 0.93299 | 0.99727 (bf16 at these magnitudes) |
+  | gated residual 1 | 0.98274 | 0.99938 |
+  | norm2 + modulation | 0.54199 | 0.99915 |
+  | mlp output | 0.51228 | 0.99957 |
+  | block output | cos 0.18744 | **0.99978** |
+
+* Regression test `TestGuardedBounceRequiresContiguous` in
+  `compat/tests/triton/test_triton_backend.py` (strided operand through
+  `matmul_kernel`'s explicit strides, contiguous control, helper semantics).
+  Against the pre-change bridge the strided case fails with
+  `Mismatched elements: 2047 / 4096 (50%)`; with the fix all three pass.
+* End to end through the OpenAI endpoint, `t2va`, the pottery prompt, 8 steps,
+  512x512, `seed=0`, after the fix:
+
+  | run | result | request time |
+  | --- | --- | --- |
+  | TP1, one GPU, 512x512 | prompt-following clip (`runs/fix-tp1-8s.mp4`) | 118.9 s |
+  | TP2, two GPUs, 512x512 | prompt-following clip (`runs/fix-tp2-8s.mp4`) | 130.1 s |
+  | TP1, one GPU, 832x480 | prompt-following clip (`runs/fix-tp1-8s-832.mp4`) | 188.3 s |
+  | TP2, two GPUs, 832x480 | prompt-following clip (`runs/fix-tp2-8s-832.mp4`) | 170.2 s |
+
+  All four clips show the potter's hands shaping a clay bowl on the spinning
+  wheel with the studio shelves behind, i.e. the structured prompt, in place of
+  the pink card, and TP1 and TP2 agree on composition. The pair ordering is the
+  known profile: at 512x512 the per-step collectives are paid without the rows
+  being long enough to win them back, so TP2 is 9% slower; at 832x480 TP2 is 10%
+  faster. Against real torch the denoise parity measured earlier stands (shim
+  1.11x on the DiT, 1.22x end to end on the diffusers path). The fix cannot slow
+  anything down -- for the strided operands it removes a device-to-device copy
+  per launch; the contiguous operands it still guards are unchanged.
+
+### Lesson
+
+A fused kernel verified against its own eager reference proves nothing about the
+*bridge*: the two agreed bitwise here because both were fed contiguous tensors,
+which is not what the model passes. When a compiled path diverges while every
+kernel looks right, check the layouts the model actually hands over -- views,
+`chunk`s, `split`s, slices -- not just the values.
+
+## 36. Speed: what the server's defaults actually cost
+
+Asked whether the server is slower than the diffusers path, the phases were
+measured on both. The two are **not** comparable as configured -- the diffusers
+harness runs the video VAE in float16 while vLLM-Omni's H3 VAE is loaded and
+decoded in float32 -- and once that is equalised the server is still ahead of
+neither: it is 1.35-1.55x slower on the VAE at matched precision (section
+below). The gap is real, and it is mostly the VAE.
+
+`t2va`, the pottery prompt, 8 steps, 512x512, seed 0, jittor shim on both sides.
+vLLM-Omni is TP1 with the recipe's default offload; the server emits these with
+`--enable-diffusion-pipeline-profiler`.
+
+| phase (s) | diffusers, fp16 VAE | diffusers, fp32 VAE | vLLM-Omni (fp32 VAE) |
+| --- | --- | --- | --- |
+| text encoder | 3.91 | 3.75 | 8.65 |
+| denoise | 35.63 | 37.36 | 42.25 |
+| **video VAE decode** | **15.75** | **335.64** (offload artifact) | **67.11** |
+| audio VAE decode | 6.04 | 5.59 | 12.50 |
+| total | 102.85 | 420.98 | 130.92 |
+
+Flipping only `--vae-dtype` on the diffusers harness moves `vae.video` from
+15.75 s to 335.64 s and leaves every other phase alone. That 335.64 s is **not**
+a decode cost, and reading it as one is how an earlier version of this section
+reached the wrong conclusion: the same latent decoded standalone takes 30.14 s
+under the same fp32 VAE (row below). What the harness pays there is its
+auto-CPU-offload (`--offload-margin 12GB`) working against a VAE that just
+doubled in size -- an offload effect, not arithmetic.
+
+### The VAE at matched precision
+
+No serve flag exposes vLLM-Omni's VAE dtype (both H3 VAEs hard-code float32 at
+load and the decode re-upcasts), so the two modules were driven directly on the
+same latent -- the one a live server request decoded -- in `probe_vae_precision.py`:
+
+| video VAE decode of `(1, 24, 37, 32, 32)`, same shim | fp32 | fp16 | bf16 |
+| --- | --- | --- | --- |
+| vLLM-Omni `MiniMaxH3VideoVAE` | 40.82 | 31.20 | 28.92 |
+| diffusers `AutoencoderKLMiniMaxH3` | 30.14 | 20.07 | -- |
+
+Read across:
+
+* **at matched precision the server's video VAE is 1.35x (fp32) and 1.55x (fp16)
+  slower than the diffusers one.** So the answer to "is the server slower than
+  the diffusers path" is yes, and the VAE is where. The earlier claim in this
+  section that equal precision puts the server 3.2x ahead is withdrawn: it
+  compared vLLM-Omni's fp32 decoder (which keeps fp16 decoder-block Linears under
+  the decode's autocast plus fused qk-norm-rope / scaled-residual / silu-and-mul)
+  against the diffusers *pipeline* fp32 figure of 335.64 s, which is the offload
+  artifact above;
+* vLLM-Omni's default decodes in fp32, worth another 1.3x over its own fp16 on
+  this latent. That is its own choice for fidelity and is not exposed as a serve
+  flag;
+* the other phases, same round: the text encoder is 8.65 s against 3.91 (its
+  encoder is layerwise-offloaded, and that offload is forced -- a no-offload TP1
+  run OOMs, 51.5 GB encoder + DiT + fp32 VAE against 95 GB), the denoise 42.25
+  against 35.63 (1.19x) and the audio VAE 12.50 against 6.04 (the audio decode is
+  wrapped in `_AudioVAEDeterminismContext`, which disables flash/mem-efficient
+  SDPA and cuDNN for reproducible soundtracks).
+
+Net for the request as configured -- diffusers harness at fp16 (102.85 s) against
+the server at its defaults (130.92 s) -- is about 27%, and the VAE accounts for
+most of it. For the like-for-like shim-vs-torch ratios the earlier sections still
+stand (DiT 1.11x, end to end 1.22x, both measured at one precision on one stack).
+
+## 37. The VAE gap is the shim's fp16 path, not the dtype choice
+
+Section 36 left the video VAE as the largest single cost on the server and
+1.35-1.55x behind the diffusers class at matched precision. Putting a real-torch
+baseline beside it turns "slower" into a specific defect.
+
+Same latent (`server_latent512.npz`), same class where possible, one decode each,
+on an H20. The reference row runs the checkpoint's own decoder class under real
+PyTorch (`probe_vae_torch_baseline.py`); the other two run the shim
+(`probe_vae_precision.py`, `probe_vae_fp16_gap.py`).
+
+| decode of `(1, 24, 37, 32, 32)` | autocast fp16 | fp32 |
+| --- | --- | --- |
+| real torch, checkpoint's class | **6.50 s** | 28.54 s |
+| shim, vLLM-Omni wrapper | **83.65 s** | 29.11 s |
+| shim, diffusers class | 20.07 s | 30.14 s |
+
+Two things follow:
+
+* **in fp32 the shim is fine**: 29.11 s against torch's 28.54 s on the same class
+  and latent. Whatever else is going on, this is not a general VAE slowdown;
+* **under `autocast(fp16)` the shim is 2.9x slower than its own fp32**, while real
+  torch is 4.4x *faster* than its own fp32. The shim's autocast is not a no-op --
+  a matmul inside the region does come back fp16 (`probe_vae_fp16_gap.py`) -- so
+  the regime the reference decode and the server both use is genuinely fp16, and
+  it is the slow one. Casting the module to fp16 outright (no autocast) gives
+  31.20 s, i.e. no better than fp32 either.
+
+So the server's 67.11 s in-pipeline decode is the shim's fp16 execution, not a
+precision choice that could be configured away. Which op pays for it is **not
+established**: `probe_autocast_ops.py` timed conv3d, group_norm, silu, padding and
+matmul with and without autocast, but its conv3d figures (0.04-0.05 ms for a
+512->512 3x3x3 conv over 4x32x32, i.e. >1 PFLOP/s) are past what the part can do,
+so those calls were not executing inside the timed loop and the per-op numbers
+must not be used. The one plausible-looking reading, group_norm at 352 ms fp32
+against 795 ms under autocast, is itself suspiciously far above a sane cost for
+16.8M elements. Attributing the 83.65 s needs a real profile of the decode
+(jittor's profiler or nsys), which is the next step.
+
+This is the one place in this whole enablement where the shim is behind torch by
+more than a small factor, and it is worth stating plainly: at matched precision
+and matched op the server's video VAE runs 3-13x slower than real torch, and the
+fp16 path is the reason.
+
+## 38. The fp16 VAE gap was the Triton bridge: a device sync per operand
+
+Section 37 established that the server's fp16 VAE decode is the slow one and left
+the cost unattributed. It is the Triton bridge, and it is three separate defects
+-- one of them a silently stale deployed binary.
+
+### What the profile says
+
+`JITTOR_TRITON_STATS=1` on one autocast decode (`probe_decode_nsys.py autocast`)
+reports, over its two decodes and 9,072 launches:
+
+```
+launches=9072 total=131.3s sync=45.8s pack=42.9s launch=0.1s final=42.4s
+avg=0.0145s | ptr=41.5s/36288 alloc=0.0s/3 memset=0.3s dtod=0.2s
+```
+
+`ptr` is 41.5 s over 36,288 calls -- **1.14 ms to read one device pointer**. nsys
+agrees on the mechanism without a per-op Python tax: the autocast decode issues
+63,816 `cudaDeviceSynchronize`, 54,444 `cudaMemcpy` and 27,216 `cudaMemset`,
+against fp32's 312 / 12 / 0. Four pointer reads + one `jt.sync_all` + two
+`drv.synchronize` per launch is 7 x 9,072 = 63,504, which is the 63,816.
+
+So the GPU is not the problem: nsys puts autocast's kernel time *below* fp32's
+(32.1 s against 60.6 s over the same two decodes) while GPU busy-ness falls from
+87% to 19%. fp32 never launches Triton at all -- which is why only autocast moved.
+
+### Defect 1: the deployed core predated `Var.device_ptr_ready`
+
+`compat/triton/backend.py::_tensor_ptr` prefers `v.device_ptr_ready`, added in
+commit `c34b1240` ("H3 VAE 解码 671s -> 9.5s") for exactly this loop. The lab's
+`jittor_core.so` (built 2026-09-17) exported `device_raw_ptr` but not
+`device_ptr_ready` -- `strings <so> | grep -c ptr_ready` was 0 -- so the shim fell
+back to the accessor that calls `sync(true, false)`, i.e. a full device drain for
+every operand of every launch.
+
+Rebuilding exposed a real bug in that upstream accessor: `Var::allocator` is null
+until `Var::alloc`, and the residency test dereferences it, so reading the pointer
+of a never-materialised holder was a null dereference. Importing such a core
+segfaults inside the generated getter with no traceback. Fixed by materialising
+once when there is nothing to point at:
+
+```cpp
+inline uint64 device_ptr_ready() {
+    if (!var->mem_ptr) sync(true, false);
+    ...
+}
+```
+
+Nothing covered the accessor, which is why it shipped broken:
+`tests/backends/cuda/test_device_ptr_ready.py` now does (fresh holder, device
+pointer identity, host-resident migration).
+
+### Defect 2: the over-read guard copied back with blocking `cudaMemcpy`
+
+The guard bounces each contiguous, exactly-sized operand into a zeroed-slack
+buffer and copies the payload back afterwards. Both directions used `cudaMemcpy`
+(host-blocking) and the copy-back added its own `drv.synchronize()`, so four
+bounced operands meant four device drains plus an extra full-device wait per
+launch. The copies are strictly ordered around the kernel anyway -- copy-in,
+kernel and copy-back are all on `_launch_stream()` -- so they now go through
+`cudaMemcpyAsync` on that stream, before the single wait.
+
+### Defect 3: the barrier before packing waited for the device
+
+`run()` did `jt.sync_all(True)` before reading pointers, which submits the operand
+graph *and* waits for it. jittor puts its own launches on `cudaStreamPerThread`,
+and the bridge launches on that same stream, so the kernel is already ordered
+behind its producers; waiting only idles the device with nothing to overlap. In
+the shim's fast-sync mode it is now `jt.sync_all(False)`, which still plans,
+allocates and enqueues and skips only the trailing device wait.
+`TestLaunchFollowsItsProducers` pins the invariant this rests on, reading the
+operand's device buffer back with `cudaMemcpy` to prove each launch saw the value
+its producer had just written.
+
+### Measured effect
+
+Per launch of the VAE's own kernel shape (8,192 x 8 x 64 fp16 q/k plus a 48-wide
+cos/sin, `probe_triton_bridge_launch_cost.py`):
+
+| build | ms/launch |
+| --- | --- |
+| baseline | 16.65 |
+| + `device_ptr_ready` | 4.86 |
+| + async bounce copy-back | 2.72 |
+| guard disabled (floor) | 2.55 |
+
+The same decode, same protocol, `probe_vae_checksum.py` / `probe_autocast_env.py`
+(fp32 then autocast, three decodes per regime, warm caches):
+
+| | fp32 | autocast fp16 |
+| --- | --- | --- |
+| baseline | 28.1 s | 84.4 s |
+| + per-op import caches | 28.1 s | 79.7 s |
+| + `device_ptr_ready` | 28.1 s | 51.3 s |
+| + async bounce copy-back | 28.1 s | 47.5 s |
+| + non-waiting operand barrier | 28.3 s | 30.1-32.5 s |
+
+fp32 is untouched throughout, as it must be -- it never enters the bridge. The
+bridge's own totals fall from 131.3 s to 59.4 s (`sync=41.9s pack=1.5s
+final=15.8s`), which is the same 2x.
+
+### Verification
+
+* **Values.** The decode is not bit-reproducible, so the check is tolerance-based
+  and controlled: two runs of one build already differ (fp32, which never enters
+  the bridge, by max 3.2e-06; autocast by 2.0e-03). The barrier change moves
+  autocast by 4.4e-03 -- the same order, with no non-finite values. Operand
+  freshness is proven directly, not by readback (see `TestLaunchFollowsItsProducers`).
+* **Triton suite.** `compat/tests/triton/test_triton_backend.py` is 5/15 before
+  and after every change, with an identical failure fingerprint (same md5 of the
+  mismatch lines) on the pre-fix core as well, so none of it is a regression.
+* **End-to-end, both parallelisms.** `t2va`, pottery prompt, 512x512, 8 steps,
+  seed 42, FLASH_ATTN, through the server's own `/v1/videos` endpoint:
+
+  | | TP1 | TP2 |
+  | --- | --- | --- |
+  | inference | **85.7 s** (was 118.9) | **85.5 s** (was 130.1) |
+  | clip | 124 frames, 512x512, stereo audio | same |
+  | frame mean/std | [101.1, 73.3, 49.8] / 64.26 | [101.0, 73.3, 50.3] / 64.41 |
+
+  Both render the expected pottery scene, and TP1 is within 0.2 s of TP2. The
+  residual TP1-vs-TP2 pixel difference (max 179-232, mean 11-19 of 255) matches
+  the pre-fix validated pair (max 201-211, mean 10.0-10.4), so it is the inherent
+  TP1/TP2 parallelism difference and not something this change introduced.
+
+### Two pre-existing findings this turned up (not addressed here)
+
+* **`jt.zeros` is a zero-stride broadcast view.** `jt.zeros(n)._storage_strides()`
+  is `[0]` where `jt.array(np.zeros(n))` gives `[1]`. A kernel writing through a
+  raw device pointer then fills the allocation correctly -- the device buffer
+  verifies bit-exact against the reference -- but jittor's *readback* honours the
+  stride and returns element 0 broadcast. That is what the triton suite's 9
+  `TestTritonBackend` cases actually hit (their outputs are `jt.zeros`), and it
+  predates all of this. The bridge does not validate an output operand's layout;
+  a non-contiguous output is neither bounced nor refused.
+* **TP2 startup needs a working `mpicc` first on `PATH`.** jittor's `setup_mpi`
+  probes `mpicc --showme:compile`; `/jizhicfs/leoyizhang/anaconda3/bin/mpicc` is
+  broken (`x86_64-conda-linux-gnu-cc: command not found`) and now that the probe
+  cache is cold it aborts startup instead of warning. Putting
+  `/usr/local/openmpi/bin` first resolves it.
+
+## 39. The last per-launch wait, and the four-way VAE matrix behind it
+
+Section 38 left the bridge at 2.72 ms/launch with `final` = 25.0 s of its 33.2 s
+total. That `final` was almost entirely one `drv.synchronize()` after the launch.
+
+### Where the 2.5 ms actually was
+
+`probe_bridge_floor.py` ablates the post-launch work in-process, and timing each
+step from inside `run` gives the same answer:
+
+| step of one launch | ms |
+| --- | --- |
+| `drv.synchronize()` | 2.070 |
+| the four bounce copy-ins | 0.069 |
+| the four guard memsets | 0.028 |
+| `cuLaunchKernel` | 0.011 |
+| `jt.sync_all` (the operand barrier) | 0.007 |
+| Python in `run` (compile lookup, packing) | ~0.32 |
+
+The wait looked load-bearing until it was measured against the GPU: queueing 60
+launches with no per-launch sync takes 22.7 ms of host time and then draining the
+launch stream takes **0.5 ms in total** -- 0.008 ms/launch of real GPU work. A
+`cudaDeviceSynchronize` on an idle device is 1.7 us. So the 2.07 ms bought nothing
+but latency, and every sync primitive (cudart device, cudart stream, jittor's own)
+cost the same.
+
+It bought nothing because the bridge now launches on `_launch_stream()`, the same
+`cudaStreamPerThread` jittor schedules its own ops on, so kernel, bounce copies and
+producers are ordered against each other by the stream. The wait dates from when
+the bridge launched on the legacy NULL stream, which has no such order -- that is
+the hazard it was papering over, and the reason the `cudaErrorIllegalAddress` in
+section 34 needed the launch moved rather than the wait kept.
+
+So `_sync_after_launch_enabled()` now defaults to the conservative answer *outside*
+the shim and to no wait inside it (`JITTOR_TRITON_SYNC_AFTER_LAUNCH=1` restores it,
+`=0` removes it everywhere), and a launch that allocates global scratch still waits
+because `drv.free` returns that memory to the driver rather than to a stream. The
+guard pool is safe to reuse without a wait: `guard_acquire`'s memset covers only
+the guard tail, disjoint from the payload the copy-back reads.
+
+| | before | after |
+| --- | --- | --- |
+| per launch | 2.65 ms | **0.515 ms** |
+| VAE autocast decode | 30.9 s | **17.25 s** |
+| VAE fp32 decode | 28.33 s | 28.33 s |
+| end-to-end TP1 512x512 | 85.7 s | **78.7 s** |
+| end-to-end TP2 512x512 | 85.5 s | **77.0 s** |
+
+Verified as in section 38: the decode differs from the previous build by max
+2.2-2.4e-03 against a 1.95e-03 same-build noise floor (smaller mean, no non-finite
+values); the triton suite is 6/16 with a fingerprint identical to the pre-change
+run; TP1 and TP2 both render the pottery scene, and their divergence (max 204-219,
+mean 9.4-17.7) matches the pre-fix validated pair (max 201-211, mean 10.0-10.4).
+
+### The four-way matrix: where the remaining gap is
+
+One protocol, one latent `(1,24,37,32,32)`, 1 warm-up + 2 timed decodes
+(`probe_vae_matrix.py`):
+
+| runtime | VAE implementation | fp32 | autocast fp16 |
+| --- | --- | --- | --- |
+| jittor shim | vLLM-Omni wrapper (fused Triton) | 28.25 | 29.80 -> **~17** |
+| jittor shim | diffusers class | 27.50 | 14.09 |
+| jittor shim | checkpoint class `decode_base` | 27.61 | 13.66 |
+| real torch | checkpoint class `decode_base` | 28.55 | **6.17** |
+
+Two cells cannot be measured on this box, both for environmental reasons: real
+torch's `vllm` wheel is built against CUDA 13 and only 12.9 is installed, so
+`import vllm_omni` fails there; and torch's diffusers class allocates ~88 GiB even
+at the 256x256 latent and OOMs on a 95 GiB card, where jittor decodes it in 3.4 s.
+
+That leaves **two separate gaps**, which the table separates cleanly:
+
+* **fp32 -- none.** 27.5 / 27.6 / 28.3 against torch's 28.6. Where the bridge is not
+  involved the shim is at parity.
+* **Plain fp16 execution -- ~2.2x, no Triton involved.** The checkpoint class under
+  autocast is 13.66 s on the shim and 6.17 s on torch, and the shim run logs no
+  Triton launch at all. This is ordinary fp16 op execution, and it is the next
+  defect. `JITTOR_TORCH_KEEP_FAST_MATH` is the first knob to try: the shim forces
+  `cuda_kernel_math='strict'` (`compat/shim/preflight.py`) unless that is set, and
+  strict math is exactly what would keep fp16 off the fast kernels.
+* **The bridge -- ~2.1x on top.** Under the shim, vLLM-Omni's wrapper (29.80) is
+  twice the eager classes (13.66/14.09) at the same dtype, because vLLM-Omni's
+  `install_h3_vae_optimizations` routes to fused Triton kernels and the diffusers
+  and checkpoint classes do not. On torch that same fused path is what buys 6.17 s.
+
+## 40. The request is GPU-bound now, so the rest of the gap is kernel work
+
+Sections 38-39 removed the host-side bottlenecks in the Triton bridge. The next
+question is what is left, and the answer is: not host work.
+
+### Where the request spends its time
+
+`--enable-diffusion-pipeline-profiler` on a 512x512, 8-step request (one TI1
+server, seed 42):
+
+| phase | time |
+| --- | --- |
+| `MiniMaxH3Pipeline.encode_prompt` (text encoder) | 8.80 s |
+| `MiniMaxH3Pipeline.diffuse` (8 steps of the DiT) | **40.90 s** |
+| `MiniMaxH3Pipeline.video_vae.decode_latent` | 21.63 s |
+| `MiniMaxH3Pipeline.audio_vae.decode_latent` | 6.01 s |
+| `forward` (whole request) | 77.67 s |
+
+`JITTOR_TRITON_STATS=1` on the same server reports the bridge across the whole
+pipeline as 6,250 launches and 23.9 s -- `sync=9.8s pack=4.9s launch=5.6s
+final=3.6s | dtod=7.4s memset=0.2s ptr=0.1s`, i.e. 3.8 ms/launch. That looks like
+30% of the request, and the guard's bounce copies (`dtod`) alone look like 7.4 s.
+
+### But that time is hidden, and the device is saturated
+
+Turning the over-read guard off removes almost all of it -- and the request gets
+*slower*:
+
+| | guard on | guard off |
+| --- | --- | --- |
+| `total` / `sync` | 23.9 / 9.8 s | **12.3 / 11.3 s** |
+| `pack` / `launch` / `final` | 4.9 / 5.6 / 3.6 s | 0.7 / 0.3 / 0.1 s |
+| `dtod` / `memset` | 7.4 / 0.2 s | 0.0 / 0.0 s |
+| request wall | 77.7 s | 84.4 s |
+
+The phases trade against each other (`sync` rises by exactly what `launch` and
+`final` lose) because the host runs ahead of the GPU and blocks wherever it can
+no longer go further. Sampling `nvidia-smi` through a request shows **100% GPU
+utilisation from start to finish**. So the bridge's 23.9 s is not 23.9 s of
+request: it is host work overlapped with a saturated device, and shaving it
+further cannot help. That is why the host-side fixes of sections 38-39 moved the
+wall clock a great deal (118.9 -> 78.7 s end to end) while this one moves it not
+at all -- they were removing the bottleneck, this is past it.
+
+### What the remaining gap is, kernel by kernel
+
+Same class, same latent, same protocol, one decode each way, nsys, three decodes
+per report (one warm-up plus two timed):
+
+| | GPU total | instances | the three big gemms | attention | elementwise |
+| --- | --- | --- | --- | --- | --- |
+| shim | 29.1 s | 526,900 | nvjet_hsh: 12.35 s | flash: 2.84 s | ~8 s of `func_*` jit kernels |
+| real torch | 20.4 s | 262,717 | nvjet_hsh **`_bias_`**: 13.11 s | cuDNN flash: 1.89 s | ~3 s of `at::native` |
+
+The dominant matmuls are the *same kernels* and the shim's are marginally cheaper
+(12.35 against 13.11 s -- torch's are the bias-fused variants, so they do more per
+call). The 8.7 s GPU delta is entirely in the small stuff:
+
+* **jittor's elementwise kernels are scalar.** One f32->f16 cast costs 2.06 s over
+  33,894 calls against torch's 0.95 s over 34,020 calls -- same count, 2.2x per
+  call. The generated kernel is
+  `op0_yp[id1] = ((float16)(float16(op0_xp[id1])))` in a thread-strided loop, one
+  element per iteration, with a redundant double cast. jittor's vectorisation
+  machinery exists (`VectorizePass`) but is gated on `cc_type == "icc"` because
+  "only icc supports the pragmas these emit", and `float4`/`half2` appear nowhere
+  in `src/codegen/` -- so on nvcc there is no 128-bit computed-elementwise path at
+  all. (`src/type/fp16_compute.h` *does* vectorise bulk `vload`/`vfill` copies, so
+  this is specific to computed loops.)
+* **no bias fusion.** torch's gemms are `nvjet_hsh_..._bias_`; jittor computes the
+  bias add as a separate elementwise pass.
+* **flash-attn 1.5x cuDNN's.** 2.84 s against 1.89 s for the same 6,804 calls, once
+  the server's own attention env is set (without it, jittor decomposes attention
+  into explicit cutlass gemms costing 6.06 s more).
+
+So the honest position is that the remaining gap is three kernel-level items, of
+which the first is the largest and needs a new codegen path rather than a fix.
+
+### Which torch references this box can and cannot produce
+
+Getting a torch number for every phase turns out to be environment-limited, and it
+is worth writing down so nobody re-runs these:
+
+* **torch + vLLM-Omni: impossible here.** `venv-oracle-cu129`'s `vllm` wheel is
+  built against CUDA 13 (`libcudart.so.13`), and only 12.9 is installed, so
+  `import vllm_omni` fails outright. The checkpoint's own decoder class is the
+  stand-in for the VAE (`MiniMaxH3VideoVAE.decode_latent` calls exactly
+  `model.decode_base`), and that is what sections 38-40 measure against.
+* **torch + the diffusers pipeline: blocked.** `run-oracle-cu129.sh` defaults to
+  `--attn-backend flash` and the oracle venv has no usable `flash-attn`
+  (`Please install flash-attn>=2.6.3`), so the run dies at
+  `set_attention_backend`. A torch phase breakdown with a *matched* attention
+  backend (the shim runs the bridged official flash-attn) is therefore not
+  available, which is why there is no torch column for the denoise or the VAE in
+  the phase table above.
+* **torch + the diffusers VAE class: OOMs.** ~88 GiB for a decode the shim does in
+  3.4 s, at the 256x256 latent as well as 512x512, on a 95 GiB card.
+
+So the trustworthy torch baseline is the VAE class (28.55 s fp32 / 6.17 s
+autocast), and the phase-level torch reference is missing for environmental
+reasons rather than for want of trying.
+
+### Closing the rest is a kernel library, not a fix
+
+The remaining delta needs per-op vectorized kernels for the CUDA backend, and it
+is worth being precise about why no smaller change gets there. jittor's
+`ParallelPass` turns an elementwise loop into a thread-strided scalar loop whose
+*body* is generated C++ text (`yp[id1] = op(xp[id1])`). Rewriting the loop's index
+math cannot vectorize a body whose `op` is arbitrary -- `exp`, a comparison, a
+reduce -- which is exactly why torch's fast paths say `vectorized`: they are
+hand-written per-op functors (`vectorized_layer_norm_kernel`,
+`gpu_kernel_impl_nocast` with vectorized elementwise functors). `VectorizePass` is
+not that; it emits `#pragma vector` for icc and lets a C compiler do the work, and
+`float4`/`half2` appear nowhere in `src/codegen/`. `src/type/fp16_compute.h` shows
+the shape of the work -- it has vectorized `vload`/`vfill` for *bulk copies* -- but
+nothing for computed loops.
+
+The measured prizes, per elementwise family, are modest individually and real
+together: the f32->f16 cast 2.06 -> ~0.95 s, flash-attn 2.84 -> ~1.89 s (cuDNN's),
+and the bias adds folded into the gemm as torch does. On the VAE class that is
+~2.9 s of a 29.1 s GPU budget, and the same codegen serves the denoise, which is
+53% of the request.
+
+### Profiling the server's own worker
+
+`serve-vllmomni.sh` takes `LAUNCHER` and prefixes it to the `vllm-omni serve`
+command, which is how to nsys the worker in the server's real configuration
+(FLASH_ATTN, no dit offload) rather than the single-process runner, whose
+attention backend is hardcoded to TORCH_SDPA:
+
+```sh
+GPU=0 PORT=8100 ATTN=FLASH_ATTN \
+  LAUNCHER="/opt/nvidia/nsight-compute/2025.2.1/host/target-linux-x64/nsys profile --stats=true -o /tmp/nsys-server --force-overwrite true" \
+  ./serve-vllmomni.sh
+```
+
+It does wrap the worker and the profile is collected, but **`stop-vllmomni.sh`
+kills the tree hard and nsys never writes the `.nsys-rep`** (it leaves an
+`nsys --start-agent` orphan holding the session). Stop the server with SIGINT and
+wait for the wrapper to exit instead, or the run is lost.
+
+### Correction: the "GPU 100% busy" reading in section 40 is not a measurement
+
+The claim above that a request runs at 100% GPU utilisation rests on sampling
+`nvidia-smi --query-gpu=utilization.gpu` during a request. That gauge is useless
+on this box: **all eight GPUs read 100% utilisation while idle**, because another
+tenant's occupancy job is spinning on them --
+
+    pid 1553  tmux new-session -d -s gpu_occupy
+              .../vllm_latest/bin/python -u /tmp/train_grpo.py --occupy-delay 0
+
+up 12 days, ~552 MiB per GPU, no compute apps of ours. So the sample says nothing
+about where *our* request's time goes.
+
+What survives is the part that did not use the gauge:
+
+* the guard A/B is a wall-clock measurement, and it stands -- removing 11.6 s of
+  bridge host time made the request **slower** (77.7 -> 84.4 s), which is evidence
+  that the bridge's host work is not the pipeline's bottleneck. That reasoning does
+  not need the utilisation gauge.
+* the "9.7 s of GPU in a 12 s decode" figure for the standalone VAE class comes
+  from nsys *kernel durations*, not the gauge, so it also stands: that decode is
+  ~80% device-resident with ~2.3 s of host time.
+
+Everything else measured on this box carries a co-tenant caveat: a spinning job
+shares the SMs, which is why identical server runs varied by 4 s (77.7 to 84.4),
+why a bare launch-plus-sync measured ~2.4 ms in one probe, and why absolute GPU
+times here should be read as upper bounds rather than as the part's capability.
+Comparisons made back-to-back on the same box (shim against torch on the same
+class, guard on against guard off) keep their direction, not their absolute size.
+
+**How to apply:** never read `utilization.gpu` as evidence on this box -- check
+`nvidia-smi --query-compute-apps` for foreign pids first -- and treat any
+absolute timing taken while `train_grpo.py --occupy-delay 0` is alive as noisy.
+
+### The vectorization "prize" is ~1.1x, so that is not the answer either
+
+Section 40 proposed a vectorized elementwise path as the largest remaining item.
+Measured directly, with two standalone CUDA kernels doing the identical f32->f16
+cast on the same buffers (`probe_vec_cast_prize.py`, `tools/veccast.cu`), the
+`float4`/`__float22half2_rn` version is only **1.10x** the scalar one:
+
+| 4.19M fp32 elements (16 MiB in, 8 MiB out) | us | effective |
+| --- | --- | --- |
+| scalar loop | 34.5 | 730 GB/s |
+| `float4` -> 2x `__half2` | 31.3 | 803 GB/s |
+| jittor's own `x.float16()` | *invalid* | *lazy -- nothing executed in the timed loop* |
+
+(That last row is the same trap as in section 37: timing an op that was never
+forced to materialise measures op construction, not the kernel.)
+
+A grid sweep on the same kernel shows why access width is not the problem -- the
+cost is launch/tail dominated and *flat* in size until the tensor is large:
+
+| elements | 256 blocks | 2048 blocks | 8192 blocks |
+| --- | --- | --- | --- |
+| 1,024 | 13.90 | 16.55 | 37.54 |
+| 65,536 | 14.06 | 16.72 | 37.57 |
+| 262,144 | 14.53 | 17.05 | 37.97 |
+| 4,194,304 | 20.15 | 34.47 | 44.49 |
+
+So ~14 us is fixed per launch no matter the payload, and the grid size matters more
+than the access width (16 MiB: 20.2 us at 256 blocks against 34.5 us at 2048).
+jittor's own heuristic is adaptive rather than the flat 2048 blocks assumed above
+(`tn0 = nbits(min(2^21, num)) - 2`, so a 4 KiB cast launches one block of 512
+threads), which leaves only a modest grid-configuration effect for large tensors --
+and a per-call average of 61 us in the profile that a raw launch of the *largest*
+tensor in the mix does not reach (34.5 us), pointing at the fixed per-launch cost
+times the count rather than at the kernel's throughput.
+
+Together with the co-tenant caveat above, the honest position is that the
+remaining elementwise delta is **not** attributable to access width, is partly a
+fixed per-launch cost, and cannot be sized reliably on this box while
+`train_grpo.py --occupy-delay 0` is running. Re-measuring on a quiet device is the
+prerequisite for any further kernel work, not another codegen change.
+
+### The gap is one kernel family, and it is fp16 elementwise
+
+Splitting the two nsys reports by kernel family (three decodes each, same class,
+same latent, back-to-back on the same box) makes the whole delta one family:
+
+| family | shim | torch |
+| --- | --- | --- |
+| **elementwise** | **311,211 launches, 12.67 s (40.7 us avg)** | **206,963 launches, 4.69 s (22.7 us avg)** |
+| cuBLASLt | 27,406, 12.35 s | 27,405, 13.11 s |
+| flash attention | 6,804, 2.84 s | 6,804, 1.89 s |
+| `jittor::kernel` builtins | 64,392, 0.65 s | -- |
+| `kernel(float*, float*)` / `(int*, int*)` copies | 51,258 + 29,779, 0.09 s | -- |
+| memcpy/memset | 35,152, 0.29 s | 21,167, 0.49 s |
+| cublas sgemm | 378, 0.20 s | 378, 0.21 s |
+
+Everything except elementwise is at parity (the big gemms are even 0.76 s *cheaper*
+on the shim). The 7.98 s delta is elementwise, and it splits into two independent
+problems: **1.5x the launches** (311k against 207k) and **1.8x the per-kernel cost**
+(40.7 against 22.7 us).
+
+Grouping the shim's elementwise kernels by the pointer types in their signatures:
+
+| signature | launches | time |
+| --- | --- | --- |
+| fp16/bf16 only | 156,774 (50.4%) | **9.25 s** |
+| mixed fp16+fp32 (the casts) | 95,976 (30.8%) | 3.15 s |
+| fp32 only | 58,461 (18.8%) | 0.26 s |
+
+and by op, from the jit cache's own key names, the top kernels are all the VAE's
+plain arithmetic -- nothing exotic:
+
+| ops in the kernel | time | launches |
+| --- | --- | --- |
+| unary fp16 `sigmoid` + binary (SiLU) | 2.06 s | 6,804 |
+| unary fp32->fp16 `cast` | 2.06 s | 33,894 |
+| binary fp16 `add` | 1.94 s | 13,608 |
+| unary fp16->fp32 `cast` + binary | 0.83 s | 13,608 |
+| binary fp16 `multiply` | 0.72 s | 13,593 |
+| binary fp16 `add` (two more specialisations) | 1.27 s | 13,230 |
+| ternary (bool) + binary | 0.63 s | 6,804 |
+
+So the remaining gap is the cost of running ordinary fp16 elementwise maths:
+SiLU, the gated-residual adds and multiplies, and the per-use fp32->fp16 weight
+casts. torch pays 4.69 s for its share of the same maths; the shim pays 12.67 s,
+because it issues 1.5x the kernels and each costs 1.8x. Given the standalone
+measurement above that a `float4` kernel is only 1.10x a scalar one, the 1.8x is
+**not** access width -- with equal launch counts it is consistent with the shim's
+kernels doing the same work on average *smaller* tensors, so a fixed per-launch
+cost is amortised over less work. That is a launch-count and per-launch-overhead
+problem, and the two ways out are fewer launches (fuse the chain: `hidden +
+attn*scale` is three ops for what one fused kernel would do) or a cheaper launch
+-- not a wider access type.
+
+### Fusion works; it is not being limited by auto_flush, and that closes the cheap routes
+
+The natural reading of the family table above is "the shim issues 1.5x the
+elementwise launches, so fuse more". Two probes say that is not reachable cheaply.
+
+**jittor's fusion works, including broadcasts.** A two-line probe -- `c = a*b + d`
+and `c2 = a*b + d - a` on fp16 tensors -- compiles to a *single* kernel with five
+fp16 pointer arguments (`func_a7a5ed749db7d6dc`), one launch per iteration. The
+VAE's actual gated residual, `(B,S,H) + (B,S,H) * (H,)` with a per-channel
+broadcast, also fuses to one kernel (`func_bffa9096c80c8727`). So the machinery is
+not broken; the real decode is doing something the probe is not -- most likely the
+6,250 Triton-bridge operand barriers (`jt.sync_all`, one submission each) cutting
+the graph before a chain completes, plus chains that legitimately cannot fuse
+(reduces, `reindex`/`chunk`, `cat`, SDPA).
+
+**`auto_flush_ops` is not the constraint.** Raising it from 512 to 200,000 on one
+autocast decode changes the elementwise launch count by 0.2%:
+
+| `auto_flush_ops` | elementwise launches | decode |
+| --- | --- | --- |
+| 512 (default) | 212,407 | 18.99 s |
+| 200,000 | 212,028 | 20.11 s |
+
+So the flush heuristic is not what is cutting the graph, and the two remaining
+routes -- widening jittor's fusion coverage, or removing the bridge's per-launch
+submission -- are both changes inside the fusion/codegen path that need a quiet
+device to evaluate. Neither is a flag.
+
+**Where that leaves the cheap-route search, all measured:**
+
+| route | measured | verdict |
+| --- | --- | --- |
+| vectorized (128-bit) elementwise | 1.10x over scalar on the same buffers | not the answer |
+| `auto_flush_ops` | no effect on launch count | closed |
+| jittor's fusion of the VAE's chains | works, incl. broadcast | not broken |
+| bias fusion into the gemm | not implemented (torch's are `_bias_`) | bounded, small |
+| flash-attn vs cuDNN's | 2.84 against 1.89 s | bounded, needs a different backend |
+| bridge host work (guard copies, packing, waits) | hidden behind a busy device | already done |
+| per-launch device sync in the bridge | 2.65 -> 0.515 ms/launch | done (section 39) |
+
+### `--enforce-eager` is not the difference either
+
+Every phase table in sections 36-40 was taken with `--enforce-eager`, which
+`serve-vllmomni.sh` applies by default, and whose own comment calls `EAGER=0` "the
+lever to test against the per-step cost" (the H3 DiT is written for regional
+compilation). Running without it changes nothing:
+
+| phase | `--enforce-eager` | without it |
+| --- | --- | --- |
+| `diffuse` (8 steps) | 40.90 s | 41.16 s |
+| `video_vae.decode_latent` | 21.63 s | 21.09 s |
+| `audio_vae.decode_latent` | 6.01 s | 8.29 s |
+| `forward` | 77.67 s | 79.70 s |
+
+The differences are inside the co-tenant noise band (identical runs varied 77.7 to
+84.4 s). Part of the explanation is in the model: the H3 transformer opts *out* of
+compilation (`@torch.compiler.disable`), and the shim implements no `torch.compile`
+entry point at all, so the "regional compilation" the comment refers to is not a
+path this stack takes. Eager it is, and eager is what the comparison should use.
+
+### Every shortcut is now measured; the rest is feature work
+
+The routes tried, and what each measured:
+
+| route | result |
+| --- | --- |
+| 128-bit vectorized elementwise | 1.10x over scalar on identical buffers -- not the answer |
+| `auto_flush_ops` 512 -> 200,000 | 0.2% change in launch count -- closed |
+| jittor's fusion of the VAE's chains | works, broadcasts included -- not broken |
+| `EAGER=0` (no `--enforce-eager`) | no change outside the noise band -- closed |
+| bridge host work (guard copies, packing, waits) | done in sections 38-39, and hidden anyway |
+| per-launch device sync in the bridge | done in section 39 (2.65 -> 0.515 ms) |
+
+What is left is three things, none of them a flag or a small patch:
+
+1. **wider fusion coverage / fewer launch boundaries** -- jittor fuses the chains it
+   can, so this means either extending `ParallelPass`/the fusion pass, or removing
+   the Triton bridge's per-launch `jt.sync_all` submission. The latter is not
+   available either: the operands of a bridge launch are always freshly produced, so
+   their `location()` is `none` and the submission is genuinely required to
+   materialise them. Making the launch a graph node (the module docstring's
+   "phase 3") is the real fix and is a feature.
+2. **bias fusion into the gemm** -- torch gets `nvjet_hsh_..._bias_` because it calls
+   `cublasLtMatmul` with a bias epilogue; jittor issues plain `cublasGemm*` and adds
+   the bias afterwards, so `cublasLt` does not appear anywhere in the tree. Adding
+   that path is new library code, not a patch.
+3. **flash-attn against cuDNN's flash SDPA** -- 2.84 against 1.89 s, a backend choice
+   the model makes, not jittor's.
+
+So the honest end state of this investigation: the host side is finished and
+verified (sections 38-39), the kernel-side delta is localised to fp16 elementwise
+launches, and closing it requires one of the three features above -- not a
+configuration change, and not any of the four shortcut routes that were tested and
+ruled out. None of them can be evaluated on this box while a co-tenant's occupancy
+job pins every GPU at 100%, which is why the numbers above are counts (exact) and
+phase times (noisy) rather than trusted absolute timings.
+
+### The extra launches are casts and layout copies, not arithmetic
+
+Mapping each `func_*` kernel back to its jit key (the cache filenames carry the op
+chain) breaks the shim's 311,195 elementwise launches into 63 distinct fused
+compositions. The head of that list is not arithmetic:
+
+| composition | launches | time |
+| --- | --- | --- |
+| `unary` fp32 -> fp16 `cast` | 33,894 | 2.06 s |
+| `unary` fp16 -> fp32 `cast` | 27,216 | 0.57 s |
+| **`contiguous` fp16, 4-D** | **27,216** | 0.37 s |
+| `unary` fp32 -> fp16 `cast` (second specialisation) | 27,090 | 0.05 s |
+| **`fuse_transpose` fp16, 4-D** | **20,409** | 0.43 s |
+| `binary` fp16 `add` | 13,608 | 1.94 s |
+| `unary` fp16 -> fp32 `cast` (second) | 13,608 | 0.83 s |
+| `unary` fp16 -> fp16 | 13,608 | 0.21 s |
+| `binary` fp32 `add` / `multiply` | 13,608 + 13,608 | 0.11 s |
+| `binary` fp16 `multiply` | 13,593 | 0.72 s |
+| `unary` fp32 -> fp32 | 13,587 | 0.04 s |
+
+Adding the cast specialisations gives roughly **102,000 cast launches** and the two
+layout compositions another **47,600**, i.e. about half the elementwise launches are
+dtype conversion and layout, not maths. Subtract them and the shim issues ~161,000
+launches of real arithmetic -- *fewer* than torch's 206,963 elementwise launches
+in total. So the shim is not decomposing the model's arithmetic more finely than
+torch; it is paying for casts and copies around it.
+
+Two of those are structural and not fixable here: the `contiguous` copies are the
+model's own (`qkv.chunk(3)` gives strided views and the fused qk-norm+RoPE path
+reshapes them, forcing a copy -- 2 per attention call, which is why there are
+9,072 per decode, and torch's `CatArrayBatchedCopy` at 9,135 per decode is the same
+copy). **The casts are the shim's.** torch documents, and relies on, autocast
+*caching* the cast of a weight for the duration of the region
+(`torch.autocast(..., cache_enabled=True)`); the shim's `_AutocastContext` accepts
+`cache_enabled` and does nothing with it, and jittor inserts the cast in C++ dtype
+inference per use instead. ~102,000 cast launches against torch's ~34,000
+cast-shaped launches is the right order of magnitude for exactly that difference,
+and it is the only remaining item that is both concrete and in jittor's own code.
+
+**The bridge is not involved in any of this.** The same measurement on the
+checkpoint class -- which uses no Triton-bridge kernel at all (`JITTOR_TRITON_STATS`
+reports zero launches; the driver-API launches in its profile are the flash-attn
+adapter's) -- still shows the 1.5x elementwise launch count. So the bridge's
+per-launch `jt.sync_all` submission is *not* what fragments the graph, and the two
+candidate fixes reduce to one: fewer casts per autocast region.
+
+### The per-use weight cast is real, but caching it is worth ~2% per call
+
+The previous section left autocast weight-cast caching as the named next fix, with
+the caveat that nobody had shown the same weight is cast repeatedly. Measured now,
+with a probe built to avoid the two traps that invalidated the first attempts:
+
+* identical activations let jittor collapse the loop into a single op (100
+  `linear(x, w)` calls produced 4 gemm kernels and 5 casts);
+* and rebinding `y` each iteration lets jittor **prune the dead outputs**, so only
+  the last call ran at all.
+
+With a fresh activation per iteration and every output accumulated (so all calls
+execute, as they do in a decode), 40 `linear(x_fp16, w_fp32)` calls under the amp
+register produce **83 f32->f16 cast kernels**; the same 40 calls with the weight
+pre-cast to fp16 produce **3**. So the weight *is* cast per use, and torch's
+documented autocast caching is indeed something the shim does not do.
+
+But the prize is small where it matters. The same probe's wall time:
+
+| | 40 calls | per call |
+| --- | --- | --- |
+| A: fp32 weight, cast per use | 5.9 ms | 0.147 ms |
+| B: pre-cast fp16 weight | 6.6 ms | 0.164 ms |
+
+Nothing. The cast costs ~2.8 us against a gemm that costs ~150 us, so removing it
+changes nothing at this shape -- and the profile's 61 us *average* cast is an
+average over the whole model's cast sizes, not the gemm-adjacent ones. The cast
+launches do total ~3.5 s of the 12.67 s elementwise time, of which caching could
+remove roughly the repeated-weight half (~1.75 s of the 7.98 s gap, ~2% of the
+pipeline) -- at the price of a C++ memo in dtype inference with a staleness hazard
+the model would have to respect. That is not the 1.8x per-kernel difference the
+family table shows, and it is not worth a core change on this evidence.
+
+**So the residual is not one defect.** Every hypothesis that could be formed has
+now been measured: vectorization (1.10x), `auto_flush_ops` (no effect), fusion
+(works, broadcasts included), `EAGER=0` (no change), the bridge's submissions
+(exonerated -- the same launch ratio appears with no bridge kernel at all), and now
+cast caching (real, ~2% per call). What is left is a long tail of small effects --
+102k cast launches that are individually microseconds, 48k layout copies that are
+the model's own, and a per-kernel cost difference with no single cause left to
+name. That is the honest answer to "why is it still 1.5x": there is no one fix, and
+the remaining work is a per-op kernel library rather than a defect.
+
+### Probe methodology notes worth keeping
+
+Two traps cost several runs here and are easy to repeat:
+
+* **identical inputs collapse jittor's graph** -- N calls with the same operands
+  build one op, so kernel counts measure 1, not N;
+* **a rebound result is dead** -- if the loop rebinds its output and nothing reads
+  it, jittor prunes it and the kernels never run. Accumulate or keep a list.
+
+Both make a probe report far too *little* work, and both look like a fast result.

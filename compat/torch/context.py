@@ -16,6 +16,12 @@ from ..diagnostics import EXPECTED, swallowed
 from .namespace import TorchNamespace
 from .contracts import Installer, validate_installer
 
+#: ``compatibility_owner``, resolved on first use and then reused -- it is called
+#: several times per tensor operation, and a function-local import pays the
+#: import machinery every time. Lazy so this module stays importable while the
+#: install context is still being built.
+_compatibility_owner = None
+
 
 def _native_backend_for(target):
     """Resolve explicit namespace ownership without delegated attribute reads."""
@@ -316,8 +322,17 @@ class InstallContext:
 
 
 def get_install_context(module, *, required=True):
-    """Read the active owner's context without creating state or installing APIs."""
-    from .tensor_state import compatibility_owner
+    """Read the active owner's context without creating state or installing APIs.
+
+    ``compatibility_owner`` is resolved once rather than imported per call: this
+    function runs several times per tensor operation, and a function-local import
+    pays the import machinery each time (51 imports per ``torch.cat``, measured).
+    """
+    global _compatibility_owner
+    compatibility_owner = _compatibility_owner
+    if compatibility_owner is None:
+        from .tensor_state import compatibility_owner as compatibility_owner
+        _compatibility_owner = compatibility_owner
     target = compatibility_owner(module)
     context = vars(target).get(InstallContext.CONTEXT_ATTR)
     if context is None and not required:
