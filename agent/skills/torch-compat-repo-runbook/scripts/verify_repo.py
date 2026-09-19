@@ -68,6 +68,15 @@ UNMEASURABLE_RE = re.compile(r"^MEMORY_UNMEASURABLE (.+)$", re.M)
 #: matches; when the jittor under test predates them, report *no* number rather
 #: than one that means something else.
 #:
+#: `jt.core.get_peak_allocator_used_memory()` looks like the right counter -- it
+#: is the allocator's own live high-water, the exact shape of torch's
+#: `max_memory_allocated` -- but `MemoryProfiler::get_memory_info` sums
+#: `SFRLAllocator::sfrl_allocators` with no CUDA filter (memory_profiler.cc:58),
+#: so it counts host *and* device. Measured: 512 MiB of CPU-only Var moved it
+#: 512 MiB, and a further 256 MiB CUDA Var moved it to 768. Only
+#: `device_memory_used`/`device_memory_reserved` and the CUDA-only pool
+#: (`total_cuda_used`) can be put beside a torch number.
+#:
 #: Jittor's memory profiling can perturb timing, so the run that measures memory
 #: is *separate* from the run that measures speed.
 _MEMORY_WRAPPER = r'''

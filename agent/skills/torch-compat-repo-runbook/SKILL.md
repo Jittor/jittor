@@ -55,10 +55,10 @@ oracle 产出权重和参考值，shim 从同一份权重重算。
 | --- | --- | --- | --- |
 | **支持的模型清单** | `_ecosystem_cases.CASES` 里该库注册的 case | 每个 case 都能跑；跑不了的写明缺什么依赖 | case 名 + 依赖 |
 | **精度** | 同权重、同输入、同 device，两个解释器；逐输出/逐梯度比 | 误差不超过门禁容差；**相对误差用全场最大量级做 floor** | worst abs / worst rel |
-| **显存** | 两侧都问运行时自己的 per-device 计数器：live（torch `memory_allocated` / jittor `device_memory_used`）与 pool（`memory_reserved` / `device_memory_reserved`） | 两个口径分别比；**绝不把 reserved 对 allocated** | live MiB、pool MiB |
+| **显存** | 两侧都问运行时自己的 per-device 计数器：live（torch `memory_allocated` / jittor `device_memory_used`）与 pool（`memory_reserved` / `device_memory_reserved`） | 两个口径分别比；**绝不把 reserved 对 allocated**；whole-run 峰值与稳态每步分开报 | live MiB、pool MiB |
 | **速度** | 重复交错采样，**取最小值** | 记录 ratio；**PR 门禁只报告不断言墙钟** | ratio |
 
-两条容易踩的口径：
+三条容易踩的口径：
 
 1. **精度的相对误差别按数组自己的量级除。** 一个接近 0 的梯度会报出 ~1 的相对误差，
    而绝对误差其实只有 1e-5——把正确结果读成失败。用整个场的最大量级做分母。
@@ -70,6 +70,15 @@ oracle 产出权重和参考值，shim 从同一份权重重算。
    **不要**用 `jt.get_mem_info().total_cuda_used`：它是 used+cached-free 且对所有设备求和
    （`mem_info.cc`），跟 `max_memory_allocated` 比是 reserved 对 allocated，会把 jittor
    凭空放大——2026-09-19 的 transformers runbook 就是这么写的，见其「显存列是旧口径」。
+   同样**不要**用 `jt.core.get_peak_allocator_used_memory()` 顶替：名字像 live high-water，
+   实际是**主机+设备**（`memory_profiler.cc` 不过滤 CUDA；实测 512 MiB CPU Var 推 512、
+   再加 256 MiB CUDA Var 推到 768），且没有复位接口。能并列的只有 `device_memory_used`
+   与 CUDA-only 的 `total_cuda_used`。
+3. **whole-run 峰值会掩盖「第一步瞬态」。** 两侧都是 high-water，jittor 的 pool 还不归还
+   CUDA。`large_transformers_bert` 修完 grad 身份 bug 后，稳态每步只差 1.11x，而 whole-run
+   是 2.11x——差额全在第一次 backward / 第一个训练步。报显存时把稳态与首步分开写，
+   否则预算按 whole-run 留、实际训练循环用不到；反之亦然。逐阶段量法见
+   `docs/results/2026-09-19-torch-compat-runbook-verification.md`。
 
 ## 四、跑四轴
 

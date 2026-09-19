@@ -271,29 +271,28 @@ worst rel 全部 ≤ 3.6e-4，远低于加速卡容差 `5e-3/2e-2`。
 （absolute 误差看着大只是因为该档张量幅值大；全场相对误差最大 1.51e-3，仍在容差内。整档
 墙钟：parity 15m39s、large 7m56s，含首次 JIT 编译；表内是 min-over-repeats。）
 
-**显存列是旧口径，且旧结论是错的（2026-09-19 复核）**：上表两列由当时的工具产出——
+**显存列是旧口径，且当时两版结论都不对（2026-09-19 定案）**：上表两列由当时的工具产出——
 oracle 报 `torch.cuda.max_memory_allocated`（**活跃**字节，单卡），jittor 报
 `jt.get_mem_info().total_cuda_used`（**活跃+缓存空闲**，且 `mem_info.cc` 对**所有**设备求和）。
 那是 reserved 对 allocated，不是同一个量纲，工具已改为两侧都报 live 与 pool 两个数
 （`verify_repo.py` 的 `_MEMORY_WRAPPER`，jittor 侧用 `device_memory_used` /
-`device_memory_reserved`）。**不要**继续引用上表两列相除的倍数；下表数字待用新工具重测。
+`device_memory_reserved`）。**不要**继续引用上表两列相除的倍数。
 
-但是：当时写的「两个数不可直接比、所以不能读成 jittor 真占更多显存」**结论也是错的**。
-`large_transformers_bert` 上按同口径实测（GPU 2，同权重同输入，`repeats=1`，仓库 checkout）：
+改成同口径后差额仍在（2.88x），于是逐阶段查了根因，结论是**两回事叠加**，都记在
+`docs/results/2026-09-19-torch-compat-runbook-verification.md`：
 
-| 口径 | torch | jittor | 比 |
-| --- | --- | --- | --- |
-| live（`max_memory_allocated` / `device_memory_used`） | 2129.5 MiB | 6131.2 MiB | **2.88x** |
-| pool（`max_memory_reserved` / `device_memory_reserved`） | 2386.0 MiB | 6588.0 MiB | **2.76x** |
-| 旧工具那一对（allocated / `total_cuda_used`） | 2129.5 MiB | 6588.0 MiB | 3.09x |
+1. **shim 的 bug（已修）**：`p.grad` 每一步都是新对象——`zero_grad(set_to_none=False)`
+   用 `zeros_like` 重建、optimizer-free 的累加写成 `prev + gr`，而 torch 两处都是就地操作。
+   于是任何跨步持有 `[p.grad for p in model.parameters()]` 的代码在 jittor 上每步钉住一整套
+   梯度（`large_transformers_bert` 实测 +198 Var / +415 MiB 每步）。修好后 live 在步间回落。
+2. **剩下的 2x 是第一步瞬态**：修完重测，jittor 首次 backward 峰值 4048 MiB、首个训练步
+   4470 MiB，之后**稳态每步只有 2366 MiB**；torch 对应 1640 / 2123 / 2083–2123 MiB。
+   稳态每步 **1.11x**，而 whole-run 的 2.11x（live）/ 2.01x（pool）几乎全来自那个瞬态——
+   jittor 的 pool 是 high-water 且从不归还 CUDA，瞬态被永久记进 pool。
 
-jittor 的缓存空闲只有 `6588.0 - 6131.2 = 456.8 MiB`（占 pool 的 7%），所以这**不是**分配器
-攒着不放的假象：jittor 在这个 case 上真实持有的活跃显存约为 torch 的 **2.9 倍**。把口径换成
-like-for-like 只把 3.09x 挪到 2.88x，没有消掉它。`fuse_op_limit` 0 与 16 两档数字完全一致
-（6588.0 / 6131.2），所以 §47 的融合宽度上限不是这里的杠杆。
-
-数字随 jittor 版本变：deployed 那份（2026-09-11 拷贝，`total_cuda_used=5870.0 MiB`）比仓库
-checkout 低 12%，但量级相同。**显存这条应当被当作一个待查的 jittor 问题**，不是口径噪声。
+所以引用显存时要分开说：**稳态约 1.11x**，但**第一步峰值约 2.1x** 才是要留得下的预算。
+另外 `jt.core.get_peak_allocator_used_memory()` 名字像 live high-water，实际是**主机+设备**
+（`memory_profiler.cc:58` 不过滤 CUDA），不能与 torch 的 `max_memory_allocated` 并列。
 
 
 ### 未跑与失败

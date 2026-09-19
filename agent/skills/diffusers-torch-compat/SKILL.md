@@ -238,9 +238,11 @@ REAL_TORCH_PYTHON=/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
   allocated，不是同一量纲。工具已改为两侧都报 live 与 pool 两个数（jittor 侧用
   `device_memory_used` / `device_memory_reserved`），**上表两列相除的倍数不要继续引用**。
   在 transformers 的同口径复核里，换成 like-for-like 只把倍数挪动约 10%、**没有**消掉差距
-  （live 2.88x、pool 2.76x），所以「口径不同」不足以解释 `large_diffusers_unet2d` 的
-  1.10 GiB -> 3.78 GiB；但 diffusers 这三个 case 尚未按新口径重测，在重测之前两侧都
-  不下结论（既不说 jittor 占更多，也不说 parity）。
+  （live 2.88x、pool 2.76x）。那 2.88x 后来查清了：主因是 shim 的 `p.grad` 每步换对象
+  （已修），剩下的 2.11x whole-run 是**第一步瞬态**，稳态每步只有 1.11x——详见
+  `docs/results/2026-09-19-torch-compat-runbook-verification.md`。所以「口径不同」既不足以
+  解释 `large_diffusers_unet2d` 的 1.10 GiB -> 3.78 GiB，也不能就此认定是稳态开销；
+  这三个 case 尚未按新口径重测，重测之前两侧都不下结论（既不说 jittor 占更多，也不说 parity）。
 - 本次全程耗时 ~23.5 min，主要花在首次 JIT 内核编译与官方 flash 扩展构建（fresh
   `JITTOR_HOME`），非 case 本身。
 

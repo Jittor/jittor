@@ -72,6 +72,18 @@ nightly；它解锁的是 CUDA 上的四轴实测。
 （`test_packaging_structure.py` 的 find_packages 与 MANIFEST 两条、`test_pytest_contract.py`
 的 collection 副作用一条）在 pristine `90fe0b9d` 上以同样方式失败，与本次改动无关，未处理。
 
+**复验（2026-09-19 晚，grad 身份修复那次）**：同一份 `compat/build/` 残渣还会判红另外两个
+扫描器——`tests/structure/test_cleanup_structure.py::test_cross_file_duplicate_implementations_are_reviewed`
+（把 `compat/` 的每个实现镜像成一份"未审查重复实现"，多出 1262 条，逐条都是
+`compat/x` 对 `compat/build/lib/jittor/compat/x`）与
+`compat/tests/structure/test_compat_write_entry_points.py::test_every_process_global_write_in_compat_is_classified`
+（54 条未分类的进程级写入全部来自残渣；非 `compat/build/` 的条目只有 pytest 自己的节点名）。
+连同 `python/jittor/extern` 造成的
+`tests/structure/backends/comm/test_comm_resource_layout.py::test_legacy_runtime_resource_trees_are_absent`
+（本机保留的目录，fresh checkout 通过，见 `2026-09-14-vllm-omni-h3-enablement.md` §Gates）。
+这三处红项都由 **git 不跟踪**的本地产物引起（`build/` 在 `.gitignore`，`extern/` 被忽略），
+在 pristine checkout 上不存在，故为绿；与源码改动无关。
+
 ## 四轴实测汇总
 
 CUDA，两侧同 device，速度取重复最小值，`fallback_count` 见各 runbook。
@@ -95,31 +107,50 @@ CUDA，两侧同 device，速度取重复最小值，`fallback_count` 见各 run
 小 case 的 speed ratio（2–3x）是 dispatch-bound，不代表真实尺寸；transformers 的 large
 tier（1.03–1.19x）才是可引用的形态。
 
-## 显存：口径是错的，而且差额是真的
+## 显存：口径错了两轮，剩下的差额根因是 shim 的 grad 对象身份
 
 工具原本两侧各问各的，问的不是同一个量：oracle 侧 `torch.cuda.max_memory_allocated`
 （**活跃**字节，单卡），Jittor 侧 `get_mem_info().total_cuda_used`——它是**活跃+缓存空闲**，
 且 `mem_info.cc:316-322` 对**所有**设备求和。reserved 对 allocated。
 
 工具已改为两侧都报 live 与 pool 两个数：torch 用 `max_memory_allocated` /
-`max_memory_reserved`，Jittor 用 `device_memory_used(N)` / `device_memory_reserved(N)`
-（jittor 早有这两个 per-device API）。被测 jittor 太老、没有这两个 API 时，报告
-`jittor_peak_bytes = -1` 并附 `memory_note` 说明原因，而**不是**拿 reserved 顶上——
-deployed 那份 2026-09-11 拷贝就落在这一支。
+`max_memory_reserved`，Jittor 用 `device_memory_used(N)` / `device_memory_reserved(N)`。
+被测 jittor 太老、没有这两个 API 时，报告 `jittor_peak_bytes = -1` 并附 `memory_note`
+说明原因，而**不是**拿 reserved 顶上——deployed 那份 2026-09-11 拷贝就落在这一支。
 
-改正之后，「所以显存不能比」这个结论是**错的**。`large_transformers_bert` 同口径实测
-（GPU 2，同权重同输入，仓库 checkout，`fuse_op_limit` 0 与 16 数字相同）：
+换口径后差额仍在（2.88x），于是分相查根因。这期间又踩到第二个口径陷阱，一并记下：
 
-| 口径 | torch | jittor | 比 |
-| --- | --- | --- | --- |
-| live（`max_memory_allocated` / `device_memory_used`） | 2129.5 MiB | 6131.2 MiB | 2.88x |
-| pool（`max_memory_reserved` / `device_memory_reserved`） | 2386.0 MiB | 6588.0 MiB | 2.76x |
-| 旧工具那一对（allocated / `total_cuda_used`） | 2129.5 MiB | 6588.0 MiB | 3.09x |
+`jt.core.get_peak_allocator_used_memory()` 形状像 `max_memory_allocated` 的对应物，
+但 `MemoryProfiler::get_memory_info` 是**不过滤 CUDA** 地累加 `SFRLAllocator::sfrl_allocators`
+（`memory_profiler.cc:58`），也就是**主机+设备**。实测：512 MiB 纯 CPU 的 Var 把它推了
+512 MiB，再加 256 MiB CUDA 的 Var 推到 768 MiB；它也没有复位接口。**不能与 torch 的
+`max_memory_allocated` 并列**，能并列的只有 `device_memory_used` 与 CUDA-only 的
+`total_cuda_used`。
 
-Jittor 的缓存空闲只有 456.8 MiB（pool 的 7%），所以这**不是**分配器攒着不放：Jittor 在这个
-case 上真持有约 **2.9 倍**的活跃显存。换口径只把 3.09x 挪到 2.88x，没消掉。**这是一条待查的
-jittor 问题，不是口径噪声**；上表 diffusers 的 1.10 -> 3.78 GiB 尚未按新口径重测，重测前
-对 diffusers 不下结论。
+根因在 shim：`p.grad` 每一步都是新对象。torch 的 `zero_grad(set_to_none=False)` 就地
+清零已有张量、`AccumulateGrad` 也就地累加，所以一个训练循环里 `p.grad` 始终是同一个对象；
+shim 的 `_zero_grad` 用 `zeros_like` 重建、optimizer-free 的累加写成 `prev + gr`，两者都换
+对象。于是任何跨步持有 `[p.grad for p in model.parameters()]` 的代码（梯度裁剪、四轴的
+显存 pass）在 jittor 上每步钉住一整套梯度。`large_transformers_bert` 实测每步多 198 个
+Var、约 415 MiB——198 ≈ 参数个数，415 MiB ≈ 参数字节数。两处改为就地操作后，live 在步间
+回落到约 840 MiB（阶段边界实测 839–845 MiB），Var 数恒定在 403–411，不再随步数增长；同一次运行里 198 个输出与梯度
+对 torch 的相对误差与修复前逐项一致（仍在上表 ≤3.6e-4 一档），所以修的是对象身份，没动数值。
+
+修完重测同一个 case（仓库 checkout，只取 device-only 计数）：
+
+| 阶段 | torch live 峰值 | jittor live 峰值 |
+| --- | --- | --- |
+| 第一个 backward | 1640.3 MiB | 4048.2 MiB |
+| 第一个 warmup step | 2122.5 MiB | 4469.7 MiB |
+| warmup / timed 稳态每步 | 2083.6–2122.5 MiB | **2366.4 MiB** |
+
+所以整个 run 的 2.11x（live）/ 2.01x（pool）**几乎全来自第一步的瞬态**：jittor 首次
+backward 要 4048 MiB、首个训练步 4470 MiB，之后稳定在 2366 MiB，torch 没有这个瞬态；
+稳态每步只差 **1.11x**。jittor 的 pool 是 high-water 且从不归还 CUDA，瞬态被永久记进
+pool，四轴工具报的 whole-run 峰值也就一直带着它。
+
+做显存预算时两个数都要说：稳态约 **1.11x**，但**第一步峰值约 2.1x** 才是必须留得下的那个。
+上表 diffusers 的 1.10 -> 3.78 GiB 仍是**旧口径**，尚未按新口径重测。
 
 （外部采样仍然不可用：`nvidia-smi --query-compute-apps` 看不到进程（容器 pid 映射），
 按 GPU 的 `memory.used` 又含同租户。所以只能问运行时自己，才更要保证问的是同一个量。）
