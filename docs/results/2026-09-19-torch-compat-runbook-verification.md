@@ -138,6 +138,39 @@ mmcv-lite 2.2.0、mmengine 0.10.7）与 `site-peft17`（transformers 4.56.2、pe
 ms-swift 4.5.2）；`/root/jittor-lab/_state/verify-misc/site`（torchmetrics、tensordict）。
 原始 `verify-report.json` 在各 lab 输出目录，不进主仓库。
 
+## 合并远端后的复验
+
+写完这份报告后分支和远端分叉了：本地 10 个提交对远端 59 个（merge-base
+`4bd42443`），而远端那条线上有整套 autocast / GradScaler / 半精度重做，正好压在本文
+量化的对象上。按协作规则先提交本地、再 `git merge origin/2.0-refactor`，合并提交
+`5fca26ff`。重叠 4 个文件，只有 `src/core/var_holder.h` 冲突——两边加的是同一个
+`#include "runtime/device.h"`，只是注释措辞不同，按"重叠处保留远端"取了远端；其余
+自动合并的文件逐个核对过两边内容都在。
+
+**因此上面所有数字的基线仍是 `90fe0b9d`，不是合并后的树。** 合并后只复验了这些：
+
+| 项 | 结果 |
+| --- | --- |
+| 导入方向门禁（3 条契约） | 全过：543 模块 / 1441 边 / 3 环，无新增环 |
+| `tools/check_repo_layout.sh` | OK，221 个 Markdown |
+| `tests/structure` 三个受影响文件 | **55 passed, 8 subtests** |
+| bias 的 dtype 行为 | 5/5 与 torch 一致 |
+
+那三个文件合并前有 3 条失败，远端 `f0bd4279` 已经全部修掉；我新增这份报告时漏了重新
+生成 `MANIFEST.in`（`test_manifest_covers_runtime_trees_without_cache_payloads` 正是
+量这个），已按 `tools/build/generate_manifest.py` 补上，整份文件只多一行。
+
+bias 那一条单独复验，因为它对应的三个用例住在 `compat/tests/torch/`，在本 lab 收不起来
+（见「限制」）。用 `probe_bias_dtype.py` 直接跑：autocast 下
+`conv3d(f32, f32, f32)`、`Conv2d` 模块、`linear` 都返回 **float16**，无 amp 区域返回
+**float32**，conv3d 不带 bias 的对照组同样是 float16——与真 torch 2.13 的 dtype 逐条一致。
+
+**还没做**：四轴没有在合并后的树上重跑。远端改的是 dtype/半精度/autocast 与 generator
+的流，正是 transformers/diffusers/peft/ms-swift 那几个 case 量的东西，所以上表的精度与
+速度数字在合并后需要重测。另一个障碍是四轴走 lab 里那个部署树（2026-09-11 的副本，见
+copy-deploy 陷阱），要量合并后的树得先把仓库重新部署进 `venv-jittor`——那会动到 H3 lab，
+要先确认没人在用。
+
 ## 限制
 
 - `compat/tests/torch/*.py` 在本机 lab venv 里无法用 pytest 收集
