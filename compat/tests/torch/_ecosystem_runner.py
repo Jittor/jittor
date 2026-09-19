@@ -102,6 +102,21 @@ def _import_torch(runtime):
     return torch
 
 
+def _to_device_callable():
+    """Move a host-backed tensor onto Jittor's selected accelerator.
+
+    Jittor's global device flag covers tensors it creates itself; a tensor built
+    from a host array keeps its host residency, so it must be moved explicitly
+    before it can take part in a device-resident graph. Real PyTorch's
+    ``from_numpy`` is host-resident for the same reason and the caller moves it.
+    """
+    def move(tensor):
+        cuda = getattr(tensor, "cuda", None)
+        return cuda() if callable(cuda) else tensor
+
+    return move
+
+
 def _select_device(torch, runtime, device, *, policy_stack=None):
     """Keep default placement selected for the caller-owned workload lifetime."""
     if runtime == "jittor":
@@ -112,10 +127,21 @@ def _select_device(torch, runtime, device, *, policy_stack=None):
             if not _test_capability.check_accelerator("cuda", backend=jt).enabled:
                 raise SystemExit("CUDA is unavailable in this Jittor build")
             policy_stack.enter_context(jt.runtime.scope(use_cuda=1))
+            # Turning the global device flag on places tensors Jittor *creates*,
+            # which is why the CPU branch below can stay identity. It does not
+            # relocate a host-backed tensor: `from_numpy` stays host-resident
+            # (exactly as real PyTorch's `from_numpy` returns a CPU tensor), and
+            # an op that mixes it with a device-resident Parameter fails
+            # dispatch_context's same-backend check. Real PyTorch has the same
+            # residency and the caller moves it, so move it here too.
+            return _to_device_callable()
         elif device == "npu":
             if not _test_capability.check_accelerator("acl", backend=jt).enabled:
                 raise SystemExit("ACL is unavailable in this Jittor build")
             policy_stack.enter_context(jt.runtime.scope(use_cuda=1, use_acl=1))
+            # Same residency issue as CUDA, but the ACL path is verified on the
+            # NPU gate rather than here; leave it identity until it can be run.
+            return lambda tensor: tensor
         else:
             policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
         return lambda tensor: tensor

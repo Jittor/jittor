@@ -17,6 +17,7 @@
 2026-09-14-exit-heap-corruption
 2026-09-14-jittor-vs-pytorch
 2026-09-14-vllm-omni-h3-enablement
+2026-09-19-torch-compat-runbook-verification
 ```
 
 ## 按主题索引

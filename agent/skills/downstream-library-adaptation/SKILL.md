@@ -175,6 +175,11 @@ compat 还行——所以第 6 节第 5 条的过期条件是必须的。
 
 ## 相关
 
+- 写/复核某个库的 runbook：[`torch-compat-repo-runbook`](../torch-compat-repo-runbook/SKILL.md)
+  —— 模板骨架、四轴验收（支持清单/精度/显存/速度）与 `scripts/verify_repo.py`。
+- 逐库 runbook（`agent/skills/<lib>-torch-compat/`）：transformers、diffusers、peft、
+  mmcv、mmengine、ms-swift、torchmetrics、tensordict、vllm、vllm-omni、
+  flash-attention、verl、trellis。
 - 对拍 harness 与梯度调试：[`jittor-torch-diff`](../jittor-torch-diff/SKILL.md)
 - 算子级独立参考：[`jittor-op-parity-oracle`](../jittor-op-parity-oracle/SKILL.md)
 - 多卡/多后端验证：[`multi-device-verification`](../multi-device-verification/SKILL.md)
