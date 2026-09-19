@@ -4618,3 +4618,132 @@ deferred to a late drain, and the shim's in-call time is **1.80 s above torch's*
 device: at ~1.3M frontend ops the launch queue is full, so a host-blocked
 measurement and a GPU-bound one look the same from here. The size sweep below
 settles it.
+
+
+## 47. The conv-bias fp16 fix costs 2x because the fuser recomputes without a bound
+
+`HANDOFF-AMP-BIAS.md` left this open: casting a fused operator's bias to the
+compute dtype makes the decode's 63 `Conv3d` return float16, which is what torch
+does, and takes the decode from 8.31 s to 15.97 s. The handoff had ruled out the
+attention inputs, the flash kernel, a backend fallback, the flag read and host
+dispatch in general, and had one clue -- `jt.sync_all()` around every SDPA call
+erases the gap entirely (8.63 off, 8.68 on).
+
+**It is the fuser, and the mechanism is unbounded recompute.**
+
+The flag matrix answers it in one row. Cast off / cast on, same process,
+alternating, conv output dtypes asserted:
+
+| | off | on | delta |
+| --- | --- | --- | --- |
+| base | 8.33 s | 15.98 s | +7.65 |
+| `sync_run=1` | 8.31 | 15.97 | +7.66 (no-op: it was already 1) |
+| `no_fuse=1` | 9.76 | 9.73 | **-0.03** |
+| `auto_flush_ops=1` | 12.00 | 12.04 | +0.04 |
+| `auto_flush_ops=0` | 8.32 | 16.01 | +7.68 |
+| lt_linear disabled | -- | 24.05 | (worse: the fused linear is *helping*) |
+
+So the penalty needs fusion **and** a large batch: turning fusion off erases it,
+flushing after every operator erases it, and going fully lazy keeps it. That also
+explains the sync clue -- a sync cuts the batch, and fusion is decided within a
+batch.
+
+The profiler cannot be used to compare the two modes: instrumentation takes the
+cast-off decode from 8.33 s to **182.32 s** and the cast-on one from 15.98 to
+25.09, and that is not rerun inflation (`sum(TotalTime)` is 167 s of the 182 s).
+Its *counts*, though, are just counts, and they say the graph is the same:
+
+| | cast OFF | cast ON |
+| --- | --- | --- |
+| kernel launches | 120,613 | 116,581 |
+| distinct kernels | 80 | 206 |
+| mean fusion width | **2.90** | **16.47** |
+| widest kernel | **17 ops** | **361 ops** |
+| operator-executions | **349,670** | **1,920,123** |
+
+Same operators, same launches, **5.5x the work**. The cast-on graph is spliced
+into a cascade of fused kernels of width 6, 8, 9, 11, 14 ... 361, each launched
+exactly 63 times -- the number of `Conv3d` sites. Ranked by time within cast-on,
+kernels of **width >= 20 carry 51.5%** of the decode: 8.4 s of a 7.65 s gap.
+
+The cause is in `exec_plan.cc`. A var the fuser decides to *share* is not written
+out; its producer is spliced into every consumer kernel and run again there. The
+cutoff that bounds this applied to weak shares only:
+
+```cpp
+if (var_fused[vi] == 2) {                    // weak share
+    if (sharegraph.size() - sn < 32) var_fused[vi] = 3;
+    else { var_fused[vi] = 1; continue; }    // cut off
+}                                            // a var already at 3 walks past
+```
+
+A **strong** share -- a broadcast producer, an all-reduce consumer set, a
+`_force_fuse` scalar -- went in unconditionally, on the reasoning that
+recomputing one of those is cheap. One is; three hundred are not, and nothing
+stopped a chain of them. In float32 the shim's promotion inserts dtype
+boundaries that break the chain at width 17; in float16 the chain is uniform and
+nothing breaks it. The bias fix did not cause the pathology, it removed the
+accident that was hiding it.
+
+**The change:** `fuse_share_limit` (new flag, default 32 -- the number the weak
+cutoff already used) applies the bound to strong shares as well. 0 restores the
+old unbounded behaviour, so the two can be compared on one binary.
+
+**Ruled out along the way**, each measured rather than reasoned about:
+
+* *cuDNN's native fp16 3D convolution.* `JITTOR_CUDNN3D_HALF_NATIVE=0` runs the
+  63 convs in float32 and casts back: 15.95 s against 15.97 s. The switch existed
+  for driver regressions and had never been tried for speed; it buys nothing.
+* *The cuBLASLt fused linear.* Disabling it costs 8 s (15.98 -> 24.05). It was
+  the top of the cast-on profile and is not the problem -- which is exactly the
+  error the distorted profiler timings would have led to.
+* *Launch count, operator count, op mix.* Identical between the modes.
+
+**Still unverified at the time of writing:** whether `fuse_share_limit=32` closes
+the gap while keeping the float16 dtypes. The change is in the tree and the A/B
+(`probe_share_limit.py`, three limits x both cast modes) has not run -- the box
+became unreachable mid-build. Until that number exists this section explains the
+2x; it does not claim to have removed it.
+
+To finish it, in order (the first step is the copy-deploy trap from
+`HANDOFF-AMP-BIAS.md` -- editing the repo changes nothing until the file reaches
+the deployed tree, and a `src/` edit means a core rebuild):
+
+```bash
+D=/root/jittor-lab/_state/h3/venv-jittor/lib/python3.12/site-packages/jittor
+cp src/core/exec_plan.cc                    "$D/src/core/exec_plan.cc"
+cp python/jittor/_runtime/flag_policy.py    "$D/_runtime/flag_policy.py"
+cd /root/jittor-lab/minimax-h3 && source ./env-jittor.sh
+CUDA_VISIBLE_DEVICES=2 "$VENV/bin/python" -u probe_share_limit.py    # no grep: it buffers
+```
+
+Expected shape of the answer, and what each outcome means:
+
+* `fuse_share_limit=0` reproduces 8.3 / 16.0 -- the bound is what changed,
+  nothing else moved underneath;
+* `=32` brings the cast-on column toward the ~9.7 s that `no_fuse` already
+  reaches with correct dtypes, and ideally below it, since only the pathological
+  sharing is cut and ordinary fusion is kept;
+* the cast-off column must not regress: this bound applies to both, and 8.3 s is
+  the number to protect;
+* if `=32` does not move it, the width histogram is the check -- re-run
+  `probe_fp16_launch_counts.py` and look at mean width, which must fall from
+  16.47. If width falls and time does not, the wide kernels were not the cost
+  after all and section 47's attribution is wrong.
+
+Then the same A/B has to run on the *native* side (`tests/` core tier, and a
+plain fp32 training step) before the bound can ship: cutting a share that used to
+be free costs a materialisation, and 32 is inherited from the weak-share cutoff
+rather than measured.
+
+### One more divergence found on the way
+
+`lt_linear_cuda` and the portable linear disagree on the result dtype.
+`lt_linear` casts the bias to the compute dtype and returns float16; the portable
+path applies torch-parity promotion and returns float32. Same operator, same
+inputs, two answers, chosen by whether a size/contiguity predicate happens to
+pass. It surfaces as `RuntimeError: query, key and value must have the same
+dtype` the moment `lt_linear` is disabled in cast-off mode. Real torch 2.13
+refuses the case outright -- `linear(fp16 x, fp16 w, fp32 b)` raises `self and
+mat2 must have the same dtype` -- so neither jittor path matches it, and the bias
+fix is what removes the mismatch at its source.

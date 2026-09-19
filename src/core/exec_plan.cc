@@ -13,6 +13,20 @@
 
 namespace jittor {
 
+// How many operators one fused op may take on as *recomputed* producers.
+//
+// A var the fuser decides to "share" is never written out: its producer is
+// spliced into each consumer kernel and executed again there. That is a good
+// trade for one broadcast or one scalar and a bad one at scale, because the
+// work grows with the length of the shared chain and every kernel along it
+// pays for the whole prefix. 32 is the number the weak-share cutoff below has
+// always used; the flag applies it to strong shares too. 0 removes the bound,
+// which is what strong shares had before.
+DEFINE_FLAG(int, fuse_share_limit, 32,
+    "Operators one fused op may take on as recomputed producers. A shared var "
+    "is recomputed inside every consumer kernel instead of being written out, "
+    "so this bounds how much recompute one kernel accepts. 0 removes the bound.");
+
 // Defined by the executor, read here: the planner is the only user.
 DECLARE_FLAG(int, gopt_disable);
 
@@ -322,14 +336,31 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                     int vi = v->batch_index_at(tt);
                     if (var_fused[vi] == 1)
                         continue;
-                    // if weak share, cut off
-                    if (var_fused[vi] == 2) {
-                        if (sharegraph.size() - sn < 32)
-                            var_fused[vi] = 3;
-                        else {
+                    // Bound the recompute. Each op pulled in here is work this
+                    // fused kernel will do that it would not do if the var
+                    // were written out instead.
+                    //
+                    // The cutoff used to apply to weak shares only: a strong
+                    // share (a broadcast producer, an all-reduce consumer set,
+                    // a `_force_fuse` scalar) walked straight past it, on the
+                    // grounds that recomputing one of those is cheap. One is.
+                    // Three hundred are not, and nothing stopped a chain of
+                    // them. Measured on the MiniMax-H3 video VAE decode under
+                    // `autocast(float16)`, where the chain is uniformly half
+                    // precision and so has no dtype boundary to break it: 63
+                    // fused kernels of widths 6, 8, 9, 11 ... 361, mean width
+                    // 16.47 against 2.90 for the same graph in float32, 1.92M
+                    // operator-executions against 350k, and the kernels of
+                    // width >= 20 carrying 51.5% of the decode -- 8.4 s of a
+                    // 7.65 s gap. The operators, the launch count and the
+                    // graph were identical in both; only the splicing differed.
+                    if (var_fused[vi] == 2 || var_fused[vi] == 3) {
+                        if (fuse_share_limit > 0 &&
+                                (int)(sharegraph.size() - sn) >= fuse_share_limit) {
                             var_fused[vi] = 1;
                             continue;
                         }
+                        var_fused[vi] = 3;
                     }
                     Op* opi = v->input();
                     int opid = opi->batch_index_at(tt);

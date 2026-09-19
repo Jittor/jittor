@@ -16,6 +16,13 @@
 
 namespace jittor {
 
+// Operators one fused kernel may hold. 0 is unbounded, which is what has always
+// shipped; see pass 3 below for the graph that made the question worth asking.
+DEFINE_FLAG(int, fuse_op_limit, 0,
+    "Operators one fused kernel may hold. Fusing a long elementwise chain into "
+    "one kernel saves memory traffic, but a very wide kernel has to keep every "
+    "live intermediate in registers. 0 is unbounded.");
+
 // count_fuse decides, for one execution batch, which ops end up inside the
 // same fused op and which intermediate vars survive as real memory.
 //
@@ -190,16 +197,42 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     }
 
     // Pass 3: union neighbours that sit on the same fuse level.
+    //
+    // `group_size` bounds how many operators one fused kernel may hold. There
+    // was no bound: the MiniMax-H3 video VAE decode under `autocast(float16)`
+    // produced kernels of 361 operators (mean width 16.47 against 2.90 for the
+    // same graph in float32), because a uniformly half-precision chain has no
+    // dtype boundary to break it while the float32 one is cut by the shim's
+    // promotion. `fuse_op_limit` is 0 -- unbounded, the behaviour that has
+    // always shipped -- until the measurement that sets it says otherwise.
+    vector<int> group_size(ops.size(), 1);
+    vector<char> forced_material(vars.size(), 0);
     for (uint i = 0; i < ops.size(); i++) {
         Op* op = ops[i];
-        int root = find_father(i);
         for_each_neighbor(op, 1, 1, [&](Var* var, Op* other, int relation, int is_control_dep) {
             if (is_control_dep) return;
             int other_id = other->batch_index_at(tt);
-            if (fuse_level[other_id] == fuse_level[i]) {
-                int other_root = find_father(other_id);
-                father[other_root] = root;
+            if (fuse_level[other_id] != fuse_level[i]) return;
+            // Re-find on every edge: an earlier edge of this same op may have
+            // already merged `i` into another tree, so the root read before the
+            // walk goes stale.
+            int root = find_father(i);
+            int other_root = find_father(other_id);
+            if (root == other_root) return;
+            if (fuse_op_limit > 0 &&
+                    group_size[root] + group_size[other_root] > fuse_op_limit) {
+                // The two ops stay in different kernels, so the var between
+                // them has to exist in memory. Without this the verdict loop
+                // below could still mark it fused-away -- it decides from the
+                // edges, not from the grouping -- and a group whose every
+                // output was fused away reaches the executor with none at all
+                // (`fused_op.cc: [check failed: outputs().size()]`, which is
+                // what `fuse_op_limit=16` hit).
+                forced_material[var->batch_index_at(tt)] = 1;
+                return;
             }
+            father[other_root] = root;
+            group_size[root] += group_size[other_root];
         });
     }
 
@@ -215,6 +248,12 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     for (uint i = 0; i < vars.size(); i++) {
         Var* var = vars[i];
         if (!var || var->tflag != tt) {
+            var_fused[i] = 1;
+            continue;
+        }
+        // A var on a boundary `fuse_op_limit` refused to cross is written out,
+        // whatever the edges say about it.
+        if (forced_material[i]) {
             var_fused[i] = 1;
             continue;
         }
