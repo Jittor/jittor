@@ -150,6 +150,33 @@ def scan_roots(root: Path) -> list[tuple[Path, str]]:
     return roots
 
 
+#: Directories setuptools and pip write build output into. The compat project
+#: declares the same two non-source in its own sdist config
+#: (``[tool.jittor.sdist] exclude = ["build/**", "dist/**", "tests/**"]``), so
+#: this is the project's classification rather than a second opinion.
+_BUILD_OUTPUT_NAMES = frozenset(("build", "dist"))
+
+
+def _is_build_output(relative: Path, base: Path) -> bool:
+    """Whether ``relative`` sits under a ``build``/``dist`` that is not a package.
+
+    ``build/lib/<packages>`` is a *copy* of the tree. Reading it as source
+    double-counts every module and invents cycles out of the copy's own
+    ``__init__`` pairs -- measured once: a ``setup.py build`` in ``compat/``
+    left ``compat/build/lib/jittor/compat/...`` behind, and the gate reported
+    four import-time cycles where the source has three, with nothing in the
+    diff to explain it.
+
+    The name alone cannot decide it, because ``jittor.build`` is a real
+    package. What separates them is what the directory holds: output has no
+    ``__init__.py`` of its own, a package does.
+    """
+    for parent in relative.parents:
+        if parent.name in _BUILD_OUTPUT_NAMES and not (base / parent / "__init__.py").is_file():
+            return True
+    return False
+
+
 def discover_modules(roots: list[tuple[Path, str]]) -> dict[str, Path]:
     modules: dict[str, Path] = {}
     for base, prefix in roots:
@@ -158,7 +185,10 @@ def discover_modules(roots: list[tuple[Path, str]]) -> dict[str, Path]:
         for path in sorted(base.rglob("*.py")):
             if "__pycache__" in path.parts:
                 continue
-            parts = list(path.relative_to(base).parts)
+            relative = path.relative_to(base)
+            if _is_build_output(relative, base):
+                continue
+            parts = list(relative.parts)
             if prefix == "jittor.compat" and parts[0] == "tests":
                 continue  # Monorepo dev tests are excluded from this distribution.
             if parts[-1] == "__init__.py":
