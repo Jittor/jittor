@@ -4855,6 +4855,32 @@ hand -- 8.89 s, `cos 0.99999898`, which is the sweep's fp16 cell reproduced by
 a different probe -- and the cross-setting table above covers three dtypes and
 two sizes with the bound on and off.
 
+**The sweep cut the wrong axis, and a later failure exposed it.** Every cell of
+the table above decodes a **32x32 spatial** latent: `half_t` cuts the temporal
+axis (37 -> 16 frames) and leaves the spatial one alone, so "two sizes" was two
+lengths at one frame size. The gap surfaced when the ComfyUI/server path
+produced pure noise at 256x256 output with VAE tiling off (adjacent-pixel delta
+47 against 4 for tiling on, same seed) -- a spatial size nothing here had
+touched. Measured directly (`probe_small_spatial.py`), the bound is neutral
+there too:
+
+| spatial latent | output | limit 16 | limit 0 | on vs off |
+| --- | --- | --- | --- | --- |
+| 32x32 | 512x512 | 0.1887 | 0.1887 | 3.2e-04 |
+| 16x16 | 256x256 | 0.1867 | 0.1867 | 5.5e-04 |
+| 8x8 | 128x128 | 0.1504 | 0.1504 | 2.4e-04 |
+
+(adjacent-pixel delta; noise reads ~47, an image ~0.2.) All three differences sit
+at the repeat-noise floor of 3.0e-04, and none of the outputs is noise, so
+`fuse_op_limit` is not what breaks that configuration. What it does not settle:
+this is `decode_base`, and the server runs vLLM-Omni's own fused-Triton VAE
+wrapper, a different implementation. The failing flag is that wrapper's, not
+this one's.
+
+**How to apply:** "two sizes" has to mean two *shapes*, not two lengths of one
+shape. A sweep that varies one axis of a 5-D tensor and calls itself
+size-covering will miss whatever lives on the others.
+
 **Gates.** `tests/core tests/autograd tests/ops/test_binary_op.py
 tests/nn/test_linear.py` at the shipped default: 532 passed, 33 skipped, 5
 xfailed, 1 xpassed, 190 subtests, no failures. The same selection before this
