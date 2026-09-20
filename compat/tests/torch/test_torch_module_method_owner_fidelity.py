@@ -322,6 +322,25 @@ def test_non_persistent_buffer_is_excluded_from_state_dict():
     assert "drop" not in keys
 
 
+def test_non_persistent_buffer_role_survives_dtype_replacement():
+    net = _Net()
+    net.register_buffer("empty", None, persistent=False)
+    old = net.drop
+    net.drop = net.drop.to(torch.bfloat16)
+
+    assert net.drop is not old
+    assert net._non_persistent_buffers_set == {"drop", "empty"}
+    assert {name: role for name, _, role in net._var_roles()}["drop"] == "non_persistent_buffer"
+    assert "drop" in dict(net.named_buffers())
+    assert "drop" not in net.state_dict()
+    assert "empty" not in net.state_dict()
+    assert "keep" in net.state_dict()
+
+    net.register_buffer("drop", torch.ones(2), persistent=True)
+    assert net._non_persistent_buffers_set == {"empty"}
+    assert "drop" in net.state_dict()
+
+
 def test_load_state_dict_roundtrip_is_exact():
     src, dst = _Net(), _Net()
     result = dst.load_state_dict(src.state_dict())

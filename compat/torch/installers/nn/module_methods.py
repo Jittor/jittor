@@ -1048,17 +1048,14 @@ def _module_type(self, dst_type=None):
 # *immediate* (non-recursive) buffer attribute names that were registered
 # with persistent=False. transformers' from_pretrained reads it via
 # `named_non_persistent_buffers()` (parent._non_persistent_buffers_set).
-# jittor instead tags each buffer Var with `.persistent`; derive the set
-# from that. It's a property so it stays correct as buffers are (de)added.
+# Jittor records buffer roles by attribute name, which survives a dtype cast
+# replacing the Var. Keep this property aligned with that canonical registry.
 def _nonpersist_set(self):
     """The immediate buffer names registered with ``persistent=False``."""
-    out = set()
-    for k, v in self.__dict__.items():
-        if (isinstance(k, str) and not k.startswith("_")
-                and isinstance(v, jt.Var)
-                and getattr(v, "is_buffer", False)
-                and not getattr(v, "persistent", True)):
-            out.add(k)
+    out = {name for name, _, role in self._var_roles()
+           if role == "non_persistent_buffer"}
+    out.update(name for name in self.__dict__.get("_non_persistent_buffer_names", ())
+               if self.__dict__.get(name, object()) is None)
     return out
 
 
