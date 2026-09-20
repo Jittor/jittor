@@ -4860,6 +4860,29 @@ this function's return value to the encoder, which contains
 `.detach().cpu()` and `.numpy()` -- both of which should force evaluation and
 evidently do not on this path.
 
+**And `fetch_sync`'s guard, which tests the wrong property and still is not
+it.** `Var.numpy()` binds straight to `VarHolder::fetch_sync`, whose skip reads
+
+```cpp
+if (!(var->mem_ptr && !var->allocator->is_cuda())) { sync(true); ... }
+ArrayArgs result{var->mem_ptr, ...};
+```
+
+-- it asks whether the Var has *memory*, not whether it has been *evaluated*, so
+a Var with a host allocation whose operator has not run is returned as its own
+uninitialised buffer. That matches every fact on the list, including why the
+isolated reproductions never fire (a small Var is rarely host-allocated-but-
+unwritten at the moment it is read). Adding `var->is_finished()` to the guard
+and testing with every workaround off: **5/6 noise, unchanged**. The binding was
+confirmed first (`// @pyjt(fetch_sync,numpy)`), so this is a real negative and
+not another wiring mistake.
+
+It leaves a contradiction worth writing down for whoever picks this up: if the
+Var were marked finished while unwritten, the new guard would still skip -- but
+then an explicit `sync` would skip it too, and a sync is what fixes the decode.
+Both cannot hold, so one of "the Var is unfinished" or "sync goes through the
+same skip" is false, and neither has been checked directly.
+
 **Which made `memory_format` look like the answer, and it is not.** `_to`
 validates `memory_format` at the top and then never uses it, so
 `.to(dtype=..., memory_format=contiguous_format)` returns a cast without the
