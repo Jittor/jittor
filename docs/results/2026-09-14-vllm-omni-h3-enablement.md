@@ -4632,62 +4632,71 @@ measurement and a GPU-bound one look the same from here. The size sweep below
 settles it.
 
 
-## 48. In-place quantisation of the decoded frames corrupts them, about half the time
+## 48. The H3 deployment's noise, and four attributions that did not survive
 
-The ComfyUI/vLLM-Omni deployment returned pure-noise video on roughly half of
-its 256x256 requests while 512x512 was clean. The cause is not in the model and
-not in this fuser work: it is the in-place trio in MiniMax-H3's
-`_prepare_minimax_h3_video_output`.
+The ComfyUI/vLLM-Omni deployment returns pure-noise video from MiniMax-H3. This
+section is written twice over: the first version named a cause and a fix, both
+of which fell apart the moment they were tested without an observer attached.
+What follows is the state after that correction, which is less than a cause.
 
-```python
-video = video.detach().float()
-video.clamp_(0, 1).mul_(255).round_()        # <- these
-return video.permute(0, 2, 3, 4, 1).to(dtype=torch.uint8, ...)
-```
+**What the failure is.** The frames reach the muxer as *uniform random uint8*:
+adjacent-pixel delta 85-97, and 85 is what uniform noise gives. That is a buffer
+nobody wrote, not arithmetic gone wrong. Every value observed on the way --
+the latent, the VAE output, the quantiser's own input -- is correct every time.
 
-Three arms, same server, same seeds, interleaved:
+**Why that last sentence is a trap.** Reading any of those calls
+`.cpu().numpy()`, which forces the lazy graph to run, and *running the graph is
+itself enough to make the failure go away*. So a probe cannot see this by
+looking. Worse, a probe left attached while something else is measured silently
+repairs the run being measured. Four separate arms were scored "clean" that way
+before anyone checked whether the tracer was still installed:
 
-| quantisation | 256x256 result |
-| --- | --- |
-| in-place, as shipped | ~10 noisy of 20 |
-| in-place, with the input materialised first | 8/8 clean |
-| **out-of-place, no forced sync** | **6/6 clean** |
+| arm | with a tracer attached | tracer removed |
+| --- | --- | --- |
+| out-of-place quantisation | 6/6 clean | **5/6 noise** |
+| bare `jt.sync_all()` before the quantiser | 6/6 clean | **5/6 noise** |
+| `value.sync()` inside the shim's `_ip` | -- | **black frames** |
+| as shipped | ~10 noisy of 20 | 5/6 noise |
 
-The third arm is what attributes it. It adds no synchronisation -- the log
-confirms the input is still unmaterialised when it runs -- and changes only
-`clamp_`/`mul_`/`round_` into `clamp()`/`*`/`round()`. So the defect is in how
-the in-place writes land, not in whether the tensor was ready.
+None of the three fixes works. The `_ip` change was reverted and never
+committed; it forced the in-place operand to evaluate without its ancestors,
+which turned noise into an all-zero image -- and the checker passed it, because
+that checker only flagged a *high* adjacent-pixel delta and a blank frame has
+the lowest possible one. Silence is not success.
 
-**What the failure looks like, and why every earlier reading missed it.** The
-frames reach the muxer as *uniform random uint8*: adjacent-pixel delta 85-97,
-and 85 is exactly what uniform noise gives. That is a buffer nobody wrote, not
-arithmetic gone wrong. Meanwhile the latent, the VAE output and the quantiser's
-own input are all correct every single time -- because reading any of them
-calls `.cpu().numpy()`, which forces the graph to run. Observing the value is
-what makes it right, so a probe cannot see this by looking; it can only see it
-by *not* looking and comparing the end result.
+**What the tracer was hiding.** Without any observer the behaviour is not 50/50
+at all. It is: **the first request after the server starts is clean and every
+later one is noise**, reproduced identically across independent runs. A
+near-deterministic pattern was being read as a coin flip for most of a day
+because the instrument was part of the circuit.
 
 **Ruled out, each by measurement:** `fuse_op_limit` (section 47's bound -- the
 decode is bit-identical at 32x32, 16x16 and 8x8 spatial latents with the bound
-on and off), `vae_use_tiling` (a dead attribute on this VAE: assigned in
-`__init__`, never read), `flow_shift`, `max_model_len`, sequence parallelism
-(`--usp` is a *size*; 1 already means off), server lifetime, and the seed --
-the same seed produces a clean video once and noise the next time, while its
-latent and VAE output are bit-identical across both.
+on and off), `vae_use_tiling` (a dead attribute here: assigned in `__init__`,
+never read), `flow_shift`, `max_model_len`, sequence parallelism (`--usp` is a
+*size*; 1 already means off), and the seed.
 
-**Not reproduced standalone.** A lazy graph of the real shape
-(1x3x124x256x256), sliced, `.contiguous()`, `.float()`, then the same in-place
-trio, matches a materialised reference 6/6. So the trigger needs more of the
-pipeline than the operator sequence alone -- the VAE graph, the offload context,
-allocator pressure -- and the mechanism inside jittor is *not* pinned. What is
-pinned is the attribution: in-place there, noise; out-of-place there, none.
+**Where it points now.** The one thing that ever cleaned a run was a probe that
+materialised the decode output *before `decode_latent` returned* -- that is,
+while `_component_on_device` still had the VAE on the accelerator. Every failed
+fix acted after that block exits and the VAE has been offloaded to host. If the
+decode is still an unevaluated graph when its weights leave the device, then
+evaluating it afterwards reads memory that was handed back, which would explain
+both the random bytes and the first-request-only success. That is a hypothesis
+with one supporting coincidence, not a finding, and it is under test.
 
-**Where it is handled.** `serve-vllmomni.sh` exports `H3_PREP_OUTOFPLACE=1` and
-`shim-extra/sitecustomize.py` swaps the out-of-place form in. That is a
-deployment workaround in the lab, deliberately visible in the serve script
-rather than silently applied by the auto-imported module. The real fix belongs
-in jittor's in-place path and needs the reproduction this section does not have.
+**Not reproduced standalone,** in five attempts: a lazy graph at the real shape,
+the same slice/`contiguous()`/`float()`/in-place sequence, live aliases held
+across the chain, and `assign`'s semantics probed directly (pending consumer,
+in-place result, aliased view -- all correct). None of them involve a component
+being moved off the device mid-graph, which is the piece the hypothesis above
+says matters.
 
+**Deployment state: still broken.** `serve-vllmomni.sh` exports
+`H3_PREP_OUTOFPLACE=1` and `shim-extra/sitecustomize.py` honours it, but that
+swap is now known not to fix anything, and for a while it was gated behind a
+*tracing* flag, so it had never actually run in the configuration it was
+credited for.
 
 ## 47. The conv-bias fp16 fix costs 2x because the fuser recomputes without a bound
 
