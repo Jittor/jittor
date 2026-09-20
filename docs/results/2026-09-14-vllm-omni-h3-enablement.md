@@ -4830,6 +4830,17 @@ asks for it. What matters is that the decode output's shape,
 `[1,3,124,256,256]`, is **not among them**. The classification is correct for
 the Var that goes bad.
 
+**An instrumentation attempt that answered nothing, recorded because it cost
+a cycle.** The next question was whether the operator producing the decode's
+output runs at all on a failing request -- if it never runs, nothing wrote that
+buffer. Instrumented before `op->execute_prepared` in `exec_runner.cc`, filtered
+on a 5-D output with `shape[1] == 3`. Two mistakes made the round useless: the
+filter matched unrelated vars (`[1152,3,2,16,16]` and friends) and never the
+decode's `[1,3,124,256,256]`, and all three requests came back clean, so there
+was no failing case to compare against anyway. Whether the probe masked the
+failure (a `getenv` per operator is not free) or three clean runs at a ~70%
+failure rate was luck (p = 0.027) is not established either.
+
 **A third hole in the checker, and it casts doubt backwards.** One run scored
 `ok` at `mean 41.4, std 14.3, max 67` -- rendered, it is a nearly black,
 degraded frame, not a picture. So the checker has now passed three distinct
