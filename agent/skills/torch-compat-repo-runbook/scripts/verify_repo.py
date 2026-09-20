@@ -114,6 +114,9 @@ if os.environ.get("VERIFY_RUNTIME") == "jittor":
         def read():
             return (int(jt.core.device_memory_used(device)),
                     int(jt.core.device_memory_reserved(device)))
+
+        def reserved():
+            return int(jt.core.device_memory_reserved(device))
     else:
         unmeasurable = (
             "jittor has no device_memory_used; its only counter "
@@ -148,19 +151,26 @@ else:
     def peak():
         return int(torch.cuda.max_memory_allocated())
 
-live = []
+    def reserved():
+        return int(torch.cuda.max_memory_reserved())
+
 pool = []
 stop = threading.Event()
 
 
 def sampler():
+    # The sampler's only job is the pool: the peak comes from the runtime's own
+    # high-water (`peak`, see above). A pool reading is still taken here rather
+    # than read once at the end, because `memory_reserved` can *fall* when a
+    # runtime releases cached blocks, so the high-water is not always the value
+    # at the end. Sampling can only ever *miss*, never invent, which is why the
+    # terminal read is unioned with these below.
     while not stop.is_set():
         try:
-            a, b = read()
+            _, b = read()
         except Exception:
             time.sleep(0.01)
             continue
-        live.append(a)
         pool.append(b)
         time.sleep(0.01)
 
@@ -179,12 +189,14 @@ finally:
         print("MEMORY_RESERVED_BYTES -1")
         print("MEMORY_UNMEASURABLE " + unmeasurable)
     else:
-        # The peak comes from the runtime's own high-water (see `peak`), not from
-        # `max(live)`: the sampler is a python thread and misses the peak on any
-        # step whose device waits are short. The pool only grows, so sampling its
-        # maximum is the same number as reading it at the end.
+        # Both numbers now come from the runtime rather than from `max(live)` and
+        # `max(pool)`. The peak has to -- this thread only runs when the
+        # interpreter releases the GIL, so it misses it on any step with short
+        # device waits. The pool's terminal reading is unioned in for the same
+        # reason: on a 5-step probe the sampler caught the pool at 512 MiB while
+        # the runtime held 1536 MiB.
         print("MEMORY_PEAK_BYTES %d" % peak())
-        print("MEMORY_RESERVED_BYTES %d" % (max(pool) if pool else -1))
+        print("MEMORY_RESERVED_BYTES %d" % max(pool + [reserved()]))
 '''
 
 
