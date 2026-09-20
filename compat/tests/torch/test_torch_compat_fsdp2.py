@@ -292,7 +292,7 @@ class TestFSDP2Compat(unittest.TestCase):
             true_fsdp_params=(types.SimpleNamespace(requires_grad=False),),
             reshard_after_forward=True,
         )
-        module = types.SimpleNamespace(_fsdp_state=state)
+        module = types.SimpleNamespace(_fsdp_state=state, parameters=lambda: ())
 
         with mock.patch.object(
                 fsdp_shard, "_unshard_module_params",
@@ -316,7 +316,7 @@ class TestFSDP2Compat(unittest.TestCase):
             true_fsdp_params=(types.SimpleNamespace(requires_grad=False),),
             reshard_after_forward=True,
         )
-        module = types.SimpleNamespace(_fsdp_state=state)
+        module = types.SimpleNamespace(_fsdp_state=state, parameters=lambda: ())
         inputs = jt.array([1.0, 2.0]).stop_grad()
         original = inputs * 3
 
@@ -346,7 +346,7 @@ class TestFSDP2Compat(unittest.TestCase):
             true_fsdp_params=(types.SimpleNamespace(requires_grad=False),),
             reshard_after_forward=True,
         )
-        module = types.SimpleNamespace(_fsdp_state=state)
+        module = types.SimpleNamespace(_fsdp_state=state, parameters=lambda: ())
         inputs = jt.array([1.0, 2.0])
         original = inputs * 3
 

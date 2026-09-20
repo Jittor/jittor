@@ -584,9 +584,12 @@ def _execute_with_true_fsdp(module, orig_execute, *args, **kwargs):
         try:
             out = orig_execute(*args, **kwargs)
             entries = getattr(state, "true_fsdp_params", ())
+            # Child FSDP states and ignored parameters are absent from entries;
+            # their gradients still depend on this module's output graph.
             if (entries
                     and not any(getattr(entry, "requires_grad", True)
                                 for entry in entries)
+                    and not any(param.requires_grad for param in module.parameters())
                     and getattr(state, "reshard_after_forward", True)):
                 if not common._primary_input_requires_grad(args, kwargs):
                     out = common._materialize_frozen_output(out)
