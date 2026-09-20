@@ -4803,6 +4803,29 @@ against ~70% noise unpatched. It replaced an earlier `copy` mode that pulled
 side effect. Both are workarounds; this one at least does the thing the defect
 description names, and costs a sync instead of a transfer.
 
+**`sync_all` is not where this lives, measured three ways.** It differs from
+the entry point that works (`VarHolder::sync(true, false)`) in two independent
+places, and both were tried against the failing decode:
+
+| `sync_all` as | 256x256 failure |
+| --- | --- |
+| shipped | ~70% |
+| sweeping every holder, not just sinks | ~17% |
+| `weak_sync=false` | ~33% |
+| both | ~17% |
+
+They do not compose, which is the answer: each raises the chance the Var is
+evaluated *in passing*, and none of them makes it happen. Both were reverted.
+A change that improves a failure rate without addressing its cause is the worst
+kind to ship -- it reads as "handled" and charges every caller for it.
+
+**A second hole in the checker.** Two of those runs produced `adj=nan`: the file
+had no decodable frames at all, and the checker scored them `ok` because it only
+knows `NOISE` (high adjacent-pixel delta) and `BLANK` (low variance). That is
+the second failure mode it has silently passed -- the first was the all-zero
+frames from the reverted `_ip` change. A verifier that only recognises the
+failures you have already seen will keep certifying the ones you have not.
+
 **Two more ruled out, and the allocator is sound.**
 
 * *A shared block recycled under its sharers.* `SFRLAllocator::share_with` does

@@ -741,6 +741,11 @@ void sync_all(bool device_sync) {
         // `jt.sync_all(True)` does not cover the Var that goes bad -- but only
         // part, and a global sync-semantics change that does not fix the bug is
         // not worth its cost. See section 48 of the H3 results doc.
+        // Sinks only. Sweeping every holder and forcing weak_sync=false were
+        // both tried against MiniMax-H3's uniform-random-byte video: ~70%
+        // failure becomes ~17% and ~33% respectively, and ~17% with both. They
+        // raise the chance the Var is evaluated in passing; they do not fix it,
+        // so the root cause is not here. See section 48 of the H3 results doc.
         if (!v->var->_outputs.size())
             vars.push_back(v->var);
     }
