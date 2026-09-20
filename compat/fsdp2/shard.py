@@ -8,6 +8,7 @@ import jittor as jt
 from jittor import nn
 
 from . import common, dtensor
+from ..torch.parameter_containers import ParameterDictAdapter, ParameterListAdapter
 from ..diagnostics import EXPECTED, swallowed
 
 
@@ -234,24 +235,12 @@ def _named_parameters_with_owner(module, recurse=True):
         return []
 
     def visit(mod, prefix=""):
-        dc = getattr(mod, "__dict__", {})
-        try:
-            if isinstance(mod, nn.ParameterList):
-                dc = mod.params
-        except EXPECTED as exc:
-            swallowed("fsdp2/shard.py visit: if isinstance(mod, nn.ParameterList):", exc)
-        bufnames = getattr(mod, "__dict__", {}).get("_buffer_names", ())
-        for name, value in list(dc.items()):
-            if isinstance(name, str) and name.startswith("_"):
+        for name, value, role in mod._var_roles():
+            if role != "parameter" or id(value) in seen:
                 continue
-            if isinstance(value, jt.Var):
-                if id(value) in seen:
-                    continue
-                if getattr(value, "is_buffer", False) or not getattr(value, "persistent", True) or name in bufnames:
-                    continue
-                seen.add(id(value))
-                pname = f"{prefix}.{name}" if prefix else str(name)
-                out.append((pname, mod, name, value))
+            seen.add(id(value))
+            pname = f"{prefix}.{name}" if prefix else str(name)
+            out.append((pname, mod, name, value))
         if recurse:
             for name, value in child_items(mod):
                 if isinstance(value, nn.Module):
@@ -316,6 +305,11 @@ def _init_true_fsdp_state_impl(module, state):
         item for item in _named_parameters_with_owner(module, recurse=True)
         if not is_fsdp_managed_param(item[3]) and id(item[3]) not in ignored_ids
     ]
+    for _, owner, _, _ in params:
+        if isinstance(owner, (nn.ParameterList, ParameterListAdapter, ParameterDictAdapter)):
+            raise NotImplementedError(
+                "FSDP2 cannot shard ParameterList/ParameterDict: its parameter "
+                "storage needs container-aware replacement at every shard transition")
     total_numel = sum(common._param_numel(param) for _, _, _, param in params)
     if common._fsdp2_flat_enabled(ws, total_numel) and params and len({_jittor_dtype_name(param.dtype) for _, _, _, param in params}) == 1:
         flat_shard_numel = common._ceil_div(total_numel, ws)
