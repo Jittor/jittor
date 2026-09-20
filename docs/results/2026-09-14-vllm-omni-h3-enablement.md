@@ -4860,6 +4860,39 @@ this function's return value to the encoder, which contains
 `.detach().cpu()` and `.numpy()` -- both of which should force evaluation and
 evidently do not on this path.
 
+**What the narrowed window forces, and the synthesis it produces.** The window
+contains no tensor operation at all: `enable_cpu_offload` defaults to false and
+the serve script does not set it, so `_move_tensor_tree_to_cpu` -- the one
+tensor-touching statement in `diffusion_engine.generate` -- never runs. Yet the
+*same tensor* synced inside the quantiser is right and synced at the
+post-process is wrong.
+
+The only thing that happens in between is other evaluation. The pipeline calls
+`jt.sync_all(True)` 160 times per request (counted), and any one of them landing
+in this window evaluates the pending graph as part of a **wide** batch --
+`weak_sync=true`, which pulls in consumers, and the sink-only sweep. An explicit
+`VarHolder::sync(true, false)` evaluates the same graph as a batch of one.
+
+That reframes the two partial results this section earlier dismissed as
+"raising the chance the Var is evaluated in passing":
+
+| `sync_all` as | failure |
+| --- | --- |
+| shipped | ~70% |
+| every holder, not just sinks | ~17% |
+| `weak_sync=false` | ~33% |
+
+Both move the intervening evaluation *towards* what an explicit sync does, and
+both reduce the failure. So the candidate is: **the same Var evaluated in a wide
+batch yields garbage, and evaluated in a narrow one yields the right answer** --
+which puts it back in the batch planner (`count_fuse`, `var_fused`, the
+shared-recompute machinery), the same code as section 47's `fuse_op_limit`.
+
+This is a synthesis of measurements, not a verified mechanism, and neither lever
+took the failure to zero -- so something in the wide-batch path is still
+unaccounted for. It is the most specific candidate this investigation has
+produced and it is where the next attempt should start.
+
 **Narrowing the window, and one trap inside it.** With "evaluate early, right;
 evaluate late, wrong" established, the remaining span is: the quantiser returns
 -> `DiffusionOutput` holds the tensor with a *deferred* `post_process_func` ->
