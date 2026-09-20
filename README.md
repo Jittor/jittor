@@ -295,12 +295,14 @@ needs -- is maintained in one place:
 按顺序编排的完整课程（读什么、什么顺序、每篇需要什么前置）维护在唯一一处：
 **[examples/notebooks/README.md](examples/notebooks/README.md)**。
 
-Beginners start with the four-part 60-minute Chinese introduction; readers who
-already know another framework start with `basics`, then `device_placement`,
-then `example`.
+Beginners start with `getting_started`, which goes from installation to training on
+CPU alone. From there, pick one of two tracks: keep writing native Jittor, or use
+the PyTorch-compatible front end (`torch_compat`, then `torch_compat_migration`)
+so existing `torch` code runs unchanged.
 
-零基础从「60 分钟入门」四篇开始；已有其它框架经验的从 `basics`、
-`device_placement`、`example` 三篇入手。
+零基础从 `getting_started` 开始，它从安装一路讲到训练，全程 CPU 可跑完。之后按背景选
+一条主线：继续用原生 Jittor，或走 PyTorch 兼容线（`torch_compat`，再读
+`torch_compat_migration`），让已有的 `torch` 代码不改一行跑在 Jittor 上。
 
 ```bash
 python -m pip install -r requirements/examples.txt

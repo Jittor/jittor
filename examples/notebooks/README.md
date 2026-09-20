@@ -1,36 +1,34 @@
 # Jittor 教程
 
-这里是可执行教程的唯一权威来源。每篇都是 MyST Markdown，由 Jupytext 生成 notebook；
-**生成物不进仓库**。
+这里是可执行教程的唯一权威来源。每篇都是 **MyST Markdown**，由 Jupytext 生成
+notebook；**生成物（`.ipynb`）不进仓库**，一律写到仓库之外。
 
-下面是一条有顺序的学习路径。每篇都注明它教什么、需要什么前置，以及是否需要显卡。
+下面是一条有顺序的学习路径。每篇都注明它教什么、需要什么前置、是否需要显卡。
+
+---
 
 ## 从哪开始
 
-有两条入门线，覆盖的内容有重叠，按你的背景选一条即可：
+**只有一个入口**：[从零开始：装好、跑通、训练第一个模型](getting_started.md)。
+它从安装讲到训练，全程 CPU 可跑完，不需要任何深度学习背景。
 
-* **零基础**（没写过深度学习代码）→ 走「60 分钟入门」四篇，从安装一路到 MNIST。
-* **有 PyTorch 等框架经验**→ 直接走下面的「主线」，它假设你懂张量和训练循环，
-  只讲 Jittor 与它们的差异。
+跑完这一篇之后，按你的背景选一条主线：
 
-两条线都走完不会浪费，但没有必要。
+* **继续用原生 Jittor**（默认）→ 走下面的「第一线：原生 Jittor」。
+* **手上已有 PyTorch 代码** → 走「第二线：PyTorch 兼容」，让你的 `torch` 代码不改一行
+  跑在 Jittor 上。
 
-### 60 分钟入门（零基础，中文）
+两条线可以都走，但**先走完一条**再换，混着读容易把两套设备模型和优化器语义记串。
 
-| 教程 | 教什么 |
-| --- | --- |
-| [0 介绍与安装](60分钟快速入门Jittor/计图入门教程%200%20---%20介绍与安装.md) | 装好、跑通第一行代码 |
-| [1 基本概念](60分钟快速入门Jittor/计图入门教程%201%20---%20基本概念.md) | Var 的创建、形状、运算 |
-| [2 训练一个线性回归](60分钟快速入门Jittor/计图入门教程%202%20---%20如何训练一个简单线性回归.md) | 完整训练循环的最小形态 |
-| [3 解决一个实际问题](60分钟快速入门Jittor/计图入门教程%203%20---%20尝试解决一个实际问题.md) | MNIST 手写数字识别 |
+---
 
-## 主线
+## 第一线：原生 Jittor
 
 ### 一、基础
 
 | 教程 | 教什么 | 需要显卡 |
 | --- | --- | --- |
-| [算子与 Var](basics.md) | Jittor 的两个核心概念；异步计算与 `sync` | 否 |
+| [算子与 Var](basics.md) | 两个核心概念；异步计算与 `sync` | 否 |
 | [设备与驻留](device_placement.md) | 数据到底在哪；全局 `use_cuda` 与 per-tensor 的差异；**读一个设备张量会把它搬走** | 部分小节需要 |
 | [模型定义与训练](example.md) | `Module`、参数、优化器、完整训练循环 | 否 |
 
@@ -77,27 +75,75 @@ PyTorch 不同，不先弄清楚，后面的性能问题会归因到错误的地
 
 配套的可运行 Web 示例在 [`examples/gan/`](../gan/README.md)。
 
+---
+
+## 第二线：PyTorch 兼容
+
+这条路讲的是「不重写代码」：激活兼容层之后，PyTorch 的 API 由 Jittor 实现。
+
+| 教程 | 教什么 | 需要显卡 |
+| --- | --- | --- |
+| [用 PyTorch API 写 Jittor](torch_compat.md) | 怎么激活；激活后张量/模型/自动求导怎么用；设备与混合精度 | 部分小节需要 |
+| [把已有 PyTorch 脚本迁到 Jittor](torch_compat_migration.md) | 同一计算两种写法的数值对照；迁移时必须改的四处 | 否 |
+
+原生写法与兼容写法的对照速记：
+
+| | 原生 Jittor | PyTorch 兼容层 |
+| --- | --- | --- |
+| 前向方法名 | `execute` | `forward` |
+| 训练一步 | `optim.step(loss)` | `zero_grad()` / `backward()` / `step()` |
+| 设备 | 全局 `jt.flags.use_cuda` | 全局，或按 PyTorch 语义 `.cuda()` |
+| 入口 | `import jittor as jt` | 先 `activate()` 再 `import torch` |
+
+生态库（transformers / diffusers / PEFT 等）的接入方式与已验证结论，见维护者文档
+`docs/compatibility/torch.md`。
+
+---
+
 ## 在本地打开
+
+### 1. 装教程工具链
 
 ```bash
 python -m pip install -r requirements/examples.txt
 ```
 
-notebook 生成到仓库外，避免在工作区里留下产物：
+### 2. 把 Markdown 源生成 notebook
+
+生成物写到仓库之外，避免在工作区留下 `.ipynb`：
 
 ```bash
 STATE="${JITTOR_LAB_ROOT:-../jittor-lab}/_state/notebooks"
 mkdir -p "$STATE"
+
+# 只生成一篇
 python -m jupytext --to ipynb \
-  --output "$STATE/basics.ipynb" examples/notebooks/basics.md
+  --output "$STATE/getting_started.ipynb" examples/notebooks/getting_started.md
+
+# 或者一次生成全部（保留目录结构）
+cp -R examples/notebooks/. "$STATE/"
+find "$STATE" -type f -name '*.md' ! -name README.md -print0 \
+  | xargs -0 -n1 python -m jupytext --to ipynb
+```
+
+### 3. 启动 Jupyter
+
+```bash
 python -m notebook --ServerApp.root_dir="$STATE"
 ```
 
-校验全部源文件并执行离线 CPU 冒烟教程：
+在浏览器里打开刚生成的 `.ipynb` 即可。第一次执行代码单元会比之后慢——那是 Jittor 在
+即时编译算子；第二次就快了。
+
+### 4. 离线校验（维护者）
+
+生成、静态契约与离线 CPU 冒烟一次跑完：
 
 ```bash
 python -m nox -s tutorials
 ```
+
+---
 
 ## 写教程的约定
 
@@ -109,6 +155,9 @@ notebook 单元格用这些执行标签：
 - `long-running`：训练或其它昂贵操作。
 - `interactive`：产生交互式或帮助类输出，不适合冒烟运行。
 - `skip-execution`：不纳入仓库维护的 CPU 冒烟测试。
+
+带 `network`/`cuda`/`long-running` 的单元格**必须同时带 `skip-execution`**；带
+`skip-execution` 的单元格**必须**给出一个原因标签。
 
 生成的 notebook 不得带有已保存的输出或执行计数。MyST 源里不得出现机器相关的
 缓存、home 或环境路径。

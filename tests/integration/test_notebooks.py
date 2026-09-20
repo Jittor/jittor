@@ -24,24 +24,36 @@ _TOPICS = (
     "device_placement",
     "diffusion",
     "example",
+    "getting_started",
     "gpt2_training",
     "lora",
     "meta_op",
     "mixed_precision",
     "profiler",
     "resnet_training",
+    "torch_compat",
+    "torch_compat_migration",
     "transformer",
     "vit_training",
-    "60分钟快速入门Jittor/计图入门教程 0 --- 介绍与安装",
-    "60分钟快速入门Jittor/计图入门教程 1 --- 基本概念",
-    "60分钟快速入门Jittor/计图入门教程 2 --- 如何训练一个简单线性回归",
-    "60分钟快速入门Jittor/计图入门教程 3 --- 尝试解决一个实际问题",
 )
 
 _SMOKE_TOPICS = (
-    "basics", "device_placement", "example", "meta_op", "custom_op", "profiler",
-    "resnet_training", "transformer", "diffusion", "lora",
-    "vit_training", "gpt2_training", "mixed_precision",
+    "getting_started",
+    "basics",
+    "device_placement",
+    "example",
+    "meta_op",
+    "custom_op",
+    "profiler",
+    "resnet_training",
+    "transformer",
+    "diffusion",
+    "lora",
+    "vit_training",
+    "gpt2_training",
+    "mixed_precision",
+    "torch_compat",
+    "torch_compat_migration",
 )
 
 _MACHINE_PATHS = (
@@ -138,8 +150,7 @@ def test_notebook_sources_are_complete_clean_and_portable():
             assert marker not in markdown
 
     assert (root / "figs" / "mop.svg").is_file()
-    assert (root / "60分钟快速入门Jittor" / "mnist.png").is_file()
-    assert (root / "60分钟快速入门Jittor" / "jittor-star.png").is_file()
+    assert (root / "figs" / "mnist.png").is_file()
 
 
 @pytest.mark.structure
