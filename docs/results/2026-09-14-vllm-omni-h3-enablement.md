@@ -4750,6 +4750,34 @@ the install prints a line naming the mode, and the verification script refuses
 to run if that line is absent. A workaround that can fail to install is worse
 than none, because it fails quietly and the measurement still returns numbers.
 
+**How far the sync story actually goes.** Forcing evaluation of the quantiser's
+input is enough on its own: `video.sync(True)` -- no host copy, no pointer read,
+no change to the arithmetic -- is 6/6 clean. So the defect is that the Var is
+not evaluated when its consumers run, and everything that worked (`.cpu()`,
+`data_ptr()`) worked because `VarHolder::storage_address()` is `sync(true,
+false)` underneath.
+
+`jt.sync_all()` does not help, and `var_holder.cc` says why: it sweeps only
+holders whose Var has **no output edges**.
+
+```cpp
+if (v->var->flag(VarFlags::_kept)) continue;
+if (!v->var->_outputs.size())        // sinks only
+    vars.push_back(v->var);
+```
+
+The pipeline already calls `jt.sync_all(True)` before the quantiser, so that
+filter is why its own barrier misses the Var. Removing the filter was tried:
+**it takes the failure from ~70% of 256x256 decodes to ~17% (5/6 clean), and no
+further.** So the sink-only sweep is *part* of why the Var escapes evaluation
+and not the whole of it -- there is another path, and it has not been found.
+
+The change was reverted rather than shipped. A global sync-semantics change
+that costs every `sync_all` and still leaves one decode in six broken is worse
+than none: it would read as "this area has been handled" while the defect is
+still there. The 17% figure is recorded here so the next attempt knows where
+this road ends.
+
 **What has been ruled out**, each by measurement: `fuse_op_limit`,
 `vae_use_tiling` (a dead attribute here), `flow_shift`, `max_model_len`,
 sequence parallelism (`--usp` is a size; 1 already means off), server lifetime,
