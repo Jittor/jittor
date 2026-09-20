@@ -4848,11 +4848,17 @@ return v.permute(0, 2, 3, 4, 1).to(dtype=torch.uint8,
 | before 1 | 8/8 clean |
 | after 1 | 6/6 clean |
 | after 2 | 6/6 clean |
+| after 3 (on the return value) | 6/6 clean |
 | nowhere | ~70% noise |
 
-Every position works, so the failure is in statement 3: that call does not
-force its input to be evaluated, and anything that does makes the decode
-correct.
+**All four positions work**, which is a different conclusion from the one this
+section first drew. It is not that statement 3 breaks the data -- no statement
+does. The whole chain is simply never evaluated, and a sync anywhere on it
+forces that evaluation; without one, something downstream reads the result's
+memory while it is still an unevaluated graph. The defect is on the path from
+this function's return value to the encoder, which contains
+`.detach().cpu()` and `.numpy()` -- both of which should force evaluation and
+evidently do not on this path.
 
 **Which made `memory_format` look like the answer, and it is not.** `_to`
 validates `memory_format` at the top and then never uses it, so
