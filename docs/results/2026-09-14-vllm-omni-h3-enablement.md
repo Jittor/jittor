@@ -4830,6 +4830,43 @@ asks for it. What matters is that the decode output's shape,
 `[1,3,124,256,256]`, is **not among them**. The classification is correct for
 the Var that goes bad.
 
+**Bisecting by sync position, which is the one probe that does not repair what
+it measures.** Reading the tensor fixes the run, so no value-reading probe can
+see the failure. But *syncing* is known to fix it, so moving that same sync one
+statement later each time localises where the data stops being good, without
+reading anything. The quantiser is three statements:
+
+```python
+v = video.detach().float()                    # 1
+v.clamp_(0, 1).mul_(255).round_()             # 2
+return v.permute(0, 2, 3, 4, 1).to(dtype=torch.uint8,
+                                   memory_format=torch.contiguous_format)  # 3
+```
+
+| sync placed | result |
+| --- | --- |
+| before 1 | 8/8 clean |
+| after 1 | 6/6 clean |
+| after 2 | 6/6 clean |
+| nowhere | ~70% noise |
+
+Every position works, so the failure is in statement 3: that call does not
+force its input to be evaluated, and anything that does makes the decode
+correct.
+
+**Which made `memory_format` look like the answer, and it is not.** `_to`
+validates `memory_format` at the top and then never uses it, so
+`.to(dtype=..., memory_format=contiguous_format)` returns a cast without the
+layout change torch guarantees. Implemented -- `_api_contiguous` already exists
+and does the right thing -- and tested with every workaround off: **4/6 noise,
+unchanged**. The reason it changes nothing here is concrete rather than
+mysterious: jittor's `permute` already yields a contiguous Var
+(`_storage_is_contiguous()` is true straight after it), so there is no strided
+view for `contiguous_format` to fix. The change was reverted rather than
+shipped as an unrelated semantic fix in the middle of a hunt -- but
+`memory_format` being accepted and ignored is a real divergence from torch and
+deserves its own fix and test.
+
 **An instrumentation attempt that answered nothing, recorded because it cost
 a cycle.** The next question was whether the operator producing the decode's
 output runs at all on a failing request -- if it never runs, nothing wrote that
