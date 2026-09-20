@@ -4733,7 +4733,22 @@ investigation that jittor's own machinery flagged, and the checker turns the
 silent corruption into a hard error.
 
 **Deployment state: worked around, not fixed.** `serve-vllmomni.sh` exports
-`H3_PREP_MODE=copy`. The root cause is unknown.
+`H3_PREP_MODE=copy`, verified through the production start path with the install
+line checked *before* the run: 6/6 clean at 256x256 and 2/2 at 512x512, against
+~70% noise on the same path unpatched. The root cause is unknown, so this is a
+bandage on a framework defect that is still there for anyone else who hits it.
+
+**The workaround's own trap, which cost three wasted rounds.** The swap lives in
+an auto-imported `sitecustomize.py`, and three separate runs were scored against
+a configuration that had silently not installed: once because the swap was gated
+behind a *tracing* flag rather than its own, once because the gate compared
+`H3_DECODE_SYNC == "1"` while the value passed was `cpu`, and once because
+`H3_PREP_MODE` was not listed in the top-level gate at all. Each time the run
+produced plausible numbers for the unpatched code and they were read as results.
+The gate is now a single `any(...)` over every switch that changes behaviour,
+the install prints a line naming the mode, and the verification script refuses
+to run if that line is absent. A workaround that can fail to install is worse
+than none, because it fails quietly and the measurement still returns numbers.
 
 **What has been ruled out**, each by measurement: `fuse_op_limit`,
 `vae_use_tiling` (a dead attribute here), `flow_shift`, `max_model_len`,
