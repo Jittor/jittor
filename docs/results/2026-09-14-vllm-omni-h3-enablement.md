@@ -4766,8 +4766,13 @@ if (!v->var->_outputs.size())        // sinks only
     vars.push_back(v->var);
 ```
 
-The pipeline already calls `jt.sync_all(True)` before the quantiser, so that
-filter is why its own barrier misses the Var. Removing the filter was tried:
+The pipeline calls `jt.sync_all(True)` **160 times per request** before the
+quantiser -- counted, not assumed -- and the Var is still unevaluated when the
+quantiser runs. So "the pipeline's own barrier misses it because of the sink
+filter" is not established: it would require the Var to have output edges at
+that moment, and Python exposes neither `_outputs` nor `is_finished` on a Var,
+so that cannot be checked without C++ instrumentation. What is measured is only
+the effect. Removing the filter was tried:
 **it takes the failure from ~70% of 256x256 decodes to ~17% (5/6 clean), and no
 further.** So the sink-only sweep is *part* of why the Var escapes evaluation
 and not the whole of it -- there is another path, and it has not been found.
