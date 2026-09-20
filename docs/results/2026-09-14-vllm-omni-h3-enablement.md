@@ -4819,6 +4819,32 @@ evaluated *in passing*, and none of them makes it happen. Both were reverted.
 A change that improves a failure rate without addressing its cause is the worst
 kind to ship -- it reads as "handled" and charges every caller for it.
 
+**`var_fused` ruled out for the Var that matters.** The invariant worth
+checking is that a Var somebody still holds must end up in memory, since
+`FusedOp::var_stays_in_memory` is `var_fused == 1` exactly and anything else is
+never written. Instrumented in `build_exec_plan` after `count_fuse`, the
+invariant is violated **2275 times per run** -- held vars classified 0 include
+the attention `[1,32,1797,64]` (1512 of them) and `[1,1797,2048]` (735). That
+is not in itself wrong: a fused-away Var is materialised later when something
+asks for it. What matters is that the decode output's shape,
+`[1,3,124,256,256]`, is **not among them**. The classification is correct for
+the Var that goes bad.
+
+**A third hole in the checker, and it casts doubt backwards.** One run scored
+`ok` at `mean 41.4, std 14.3, max 67` -- rendered, it is a nearly black,
+degraded frame, not a picture. So the checker has now passed three distinct
+failures: all-zero frames, a file with no decodable frames, and this. Every
+"N/N clean" in this section was produced by a checker that only recognised
+uniform noise, which means the failure rates quoted for each hypothesis are
+**lower bounds**, and comparisons between them are only as good as the
+assumption that degraded-but-not-noisy output was equally rare in each arm --
+which was never checked.
+
+The workaround was re-verified against a checker that flags noise, no variance,
+no decodable frames *and* darkness: **8/8 clean**, std 83-107 and mean 132-188,
+nowhere near the dark threshold. That claim survives. The others were not
+re-run.
+
 **A second hole in the checker.** Two of those runs produced `adj=nan`: the file
 had no decodable frames at all, and the checker scored them `ok` because it only
 knows `NOISE` (high adjacent-pixel delta) and `BLANK` (low variance). That is
