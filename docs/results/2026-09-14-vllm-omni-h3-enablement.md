@@ -4958,6 +4958,49 @@ Bracketing that, with every arm gate-verified and its hook counted:
 | the post-process (`postsync`) | 2/3 **failed** |
 | nowhere | ~70% failed |
 
+**A fourth checker hole, and this one is in jittor's own.** If the finding is
+that a pending graph goes bad while it waits, the mechanism to look for is its
+inputs being released early -- a liveness accounting bug. `check_graph=1` is the
+tool for that, and its dangling-node sweep declines to look at exactly the nodes
+in question:
+
+    for (auto& kv : lived_nodes) {
+        ...
+        if (!visited.count(node) && !node->flags.get(NodeFlags::_released)) {
+            if (node->is_var() && node->_inputs.size())
+                continue;                       // <-- every computed Var
+            LOGf << "ERROR dnode" << ...;
+        }
+    }
+
+A Var that is live, unreachable from any holder, and unreleased is reported only
+when it has **no inputs**. Every Var a decode produces has inputs, so the one
+class of leak that would explain this bug is the one class the sweep skips. That
+is also why the only thing it has ever reported here is the edge-less
+audio-shaped orphan noted earlier -- not because nothing else leaks, but because
+nothing else is eligible to be reported.
+
+Worth separating from the H3 question: this is a defect in the checker on its
+own terms, of the same kind as the three scoring holes earlier in this section,
+and it is the reason those `check_graph=1` runs read as "all clear".
+
+**Two caveats on those numbers, both mine.** The `w_all` arm scores
+`adj=11.8` on all three clips, while runs called clean earlier in this section
+score `adj=1.6-3.6`. Those earlier runs came from a different harness and may
+have been 512x512; adjacent-pixel delta rises as resolution falls, so the two
+are not comparable, and the `adj>20` threshold was calibrated on the *other*
+harness. Until `varsync` is run through this harness at 256x256, "ok" here rests
+on a borrowed scale. The three `w_all` clips agreeing to within 0.13 is evidence
+they are a real, stable picture rather than noise, but it is not the control.
+
+And the failing arms keep showing a pattern retracted earlier in this section:
+request #1 is clean and the later ones fail (`ps3`: ok/NOISE/NOISE;
+`postsync2`: ok/DARK/NOISE). It is not universal -- `w_all` is clean 3/3 -- but
+where the failure appears it has never been on the first request after a
+restart. If the damage needs prior state, a 3-request arm carries two effective
+samples, not three, and every failure rate quoted in this section is computed
+over runs that include a free pass.
+
 So the damage happens between the quantiser's return and the post-process. What
 is in that gap is `videos.append(out)`, `audios.append(audio)`, the
 list-to-tensor step, the `DiffusionOutput` construction, and the engine
