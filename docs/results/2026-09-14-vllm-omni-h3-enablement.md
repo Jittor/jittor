@@ -4794,6 +4794,35 @@ parked Var (`location=device`, metadata consistent), and the component offload
 (touching the tensor *before* the offload fails; *after* it works, which is
 backwards for that story).
 
+**Three more ruled out, from inside the C++ this time.**
+
+* *Memory reuse.* `use_nfef_allocator=1` (never free, so nothing is recycled)
+  cannot run this model at all -- `var.cc:261: Allocator cannot represent
+  shared strided storage` -- so the reuse hypothesis is untestable by that
+  route rather than answered. The error is worth its own note: it means this
+  graph contains vars that *share strided storage*, which is the next item.
+* *Share ordering.* `var.cc`'s `share_with` computes a var's pointer from its
+  source's (`mem_ptr = x->mem_ptr + share_offset`), so a share established
+  before the source has produced its data would leave the sharer pointing at
+  memory nothing will ever write -- and nothing in `executor.cc`,
+  `exec_plan.cc` or `var_holder.cc` references the share group, so that
+  ordering is enforced nowhere. Instrumented at the point the share is
+  consumed and run against the failing decode: **zero** shares with an
+  unfinished source. Not it.
+* *A severed graph at `detach`.* The quantiser's first statement is
+  `video.detach()`, and a detached var with no producer could only read stale
+  memory. But `detach` is `make_clone` plus `set_stop_grad`, i.e. a `CloneOp`
+  whose input is the original, so the dependency survives. Not it either.
+
+**Where this stopped.** Seventeen hypotheses, each tested and each wrong. The
+one that measurably moved the failure rate -- sweeping every holder in
+`sync_all` -- took ~70% to ~17% and was reverted for being a global
+sync-semantics change that does not fix the bug. Everything that fully works
+routes through `VarHolder::sync(true, false)` on that one Var. Why nothing else
+evaluates it is not known, and answering it needs a debug build that can trace
+one buffer from allocation to read -- which is a different class of tooling
+than anything used here.
+
 **Six standalone reproductions, none triggering:** a lazy graph at the real
 shape, the same slice/`contiguous()`/`float()`/in-place sequence, live aliases
 held across the chain, `assign` probed directly, the quantiser in isolation in
