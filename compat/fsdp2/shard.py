@@ -407,6 +407,37 @@ def _unshard_module_params(module):
         return _unshard_module_params_impl(module)
 
 
+def _compute_shard(state, master_shard):
+    """Cast a temporary collective input, preserving the optimizer's shard."""
+    policy = getattr(state, "mp_policy", None)
+    target = getattr(policy, "param_dtype", None)
+    if target is None:
+        return master_shard
+    name = _jittor_dtype_name(target)
+    return (master_shard if _jittor_dtype_name(master_shard.dtype) == name
+            else master_shard.cast(name))
+
+
+def _cast_floating_tree(value, target):
+    """Convert floating tensors inside forward inputs/outputs without detaching."""
+    if isinstance(value, jt.Var):
+        source = _jittor_dtype_name(value.dtype)
+        return value.cast(target) if "float" in source and source != target else value
+    if isinstance(value, tuple):
+        values = tuple(_cast_floating_tree(item, target) for item in value)
+        if hasattr(value, "_fields"):
+            return type(value)(*values)
+        return values if type(value) is tuple else type(value)(values)
+    if isinstance(value, list):
+        values = [_cast_floating_tree(item, target) for item in value]
+        return values if type(value) is list else type(value)(values)
+    if isinstance(value, dict):
+        values = {key: _cast_floating_tree(item, target)
+                  for key, item in value.items()}
+        return values if type(value) is dict else type(value)(values)
+    return value
+
+
 def _unshard_module_params_impl(module):
     state = getattr(module, "_fsdp_state", None)
     if state is None or not getattr(state, "true_fsdp_initialized", False):
@@ -414,7 +445,9 @@ def _unshard_module_params_impl(module):
     if getattr(state, "true_fsdp_unsharded", False):
         return module
     if getattr(state, "true_fsdp_flat", False):
-        full_flat = common._all_gather_shards(state.true_fsdp_flat_shard, getattr(state, "shard_group", None))
+        full_flat = common._all_gather_shards(
+            _compute_shard(state, state.true_fsdp_flat_shard),
+            getattr(state, "shard_group", None))
         state.true_fsdp_flat_full_param = full_flat
         for entry in state.true_fsdp_params:
             full = common._slice_flat(full_flat, entry.flat_offset, entry.numel).reshape(entry.shape)
@@ -428,7 +461,9 @@ def _unshard_module_params_impl(module):
             object.__setattr__(entry.owner, entry.attr, full)
     else:
         for entry in state.true_fsdp_params:
-            gathered = common._all_gather_shards(entry.shard, getattr(state, "shard_group", None))
+            gathered = common._all_gather_shards(
+                _compute_shard(state, entry.shard),
+                getattr(state, "shard_group", None))
             full_flat = gathered if entry.padded_numel == entry.numel else common._slice_flat(gathered, 0, entry.numel)
             full = full_flat.reshape(entry.shape)
             entry.full_param = full
@@ -545,6 +580,12 @@ def _execute_with_true_fsdp(module, orig_execute, *args, **kwargs):
     setattr(state, _EXECUTE_DEPTH_ATTR, depth + 1)
     frozen_forward_synced = False
     try:
+        policy = getattr(state, "mp_policy", None)
+        param_dtype = getattr(policy, "param_dtype", None)
+        if param_dtype is not None and getattr(policy, "cast_forward_inputs", True):
+            target = _jittor_dtype_name(param_dtype)
+            args = _cast_floating_tree(args, target)
+            kwargs = _cast_floating_tree(kwargs, target)
         _unshard_module_params(module)
         try:
             out = orig_execute(*args, **kwargs)
@@ -559,6 +600,9 @@ def _execute_with_true_fsdp(module, orig_execute, *args, **kwargs):
                 if roots:
                     jt.submit_pending(*roots, device_sync=True)
                 frozen_forward_synced = True
+            output_dtype = getattr(policy, "output_dtype", None)
+            if output_dtype is not None:
+                out = _cast_floating_tree(out, _jittor_dtype_name(output_dtype))
             return out
         finally:
             if getattr(state, "reshard_after_forward", True):

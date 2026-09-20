@@ -690,7 +690,8 @@ class TestFSDP2Compat(unittest.TestCase):
             [entry.shard for entry in entries], lr=0.01, weight_decay=0.2)
 
         def local_sync(current_state, grads, **kwargs):
-            return [grad.reshape(entry.shard.shape).stop_grad()
+            self.assertIsNone(grads[1])
+            return [grad.reshape(entry.shard.shape).stop_grad() if grad is not None else None
                     for entry, grad in zip(current_state.true_fsdp_params, grads)]
 
         with mock.patch.object(

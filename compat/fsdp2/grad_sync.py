@@ -39,11 +39,18 @@ def sync_sharded_grads(module, loss=None, *, divide_by_world_size=True):
     if loss is None:
         raise ValueError("sync_sharded_grads() requires a loss for true FSDP2")
     has_forward_params = all(getattr(entry, "full_param", None) is not None
-                             for entry in state.true_fsdp_params)
+                             for entry in state.true_fsdp_params
+                             if getattr(entry, "requires_grad", True))
     if not getattr(state, "true_fsdp_unsharded", False) and not has_forward_params:
         shard._unshard_module_params(module)
-    full_params = [entry.full_param for entry in state.true_fsdp_params]
+    full_params = [entry.full_param for entry in state.true_fsdp_params
+                   if getattr(entry, "requires_grad", True)]
+    if not full_params:
+        return [None] * len(state.true_fsdp_params)
     full_grads = jt.grad(loss, full_params)
+    grads = iter(full_grads)
+    full_grads = [next(grads) if getattr(entry, "requires_grad", True) else None
+                  for entry in state.true_fsdp_params]
     sharded = _sync_sharded_grads_from_full_grads(
         state, full_grads, divide_by_world_size=divide_by_world_size)
     # The gathered parameters have served their purpose; holding them is what
@@ -54,18 +61,31 @@ def sync_sharded_grads(module, loss=None, *, divide_by_world_size=True):
 
 @common._state_frontend
 def _sync_sharded_grads_from_full_grads(state, full_grads, *, divide_by_world_size=True):
+    policy = getattr(state, "mp_policy", None)
+    reduce_dtype = getattr(policy, "reduce_dtype", None)
+    if reduce_dtype is None:
+        reduce_dtype = getattr(policy, "param_dtype", None)
+    if reduce_dtype is not None:
+        full_grads = [grad.cast(reduce_dtype) if grad is not None and grad.dtype != reduce_dtype
+                      else grad for grad in full_grads]
     replicate = getattr(state, "replicate_group", None)
     if replicate is not None and replicate.size() > 1:
         full_grads = [replicate._all_reduce(grad, "mean" if divide_by_world_size
-                                          else "sum") for grad in full_grads]
+                                          else "sum") if grad is not None else None
+                      for grad in full_grads]
     if getattr(state, "true_fsdp_flat", False):
         flat_grad = common._pad_flat(
-            jt.concat([common._flatten_var(grad) for grad in full_grads], dim=0),
+            jt.concat([common._flatten_var(
+                grad if grad is not None else common._zeros_like_shape(
+                    entry.shard, entry.shape, dtype=reduce_dtype or entry.dtype))
+                for entry, grad in zip(state.true_fsdp_params, full_grads)], dim=0),
             state.true_fsdp_flat_padded_numel,
         )
         flat_shard_grad = common._reduce_scatter_padded(flat_grad, getattr(state, "shard_group", None))
         if divide_by_world_size:
             flat_shard_grad = flat_shard_grad / max(int(state.true_fsdp_world_size), 1)
+        if flat_shard_grad.dtype != state.true_fsdp_flat_shard.dtype:
+            flat_shard_grad = flat_shard_grad.cast(state.true_fsdp_flat_shard.dtype)
         flat_shard_grad = flat_shard_grad.stop_grad()
         state.true_fsdp_last_flat_grad = flat_shard_grad
         sharded = [
@@ -81,15 +101,21 @@ def _sync_sharded_grads_from_full_grads(state, full_grads, *, divide_by_world_si
         return sharded
     sharded = []
     for entry, grad in zip(state.true_fsdp_params, full_grads):
+        if grad is None:
+            sharded.append(None)
+            continue
         flat = common._pad_flat(common._flatten_var(grad), entry.padded_numel)
         shard_grad = common._reduce_scatter_padded(flat, getattr(state, "shard_group", None))
         if divide_by_world_size:
             shard_grad = shard_grad / max(int(state.true_fsdp_world_size), 1)
+        if shard_grad.dtype != entry.shard.dtype:
+            shard_grad = shard_grad.cast(entry.shard.dtype)
         shard_grad = shard._mark_fsdp_param_var(
             shard_grad.stop_grad(), state, entry, "grad_shard")
         sharded.append(shard_grad)
     for grad in sharded:
-        object.__setattr__(grad, "_fsdp_norm_group", getattr(state, "shard_group", None))
+        if grad is not None:
+            object.__setattr__(grad, "_fsdp_norm_group", getattr(state, "shard_group", None))
     state.true_fsdp_last_grads = sharded
     return sharded
 
@@ -263,12 +289,15 @@ def collect_fsdp_full_params_for_backward(optimizers):
     targets = []
     for state in _fsdp_states_from_optimizers(optimizers):
         has_forward_params = all(getattr(entry, "full_param", None) is not None
-                                 for entry in state.true_fsdp_params)
+                                 for entry in state.true_fsdp_params
+                                 if getattr(entry, "requires_grad", True))
         if not has_forward_params:
             module = getattr(state, "true_fsdp_module", None)
             if module is not None:
                 shard._unshard_module_params(module)
         for entry in state.true_fsdp_params:
+            if not getattr(entry, "requires_grad", True):
+                continue
             full = getattr(entry, "full_param", None)
             if full is not None:
                 targets.append(full)
@@ -289,6 +318,10 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
         full_grads = []
         local_used = []
         for entry in state.true_fsdp_params:
+            if not getattr(entry, "requires_grad", True):
+                local_used.append(False)
+                full_grads.append(None)
+                continue
             full = getattr(entry, "full_param", None)
             if full is not None:
                 full_id = id(full)
