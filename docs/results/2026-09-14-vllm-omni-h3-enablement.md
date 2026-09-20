@@ -4664,11 +4664,15 @@ which turned noise into an all-zero image -- and the checker passed it, because
 that checker only flagged a *high* adjacent-pixel delta and a blank frame has
 the lowest possible one. Silence is not success.
 
-**What the tracer was hiding.** Without any observer the behaviour is not 50/50
-at all. It is: **the first request after the server starts is clean and every
-later one is noise**, reproduced identically across independent runs. A
-near-deterministic pattern was being read as a coin flip for most of a day
-because the instrument was part of the circuit.
+**What the tracer was hiding -- and a second thing it was not.** Two
+observer-free runs of the shipped configuration both read "first request clean,
+every later one noise", which looked like a near-deterministic pattern that the
+instrument had been smearing into a coin flip. A third run of the same
+configuration came back 3 clean then 3 noisy, so that reading does not hold
+either: this is genuinely non-deterministic, and two matching runs were not
+enough to say otherwise. The honest statement is only that removing the observer
+raises the failure rate sharply -- roughly half with a tracer attached, and 3 to
+5 of every 6 without one.
 
 **Ruled out, each by measurement:** `fuse_op_limit` (section 47's bound -- the
 decode is bit-identical at 32x32, 16x16 and 8x8 spatial latents with the bound
