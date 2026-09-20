@@ -58,6 +58,11 @@ oracle 产出权重和参考值，shim 从同一份权重重算。
 | **显存** | 两侧都问运行时自己的 per-device 计数器：live（torch `memory_allocated` / jittor `device_memory_used`）与 pool（`memory_reserved` / `device_memory_reserved`） | 两个口径分别比；**绝不把 reserved 对 allocated**；whole-run 峰值与稳态每步分开报 | live MiB、pool MiB |
 | **速度** | 重复交错采样，**取最小值** | 记录 ratio；**PR 门禁只报告不断言墙钟** | ratio |
 
+`verify_repo.py` 的 peak/pool 两列都取自运行时自己的 high-water（jittor 侧
+`get_peak_device_used_memory`，`f1a498c7` 起）。**不**是 python 线程采样出来的最大值：
+采样线程只在解释器释放 GIL 时才跑，快 step 上两列都会少报（peak 实测 3406.5 对 7272 MiB，
+小探针的 pool 实测 512 对 1536 MiB），而且会把同一个 step 的「峰值」读成两种不同的值。
+
 三条容易踩的口径：
 
 1. **精度的相对误差别按数组自己的量级除。** 一个接近 0 的梯度会报出 ~1 的相对误差，
@@ -72,8 +77,12 @@ oracle 产出权重和参考值，shim 从同一份权重重算。
    凭空放大——2026-09-19 的 transformers runbook 就是这么写的，见其「显存列是旧口径」。
    同样**不要**用 `jt.core.get_peak_allocator_used_memory()` 顶替：名字像 live high-water，
    实际是**主机+设备**（`memory_profiler.cc` 不过滤 CUDA；实测 512 MiB CPU Var 推 512、
-   再加 256 MiB CUDA Var 推到 768），且没有复位接口。能并列的只有 `device_memory_used`
-   与 CUDA-only 的 `total_cuda_used`。
+   再加 256 MiB CUDA Var 推到 768），且没有复位接口。峰值要问
+   `jt.core.get_peak_device_used_memory(N)`——它只累加该设备各池的 `used`，是
+   `max_memory_allocated(N)` 的真正对应物。**不要**在 python 里轮询
+   `device_memory_used` 当峰值：采样线程只在解释器释放 GIL 时（step 内即 device wait
+   时）才跑，快 step 上只能抓到中间值（8 层 llama 实测采样 3406.5 MiB、运行时自己的
+   high-water 7272 MiB、torch 6655 MiB）。
 3. **whole-run 峰值会掩盖「第一步瞬态」。** 两侧都是 high-water，jittor 的 pool 还不归还
    CUDA。`large_transformers_bert` 修完 grad 身份 bug 后，稳态每步只差 1.11x，而 whole-run
    是 2.11x——差额全在第一次 backward / 第一个训练步。报显存时把稳态与首步分开写，

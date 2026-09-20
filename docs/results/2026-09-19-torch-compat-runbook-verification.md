@@ -127,6 +127,37 @@ tier（1.03–1.19x）才是可引用的形态。
 `max_memory_allocated` 并列**，能并列的只有 `device_memory_used` 与 CUDA-only 的
 `total_cuda_used`。
 
+### 补记（2026-09-20，`f1a498c7`）：上面缺的那个对应物补上了
+
+上面「能并列的只有 `device_memory_used`」是当时的状态——jittor 没有自己的
+`max_memory_allocated`。现在有了：`jt.core.get_peak_device_used_memory(N)`
+（`src/core/memory_profiler.h`），由 `MemoryProfiler::check()` 在每个 op 之后记录该设备
+各池 `used_memory` 之和的高水位。8 层 llama、seq 512、batch 4、fp32：
+
+| | 读数 |
+| --- | --- |
+| torch `max_memory_allocated` 高水位 | 6655 MiB |
+| jittor `get_peak_device_used_memory(0)` | **7272.6 MiB（1.09x）** |
+| jittor `device_memory_reserved(0)` | 7479 MiB |
+| python 轮询 `device_memory_used` 报的「step 峰值」 | 3406.5 MiB ← **不是峰值** |
+
+最后一行才是这次的教训：**峰值只能问运行时**。采样线程只在解释器释放 GIL 时（step 内
+即 device wait 时）才跑，48 s 的首步能让它采到真峰值，47 ms 的后续 step 只能采到中间
+值——于是同一个 step 出现 3406.5 / 7144.6 两种读数（4 次运行 2:2），还会凭空造出一个
+「首步 2x 瞬态」。四轴工具的 `jittor_peak_bytes` 此前就是这么采的，所以那个数不是 peak；
+`f1a498c7` 起改读上面的接口，接口缺失时直接报不可测。上表 1.09x 是两侧同形状直接测出
+来的，`verify_repo.py` 的各 case 尚未按新口径重跑。
+
+它和 host+device 那个 sibling 一样**没有复位接口**：读的是「自启用 profiling 以来的高
+水位」，要量某个阶段就把 `profile_memory_enable` 在该阶段开始时打开。回归在
+`tests/runtime/test_profiler.py::TestMemoryHighWater`。
+
+同一个成因还咬到了 pool 那一列：采样线程抢不到 GIL 就少读，5 步的小探针里它把
+`device_memory_reserved` 读成 512 MiB，而运行时当时持有 1536 MiB——三倍的少报（`f2ec8c5f`
+起工具在收尾时再并进一次运行时的读数；采样只会漏、不会凭空多，对 high-water 语义的 torch
+侧这是恒等变换）。结论一致：**显存读数要么问运行时，要么就说不可测**，谁都不要用「python
+线程看见的最大值」充当峰值。
+
 根因在 shim：`p.grad` 每一步都是新对象。torch 的 `zero_grad(set_to_none=False)` 就地
 清零已有张量、`AccumulateGrad` 也就地累加，所以一个训练循环里 `p.grad` 始终是同一个对象；
 shim 的 `_zero_grad` 用 `zeros_like` 重建、optimizer-free 的累加写成 `prev + gr`，两者都换

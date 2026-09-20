@@ -292,7 +292,10 @@ oracle 报 `torch.cuda.max_memory_allocated`（**活跃**字节，单卡），ji
 
 所以引用显存时要分开说：**稳态约 1.11x**，但**第一步峰值约 2.1x** 才是要留得下的预算。
 另外 `jt.core.get_peak_allocator_used_memory()` 名字像 live high-water，实际是**主机+设备**
-（`memory_profiler.cc:58` 不过滤 CUDA），不能与 torch 的 `max_memory_allocated` 并列。
+（`memory_profiler.cc:58` 不过滤 CUDA），不能与 torch 的 `max_memory_allocated` 并列；
+能与它并列的是 `jt.core.get_peak_device_used_memory(N)`（`f1a498c7` 新增，只累加该设备
+各池的 `used`）。**不要**在 python 里轮询 `device_memory_used` 当峰值：采样线程只在
+解释器释放 GIL 时运行，快 step 上抓不到峰值。
 
 
 ### 未跑与失败
