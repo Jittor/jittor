@@ -4696,11 +4696,61 @@ in-place result, aliased view -- all correct). None of them involve a component
 being moved off the device mid-graph, which is the piece the hypothesis above
 says matters.
 
-**Deployment state: still broken.** `serve-vllmomni.sh` exports
-`H3_PREP_OUTOFPLACE=1` and `shim-extra/sitecustomize.py` honours it, but that
-swap is now known not to fix anything, and for a while it was gated behind a
-*tracing* flag, so it had never actually run in the configuration it was
-credited for.
+**The one thing that works, and why it is not an explanation.** Touching the
+quantiser's input tensor once, before the shipped in-place code runs, gives
+22/22 clean decodes against a ~70% failure rate:
+
+```python
+_ = video.detach().float().cpu().numpy()   # discarded
+```
+
+`data_ptr()` alone does it too. `jt.sync_all()` does **not** -- which is the
+sharpest fact available: draining the global pending set leaves the failure in
+place, while touching this one tensor removes it. Whatever this Var is waiting
+for, it is not in the set that drains.
+
+That also explains why the defect survived six rounds of probing. Every probe
+reads the tensor, and reading it is the repair, so the instrument reports a
+healthy value and silently fixes the run it is measuring. Four "verified"
+fixes were scored that way before anyone checked whether a tracer was still
+attached.
+
+**A real defect found on the way, and it is not this one.** With
+`check_graph=1` and no Python-side probe at all, jittor's own checker fires:
+
+```
+graph.cc:89: ERROR dnode 0x7f0790071070 593216
+  Var(593216:1:1:1:i0:o0:s1:n1:g0,float32,,7f40e9000000)[2,8,165610,1,]
+```
+
+A live Var, no input or output edges, unreachable from any VarHolder and not
+`_released` -- an orphan the sweep cannot account for. It is the same Var every
+time (14 reports, one id, one address) and its 165,610-sample shape makes it
+audio, not video. A single persistent orphan does not explain an intermittent
+video corruption, so this is recorded as a separate leak rather than promoted
+to the cause. It is worth chasing on its own: it is the only thing in this
+investigation that jittor's own machinery flagged, and the checker turns the
+silent corruption into a hard error.
+
+**Deployment state: worked around, not fixed.** `serve-vllmomni.sh` exports
+`H3_PREP_MODE=copy`. The root cause is unknown.
+
+**What has been ruled out**, each by measurement: `fuse_op_limit`,
+`vae_use_tiling` (a dead attribute here), `flow_shift`, `max_model_len`,
+sequence parallelism (`--usp` is a size; 1 already means off), server lifetime,
+request index, the seed, in-place writes (out-of-place fails identically),
+missing synchronisation (three placements of `jt.sync_all()`, all fail),
+`assign` semantics (pending consumer, in-place result, aliased view -- all
+correct standalone), the permute-then-cast (bit-exact in both dtype paths), a
+parked Var (`location=device`, metadata consistent), and the component offload
+(touching the tensor *before* the offload fails; *after* it works, which is
+backwards for that story).
+
+**Six standalone reproductions, none triggering:** a lazy graph at the real
+shape, the same slice/`contiguous()`/`float()`/in-place sequence, live aliases
+held across the chain, `assign` probed directly, the quantiser in isolation in
+both dtype paths, and the whole sequence at 124 frames. The trigger needs more
+of the pipeline than the operator sequence.
 
 ## 47. The conv-bias fp16 fix costs 2x because the fuser recomputes without a bound
 
