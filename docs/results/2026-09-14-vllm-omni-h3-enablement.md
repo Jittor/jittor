@@ -4860,6 +4860,24 @@ this function's return value to the encoder, which contains
 `.detach().cpu()` and `.numpy()` -- both of which should force evaluation and
 evidently do not on this path.
 
+**Narrowing the window, and one trap inside it.** With "evaluate early, right;
+evaluate late, wrong" established, the remaining span is: the quantiser returns
+-> `DiffusionOutput` holds the tensor with a *deferred* `post_process_func` ->
+that crosses the result queue -> `_minimax_h3_post_process` runs
+`.detach().cpu().numpy()`. Syncing at the post-process was 2/3 failed (one DARK,
+one NOISE), which would put the damage *before* the post-process -- but the hook
+never logged whether its `sync` actually ran, so that reading is unconfirmed and
+is recorded as such.
+
+The first attempt at that hook also broke every request outright
+(`_minimax_h3_post_process() got an unexpected keyword argument
+'sampling_params'`). The wrapper was written `(output, *a, **kw)`, and the
+caller filters the keywords it passes by inspecting the callee's signature: a
+wrapper advertising `**kw` is handed arguments the real function does not take.
+Wrapping with `*args, **kwargs` is not transparent to a signature-inspecting
+caller. The corrected checker is what caught it -- three `NOFRAMES` rather than
+three results to explain.
+
 **The framing was wrong: it *is* evaluated, and evaluating it late is what
 breaks it.** Instrumented inside `fetch_sync` and run with every workaround off,
 the decode's own frames appear as
