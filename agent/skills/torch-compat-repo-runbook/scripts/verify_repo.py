@@ -77,6 +77,22 @@ UNMEASURABLE_RE = re.compile(r"^MEMORY_UNMEASURABLE (.+)$", re.M)
 #: `device_memory_used`/`device_memory_reserved` and the CUDA-only pool
 #: (`total_cuda_used`) can be put beside a torch number.
 #:
+#: The peak therefore comes from `get_peak_device_used_memory(device)`, which is
+#: that same high-water restricted to one device's pools. **It must not be read
+#: by sampling `device_memory_used` from this thread**, which is what this
+#: wrapper used to do: a python sampler only runs when the interpreter releases
+#: the GIL -- during a step, only at device waits -- so on a fast step it reports
+#: whichever intermediate value it happened to catch, while torch's
+#: `max_memory_allocated` is maintained exactly by its allocator. Measured on an
+#: 8-layer llama step (batch 4, seq 512): the sampler's max was 3406.5 MiB, the
+#: runtime's own high-water was 7272 MiB, and torch's was 6655 MiB. So a sampled
+#: "peak" understates by more than 2x on exactly the fast steps a run mostly
+#: consists of, and the ratio printed from it measures the sampler's luck rather
+#: than the two runtimes. It also manufactured a phantom "first-step 2x
+#: transient" -- a slow first step's device waits are long enough for the sampler
+#: to win the GIL, the fast later ones are not -- which two separate
+#: investigations chased before the sampler itself was identified as the cause.
+#:
 #: Jittor's memory profiling can perturb timing, so the run that measures memory
 #: is *separate* from the run that measures speed.
 _MEMORY_WRAPPER = r'''
@@ -104,6 +120,23 @@ if os.environ.get("VERIFY_RUNTIME") == "jittor":
             "(get_mem_info().total_cuda_used) is used+cached-free summed over "
             "every device, which cannot be compared with torch's "
             "max_memory_allocated")
+
+    if hasattr(jt.core, "get_peak_device_used_memory"):
+        # The peak has to come from the runtime, not from this thread. The
+        # sampler below only runs when the interpreter releases the GIL -- which
+        # during a step means only at device waits -- so on a fast step it
+        # reports whichever intermediate value it happened to catch, while
+        # torch's `max_memory_allocated` is maintained exactly by its allocator.
+        # Measured on an 8-layer llama step: this sampler's max was 3406.5 MiB
+        # and the runtime's own high-water was 7272 MiB, against torch's 6655.
+        def peak():
+            return int(jt.core.get_peak_device_used_memory(device))
+    elif not unmeasurable:
+        unmeasurable = (
+            "this jittor predates get_peak_device_used_memory, whose absence "
+            "leaves no exact peer for torch's max_memory_allocated -- a python "
+            "sampler misses the peak on any fast step, so report no number "
+            "rather than one that is not the peak")
 else:
     os.environ.pop("JITTOR_TORCH_SHIM", None)
     import torch
@@ -111,6 +144,9 @@ else:
     def read():
         return (int(torch.cuda.max_memory_allocated()),
                 int(torch.cuda.max_memory_reserved()))
+
+    def peak():
+        return int(torch.cuda.max_memory_allocated())
 
 live = []
 pool = []
@@ -143,7 +179,11 @@ finally:
         print("MEMORY_RESERVED_BYTES -1")
         print("MEMORY_UNMEASURABLE " + unmeasurable)
     else:
-        print("MEMORY_PEAK_BYTES %d" % (max(live) if live else -1))
+        # The peak comes from the runtime's own high-water (see `peak`), not from
+        # `max(live)`: the sampler is a python thread and misses the peak on any
+        # step whose device waits are short. The pool only grows, so sampling its
+        # maximum is the same number as reading it at the end.
+        print("MEMORY_PEAK_BYTES %d" % peak())
         print("MEMORY_RESERVED_BYTES %d" % (max(pool) if pool else -1))
 '''
 

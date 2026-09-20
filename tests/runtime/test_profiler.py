@@ -9,6 +9,8 @@ import jittor as jt
 import numpy as np
 import os
 
+from _helpers import capability as _test_capability
+
 #: Both cases here used to count report *rows* for one matmul, from a time when
 #: a CPU matmul reached its library kernel through the tuner relay and the
 #: report carried a row for each side of it: two rows whose averages were the
@@ -73,6 +75,48 @@ class TestProfiler(unittest.TestCase):
             prefix = name[len("[marks:"):name.index(",]") + 1] if name.startswith("[marks:") else ""
             marks[prefix] = int(row["Count"])
         self.assertEqual(marks, {"": 2, "mark1,": 1, "mark1,mark2,": 1, "mark3,": 1})
+
+
+class TestMemoryHighWater(unittest.TestCase):
+    """The two allocator high-waters, which do *not* measure the same thing.
+
+    `get_peak_allocator_used_memory` sums host and device pools, so it is not
+    the peer of `torch.cuda.max_memory_allocated(N)`; a CPU run pushes it while
+    torch's counter stays at zero. `get_peak_device_used_memory(N)` exists to be
+    that peer, and the exclusion between the two is what these cases pin.
+    """
+
+    def test_device_high_water_excludes_host_pools(self):
+        with jt.flag_scope(use_cuda=0, profile_memory_enable=1):
+            device_before = jt.core.get_peak_device_used_memory(0)
+            x = jt.randn(4096, 4096)               # 64 MiB, host only
+            (x + 1).sync()
+            # The host bytes do reach the inclusive high-water ...
+            self.assertGreater(jt.core.get_peak_allocator_used_memory(), 0)
+            # ... and must not reach the device-only one. Captured rather than
+            # asserted zero: what is under test is that *this* allocation moved
+            # nothing, not that the process never touched a device at all.
+            self.assertEqual(jt.core.get_peak_device_used_memory(0), device_before)
+
+    @unittest.skipUnless(
+        _test_capability.check_accelerator("cuda", backend=jt).enabled,
+        "Cuda not found")
+    def test_device_high_water_covers_a_device_allocation(self):
+        size = 4096
+        with jt.flag_scope(use_cuda=1, profile_memory_enable=1):
+            live_before = jt.core.device_memory_used(0)
+            x = jt.randn(size, size)
+            (x + 1).sync()
+            peak = jt.core.get_peak_device_used_memory(0)
+            # `x` is on the device and the profiler checks after every op, so
+            # the high-water must cover at least what was live before it plus
+            # the tensor. Stated as a lower bound rather than a comparison with
+            # an earlier reading, which a previous case in this process can
+            # already have raised.
+            self.assertGreaterEqual(peak - live_before, size * size * 4)
+            # Device-only is a subset of the pools the inclusive counter sums,
+            # so its high-water can never exceed that one.
+            self.assertLessEqual(peak, jt.core.get_peak_allocator_used_memory())
 
 
 if __name__ == "__main__":
