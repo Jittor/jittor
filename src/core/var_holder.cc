@@ -735,12 +735,6 @@ void sync_all(bool device_sync) {
         // `keep_graph` is what leaves it pending -- so sweeping it up here
         // only re-runs it, every time anyone asks for everything to complete.
         if (v->var->flag(VarFlags::_kept)) continue;
-        // Sinks only. Sweeping every holder was tried against MiniMax-H3's
-        // uniform-random-byte video: it takes the failure from ~70% of 256x256
-        // decodes to ~17%, so the filter is part of why the pipeline's own
-        // `jt.sync_all(True)` does not cover the Var that goes bad -- but only
-        // part, and a global sync-semantics change that does not fix the bug is
-        // not worth its cost. See section 48 of the H3 results doc.
         // Sinks only. Sweeping every holder and forcing weak_sync=false were
         // both tried against MiniMax-H3's uniform-random-byte video: ~70%
         // failure becomes ~17% and ~33% respectively, and ~17% with both. They

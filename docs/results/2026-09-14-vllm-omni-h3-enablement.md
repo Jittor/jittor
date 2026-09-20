@@ -4882,11 +4882,57 @@ That reframes the two partial results this section earlier dismissed as
 | every holder, not just sinks | ~17% |
 | `weak_sync=false` | ~33% |
 
-Both move the intervening evaluation *towards* what an explicit sync does, and
-both reduce the failure. So the candidate is: **the same Var evaluated in a wide
-batch yields garbage, and evaluated in a narrow one yields the right answer** --
-which puts it back in the batch planner (`count_fuse`, `var_fused`, the
-shared-recompute machinery), the same code as section 47's `fuse_op_limit`.
+**Correction, before that reading goes any further.** The paragraph above
+claimed both rows move the intervening evaluation "towards what an explicit sync
+does". For the `weak_sync` row that is backwards. `var_holder.h` declares
+
+    // @pyjt(sync)
+    VarHolder* sync(bool device_sync = false, bool weak_sync = true);
+
+so the workaround's `video.sync(True)` is `weak_sync=`**`true`** -- the same
+weak_sync as `sync_all`. The two differ only in **which Vars are in the batch**
+and **when it runs**, never in weak_sync, so the ~33% row is unexplained rather
+than supporting. What survives is narrower: the same Var is right when synced
+explicitly at the quantiser and wrong when left to the pipeline's own barriers.
+
+A second inference this section leaned on turns out never to have been measured.
+"`sync_all` sweeps only sinks, and this Var is not a sink" was read out of the
+C++, and every probe that tried to confirm it logged `outputs=?` -- because
+`_outputs` and `is_finished` are **not bound on `jittor_core.Var` at all**, so
+the attribute access raised and the handler printed `?`. `dump_all_graphs()`
+does expose `nodes_info`/`inputs`/`outputs` and reads no tensor data, so it can
+measure this on a run that is about to fail; until it does, the sink claim is
+unverified.
+
+**Reproduction 8, and it does not trigger either.** The mechanism the two
+findings above suggest is specific enough to build directly: a Var held by
+Python that *still has a consumer* is not a sink, so `sync_all` never makes it a
+target; as an intermediate it may be fused away and the buffers behind it
+released; a later read finds it unfinished and recomputes it; and a recompute
+whose inputs have been recycled returns whatever now occupies that memory --
+which is what uniform random bytes are. That chain also explains the H3 fetch
+probe's `finished=0 mem_ptr=0`, which had been the awkward fact in every earlier
+story.
+
+Built as `tests/core/test_nonsink_holder_evaluation.py`: a six-deep arithmetic
+chain, held, given a `sum()` consumer so it is not a sink, then read after
+`sync_all`, after `sync_all` plus enough allocation churn to recycle any
+released block, and after churn with no barrier at all. Half and single
+precision, 256 and 512. **Every case passed on the first run**, `rel` at the
+dtype's rounding floor. The seven earlier reproductions failed to trigger
+because they had the wrong shape; this one has the right shape and still does
+not.
+
+The test is kept anyway. The property is one the executor is meant to hold,
+nothing else in `tests/core` states it, and a regression would be silent -- the
+value would be wrong rather than missing, and nothing would raise.
+
+That leaves one variable worth isolating: **batch composition at a fixed
+position**. `video.sync(True)` at the top of the quantiser is 28/28 clean; the
+`w_all` arm runs `jt.sync_all(True)` at that same instant instead. Clean means
+position is the variable and no barrier ever lands in the gap; noisy means the
+same Var, at the same instant, in a different batch, gives a different answer --
+which would put the defect in the batch planner.
 
 This is a synthesis of measurements, not a verified mechanism, and neither lever
 took the failure to zero -- so something in the wide-batch path is still
