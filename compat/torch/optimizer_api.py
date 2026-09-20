@@ -465,6 +465,10 @@ def _zero_grad_compat(self, set_to_none=True):
     # native implementation assumes every entry in ``pg['grads']`` is a Var,
     # so calling it for the mixed list used by set_to_none=False raises.
     result = _orig_zero(self) if set_to_none else None
+    if not set_to_none:
+        # The zero tensors above are already installed in the optimizer. The
+        # native zero flag also tells FSDP to discard unsynced full gradients.
+        object.__setattr__(self, "_Optimizer__zero_grad", True)
     _fsdp2_zero = _fsdp_hooks.provider()
     if _fsdp2_zero is not None and _fsdp2_zero.optimizer_has_fsdp_params(self):
         _fsdp2_zero.refresh_visible_full_grads(self)

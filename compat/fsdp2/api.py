@@ -35,9 +35,19 @@ class FSDPModule(metaclass=_FSDPModuleMeta):
         return shard._apply_fsdp_attr(self, "reshard_after_forward", value, recurse)
 
     def set_requires_gradient_sync(self, value, recurse=True):
+        shard._apply_fsdp_attr(self, "requires_all_reduce", bool(value), recurse)
         return shard._apply_fsdp_attr(self, "requires_gradient_sync", bool(value), recurse)
 
     def set_requires_all_reduce(self, value, recurse=True):
+        if not value:
+            for module in shard._iter_fsdp_modules(self, recurse):
+                state = getattr(module, "_fsdp_state", None)
+                replicate = getattr(state, "replicate_group", None)
+                if replicate is not None and replicate.size() > 1:
+                    raise NotImplementedError(
+                        "FSDP2 set_requires_all_reduce(False) with a replicate "
+                        "mesh requires partial-gradient accumulation; silently "
+                        "omitting all-reduce would update replica weights differently")
         return shard._apply_fsdp_attr(self, "requires_all_reduce", bool(value), recurse)
 
     def set_all_reduce_hook(self, hook, *, stream=None):

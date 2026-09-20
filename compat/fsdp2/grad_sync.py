@@ -61,6 +61,14 @@ def sync_sharded_grads(module, loss=None, *, divide_by_world_size=True):
 
 @common._state_frontend
 def _sync_sharded_grads_from_full_grads(state, full_grads, *, divide_by_world_size=True):
+    replicate = getattr(state, "replicate_group", None)
+    if (getattr(state, "requires_gradient_sync", True)
+            and not getattr(state, "requires_all_reduce", True)
+            and replicate is not None and replicate.size() > 1):
+        raise NotImplementedError(
+            "FSDP2 set_requires_all_reduce(False) with a replicate mesh "
+            "needs partial-gradient accumulation; reducing only shard "
+            "gradients would silently produce incorrect optimizer updates")
     policy = getattr(state, "mp_policy", None)
     reduce_dtype = getattr(policy, "reduce_dtype", None)
     if reduce_dtype is None:
@@ -68,7 +76,29 @@ def _sync_sharded_grads_from_full_grads(state, full_grads, *, divide_by_world_si
     if reduce_dtype is not None:
         full_grads = [grad.cast(reduce_dtype) if grad is not None and grad.dtype != reduce_dtype
                       else grad for grad in full_grads]
-    replicate = getattr(state, "replicate_group", None)
+    pending = getattr(state, "true_fsdp_pending_full_grads", None)
+    if pending is not None and len(pending) != len(full_grads):
+        raise RuntimeError("FSDP2 parameter set changed during gradient accumulation")
+    if not getattr(state, "requires_gradient_sync", True):
+        if pending is None:
+            pending = [None] * len(full_grads)
+        accumulated = []
+        for old, grad in zip(pending, full_grads):
+            if grad is None:
+                accumulated.append(old)
+                continue
+            # Materialize locally so pending grads do not retain every prior
+            # microbatch's lazy forward/backward graph until final reduction.
+            value = jt.Var.copy(old + grad if old is not None else grad).stop_grad()
+            value.sync()
+            accumulated.append(value)
+        state.true_fsdp_pending_full_grads = accumulated
+        return [None] * len(full_grads)
+    if pending is not None:
+        full_grads = [old + grad if old is not None and grad is not None
+                      else (old if grad is None else grad)
+                      for old, grad in zip(pending, full_grads)]
+        state.true_fsdp_pending_full_grads = None
     if replicate is not None and replicate.size() > 1:
         full_grads = [replicate._all_reduce(grad, "mean" if divide_by_world_size
                                           else "sum") if grad is not None else None
@@ -234,8 +264,28 @@ def _sync_visible_full_grads_to_optimizer(opt):
                           "step() may apply stale or missing gradients")
 
 
+def _clear_pending_full_grads_for_optimizer(state, opt):
+    pending = getattr(state, "true_fsdp_pending_full_grads", None)
+    if pending is None:
+        return
+    owned = {
+        id(entry) for pg in getattr(opt, "param_groups", ())
+        for param in pg.get("params", ())
+        for owner, entry in (shard._fsdp_param_entry(param),)
+        if owner is state and entry is not None
+    }
+    if not owned:
+        return
+    pending = [None if id(entry) in owned else grad
+               for entry, grad in zip(state.true_fsdp_params, pending)]
+    state.true_fsdp_pending_full_grads = pending if any(
+        grad is not None for grad in pending) else None
+
+
 def refresh_visible_full_grads(opt):
     for state in _fsdp_states_from_optimizers([opt]):
+        if getattr(opt, "_Optimizer__zero_grad", False):
+            _clear_pending_full_grads_for_optimizer(state, opt)
         for entry, full_grad in zip(
                 state.true_fsdp_params,
                 _visible_full_grads_from_shards(state)):
@@ -311,6 +361,12 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
         return False
     entry_grad = {}
     for state in states:
+        pending = getattr(state, "true_fsdp_pending_full_grads", None)
+        if pending is not None:
+            for opt in optimizers or ():
+                if getattr(opt, "_Optimizer__zero_grad", True):
+                    _clear_pending_full_grads_for_optimizer(state, opt)
+            pending = getattr(state, "true_fsdp_pending_full_grads", None)
         # ``_release_full_params`` drops the gathered Var after the first
         # reduce-scatter.  Keep only its identity-to-entry association so a
         # repeated call with the same grad map can still recognize a shared
@@ -329,12 +385,19 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
             else:
                 full_id = getattr(entry, "_jittor_fsdp_full_param_id", None)
             grad = grad_by_id.get(full_id) if full_id is not None else None
-            local_used.append(grad is not None)
-            if grad is None:
+            pending_grad = (pending[len(full_grads)] if pending is not None
+                            else None)
+            local_used.append(grad is not None or pending_grad is not None)
+            if grad is None and pending_grad is None and getattr(state, "requires_gradient_sync", True):
                 reference = full if full is not None else entry.shard
                 grad = common._zeros_like_shape(
                     reference, entry.shape, dtype=entry.dtype)
             full_grads.append(grad)
+        if not getattr(state, "requires_gradient_sync", True):
+            _sync_sharded_grads_from_full_grads(
+                state, full_grads, divide_by_world_size=divide_by_world_size)
+            shard._release_full_params(state)
+            continue
         if not any(local_used) and common._world_size() <= 1:
             # This backward pass never reached the state's parameters -- a second
             # optimizer's loss, say, while a sharded model sits idle in the same
