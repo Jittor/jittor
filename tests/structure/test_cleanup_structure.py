@@ -26,6 +26,7 @@ from __future__ import print_function
 import ast
 import copy
 import datetime
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
@@ -41,10 +42,38 @@ from _helpers.child_process import run_python_child
 #: a reason; leaving them in place silently is what the audit found.
 MIGRATION_GUARD_EXPIRY = datetime.date(2027, 3, 1)
 
+#: The import-layering checker owns the classification "this path is setuptools
+#: output, not source", and its answer is the project's: output has no
+#: ``__init__.py`` of its own, a package named ``build`` does. Loading it keeps
+#: one answer instead of a second opinion -- and a local restatement would be a
+#: cross-file duplicate, i.e. exactly what the gate below reports. It loads on
+#: first use, not at import, so that a non-source checkout still reaches the
+#: ``setUpClass`` skip below instead of failing collection.
+_IMPORT_LAYERING_CHECKER = (
+    Path(__file__).resolve().parents[2] / "tools" / "lint" / "check_import_layering.py"
+)
+
+_BUILD_OUTPUT_FILTER = None
+
+
+def _is_build_output(relative, base):
+    global _BUILD_OUTPUT_FILTER
+    if _BUILD_OUTPUT_FILTER is None:
+        spec = importlib.util.spec_from_file_location(
+            "jittor_check_import_layering", _IMPORT_LAYERING_CHECKER)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _BUILD_OUTPUT_FILTER = module._is_build_output
+    return _BUILD_OUTPUT_FILTER(relative, base)
+
 
 def _runtime_sources(repo_root):
-    return sorted(path for root in (repo_root / "python/jittor", repo_root / "backends", repo_root / "compat")
-                  for path in root.rglob("*.py"))
+    return sorted(
+        path
+        for root in (repo_root / "python/jittor", repo_root / "backends", repo_root / "compat")
+        for path in root.rglob("*.py")
+        if not _is_build_output(path.relative_to(root), root)
+    )
 
 
 class TestCleanupStructure(unittest.TestCase):
@@ -140,9 +169,13 @@ class TestCleanupStructure(unittest.TestCase):
 
     def test_cross_file_duplicate_implementations_are_reviewed(self):
         implementations: Dict[str, List[Tuple[str, str]]] = {}
-        sources = sorted(path for root in (self.repo_root / "python", self.repo_root / "backends", self.repo_root / "compat")
-                         for path in root.rglob("*.py")
-                         if "tests" not in path.relative_to(root).parts)
+        sources = sorted(
+            path
+            for root in (self.repo_root / "python", self.repo_root / "backends", self.repo_root / "compat")
+            for path in root.rglob("*.py")
+            if "tests" not in path.relative_to(root).parts
+            and not _is_build_output(path.relative_to(root), root)
+        )
         for path in sources:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in tree.body:
