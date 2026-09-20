@@ -4860,6 +4860,30 @@ this function's return value to the encoder, which contains
 `.detach().cpu()` and `.numpy()` -- both of which should force evaluation and
 evidently do not on this path.
 
+**The framing was wrong: it *is* evaluated, and evaluating it late is what
+breaks it.** Instrumented inside `fetch_sync` and run with every workaround off,
+the decode's own frames appear as
+
+```
+FETCH num 24379392 dtype uint8 finished 0 mem_ptr 0 skip 0
+```
+
+`24379392` is `3*124*256*256`, so this is the video. It is unfinished and has no
+memory -- and `skip 0` means the guard did **not** skip: `fetch_sync` ran the
+sync. The graph is evaluated at fetch time. It still comes back as noise.
+
+So "the Var is never evaluated" -- the premise under the last five hypotheses,
+including the two reverted fixes -- is false. The correct statement is:
+
+> The same graph gives the right answer when it is evaluated inside the
+> quantiser, and garbage when the evaluation is left until the fetch.
+
+It is a question of *when*, not *whether*. That also explains why adding
+`is_finished()` to the guard did nothing: the guard was never the reason.
+Whatever invalidates the pending graph happens between the quantiser's return
+and the fetch -- and a sync anywhere before that window is what the deployment
+has been paying for.
+
 **And `fetch_sync`'s guard, which tests the wrong property and still is not
 it.** `Var.numpy()` binds straight to `VarHolder::fetch_sync`, whose skip reads
 
