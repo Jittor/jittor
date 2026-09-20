@@ -4958,6 +4958,77 @@ Bracketing that, with every arm gate-verified and its hook counted:
 | the post-process (`postsync`) | 2/3 **failed** |
 | nowhere | ~70% failed |
 
+**`retsync`: clean 3/3, and the window is now pure engine plumbing.**
+
+    [arm] gate ok: [h3-oop] prep mode=retsync
+    [retsync] #1   86s adj= 11.93 std= 95.69 mean= 125.9 ok
+    [retsync] #2   70s adj= 11.95 std= 95.78 mean= 127.2 ok
+    [retsync] #3   65s adj= 12.03 std= 95.58 mean= 125.6 ok
+          1 [retsync] armed on DiffusionOutput.__init__
+          3 [retsync] synced
+
+`adj` within 0.1 of `w_all`, which is the first cross-arm agreement in this
+section that did not need a caveat. So a sync at the `DiffusionOutput`
+construction is clean and one at the post-process is not, leaving the gap as
+`return DiffusionOutput(...)` -> stage machinery -> `output.output` ->
+`post_process_func(...)`, with `_move_tensor_tree_to_cpu` already excluded.
+
+**And that reframes the whole bracket.** Every clean position -- quantiser top,
+quantiser end, `DiffusionOutput` construction -- is inside
+`MiniMaxH3Pipeline.forward`. The one failing position is not. The engine log
+says
+
+    [AsyncOmniEngine] Launching Orchestrator thread with 1 stages
+
+so the reading of "position is the variable" that fits best is that it is really
+**thread**: the graph is built on the worker thread and evaluated on another
+one, and jittor's executor carries thread-local state -- the traversal epoch,
+`tflag`, the entry lock that `tests/core/test_executor_entry_lock.py` exists
+for. Every observation in this section falls out of that. The 160 `sync_all`
+calls do not help because they all run on the producing thread. The first
+request after a restart passes because nothing has been handed across yet. And
+a sync "anywhere in the quantiser" works not because of where it is in the
+arithmetic but because of which thread is running it.
+
+This is a hypothesis with one cheap decisive test: log the thread identity at
+the quantiser and at the post-process. Identifiers only, no tensor read, so
+unlike the six value-reading probes it cannot repair what it measures. That arm
+also carries no sync at all, which makes it the 256x256 no-workaround baseline
+this harness has been missing.
+
+**A flag that exists for exactly this, and this deployment does not set it.**
+`executor.cc` declares
+
+    DEFINE_FLAG(int, use_threading, 0, "Allow to use python threading with jittor.");
+
+and uses it to decide whether a weak sync widens its roots:
+
+    if (weak_sync && !use_threading)
+        top_weak_sync(vars);
+
+`top_weak_sync` walks `runtime_holder_state().peek_pending()` and
+`consume_pending()` -- a **global** pending queue, not a per-thread one -- and
+for each holder it takes it either adds it as a root or drops it (`continue`) on
+`_outputs.size()`, `is_finished()` or `_kept`. A holder consumed by one thread's
+sync and dropped is gone from that queue: a later weak sync will not consider it
+a root again. With `use_threading=0` -- the default, and the serve script never
+sets it -- that runs while other threads hold pending graphs.
+
+There are other threads. `diffusion_engine.py:421` starts a `worker_thread`
+running `_busy_loop`; `inline_stage_diffusion_client.py:68` runs the engine in a
+`ThreadPoolExecutor(max_workers=1, thread_name_prefix="inline-diffusion")`
+inside the orchestrator process; and the comment already in `run_sync` records
+vLLM loading weights from four more, which is the thread race that was found
+and fixed in this same function (snapshot + hold, 20/20). So threads have
+already caused one measured corruption in this exact deployment. What was fixed
+was the loader case.
+
+That makes `use_threading=1` the first candidate in this investigation that is a
+*fix* rather than a probe, and it costs one arm. It is not yet tested, and two
+things temper it: turning it on *skips* `top_weak_sync`, so it narrows what a
+weak sync sweeps rather than making anything safer, and the thread hypothesis it
+serves is itself still unconfirmed at the time of writing.
+
 **A fourth checker hole, and this one is in jittor's own.** If the finding is
 that a pending graph goes bad while it waits, the mechanism to look for is its
 inputs being released early -- a liveness accounting bug. `check_graph=1` is the
