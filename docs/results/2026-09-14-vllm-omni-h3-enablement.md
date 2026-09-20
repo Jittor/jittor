@@ -4794,6 +4794,24 @@ parked Var (`location=device`, metadata consistent), and the component offload
 (touching the tensor *before* the offload fails; *after* it works, which is
 backwards for that story).
 
+**The workaround, stated as what it actually is.** `serve-vllmomni.sh` exports
+`H3_PREP_MODE=varsync`, which calls `VarHolder::sync(true, false)` on the
+quantiser's input and nothing else: 6/6 clean at 256x256, 2/2 at 512x512,
+against ~70% noise unpatched. It replaced an earlier `copy` mode that pulled
+~97 MB to the host and discarded it -- that worked only because the transfer
+*also* forced the evaluation, so it paid a full device-to-host round trip for a
+side effect. Both are workarounds; this one at least does the thing the defect
+description names, and costs a sync instead of a transfer.
+
+**Two more ruled out, and the allocator is sound.**
+
+* *A shared block recycled under its sharers.* `SFRLAllocator::share_with` does
+  `++block->share_times` and `free` only releases at zero, so a block outlives
+  every var that shares it.
+* *`free_var_mem` not telling the share group.* It does only
+  `share_group_unlink(v)` -- itself, not the others -- but the refcount above
+  is what keeps the memory alive, so the omission is not a dangling pointer.
+
 **Three more ruled out, from inside the C++ this time.**
 
 * *Memory reuse.* `use_nfef_allocator=1` (never free, so nothing is recycled)
