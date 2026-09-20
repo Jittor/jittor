@@ -4929,10 +4929,53 @@ value would be wrong rather than missing, and nothing would raise.
 
 That leaves one variable worth isolating: **batch composition at a fixed
 position**. `video.sync(True)` at the top of the quantiser is 28/28 clean; the
-`w_all` arm runs `jt.sync_all(True)` at that same instant instead. Clean means
-position is the variable and no barrier ever lands in the gap; noisy means the
-same Var, at the same instant, in a different batch, gives a different answer --
-which would put the defect in the batch planner.
+`w_all` arm runs `jt.sync_all(True)` at that same instant instead.
+
+**It is clean, 3/3, and that kills the batch-planner story.**
+
+    [arm] gate ok: [h3-oop] prep mode=w_all
+    [w_all] #1   88s adj= 11.78 std= 95.71 mean= 126.7 ok
+    [w_all] #2   65s adj= 11.91 std= 95.71 mean= 126.9 ok
+    [w_all] #3   60s adj= 11.83 std= 95.66 mean= 126.1 ok
+          3 [wide] w_all sync_all ok
+
+Three clean decodes at 256x256, where the failure rate is ~70%, from the *same*
+`jt.sync_all(True)` the pipeline already calls 160 times per request -- only
+placed at the quantiser. So batch composition is not the variable. **Position
+is.** The synthesis committed a few hours earlier, that a Var evaluated in a
+wide batch yields garbage, is withdrawn: its own controlled test refutes it.
+
+The claim that replaces it is narrower and much better supported: **the decode
+graph is correct when evaluated as soon as it is built, and garbage when the
+same graph is left pending and evaluated later.**
+
+Bracketing that, with every arm gate-verified and its hook counted:
+
+| barrier at | result |
+| --- | --- |
+| top of the quantiser (`varsync`, `w_all`) | clean, 28/28 and 3/3 |
+| last statement of the quantiser (`bisect4`) | clean, 6/6 |
+| the post-process (`postsync`) | 2/3 **failed** |
+| nowhere | ~70% failed |
+
+So the damage happens between the quantiser's return and the post-process. What
+is in that gap is `videos.append(out)`, `audios.append(audio)`, the
+list-to-tensor step, the `DiffusionOutput` construction, and the engine
+plumbing -- and no arithmetic.
+
+Two candidates in that neighbourhood are now measured rather than inferred, and
+both are out. `enable_cpu_offload` is false and unset by the serve script, so
+`_move_tensor_tree_to_cpu` never runs. And the scoped contexts the decode is
+built inside -- `_component_on_device(self.video_vae)` and the fp16 autocast --
+both exit before the Var is ever evaluated, which looked like the whole answer
+for a lazy graph wrapped in torch-style context managers. It is not this bug:
+the serve log shows `offload={"mode":"layer","components":["text_encoder"]}`,
+and `_uses_manual_component_offload` returns `component is self.text_encoder`
+once a `diffusion_offload_config` exists, so `load_to_device`/`offload_to_cpu`
+never fire for either VAE. Both sync points that bracket the failure are outside
+both contexts anyway, so neither exit can be the discriminator.
+
+
 
 This is a synthesis of measurements, not a verified mechanism, and neither lever
 took the failure to zero -- so something in the wide-batch path is still
