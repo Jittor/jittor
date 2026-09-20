@@ -4865,9 +4865,16 @@ evaluate late, wrong" established, the remaining span is: the quantiser returns
 -> `DiffusionOutput` holds the tensor with a *deferred* `post_process_func` ->
 that crosses the result queue -> `_minimax_h3_post_process` runs
 `.detach().cpu().numpy()`. Syncing at the post-process was 2/3 failed (one DARK,
-one NOISE), which would put the damage *before* the post-process -- but the hook
-never logged whether its `sync` actually ran, so that reading is unconfirmed and
-is recorded as such.
+one NOISE), and a re-run with the hook logging what it did confirms it: three
+requests, three `[postsync] synced`, two still failed. So the damage happens
+**before** the post-process -- between the quantiser returning and that call.
+
+What is in that window is framework plumbing only: the returned tensor is put
+in a `DiffusionOutput` together with a *deferred* `post_process_func`, and the
+stage machinery carries that object to wherever the function is finally run.
+Nothing in it is arithmetic. That is where this investigation stops, and it is
+the narrowest the window has been -- from "somewhere between the VAE and the
+encoder" at the start of the session to a handful of plumbing statements.
 
 The first attempt at that hook also broke every request outright
 (`_minimax_h3_post_process() got an unexpected keyword argument
