@@ -5406,11 +5406,37 @@ snapshot the planner already takes, so no extra traversal -- deduplicated,
 because phase 7 asserts `backward.count() <= batch_hold_per_var` and discounts
 exactly one hold per var.
 
-This is the first candidate in this investigation that is a named mechanism with
-a line-level measurement behind it rather than a story that fits the data. It is
-not yet verified: the reproduction has to come back clean, the suite has to
-pass, and then the H3 arm has to be re-run at N=12. Any of those can still
-refute it.
+**Verified against the reproduction, and it surfaces the primary failure.**
+Fifteen runs with the extended hold:
+
+    segfault=0  wrong value=0  clean=9  other=6   (of 15)
+
+**Zero crashes** against a ~1-in-3 baseline: p = (2/3)^15 ~ 0.002. And the six
+remaining failures are not crashes -- they are the diagnostic the handlers kept
+dying while trying to print:
+
+    Reason: fused_op.cc:163: [check failed: outputs().size()]
+    This is an internal Jittor invariant, not an error in your program.
+
+That is the assert `run_sync`'s own comment already named as the symptom of the
+earlier loader race -- *"no hold: the 'no in-memory output' assert in
+fused_op.cc"*. A `FusedOp` reached `do_prepare` with **no outputs at all**.
+
+So the three fixes compose into one result: the failure handlers stopped
+destroying the evidence, the batch hold stopped the pointers dying, and what was
+underneath is now a named invariant violation instead of a segfault. `ASSERT`
+sits right after a block that logs each output's `tflag`, `batch_stamp`,
+`var_stays_in_memory` and `var_fused` -- and `var_stays_in_memory` is
+`var_fused == 1` exactly, the same verdict machinery as section 47's
+`fuse_op_limit`. Under concurrency the fusion verdicts come out such that not
+one output stays in memory.
+
+**What this is and is not.** The crash is fixed and measured. The underlying
+defect is not: 6 of 15 runs still fail, now loudly. The H3 video bug is still
+only *hypothesised* to be the same thing -- what connects them is the
+configuration (two Python threads inside jittor at once) and nothing stronger,
+and the H3 arm has not been re-run against these fixes. The suite pass quoted
+above predates two of the three changes and has to be repeated.
 
 **Reading the threading machinery: most of it is careful, and one thing is
 not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
