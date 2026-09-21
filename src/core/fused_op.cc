@@ -121,12 +121,22 @@ void FusedOp::update_ops() {
     }
     loop_options = loop_options_origin;
 
-    if (outputs().size() == 0 && getenv("H3_FUSE_DUMP")) {
-        // TEMP DIAGNOSTIC: this segment was classified with no output that has
-        // to stay in memory, so the assertion below is about to fire. Dump the
-        // batch verdict and the marks the planner read it out of: an op or var
-        // whose tflag is not this batch's stamp means the traversal that built
-        // the verdict was looking at a different one.
+    if (outputs().size() == 0) {
+        // This segment was classified with no output that has to stay in
+        // memory, so the assertion below is about to fire. Dump the batch
+        // verdict and the marks the planner read it out of: an op or var whose
+        // tflag is not this batch's stamp means the traversal that built the
+        // verdict was looking at a different one.
+        //
+        // No longer behind `H3_FUSE_DUMP`. The condition is already "we are
+        // about to abort", so this costs nothing on any run that works, while
+        // requiring the variable cost two things: the failure had to be
+        // reproduced twice, and the same variable also turns on the
+        // per-edge `erase_output` logging in node.cc, which is heavy enough to
+        // change the timing -- 30 runs with it on produced no assert at all,
+        // against 6 in 15 with it off. A diagnostic that only runs on the
+        // failure path should not need to be asked for, least of all through a
+        // switch that suppresses the failure.
         auto& tstate = runtime_traversal_state();
         std::ostringstream os;
         os << "fused segment with no in-memory output: ops=" << ops.size()

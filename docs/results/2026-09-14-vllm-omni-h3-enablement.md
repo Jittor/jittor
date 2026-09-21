@@ -5480,6 +5480,32 @@ beside each op's `batch_stamp` and would show the mismatch directly -- that
 block is gated behind the same env var and did not fire in ten runs. That is the
 confirming measurement, and it is the next thing to catch.
 
+**A fourth measurement trap, and it invalidates the rate comparisons above.**
+Trying to catch the assert's own dump produced a third heisenbug: with
+`H3_FUSE_DUMP=1` the failure stops happening. That variable also turns on
+node.cc's per-edge `erase_output` logging, which is heavy enough to change the
+timing -- 30 runs with it on, no assert at all, against 6 in 15 with it off. The
+switch that asks for the diagnostic suppresses the thing being diagnosed.
+
+The block is now ungated. Its condition is already `outputs().size() == 0`, i.e.
+"we are about to abort", so it costs nothing on any run that works, and
+requiring the variable meant reproducing the failure twice -- through a switch
+that prevents the second one. **A diagnostic that only runs on the failure path
+should not have to be asked for.**
+
+Ungated, it still did not fire in 20 runs. But neither did the assert, and that
+is the trap: the earlier 6-in-15 was measured **while `tests/core` was
+saturating the machine**, and this is a timing race. Load is a variable nobody
+here controlled, and every crash and assert rate quoted in this section was
+taken under whatever else happened to be running. They are not comparable to
+each other, and the one comparison that matters -- before and after the
+batch-hold fix -- straddles exactly that change in load.
+
+Joining the list of things that perturb this bug: reading a tensor value
+repairs it; `NODE_MEMCHECK` suppresses the crash; `H3_FUSE_DUMP` suppresses the
+assert; and CPU contention changes the rate. Four separate ways for an
+observation to destroy what it was measuring, in one investigation.
+
 **Reading the threading machinery: most of it is careful, and one thing is
 not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
 process-wide mutex, recursive by thread, and it handles the GIL inversion the
