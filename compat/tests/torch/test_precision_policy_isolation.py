@@ -18,7 +18,15 @@ def _policies(cuda=False):
         if not inventory.capability.enabled or not inventory.count:
             pytest.skip("accelerator prerequisite: real CUDA required")
     options = dict(float32_matmul_precision="highest", use_tensorcore=0,
-                   cuda_allow_tf32=0, cuda_allow_cudnn_tf32=0, auto_flush_ops=0)
+                   auto_flush_ops=0)
+    # A CPU-only core has no `cuda_allow_tf32`/`cuda_allow_cudnn_tf32` to write
+    # (flag binding generation drops `cuda*` names without CUDA; see
+    # tests/structure/runtime/test_runtime_sync_state.py). The frontend keeps
+    # those two domains in its own context state there, so there is nothing for
+    # the native scope to pin -- and asking for it raises AttributeError.
+    for flag in ("cuda_allow_tf32", "cuda_allow_cudnn_tf32"):
+        if hasattr(jt.flags, flag):
+            options[flag] = 0
     if cuda:
         options["use_cuda"] = 1
     with jt.runtime.scope(**options):
