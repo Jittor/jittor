@@ -735,6 +735,12 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   The probe reports *that* something changed, not what it costs -- the severity
   came from measurement afterwards, and the first reading of this entry claimed
   a recompute that measurement did not support.
+- Blast radius, measured 2026-09-21 so that Low is a measurement and not a
+  guess: of `shape`, `dtype`, `location()`, `device`, `is_stop_grad()`,
+  `numel()` and the value, **only `location()` moves** across the registration
+  -- everything else is identical before and after, and the hook still applies
+  (`jt.grad` with a `g*2` hook returns `[2,2,2]`). So this is one accessor
+  answering about the wrong node, which is why it stays Low.
 - Workaround: none needed for correctness or speed; do not read `location()` or
   `device` immediately after registering a hook.
 - Review/expiry condition: `register_hook` leaves `location()` unchanged on CPU
