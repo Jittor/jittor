@@ -469,6 +469,14 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   This one has no escape hatch, because there is no construction to pass
   `dtype=` to: the scalar is written inline.
 - Owner: dtype and compatibility maintainers
+- Evidence: [`TestScalarPromotion.test_float64_tensor_with_an_inexact_python_float_keeps_its_value`](../../tests/type/test_dtype_promotion.py)
+  -- the four inexact expressions below, an `expectedFailure` so that a strict
+  XPASS reports the day they start passing. Its companion
+  `test_float64_tensor_with_an_exact_python_float_is_exact` is the control that
+  must keep passing either way. `TestScalarPromotion.
+  test_float_tensor_keeps_its_own_width` pins the same operation's *dtype* using
+  `2.0`, which float32 represents exactly, so it cannot see this defect at all --
+  that is why the value had no gate until now.
 - Mechanism, one line. `ArrayOp::ArrayOp(PyObject*)` in
   `src/bindings/pyjt/py_array_op.cc`:
 
@@ -519,7 +527,9 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   problem, and a float32 one only where the scalar is inexact at float32.
 - Review/expiry condition: close when a Python float keeps its value against a
   float64 operand in both modes, with the five expressions above as the test,
-  and the four half expressions still bit-identical to torch.
+  and the four half expressions still bit-identical to torch. The gate is
+  already in place: the expected failure above XPASSes the moment this closes,
+  and `xfail_strict` turns that into a red run until the decorator is dropped.
 
 ## KI-MEM-002: reading a device tensor relocates it to the host
 
