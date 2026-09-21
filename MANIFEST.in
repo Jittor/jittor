@@ -381,6 +381,7 @@ include examples/notebooks/resnet_training.md
 include examples/notebooks/torch_compat.md
 include examples/notebooks/torch_compat_migration.md
 include examples/notebooks/transformer.md
+include examples/notebooks/vae.md
 include examples/notebooks/vit_training.md
 include examples/notebooks/wgan_gp.md
 include pyproject.toml
