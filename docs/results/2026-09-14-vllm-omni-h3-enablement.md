@@ -5895,6 +5895,37 @@ One reading survives and is being measured: 200k may simply be smaller than one
 decode's node count, in which case the window never opened. That is a number,
 not a guess, and it is the next thing on the wire.
 
+**It is the evaluating thread, not the second thread.** Four arms on the decode
+reproduction, all paced to the server's rhythm:
+
+| arm | result |
+| --- | --- |
+| consumer fetches (evaluation on the consumer thread) | 12/12 all-NaN |
+| `sync(True)` on the **consumer** before fetching | 12/12 all-NaN |
+| `sync(True)` on the **producer** (`varsync`) | 0/12 |
+| **producer fetches, consumer only compares host bytes** | **0/12** |
+
+The last one settles it. The second thread still exists, still receives every
+result, still runs concurrently -- it simply never touches jittor. That is
+clean, 12 of 12, inside the control's 0.002 band.
+
+So the variable is not two threads coexisting, and not memory lifetime:
+**evaluating the graph on a thread other than the one that built it is what
+produces NaN.** Deferring deletion by 200k nodes changes nothing, and leaking
+everything is unusable at this scale (17s to 835s, 993GB), so the
+use-after-free direction -- which eleven fix attempts were aimed at -- is
+answering a different defect that happens to share this trigger.
+
+What remains is narrow and specific: jittor's evaluation path reads some
+thread-local state that is only correct on the building thread. One candidate
+has been tried and did not fix it -- `construction_placement`
+(runtime/tensor_placement.cc) is `thread_local`, and
+`construction_target_backend` consults it when an op carries no explicit
+placement of its own -- though that arm's own effectiveness was not verified,
+so it is marked for recheck rather than closed. The others the evaluation path
+touches are `execution_target_override` (op.cc), the traversal epoch and
+`tflag`, and the fusion planner's batch state.
+
 **Reading the threading machinery: most of it is careful, and one thing is
 not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
 process-wide mutex, recursive by thread, and it handles the GIL inversion the

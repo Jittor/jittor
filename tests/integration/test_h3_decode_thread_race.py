@@ -56,6 +56,17 @@ def decode():
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16,
                                                 enabled=True):
         out = model.decode_base(latent * std + mean)
+    if int(os.environ.get("H3DR_PRODUCER_FETCH", "0")):
+        # The producer does the *fetch* itself -- `.float().cpu().numpy()`, the
+        # whole evaluation -- and hands over plain host bytes. The consumer
+        # thread then touches no jittor state at all.
+        #
+        # This is the general form of the placement test that just failed: if
+        # it comes back clean, the variable is the evaluating thread itself,
+        # whatever thread-local state is behind that, and no single candidate
+        # has to be guessed. If it is still NaN, the second thread's mere
+        # existence is enough and the fetch is not where it goes wrong.
+        return out.float().cpu().numpy()
     if SYNC_PRODUCER == 1:
         # `varsync` syncs *this Var*, not the world. The two are not the same
         # here: on the server, `jt.sync_all(True)` at the same position behaved
@@ -84,7 +95,9 @@ def decode():
 
 print("START rounds=%d consumers=%d" % (ROUNDS, NCONS), flush=True)
 t0 = time.time()
-ref = decode().float().cpu().numpy()     # quiet reference, nothing else running
+_r = decode()                            # quiet reference, nothing else running
+ref = _r if isinstance(_r, np.ndarray) else _r.float().cpu().numpy()
+del _r
 print("reference captured at %.1fs shape=%s mean=%.4f"
       % (time.time() - t0, ref.shape, float(ref.mean())), flush=True)
 
@@ -103,12 +116,35 @@ lock = threading.Lock()
 
 
 def consumer():
+    # `construction_placement` is `thread_local` (runtime/tensor_placement.cc),
+    # and `construction_target_backend` reads it to decide an op's device when
+    # the op carries no explicit placement of its own. The producer sets it by
+    # putting tensors on cuda:0; on this thread it is whatever the default is.
+    # If any part of evaluating the decode consults it, this thread resolves a
+    # different device than the one the graph was built for -- which for fp16
+    # is exactly the shape of an all-NaN result.
+    #
+    # H3DR_CONSUMER_PLACEMENT=1 gives this thread the producer's placement
+    # before it fetches anything, which is the whole test.
+    if int(os.environ.get("H3DR_CONSUMER_PLACEMENT", "0")):
+        _warm = torch.zeros(1, device="cuda:0")
+        _ = _warm.float().cpu().numpy()
+        del _warm
     while not stop.is_set():
         try:
             i, out = work.get(timeout=1)
         except queue.Empty:
             continue
-        got = out.float().cpu().numpy()   # the cross-thread fetch
+        # SYNC_CONSUMER=1 is the server's `postsync` arm: the same
+        # `sync(True)`, on the fetching thread instead of the building one. On
+        # the server that arm does *not* fix the decode while `varsync` does,
+        # which is the asymmetry this reproduction now exists to test against.
+        if int(os.environ.get("H3DR_SYNC_CONSUMER", "0")):
+            out.sync(True)
+        if isinstance(out, np.ndarray):
+            got = out                      # producer already fetched it
+        else:
+            got = out.float().cpu().numpy()   # the cross-thread fetch
         # NaN in the output makes `np.abs(got-ref).max()` NaN, and `nan > tol`
         # is False -- so a NaN decode scored as a pass. That is a checker that
         # turns a failure into a success, which is worse than one that misses
@@ -138,7 +174,7 @@ for c in cons:
 for i in range(ROUNDS):
     out = decode()                        # producer keeps decoding, does not wait
     if NCONS == 0:
-        got = out.float().cpu().numpy()
+        got = out if isinstance(out, np.ndarray) else out.float().cpu().numpy()
         rel = (float("inf") if np.isnan(got).any()
                else float(np.abs(got - ref).max()) / max(1e-9, float(np.abs(ref).max())))
         with lock:
