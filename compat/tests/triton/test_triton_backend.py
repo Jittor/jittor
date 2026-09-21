@@ -695,9 +695,18 @@ class TestTheLaunchBarrierNamesItsOperands(unittest.TestCase):
 
     def _prepare(self):
         global triton, tl
+        if not _HAVE:
+            # Same guard as `TestLaunchFollowsItsProducers` above, and for the
+            # same reason: `_shim` is None until real triton imports, so asking
+            # it to activate the bridge raised `AttributeError: 'NoneType'
+            # object has no attribute 'activate_bridge'` on a box without a
+            # triton install instead of skipping. b2ea67cc added the guard to
+            # that class and left this one -- added in the same series -- with
+            # the defect.
+            self.skipTest("real upstream triton + CUDA not available")
         if triton is None or tl is None:
             setUpModule()
-        if not _shim.activate_bridge():
+        if _shim is None or not _shim.activate_bridge():
             self.skipTest("jittor Triton bridge is unavailable")
 
     def test_the_barrier_takes_operands_rather_than_the_whole_process(self):
