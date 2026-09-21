@@ -5526,6 +5526,33 @@ repairs it; `NODE_MEMCHECK` suppresses the crash; `H3_FUSE_DUMP` suppresses the
 assert; and CPU contention changes the rate. Four separate ways for an
 observation to destroy what it was measuring, in one investigation.
 
+**The controlled comparison, first 15 pairs.** Two builds in separate caches,
+identical but for the extended hold, run alternately so machine load hits both:
+
+| arm | segfault | clean |
+| --- | --- | --- |
+| without the hold | 11/15 (73%) | 4 |
+| with the hold | 7/15 (47%) | 8 |
+
+The direction is right and the size is worth having -- and **it is not
+significant**: Fisher one-tailed p ~ 0.13. Fifteen pairs cannot separate 73%
+from 47%.
+
+So the honest state of the batch-hold change is "suggestive, unresolved". Given
+how this section has gone -- three retractions, each from concluding before the
+evidence could carry it -- the response is to add samples rather than to pick
+the reading that flatters the change. Separating this effect at 80% power needs
+roughly 55 per arm, so another 45 pairs are running. That is about an hour of
+machine time and it settles the question either way, which is worth more than a
+fourth retraction.
+
+(Note also what is absent from both columns: the `fused_op.cc:163` assert fired
+zero times in 30 runs here, against 6 in 15 earlier. Same reproduction, same
+code -- only the machine's other load differs. Whatever conclusion the larger
+run supports about crashes, the assert's rate is not a stable quantity either,
+and no claim in this section should rest on it without the same interleaved
+treatment.)
+
 **Reading the threading machinery: most of it is careful, and one thing is
 not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
 process-wide mutex, recursive by thread, and it handles the GIL inversion the
