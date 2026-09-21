@@ -6631,3 +6631,43 @@ use-after-free on a deleted node, it needs two Python threads *concurrently*,
 and disabling deletion moves it 6/6 to 0/6 -- where disabling deletion did
 nothing at all for the corruption. The two share a trigger and not a mechanism;
 `tests/core/test_executor_python_threads.py` still reproduces it.
+
+### The deployment, with the workaround removed
+
+Server restarted at `H3_PREP_MODE=off` -- the hook announces `prep mode=off
+(untouched)`, which is better evidence than an absent line because it separates
+"ran and installed nothing" from "never ran". Four clips, scored by the same
+four-way checker:
+
+| clip | adj | std | mean | verdict |
+|---|---|---|---|---|
+| 1 | 11.99 | 95.49 | 126.1 | ok |
+| 2 | 11.82 | 95.79 | 126.5 | ok |
+| 3 | 11.98 | 95.69 | 126.5 | ok |
+| 4 | 11.95 | 95.76 | 126.5 | ok |
+
+The six known-clean reference clips span adj 11.78-12.03, so all four sit
+inside that band. Against the 67% failure rate this deployment had without the
+workaround, four clean clips in a row is p ~ 0.012.
+
+`varsync` is no longer needed. It worked because `sync(True)` reaches
+`cudaDeviceSynchronize`, which is device-wide and therefore waits for the other
+thread's stream too -- a device-wide wait standing in for the ordering that was
+missing.
+
+#### Two harness faults found on the way, both of the kind that invents results
+
+They are recorded because both would have produced a *number*, and this
+investigation has already been wrong eight times in exactly that way.
+
+`pkill` returns immediately and a SIGTERMed server stops answering while it
+shuts down. The first stock arm read `ready=200 after 5s` -- a fresh H3 server
+takes 305s -- because it was talking to a six-hour-old server still running the
+workaround it was meant to replace. The port going quiet is not the process
+being gone; the guard now waits for the process and escalates to `-9`.
+
+`ask_backend.py` only knows the inline-base64 response shape. This deployment
+returns metadata plus a `file_name` and serves the bytes from
+`/v1/videos/<id>/content`, so the script wrote no file and four requests scored
+`NOCLIP` while the jobs were completing with `error=None`, 124 frames each. The
+arm sent that script's output to `/dev/null`, which is where the reason went.
