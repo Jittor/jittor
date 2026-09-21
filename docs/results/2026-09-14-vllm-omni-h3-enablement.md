@@ -5208,10 +5208,38 @@ to skip `top_weak_sync`, and whatever is unsafe here survives that. So the
 candidate fix named after the problem is, on this evidence, not a fix -- which
 also predicts the H3 arm testing it will come back unchanged.
 
-The symptom differs from H3's: this crashes rather than returning garbage. What
-the two share is the configuration -- jittor driven from two Python threads --
-and H3 is the case where the same unsafety lands on data instead of on a
-pointer. That is a hypothesis about the connection, not a measurement of it.
+The symptom differs from H3's: this crashes rather than returning garbage.
+
+**Where it crashes**, resolved from the offsets (the `.so` carries no line
+info, so this is nearest-symbol):
+
+    #3  jittor::parallel_compile_all_ops(...)      <- fault pc
+    #4  jittor::Executor::run_sync(...)
+    #5  jittor::sync_all(bool)
+
+`parallel_compile_all_ops` raised an obvious objection: H3 runs with
+`use_parallel_op_compiler='0'`, so if the crash needed the parallel compiler it
+would be a separate bug and this reproduction would not be modelling H3 at all.
+It does not need it:
+
+| `use_parallel_op_compiler` | segfault |
+| --- | --- |
+| 1 | 4/10 |
+| 0 (**H3's own setting**) | 5/10 |
+
+Across all four configurations tried -- `use_threading` 0 and 1, parallel
+compiler 0 and 1 -- the rate sits between 4/10 and 6/10 and moves with none of
+them. **Two Python threads driving jittor crash it about half the time, in the
+configuration this deployment actually runs, and no flag that claims to govern
+threading changes that.**
+
+Reproduction 9 still is not H3's shape, though, and its own result is what shows
+why: it builds *and* fetches on the same thread, with the second thread only
+doing unrelated work alongside. The paired arm had just established that what
+matters is the fetch crossing threads. So reproduction 10 mirrors the measured
+layout instead -- a worker thread builds the chain, holds it, never reads it,
+and hands the holder to the main thread to fetch -- at the deployment's own
+compiler setting, with and without the producer-side sync.
 
 **Reading the threading machinery: most of it is careful, and one thing is
 not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
