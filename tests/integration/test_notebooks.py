@@ -17,9 +17,8 @@ from _helpers.child_process import run_python_child
 
 
 _TOPICS = (
-    "ConditionGAN",
-    "LSGAN",
     "basics",
+    "conditional_gan",
     "custom_op",
     "device_placement",
     "diffusion",
@@ -52,6 +51,7 @@ _SMOKE_TOPICS = (
     "vit_training",
     "gpt2_training",
     "mixed_precision",
+    "conditional_gan",
     "torch_compat",
     "torch_compat_migration",
 )
@@ -239,9 +239,6 @@ def test_expensive_and_external_cells_are_tagged():
                     "{} has skip-execution without a reason tag".format(topic)
             if tags.intersection({"network", "cuda", "long-running"}):
                 assert "skip-execution" in tags
-        if topic in {"ConditionGAN", "LSGAN"}:
-            assert code_cells
-            assert all({"gan", "skip-execution"}.issubset(cell["tags"]) for cell in code_cells)
 
     assert {"gan", "network", "cuda", "long-running", "interactive",
             "skip-execution"}.issubset(all_tags)

@@ -9,7 +9,7 @@ download data, initialize a device, open a port, or create a Jittor cache.
 | 目录 | 内容 |
 | --- | --- |
 | [`notebooks/`](notebooks/README.md) | 可执行教程。MyST Markdown 是唯一权威来源，notebook 由 Jupytext 生成 |
-| [`gan/`](gan/README.md) | 可直接运行的 Web 应用示例 |
+| [`gan/`](gan/README.md) | 可直接运行的 Web 应用示例（启动时自训练，不依赖外部权重） |
 
 **教程的完整阅读顺序在 [`notebooks/README.md`](notebooks/README.md)**，那里有两条主线：
 
@@ -70,8 +70,12 @@ python -m nox -s tutorials
 `gan/` 下的示例是独立脚本，按各自 README 的说明运行，例如：
 
 ```bash
-python examples/gan/simple_cgan.py
+python examples/gan/simple_cgan.py --no-server \
+  --output "$JITTOR_LAB_ROOT/_state/examples/cgan.png"
 ```
 
-它们同样要求「导入不产生副作用」：需要下载数据或开端口的地方都写在脚本执行阶段，
+`simple_cgan.py` 在启动时训练一个小模型（CPU 上约一分钟），不下载任何权重，训练完再把
+生成器接到命令行或 Web 界面上。
+
+它们同样要求「导入不产生副作用」：训练、下载数据、开端口都发生在脚本执行阶段，
 而不是 import 阶段。
