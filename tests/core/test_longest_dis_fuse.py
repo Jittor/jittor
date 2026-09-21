@@ -60,10 +60,21 @@ class TestLongestDisFuse(unittest.TestCase):
         for s in g.nodes_info:
             if not s.startswith("Var"):
                 continue
-            shape = s.split("[")[1].split("]")[0].split(",")
+            # `debug_msg` writes the shape with a trailing comma -- `[1,64,112,112,]`
+            # -- and `"1,64,112,112,".split(",")` is five fields, not four. The
+            # count here was one more than the rank for as long as this has been
+            # written that way, so the bound below was enforced as `rank <= 4`
+            # and every tensor in the graph was one degree closer to it than the
+            # number suggests. Drop the empty fields.
+            shape = [f for f in s.split("[")[1].split("]")[0].split(",") if f.strip()]
             ptr = s.split("(")[1].split(")")[0].split(",")[-1]
             if ptr != '0' and ptr != '0x0':
-                assert len(shape)<=5, s
+                # The message names the rank and the var: the interesting one is
+                # a 7-dimensional reindex the convolution materialises instead of
+                # folding away, and `assert 8 <= 5` is not a report a reader can
+                # act on. See KI-OPS-013.
+                assert len(shape)<=5, \
+                    "a fused intermediate was materialised with %d dims: %s" % (len(shape), s)
 
 if __name__ == "__main__":
     unittest.main()

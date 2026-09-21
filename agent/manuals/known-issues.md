@@ -474,6 +474,46 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
 - Review/expiry condition: the CUDA half class's strict expected failure turns
   red (i.e. the CUDA rows answer from an infinity), and the entry is removed.
 
+## KI-OPS-013: the fake-ResNet graph materialises a 7-dimensional convolution reindex
+
+- Severity: Medium (roughly 472 MB held per occurrence, which is the memory the
+  fusion exists to save; no wrong answer)
+- Status: Reproduced on CPU at `30ef10cd`, unfixed. The gate that reports it,
+  [`test_longest_dis_fuse.py`](../../tests/core/test_longest_dis_fuse.py), is in
+  the **smoke tier**, so HEAD's pull-request gate is red for this.
+- Evidence, measured in a clean worktree at `30ef10cd`, CPU, the test's own
+  graph (`nn.Conv(3,64,7,2,3)` -> BatchNorm -> ReLU -> `nn.Pool(3,2,1)` on a
+  1x3x224x224 input, then `jt.grad` of the sum). Allocated vars, largest first:
+
+  | rank | elements | shape |
+  | --- | --- | --- |
+  | **7** | **118,013,952** | `[1,64,3,112,112,7,7,]` (two of these) |
+  | 4 | 802,816 | `[1,64,112,112,]` (the feature map, sixteen of these) |
+
+  118,013,952 float32 is **472 MB**, and the var has a non-null pointer, so it
+  is storage the graph really holds -- the test filters on exactly that. The
+  7-dimensional layout is jittor's own convolution formulation (the `reindex` in
+  [元算子](../../examples/notebooks/meta_op.md) writes the same seven indices),
+  and folding it away instead of writing it out is what the fused op is for.
+- The same test also counted one field too many, fixed 2026-09-21. `debug_msg`
+  prints the shape with a trailing comma, so `"1,64,112,112,".split(",")` is
+  five fields and the bound was enforced as `rank <= 4`: a plain four-dimensional
+  feature map already sat exactly on it. The failure used to read
+  `assert 8 <= 5` against a raw debug string; it now reads
+  `a fused intermediate was materialised with 7 dims: Var(...)[1,64,3,112,112,7,7,]`.
+  That is a repair of the report, not of the defect -- the assertion still fails,
+  which is the correct outcome for a materialised 7-dimensional intermediate.
+- Not fixed here, and deliberately: the lever is the materialisation decision in
+  [`fuser.cc`](../../src/core/fuser.cc), which was being tuned in the same week
+  (`bb901d65`, `1345192d` introduce and bound `fuse_op_limit`). Those bounds
+  apply to **half-precision** chains only, which is why they do not reach this
+  float32 graph, and why this entry is not a regression from them. Changing what
+  is materialised needs its own before/after measurement, not a bound moved by
+  hand.
+- Workaround: none. This is a memory footprint, not a wrong answer.
+- Review/expiry condition: the assertion passes with the corrected parse, i.e.
+  no allocated intermediate in that graph has more than five dimensions.
+
 ## KI-SEMANTICS-003: floating-comparison backend verification incomplete
 
 - Severity: Critical
