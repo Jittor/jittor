@@ -5438,6 +5438,48 @@ configuration (two Python threads inside jittor at once) and nothing stronger,
 and the H3 arm has not been re-run against these fixes. The suite pass quoted
 above predates two of the three changes and has to be repeated.
 
+**The mechanism, in the code and in a log line.** Turning on the diagnostic the
+tree already carries (`H3_FUSE_DUMP=1`) fills the log with:
+
+    H3FUSE erase_output emptied producer op Op(4531:...,broadcast_to)
+        tflag 748 batch_stamp 746 erased_index 0
+
+Ops are having their output edges erased while their `tflag` (748) belongs to a
+*newer* traversal than their `batch_stamp` (746) -- which is exactly the reading
+`fused_op.cc`'s own comment gives: *"an op or var whose tflag is not this
+batch's stamp means the traversal that built the verdict was looking at a
+different one."*
+
+And `snapshot_outputs` shows what that costs:
+
+    vector<Var*> FusedOp::snapshot_outputs(Op* op) const {
+        if (batch_op_outputs && op->batch_stamp == batch_stamp_wanted) {
+            ...
+            return (*batch_op_outputs)[idx];      // the snapshot
+        }
+        vector<Var*> out;
+        for (Var* o : op->outputs()) out.push_back(o);   // live edges
+        return out;
+    }
+
+The planner takes that snapshot precisely because, as `run_sync` puts it, *"a
+live var can still have its edges released"*. But the snapshot is consulted
+**only while the stamps match**. Let a concurrent traversal advance the stamp
+and the op no longer matches, so the function falls back to the live edges --
+the ones `erase_output` has just emptied. The result is a `FusedOp` with no
+outputs, and `ASSERT(outputs().size())` at `fused_op.cc:163`.
+
+**The protection built for this case is bypassed in the case it was built for**,
+silently, by a stamp comparison that a second thread can invalidate.
+
+To be precise about what is measured and what is inferred: the `erase_output`
+lines with diverging `tflag`/`batch_stamp` are measured, the assert firing is
+measured, and the fallback's condition is in the source. What has not yet been
+caught in one log is the assert's own dump, which prints `batch_stamp_wanted`
+beside each op's `batch_stamp` and would show the mismatch directly -- that
+block is gated behind the same env var and did not fire in ten runs. That is the
+confirming measurement, and it is the next thing to catch.
+
 **Reading the threading machinery: most of it is careful, and one thing is
 not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
 process-wide mutex, recursive by thread, and it handles the GIL inversion the
