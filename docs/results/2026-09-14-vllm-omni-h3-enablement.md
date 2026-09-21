@@ -5154,6 +5154,76 @@ things temper it: turning it on *skips* `top_weak_sync`, so it narrows what a
 weak sync sweeps rather than making anything safer, and the thread hypothesis it
 serves is itself still unconfirmed at the time of writing.
 
+**The decisive arm: thread is the variable.** Three arms, six samples each,
+alternating inside one model load so they share a server instance and any drift
+hits all three equally. `none` does nothing; `producer` syncs the Var at the
+quantiser, on the `_busy_loop` thread; `consumer` syncs *the same Var with the
+same call* at the post-process, on the orchestrator thread.
+
+| arm | results | failures |
+| --- | --- | --- |
+| `none` | ok, NOISE, ok, NOISE, DEGRADED, NOISE | **4/6 (67%)** |
+| `producer` | ok ok ok ok ok ok | **0/6** |
+| `consumer` | ok, DEGRADED, ok, ok, NOISE, DEGRADED | **3/6 (50%)** |
+
+Switch counts verified -- `producer:synced` x6, `consumer:synced` x6, twelve
+skips each -- and the gate passed. The `none` arm's 67% reproduces the
+independent N=12 baseline exactly, which is the first time two separately
+measured baselines here have agreed.
+
+**The same sync, on the same Var, is a complete fix on the producing thread and
+does nothing on the consuming one.** `producer` against the 67% baseline is
+p = 0.33^6 = 0.0013. `consumer` sits with the baseline. (Stated precisely:
+`producer` vs baseline is established at p~0.001; `consumer` vs `producer`
+alone is Fisher p = 0.09, just short of 5%, but `consumer` matching the baseline
+is what carries it.)
+
+That retires "position is the variable" in favour of the thing position was
+standing in for. Every clean position measured over the last several hours --
+quantiser top, quantiser end, `DiffusionOutput` construction -- is on the
+worker thread, and the single failing one is on the orchestrator thread. The
+window-narrowing was real but it was narrowing the wrong axis.
+
+**Reading the threading machinery: most of it is careful, and one thing is
+not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
+process-wide mutex, recursive by thread, and it handles the GIL inversion the
+right way round -- drop the GIL, block on the lock, take the GIL back with the
+lock held -- so a thread waiting for the executor never holds the GIL and the
+classic deadlock has nowhere to form. Concurrent `run_sync` is therefore not
+the race.
+
+`top_weak_sync` is the exception, and it is the only thing `use_threading`
+controls -- the flag appears exactly twice in the source, its definition and
+that one `if`. The queue it walks is a **process-global cursor**:
+
+    VarHolder* peek_pending() const {
+        if (sync_cursor_ == holders_.begin()) return nullptr;
+        return *std::prev(sync_cursor_);
+    }
+    void consume_pending() {
+        if (sync_cursor_ != holders_.begin()) --sync_cursor_;
+    }
+
+and `RuntimeHolderState` says outright that it relies on the GIL:
+*"Mutations retain the existing serialized runtime/GIL requirement."* Two
+threads calling a weak sync share that one cursor. A holder consumed by one
+thread's sync and then dropped -- on `_outputs.size()`, `is_finished()` or
+`_kept` -- is past the cursor permanently, so a later weak sync on the other
+thread will not consider it a root. If the producing thread was relying on a
+later `sync_all` to sweep it, it is silently never evaluated as one.
+
+In this deployment both threads do exactly that: the worker builds and syncs,
+the orchestrator fetches. So `use_threading=1` is not a shot in the dark -- it
+disables the single mechanism by which one thread's sync can quietly remove
+another thread's holder from the weak-sync frontier. That is a candidate fix
+with a named mechanism, and it costs one arm.
+
+Reproduction 9 targets the same mechanism without the H3 stack: a held non-sink
+Var on the main thread, a second Python thread doing nothing but
+`jt.sync_all(True)` in a loop so the two share the cursor, forty rounds, run at
+`use_threading` 0 and 1. The eight reproductions before it had no second thread
+in them at all, which is the most likely reason none triggered.
+
 **A fourth checker hole, and this one is in jittor's own.** If the finding is
 that a pending graph goes bad while it waits, the mechanism to look for is its
 inputs being released early -- a liveness accounting bug. `check_graph=1` is the
