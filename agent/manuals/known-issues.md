@@ -1332,10 +1332,13 @@ the element it is relative to.
   flush for 1e-45`. A build where the policy switch did nothing cannot satisfy
   it, which is the failure mode a one-sided "CUDA flushes" assertion would miss.
 
-## KI-CLEANUP-001: the duplicate-implementation gate is red with 24 groups and no decision
+## KI-CLEANUP-001: fixed -- the duplicate gate scans the test tree again and names the kind
 
 - Severity: Medium (a gate nobody can act on is a gate nobody reads)
-- Status: Reproduced and enumerated 2026-09-11, undecided
+- Status: Fixed 2026-09-21. It had been made green on 2026-09-11 by skipping
+  every path with a `tests` component, which is the option this entry argued
+  against: that also stops the gate noticing an implementation copied into a
+  test. The tree is back in scope and the two kinds are answered separately.
 - Owner: cleanup and packaging maintainers
 - Evidence:
   `tests/structure/test_cleanup_structure.py::TestCleanupStructure::test_cross_file_duplicate_implementations_are_reviewed`
@@ -1374,12 +1377,33 @@ the element it is relative to.
   was built for, but excluding the tree outright would also stop it noticing a
   real implementation copied into a test. Reporting the two kinds separately is
   the shape that keeps both.
+- What was done, 2026-09-21. The `tests` exclusion is gone, so the scan covers
+  `python/`, `backends/`, `compat/` and `tests/`. Duplicates are partitioned by
+  whether any path has a `tests` component and answered by kind:
+
+  * **shipped code** -- reviewed by *exact group*, unchanged from before, so a
+    kernel copied to a new pair of files is still not covered by having
+    reviewed the old pair. All 14 groups were already allowlisted.
+  * **test tree** -- reviewed by *name*, with one line of reason each, in
+    `reviewed_test_tree_names`. Re-enumerated with the tree in scope: 38 groups
+    over 93 paths and 27 name keys (`Base` ×5, `setUpModule` ×7, `both_devices`
+    ×2, the NumPy references the OpInfo definitions share, the sample model
+    repeated across the three example-derived test files, and the small probes
+    and permutation indices the backend tests repeat). By name rather than by
+    group because this scaffolding keeps being repeated; the honest cost is
+    that a *new* group reusing an allowed name is not caught, which the
+    docstring says.
+
+  Each of the two assertions carries its own message, so a failure says which
+  tree changed. Verified by teeth, not by reading: renaming `Base` in the
+  allowlist turns the gate red with
+  `test-tree definitions repeated across files with no reviewed reason: ['Base']`.
 - Workaround: none needed at runtime; this is a gate, not a defect in shipped
-  behaviour. Do not read its red as evidence of a new duplicate.
-- Review/expiry condition: every group above has an answer -- deduplicated, or
-  allowlisted with the reason written next to it -- and the gate distinguishes
-  a shipped-code duplicate from a test-tree one in its message, so the next
-  failure names what changed.
+  behaviour.
+- Review/expiry condition: met 2026-09-21 -- every group has an answer, and the
+  failure names the kind. Re-open if a name has to be added to
+  `reviewed_test_tree_names` without a reason, or if a shipped-code group is
+  allowlisted without one.
 
 ## KI-BACKEND-009: CUDA cannot compile a logical or narrow-integer reduction
 

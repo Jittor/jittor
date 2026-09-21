@@ -168,13 +168,32 @@ class TestCleanupStructure(unittest.TestCase):
         self.assertEqual(duplicates, [])
 
     def test_cross_file_duplicate_implementations_are_reviewed(self):
+        """Reviewed, and the report says which tree a duplicate is in.
+
+        This scans the test tree as well as the shipped one. It used to skip any
+        path with a `tests` component, which made the gate green by narrowing
+        what it looks at: that also stopped it noticing an implementation copied
+        into a test, which is the failure this gate exists for. KI-CLEANUP-001
+        left the choice written down -- "excluding the tree outright would also
+        stop it noticing a real implementation copied into a test. Reporting the
+        two kinds separately is the shape that keeps both."
+
+        So the two kinds are answered differently. A shipped duplicate is
+        reviewed by *exact group*: copying a kernel to a new pair of files is not
+        covered by having reviewed the old pair. A test-tree duplicate is
+        reviewed by *name*, because the same four-line `Base` or `setUpModule`
+        is scaffolding that will keep being repeated, and a reason per name is
+        what a reader needs. That is looser in one direction -- a new group
+        reusing an allowed name slips through -- so the report below names the
+        kind, and a new *name* in either tree still fails.
+        """
         implementations: Dict[str, List[Tuple[str, str]]] = {}
         sources = sorted(
             path
-            for root in (self.repo_root / "python", self.repo_root / "backends", self.repo_root / "compat")
+            for root in (self.repo_root / "python", self.repo_root / "backends",
+                         self.repo_root / "compat", self.repo_root / "tests")
             for path in root.rglob("*.py")
-            if "tests" not in path.relative_to(root).parts
-            and not _is_build_output(path.relative_to(root), root)
+            if not _is_build_output(path.relative_to(root), root)
         )
         for path in sources:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -295,11 +314,74 @@ class TestCleanupStructure(unittest.TestCase):
                 return len(group) > 10 and all(name.endswith("_cmd") for _path, name in group)
             return False
 
-        unreviewed = sorted(
-            (sorted(group) for group in duplicate_groups if not reviewed(group)),
+        #: A test-tree definition that repeats across files, by name, with the
+        #: reason it is repeated rather than shared. One line each, because the
+        #: point is that a reader can check the claim: scaffolding is repeated
+        #: on purpose, and anything copied *out of the implementation* is not
+        #: here. Enumerated 2026-09-21; a name that is not in this dict fails.
+        reviewed_test_tree_names = {
+            "Base": "compat tests: a per-file unittest base with its own asserts",
+            "both_devices": "a two-line parametrisation over the device list",
+            "setUpModule": "the unittest module hook; seeding and guards are per-file",
+            "pytest_addoption": "the pytest hook, once per conftest",
+            "_cuda_available": "the capability probe, repeated per compat test file",
+            "_device_count": "the same probe, asking for a count instead",
+            "_device_array": "a device-value conversion helper for the CUDA tests",
+            "_device_value": "the scalar half of the same helper",
+            "_assert_acl_device": "an ACL device assertion, local to two ACL tests",
+            "_fetch_acl": "an ACL handle helper, local to the same two",
+            "_bfloat16_round": "a reference rounding helper for the dtype tests",
+            "bfloat16_round": "its dtype-named alias in the same file",
+            "_output_tensor": "a two-line tensor builder in the HF alias tests",
+            "_function_body": "an AST helper, local to two structure tests",
+            "_native_packages": "a package list builder in the compat structure tests",
+            "_softmax": "a NumPy reference for the attention OpInfo definitions",
+            "_softmax_np": "its alias where the reference shadows the op name",
+            "adaptive_avg_ref": "a NumPy reference for the pooling OpInfo definitions",
+            "conv2d_ref": "a NumPy reference for the convolution OpInfo definitions",
+            "conv_transpose2d_ref": "the transposed convolution reference",
+            "pool2d_ref": "the pooling reference beside it",
+            "matmul": "the sample model repeated in the three example-derived tests",
+            "Linear": "the same sample model's layer",
+            "Model": "the same sample model's container",
+            "MnistNet": "the small MNIST model repeated in three test files",
+            "check_equal": "relative-error helpers, two lines, per test file",
+            "check_share": "a storage-sharing assertion in the fp16/bf16 pair",
+            "gen_data": "an input builder repeated across the op tests",
+            "transpose0231": "permutation indices in the fp16/bf16 pair",
+            "transpose0231_2": "the second of that pair's permutations",
+        }
+
+        def in_test_tree(group):
+            return any("tests" in Path(relative).parts for relative, _name in group)
+
+        shipped_groups = [group for group in duplicate_groups if not in_test_tree(group)]
+        test_groups = [group for group in duplicate_groups if in_test_tree(group)]
+
+        # Shipped code: reviewed by exact group, because a new pair of files
+        # holding a copied kernel is not covered by having reviewed the old pair.
+        unreviewed_shipped = sorted(
+            (sorted(group) for group in shipped_groups if not reviewed(group)),
             key=repr,
         )
-        self.assertEqual(unreviewed, [])
+        self.assertEqual(
+            unreviewed_shipped, [],
+            "shipped-code duplicates with no reviewed answer: %r" % (unreviewed_shipped,),
+        )
+
+        # Test tree: reviewed by name, with the reason above. The kind is named
+        # in the message so that the next failure says which tree changed.
+        unreviewed_test_names = sorted({
+            name
+            for group in test_groups
+            for _path, name in group
+            if name not in reviewed_test_tree_names
+        })
+        self.assertEqual(
+            unreviewed_test_names, [],
+            "test-tree definitions repeated across files with no reviewed reason: %r"
+            % (unreviewed_test_names,),
+        )
 
     def test_legacy_fsdp2_path_names_are_absent_everywhere(self):
         forbidden_names = {
