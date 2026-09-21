@@ -142,8 +142,19 @@ struct CommonOpType : OpByType {
             // Casting the operands to the output type first discarded the
             // fraction of the *inputs*: KI-OPS-003.
             {"floor_divide", "@if(@strcmp($1,float32)==0,(($1)std::floor(($1($2))/($1($4)))),@if(@strcmp($1,float64)==0,(($1)std::floor(($1($2))/($1($4)))),jittor::_floor_divide($1($2), $1($4))))"},
-            {"init_maximum", "std::numeric_limits<$1>::lowest()"},
-            {"init_minimum", "std::numeric_limits<$1>::max()"},
+            // KI-OPS-008: the identity a float reduction folds *from* has to be
+            // an infinity, not the lowest finite value. `max(lowest(), -inf)`
+            // keeps `lowest()`, so a float32 tensor whose maximum really is
+            // -inf reported -3.4e38 here while CUDA reported -inf -- reachable
+            // without writing an infinity by hand, because a fully masked
+            // attention row is all -inf and `logits.max(-1)` is this reduction.
+            // Integers keep `lowest()`/`max()`: that *is* their identity and
+            // they have no infinity to lose, so this dispatches rather than
+            // replacing the row. `has_infinity` picks the branch per $1 and is
+            // a compile-time constant, so the unused arm is still well-formed
+            // for integers (their `infinity()` is valid and yields 0).
+            {"init_maximum", "(std::numeric_limits<$1>::has_infinity ? -std::numeric_limits<$1>::infinity() : std::numeric_limits<$1>::lowest())"},
+            {"init_minimum", "(std::numeric_limits<$1>::has_infinity ? std::numeric_limits<$1>::infinity() : std::numeric_limits<$1>::max())"},
         };
 
         static unordered_map<string,string> both_map {

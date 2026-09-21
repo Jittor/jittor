@@ -385,44 +385,50 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   it red: `log(1.0000000000000004) in float64 gave 0.0, NumPy gives
   4.440892098500625e-16`.
 
-## KI-OPS-008: the CPU max/min reduction starts from a finite identity
+## KI-OPS-012: the half-precision max/min reduction still folds from a finite literal
 
-- Severity: Critical
-- Status: Reproduced on CPU, unfixed; CUDA is already correct
+- Severity: Critical -- silent wrong value, on finite input as well as on
+  infinities, and only on the half dtypes.
+- Status: CPU half fixed and verified 2026-09-21; **CUDA half reproduced by
+  inspection only, unfixed** -- the fix needs a device to verify and there is
+  none on this machine. Distinct from [KI-OPS-008], which was the float32
+  float64 half of the same idea and is now closed (that CPU table dispatches on
+  `has_infinity`).
 - Owner: reduction operator maintainers
 - Evidence:
   [`test_minmax_reduction_identity.py`](../../tests/ops/test_minmax_reduction_identity.py)
-  `::TestMinMaxReductionIdentityCpu::test_infinite_reductions_use_the_right_identity`,
-  a strict expected failure; the CUDA class runs the same body and passes
-- Symptom: `jt.max` of a float32 tensor whose every element is -inf returns
-  -3.4028235e38 on CPU and -inf on CUDA; `jt.min` of an all +inf tensor is the
-  mirror image. NumPy and Torch return the infinity. A fully masked attention
-  row is exactly this input -- it is all -inf, and `logits.max(-1)` is exactly
-  this reduction -- so the wrong value is reachable without anyone writing an
-  infinity by hand.
-- Cause: `init_maximum` is `std::numeric_limits<$1>::lowest()` in the CPU table
-  of [`common_op_type.cc`](../../src/type/common_op_type.cc) and
-  `::numeric_min<$1>()` in the CUDA table, and the CUDA one resolves to
-  `-CUDART_INF` for float and double. `max(lowest(), -inf)` keeps the identity
-  instead of the element, so on CPU no reduction can ever report an infinity it
-  was given. It is the `init_maximum`/`init_minimum` rows that are wrong, not
-  the `maximum`/`minimum` rows beside them, which is why KI-BACKEND-004
-  changing the latter did nothing here. Integers are unaffected: `lowest()`
-  *is* their identity and they have no infinity to lose, so the fix has to
-  dispatch on the dtype rather than replace the row.
-- Distinct from KI-BACKEND-004, and untouched by it. That was the NaN
-  behaviour of the `maximum`/`minimum` *operators*, now fixed; this is the
-  identity the reduction folds *from* -- a per-output-element constant, with no
-  effect on the inner loop. Re-measured after that fix, 2026-09-10: CPU
-  `jt.max` of an all `-inf` float32 tensor still returns `-3.4028235e38` and
-  CUDA still returns `-inf`, and the strict expected failure above still
-  fails. `jittor::_max(lowest(), -inf)` is `lowest()`, exactly as
-  `std::max(lowest(), -inf)` was, so nothing about this entry moved.
-- Workaround: on CPU, treat a result equal to `numpy.finfo(dtype).min` (or
-  `.max` for `min()`) as possibly an infinity, or run the reduction on CUDA.
-- Review/expiry condition: the CPU identity resolves to `-inf`/`+inf` for
-  float32 and float64 while integers keep `lowest()`/`max()`, the strict
-  expected failure above turns red, and this entry is removed.
+  `::TestMinMaxReductionIdentityCpu::test_half_precision_reductions_use_the_right_identity`
+  now passes; the CUDA class carries the same body as a strict expected failure
+  and is skipped without a device.
+- Symptom, measured on CPU before the fix, `use_cuda=0`:
+
+      dtype       max([-inf,-inf])   min([+inf,+inf])   max([-65504,-65504])
+      float16     -3.277e+04         3.277e+04          -32768   (should be -65504)
+      bfloat16    -32768.0           32768.0            --       (bound is 3.39e38)
+
+  The third column is the worse half: -65504 is float16's *lowest finite value*,
+  an ordinary number, and `-32768` is above it -- so the reduction answered a
+  value that was not in its input. `min` mirrored it at +65504.
+- Cause: `init_maximum`/`init_minimum` are plain finite literals in
+  [`fp16_op_type.cc`](../../src/type/fp16_op_type.cc) -- `-32768.0f`/`32768.0f`
+  in the CPU map, `-65000.0f`/`-1e38` in the CUDA one -- while `-inf`/`+inf` is
+  representable in both float16 and bfloat16. The CPU map already widens its
+  operands to float32 for `maximum`/`minimum`, so the fixed CPU rows answer from
+  `std::numeric_limits<float>::infinity()`; `<limits>` is now included by
+  [`fp16_compute.h`](../../src/type/fp16_compute.h), which the post-pass injects
+  into every half kernel, because `core/common.h` pulls in neither `<limits>`
+  nor `<cmath>`.
+- What the CUDA half still needs: `-CUDART_INF_F`/`CUDART_INF_F` for float16 and
+  bfloat16 (both convert from float), which means reaching
+  `type/cuda_limits.h` -- today that header is pushed only by `parallel_pass`,
+  not by the half post-pass, so the change has to bring the include with it.
+  Not attempted here: it cannot be compiled or run without a device, and a
+  half-fix that breaks the half kernels' build on the main accelerator path
+  would be worse than the defect.
+- Integer and float32/float64 reductions are unaffected and are covered as
+  controls in the same file.
+- Review/expiry condition: the CUDA half class's strict expected failure turns
+  red (i.e. the CUDA rows answer from an infinity), and the entry is removed.
 
 ## KI-SEMANTICS-003: floating-comparison backend verification incomplete
 

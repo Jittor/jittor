@@ -8,6 +8,11 @@
 #include "core/common.h"
 #include "type/minmax_compute.h"
 
+// For the reduce identities of the half dtypes: `common.h` pulls in neither
+// <limits> nor <cmath>, and the CPU half table answers from
+// `std::numeric_limits<float>::infinity()` (KI-OPS-012).
+#include <limits>
+
 #if defined(JIT_cuda) && !defined(IS_ACL)
 
 #include <driver_types.h>
