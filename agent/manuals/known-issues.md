@@ -297,6 +297,40 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   (16, 128, 1024), whose last-dim `max` is exactly this reduction, moves 1.175
   -> 1.207 ms while the `layernorm` control moves 1.690 -> 1.757 ms in the same
   run. The control moved more, so there is no measurable cost there.
+- Re-measured 2026-09-21, and the figure above is **data-dependent by 4.4x** --
+  which the table above does not say and does not control for. 16.7M float32,
+  five interleaved repetitions, minimum, this tree:
+
+  | input | `sum` (control) | `max` | `min` |
+  | --- | --- | --- | --- |
+  | ascending `arange` | 25.48 | **1.64** | 7.24 |
+  | descending `arange` | 25.39 | 7.24 | **1.64** |
+  | `randn` | 25.38 | 7.24 | 7.24 |
+  | all-equal | 25.34 | **1.64** | **1.64** |
+
+  So the 7.24 in the table above is the `randn` row, and a 16.7M `arange` --
+  the obvious thing to write in a quick harness -- reports `max` at 1.64. Two
+  consequences. Any attempt to close this entry must name the data, because
+  "within 10% of the `std::max` figures" is satisfiable on one row and not on
+  another. And it is not an asymmetry between the two ops: descending swaps
+  `max` and `min` exactly, so whatever the mechanism is, it is about what the
+  accumulator does, not about which comparison is used.
+- The accumulator lives in memory across the whole inner loop. Line 464 of
+  [`reduce_op.cc`](../../src/ops/reduce_op.cc) is
+  `yp[yid] = _max(yp[yid], xp[xid])` with `yid` invariant in the innermost
+  reduced loop -- a read-modify-write of one address per element. That is the
+  obvious lever and it is *not* what the paragraph above pursued (the stride):
+  an accumulator hoisted into a local, stored once per output, removes the
+  per-element RMW and shortens the dependency chain. The measured hint that this
+  is the right lever is already in this entry -- "eight partials of this same
+  `|` form reach 13.7 GB/s" -- because partials are what breaks that chain.
+  Not attempted here: restructuring the `@for` nest in that template is the
+  kind of change that needs its own before/after run, and 2026-09-21 had no
+  budget for it.
+- Also re-measured the same day: the KI-OPS-008 fix (the identity dispatching to
+  `+-inf`) is **performance-neutral** here. The same harness against a worktree
+  without it reads `max` 1.63/1.64 and `min` 7.24/7.29 at 1M and 16M -- the same
+  numbers to within the run-to-run spread.
 - Cause, measured rather than assumed. `std::max(a, b)` is one `maxss`;
   NumPy's `maximum` is a compare, an or, and a select, and g++ does not
   recognise the result as a reduction. Timed in isolation on 16.7M float32 at
@@ -345,7 +379,10 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   compile-time constant when it is one -- the loop versioned, or `@if` on a
   unit-stride specialisation -- and the float32 `max`/`min` reduction is within
   10% of the `std::max` figures above on the same benchmark. Then this entry
-  goes.
+  goes. **Name the data pattern when you measure it**: as the 2026-09-21
+  re-measurement below shows, the same kernel answers 7.24 or 1.64 GB/s
+  depending only on whether the input's order makes the accumulator move every
+  element or never, so a figure without its input is not a figure.
 
 ## KI-OPS-007: fixed -- the CUDA unary math table dispatches on dtype
 
