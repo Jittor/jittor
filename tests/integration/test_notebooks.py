@@ -17,6 +17,7 @@ from _helpers.child_process import run_python_child
 
 
 _TOPICS = (
+    "autograd_details",
     "basics",
     "checkpointing",
     "conditional_gan",
@@ -27,6 +28,7 @@ _TOPICS = (
     "example",
     "getting_started",
     "gpt2_training",
+    "jit_and_async",
     "lora",
     "meta_op",
     "mixed_precision",
@@ -45,6 +47,8 @@ _SMOKE_TOPICS = (
     "example",
     "data_pipeline",
     "checkpointing",
+    "autograd_details",
+    "jit_and_async",
     "meta_op",
     "custom_op",
     "profiler",

@@ -5643,6 +5643,64 @@ What stays is what stands on its own: the failure handlers that no longer
 destroy their diagnostic, `check_graph`'s sweep, `JT_BUILD_SYMBOLS`, the
 ungated dump, and the 10-second reproduction with its control.
 
+**The decisive experiment, and it should have come first.** One env var apart
+on the same binary, with the deletion of freed nodes switched off:
+
+| | crash | survived |
+| --- | --- | --- |
+| delete the freed nodes (shipped behaviour) | **6/6** | 0 |
+| never delete them | **0** | **6/6** |
+
+Fisher p ~ 0.002. **The crash is a use-after-free on a deleted node**, and the
+fix belongs to lifetime.
+
+Both outcomes of that experiment were useful, which is why it was worth running
+before another guess: a null result would have removed the whole deletion line
+of enquiry rather than leaving it open. The three failed attempts above went the
+other way round -- guess a fix, test it, learn only that it did not work -- and
+that ordering is the mistake, not the individual guesses.
+
+It also convicts attempt 3. "Defer the drain while a batch holds pointers" is
+*temporary leaking*, and leaking works, so it should have worked. The likely
+reason it did not is the trap this whole investigation keeps falling into: its
+guard was never checked to have fired. The reimplementation counts deferrals and
+says so once, so the next measurement of it cannot be scored blind.
+
+**Pinning: the first thing that survives the race, and still not shippable.**
+Following the leak result to its conclusion -- mark the nodes a batch holds and
+have the drain skip exactly those -- took three iterations, each closing one
+hole the previous one left:
+
+| pinned | threads=1 |
+| --- | --- |
+| the planner's BFS queue | crash 6/6 |
+| + every op's outputs | crash 6/6 |
+| + every op's inputs | **survives the loop** |
+
+The guard was made to say so once (`kept a pinned node out of the free-buffer
+drain`), because the one attempt in this investigation that was scored without
+that check turned out never to have fired.
+
+Two things stop it being a fix. Throughput collapses: with a rival thread the
+reproduction manages **one round in 15 seconds**, against 38,497 in six with no
+rival. The cause is structural -- pinned nodes stay in `free_buffer`, the buffer
+grows, and every drain rebuilds it in O(size), so drains go quadratic. And the
+crash does not go away, it **moves to teardown**: `SURVIVED` prints and the
+process then dies at exit.
+
+Both symptoms say the same thing about the approach. A flag plus a
+skip-on-drain is an attempt to simulate ownership, and it fails in the two ways
+simulated ownership always fails: it misses holders (the first two iterations)
+or it strangles reclamation (the third). What the code actually needs is for
+`plan.ops` to *own* its operators -- a counted handle, the way `VarPtr` already
+does for vars -- so that reclamation is correct by construction instead of by a
+reachability enumeration that has to be kept in sync with every walk
+`update_ops` performs.
+
+That is a change to node ownership, not a patch to the drain, and it is where
+this should go next. All of the pinning work is reverted; what it leaves behind
+is the diagnosis and the 10-second loop to test the next attempt against.
+
 **Reading the threading machinery: most of it is careful, and one thing is
 not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
 process-wide mutex, recursive by thread, and it handles the GIL inversion the

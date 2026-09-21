@@ -49,7 +49,7 @@ import time
 
 import jittor as jt
 
-jt.flags.use_cuda = 0        # 本篇用 CPU；有显卡时它会自动打开
+jt.flags.use_cuda = 0        # 本篇用 CPU；有显卡时可以把它改成 1
 
 a = jt.randn((512, 512))
 b = jt.randn((512, 512))

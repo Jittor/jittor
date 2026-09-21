@@ -358,6 +358,7 @@ include examples/README.md
 include examples/gan/README.md
 include examples/gan/simple_cgan.py
 include examples/notebooks/README.md
+include examples/notebooks/autograd_details.md
 include examples/notebooks/basics.md
 include examples/notebooks/checkpointing.md
 include examples/notebooks/conditional_gan.md
@@ -370,6 +371,7 @@ include examples/notebooks/figs/mnist.png
 include examples/notebooks/figs/mop.svg
 include examples/notebooks/getting_started.md
 include examples/notebooks/gpt2_training.md
+include examples/notebooks/jit_and_async.md
 include examples/notebooks/lora.md
 include examples/notebooks/meta_op.md
 include examples/notebooks/mixed_precision.md
