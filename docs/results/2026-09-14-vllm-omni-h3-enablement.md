@@ -5038,6 +5038,27 @@ Every arm from here uses **N=12**. The first of them re-runs `tid` with its
 post-process hook repaired, which answers the thread question and rebuilds the
 baseline on twelve samples at the same time.
 
+**What the recalibration does to the 24 ruled-out hypotheses.** Most of them
+were ruled out the same way today's two withdrawn conclusions were: a handful of
+requests, scored against a failure rate that did not apply. Any of them rejected
+on "still failed at a similar rate" or "clean for N requests" with N small is
+not actually rejected.
+
+The clearest case is in-place writes. That one was dismissed because rewriting
+the quantiser out-of-place "fails identically, at 5/6". Against the measured
+25% baseline, 5/6 is not identical -- it is **worse**, by a lot, and a result
+that says the out-of-place rewrite makes things worse is a finding, not a
+dismissal. It needs re-measuring before anything is concluded from it either
+way.
+
+This does not mean every hypothesis is back. The ones ruled out by reading
+configuration or code -- `enable_cpu_offload` being false, the VAEs never
+staging an offload, `--usp` being a size rather than a mode, `vae_use_tiling`
+being a dead attribute -- stand, because they were never scored. It is the
+ones ruled out by counting failures that have to be re-run at N=12, and the
+interleaved harness makes that cheap: paired arms in one model load, six pairs
+in about the time one old three-request arm took.
+
 **A flag that exists for exactly this, and this deployment does not set it.**
 `executor.cc` declares
 
