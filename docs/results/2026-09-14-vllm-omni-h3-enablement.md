@@ -5870,6 +5870,31 @@ single-threaded control in the same script. Eleven fix attempts were made
 against a premise that was never checked; the next one can be checked in the
 time it takes to read this paragraph.
 
+**Deferring the delete does not fix the video corruption.** With the
+reproduction finally able to answer this in minutes, the question that had been
+open all day -- is H3's corruption the same use-after-free the standalone
+segfault is? -- gets a direct answer:
+
+| arm (paced, no sync) | result |
+| --- | --- |
+| normal deletion | 12/12 all-NaN |
+| **delete deferred by 200k nodes** | **12/12 all-NaN** |
+
+Leaking *everything* is not an available probe at this scale, and that itself is
+a measurement: the reference decode went from 17s to **835s** and the box to
+**993GB** resident, because one decode is hundreds of thousands of nodes. The
+bounded version keeps the memory finite and changes nothing.
+
+So the two defects share a trigger -- two Python threads inside jittor at once --
+and **not a mechanism**. On the standalone reproduction, switching deletion off
+takes the segfault from 6/6 to 0/6; on H3's decode it does nothing. The
+use-after-free direction, which eleven fix attempts were aimed at, is aimed at
+the wrong one of the two.
+
+One reading survives and is being measured: 200k may simply be smaller than one
+decode's node count, in which case the window never opened. That is a number,
+not a guess, and it is the next thing on the wire.
+
 **Reading the threading machinery: most of it is careful, and one thing is
 not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
 process-wide mutex, recursive by thread, and it handles the GIL inversion the
