@@ -5848,6 +5848,28 @@ The NaN matters beyond the checker. Two of the server's failures were
 all-NaN frame is exactly what an encoder refuses. That is the first time a
 symptom on the two sides has matched rather than merely co-occurred.
 
+**And paced, the workaround works -- so the reproduction is usable.**
+
+    sync path=tensor.sync
+    checked=12 mismatches=0 nan_decodes=0 worst_finite_rel=0.002145
+
+| arm | reproduction | server |
+| --- | --- | --- |
+| no sync | 12/12, all-NaN | 67% (including NOFRAMES) |
+| **`varsync`** | **0/12** | **0/6** |
+| single thread | 0/12 | -- |
+
+Twelve decodes back inside the control's 0.002 band. The reproduction now
+matches the deployment on every arm that has been measured on both, including
+the asymmetry that took most of a day to establish on the server -- `varsync`
+works, `sync_all` does not.
+
+**This is the verification loop this investigation has lacked.** Minutes per
+arm instead of twenty, no server, no diffusion loop, no HTTP, and a
+single-threaded control in the same script. Eleven fix attempts were made
+against a premise that was never checked; the next one can be checked in the
+time it takes to read this paragraph.
+
 **Reading the threading machinery: most of it is careful, and one thing is
 not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
 process-wide mutex, recursive by thread, and it handles the GIL inversion the

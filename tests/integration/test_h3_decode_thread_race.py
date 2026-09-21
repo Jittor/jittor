@@ -47,10 +47,39 @@ std = torch.tensor(cfg["latents_std"], device="cuda:0",
                    dtype=torch.float32).view(1, -1, 1, 1, 1)
 
 
+import os
+SYNC_PRODUCER = int(os.environ.get("H3DR_SYNC_PRODUCER", "0"))
+_SYNC_REPORTED = False
+
+
 def decode():
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16,
                                                 enabled=True):
-        return model.decode_base(latent * std + mean)
+        out = model.decode_base(latent * std + mean)
+    if SYNC_PRODUCER == 1:
+        # `varsync` syncs *this Var*, not the world. The two are not the same
+        # here: on the server, `jt.sync_all(True)` at the same position behaved
+        # differently from `video.sync(True)`, which is what the w_all arm was
+        # for. Reaching the underlying jittor Var through the shim's tensor.
+        # Say once what was actually reached and whether the sync ran. Every
+        # change in this investigation that was scored without that check
+        # turned out not to have taken effect.
+        # `torch.Tensor` in this shim *inherits from* jittor_core.Var, so the
+        # sync is on the tensor itself -- exactly what the deployment's
+        # `varsync` does. Looking for `_jt_var` found None and silently fell
+        # back to `out.float().sum().item()`, which is a different operation;
+        # two arms were scored against that before the self-report caught it.
+        global _SYNC_REPORTED
+        did = "tensor.sync"
+        out.sync(True)
+        if not _SYNC_REPORTED:
+            _SYNC_REPORTED = True
+            print("sync path=%s out_type=%s has_jt_var=%s"
+                  % (did, type(out).__name__, True), flush=True)
+    elif SYNC_PRODUCER == 2:
+        import jittor as jt
+        jt.sync_all(True)
+    return out
 
 
 print("START rounds=%d consumers=%d" % (ROUNDS, NCONS), flush=True)
@@ -59,7 +88,15 @@ ref = decode().float().cpu().numpy()     # quiet reference, nothing else running
 print("reference captured at %.1fs shape=%s mean=%.4f"
       % (time.time() - t0, ref.shape, float(ref.mean())), flush=True)
 
-work = queue.Queue(maxsize=3)
+# The server does one decode per request, seconds apart. This producer decodes
+# flat out, which is two or three orders of magnitude more pressure and may open
+# paths the server never reaches -- the workaround that fixes the server does
+# not fix this reproduction, and that is the first thing to test. PACED=1 makes
+# the producer wait for the consumer to finish each item before starting the
+# next, which is the server's rhythm.
+PACED = int(os.environ.get("H3DR_PACED", "0"))
+done_one = threading.Event()
+work = queue.Queue(maxsize=1 if PACED else 3)
 stop = threading.Event()
 results = []
 lock = threading.Lock()
@@ -72,11 +109,22 @@ def consumer():
         except queue.Empty:
             continue
         got = out.float().cpu().numpy()   # the cross-thread fetch
-        d = float(np.abs(got - ref).max())
-        rel = d / max(1e-9, float(np.abs(ref).max()))
+        # NaN in the output makes `np.abs(got-ref).max()` NaN, and `nan > tol`
+        # is False -- so a NaN decode scored as a pass. That is a checker that
+        # turns a failure into a success, which is worse than one that misses
+        # a failure, and it is the eighth scoring hole found in this
+        # investigation. NaN is now infinite error.
+        nan_frac = float(np.isnan(got).mean())
+        if nan_frac > 0:
+            rel = float("inf")
+        else:
+            d = float(np.abs(got - ref).max())
+            rel = d / max(1e-9, float(np.abs(ref).max()))
         with lock:
             results.append((i, rel))
         del out, got
+        if PACED:
+            done_one.set()
 
 
 # NCONS=0 is the control: the main thread fetches each decode itself, so no
@@ -91,13 +139,18 @@ for i in range(ROUNDS):
     out = decode()                        # producer keeps decoding, does not wait
     if NCONS == 0:
         got = out.float().cpu().numpy()
-        rel = float(np.abs(got - ref).max()) / max(1e-9, float(np.abs(ref).max()))
+        rel = (float("inf") if np.isnan(got).any()
+               else float(np.abs(got - ref).max()) / max(1e-9, float(np.abs(ref).max())))
         with lock:
             results.append((i, rel))
         del got
     else:
         try:
+            if PACED:
+                done_one.clear()
             work.put((i, out), timeout=5)
+            if PACED:
+                done_one.wait(timeout=30)   # the server's rhythm: one at a time
         except queue.Full:
             pass
     del out
@@ -128,7 +181,10 @@ with lock:
     bad = [(i, r) for i, r in results if r > 1e-2]
 for i, r in bad[:5]:
     print("  MISMATCH round=%d rel=%.4g" % (i, r), flush=True)
-worst = max((r for _, r in results), default=0.0)
-print("checked=%d mismatches=%d worst_rel=%.4g" % (checked, len(bad), worst))
+finite = [r for _, r in results if np.isfinite(r)]
+n_inf = sum(1 for _, r in results if not np.isfinite(r))
+worst = max(finite, default=0.0)
+print("checked=%d mismatches=%d nan_decodes=%d worst_finite_rel=%.4g"
+      % (checked, len(bad), n_inf, worst))
 print("VERDICT:", "NO-SAMPLES" if checked == 0
       else ("REPRODUCED" if bad else "no trigger"))
