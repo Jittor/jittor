@@ -5794,6 +5794,37 @@ Its threshold is the control's, not a guess: 0.01 is four times the widest
 single-threaded sample and three orders below the smallest two-threaded
 failure, so the populations do not overlap near it.
 
+**But it does not answer to the workaround, and that is a problem.** On the
+server, `varsync` -- `video.sync(True)` on the producing thread -- takes the
+failure from 67% to 0 in 6. In this reproduction the equivalent barely moves it:
+
+| arm | failures |
+| --- | --- |
+| no sync | 12/12 |
+| `jt.sync_all(True)` | 7/12 |
+| `out.sync(True)`, the true `varsync` equivalent | 10/12 |
+
+Two of those three numbers were nearly reported as evidence against the
+reproduction before a self-report caught what they actually measured: reaching
+for `out._jt_var` returned `None`, so the sync silently fell through to
+`out.float().sum().item()`, a different operation. In this shim `torch.Tensor`
+*inherits from* `jittor_core.Var`, so the sync is `out.sync(True)` on the tensor
+itself. That is the eighth "changed it but it never took effect" of this
+investigation, and the first caught before a conclusion rather than after.
+
+With the arm fixed the mismatch stands: the workaround that fixes the server
+does not fix this. The likeliest reading is that the reproduction is a
+*related but different* corruption -- its producer decodes flat out, where the
+server does one decode per request, a difference of two or three orders of
+magnitude in pressure, and that may open paths the server never reaches.
+
+So this cannot be used as the verification loop for a fix yet. Using it that way
+would steer the fix at whatever this reproduces rather than at the deployment's
+bug. The next step is to slow the producer to the server's rhythm -- decode,
+wait for the consumer, decode again -- and see whether `varsync` recovers its
+effect. If it does, the reproduction is usable once its pressure is tuned. If it
+does not, it is a different defect and the H3 question goes back to the server.
+
 **Reading the threading machinery: most of it is careful, and one thing is
 not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
 process-wide mutex, recursive by thread, and it handles the GIL inversion the
