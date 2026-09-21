@@ -1,10 +1,12 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-09-11 -- a documentation pass over id collisions and
-  statements the `-Ofast` removal made stale, not a re-verification of every
-  entry
-- Baseline: `2d716db31`
+- Last reviewed: 2026-09-21 -- a pass that changed five entries rather than
+  re-verifying every one: KI-OPS-008 closed and removed, KI-OPS-012 opened for
+  the half-precision half of the same identity, KI-OPS-006 re-measured and found
+  data-dependent, KI-CLEANUP-001 closed, and KI-AUTOGRAD-003 given a CPU
+  reproduction where it only had a CUDA one.
+- Baseline: `b0be99d8`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -708,6 +710,16 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
 - Evidence: real CUDA. `a = jt.ones((2048,2048)).cuda(); a.sync()` gives
   `a.location() == "device"`; `a.register_hook(lambda g: g)` then gives
   `a.location() == "none"`, the state of a Var whose data has not been produced.
+- Re-measured 2026-09-21 on **CPU**, which needs no device and is therefore the
+  cheap way to iterate on a fix: `jt.ones((4,4))` + `sync()` reads
+  `location == "cpu"`, and after `register_hook(lambda g: g)` it reads
+  `location == "none"` while `device == "cpu"` and the value still sums to 16.0.
+  So the two accessors do **not** agree, which the line above says they do:
+  only `location()` is wrong here, `device` is unchanged. The mechanism is
+  visible in `python/jittor/_core/hooks.py`: `register_hook` ends with
+  `v.swap(hooker(v)[0])`, so the Var the caller holds carries the state of the
+  hooker's not-yet-materialised output node -- and `location()` answers for that
+  node, not for the storage the value will resolve to.
 - Not what it looks like: the data is still there. Device memory does not drop
   (`+32 MiB` before and after), the value reads back correct, and the next
   device operation costs the same as without the hook -- 0.9x, measured with an
