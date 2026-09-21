@@ -31,6 +31,8 @@ notebook；**生成物（`.ipynb`）不进仓库**，一律写到仓库之外。
 | [算子与 Var](basics.md) | 两个核心概念；异步计算与 `sync` | 否 |
 | [设备与驻留](device_placement.md) | 数据到底在哪；全局 `use_cuda` 与 per-tensor 的差异；**读一个设备张量会把它搬走** | 部分小节需要 |
 | [模型定义与训练](example.md) | `Module`、参数、优化器、完整训练循环 | 否 |
+| [数据加载与预处理](data_pipeline.md) | 自定义 `Dataset`；`len(loader)`/`shuffle`/`num_workers` 的真实语义；`jt.transform` 与 torchvision 的差别 | 否 |
+| [检查点与断点续训](checkpointing.md) | 训练状态包含哪些部分；为什么只存权重会静默毁掉续训；`load_state_dict` 为什么不报错 | 否 |
 
 **建议按上面的顺序读。**「设备与驻留」放在训练之前是有意的：Jittor 的设备模型与
 PyTorch 不同，不先弄清楚，后面的性能问题会归因到错误的地方。

@@ -18,8 +18,10 @@ from _helpers.child_process import run_python_child
 
 _TOPICS = (
     "basics",
+    "checkpointing",
     "conditional_gan",
     "custom_op",
+    "data_pipeline",
     "device_placement",
     "diffusion",
     "example",
@@ -41,6 +43,8 @@ _SMOKE_TOPICS = (
     "basics",
     "device_placement",
     "example",
+    "data_pipeline",
+    "checkpointing",
     "meta_op",
     "custom_op",
     "profiler",

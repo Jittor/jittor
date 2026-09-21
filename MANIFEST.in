@@ -359,8 +359,10 @@ include examples/gan/README.md
 include examples/gan/simple_cgan.py
 include examples/notebooks/README.md
 include examples/notebooks/basics.md
+include examples/notebooks/checkpointing.md
 include examples/notebooks/conditional_gan.md
 include examples/notebooks/custom_op.md
+include examples/notebooks/data_pipeline.md
 include examples/notebooks/device_placement.md
 include examples/notebooks/diffusion.md
 include examples/notebooks/example.md
