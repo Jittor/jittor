@@ -741,6 +741,11 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   -- everything else is identical before and after, and the hook still applies
   (`jt.grad` with a `g*2` hook returns `[2,2,2]`). So this is one accessor
   answering about the wrong node, which is why it stays Low.
+- It is also the only one of its kind, which is the rest of why Low is right:
+  `tools/side_effect_probe.py --device cpu` on 2026-09-21 reports
+  `probed=223 {'OK': 182, 'UNCALLED': 40, 'MUTATES': 1}`, and the single
+  undeclared mutation is this `location cpu->none`. The 40 uncalled are the ones
+  that need a device.
 - Workaround: none needed for correctness or speed; do not read `location()` or
   `device` immediately after registering a hook.
 - Review/expiry condition: `register_hook` leaves `location()` unchanged on CPU
