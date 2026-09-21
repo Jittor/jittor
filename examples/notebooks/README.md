@@ -64,11 +64,16 @@ PyTorch 不同，不先弄清楚，后面的性能问题会归因到错误的地
 | 教程 | 教什么 | 需要显卡 |
 | --- | --- | --- |
 | [残差网络训练](resnet_training.md) | 图像分类的标准训练流程 | 否（小规模） |
+| [循环网络](rnn.md) | 隐藏状态与 BPTT；**普通 RNN 与 LSTM 在长依赖上的实测差距**；截断 BPTT 剪断了什么 | 否（小规模） |
 | [从零实现 Transformer](transformer.md) | 注意力与编码器的实现细节 | 否（小规模） |
 | [视觉 Transformer 训练](vit_training.md) | 把 Transformer 用在图像上 | 否（小规模） |
 | [训练 GPT 风格语言模型](gpt2_training.md) | 自回归语言建模与生成 | 否（小规模） |
 | [从零实现去噪扩散模型](diffusion.md) | 扩散过程的前向与反向 | 否（小规模） |
 | [LoRA 参数高效微调](lora.md) | 只训练低秩增量而不动主干权重 | 否（小规模） |
+
+`rnn.md` 是这一组里唯一处理**变长输入**的一篇，也是唯一把「为什么这个结构不行」当成
+主线的一篇：它用一个能测的记忆任务，把「普通 RNN 学不会长依赖」从经验说法变成一个
+可以复现的数字；`transformer.md` 接着给出绕开这条路的方法。
 
 ### 五、性能
 
@@ -107,7 +112,13 @@ PyTorch 不同，不先弄清楚，后面的性能问题会归因到错误的地
 | 教程 | 教什么 | 需要显卡 |
 | --- | --- | --- |
 | [用 PyTorch API 写 Jittor](torch_compat.md) | 怎么激活；激活后张量/模型/自动求导怎么用；设备与混合精度 | 部分小节需要 |
-| [把已有 PyTorch 脚本迁到 Jittor](torch_compat_migration.md) | 同一计算两种写法的数值对照；迁移时必须改的四处 | 否 |
+| [把已有 PyTorch 脚本迁到 Jittor](torch_compat_migration.md) | 同一计算两种写法的数值对照；哪些**不用改**；跨前端存档的静默陷阱；兼容层的实测开销 | 否 |
+| [把真实的生态库跑在 Jittor 上](torch_ecosystem.md) | 别人写的库（transformers/diffusers/PEFT/MMCV）怎么带起来；**哪些库根本带不动**；怎么验证算得对 | 否 |
+
+三篇的顺序是「从自己的代码，到别人的代码」：`torch_compat.md` 教你把自己的代码
+改成 `import torch`；`torch_compat_migration.md` 讲迁移时真正要动的那几处（以及哪些
+**不用**动）；`torch_ecosystem.md` 处理最省事也最容易踩空的一类——从 pip 装进来的
+第三方库，它的源码你改不了，也不该改。
 
 原生写法与兼容写法的对照速记：
 
@@ -118,8 +129,9 @@ PyTorch 不同，不先弄清楚，后面的性能问题会归因到错误的地
 | 设备 | 全局 `jt.flags.use_cuda` | 全局，或按 PyTorch 语义 `.cuda()` |
 | 入口 | `import jittor as jt` | 先 `activate()` 再 `import torch` |
 
-生态库（transformers / diffusers / PEFT 等）的接入方式与已验证结论，见维护者文档
-`docs/compatibility/torch.md`。
+生态库（transformers / diffusers / PEFT 等）的接入方式与「哪些库根本带不动」见
+[把真实的生态库跑在 Jittor 上](torch_ecosystem.md)；完整的已验证模型清单与门禁状态见
+维护者文档 `docs/compatibility/torch.md`。
 
 ---
 

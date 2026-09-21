@@ -378,8 +378,10 @@ include examples/notebooks/meta_op.md
 include examples/notebooks/mixed_precision.md
 include examples/notebooks/profiler.md
 include examples/notebooks/resnet_training.md
+include examples/notebooks/rnn.md
 include examples/notebooks/torch_compat.md
 include examples/notebooks/torch_compat_migration.md
+include examples/notebooks/torch_ecosystem.md
 include examples/notebooks/transformer.md
 include examples/notebooks/vae.md
 include examples/notebooks/vit_training.md

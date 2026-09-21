@@ -35,8 +35,10 @@ _TOPICS = (
     "mixed_precision",
     "profiler",
     "resnet_training",
+    "rnn",
     "torch_compat",
     "torch_compat_migration",
+    "torch_ecosystem",
     "transformer",
     "vae",
     "vit_training",
@@ -56,6 +58,7 @@ _SMOKE_TOPICS = (
     "custom_op",
     "profiler",
     "resnet_training",
+    "rnn",
     "transformer",
     "diffusion",
     "lora",
@@ -68,6 +71,7 @@ _SMOKE_TOPICS = (
     "vae",
     "torch_compat",
     "torch_compat_migration",
+    "torch_ecosystem",
 )
 
 _MACHINE_PATHS = (
