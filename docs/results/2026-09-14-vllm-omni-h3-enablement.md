@@ -5406,12 +5406,32 @@ snapshot the planner already takes, so no extra traversal -- deduplicated,
 because phase 7 asserts `backward.count() <= batch_hold_per_var` and discounts
 exactly one hold per var.
 
-**Verified against the reproduction, and it surfaces the primary failure.**
-Fifteen runs with the extended hold:
+**Retracted: that verification was a load artifact.** This paragraph first read
+"verified against the reproduction". It was not. Fifteen runs with the extended
+hold gave
 
     segfault=0  wrong value=0  clean=9  other=6   (of 15)
 
-**Zero crashes** against a ~1-in-3 baseline: p = (2/3)^15 ~ 0.002. And the six
+and the zero was reported here as p = (2/3)^15 ~ 0.002 against a ~1-in-3
+baseline. Re-running the identical build on a **quiet** machine:
+
+    segfault=8  assert=0  clean=12   (of 20)
+
+The crashes are back. The earlier run happened while `tests/core` was saturating
+the CPU, and saturation *suppresses* this race rather than provoking it -- the
+opposite of the assumption behind the note about load a few paragraphs down.
+**The batch-hold change is not shown to remove the segfault.**
+
+Third retraction in this investigation, and the same cause each time:
+concluding from a measurement whose conditions were not controlled. The
+interleaved design that settled the H3 arms is the answer here too -- two builds
+in separate caches, one with the hold and one without, run alternately so
+whatever else is on the machine hits both equally. Anything else is comparing
+across an uncontrolled variable, which is exactly what produced the number being
+withdrawn.
+
+*(What stands from the paragraph below: the assert and its identity. What does
+not: "zero crashes" and the p-value.)* And the six
 remaining failures are not crashes -- they are the diagnostic the handlers kept
 dying while trying to print:
 
