@@ -5264,6 +5264,61 @@ rather than taking turns. The crash and the video corruption are then the same
 unsafety landing in different places, which remains a hypothesis; what is now
 measured is that the unsafety needs two threads *at once*.
 
+**`use_threading=1` on H3: not a fix.** Twelve requests, no workaround, flag
+gate confirmed by jittor:
+
+    ok x8 | NOISE #3 #4 | NOFRAMES #7 #11
+
+The two `NOFRAMES` are not an unrelated flake. The server log carries, at
+exactly those two timestamps:
+
+    av.error.ArgumentError: Invalid argument: 'avcodec_send_frame()' returned 22
+
+The encoder rejected the frames outright -- the same corruption, landing hard
+enough to be refused rather than encoded. So the arm is **4/12 failures against
+a 8/12 baseline**: Fisher p ~ 0.10, not significant, and plainly not an
+elimination. This matches reproduction 9, where the flag moved the crash rate
+not at all. `use_threading` is not the fix, and the candidate is dropped.
+
+**What the crash actually is, and why this bug has been so hard to see.**
+Resolved against the shipped `.so`:
+
+    Op::name_ex()  <-  operator<<(ostream&, Op const*)
+                   <-  operator<<(ostream&, vector<Op*>)
+                   <-  parallel_compile_all_ops [clone **.cold**]
+
+`.cold` is the error path. The handler in `parallel_compiler.cc` formats its
+message by dereferencing the operator pointers:
+
+    ss << "Compile fused operator(" << i << '/' << n << ")"
+       << "failed:" << ((FusedOp*)op)->ops << "\n\nReason: " << e.what();
+
+`((FusedOp*)op)->ops` is a `vector<Op*>`, and printing it walks every sub-Op for
+its name. Concurrently, those pointers can already be freed -- `run_sync`'s own
+comment records the same history, "a concurrent `Node::free()` on another
+thread destroyed a node the plan still pointed at".
+
+So the sequence is: a compile error happens under concurrency; the handler tries
+to describe it; the description dereferences dead pointers; the process dies.
+**A diagnosable error becomes a segfault, and the one message that would say
+what the primary failure was is destroyed in the act of printing it.**
+
+The fix captures the description at task construction, on the main thread, while
+the pointers are known live, and the handler prints that string. It costs
+nothing measurable: a `CompileTask` only exists for a cache miss, and a cache
+miss is about to invoke a C++ compiler anyway.
+
+This is a located, fixed defect -- and measuring it says plainly that it is not
+the whole story. Ten runs after the fix: **segfault 3/10, reported errors 0,
+clean 7/10.** Against ~5/10 before, 3/10 is not a reduction anyone can claim
+(Fisher p ~ 0.65), and zero printed compile errors means these crashes are not
+in the path that was repaired at all.
+
+So: a real bug, fixed, with a clear argument for why it mattered -- an error
+handler that destroys its own diagnostic is worth removing whatever else is
+true -- and no evidence yet that it is *the* bug. The next backtrace has to come
+from the patched build to say where the remaining crashes are.
+
 **Reading the threading machinery: most of it is careful, and one thing is
 not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
 process-wide mutex, recursive by thread, and it handles the GIL inversion the

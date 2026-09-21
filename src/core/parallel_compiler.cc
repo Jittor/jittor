@@ -100,6 +100,26 @@ int parallel_compile_worker_count(int requested) {
 struct CompileTask {
     int rid;
     string previous_jit_key;
+    // What to call this op if it fails to compile, formatted **here**, on the
+    // main thread, while the Op pointers are known live.
+    //
+    // The worker's failure handler used to format the name from the pointers
+    // themselves -- `((FusedOp*)op)->ops` for a fused op -- which dereferences
+    // every sub-Op at the moment of the error. Under two Python threads those
+    // pointers can already be freed (`run_sync` carries the same history: "a
+    // concurrent Node::free() on another thread destroyed a node the plan still
+    // pointed at"), so the handler segfaulted instead of reporting, and took
+    // the only description of the real failure with it. Reproduction 9 in the
+    // H3 results doc crashes this way in about half of its runs:
+    //
+    //     Op::name_ex() <- operator<<(ostream&, Op const*)
+    //                   <- operator<<(ostream&, vector<Op*>)
+    //                   <- parallel_compile_all_ops [clone .cold]
+    //
+    // Formatting it up front costs nothing in practice: a CompileTask only
+    // exists for a cache miss, and a cache miss is about to invoke a C++
+    // compiler.
+    string description;
 };
 
 struct CompileResult {
@@ -168,7 +188,12 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
         } else {
             task_rid = rid;
         }
-        tasks.push_back({task_rid, string(jit_key)});
+        std::stringstream task_desc;
+        if (is_fused_op)
+            task_desc << ((FusedOp*)op)->ops;
+        else
+            task_desc << op;
+        tasks.push_back({task_rid, string(jit_key), task_desc.str()});
 
 
         LOGvv << "Op needs compile:" << op;
@@ -299,12 +324,12 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 string prepared_key = jkl.to_string();
                 // Reason first, path after -- see the note at the sibling site
                 // above.
-                if (is_fused_op) {
-                    ss << "Compile fused operator(" << i << '/' << n << ")"
-                        << "failed:" << ((FusedOp*)op)->ops << "\n\nReason: " << e.what();
-                } else
-                    ss << "Compile operator(" << i << '/' << n << ")"
-                        << "failed:" << op << "\n\nReason: " << e.what();
+                // `task.description`, not the Op pointers: see CompileTask.
+                // Dereferencing them here is what turned a reportable compile
+                // error into a segfault.
+                ss << (is_fused_op ? "Compile fused operator(" : "Compile operator(")
+                    << i << '/' << n << ")"
+                    << "failed:" << task.description << "\n\nReason: " << e.what();
                 if (prepared_key.size())
                     ss << "\n\ngenerated source: "
                         << Op::get_filename_from_jit_key(prepared_key, ".cc");
