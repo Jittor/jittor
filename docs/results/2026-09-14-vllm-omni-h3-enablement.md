@@ -5241,6 +5241,29 @@ layout instead -- a worker thread builds the chain, holds it, never reads it,
 and hands the holder to the main thread to fetch -- at the deployment's own
 compiler setting, with and without the producer-side sync.
 
+**Reproduction 10 is clean, and that is the useful part.** Eight runs at each
+setting, at the deployment's own compiler flag: 0 segfaults, 0 wrong values,
+8/8 clean both with and without the producer-side sync.
+
+So handing a pending Var from the thread that built it to a thread that fetches
+it is, on its own, **safe**. Put beside reproduction 9 the pair says something
+neither says alone:
+
+| | shape | result |
+| --- | --- | --- |
+| 9 | two threads **concurrently** inside jittor, build and fetch on the same one | crash ~50% |
+| 10 | build on a worker, fetch on the main thread, but queue-alternated so only one thread is ever inside jittor | 8/8 clean |
+
+**The trigger is concurrency, not the handoff.** That is worth having: it rules
+out the reading the paired arm most naturally suggests -- that a Var evaluated
+by a thread other than its builder is read wrongly -- because when that is all
+that happens, it is read correctly every time.
+
+It also fits H3, where `_busy_loop` and `orchestrator` are genuinely concurrent
+rather than taking turns. The crash and the video corruption are then the same
+unsafety landing in different places, which remains a hypothesis; what is now
+measured is that the unsafety needs two threads *at once*.
+
 **Reading the threading machinery: most of it is careful, and one thing is
 not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
 process-wide mutex, recursive by thread, and it handles the GIL inversion the
