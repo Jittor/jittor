@@ -175,6 +175,41 @@ class TestRootExportsAreDeclared(unittest.TestCase):
                             if not name.startswith("_"))
         self.assertEqual(declared, set(jt.__all__))
 
+    def test_every_relative_module_the_stub_imports_from_is_importable(self):
+        """The stub's module *paths*, not just the names it pulls out of them.
+
+        The cases above check that everything the stub declares exists on the
+        runtime package. They say nothing about whether
+        ``from .compiler import LOG`` names a real module: the name `LOG` is a
+        root attribute either way, so a stub that points at a module which has
+        since moved passes every other check here.
+
+        That is not hypothetical. ``jittor/compiler.py`` no longer exists -- the
+        module is ``jittor/build/compiler.py`` -- and ``from .compiler import
+        ...`` is still in the stub. It happens to resolve, because the package
+        registers an alias, and this case is what pins that: if the alias is
+        ever dropped, the stub silently starts lying to type checkers and
+        nothing else in this file notices.
+        """
+        import importlib
+
+        tree = ast.parse(ROOT_STUB.read_text(encoding="utf-8"))
+        modules = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.level == 1 and node.module:
+                modules.add(node.module)
+        self.assertTrue(modules, "the stub has no relative imports to check")
+
+        broken = []
+        for name in sorted(modules):
+            try:
+                importlib.import_module("jittor." + name)
+            except Exception as exc:                      # noqa: BLE001
+                broken.append("jittor.%s (%s)" % (name, type(exc).__name__))
+        self.assertEqual(broken, [],
+                         "the stub imports from modules that cannot be "
+                         "imported: " + ", ".join(broken))
+
 
 if __name__ == "__main__":
     unittest.main()
