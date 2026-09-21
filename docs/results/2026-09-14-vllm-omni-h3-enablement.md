@@ -5038,6 +5038,39 @@ Every arm from here uses **N=12**. The first of them re-runs `tid` with its
 post-process hook repaired, which answers the thread question and rebuilds the
 baseline on twelve samples at the same time.
 
+**Measured: the graph is built on one thread and read on another.**
+
+    [tid] quantiser        pid=3617457 tid=139708927399616 name=Thread-3 (_busy_loop)
+    [tid] DiffusionOutput  pid=3617457 tid=139708927399616 name=Thread-3 (_busy_loop)
+    [tid] post_process     pid=3617457 tid=139865666504384 name=orchestrator
+
+Same process, two threads. `MiniMaxH3Pipeline.forward` -- the decode, the
+quantiser, the `DiffusionOutput` construction -- runs on the engine's
+`_busy_loop` worker. The post-process, which is where the video Var is finally
+fetched, runs on the **orchestrator** thread. Identifiers only; no tensor is
+read, so unlike the six value-reading probes this measurement cannot have
+repaired what it observed.
+
+That is a fact about the deployment, not yet a cause. What makes it the best
+lead available is how much it lines up with:
+
+* every sync position that has looked clean is on the producing thread, and the
+  one that has looked bad is on the consuming thread;
+* jittor has a flag for exactly this, `use_threading`, and it defaults to 0 and
+  is never set by the serve script;
+* `run_sync`'s own comments record a thread-caused corruption already found and
+  fixed in this same deployment -- vLLM's four weight-loader threads calling
+  `Node::free()` on a node the execution plan still pointed at. What was fixed
+  was the loader case;
+* `top_weak_sync`, which runs precisely when `use_threading` is 0, consumes a
+  **global** pending-holder queue and can drop a holder another thread was
+  relying on.
+
+The caveat is the one this section just learned to apply: the arms that placed
+the clean/dirty boundary between the two threads were three requests long and
+cannot carry that weight. The thread split is measured; the claim that crossing
+it is what breaks the decode is not, and needs an N=12 arm.
+
 **What the recalibration does to the 24 ruled-out hypotheses.** Most of them
 were ruled out the same way today's two withdrawn conclusions were: a handful of
 requests, scored against a failure rate that did not apply. Any of them rejected
