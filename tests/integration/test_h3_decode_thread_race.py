@@ -1,0 +1,134 @@
+"""The real H3 decode, run from two Python threads.
+
+Five synthetic reproductions failed to trigger the video corruption, each with
+tens of thousands of samples. What they all lacked is the decode itself: a
+handful of elementwise ops on a 64x64 tensor is not a VAE with real weights,
+real shapes, fp16 autocast and a fused graph of hundreds of thousands of nodes.
+This keeps the decode exactly as `probe_decode_base_repeat.py` runs it -- same
+checkpoint, same captured latent, same autocast -- and adds the one thing the
+server does that that probe does not: a second Python thread fetching the result
+while the first keeps decoding.
+
+The consumer compares against a reference captured on the first, quiet decode.
+Any later decode of the same latent must match it: same input, same weights, no
+sampling. A mismatch is the corruption.
+
+    python3 h3_decode_race.py [rounds] [consumer_threads]
+"""
+import json
+import sys
+import threading
+import time
+import queue
+
+import numpy as np
+import torch
+
+COMP = "/root/jittor-lab/_state/h3/models/MiniMax-H3/FL2VA/video_vae"
+NPZ = "/root/jittor-lab/comfyui/server_latent512.npz"
+ROUNDS = int(sys.argv[1]) if len(sys.argv) > 1 else 12
+NCONS = int(sys.argv[2]) if len(sys.argv) > 2 else 1
+
+cfg = json.load(open("%s/config.json" % COMP))
+from transformers.dynamic_module_utils import get_class_from_dynamic_module
+
+cls = get_class_from_dynamic_module(cfg["auto_map"]["AutoModel"], COMP)
+model = cls.from_pretrained(COMP).eval().to(torch.device("cuda:0"))
+# `torch.from_numpy(...).to("cuda:0")` goes through a shim path that calls
+# `_owner._is_index` (method_api.py:602), and the tensor installer in this
+# deployment does not define it -- the stock decode probe fails the same way,
+# so this is the tree's own shim inconsistency, not this script's. `as_tensor`
+# with an explicit device avoids that path.
+_lat_np = np.load(NPZ)["latent"]
+latent = torch.as_tensor(_lat_np, device="cuda:0")
+mean = torch.tensor(cfg["latents_mean"], device="cuda:0",
+                    dtype=torch.float32).view(1, -1, 1, 1, 1)
+std = torch.tensor(cfg["latents_std"], device="cuda:0",
+                   dtype=torch.float32).view(1, -1, 1, 1, 1)
+
+
+def decode():
+    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16,
+                                                enabled=True):
+        return model.decode_base(latent * std + mean)
+
+
+print("START rounds=%d consumers=%d" % (ROUNDS, NCONS), flush=True)
+t0 = time.time()
+ref = decode().float().cpu().numpy()     # quiet reference, nothing else running
+print("reference captured at %.1fs shape=%s mean=%.4f"
+      % (time.time() - t0, ref.shape, float(ref.mean())), flush=True)
+
+work = queue.Queue(maxsize=3)
+stop = threading.Event()
+results = []
+lock = threading.Lock()
+
+
+def consumer():
+    while not stop.is_set():
+        try:
+            i, out = work.get(timeout=1)
+        except queue.Empty:
+            continue
+        got = out.float().cpu().numpy()   # the cross-thread fetch
+        d = float(np.abs(got - ref).max())
+        rel = d / max(1e-9, float(np.abs(ref).max()))
+        with lock:
+            results.append((i, rel))
+        del out, got
+
+
+# NCONS=0 is the control: the main thread fetches each decode itself, so no
+# second Python thread is ever inside jittor. If that is clean while NCONS>=1
+# corrupts, concurrency is the variable -- which is the whole claim.
+cons = [threading.Thread(target=consumer, daemon=True, name="fetch%d" % k)
+        for k in range(NCONS)]
+for c in cons:
+    c.start()
+
+for i in range(ROUNDS):
+    out = decode()                        # producer keeps decoding, does not wait
+    if NCONS == 0:
+        got = out.float().cpu().numpy()
+        rel = float(np.abs(got - ref).max()) / max(1e-9, float(np.abs(ref).max()))
+        with lock:
+            results.append((i, rel))
+        del got
+    else:
+        try:
+            work.put((i, out), timeout=5)
+        except queue.Full:
+            pass
+    del out
+
+# let the consumers drain
+deadline = time.time() + 60
+while time.time() < deadline:
+    with lock:
+        n = len(results)
+    if n >= ROUNDS or work.empty():
+        time.sleep(2)
+        with lock:
+            n = len(results)
+        if n >= ROUNDS:
+            break
+    time.sleep(1)
+stop.set()
+for c in cons:
+    c.join(timeout=5)
+
+with lock:
+    checked = len(results)
+    # Threshold from the single-threaded control, not guessed: twelve decodes
+    # with no second thread land in 0.0017-0.0023, which is what fp16 and
+    # cuDNN's own nondeterminism cost. Anything above 0.01 is four times the
+    # widest of those and three orders below what the two-thread arm produces
+    # (0.84-69.6), so the two populations do not overlap anywhere near it.
+    bad = [(i, r) for i, r in results if r > 1e-2]
+for i, r in bad[:5]:
+    print("  MISMATCH round=%d rel=%.4g" % (i, r), flush=True)
+worst = max((r for _, r in results), default=0.0)
+print("checked=%d mismatches=%d worst_rel=%.4g" % (checked, len(bad), worst))
+print("VERDICT:", "NO-SAMPLES" if checked == 0
+      else ("REPRODUCED" if bad else "no trigger"))

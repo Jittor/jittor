@@ -5763,6 +5763,37 @@ and it wants a recorder that does not share a word with anything.
 
 Nine attempts, all measured, all reverted. The tree is clean.
 
+**The video corruption reproduces, outside the server.** Five synthetic
+reproductions failed, each with thousands of samples, and what every one of them
+lacked was the decode itself: a chain of elementwise ops on a 64x64 tensor is
+not a VAE with real weights, real shapes and a fused graph of hundreds of
+thousands of nodes. Keeping the decode exactly as `probe_decode_base_repeat.py`
+runs it -- same checkpoint, same captured latent, same `autocast(fp16)` -- and
+adding only the thing the server does that the probe does not, a second Python
+thread fetching the result while the first keeps decoding:
+
+| consumers | worst relative error | spread |
+| --- | --- | --- |
+| **0** (main thread fetches inline) | **0.0023** | 0.0017-0.0023, all twelve |
+| **1** (second thread fetches) | **69.64** | 0.0016, 0.0021, then 0.84, 0.997, 0.84 ... |
+
+Same latent, same weights, no sampling: every decode must match the first. The
+single-threaded arm's 0.002 is what fp16 and cuDNN cost on their own, and twelve
+runs sit inside that band. One fetching thread takes it to **0.84-69.6**, four
+orders of magnitude out, on 12 of 12.
+
+Three things follow. The corruption is reproducible **without the server, the
+diffusion loop or an HTTP request** -- the decode and one extra thread are
+enough. **Concurrency is the variable**, by a control that was run rather than
+assumed. And the hypothesis this section has carried all day, that the video
+corruption and the standalone segfault are the same defect, has its first direct
+evidence: they share a trigger, two Python threads inside jittor at once.
+
+The reproduction is kept as `tests/integration/test_h3_decode_thread_race.py`.
+Its threshold is the control's, not a guess: 0.01 is four times the widest
+single-threaded sample and three orders below the smallest two-threaded
+failure, so the populations do not overlap near it.
+
 **Reading the threading machinery: most of it is careful, and one thing is
 not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
 process-wide mutex, recursive by thread, and it handles the GIL inversion the
