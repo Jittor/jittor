@@ -4996,6 +4996,48 @@ unlike the six value-reading probes it cannot repair what it measures. That arm
 also carries no sync at all, which makes it the 256x256 no-workaround baseline
 this harness has been missing.
 
+**The baseline arm, and it invalidates most of today's arithmetic.** The `tid`
+arm installs no sync at all, which makes it the 256x256 no-workaround control
+this harness never had:
+
+    [tid] #1   88s adj= 11.89 std= 95.57 mean= 126.4 ok
+    [tid] #2   61s adj= 39.09 std= 61.34 mean= 120.3 NOISE
+    [tid] #3   60s adj= 11.89 std= 95.49 mean= 126.3 ok
+    [tid] #4   60s adj= 11.91 std= 95.61 mean= 126.4 ok
+
+Two things come out of it, one good and one that costs most of this section's
+recent conclusions.
+
+The good one: **`adj` is now calibrated.** A clean 256x256 clip on this harness
+sits at 11.9 and a failed one at 39.1, so `w_all` (11.78-11.91) and `retsync`
+(11.93-12.03) were reading real pictures and the `adj>20` threshold separates
+the two cleanly. The borrowed-scale caveat above is resolved.
+
+The expensive one: **the no-workaround failure rate here is 1 in 4, not ~70%.**
+The ~70% figure came from other conditions and should never have been carried
+into arms scored on this harness. At 25% per request, three clean requests in a
+row happen **42% of the time with no effect at all**:
+
+| arm | result | P(this or better \| no effect) |
+| --- | --- | --- |
+| `varsync` | 28/28 clean | 0.0003 -- significant |
+| `w_all` | 3/3 clean | 0.42 -- **not significant** |
+| `retsync` | 3/3 clean | 0.42 -- **not significant** |
+| `postsync` | 2/3 failed | indistinguishable from baseline |
+
+So the two results this section called decisive a few hours ago are not. "Batch
+composition is not the variable, position is" and the narrowing of the window to
+`DiffusionOutput` construction -> post-process both rest on 3-request arms that
+cannot carry them. **Both are withdrawn.** What survives is what survived
+before: `varsync` is 28/28 and that is real.
+
+The method fix is cheap and should have been obvious. Separating 25% from ~0%
+needs about a dozen clean runs (0.75^11 ~ 4%), and twelve requests cost nine
+minutes more than three -- the five-minute model load dominates either way.
+Every arm from here uses **N=12**. The first of them re-runs `tid` with its
+post-process hook repaired, which answers the thread question and rebuilds the
+baseline on twelve samples at the same time.
+
 **A flag that exists for exactly this, and this deployment does not set it.**
 `executor.cc` declares
 
