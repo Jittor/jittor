@@ -5818,12 +5818,35 @@ does not fix this. The likeliest reading is that the reproduction is a
 server does one decode per request, a difference of two or three orders of
 magnitude in pressure, and that may open paths the server never reaches.
 
-So this cannot be used as the verification loop for a fix yet. Using it that way
-would steer the fix at whatever this reproduces rather than at the deployment's
-bug. The next step is to slow the producer to the server's rhythm -- decode,
-wait for the consumer, decode again -- and see whether `varsync` recovers its
-effect. If it does, the reproduction is usable once its pressure is tuned. If it
-does not, it is a different defect and the H3 question goes back to the server.
+So this cannot be used as the verification loop for a fix yet. The next step is
+to slow the producer to the server's rhythm -- decode, wait for the consumer,
+decode again -- and see whether `varsync` recovers its effect.
+
+**Paced, it gets worse, not better -- and that inverts the reading above.**
+
+| arm | result |
+| --- | --- |
+| single thread | clean, 0.0017-0.0023 |
+| two threads, flat out | 12/12, rel 0.84-69.6 |
+| two threads, **paced to the server's rhythm** | **12/12, every decode all-NaN** |
+
+The closer the reproduction gets to the server's timing, the *more* severe the
+corruption. The "too much pressure, therefore a different defect" reading is
+withdrawn: pressure was hiding severity, not manufacturing it.
+
+That first paced run reported `mismatches=0, worst_rel=nan` and would have been
+read as "paced is clean" -- because `np.abs(got-ref).max()` is NaN when the
+output contains NaN, and `nan > tol` is False. A NaN decode scored as a pass.
+Eighth scoring hole here and the third that turns a failure into a success (the
+others: reading a stale clip, and a verdict over zero samples). All three are
+mine, and all three share a shape -- the checker tested for "bad" and never
+tested whether the data was valid at all.
+
+The NaN matters beyond the checker. Two of the server's failures were
+`NOFRAMES`, and the server log gives their cause as
+`avcodec_send_frame() returned EINVAL` -- the encoder refusing the frames. An
+all-NaN frame is exactly what an encoder refuses. That is the first time a
+symptom on the two sides has matched rather than merely co-occurred.
 
 **Reading the threading machinery: most of it is careful, and one thing is
 not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
