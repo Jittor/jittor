@@ -6525,3 +6525,109 @@ dtype` the moment `lt_linear` is disabled in cast-off mode. Real torch 2.13
 refuses the case outright -- `linear(fp16 x, fp16 w, fp32 b)` raises `self and
 mat2 must have the same dtype` -- so neither jittor path matches it, and the bias
 fix is what removes the mismatch at its source.
+
+## 49. The compute stream is per-thread and the graph is not
+
+The H3 video corruption is fixed. The cause is one line in the CUDA driver
+shim:
+
+```cpp
+void* compute_stream(int device) { return reinterpret_cast<void*>(cudaStreamPerThread); }
+```
+
+`cudaStreamPerThread` resolves to a **different stream for every calling
+thread**. jittor's graph, its Vars and their buffers are process-global and
+carry no stream affinity at all, so when two threads take turns in the
+executor, the second thread's kernels are free to run while the first thread's
+are still writing the buffers they read. There is no error, no warning and no
+log line -- only wrong numbers.
+
+`compute_stream`'s own comment makes exactly this argument, for the legacy
+default stream against the per-thread one:
+
+> a straggler left on the legacy stream is an unordered race that raises no
+> error and produces no message
+
+It holds just as well for two threads' per-thread streams, which is the case
+the comment does not cover.
+
+### Why every synthetic reproduction was clean
+
+Six synthetic graphs -- elementwise fp32 and fp16, matmul fp32 and fp16, conv3d
+fp32 and fp16, groupnorm -- built on one thread and evaluated on another all
+came back clean, 12 rounds each. They are a dozen operators long, and
+`auto_flush_ops` is 128: the building thread never reaches the flush, so it
+issues *nothing*, and the evaluating thread's stream ends up holding the whole
+graph. Self-consistent, and therefore correct.
+
+The real VAE is hundreds of operators. The building thread flushes repeatedly,
+leaving part of the graph in flight on its own stream, and the evaluating
+thread issues the rest against it. That is the entire difference, and it is why
+this hid behind "only the big model" for so long.
+
+### The reproduction, from twenty minutes to seconds
+
+Slicing the latent to four frames reproduces it at 6/6, in seconds rather than
+the 17s-per-round full clip. At T=4 the damage is *finite garbage* -- values
+around 4e7 where the answer ranges over +-6, every frame, varying run to run --
+and only at T>=8 does it become the all-NaN the server showed. The NaN is that
+garbage after a normalization, not a separate failure.
+
+One variable settled it: `CUDA_LAUNCH_BLOCKING=1`, nothing else changed,
+restored the output to the reference range. Asynchrony, not graph logic.
+
+### A retraction, and then a retraction of the retraction
+
+Earlier the same evening this was ruled out. The arm that did it was
+`out.sync(False)` -- evaluate on the building thread, do not wait for the
+device -- which came back 12/12 clean and appeared to show that handing
+in-flight work across threads is fine.
+
+It does not show that. `.numpy()` is a blocking copy: it issues no kernels, so
+it never exercises the hazard. The hazard needs the second thread to *launch*
+against the first thread's buffers, which is what the unsynced arm does and
+what that arm does not. The conclusion was drawn from an arm that could not
+have failed either way.
+
+### The fix
+
+`backend_compute_stream_acquire` / `backend_compute_stream_release`, in
+`src/runtime/backend_streams.cc`, called at the two ends of `run_exec_plan`.
+The entry lock already serialises the executor, so the handoff is a single
+global relay: whoever issues last records an event on its own compute stream,
+and the next thread in makes its stream wait for that event before issuing
+anything. The exact dependency, not a device-wide wait.
+
+A single-threaded process pays nothing. Until a second thread has ever reached
+the executor there is nobody to hand off to, so the recording side is skipped
+entirely -- no event record per batch. The first time a second thread does
+arrive there is nothing recorded for it to wait on, so that one handoff is paid
+with a device wait, once per process.
+
+### Numbers
+
+| arm (full clip, unsynced -- the deployment's own path) | before | after |
+|---|---|---|
+| cross-thread decode, 12 rounds | 12/12 all-NaN | 0/12, worst rel 0.0023 |
+
+At T=4, against a same-thread control measured on the same build:
+
+| | worst rel |
+|---|---|
+| same-thread control | 0.00166 |
+| cross-thread | 0.00196 |
+
+The medians are identical. What is left is fp16 run-to-run spread, which is why
+the control is there: this decode is not bit-reproducible between runs, so
+"differs from the reference" means nothing on its own.
+
+Reference decode time is 17.5s against 17.0s before the fix -- within the noise
+of a shared machine, and the single-threaded path is unchanged by construction.
+
+### What this does not fix
+
+The segfault in `FusedOp::update_ops` is a different defect. It is a
+use-after-free on a deleted node, it needs two Python threads *concurrently*,
+and disabling deletion moves it 6/6 to 0/6 -- where disabling deletion did
+nothing at all for the corruption. The two share a trigger and not a mechanism;
+`tests/core/test_executor_python_threads.py` still reproduces it.

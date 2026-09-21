@@ -9,6 +9,7 @@
 #include "core/event_queue.h"
 #endif
 #include "runtime/device.h"
+#include "runtime/backend_streams.h"
 #include "runtime/executor_entry.h"
 #include "runtime/backend.h"
 #include "runtime/backend_fallback.h"
@@ -241,6 +242,10 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     auto temp_allocator = exe.temp_allocator;
     #ifdef HAS_ACCELERATOR
     uint64 touched_devices = 0;
+    // Nothing this batch launches is ordered against work another thread left
+    // on its own compute stream -- that stream is per-thread and the graph is
+    // not. Wait for it before issuing anything.
+    backend_compute_stream_acquire();
     #else
     (void)entry_device;
     #endif
@@ -524,6 +529,11 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     if (device_sync && !runtime_use_cuda())
         backend_ops(BackendId::Cpu).synchronize(0);
     #ifdef HAS_ACCELERATOR
+    // Publish what this batch issued, so the next thread into the executor can
+    // wait for it. Before the device wait below on purpose: with `device_sync`
+    // the event is already complete by the time anyone looks at it, and
+    // without it this is the only record that the work exists.
+    backend_compute_stream_release(touched_devices);
     if (device_sync && (runtime_use_cuda() || touched_devices)) {
         exe.last_is_cuda = false;
         sync_times++;

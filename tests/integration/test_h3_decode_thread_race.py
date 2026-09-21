@@ -90,6 +90,22 @@ def decode():
     elif SYNC_PRODUCER == 2:
         import jittor as jt
         jt.sync_all(True)
+    elif SYNC_PRODUCER == 3:
+        # Evaluate on the producer thread but do NOT wait for the device.
+        #
+        # This separates the two remaining stories for the same observation.
+        # jittor's compute stream is `cudaStreamPerThread` (driver.cc), which
+        # is a *different stream per calling thread*, and Vars are global and
+        # carry no stream affinity. If that is the mechanism, the producer's
+        # kernels are still in flight on the producer's stream while the
+        # consumer's readback runs on the consumer's, nothing orders the two,
+        # and this arm is still NaN. If instead what matters is only which
+        # thread issues the work, everything here was issued on the producer
+        # and this arm comes back clean.
+        out.sync(False)
+        if not _SYNC_REPORTED:
+            _SYNC_REPORTED = True
+            print("sync path=tensor.sync(device_sync=False)", flush=True)
     return out
 
 
