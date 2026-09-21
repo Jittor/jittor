@@ -5553,6 +5553,96 @@ run supports about crashes, the assert's rate is not a stable quantity either,
 and no claim in this section should rest on it without the same interleaved
 treatment.)
 
+**A 10-second reproduction, and what it pointed at.** The old reproduction cost
+~40s per attempt at a ~50% hit rate -- 80s per crash, so one comparison was an
+hour and nothing could be iterated. Stripping it to what actually triggers (a
+held non-sink Var on one thread, rival threads inside the executor, 16x16
+tensors, **no CUDA**) gives ~10s per attempt of which 7.7s is jittor's import,
+and it crashes every time. The control is clean and is the reason to trust it:
+
+| rival threads | result |
+| --- | --- |
+| 0 | SURVIVED 3/3, ~38,700 rounds in 6s |
+| 1 | CRASH 3/3, ~1.7s |
+
+Single-threaded does thirty-eight thousand rounds without complaint; one extra
+Python thread kills it in under two seconds.
+
+Its backtrace lands on **`FusedOp::update_ops()`** <- `load_fused_op` <-
+`parallel_compile_all_ops` <- `run_sync` <- `sync_all`, faulting on near-null
+addresses (0x2, 0x130) -- the walk of `op->outputs()` over an Op that has been
+freed.
+
+**And the tree already knew.** `Node::free()` carries this, written by earlier
+work on the loader race:
+
+> an op with a live or unfinished output reaches this point, and clearing the
+> edges below is what takes its segment out from under a batch the executor is
+> still planning (`FusedOp::update_ops` classifies a segment by walking
+> `op->outputs()`). Returning early here is NOT the fix ... **The fix has to
+> keep the planning thread and this one from overlapping at all --
+> `graph_mutation_mutex()` -- not keep this node alive.**
+
+Which also explains why the batch-hold change did not settle it: that keeps the
+node *alive*, and the comment says in as many words that keeping it alive is not
+the fix. `Node::free()` already erases edges under `graph_mutation_mutex()`;
+`update_ops` reads them under nothing.
+
+So `update_ops` takes that mutex for the classification walk. The scope is the
+walk, not the batch -- holding the graph lock across a whole batch was tried and
+deadlocked, and that is in the table in `run_sync`. Nothing inside waits, takes
+another lock or touches the GIL, and the mutex is recursive, so the
+execution-time call through `load_fused_op` nests harmlessly.
+
+**It is not enough.** With the mutex in `update_ops`, and the control still
+clean:
+
+| rival threads | crash | survived |
+| --- | --- | --- |
+| 0 | 0 | 6 |
+| 1 | **6** | 0 |
+| 2 | 5 | 1 |
+| 3 | 5 | 1 |
+
+The reason is visible once stated: the dangling `Op*` is already in
+`fused_op.ops` *before* the walk begins. Locking the walk stops a free from
+racing it, but the free that matters happened earlier -- while `ops[opid]` was
+being read, or before that. The lock has to cover the read, not just the use.
+
+**Three attempts, all refuted, in about twenty minutes.** This is what the fast
+reproduction bought: each of these cost one rebuild and one four-minute
+verification, where the same three would have been most of a day.
+
+| attempt | idea | threads=1 |
+| --- | --- | --- |
+| 1 | `graph_mutation_mutex` around `update_ops`'s walk | crash 6/6 |
+| 2 | same lock widened to cover `load_fused_op` | crash 6/6 |
+| 3 | defer the `free_buffer` drain while a batch holds pointers | crash 5-6/6 |
+
+The control stayed clean (0 rival threads, 6/6 survived) in all three, so each
+result means what it says.
+
+Attempts 1 and 2 fail for a reason worth keeping: **no scope on the consumer
+side reaches the problem**, because the node is already gone before either the
+read of `ops[opid]` or the walk. Attempt 3 followed that to the delete side --
+`free_buffer` is a global vector drained by whichever thread leaves the
+outermost `SetupFreeBuffer`, with no regard for a batch mid-plan over those
+pointers -- and it also failed, which says the delete is not the whole story
+either. `Node::free()` clears `_inputs`/`_outputs` **immediately**, before the
+deferred delete, so an op can be alive-but-edgeless as well as deleted; the
+fault addresses (0x2, 0x130, 0x0) say something is being dereferenced through a
+null or garbage slot rather than simply finding an empty list.
+
+All three changes are reverted. Two of them cost something real -- a lock on a
+hot path, a set allocation and two atomics per batch -- and none of them has
+evidence behind it. The earlier batch-hold extension goes with them: `Node::free`'s
+own comment says keeping the node alive is not the fix, and the measurements
+agree.
+
+What stays is what stands on its own: the failure handlers that no longer
+destroy their diagnostic, `check_graph`'s sweep, `JT_BUILD_SYMBOLS`, the
+ungated dump, and the 10-second reproduction with its control.
+
 **Reading the threading machinery: most of it is careful, and one thing is
 not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
 process-wide mutex, recursive by thread, and it handles the GIL inversion the

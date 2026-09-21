@@ -332,27 +332,6 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     vector<VarPtr> batch_hold;
     batch_hold.reserve(plan.all_vars.size());
     for (Var* v : plan.all_vars) batch_hold.emplace_back(v);
-    // `all_vars` is what the BFS *enqueued*, and the transitive argument above
-    // -- an op whose output var is held cannot be freed either -- only reaches
-    // the ops whose outputs are in it. An op reached from its input side can
-    // have outputs that were never enqueued, and then nothing holds that op
-    // while `parallel_compile_all_ops` walks its sub-operators.
-    //
-    // Measured, not deduced. With both of that function's failure handlers
-    // fixed to stop printing dead `Op*`s, the remaining crash moved onto a
-    // plain `<< fused_op.ops` in the **normal** path -- no exception involved,
-    // right after `load_fused_op` filled the batch -- resolving to
-    // op.cc:379 (`Op::name_ex`). Two Python threads, ~1 run in 3.
-    //
-    // `op_outputs` is the snapshot the planner already takes of each op's
-    // outputs, so this needs no extra traversal. Deduplicated because phase 7
-    // asserts on `backward.count() <= batch_hold_per_var` and discounts
-    // exactly one hold per var; holding a requested var twice would trip it.
-    std::unordered_set<Var*> already(plan.all_vars.begin(), plan.all_vars.end());
-    for (auto& outs : plan.op_outputs)
-        for (Var* o : outs)
-            if (already.insert(o).second)
-                batch_hold.emplace_back(o);
     // What phase 7 has to discount: this hold is bookkeeping, not a consumer.
     plan.batch_hold_per_var = 1;
     ExecutionBackendScope backend_scope(plan.backend);
