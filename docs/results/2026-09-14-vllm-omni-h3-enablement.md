@@ -5730,10 +5730,38 @@ established and what is not:
 * **Not established:** which pointer, and reached how. The reachability sets
   tried so far do not contain it.
 
-The next step is to find that out rather than guess again: log the address the
-drain deletes and the addresses `update_ops` is about to walk, in the same run,
-and intersect them. The 10-second loop makes that one run rather than an
-afternoon.
+**Measured, on the ninth attempt: the pointer is identified.** Logging the
+addresses with `fprintf` stopped the crash happening -- a fifth observer effect,
+after the tensor read, `NODE_MEMCHECK`, `H3_FUSE_DUMP` and CPU load. What works
+is a plain store per event and a dump from the signal handler, which touches
+nothing until the process is already dying:
+
+    uaf: last update_ops dereference 0x55d1e2bc7710 -- WAS DELETED by the drain
+
+Four runs of four. **The operator `FusedOp::update_ops` faults on is one the
+free-buffer drain deleted**, which is no longer an inference from the
+delete/leak experiment but the same pointer seen on both sides.
+
+**Attempt 9 -- collect and pin under `graph_mutation_mutex` -- deadlocks.** The
+reasoning was that an earlier pin pass ran *after* the traversal, leaving a
+window in which the node could be deleted between being collected and being
+pinned; holding the mutex across `build_exec_plan` closes it, since
+`Node::free()` and the drain take the same lock. Throughput was unaffected
+(38,466-39,418 rounds at zero rival threads) and the crash was unaffected
+(6/6 at one). Then a run hung past its 90-second timeout, which is precisely
+what `run_sync`'s own table records for this: *"hold the graph lock: deadlock,
+killed at the timeout"*. The scope is not available, and the comment saying so
+was there before I started.
+
+One thing the attempt did establish, from the verdict line surviving into it:
+after pinning the whole traversal queue plus every input and output of every op
+in it, the faulting node was **still** an unpinned delete. Either it never
+reaches the pin loop, or the pin does not stick -- and `NodeFlags::set_bit` is a
+read-modify-write of the entire 32-bit word, so any concurrent flag write on the
+same node from another thread erases the pin. That is the next thing to measure,
+and it wants a recorder that does not share a word with anything.
+
+Nine attempts, all measured, all reverted. The tree is clean.
 
 **Reading the threading machinery: most of it is careful, and one thing is
 not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
