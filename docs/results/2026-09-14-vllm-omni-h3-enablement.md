@@ -5184,6 +5184,35 @@ quantiser top, quantiser end, `DiffusionOutput` construction -- is on the
 worker thread, and the single failing one is on the orchestrator thread. The
 window-narrowing was real but it was narrowing the wrong axis.
 
+**Reproduction 9 triggers -- as a segfault, and the flag does not help.**
+Forty rounds of a held non-sink Var on the main thread while a second Python
+thread does nothing but `jt.sync_all(True)` in a loop, so the two share the
+weak-sync cursor. No H3, no vLLM, no model. Ten runs at each setting:
+
+| `use_threading` | segfault | wrong value | clean |
+| --- | --- | --- | --- |
+| 0 | **6/10** | 0 | 4 |
+| 1 | **5/10** | 0 | 5 |
+
+Two results, and the second is the more important one.
+
+**jittor crashes about half the time under two Python threads.** That is a
+standalone, reproducible framework bug with no application stack involved --
+the eight earlier reproductions never triggered because none of them had a
+second thread in it.
+
+**And `use_threading` makes no difference to it.** 6/10 against 5/10 is nothing.
+The flag whose description is *"Allow to use python threading with jittor"*
+does not make Python threading safe; its only effect in the whole codebase is
+to skip `top_weak_sync`, and whatever is unsafe here survives that. So the
+candidate fix named after the problem is, on this evidence, not a fix -- which
+also predicts the H3 arm testing it will come back unchanged.
+
+The symptom differs from H3's: this crashes rather than returning garbage. What
+the two share is the configuration -- jittor driven from two Python threads --
+and H3 is the case where the same unsafety lands on data instead of on a
+pointer. That is a hypothesis about the connection, not a measurement of it.
+
 **Reading the threading machinery: most of it is careful, and one thing is
 not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
 process-wide mutex, recursive by thread, and it handles the GIL inversion the
