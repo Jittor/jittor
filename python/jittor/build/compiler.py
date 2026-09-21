@@ -530,12 +530,27 @@ def check_pybt(gdb_path, python_path):
     # return False
 
 def check_debug_flags():
+    """Debug symbols, and separately the node-tracking build.
+
+    ``JT_BUILD_DEBUG`` adds both ``-g`` and ``-DNODE_MEMCHECK``. That pairing is
+    fine for a deliberate debugging build and useless for a race: NODE_MEMCHECK
+    registers every node in a hash table, which changes both the bookkeeping and
+    the timing. A reproduction that segfaults in roughly a third of release runs
+    went 15 for 15 clean under it -- so the only build that carried line numbers
+    was also the one that could not reproduce what the line numbers were for.
+
+    ``JT_BUILD_SYMBOLS`` is the missing half: ``-g`` alone, same code as a
+    release build, so a backtrace resolves to a source line without the race
+    moving. It costs binary size and nothing else.
+    """
     global is_debug
     is_debug = 0
+    global cc_flags
     if build_flag("debug"):
         is_debug = 1
-        global cc_flags
         cc_flags += " -g -DNODE_MEMCHECK "
+    elif build_flag("symbols"):
+        cc_flags += " -g "
 
 def check_save_mem_flags():
     """Warn when the unfinished swapping build is explicitly enabled.

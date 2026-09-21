@@ -5319,6 +5319,99 @@ handler that destroys its own diagnostic is worth removing whatever else is
 true -- and no evidence yet that it is *the* bug. The next backtrace has to come
 from the patched build to say where the remaining crashes are.
 
+**The crash moves after the fix, and the only build with line numbers cannot
+see it.** With the handler repaired, the remaining crashes resolve to the *main
+body* of `parallel_compile_all_ops` rather than its `.cold` path -- which is
+what the error handler had been trying to report all along.
+
+Getting a line number from there needed a `-g` build, and that is where the
+tooling gave out. `JT_BUILD_DEBUG=1` adds `-g` **and** `-DNODE_MEMCHECK`
+together, and NODE_MEMCHECK registers every node in a hash table -- changing
+both the bookkeeping and the timing. Under it the reproduction went **15 for 15
+clean**, against roughly a third crashing in release: p = 0.65^15 ~ 0.0016, so
+the suppression is real, not luck. **The only build that carried line numbers
+was the one that could not reproduce what the line numbers were for.**
+
+Two smaller things were wrong on the way there and both were caught by checking
+the artifact rather than trusting the command. `debug=1` does nothing:
+`_is_bare_word` rejects unprefixed names without an underscore, so the variable
+is `JT_BUILD_DEBUG` (and `use_threading`, which has one, is read either way --
+which is why *that* one worked). And the first `JT_BUILD_DEBUG` build was a
+cache hit on a directory a previous non-debug build had already filled, since
+the cache key does not include the debug flags. `readelf -S | grep -c debug`
+returning 0 is what caught both.
+
+The fix for the tooling is to split the flag: `JT_BUILD_SYMBOLS=1` adds `-g`
+alone, leaving the code identical to a release build, so a backtrace resolves
+without the race moving.
+
+**With `-g` alone, a source line on the first attempt:**
+
+    0x3f6818  src/core/op.cc:379                  jittor::Op::name_ex()   <- fault
+    0xde61f   src/core/parallel_compiler.cc:215   parallel_compile_all_ops
+
+Line 215 is the **other** failure handler -- the one in the preparation loop,
+sibling to the worker's:
+
+    LOGf << "Compile fused operator(" >> rid >> '/' >> queue.size() >> ")"
+        << "failed:" << fused_op.ops << "\n\nReason: " >> e.what() >> source_note;
+
+Same defect, second site: `<< fused_op.ops` walks every sub-`Op*` for its name.
+Fixing the worker's copy simply moved the crash here. This handler runs on the
+main thread, which looked at first like it should be safe -- but
+`op->prepare_execution` can release the GIL, so another Python thread gets to
+free nodes between the fused op being loaded and the exception being thrown.
+
+Both handlers now print a description captured as soon as the operator is
+settled, while its pointers are known live, and the two share the one string
+rather than formatting it twice. When the failure happens before there is
+anything to name, the handler says so instead of guessing.
+
+The prediction this sets up is the same one that held last time: the crash
+should move again, and where it moves next is the primary failure these handlers
+keep dying while trying to describe.
+
+**The crash moves a third time, and this one is not an error path.** With both
+handlers fixed:
+
+    0x3f6978  src/core/op.cc:379                  Op::name_ex()   <- fault
+    0x3ea59b  src/core/parallel_compiler.cc:178   parallel_compile_all_ops
+
+Line 178 was the eager capture added by the previous fix -- a plain
+`<< fused_op.ops` sitting in the **normal** path, after `load_fused_op` has
+filled the batch and before `prepare_execution`, with no exception anywhere near
+it. So:
+
+> **The sub-operator pointers are already dead in ordinary operation.**
+
+That is a different and much stronger statement than "the failure handler is
+late". It also says the eager capture was not a fix but a probe: hoisting the
+walk earlier did not make it safe, because no placement of that walk is safe
+while the pointers' liveness is not guaranteed. The hot-path walk is removed --
+printing the fused operator itself costs nothing and cannot fault, and a
+description that survives being printed beats a more detailed one that does not.
+
+**Which lands on the batch hold.** `run_sync` holds the batch like this:
+
+    vector<VarPtr> batch_hold;
+    for (Var* v : plan.all_vars) batch_hold.emplace_back(v);
+
+resting on the argument in its own comment -- "an op's liveness comes from its
+outputs, so an op whose output var is held cannot be freed either". That only
+reaches ops whose outputs are in `all_vars`, and `all_vars` is what the planner's
+BFS *enqueued*. An op reached from its input side can have outputs that were
+never enqueued, and then nothing holds it while `parallel_compile_all_ops` walks
+its sub-operators. The fix extends the hold over `plan.op_outputs` -- the
+snapshot the planner already takes, so no extra traversal -- deduplicated,
+because phase 7 asserts `backward.count() <= batch_hold_per_var` and discounts
+exactly one hold per var.
+
+This is the first candidate in this investigation that is a named mechanism with
+a line-level measurement behind it rather than a story that fits the data. It is
+not yet verified: the reproduction has to come back clean, the suite has to
+pass, and then the H3 arm has to be re-run at N=12. Any of those can still
+refute it.
+
 **Reading the threading machinery: most of it is careful, and one thing is
 not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
 process-wide mutex, recursive by thread, and it handles the GIL inversion the

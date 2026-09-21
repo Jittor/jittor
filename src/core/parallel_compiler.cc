@@ -158,6 +158,13 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
         int root = queue[rid];
         Op* op = ops[root];
         bool is_fused_op = false;
+        // Filled below, as soon as the operator is settled and while its
+        // pointers are known live. Both failure handlers in this function print
+        // this string instead of walking `Op*`s of their own; see CompileTask.
+        // Declared out here because the catch needs it and the load happens
+        // inside the try -- empty means we failed before there was anything to
+        // name, which the handler says rather than guesses.
+        string op_desc;
         try {
         if (op->type() != OpType::other) {
             op = &fused_op;
@@ -165,6 +172,24 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
             int ll = (rid<queue.size()-1)?range[queue.size()-rid-2]:0, rr = range[queue.size()-rid-1];
             root = fuse_ops[rr-1];
             load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
+        }
+        {
+            // `op`, never `fused_op.ops`. Printing the sub-operator list walks
+            // every `Op*` in it, and that is exactly what was crashing in both
+            // failure handlers. Hoisting the walk to here did not make it safe:
+            // with the handlers fixed the crash moved to this line -- normal
+            // path, no exception in sight -- which is the finding rather than a
+            // setback. The sub-Op pointers are already dead by the time
+            // `load_fused_op` has filled the batch, so *no* placement of this
+            // walk is safe while their liveness is not guaranteed.
+            //
+            // The fused operator itself is a local and always valid, so its own
+            // name costs nothing and cannot fault. It is less detail than the
+            // sub-operator list; it is also a description that survives being
+            // printed.
+            std::stringstream desc_ss;
+            desc_ss << op;
+            op_desc = desc_ss.str();
         }
         LOGvvv << "Check op needs compile:" << op;
         ExecutionBackendScope operation_backend_scope(op->requested_backend());
@@ -188,12 +213,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
         } else {
             task_rid = rid;
         }
-        std::stringstream task_desc;
-        if (is_fused_op)
-            task_desc << ((FusedOp*)op)->ops;
-        else
-            task_desc << op;
-        tasks.push_back({task_rid, string(jit_key), task_desc.str()});
+        tasks.push_back({task_rid, string(jit_key), op_desc});
 
 
         LOGvv << "Op needs compile:" << op;
@@ -210,13 +230,18 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
             if (prepared_key.size())
                 source_note = "\n\ngenerated source: " +
                     Op::get_filename_from_jit_key(prepared_key, ".cc");
-            if (is_fused_op) {
-                LOGf << "Compile fused operator(" >> rid >> '/' >> queue.size() >> ")"
-                    << "failed:" << fused_op.ops << "\n\nReason: " >> e.what()
-                    >> source_note;
-            } else
-                LOGf << "Compile operator(" >> rid >> '/' >> queue.size() >> ")"
-                    << "failed:" << op << "\n\nReason: " >> e.what() >> source_note;
+            // `op_desc`, not the live pointers. This handler is the sibling of
+            // the worker's and had the same defect: `<< fused_op.ops` walks
+            // every sub-Op for its name, and once the worker's copy was fixed
+            // this became the crash -- resolved to parallel_compiler.cc:215 ->
+            // Op::name_ex (op.cc:379). prepare_execution can release the GIL,
+            // so another Python thread gets to free nodes between the load and
+            // the throw.
+            const char* named = op_desc.size() ? op_desc.c_str()
+                                               : "(operator not yet identified)";
+            LOGf << (is_fused_op ? "Compile fused operator(" : "Compile operator(")
+                >> rid >> '/' >> queue.size() >> ")"
+                << "failed:" << named << "\n\nReason: " >> e.what() >> source_note;
         }
     }
     if (tasks.empty()) return;
