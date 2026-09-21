@@ -39,6 +39,7 @@ _TOPICS = (
     "torch_compat_migration",
     "transformer",
     "vit_training",
+    "wgan_gp",
 )
 
 _SMOKE_TOPICS = (
@@ -62,6 +63,7 @@ _SMOKE_TOPICS = (
     "mixed_precision",
     "conditional_gan",
     "dcgan",
+    "wgan_gp",
     "torch_compat",
     "torch_compat_migration",
 )

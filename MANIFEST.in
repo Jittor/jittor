@@ -382,6 +382,7 @@ include examples/notebooks/torch_compat.md
 include examples/notebooks/torch_compat_migration.md
 include examples/notebooks/transformer.md
 include examples/notebooks/vit_training.md
+include examples/notebooks/wgan_gp.md
 include pyproject.toml
 include python/jittor/__init__.pyi
 include python/jittor/build/utils/class/motd
