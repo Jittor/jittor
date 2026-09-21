@@ -23,6 +23,7 @@ _TOPICS = (
     "conditional_gan",
     "custom_op",
     "data_pipeline",
+    "dcgan",
     "device_placement",
     "diffusion",
     "example",
@@ -60,6 +61,7 @@ _SMOKE_TOPICS = (
     "gpt2_training",
     "mixed_precision",
     "conditional_gan",
+    "dcgan",
     "torch_compat",
     "torch_compat_migration",
 )

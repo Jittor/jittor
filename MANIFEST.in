@@ -364,6 +364,7 @@ include examples/notebooks/checkpointing.md
 include examples/notebooks/conditional_gan.md
 include examples/notebooks/custom_op.md
 include examples/notebooks/data_pipeline.md
+include examples/notebooks/dcgan.md
 include examples/notebooks/device_placement.md
 include examples/notebooks/diffusion.md
 include examples/notebooks/example.md
