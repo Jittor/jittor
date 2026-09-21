@@ -228,6 +228,24 @@ struct BatchReleaseRecord {
 };
 }
 
+#ifdef HAS_ACCELERATOR
+namespace {
+// Publishes the batch's device work for the next thread into the executor, on
+// every exit including an exception. Destructors do not throw, and a failure
+// here must not replace whatever error is already unwinding.
+struct ComputeHandoffScope {
+    const uint64& devices;
+    ~ComputeHandoffScope() {
+        try {
+            backend_compute_stream_release(devices);
+        } catch (const std::exception& error) {
+            LOGe << "Compute handoff failed:" << error.what();
+        }
+    }
+};
+}
+#endif
+
 void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                    vector<Var*>& vars, bool device_sync, int entry_device) {
     ExecutionBackendScope backend_scope(plan.backend);
@@ -244,8 +262,14 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     uint64 touched_devices = 0;
     // Nothing this batch launches is ordered against work another thread left
     // on its own compute stream -- that stream is per-thread and the graph is
-    // not. Wait for it before issuing anything.
+    // not. Wait for it before issuing anything, and publish what this batch
+    // issued on the way out so the next thread in can do the same.
+    //
+    // On the way out even if the batch threw: the kernels launched before the
+    // throw are still in flight, and a thread that never publishes them leaves
+    // the next one free to read what they are still writing.
     backend_compute_stream_acquire();
+    ComputeHandoffScope compute_handoff{touched_devices};
     #else
     (void)entry_device;
     #endif
@@ -529,11 +553,6 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     if (device_sync && !runtime_use_cuda())
         backend_ops(BackendId::Cpu).synchronize(0);
     #ifdef HAS_ACCELERATOR
-    // Publish what this batch issued, so the next thread into the executor can
-    // wait for it. Before the device wait below on purpose: with `device_sync`
-    // the event is already complete by the time anyone looks at it, and
-    // without it this is the only record that the work exists.
-    backend_compute_stream_release(touched_devices);
     if (device_sync && (runtime_use_cuda() || touched_devices)) {
         exe.last_is_cuda = false;
         sync_times++;

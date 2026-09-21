@@ -238,6 +238,14 @@ void check_error() { checkCudaErrors(cudaGetLastError()); }
 //     spell a stream out;
 //   - every library handle: `cublasSetStream`/`cudnnSetStream`/... at creation.
 // Grep for `cudaStreamPerThread` to audit the set.
+//
+// The same argument applies to two *threads*, which this stream makes into two
+// streams while the graph, the Vars and their buffers stay process-global and
+// carry no stream affinity. That one is not fixed here: it is ordered at the
+// two ends of `run_exec_plan` by `backend_compute_stream_acquire`/`_release`
+// (src/runtime/backend_streams.cc), which is what keeps a graph built on one
+// Python thread and finished on another from reading buffers the first thread
+// is still writing.
 void* compute_stream(int device) {
     CHECK(device >= 0 && device < accelerator_count()) << "Invalid compute stream device";
     return reinterpret_cast<void*>(cudaStreamPerThread);
