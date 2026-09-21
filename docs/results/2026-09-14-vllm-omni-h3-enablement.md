@@ -5697,9 +5697,43 @@ does for vars -- so that reclamation is correct by construction instead of by a
 reachability enumeration that has to be kept in sync with every walk
 `update_ops` performs.
 
-That is a change to node ownership, not a patch to the drain, and it is where
-this should go next. All of the pinning work is reverted; what it leaves behind
-is the diagnosis and the 10-second loop to test the next attempt against.
+Three more iterations followed that, and the final state is worth recording
+precisely because it is negative:
+
+| change | threads=0 | threads=1 |
+| --- | --- | --- |
+| pin, keep pinned nodes in the buffer | 1-2 rounds | survives the loop, dies at exit |
+| pin, hand the delete to `~ExecPlan` | **38,607 rounds** | crash |
+| + serialise the unpin with the drain | 38,274-38,696 | **crash 6/6** |
+
+The throughput problem is solved outright by handing ownership over instead of
+leaving pinned nodes to be rescanned, and the exit crash had a real cause -- the
+unpin and the drain both deciding to delete -- that the shared mutex addresses.
+Neither makes the race go away.
+
+**And the gap between those two columns is the finding.** Disabling deletion
+globally fixes it, 0/6. Pinning every node the planner enqueues, plus every
+input and output of every op among them, does not -- 6/6. So **the node being
+deleted is not in that set**, and the whole approach of enumerating what a batch
+reaches is chasing a boundary that is not where the dereference happens. Adding
+another edge class to the enumeration would be the fourth guess of the same
+shape, and the previous three each looked equally reasonable.
+
+Eight attempts, all measured, all reverted. The tree is clean. What is
+established and what is not:
+
+* **Established:** the failure is a use-after-free on a deleted node
+  (delete/leak, 6/6 vs 0/6); it needs two Python threads *concurrently* inside
+  jittor (reproduction 9 vs 10); it faults in `FusedOp::update_ops` walking
+  `op->outputs()`; and single-threaded jittor does 38,000 rounds of the same
+  work without a scratch.
+* **Not established:** which pointer, and reached how. The reachability sets
+  tried so far do not contain it.
+
+The next step is to find that out rather than guess again: log the address the
+drain deletes and the addresses `update_ops` is about to walk, in the same run,
+and intersect them. The 10-second loop makes that one run rather than an
+afternoon.
 
 **Reading the threading machinery: most of it is careful, and one thing is
 not.** The executor entry is properly serialized. `ExecutorEntryScope` is a
