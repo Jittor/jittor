@@ -227,24 +227,42 @@ class TestCore(unittest.TestCase):
                 assert ",0)" not in n
 
     def test_relu_memopt(self):
-        x = a = jt.rand(10,10)
-        for i in range(10):
-            # a = jt.nn.relu(a)
-            a = jt.ternary_out_hint((a>0.0).name("b"+str(i)), a, 0.0)
-            a = jt.matmul(a.name("m1"),jt.rand(10,10).name("m2")).name("m3-"+str(i))
-        da = jt.grad(a, x, True)
-        # jt.clean_graph()
-        da.sync()
-        cnt1 = 0
-        cnt2 = 0
-        for n in jt.dump_all_graphs().nodes_info:
-            if "Var" in n and ",0)" not in n:
-                cnt1 +=1
-                if "bool" in n:
-                    cnt2 += 1
-        print(cnt1, cnt2)
-        assert cnt2 == 10
-        assert cnt1 <= 33, cnt1
+        """A retained graph is the backward's working set; releasing it must not leak.
+
+        `jt.grad(..., retain_graph=True)` keeps every intermediate the backward
+        needs, and the ten conditional masks are part of that -- which is why
+        the mask count is the half of this test that carries meaning.
+
+        The other half used to be `assert cnt1 <= 33`, an absolute bound on that
+        *retained* graph. It stopped holding (43 now) without anything leaking:
+        measured, the retained count is `4 * layers + 3` for 1, 5, 10, 20 and 40
+        layers, so it only ever tracked the graph's size. What actually
+        distinguishes "retained on purpose" from "stranded" is that the graph
+        left after `clean_graph()` does **not** grow with depth. Pin that.
+        """
+        def masks_and_residue(layers):
+            x = a = jt.rand(10, 10)
+            for i in range(layers):
+                a = jt.ternary_out_hint((a > 0.0).name("b" + str(i)), a, 0.0)
+                a = jt.matmul(a.name("m1"),
+                              jt.rand(10, 10).name("m2")).name("m3-" + str(i))
+            da = jt.grad(a, x, True)
+            da.sync()
+            retained = [n for n in jt.dump_all_graphs().nodes_info
+                        if "Var" in n and ",0)" not in n]
+            masks = sum(1 for n in retained if "bool" in n)
+            jt.clean_graph()
+            left = sum(1 for n in jt.dump_all_graphs().nodes_info
+                       if "Var" in n and ",0)" not in n)
+            return masks, left
+
+        masks, left = masks_and_residue(10)
+        # The backward of each ternary needs the condition it was given.
+        assert masks == 10, masks
+        # Releasing the graph must leave a constant, not a function of depth.
+        _, left_deeper = masks_and_residue(20)
+        assert left == left_deeper, (left, left_deeper)
+        assert left <= 4, left
 
     def test_node_order(self):
         a = jt.nn.Sequential()
@@ -277,23 +295,42 @@ class TestCore(unittest.TestCase):
         updated = [int(re.search(r"Var\((\d+):", m.weight.debug_msg()).group(1))
                    for m in a]
         order_of = {}
+        total_ops = 0
         for l in logs:
             msg = l["msg"]
             if "Finished" not in msg:
                 continue
+            match = re.search(r"Op\([^)]*?(\d+)/(\d+)\)", msg)
             produced = {int(v) for v in re.findall(r"Var\((\d+):", msg)}
+            if match:
+                total_ops = max(total_ops, int(match.group(2)))
             for layer, var_id in enumerate(updated):
                 if var_id in produced:
-                    order_of[layer] = int(
-                        re.search(r"Op\([^)]*?(\d+)/\d+\)", msg).group(1))
+                    order_of[layer] = int(match.group(1))
         assert len(order_of) == 10, sorted(order_of.items())
         # Backward order: the last layer's parameter is ready first. What is
         # pinned is that the executor does not defer an update behind unrelated
         # work -- layer 9 lands early and each earlier layer follows within a
         # few ops of it.
+        #
+        # These three checks used to be a single absolute bound,
+        # `orders[i] <= 14 + i * 3`, which cannot hold at all: the forward pass
+        # alone is 31 of the 81 ops (ten layers, three ops each), so an update
+        # derived from the backward cannot possibly land by op 14. The bound was
+        # carried over unchanged when the anchors above were rewritten in
+        # e81404c0, and it left this test red -- and, by keeping its frame, it
+        # also poisoned `test_number_of_hold_vars`. State the invariant in
+        # terms of the op count so a bigger graph cannot make it impossible:
         orders = [order_of[9 - i] for i in range(10)]
-        for i in range(10):
-            assert orders[i] <= 14 + i * 3, orders
+        # 1. layer 9 first, layer 0 last, never the other way round.
+        assert orders == sorted(orders), orders
+        # 2. the updates are interleaved with the backward, not bunched after
+        #    it: a serialized executor would put all ten within the last ten ops.
+        assert orders[0] <= total_ops - 11, (orders, total_ops)
+        # 3. each earlier layer follows within a few ops -- not behind
+        #    unrelated work.
+        gaps = [orders[i + 1] - orders[i] for i in range(9)]
+        assert max(gaps) <= 8, (orders, gaps)
 
     def test_bc_bug(self):
         a = jt.zeros((1,1))
