@@ -465,7 +465,12 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   half-fix that breaks the half kernels' build on the main accelerator path
   would be worse than the defect.
 - Integer and float32/float64 reductions are unaffected and are covered as
-  controls in the same file.
+  controls in the same file. Re-measured 2026-09-21 under the Torch-compat shim
+  as well, since the two frontends are separate sessions in the gate: with
+  `JITTOR_TORCH_SHIM=1`, `torch.max([-inf,-inf])` is `-inf` and
+  `torch.min([+inf,+inf])` is `inf` at both float32 and float64, and native
+  `jt`'s float64 `max` is `-inf` in the same process. So the identity fix
+  reaches both frontends, not just native.
 - Review/expiry condition: the CUDA half class's strict expected failure turns
   red (i.e. the CUDA rows answer from an infinity), and the entry is removed.
 
