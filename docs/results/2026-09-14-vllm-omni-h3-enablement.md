@@ -5013,23 +5013,52 @@ sits at 11.9 and a failed one at 39.1, so `w_all` (11.78-11.91) and `retsync`
 (11.93-12.03) were reading real pictures and the `adj>20` threshold separates
 the two cleanly. The borrowed-scale caveat above is resolved.
 
-The expensive one: **the no-workaround failure rate here is 1 in 4, not ~70%.**
-The ~70% figure came from other conditions and should never have been carried
-into arms scored on this harness. At 25% per request, three clean requests in a
-row happen **42% of the time with no effect at all**:
+**That N=4 reading was itself underpowered, and the N=12 control corrects it
+back.** Twelve no-sync requests:
+
+    #1 11.89 ok   #2 39.00      #3 18.35      #4 43.34
+    #5 49.80      #6 11.92 ok   #7 17.57      #8 12.00 ok
+    #9 11.84 ok   #10 17.74     #11 38.74     #12 44.22
+
+`adj` falls into **three** clusters, not two: 11.84-12.00 (4 runs), 17.57-18.35
+(3 runs), 38.74-49.80 (5 runs). The `adj>20` threshold scored the middle cluster
+"ok", which is a fifth scoring hole in this investigation.
+
+The middle cluster is not normal variation. Six independently clean clips
+(`w_all` and `retsync`) span adj 11.78-12.03 -- a range of 0.25, because `adj`
+is a texture statistic and holds steady across different valid videos of the
+same prompt. 17.57 is nowhere near that band. Frame-wise comparison cannot
+settle it, and checking that was worth doing: clips from an all-clean arm differ
+from each other by meandiff 11-17 with maxdiff 255, so this pipeline is **not**
+bit-deterministic across requests even at a fixed seed, and identity is not an
+available criterion. The tightness of `adj` is.
+
+So the baseline is **4/12 correct, 67% failure** -- which is the ~70% originally
+quoted. The 25% figure was the artifact: four samples scored with a threshold
+that let a whole degraded cluster through.
+
+**Which means the retraction above was wrong, and for the same reason as the
+overclaim it retracted.** At a 67% failure rate, three clean requests in a row
+have p = 0.33^3 = 0.036:
 
 | arm | result | P(this or better \| no effect) |
 | --- | --- | --- |
-| `varsync` | 28/28 clean | 0.0003 -- significant |
-| `w_all` | 3/3 clean | 0.42 -- **not significant** |
-| `retsync` | 3/3 clean | 0.42 -- **not significant** |
-| `postsync` | 2/3 failed | indistinguishable from baseline |
+| `varsync` | 28/28 clean | vanishing |
+| `w_all` | 3/3 clean | 0.036 -- significant at 5% |
+| `retsync` | 3/3 clean | 0.036 -- significant at 5% |
+| `postsync` | 2/3 failed | consistent with baseline, uninformative |
 
-So the two results this section called decisive a few hours ago are not. "Batch
-composition is not the variable, position is" and the narrowing of the window to
-`DiffusionOutput` construction -> post-process both rest on 3-request arms that
-cannot carry them. **Both are withdrawn.** What survives is what survived
-before: `varsync` is 28/28 and that is real.
+`w_all` and `retsync` stand, at p~0.036 -- suggestive rather than airtight, and
+worth re-running at N=12, but not withdrawn. The lesson is not about those arms;
+it is that **retracting on four samples repeated the error of concluding on
+three**. The baseline had to come first.
+
+The threshold is now calibrated instead of guessed: clean band 11.78-12.03, next
+cluster from 17.57, so the cut sits at 14 with a separate `DEGRADED` verdict
+above it and `NOISE` above 30.
+
+*(Superseded paragraph, kept for the record: "the no-workaround failure rate
+here is 1 in 4, not ~70%.")*
 
 The method fix is cheap and should have been obvious. Separating 25% from ~0%
 needs about a dozen clean runs (0.75^11 ~ 4%), and twelve requests cost nine
