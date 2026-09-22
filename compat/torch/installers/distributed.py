@@ -108,8 +108,9 @@ def _clear_stale_rendezvous(rootinfo, rank):
     for path in stale:
         try:
             os.remove(path)
-        except FileNotFoundError:
-            pass
+        except FileNotFoundError as exc:
+            swallowed("distributed.py clearing stale rendezvous file %s" % path,
+                      exc)
         except OSError as error:
             warnings.warn(
                 "could not remove the stale rendezvous file %s: %s; a rerun on "
@@ -123,8 +124,9 @@ def _clear_stale_rendezvous_atexit(rootinfo):
             glob.glob(rootinfo + ".hb*") + glob.glob(rootinfo + ".tmp"):
         try:
             os.remove(path)
-        except OSError:
-            pass
+        except OSError as exc:
+            swallowed("distributed.py atexit clearing stale rendezvous file %s"
+                      % path, exc)
 
 
 def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):

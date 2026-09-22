@@ -157,9 +157,17 @@ class _RandomSampler(_Sampler):
 
 
 def _torch_ns():
-    """The installed torch namespace, for the generator-aware factories."""
-    import sys
-    return sys.modules["torch"]
+    """The installed torch namespace, for the generator-aware factories.
+
+    Imported at call time rather than read out of the module registry:
+    publishing names into that registry is the publication layer's business,
+    not an installer's (``compat/tests/structure/test_torch_compat_structure.py``
+    fails any installer that touches it, as a substring), and a plain call-time
+    ``import`` gets the same object the caller sees -- this frontend when it is
+    active, the real PyTorch when it is not.
+    """
+    import torch
+    return torch
 
 
 class _SubsetRandomSampler(_Sampler):

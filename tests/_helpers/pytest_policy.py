@@ -706,8 +706,13 @@ _SKIP_BUCKET_PATTERNS = {
     # the opt-in bucket, explained but wordless about hardware, so it counted
     # as unexplained and failed the run. `tests/ops/test_ops.py` alone emits
     # seven of them.
+    # The last entry is the same shape in a structure gate:
+    # `tests/structure/build/test_env_var_manifest.py` is parametrized over the
+    # modules that read a setting under its unprefixed name and skips the
+    # resolver files, which are exactly where those names are resolved.
     "declared": ("supports_gradgrad=false", "supports_autograd=false",
-                 "no numpy reference", "no differentiable samples"),
+                 "no numpy reference", "no differentiable samples",
+                 "the resolver is where these names are allowed"),
 }
 
 
