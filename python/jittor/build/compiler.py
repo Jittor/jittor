@@ -255,6 +255,13 @@ def check_cuda():
     # assert cuda_dir.endswith("bin") and "cuda" in cuda_dir.lower(), f"Wrong cuda_dir: {cuda_dir}"
     cuda_include = os.path.abspath(os.path.join(cuda_dir, "..", "include"))
     cuda_lib = os.path.abspath(os.path.join(cuda_dir, "..", "lib64"))
+    # Conda-style CUDA environments use ``lib`` instead of the system
+    # toolkit's ``lib64``. Keep the conventional path first, but accept the
+    # layout used by uv/conda-managed toolchains as well.
+    if not os.path.isdir(cuda_lib):
+        conda_cuda_lib = os.path.abspath(os.path.join(cuda_dir, "..", "lib"))
+        if os.path.isdir(conda_cuda_lib):
+            cuda_lib = conda_cuda_lib
     if nvcc_path == "/usr/bin/nvcc":
         # this nvcc is install by package manager
         cuda_lib = "/usr/lib/x86_64-linux-gnu"
