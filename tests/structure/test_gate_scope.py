@@ -287,3 +287,9 @@ def test_skip_reason_summary_and_threshold_are_wired():
     assert "_report_skip_reason_buckets(terminalreporter)" in source
     assert "other skipped:" in source
     assert "_other_skip_count() > 0" in source
+    # A bare count reds the run and says nothing about what to do. Naming the
+    # reasons is what makes it actionable -- five of this machine's six turned
+    # out to be build facts (no jt_graph_build_profile, no cub, no MKL, no gdb)
+    # and the sixth a placeholder reason string.
+    assert "_OTHER_SKIP_REASONS[reason] += 1" in source
+    assert "_OTHER_SKIP_REASONS.most_common(10)" in source

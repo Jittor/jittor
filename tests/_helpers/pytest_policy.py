@@ -636,6 +636,9 @@ _FILES_WITH_ITEMS = set()
 #: lets ``_files_that_collected_nothing()`` mean collection.
 _COLLECTED_FILES = set()
 _SKIP_REASON_BUCKETS = Counter()
+#: {lowercased reason: n} for the skips that landed in `other`, so the report can
+#: name them instead of printing a count that reds a run and explains nothing.
+_OTHER_SKIP_REASONS = Counter()
 _ACCELERATOR_EXECUTED = 0
 #: Ordered, and the order is the classification: the first bucket whose pattern
 #: appears in the reason wins. "insufficient-devices" therefore has to precede
@@ -746,7 +749,10 @@ def pytest_runtest_logreport(report):
         record["skipped"] += 1
         reason = _skip_reason(report)
         record["reasons"].add(reason)
-        _SKIP_REASON_BUCKETS[classify_skip_reason_bucket(reason)] += 1
+        bucket = classify_skip_reason_bucket(reason)
+        _SKIP_REASON_BUCKETS[bucket] += 1
+        if bucket == "other":
+            _OTHER_SKIP_REASONS[reason] += 1
         if _real_torch_is_required() and _blames_missing_torch(reason):
             _MISSING_REAL_TORCH.append((report.nodeid, reason))
 
@@ -1042,6 +1048,21 @@ def _report_skip_reason_buckets(terminalreporter):
     for bucket, count in buckets:
         terminalreporter.write_line("%d skipped: %s" % (count, bucket))
     terminalreporter.write_line("other skipped: %d" % _other_skip_count())
+    if _OTHER_SKIP_REASONS:
+        # Name them. `other > 0` fails a ``JITTOR_TEST_REQUIRE_EXECUTION=1`` run,
+        # and a bare count is unactionable: the only way to find these was to
+        # patch a print into the accounting hook yourself and re-run the whole
+        # selection. Five of the six reasons behind this machine's twenty turned
+        # out to be facts about the build (no ``jt_graph_build_profile``, no cub,
+        # no MKL, no gdb) and the sixth a placeholder reason string.
+        terminalreporter.write_line(
+            "the reasons counted as `other` (fix or explain these):")
+        for reason, count in _OTHER_SKIP_REASONS.most_common(10):
+            terminalreporter.write_line("  %d x %s" % (count, reason[:160]))
+        if len(_OTHER_SKIP_REASONS) > 10:
+            terminalreporter.write_line(
+                "  ... and %d more distinct reason(s)"
+                % (len(_OTHER_SKIP_REASONS) - 10))
     short = _SKIP_REASON_BUCKETS.get("insufficient-devices", 0)
     if short:
         # Said out loud because it is the one bucket that is not an environment
