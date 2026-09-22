@@ -287,3 +287,16 @@ def div(input, other, *, rounding_mode=None, out=None):
 #: same ``rounding_mode``; published as the same object so the two spellings
 #: cannot drift apart.
 divide = div
+
+
+def _tensor_div(self, other, *, rounding_mode=None):
+    """``Tensor.div`` -- the method spelling of the same operation.
+
+    Torch's method form takes the same ``rounding_mode`` as the function form
+    (measured against real torch 2.13: ``x.div(y, rounding_mode="trunc")`` gives
+    the values *and* the dtype of ``torch.div(x, y, rounding_mode="trunc")``),
+    so it has to reach this adapter instead of the native binary op that jittor
+    generates from the ``div`` op name. ``div_``/``divide_`` keep the native path,
+    and ``true_divide`` takes no ``rounding_mode`` in torch either.
+    """
+    return div(self, other, rounding_mode=rounding_mode)

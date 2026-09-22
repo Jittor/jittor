@@ -315,6 +315,8 @@ _DIV_FIDELITY_DETAIL = (
 
 from .elementwise import div, divide
 
+from .elementwise import _tensor_div
+
 register_fidelity(
     "torch.div",
     div,
@@ -1186,6 +1188,10 @@ def install(ctx):
         g.div = div
     if callable(_orig_divide):
         g.divide = divide
+    # The method spellings take the same `rounding_mode` in torch, and jittor's
+    # are auto-generated from the op name, so they need the adapter too.
+    Var.div = _tensor_div
+    Var.divide = _tensor_div
     _bind_missing(g, "isclose", isclose)
     _bind_missing(g, "allclose", allclose)
     _bind_missing(g, "cosine_similarity", cosine_similarity)
