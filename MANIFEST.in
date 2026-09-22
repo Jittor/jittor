@@ -321,6 +321,7 @@ include docs/development/source-architecture.md
 include docs/development/static-graph-replay.md
 include docs/development/storage-layout.md
 include docs/development/test-system.md
+include docs/guides/ascend-310p.md
 include docs/guides/ascend-910b.md
 include docs/guides/corex.md
 include docs/guides/cpp-console.md

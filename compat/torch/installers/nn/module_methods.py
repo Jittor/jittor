@@ -941,9 +941,11 @@ def _get_parameter(self, target):
     # `requires_grad` cannot classify it -- a buffer registered from a torch
     # factory is not stop_grad either, so asking that question returned
     # buffers from `get_parameter`, which torch answers with AttributeError.
-    # The module's own parameter listing is the authority; buffers are tracked
-    # separately, by name (see Module.register_buffer).
-    if isinstance(v, jt.Var) and target in {n for n, _ in self.named_parameters()}:
+    # The leaf module's own `_parameters` table is the authority, and it must
+    # be a LOCAL check: the global named_parameters() list de-duplicates a
+    # Var reachable under several names, which is exactly how a tied weight
+    # (`lm_head.weight` aliasing `embed_tokens.weight`) was refused here.
+    if isinstance(v, jt.Var) and leaf in getattr(mod, "_parameters", {}):
         return v
     raise AttributeError(f"`{target}` is not a parameter")
 
@@ -959,8 +961,7 @@ def _get_buffer(self, target):
     if not hasattr(mod, leaf):
         raise AttributeError(f"`{target}` is not a buffer")
     v = getattr(mod, leaf)
-    names = {n for n, _ in self.named_buffers()}
-    if isinstance(v, jt.Var) and target in names:
+    if isinstance(v, jt.Var) and leaf in getattr(mod, "_buffers", {}):
         return v
     raise AttributeError(f"`{target}` is not a buffer")
 

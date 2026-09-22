@@ -64,9 +64,23 @@ def _invoke_factory(name, args, kwargs):
     if implementation is None:
         raise RuntimeError("torch.%s is not installed" % name)
     from ..frontend import tensor_frontend
+    from ..types import _is_meta_device_request
     like = args[0] if args and (name.endswith("_like") or name in _TENSOR_FIRST_ARGUMENT) else None
-    with tensor_frontend(context.target_namespace.Var, device=kwargs.get("device"), like=like):
-        return implementation(*args, **kwargs)
+    requested = kwargs.get("device")
+    meta = _is_meta_device_request(requested)
+    # torch's meta tensors carry shape/dtype only; Jittor has no meta backend,
+    # so the same contract `with torch.device("meta")` uses applies here: the
+    # Var is really allocated (on the host) and reports "meta" via the
+    # `_jittor_torch_meta` mark that `Tensor.device`/`is_meta` read.
+    with tensor_frontend(context.target_namespace.Var,
+                         device="cpu" if meta else requested, like=like):
+        result = implementation(*args, **kwargs)
+    if meta:
+        try:
+            result._jittor_torch_meta = True
+        except (AttributeError, TypeError) as exc:
+            swallowed("torch/installers/factories.py _invoke_factory: meta mark", exc)
+    return result
 
 
 def arange(*args, **kwargs):

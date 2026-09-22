@@ -433,6 +433,11 @@ def _invert(self):
 
 
 def _device(self):
+    # A Var built through a factory's `device="meta"` argument keeps its mark:
+    # torch's meta is a real device the tensor reports forever, not just a
+    # context the `with torch.device("meta")` stack below emulates.
+    if getattr(self, "_jittor_torch_meta", False):
+        return _owner.device("meta")
     if self.placement_backend >= 0:
         if self.placement_backend == 0:
             return _owner.device("cpu")

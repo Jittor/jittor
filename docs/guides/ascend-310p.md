@@ -17,6 +17,10 @@
 
 验证命令与结果：`tests/backends/acl/` 214 通过 / 11 跳过 / 0 失败，
 `backend_fallback=error` 下零 CPU 回退，全部跳过已按能力归类。
+模型级验收：Transformers 4.56.2 + Torch shim，Qwen3-0.6B FP16 greedy
+生成零回退且三次重复一致（需 `acl_allow_hf32=1`，RoPE 的 FP32
+`inv_freq @ position_ids` 走显式降精度），详见
+`refactor-wip/results/transformers/2026-09-22-qwen3-ascend310p-fp16.md`。
 
 ## 与 910B 的能力差异
 
