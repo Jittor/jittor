@@ -23,7 +23,15 @@ class TestCudaStreams(unittest.TestCase):
                 self.assertIs(fidelity_of("torch.cuda." + name).implementation, implementation)
         self.assertIs(fidelity_of("torch.cuda.Stream").level, Fidelity.APPROXIMATE)
         self.assertIn("sampled", fidelity_of("torch.cuda.max_memory_allocated").detail)
-        self.assertIs(fidelity_of("torch.cuda.get_rng_state").level, Fidelity.UNIMPLEMENTED)
+        # `get_rng_state` used to be a placeholder that returned the constant
+        # `[0]`, and this assertion pinned that as UNIMPLEMENTED. It is a real
+        # seed-plus-position now (`api.py`'s `_RNG_STATE_MAGIC` block, and
+        # `test_torch_cuda_rng_state.py` for the round-trip), so APPROXIMATE is
+        # the level -- approximate rather than checked because the bytes are
+        # jittor's own format, not torch's CUDA state bytes: they round-trip
+        # through jittor and must not be parsed or handed to torch.
+        self.assertIs(fidelity_of("torch.cuda.get_rng_state").level,
+                      Fidelity.APPROXIMATE)
 
     def test_batch_invariant_precision_controls_are_mutable(self):
         matmul = torch.backends.cuda.matmul

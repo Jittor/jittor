@@ -14,20 +14,49 @@ restore every one of the four kinds continues exactly. The C5 issue doc's
 "问题一" says a single offset cannot describe a mixed history -- on this cuRAND
 it can; the measurement is described in the commit that added this.
 """
+from functools import wraps
+
 import jittor as jt
 import numpy as np
 import pytest
 import torch
 
 
-def _cuda_or_skip():
-    if not jt.has_cuda:
-        pytest.skip("no CUDA device")
-    jt.flags.use_cuda = 1
+def _on_cuda(require_counting):
+    """Run on a CUDA build with `use_cuda` scoped, or skip.
+
+    The flag is set through `jt.flag_scope` rather than by assigning
+    `jt.flags.use_cuda`: it is process-global, and a test that leaves it on makes
+    every later file in the session run on the accelerator. The flag-scope gate
+    (`tests/structure/runtime/test_flag_scope_contract.py`) flagged the previous
+    assignments for exactly that, and it is right to -- nothing here restored
+    them. ``require_counting`` is for the tests that assert the saved *position*
+    round-trips; the ones that only need a seed run without the native wrapper.
+    """
+    def decorate(func):
+        @wraps(func)
+        def inner(*args, **kwargs):
+            if not jt.has_cuda:
+                pytest.skip("no CUDA device")
+            if require_counting:
+                backend = getattr(jt.compile_extern, "curand", None)
+                if backend is None or not hasattr(backend, "curand_restore_state"):
+                    # The counting lives in the native cuRAND wrapper. Without
+                    # it there is no position to save, and everything below
+                    # asserts that the position round-trips.
+                    pytest.skip("this build has no native cuRAND offset accounting")
+            with jt.flag_scope(use_cuda=1):
+                return func(*args, **kwargs)
+        return inner
+    return decorate
 
 
+_cuda_rng = _on_cuda(require_counting=True)
+_cuda_rng_seed_only = _on_cuda(require_counting=False)
+
+
+@_cuda_rng
 def test_state_round_trips_for_uniform():
-    _cuda_or_skip()
     torch.cuda.manual_seed(1234)
     jt.random((10,)).sync()
 
@@ -38,10 +67,10 @@ def test_state_round_trips_for_uniform():
     np.testing.assert_array_equal(jt.random((8,)).numpy(), expected)
 
 
+@_cuda_rng
 def test_state_round_trips_after_a_mixed_history():
     # The history the doc says cannot be expressed: uniform, then normal, then
     # an odd-length normal, then float64.
-    _cuda_or_skip()
     torch.cuda.manual_seed(99)
     jt.random((5,)).sync()
     jt.random((6,), type="normal").sync()
@@ -57,10 +86,10 @@ def test_state_round_trips_after_a_mixed_history():
     np.testing.assert_array_equal(jt.random((4,), type="normal").numpy(), expected_n)
 
 
+@_cuda_rng
 def test_a_restored_state_is_not_just_a_reseed():
     # Seeding rewinds; restoring continues. If `set_rng_state` were a reseed in
     # disguise, the draw after it would be the sequence's *first* values.
-    _cuda_or_skip()
     torch.cuda.manual_seed(7)
     first = jt.random((8,)).numpy().copy()
     state = torch.cuda.get_rng_state()
@@ -71,15 +100,15 @@ def test_a_restored_state_is_not_just_a_reseed():
     np.testing.assert_array_equal(jt.random((8,)).numpy(), after)
 
 
+@_cuda_rng
 def test_a_foreign_state_is_refused():
-    _cuda_or_skip()
     with pytest.raises(ValueError) as caught:
         torch.cuda.set_rng_state(torch.zeros(24, dtype=torch.uint8))
     assert "format" in str(caught.value) or "jittor" in str(caught.value)
 
 
+@_cuda_rng
 def test_a_refused_state_leaves_the_generator_alone():
-    _cuda_or_skip()
     torch.cuda.manual_seed(31)
     state = torch.cuda.get_rng_state()
     expected = jt.random((8,)).numpy().copy()
@@ -90,21 +119,22 @@ def test_a_refused_state_leaves_the_generator_alone():
     np.testing.assert_array_equal(jt.random((8,)).numpy(), expected)
 
 
+@_cuda_rng
 def test_get_rng_state_all_answers_per_device():
-    _cuda_or_skip()
     states = torch.cuda.get_rng_state_all()
     assert len(states) == int(jt.get_device_count())
     torch.cuda.set_rng_state_all(states)
 
 
+@_cuda_rng_seed_only
 def test_initial_seed_reports_the_seed_in_use():
-    _cuda_or_skip()
+    # No native counting needed: the seed is expressible either way.
     torch.cuda.manual_seed(4321)
     assert torch.cuda.initial_seed() == 4321
 
 
+@_cuda_rng_seed_only
 def test_seed_actually_reseeds():
-    _cuda_or_skip()
     torch.cuda.manual_seed(11)
     torch.cuda.seed()
     assert torch.cuda.initial_seed() != 11
