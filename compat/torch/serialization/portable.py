@@ -159,7 +159,15 @@ def _apply_map_location(obj, map_location, _depth=0, source_devices=None):
             return _preserve_parameter(obj, _make_cpu_resident(
                 obj, inplace=isinstance(obj, g.nn.Parameter)), g)
     if name in ("cuda", "npu", "gpu"):
-        if obj.placement_backend >= 0:
+        # `placement_backend` is 0 for an *explicitly CPU-placed* Var and > 0 for
+        # an accelerator one (`types.py` reads it the same way: `== 0` is CPU).
+        # Testing it as `>= 0` sent a CPU-placed Var down the direct-move path,
+        # so the diagnosis below never ran: `torch.load(p, map_location="cuda")`
+        # on a build with no accelerator raised the raw
+        # "Invalid cuda device index 0; visible device count is 0" instead of
+        # naming `map_location`. Only a Var that is already on an accelerator
+        # belongs on that path.
+        if obj.placement_backend > 0:
             if name == "gpu":
                 target = "cuda" + str(target)[3:]
             moved = _make_cuda_resident(obj, force=True,
