@@ -1,12 +1,15 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-09-21 -- a pass that changed five entries rather than
-  re-verifying every one: KI-OPS-008 closed and removed, KI-OPS-012 opened for
-  the half-precision half of the same identity, KI-OPS-006 re-measured and found
-  data-dependent, KI-CLEANUP-001 closed, and KI-AUTOGRAD-003 given a CPU
-  reproduction where it only had a CUDA one.
-- Baseline: `b0be99d8`
+- Last reviewed: 2026-09-22 -- one entry added (KI-TEST-006, a standalone H3
+  reproduction that pytest collects as a test file). The rest of the pass was
+  test-side and is in Git rather than here: two assertions that had gone stale
+  against newer behaviour (`prod`'s half dtype, the gamma kernel table), a
+  triton class that raised instead of skipping without triton, a child-process
+  launch that had left the `_helpers.child_process` contract, and the CPU-only
+  cores' absent `cuda_allow_tf32`, which had turned a whole compat file red in
+  the pull-request gate.
+- Baseline: `fc1af095`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -2131,6 +2134,50 @@ about whether to take it.
   the per-file result; `tests/backends` from 28 failed to 25. Runs take longer
   now because tests that had been silently running on CPU do use the GPU and
   compile its kernels once.
+
+## KI-TEST-006: a standalone H3 reproduction is collected as a test file
+
+- Severity: Low (a pull-request gate red; no wrong result, no wrong answer)
+- Status: Reproduced 2026-09-21 at `f7edfa92`, deliberately **not** repaired
+  here. The file belongs to the H3 compute-stream-ordering line (`a60d12f9`,
+  `61294cd1`, `69c3bdfd`) and its author still runs it from this path. The
+  owner's choice is to move it to `$JITTOR_LAB_ROOT/<topic>/`, or to add a
+  module-level `pytest.skip(..., allow_module_level=True)` for the
+  `__name__ != "__main__"` case, which keeps `python3 <path> 12 1` working.
+- Evidence: `tests/integration/test_h3_decode_thread_race.py` is 242 lines with
+  no `def test*` and no `class Test*`. An AST sweep of `tests/`,
+  `compat/tests/` and `adapters/tests/` for `test_*.py` files that define no
+  test returns this file and nothing else. Its module body takes `sys.argv[1]`
+  as an integer, hardcodes
+  `/root/jittor-lab/_state/h3/models/MiniMax-H3/FL2VA/video_vae` and
+  `/root/jittor-lab/comfyui/server_latent512.npz`, and calls
+  `from_pretrained(...)` at import time.
+- Symptom: pytest collects it because of the `test_` prefix and the module body
+  raises during collection -- `int(sys.argv[1])` is handed a pytest argument
+  rather than a round count -- so the file contributes one collection error to
+  the native session, and `tools/run_test_suite.py --tier smoke` counts it as a
+  failure of the pull-request gate. No test in it is skipped or run; the whole
+  file is unusable as a test and never was one.
+- Four structure gates fire on it as well, measured 2026-09-21 in the Torch
+  session (`tests/structure/test_child_process_contract.py`,
+  `tests/structure/test_pytest_contract.py`): the collection error above;
+  `test_native_tests_do_not_claim_torch_namespace_during_collection` at line 25
+  (`import torch` at module scope installs Jittor's process-global Torch shim
+  during collection);
+  `test_test_modules_avoid_collection_time_backend_side_effects` at lines 32
+  (`open`), 36 (`eval`) and 114/191 (a decode run at import); and the
+  module-level `from_pretrained(...)`. The last three are facts about the file
+  itself, so moving it to the lab clears all four at once.
+- Cause: a script that is meant to be run by path was committed under `tests/`,
+  where the file name is a collection instruction. Nothing in
+  `tests/_helpers/pytest_policy.py` refuses a collected module that defines no
+  tests, so the layout rule ("独立实验、下游 checkout 和大体积产物放在
+  `$JITTOR_LAB_ROOT/<topic>/`") is the only thing that would have caught it.
+- Workaround: none needed for the script itself; the gate is the only casualty.
+- Review/expiry condition: every `test_*.py` under a test root defines at least
+  one test -- whether because this file moved to the lab, because a
+  module-level skip was added, or because a collection rule refuses a
+  test-named module with no tests.
 
 ## KI-COMPILER-004: fixed -- a CPU-only core no longer shadows the CUDA build
 
