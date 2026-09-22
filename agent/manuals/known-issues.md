@@ -1,19 +1,21 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-09-22 -- one entry added (KI-COMPAT-005:
-  `torch.div(..., rounding_mode=)` is unimplemented, which stops Longformer at
-  its first sliding-window chunk). KI-TEST-006 was added earlier the same day.
-  The rest of the pass was test-side and is in Git rather than here: two
-  assertions that had gone stale against newer behaviour (`prod`'s half dtype,
-  the gamma kernel table), a triton class that raised instead of skipping
-  without triton, a child-process launch that had left the
-  `_helpers.child_process` contract, the CPU-only cores' absent
-  `cuda_allow_tf32`, `np.row_stack`'s removal, a cast region that named a device
-  the operand could not be on, and three shim diagnostics (the adapters'
-  lazy-module version read, the generated-copy scan, and `torch.cuda.set_device`
-  / `map_location="cuda"` on a build with no device).
-- Baseline: `4fa42270`
+- Last reviewed: 2026-09-22, second pass the same day -- KI-COMPAT-005 is now
+  fixed (`e8105ecc`): `torch.div(..., rounding_mode=)` is implemented in the
+  compat layer and `torch.masked_fill` is published, which together are what
+  Longformer's forward needed. The first pass that day added KI-COMPAT-005 and
+  KI-TEST-006 (a standalone H3 reproduction that pytest collects as a test
+  file). The rest of both passes was test-side and is in Git rather than here:
+  two assertions stale against newer behaviour (`prod`'s half dtype, the gamma
+  kernel table), a triton class that raised instead of skipping without triton,
+  a child-process launch that had left the `_helpers.child_process` contract,
+  the CPU-only cores' absent `cuda_allow_tf32`, `np.row_stack`'s removal, a cast
+  region naming a device the operand could not be on, and three shim
+  diagnostics (the adapters' lazy-module version read, the generated-copy scan,
+  and `torch.cuda.set_device` / `map_location="cuda"` on a build with no
+  device).
+- Baseline: `bdf1399c`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -2487,52 +2489,61 @@ about whether to take it.
 - Exit condition: all three classes in that file pass, with the mechanism
   behind attempt 2's collateral damage understood rather than worked around.
 
-## KI-COMPAT-005: `torch.div(..., rounding_mode=)` is unimplemented, so Longformer cannot run
+## KI-COMPAT-005: fixed -- `torch.div(..., rounding_mode=)` was unimplemented, which stopped Longformer
 
-- Severity: Medium (a shipped HuggingFace architecture cannot complete a forward
-  pass on CPU -- no wrong answer, but no answer)
-- Status: Reproduced 2026-09-22 at `4fa42270`, unfixed. The case that reports it,
-  `compat/tests/torch/test_torch_hf_models.py::TestTorchHFModels::test_forward_and_eval_determinism[longformer]`,
-  is in the **smoke tier** (not in `tiers.SLOW_FILES`), so HEAD's pull-request
-  gate is red for it.
-- Evidence: `AutoModel.from_config` on the file's own tiny longformer config
-  (`hidden_size=64, num_layers=2, heads=2, attention_window=4`), forward under
-  `torch.no_grad()`, dies at
+- Status: Fixed 2026-09-22 in `e8105ecc`. Reproduced earlier the same day at
+  `4fa42270`: `AutoModel.from_config` on this suite's own tiny longformer config
+  died in the forward, at
+  `transformers/models/longformer/modeling_longformer.py:770` --
 
-      transformers/models/longformer/modeling_longformer.py:770
       chunks_count = torch.div(seq_len, window_overlap, rounding_mode="trunc") - 1
 
   with `RuntimeError: Wrong inputs arguments, Please refer to
-  examples(help(jt.ops.div)).` raised in
-  [`native_api.py`](../../compat/torch/native_api.py)'s dispatch
-  (`return implementation(*args, **kwargs)`). The frame chain is
-  `LongformerModel.forward` -> `LongformerEncoder` -> `LongformerLayer` ->
-  `LongformerAttention.forward` -> `_sliding_chunks_query_key_matmul`.
-  A one-file probe reproduces it in ~30 s including the import.
-- Cause: `torch.div` is published straight from `_NATIVE_NAMES` in
-  [`native_api.py`](../../compat/torch/native_api.py), i.e. it *is* `jt.div`,
-  which has no `rounding_mode` parameter. Every other op that needed a Torch-only
-  keyword (`log1p`, `softmax`, `take_along_dim`, `all`/`any` with
-  `axis`/`keepdims`) is instead an adapted function published by
-  `compat/torch/installers/numerical/`; `div` is one of the few names that is
-  both a `_NATIVE_NAMES` entry and a Torch spelling that needs adapting.
-- Triage (downstream-library-adaptation §0): the capability exists -- jittor has
-  `floor_divide`, `floor`, `round` -- and only the *spelling* differs, so this is
-  `jittor.compat.torch`, not the core and not an adapter. `rounding_mode="floor"`
-  maps onto `floor_divide`; `"trunc"` (toward zero) has no direct primitive
-  (jittor has no `trunc` op), so it needs the sign-aware form, and that is the
-  part to get right rather than approximate.
-- Not done here, deliberately: the fix has to remove `"div"` from
-  `_NATIVE_NAMES` and publish an adapted `div` from the numerical installer,
-  which changes what `torch.div` *is* on the public surface. That needs its own
-  pass over the surface gates (`tests/structure/test_torch_api_surface.py`,
-  `compat/tests/torch/test_torch_compat_dtype.py`'s promotion rows) and a
-  dtype-by-dtype comparison against real torch for both rounding modes, not a
-  wrapper dropped in at the end of a session.
-- Workaround for a caller: compute the quotient and round it explicitly, e.g.
-  `(seq_len / window_overlap).floor()` when the operands are non-negative
-  (`"floor"` and `"trunc"` agree there, which is why only this one op path is
-  affected).
-- Review/expiry condition: `torch.div(a, b, rounding_mode="trunc")` and
-  `...="floor"` match real torch on integer and float inputs of both signs, and
-  the longformer subtest passes.
+  examples(help(jt.ops.div)).` raised out of the native dispatch.
+- Cause: `torch.div` was published straight from `_NATIVE_NAMES` in
+  [`native_api.py`](../../compat/torch/native_api.py), i.e. it *was* `jt.div`,
+  which has no `rounding_mode`. Route (downstream-library-adaptation §0): the
+  capability exists -- `floor_divide`, `floor`, `round` -- and only the
+  *spelling* differs, so this belongs to `jittor.compat.torch`, not the core and
+  not an adapter.
+- Fix, in three parts that are each necessary: `"div"` and `"divide"` removed
+  from `_NATIVE_NAMES` (otherwise the native binding keeps the name); an adapted
+  `div` in [`installers/numerical/elementwise.py`](../../compat/torch/installers/numerical/elementwise.py)
+  registered for both spellings -- `None` is true division, `"floor"` is
+  `jt.floor_divide`, `"trunc"` rounds toward zero, computed in **integer**
+  arithmetic for an integral pair (floor corrected by one where the remainder is
+  non-zero and the signs differ) so it stays exact past the float32 mantissa;
+  and a **force-set** binding in `install()` (`g.div = div`), because
+  `_bind_missing` skips any name the module already has and would have bound
+  nothing. The adapter divides through a `_native_div` captured before install,
+  the way `_native_all`/`_native_any` already were -- after the force-set
+  `jt.div` *is* the adapter, so reaching for it would recurse. The invalid-mode
+  message mirrors torch's own wording.
+- The same code path held a second gap, also fixed here: `torch.masked_fill` was
+  missing from the sealed facade (`AttributeError` out of the namespace proxy)
+  even though Jittor's own `jt.masked_fill` is already the same selection
+  (`jt.ternary(mask, value, x)`), broadcasting mask and output dtype included.
+  Publishing it is the whole fix, and `_bind_missing` cannot do it for the same
+  reason as `div`. That both gaps sat on one path is why the architecture could
+  not take a single forward pass.
+- Evidence, measured against **real torch 2.13** (the oracle venv, CPU) for
+  int32 and float32 over `7,-7` divided by `3,3,-3,-3`:
+
+  | dtype | mode | real torch | shim |
+  | --- | --- | --- | --- |
+  | int32 | `None` | float32 `2.33,-2.33,-2.33,2.33` | same |
+  | int32 | `"trunc"` | int32 `2,-2,-2,2` | same |
+  | int32 | `"floor"` | int32 `2,-3,-3,2` | same |
+  | float32 | `None` | float32 `2.33,-2.33,-2.33,2.33` | same |
+  | float32 | `"trunc"` | float32 `2.0,-2.0,-2.0,2.0` | same |
+  | float32 | `"floor"` | float32 `2.0,-3.0,-3.0,2.0` | same |
+
+  Every row agrees in value *and* dtype; `torch.divide` agrees with `torch.div`;
+  the scalar form Longformer calls (`div(16,4)`, `div(8,3)`, `div(-8,3)`) is
+  right; and the invalid-mode message matches. Suite: `test_torch_hf_models.py`
+  6 passed / 44 subtests, `compat/tests/structure` plus the two `tests/structure`
+  surface gates 121 passed / 408 subtests, and the whole torch half of the
+  gate 1480 passed / 0 failed.
+- Guard: the model-level outcome is what the suite pins
+  (`test_torch_hf_models.py::test_forward_and_eval_determinism[longformer]`);
+  the six-row probe lives in this entry's evidence rather than in the tree.
