@@ -24,35 +24,6 @@ static vector<uint64> curand_stream_binds;
 // The last seed, replayed onto a generator created after set_seed so every
 // device answers the same seed the same way.
 static int curand_last_seed = -1;
-// How far each device's generator has advanced since it was last seeded or
-// restored, in `curandSetGeneratorOffset` units.
-//
-// The offset is what makes a CUDA RNG checkpoint possible: cuRAND can set a
-// seed and an offset but will not tell you the offset it is at, so unless
-// somebody counts, a resumed run restarts the sequence instead of continuing
-// it -- silently. Measured on this box against CURAND_RNG_PSEUDO_DEFAULT:
-//
-//   uniform float32/float64   n elements cost n
-//   normal  float32/float64   n elements cost n/2
-//
-// and a mixed history costs the sum of its parts. Verified by drawing a
-// history, drawing a continuation, then reseeding, setting the summed offset
-// and drawing again: the values match exactly, for a continuation of every
-// one of the four kinds.
-static vector<int64> curand_offsets;
-
-void curand_advance(int device, int64 cost) {
-    if (device < 0) return;
-    if ((int)curand_offsets.size() <= device) curand_offsets.resize(device + 1, 0);
-    curand_offsets[device] += cost;
-}
-
-int64 curand_generator_offset(int device) {
-    return device >= 0 && device < (int)curand_offsets.size()
-        ? curand_offsets[device] : 0;
-}
-
-int curand_generator_seed() { return curand_last_seed; }
 
 static void curand_seed_generator(curandGenerator_t g, int seed) {
     checkCudaErrors( curandSetPseudoRandomGeneratorSeed(g, seed) );
@@ -92,24 +63,6 @@ static void curand_switch_device(int device) {
     gen = gens[device];
 }
 
-// Put a device's generator back where a checkpoint left it.
-//
-// Seeding alone is not a restore: it rewinds to the start of the sequence, so
-// the resumed run draws what the *original* run drew first rather than what it
-// was about to draw. Seed, then set the offset the checkpoint recorded.
-void curand_restore_state(int device, int seed, int64 offset) {
-    CHECK(device >= 0) << "curand restore needs a device";
-    int previous = current_device();
-    if (device != previous) set_current_device(device);
-    curand_switch_device(device);
-    checkCudaErrors( curandSetPseudoRandomGeneratorSeed(gens[device], seed) );
-    checkCudaErrors( curandSetGeneratorOffset(gens[device], (unsigned long long)offset) );
-    if ((int)curand_offsets.size() <= device) curand_offsets.resize(device + 1, 0);
-    curand_offsets[device] = offset;
-    curand_last_seed = seed;
-    if (device != previous) set_current_device(previous);
-}
-
 // See cublas_shutdown: report, never raise, and idempotent.
 void curand_shutdown() {
     if (gens.empty()) return;
@@ -128,9 +81,6 @@ inline curand_initer() {
     add_device_switch_hook(curand_switch_device);
     add_set_seed_callback([](int seed) {
         curand_last_seed = seed;
-        // Seeding rewinds every generator to offset 0 (see
-        // curand_seed_generator), so the count has to rewind with it.
-        for (auto& offset : curand_offsets) offset = 0;
         // The callback list is a separate global: nothing orders it against
         // these generators at exit, so a set_seed after shutdown must not run.
         for (auto g : gens)

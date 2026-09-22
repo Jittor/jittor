@@ -36,6 +36,20 @@ _BASE_ENV = {
 }
 
 
+#: How long a child waits inside the store for its peer.
+#:
+#: Every child imports jittor *before* it touches the store, and on a shared box
+#: that import takes seconds to tens of seconds. A fixed 10 s here therefore
+#: measured the machine's load, not the code: the file failed intermittently
+#: with `timed out waiting for 2 TCPStore workers; got 1` while the store was
+#: working (measured 2026-09-22 on a box at load 15: one failure in two runs of
+#: `test_tcp_store_crosses_process_boundary`, and a `SUBFAILED` on the same
+#: rendezvous inside the smoke tier). Generous, but well under `default_timeout()`
+#: below, so a rendezvous that never completes is still reported by the child
+#: that waited rather than by the parent's kill.
+_STORE_TIMEOUT_SECONDS = 120
+
+
 _DIRECT_STORE = r"""
 import datetime
 import os
@@ -44,7 +58,7 @@ import torch.distributed as dist
 
 rank = int(os.environ["STORE_RANK"])
 kind = os.environ["STORE_KIND"]
-timeout = datetime.timedelta(seconds=10)
+timeout = datetime.timedelta(seconds=float(os.environ["STORE_TIMEOUT"]))
 if kind == "tcp":
     store = dist.TCPStore(
         "127.0.0.1", int(os.environ["STORE_PORT"]), 2, rank == 0,
@@ -83,7 +97,7 @@ implementation.get_world_size = lambda: 2
 dist.init_process_group(
     backend="mpi",
     init_method=os.environ["STORE_INIT_METHOD"],
-    timeout=datetime.timedelta(seconds=10),
+    timeout=datetime.timedelta(seconds=float(os.environ["STORE_TIMEOUT"])),
 )
 store = c10d._get_default_store()
 assert store is not None
@@ -160,10 +174,13 @@ class TestCrossProcessStores(unittest.TestCase):
         # A fixed 30 s turned that into ``-9 != 0`` with an empty output, which
         # names neither the compile nor the rank that was still building.
         #
-        # Wall clock is not what this test asserts: both stores above carry a
-        # 10 s timeout of their own, so a rendezvous that never completes still
-        # fails inside the child. This budget only turns a true hang into a
-        # failure instead of a hung session.
+        # Wall clock is not what this test asserts: the stores above carry
+        # `_STORE_TIMEOUT_SECONDS` of their own -- generous, because a child
+        # imports jittor before it reaches the store -- so a rendezvous that
+        # never completes still fails inside the child, which names the peer it
+        # was waiting for. This budget is larger than that one on purpose: it
+        # only turns a true hang (both children stuck) into a failure instead of
+        # a hung session.
         budget = default_timeout()
         processes = []
         outputs = []
@@ -173,6 +190,10 @@ class TestCrossProcessStores(unittest.TestCase):
                 env = dict(_BASE_ENV)
                 env.update(extra)
                 env["STORE_RANK"] = str(rank)
+                # Both embedded stores read this: it must outlast the import
+                # each child does before it reaches the store, and stay under
+                # the parent's budget so the child's own error wins.
+                env["STORE_TIMEOUT"] = str(_STORE_TIMEOUT_SECONDS)
                 processes.append(subprocess.Popen(
                     [PYTHON, "-c", source],
                     cwd=REPO_ROOT,
