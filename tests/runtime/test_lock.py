@@ -100,6 +100,12 @@ class TestBuildLockIsShared(unittest.TestCase):
     "exclusive" section at once and compile into the same cache directory.
     Every assertion below is about a *third* process observing what we hold:
     that is the only way to tell which lock family is actually in use.
+
+    Nothing here asserts that the file is *idle*, because it is the session's
+    lock and the gate runs several workers against one ``JITTOR_HOME``; an
+    "idle" assertion would be a statement about the whole session that this
+    process cannot make. The two that existed were removed for that reason --
+    see the comment in the first case.
     """
 
     def setUp(self):
@@ -108,7 +114,16 @@ class TestBuildLockIsShared(unittest.TestCase):
             self.skipTest("jittor_core was not handed the lock descriptor")
 
     def test_core_lock_is_visible_to_other_processes(self):
-        self.assertEqual(_lock_state(self.lock.filename), "free")
+        # Deliberately *not* `assertEqual(_lock_state(...), "free")` first, and
+        # not at the end either. The file is the session's build lock, shared
+        # with every other worker, and the gate runs four of them against one
+        # `JITTOR_HOME`: "nobody holds it" is a property of the whole session,
+        # not something one process can establish. Measured: with any concurrent
+        # holder the probe answers "busy", which is exactly how this failed in
+        # the native half of the pull-request gate (`'busy' != 'free'`, while the
+        # same file passed serially). What the case is about is the class
+        # docstring's claim -- a third process observes *our* hold, and our own
+        # release is asserted through `is_locked` below.
         jt.core.lock_acquire()
         try:
             self.assertTrue(jt.core.lock_is_held())
@@ -118,7 +133,6 @@ class TestBuildLockIsShared(unittest.TestCase):
         finally:
             jt.core.lock_release()
         self.assertFalse(self.lock.is_locked)
-        self.assertEqual(_lock_state(self.lock.filename), "free")
 
     def test_closing_another_descriptor_does_not_release_the_lock(self):
         """A POSIX record lock dies when *any* fd for the file is closed."""
@@ -135,7 +149,6 @@ class TestBuildLockIsShared(unittest.TestCase):
             self.assertTrue(jt.core.lock_is_held())
             self.assertEqual(_lock_state(self.lock.filename), "busy")
         self.assertFalse(jt.core.lock_is_held())
-        self.assertEqual(_lock_state(self.lock.filename), "free")
 
     def test_nested_scopes_do_not_release_early(self):
         with jit_lock.lock_scope():
