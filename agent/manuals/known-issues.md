@@ -2198,8 +2198,8 @@ about whether to take it.
   in 26 runs outside it. Unfixed, and the reproduction recipe is exact so it does
   not have to be rediscovered.
 - Evidence: the case is
-  `tests/build/test_build_config.py::test_explicit_cpu_import_skips_cuda_services`
-  (file `tests/build/test_backend_build_config.py`). Reproduce with
+  `tests/build/test_backend_build_config.py::test_explicit_cpu_import_skips_cuda_services`
+  (the test, not the file the name suggests). Reproduce with
 
       "$VENV/bin/python" tools/run_test_suite.py --tier smoke --session native \
           -- -k explicit_cpu_import_skips_cuda_services
