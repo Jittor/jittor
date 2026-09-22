@@ -11,18 +11,37 @@
     storage (one shares the 64x3x7x7 weight), the graph's peak resident set is
     83.8 MiB, and no mapping in the process is over 100 MiB. The test now bounds
     resident growth instead of rank (256 MiB against the 33 MiB it uses).
-  * **KI-CODEGEN-001 has a measured mechanism**: a broadcast add is 7.4x its
-    dense counterpart today (122.9 us vs 914.8 us per add, interleaved minimum),
-    and the generated kernel recovers the strided operand's index with two
-    divisions and a modulo per element. The entry says which part of that is a
-    fold and which part needs the merge structure back, and corrects its own
-    earlier claim that the five merge-loop-var tests were merely stale.
+  * **KI-CODEGEN-001: mechanism measured, arithmetic half fixed** (`3e8b4dfe`,
+    `3018c597`). A broadcast add was **914.8 us** per call against a dense
+    **122.9 us** (7.4x, interleaved minimum), and the generated kernel recovered
+    the strided operand's index with **two divisions and a modulo per element**.
+    The recovery now folds its per-axis division chain into one division by the
+    product of the shapes above the axis -- in `binary_op`/`unary_op`/`ternary_op`,
+    and in `contiguous_op`, which unflattened *every* axis with no stride mask in
+    its jit key at all -- giving **914.8 -> 636.5 us** (7.4x -> 5.2x) and
+    **1199.3 -> 647.2 us** for `contiguous()` of a broadcast view. Verified
+    bit-exact over 138 elementwise cases, every 2^rank view of five base shapes
+    through `abs`/`where`/`contiguous()`, multi-axis slices and transposes, plus
+    106 op-gate cases. The entry says which part of the cost is left: the
+    structural half (the masked axis that `MergeLoopVarPass` merged away), and it
+    corrects its own earlier claim that the five merge-loop-var tests were merely
+    stale.
   * **KI-COMPILER-007's suspected hazard is gone**: the case's child patched five
     `install_cuda` entry points with a function that *raised*, which is the
     mechanism the entry hypothesised (an exception during interpreter shutdown).
     It now records, asserts, and fails late through `os._exit`, and the abort
     did not reproduce in five further attempts in every shape this box can
     produce, including the whole-tree `-n 4` collection it was seen in.
+  * **A gate test measured the machine, not the code** (`7cf7c5b2`): the two
+    children in `tests/distributed/test_process_store.py` carried a fixed 10 s
+    store-rendezvous timeout while each must `import jittor` first -- on this box
+    at load 15 that import is the longer half. They now read
+    `_STORE_TIMEOUT_SECONDS` (120 s) injected by `_run_pair`, still far under the
+    parent's budget so a real hang is still reported by the child that waited.
+    Mechanism checked both ways: a 2 s bound fails with exactly the observed
+    `timed out waiting for 2 TCPStore workers; got 1`, a 120 s bound is still
+    waiting after 15 s. The file went from about one red run in three to ten
+    clean runs of eleven.
   The fifth pass earlier the same day: the native tier went from 27 failed / 1
   error to **6 failed / 0 errors** with `other skipped: 0`, and four of the
   removed reds came from the gate's own accounting rather than from a test (a
@@ -57,7 +76,7 @@
   diagnostics (the adapters' lazy-module version read, the generated-copy scan,
   and `torch.cuda.set_device` / `map_location="cuda"` on a build with no
   device).
-- Baseline: `3df90e31`
+- Baseline: `7cf7c5b2`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -2465,23 +2484,41 @@ about whether to take it.
   non-zero stride is on axis 1. The profiler on the same pair: dense 3.9 GB/s in
   / 1.95 GB/s out, broadcast 1.39 / 0.71, i.e. the per-element integer work also
   costs about 2.8x of the achieved bandwidth (it blocks vectorisation).
+  Quote 7.4x as the pre-fold number and **5.2x (636.5 us) as the current one**:
+  the arithmetic half of the fix landed the same day, see below.
 - Two things follow, and they are different sizes:
-  * **Arithmetic, small**: consecutive `/shape` steps can be folded into one
-    division by the product of the shapes above the axis, which the kernel
-    already has (`op0_zstride1 == shape2*shape3`, and the identity
-    `(i/a)/b == i/(a*b)` holds for non-negative integers). Each masked axis then
-    costs one division and one modulo instead of a chain. Expect a fraction of
-    the 7.4x, not the whole of it: the divisions that remain still stop the
-    vectoriser.
-  * **Structural, and the real fix**: the index needs no division at all if the
-    loop that carries the masked axis is *not* merged into the flat one -- which
-    is what the old shape was (`range2_3` under `id0,id1`, asserted by
-    `test_merge_loop_var_pass::test3`) and what
+  * **Arithmetic: landed 2026-09-22 in `3e8b4dfe`** (`binary_op.cc`, `unary_op.cc`,
+    `ternary_op.cc`) **and `3018c597`** (`composite/contiguous_op.cc`). Consecutive
+    `/shape` steps are folded into one division by the product of the shapes
+    above the axis, which the kernel already has, and axis 0 keeps its no-modulo
+    case. Measured on the same probe and protocol:
+    **914.8 -> 636.5 us per broadcast add** (dense arm unchanged at 122.9 us), so
+    the ratio is **7.4x -> 5.2x**; and `contiguous()` of a broadcast view
+    **1199.3 -> 647.2 us** (46% off), which is the other half of the same cost --
+    it was the one place that unflattened *every* axis with no stride mask in its
+    jit key at all, so a 4-dim view paid four divisions and four modulos to
+    compute an offset one axis determines. It now carries `«XSMASK=` in the key
+    and **deliberately has no `offset = i` shortcut**: this kernel can be handed a
+    view whose every stride is zero (a scalar broadcast), where `i` would index
+    past the four bytes the source owns -- the elementwise ops may take that
+    shortcut only because they know their input is contiguous in that branch.
+    Verified bit-exact: 46 broadcast patterns x float32/float64/int32 x
+    add/sub/mul x both operand orders, plus every 2^rank view of four base shapes
+    through `abs` and `where` (with an assertion that the kernel really took the
+    strided branch), plus every 2^rank broadcast, multi-axis stride slices,
+    transposes, ranks 1-4 and non-power-of-two shapes through `contiguous()`, plus
+    `tests/ops/{test_binary_op,test_broadcast_to_op,test_broadcast_index,test_unary_op,test_ternary_op,test_where_op,test_float64_unary_math,test_float64_unary_precision,test_reinterpret_view,test_reindex_op,test_reindex_reduce_op,test_slice,test_transpose_op,test_rank0_transpose}.py`
+    at 106 passed / 88 skipped / 0 failed and no change in the native smoke tier.
+  * **Structural, and what the remaining 5.2x needs**: the index needs no division
+    at all if the loop that carries the masked axis is *not* merged into the flat
+    one -- which is what the old shape was (`range2_3` under `id0,id1`, asserted
+    by `test_merge_loop_var_pass::test3`) and what
     `test_reduce_with_merge_loop_var` counts as `tdim`. `MergeLoopVarPass` checks
-    defines ending in `id`/`_i`, and the recovery is written to `yrem`/`yi`, so
-    it sees no loop variable to respect and merges every loop it can. That is why
-    those tests fail: **they are the cost's guard, not stale substring
-    assertions** -- see the correction to KI-TUNER-001's tail below.
+    defines ending in `id`/`_i`, and the recovery is written to `yi`/`q@d`, so it
+    sees no loop variable to respect and merges every loop it can. A division per
+    element is enough to stop vectorisation, so this is the part that matters.
+    That is why those tests fail: **they are the cost's guard, not stale
+    substring assertions** -- see the correction to KI-TUNER-001's tail below.
 - Correction (2026-09-22) to what KI-TUNER-001's tail says about the same tests:
   it calls `test_merge_loop_var_pass::test3` and four siblings "a stale substring
   assertion, not a lost optimization". The numerics half of that is right (the
