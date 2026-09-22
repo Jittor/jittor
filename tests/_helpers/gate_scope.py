@@ -84,10 +84,14 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # fact about the machine; `JITTOR_REQUIRE_OPTIONAL_DEPS=1` is what turns it
     # into a configuration error, the way REAL_TORCH_PATTERNS does for torch.
     # Most of these reasons happen to contain "torch" and were therefore
-    # covered by accident; this one did not, so a CPU-only session reported the
-    # file as unexplained and the whole selection exited non-zero with every
+    # covered by accident; these did not, so a CPU-only session reported the
+    # files as unexplained and the whole selection exited non-zero with every
     # test passing.
-    "tensordict",
+    "tensordict", "mmcv", "mmengine",
+    # Facts about the *runner* rather than the machine's hardware: a case that
+    # asserts directory permissions cannot hold when the suite runs as root,
+    # because root bypasses them.
+    "root ignores",
 )
 
 #: The subset of the above that stops being an explanation once a session

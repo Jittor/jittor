@@ -575,7 +575,7 @@ _ACCELERATOR_EXECUTED = 0
 #: "accelerator", because its reasons name the accelerator too.
 _SKIP_BUCKET_ORDER = ("insufficient-devices", "accelerator", "backend", "mpi",
                       "torch", "network", "manual", "opt-in", "declared",
-                      "other")
+                      "environment", "other")
 _SKIP_BUCKET_PATTERNS = {
     # Not the same fact as "this box has no accelerator", and the difference is
     # the whole point of counting it apart. A test that wants two devices skips
@@ -907,11 +907,25 @@ def _skip_reason_buckets():
 
 
 def classify_skip_reason_bucket(reason):
-    """Classify a skip reason using fixed, overlap-safe priority."""
+    """Classify a skip reason using fixed, overlap-safe priority.
+
+    The named buckets come first, then the *same* list that decides whether a
+    skip is explained (``gate_scope.ENVIRONMENT_SKIP_PATTERNS``, with its
+    ``JITTOR_REQUIRE_REAL_TORCH`` withdrawal applied) answers "environment".
+    Keeping one list is the point: while the bucket table was its own list, a
+    reason could be explained and still counted as ``other``, and ``other > 0``
+    fails a run outright -- measured on a CPU-only session where every test
+    passed and the selection still exited non-zero, over "tensordict is not
+    installed", "needs mmcv-lite and mmengine" and "root ignores directory
+    permissions". Anything neither list recognises stays ``other``, which is the
+    pressure the bucket exists to apply.
+    """
     text = str(reason or "").lower()
     for bucket in _SKIP_BUCKET_ORDER[:-1]:
-        if any(pattern in text for pattern in _SKIP_BUCKET_PATTERNS[bucket]):
+        if any(pattern in text for pattern in _SKIP_BUCKET_PATTERNS.get(bucket, ())):
             return bucket
+    if any(pattern in text for pattern in _accepted_skip_patterns()):
+        return "environment"
     return "other"
 
 
