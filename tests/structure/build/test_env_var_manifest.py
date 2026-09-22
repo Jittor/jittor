@@ -31,6 +31,7 @@ Run::  python -m pytest tests/structure/build/test_env_var_manifest.py
 """
 
 import ast
+import functools
 import re
 import runpy
 from pathlib import Path
@@ -161,7 +162,15 @@ _ENV_READ = re.compile(
     r"""|["']([A-Za-z_][A-Za-z_0-9]*)["']\s+in\s+(?:os\.)?environ""")
 
 
+@functools.lru_cache(maxsize=None)
 def _unprefixed_settings():
+    """Cached: ``entries()`` walks all of ``src/`` reading every .cc/.h/.cu.
+
+    Measured on this tree, one call is 6.95s. The parametrised rule below asks
+    for it once per module -- 298 of them -- so uncached this single file cost
+    34.5 minutes and made ``pytest tests/structure`` look like it had hung.
+    The settings are read out of files that do not change inside a run.
+    """
     names = set()
     for row in env_manifest.entries():
         if row["deprecated_name"]:
