@@ -343,8 +343,17 @@ class DomainRouting(unittest.TestCase):
                              flags=SimpleNamespace(amp_reg=0),
                              amp_flags=SimpleNamespace(keep_reduce=4),
                              binary_dtype_infer=lambda *args: "float32")
+        # `concat` resolves the module through `_jt()` -- `34976898` replaced the
+        # function-local `import jittor` with a cached accessor -- and the loader
+        # keeps only the FunctionDefs named here, so the accessor has to be
+        # injected the way `jt` itself is. Without it the first line of `concat`
+        # raised `NameError: name '_jt' is not defined`, which is the same
+        # defect class as the module-level *constants* `a1977f68` taught the
+        # loader to carry: a name the surviving function reads and the sandbox
+        # never provided.
         owner = definitions("ops/concatenation.py", {"concat", "_merge_dtypes"},
-                            jt=jt, Sequence=(list, tuple), select_kernel=select)
+                            jt=jt, _jt=lambda: jt, Sequence=(list, tuple),
+                            select_kernel=select)
         inputs = (Var("int32"), Var("float32"))
         self.assertIs(owner.concat(inputs, -1), result)
         self.assertEqual([value.dtype for value in calls[0][0]], ["float32", "float32"])
