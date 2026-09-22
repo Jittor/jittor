@@ -11,7 +11,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "adapters"))
 from jittor_adapters import transformers, torchmetrics
-from jittor_adapters._common import UnsupportedAdapterVersion
+from jittor_adapters._common import UnsupportedAdapterVersion, require_version
 
 # Load the actual registration mechanism without importing the native runtime.
 native = types.ModuleType("jittor")
@@ -53,6 +53,65 @@ class AdapterContracts(unittest.TestCase):
         (package / "utils/import_utils.py").write_text(
             "def is_torch_npu_available(check_device=False):\n"
             "    raise RuntimeError('native torch_npu probe must not execute')\n")
+
+    #: The shape transformers 5.x ships: the version is assigned while the
+    #: package executes, then the module is handed to a ``_LazyModule`` and the
+    #: namespace entry is dropped. Once the import is over the value is only
+    #: reachable through ``__getattr__`` -- which is the state that was read.
+    _LAZY_INIT = '''
+import sys
+
+__version__ = %r
+
+from .utils.import_utils import is_torch_npu_available
+
+
+class _LazyModule(type(sys)):
+    _version = %r
+
+    def __getattr__(self, name):
+        if name == "__version__":
+            return type(self)._version
+        raise AttributeError(name)
+
+
+sys.modules[__name__].__class__ = _LazyModule
+del __version__
+'''
+
+    def fake_lazy_transformers(self, root, version):
+        self.fake_transformers(root, version)
+        (Path(root) / "transformers" / "__init__.py").write_text(
+            self._LAZY_INIT % (version, version))
+
+    def test_a_version_reachable_only_through_getattr_is_accepted(self):
+        """The version lookup used to read the namespace dict, not the module.
+
+        ``require_version`` did ``vars(module).get("__version__")``. Transformers
+        5.x ships the package as a ``_LazyModule`` that carries the version in
+        ``extra_objects`` and drops the namespace entry, so once the package has
+        been imported that lookup reports ``None`` and the adapter rejects
+        5.5.3 -- a version ``SUPPORTED_VERSIONS`` lists. The rejection is a
+        ``@required_patch``, so it escapes ``install_module_patches`` and took
+        five tests in ``compat/tests/torch/test_compat_mechanisms.py`` with it.
+
+        The precondition asserted below is what gives this case teeth: if the
+        fake ever keeps ``__version__`` in the dict, the case stops modelling
+        the shape that was broken and the check below passes for the wrong
+        reason.
+        """
+        with tempfile.TemporaryDirectory() as root:
+            self.fake_lazy_transformers(root, "5.5.3")
+            sys.path.insert(0, root)
+            try:
+                module = importlib.import_module("transformers")
+                self.assertNotIn("__version__", vars(module))
+                self.assertEqual(module.__version__, "5.5.3")
+                self.assertEqual(
+                    require_version("transformers", transformers.SUPPORTED_VERSIONS),
+                    "5.5.3")
+            finally:
+                sys.path.remove(root)
 
     def test_transformers_npu_probe_rejects_real_pytorch_extension(self):
         transformers.register(patcher.register_module_patch)
