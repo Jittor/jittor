@@ -1198,13 +1198,36 @@ def _rng_state_unpack(state):
     return int(seed), int(offset)
 
 
-def _curand():
+#: What to say when the native half is not there.
+#:
+#: The seed/offset counting lives in `backends/cuda/libraries/curand/`. When
+#: that is absent -- an older build, a backend compiled without it, or the
+#: native change not present -- there is no position to save, and the honest
+#: answer is to say so rather than to call a function that is not there or,
+#: worse, to go back to answering with a constant.
+_NO_NATIVE_RNG_STATE = (
+    "this jittor build cannot express the CUDA RNG state: its cuRAND wrapper "
+    "does not count how far the generator has advanced, so there is no "
+    "position to save and a restore could only reseed. "
+    "torch.cuda.manual_seed(seed) starts a reproducible sequence; resuming one "
+    "from a checkpoint needs curand_generator_offset/curand_restore_state in "
+    "the native cuRAND backend."
+)
+
+
+def _curand(required=True):
     backend = getattr(jt.compile_extern, "curand", None)
-    if backend is None or not hasattr(backend, "curand_generator_offset"):
-        raise RuntimeError(
-            "jittor was built without the cuRAND backend, so there is no CUDA "
-            "RNG state to save or restore")
+    if backend is None or not hasattr(backend, "curand_generator_offset") \
+            or not hasattr(backend, "curand_restore_state"):
+        if required:
+            raise NotImplementedError(_NO_NATIVE_RNG_STATE)
+        return None
     return backend
+
+
+def cuda_rng_state_is_supported():
+    """Whether this build can save and restore the CUDA RNG position."""
+    return _curand(required=False) is not None
 
 
 def _rng_device_index(device):
