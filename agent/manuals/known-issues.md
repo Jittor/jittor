@@ -20,6 +20,16 @@
     `tests/backends/rocm/test_rocm.py`;
   * and the summary printed that count without naming a single reason, so the
     reasons were unactionable until they were listed (`ce26103d`).
+  The Torch half was measured once in that window and had **2 failed / 2
+  `other` skips**, all three of them real and all fixed (`489fb8ac`): an
+  installer reaching into the module registry for the torch namespace
+  (`compat/torch/installers/data.py`, the structure rule matches that string as
+  a plain substring over the file, comments included), two `except ...: pass`
+  handlers in `compat/torch/installers/distributed.py` that the exception policy
+  requires to leave a `diagnostics.swallowed` record, and a skip reason in
+  `tests/structure/build/test_env_var_manifest.py` that named nothing and so
+  counted as `other` (now the `declared` bucket). The Torch tier was not re-run
+  end to end -- this box was carrying other work and one tier takes 25 minutes.
   A fifth red belongs to KI-COMPILER-007's family but not to the entry: the
   case did not abort in the last two `-n 4` runs, so the entry stays open and
   intermittent.
@@ -49,7 +59,7 @@
   diagnostics (the adapters' lazy-module version read, the generated-copy scan,
   and `torch.cuda.set_device` / `map_location="cuda"` on a build with no
   device).
-- Baseline: `ad367ee2`
+- Baseline: `489fb8ac`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
