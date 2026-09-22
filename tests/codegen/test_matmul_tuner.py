@@ -12,11 +12,24 @@ import jittor as jt
 import unittest
 import time
 import numpy as np
+from _helpers import capability as _test_capability
 from _helpers.logs import find_log_with_re
 from _helpers.tuner_parser import simple_parser
 
 class TestMatmulTuner(unittest.TestCase):
     def test_matmul_tuner(self):
+        # The relay needs somewhere to relay *to*: `find_op_capability` looks
+        # for a registered matmul implementation, and on this backend only the
+        # CPU library registers one (`backends/cpu/libraries/mkl/
+        # mkl_capabilities.cc`, compiled in only with `use_mkl=1`). Without it
+        # the tuner declines correctly -- `if (!make_matmul) continue` -- so
+        # this case would be asserting that the build has a library it does not
+        # have. Measured 2026-09-22 on the CPU gate: every capability query
+        # (`matmul`, `conv2d`, `random`, `transpose`) returns `[]` there.
+        # KI-TUNER-001 still holds for builds that *do* have one: the relay
+        # cannot carry an operand that lives outside the fused op, which is what
+        # the expand became when it turned into a stride-0 view.
+        _test_capability.require_library("mkl")
         n,m,k = 10,10,10
         a = jt.random([n,m])
         b = jt.random([m,k])
