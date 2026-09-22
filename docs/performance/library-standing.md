@@ -191,3 +191,36 @@ PyTorch 对照物**。JDet 不是 mmdetection，JSeg 不是 mmsegmentation，模
   不是"测完了"；
 - **拒绝掉的更快路径要记下来**（如上面的 CANN RoPE），否则后人会重新发现它、
   重新采纳它，再重新发现它不对。
+
+### 原生 SDPA 在 CUDA 上没有注册 kernel，长序列上差 2.72x（2026-09-22 实测）
+
+`python/jittor/nn/functional/attention.py` 会问
+`try_dispatch("nn.scaled_dot_product_attention", ...)`。CUDA 上没有任何东西注册
+在这个名字下——`backends/acl/kernels/install.py:53` 注册了它，**只给昇腾**——所以
+每一次原生调用都落到数学降级，物化一个 N×N 的分数矩阵。flash 路径存在，但住在
+`compat/torch/installers/nn/attention.py`，只有走 torch shim 才够得着。
+
+同一批 q/k/v，交错 A/B/A/B 取中位数，fp16，`hits=6 misses=0`（flash 每次都命中）：
+
+| 形状 | 原生（数学） | shim（flash） | 比值 |
+| --- | --- | --- | --- |
+| H3 video VAE 注意力 `2x32x1797x1797x64` | `0.0081s` | `0.0030s` | **`2.72x`** |
+| GPT-2 medium `4x16x1024x1024x64` | `0.0030s` | `0.0026s` | `1.14x` |
+| Llama prefill `1x32x2048x2048x128` | `0.0038s` | `0.0031s` | `1.23x` |
+
+**差距随序列长度增长**，和 O(N²) 显存对 O(N) 的预期一致。五次重复之间的离散度
+低于 1%，远在这台机器的噪声之上（占卡程序在跑，绝对值不可比，比值可比）。
+
+`no_grad` 和带梯度两档结果相同：只要反向 kernel 已经编出来，
+`attention.py:212` 的 training 能力检查就过得去，所以「带梯度会挡住 flash」这个
+担心是多余的。
+
+**没有据此改代码。** 把 flash 注册成原生 CUDA kernel意味着核心 jittor 依赖
+torch shim 的 C++ 扩展构建器、pybind11 和一个 flash-attention 源码 checkout——
+这条依赖链对核心来说太重。干净的原生解法应该是一个不依赖 torch 的融合注意力
+kernel（cuDNN 的融合注意力是候选，**本次没有核实这套构建的 cuDNN 是否提供它**），
+那是一块独立的工作量，不是一次注册。这行记在这里，是为了让那块工作有一个已经量出来
+的收益上限。
+
+复现：`$JITTOR_LAB_ROOT/sdpa-dispatch/bench_sdpa_paths.py`。跑之前需要 pybind11
+头文件和 `JITTOR_FLASH_ATTN_JITTOR_SRC`，见 `examples/flash-attention/README.md`。

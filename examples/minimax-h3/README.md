@@ -44,6 +44,8 @@ export VLLM_ENABLE_V1_MULTIPROCESSING=0
 # server does not compile one in the middle of its first request.
 export JITTOR_FLASH_ATTN_JITTOR_SRC=/path/to/flash-attention
 export JITTOR_FLASH_ATTN_JITTOR_REQUIRED=1    # a failed build is an error, not a silent fallback
+# ^ this one turns a missing pybind11 into a hard server failure rather than a
+#   fallback, so install pybind11 first; see examples/flash-attention/README.md.
 export JITTOR_FLASH_ATTN_HEAD_DIMS=64,128     # warm-up hint
 export JITTOR_FLASH_ATTN_DTYPES=bf16,fp16     # warm-up hint
 export JITTOR_FLASH_ATTN_CAST_FLOAT32=bf16    # what a float32 q/k/v is cast to
