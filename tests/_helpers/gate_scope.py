@@ -80,6 +80,14 @@ ENVIRONMENT_SKIP_PATTERNS = (
     "mpi", "nccl", "world size",
     # opt-in assets and probes
     "download", "dataset", "network", "manual probe",
+    # Optional third-party libraries the shim is validated against. Absence is a
+    # fact about the machine; `JITTOR_REQUIRE_OPTIONAL_DEPS=1` is what turns it
+    # into a configuration error, the way REAL_TORCH_PATTERNS does for torch.
+    # Most of these reasons happen to contain "torch" and were therefore
+    # covered by accident; this one did not, so a CPU-only session reported the
+    # file as unexplained and the whole selection exited non-zero with every
+    # test passing.
+    "tensordict",
 )
 
 #: The subset of the above that stops being an explanation once a session

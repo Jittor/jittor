@@ -3,6 +3,7 @@
 from _helpers import capability as _test_capability
 
 import importlib.util
+import os
 import unittest
 
 import numpy as np
@@ -12,6 +13,15 @@ import jittor as _native_jittor
 
 
 _HAS_TENSORDICT = importlib.util.find_spec("tensordict") is not None
+
+#: Same opt-in as ``test_peft.py``: on a machine that is supposed to have the
+#: optional dependency, "not installed" is a configuration error rather than a
+#: fact about the machine.
+_REQUIRE_OPTIONAL_DEPS = os.environ.get("JITTOR_REQUIRE_OPTIONAL_DEPS") == "1"
+
+if not _HAS_TENSORDICT and _REQUIRE_OPTIONAL_DEPS:
+    raise ModuleNotFoundError(
+        "tensordict is required by JITTOR_REQUIRE_OPTIONAL_DEPS=1")
 
 
 @unittest.skipUnless(_HAS_TENSORDICT, "tensordict is not installed")
