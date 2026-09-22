@@ -672,6 +672,7 @@ _SKIP_BUCKET_PATTERNS = {
         "cusparse",
         "cufft",
         "curand",
+        "nvcc",
         "gpu",
         "rocm",
         "hip",
@@ -695,7 +696,10 @@ _SKIP_BUCKET_PATTERNS = {
     # holding one therefore failed every gate that collected it, for doing
     # exactly what it was written to do.
     "opt-in": ("performance_test", "skip slow test", "upper bound on wall-clock",
-               "load_sensitive"),
+               "load_sensitive",
+               # A documented known-failing case with its own switch; see the
+               # note on the same pattern in `gate_scope.ENVIRONMENT_SKIP_PATTERNS`.
+               "jt_test_thread_race"),
     # The subject itself says the case does not apply: an OpInfo entry that
     # declares no second derivative, no numpy reference, or no differentiable
     # sample. A fact about the operator, not about this machine -- and, like

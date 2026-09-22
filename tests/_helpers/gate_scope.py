@@ -69,8 +69,13 @@ EXCLUDED = ()
 #: use cublas, skip" are three ways of saying the same fact about the machine,
 #: and a phrase list would have to grow one entry per author.
 ENVIRONMENT_SKIP_PATTERNS = (
-    # accelerators and the libraries that only exist alongside them
+    # accelerators and the libraries that only exist alongside them. `nvcc` is
+    # here because a CUDA *compiler* is the thing whose absence a CPU-only build
+    # states most directly (`tests/build/test_cuda_arch_flags.py` says exactly
+    # "no nvcc", and a one-word reason like that matches none of the library
+    # names around it).
     "cuda", "cudnn", "cublas", "cutt", "cusparse", "cufft", "curand",
+    "nvcc",
     "gpu", "accelerator", "acl", "npu", "ascend", "cann", "rocm", "hip",
     "triton",
     # an independent PyTorch build, which only the oracle sessions have.
@@ -124,6 +129,13 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # shapes and their counts are named in that file's `KNOWN_LEAKING_SHAPES`;
     # the case still fails when a *different* number appears.
     "nothing leaked in this environment",
+    # A case that is deliberately not run unless asked for, where the reason says
+    # how to ask: `tests/core/test_executor_python_threads.py` documents a
+    # segfaulting thread race and gates itself behind `JT_TEST_THREAD_RACE=1`.
+    # Its wording names no hardware, so it counted as `other` and the file -- a
+    # single-case file, so it also executed nothing -- red the run for doing what
+    # it was written to do.
+    "jt_test_thread_race",
 )
 
 #: The subset of the above that stops being an explanation once a session
