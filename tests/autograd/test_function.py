@@ -309,13 +309,28 @@ class TestFunction(unittest.TestCase):
         )
 
     def test_zmem_leak(self):
+        # `== 0`, never `== before + something`: `live_vars` is process-global and
+        # carries a floor from whatever cached Vars the process already holds --
+        # `jittor.fft._dft_mat_cache` and the attention need-length cache keep
+        # theirs for the life of the interpreter. Measured with
+        # `tests/ops/test_fft_op.py` collected first, the floor is 26 and the
+        # absolute form failed as `26 != 0`; alone it is 0, which is why the
+        # absolute form survived. The clean *before* the snapshot is what makes
+        # the baseline the floor: vars left over by earlier tests in this process
+        # are released by the test's own `jt.clean()`, so a baseline taken
+        # without one is higher than the count can ever come back to. Same idiom
+        # as tests/ops/test_merge_single_array_op.py::test6.
+        jt.clean()
+        floor = jt.introspection.counters.live_vars
         def test():
             self.test_multi_grads_multi_out5()
         test()
         jt.clean()
-        self.assertEqual(jt.introspection.counters.live_vars, 0)
+        self.assertEqual(jt.introspection.counters.live_vars, floor)
 
     def test_zmem_leak2(self):
+        jt.clean()
+        floor = jt.introspection.counters.live_vars
         def test():
             class MyFunc(Function):
                 def execute(self, x, z, y):
@@ -335,10 +350,12 @@ class TestFunction(unittest.TestCase):
         test()
         jt.clean()
         jt.dump_all_graphs()
-        self.assertEqual(jt.introspection.counters.live_vars, 0)
+        self.assertEqual(jt.introspection.counters.live_vars, floor)
 
     @pytest.mark.slow
     def test_zmem_leak3(self):
+        jt.clean()
+        floor = jt.introspection.counters.live_vars
         def test():
             class MyFunc(Function):
                 def execute(self, x, z, y):
@@ -357,7 +374,7 @@ class TestFunction(unittest.TestCase):
             jt.sync(g)
         assert_rss_growth_bounded(
             test, iterations=512, max_growth_bytes=4 << 20, cleanup=jt.clean)
-        self.assertEqual(jt.introspection.counters.live_vars, 0)
+        self.assertEqual(jt.introspection.counters.live_vars, floor)
 
 
 class TestFunctionWithEagerExecution(TestFunction):
