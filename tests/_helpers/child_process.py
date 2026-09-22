@@ -415,6 +415,32 @@ def mpirun_path():
     return jt.compile_extern.mpicc_path.replace("mpicc", "mpirun")
 
 
+#: OpenMPI refuses to start as root unless it is told twice that this is
+#: intended: ``mpirun has detected an attempt to run as root ... You can
+#: override this protection by ... the variable OMPI_ALLOW_RUN_AS_ROOT=1 ... and
+#: OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1``. A container usually *is* root, so every
+#: MPI case in this repository failed there for a reason that has nothing to do
+#: with jittor -- measured 11 of them in one smoke run, each with that paragraph
+#: as its assertion message. Both names are read only by OpenMPI's launcher, so
+#: exporting them is inert for MPICH/Hydra/Fujitsu and needs no launcher probe.
+_ROOT_RUN_AS_ROOT_VARIABLES = ("OMPI_ALLOW_RUN_AS_ROOT",
+                               "OMPI_ALLOW_RUN_AS_ROOT_CONFIRM")
+
+
+def _mpi_environment(env):
+    """The environment a rank-launcher child gets, including the root override.
+
+    ``setdefault``, so a caller that wants the protection (or a future launcher
+    with its own spelling) still wins.
+    """
+    if os.name != "posix" or os.geteuid() != 0:
+        return env
+    env = dict(env or {})
+    for name in _ROOT_RUN_AS_ROOT_VARIABLES:
+        env.setdefault(name, "1")
+    return env
+
+
 def run_mpi_python(num_procs, args, *, env=None, timeout=None, cwd=None,
                    text=True, check=False, merge_stderr=False, launcher=None,
                    inherit=True, without_torch_mode=False):
@@ -426,8 +452,9 @@ def run_mpi_python(num_procs, args, *, env=None, timeout=None, cwd=None,
     """
     command = [launcher or mpirun_path(), "-np", str(num_procs), PYTHON]
     command += [str(arg) for arg in args]
-    return _run(command, env, timeout, cwd, text, check, None, merge_stderr,
-                inherit=inherit, without_torch_mode=without_torch_mode)
+    return _run(command, _mpi_environment(env), timeout, cwd, text, check, None,
+                merge_stderr, inherit=inherit,
+                without_torch_mode=without_torch_mode)
 
 
 def shell(command, *, env=None, timeout=None, cwd=None, text=True,
