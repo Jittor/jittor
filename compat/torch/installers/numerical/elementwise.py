@@ -222,3 +222,68 @@ def diff(x, n=1, dim=-1, prepend=None, append=None):
 def square(x):
     """Return the elementwise square of a tensor."""
     return x * x
+
+
+def _integer_result(dtype):
+    """Whether a result of ``dtype`` is an integral one."""
+    from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+    return _jittor_dtype_name(dtype).startswith(("int", "uint"))
+
+
+def div(input, other, *, rounding_mode=None, out=None):
+    """``torch.div``, including its one Torch-only keyword, ``rounding_mode``.
+
+    The three modes are three different operations rather than three spellings
+    of one: ``None`` is true division, ``"floor"`` is :func:`jt.floor_divide`,
+    and ``"trunc"`` rounds **toward zero** -- which jittor has no primitive for,
+    and which differs from ``"floor"`` exactly when the quotient is negative and
+    inexact (``trunc(-7/3) = -2``, ``floor(-7/3) = -3``).
+
+    Values and output dtypes measured against real torch 2.13 on CPU, over
+    ``7,-7`` divided by ``3,3,-3,-3``:
+
+        int32    None   -> float32  2.33, -2.33, -2.33,  2.33
+        int32    trunc  -> int32    2,    -2,    -2,     2
+        int32    floor  -> int32    2,    -3,    -3,     2
+        float32  trunc  -> float32  2.0,  -2.0,  -2.0,   2.0
+        float32  floor  -> float32  2.0,  -3.0,  -3.0,   2.0
+
+    An integral pair therefore gives an integral result under either rounded
+    mode and true division gives a float, which is what ``jt.floor_divide`` and
+    ``jt.div`` already do. ``"trunc"`` on integers is computed in integer
+    arithmetic (floor, corrected by one where the remainder is non-zero and the
+    signs differ) so it stays exact past the float32 mantissa; on floats it is
+    the quotient rounded toward zero.
+
+    ``out`` is accepted for API shape compatibility and is not populated, the
+    same boundary the other approximate fallbacks in this package keep.
+    """
+    from . import (
+        _native_div,
+        jt,
+    )
+
+    if rounding_mode not in (None, "trunc", "floor"):
+        raise RuntimeError(
+            "div expected rounding_mode to be one of None, 'trunc', or 'floor' "
+            "but found %r" % (rounding_mode,))
+    if rounding_mode is None:
+        return _native_div(input, other)
+    floored = jt.floor_divide(input, other)
+    if rounding_mode == "floor":
+        return floored
+    if _integer_result(floored.dtype):
+        # `%` follows the floor convention, so a zero remainder is exactly
+        # "divisible", and the quotient needs correcting only when the two
+        # operands have opposite signs.
+        remainder = input % other
+        opposite_signs = (input < 0) != (other < 0)
+        return floored + (remainder != 0) * opposite_signs
+    quotient = _native_div(input, other)
+    return jt.ternary(quotient < 0, jt.ceil(quotient), jt.floor(quotient))
+
+
+#: ``torch.divide`` is documented as an alias of ``torch.div`` and accepts the
+#: same ``rounding_mode``; published as the same object so the two spellings
+#: cannot drift apart.
+divide = div
