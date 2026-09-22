@@ -18,12 +18,17 @@ static auto make_transpose = op_constructor<VarPtr, Var*, NanoVector>("transpose
 DEFINE_FLAG(int, transpose_storage_view, 0,
     "Return a permutation as a view of its input's allocation instead of a "
     "materialised copy: same storage, swapped strides, and a write through the "
-    "result reaches its base -- what torch returns. Off by default: the result "
-    "is then non-dense, which every consumer handles (elementwise, reduce, "
-    "broadcast and reindex read storage_strides, and a slice already reaches "
-    ".numpy(), .cpu() and the fused kernels this way) but a cuBLAS or cuTT path "
-    "wanting dense memory may prefer one copy up front. Benchmark before "
-    "making it the default.");
+    "result reaches its base -- what torch returns. Off by default, and the "
+    "benchmark that decided that says why: which way is faster depends on what "
+    "consumes the transpose, and the two directions disagree. Feeding an "
+    "elementwise or convolution chain, the view wins by skipping a copy -- the "
+    "MiniMax-H3 video VAE decodes 1.24x faster with it on (1.581s -> 1.272s, "
+    "same picture to within the run-to-run fp16 spread). Feeding cuBLAS, the "
+    "dense copy wins, because a transposed operand that is a strided view is "
+    "not what the GEMM wants: 1576x768 @ 768x3072 goes from 594us to 702us, "
+    "18% slower, and 4096-cubed and 8192-cubed lose a few percent each. So "
+    "there is no single right default; turn it on for a model whose transposes "
+    "feed elementwise work, and measure.");
 
 TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     // A rank-0 var has no axes to permute, and the empty permutation of
