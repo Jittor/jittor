@@ -2212,6 +2212,16 @@ about whether to take it.
   `CPU_BUILD_CONFIG={"cuda_services": 0, "backend": "cpu"}`, and exits. **All
   four assertions pass and the line is printed** -- the corruption is in
   teardown, after the last statement.
+- **The narrowing that matters**: it needs the tool's parallel workers. Every
+  abort was in a run where the case executed under the tool's default `-n 4`
+  -- the smoke tier, then two `-k ... <case>` runs, 3/3, each with a different
+  glibc sentence (`double free or corruption (!prev)`, `corrupted size vs.
+  prev_size while consolidating`, and with `MALLOC_CHECK_=3` the explicit
+  `free(): double free detected in tcache 2`). Six further `-k` runs with
+  `-n0 -s` were clean, 0/6. So the trigger is four pytest workers sharing one
+  `JITTOR_HOME` and its build lock while the child imports jittor -- i.e. the
+  child's import contends with a concurrent compile -- and not the child's
+  environment, which is what my direct runs varied.
 - What has been ruled out, measured (each of these is 0 failures):
   - the same child run directly, 16/16 clean, with and without a prefixed
     `JT_USE_PARALLEL_OP_COMPILER`, and with `use_mkl` on and off;
