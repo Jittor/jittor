@@ -22,37 +22,45 @@ import pytest
 import torch
 
 
-def _on_cuda(require_counting):
-    """Run on a CUDA build with `use_cuda` scoped, or skip.
+def _cuda_rng(func):
+    """Run on a CUDA build with cuRAND offset accounting, `use_cuda` scoped.
 
     The flag is set through `jt.flag_scope` rather than by assigning
     `jt.flags.use_cuda`: it is process-global, and a test that leaves it on makes
     every later file in the session run on the accelerator. The flag-scope gate
     (`tests/structure/runtime/test_flag_scope_contract.py`) flagged the previous
-    assignments for exactly that, and it is right to -- nothing here restored
-    them. ``require_counting`` is for the tests that assert the saved *position*
-    round-trips; the ones that only need a seed run without the native wrapper.
+    assignments for exactly that, and it is right to -- nothing restored them.
     """
-    def decorate(func):
-        @wraps(func)
-        def inner(*args, **kwargs):
-            if not jt.has_cuda:
-                pytest.skip("no CUDA device")
-            if require_counting:
-                backend = getattr(jt.compile_extern, "curand", None)
-                if backend is None or not hasattr(backend, "curand_restore_state"):
-                    # The counting lives in the native cuRAND wrapper. Without
-                    # it there is no position to save, and everything below
-                    # asserts that the position round-trips.
-                    pytest.skip("this build has no native cuRAND offset accounting")
-            with jt.flag_scope(use_cuda=1):
-                return func(*args, **kwargs)
-        return inner
-    return decorate
+    @wraps(func)
+    def inner(*args, **kwargs):
+        if not jt.has_cuda:
+            pytest.skip("no CUDA device")
+        backend = getattr(jt.compile_extern, "curand", None)
+        if backend is None or not hasattr(backend, "curand_restore_state"):
+            # The counting lives in the native cuRAND wrapper. Without it there
+            # is no position to save, and everything below asserts that the
+            # position round-trips.
+            pytest.skip("this build has no native cuRAND offset accounting")
+        with jt.flag_scope(use_cuda=1):
+            return func(*args, **kwargs)
+    return inner
 
 
-_cuda_rng = _on_cuda(require_counting=True)
-_cuda_rng_seed_only = _on_cuda(require_counting=False)
+def _cuda_rng_seed_only(func):
+    """The same, for the two tests with no saved position to round-trip.
+
+    Spelled out rather than derived from ``_cuda_rng``: a module-level
+    ``_alias = factory(...)`` is an assignment whose value calls a local helper,
+    which the collection-side-effect gate reads as work a bare import would do.
+    The decorator form is not an assignment and needs no allowlist entry.
+    """
+    @wraps(func)
+    def inner(*args, **kwargs):
+        if not jt.has_cuda:
+            pytest.skip("no CUDA device")
+        with jt.flag_scope(use_cuda=1):
+            return func(*args, **kwargs)
+    return inner
 
 
 @_cuda_rng
