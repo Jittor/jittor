@@ -1,3 +1,4 @@
+import mmap
 import pytest
 from pathlib import Path
 import runpy
@@ -127,14 +128,31 @@ def test_snapshot_refuses_a_missing_service_after_initialization(monkeypatch):
 
 
 def test_rss_bound_rejects_an_intentional_retained_allocation():
+    """The bound has to react to memory that is really resident.
+
+    Allocating ``bytearray(1 << 20)`` and keeping it did not do that reliably.
+    RSS is what the helper measures, and where a small chunk of that size ends
+    up depends on what the process has already allocated and released: the same
+    case that passes on its own failed inside a ``-n 4`` worker that had run a
+    few hundred tests, finding a delta of nothing at all while the helper was
+    working as intended.
+
+    An anonymous mapping touched one byte per page does not depend on that
+    reuse -- the pages are new and stay resident while the mapping is alive --
+    and four MiB per iteration against a four MiB bound puts the signal well
+    above the several MiB of drift a busy worker can show on its own.
+    """
     retained = []
 
-    def leak_one_mebibyte():
-        retained.append(bytearray(1 << 20))
+    def retain_four_mebibytes():
+        size = 4 << 20
+        chunk = mmap.mmap(-1, size)
+        chunk[::4096] = b"\0" * (size // 4096)  # one byte per page
+        retained.append(chunk)
 
     with pytest.raises(AssertionError, match="RSS grew"):
         assert_rss_growth_bounded(
-            leak_one_mebibyte,
+            retain_four_mebibytes,
             warmup=0,
             iterations=8,
             max_growth_bytes=4 << 20,

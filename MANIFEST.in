@@ -355,8 +355,10 @@ include docs/slides/jittor-overview.html
 include docs/slides/计图介绍.pptx
 include docs/tutorials/index.md
 include examples/README.md
+include examples/flash-attention/README.md
 include examples/gan/README.md
 include examples/gan/simple_cgan.py
+include examples/minimax-h3/README.md
 include examples/notebooks/README.md
 include examples/notebooks/autograd_details.md
 include examples/notebooks/basics.md
