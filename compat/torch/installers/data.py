@@ -124,15 +124,42 @@ class _RandomSampler(_Sampler):
     def num_samples(self):
         return len(self.data_source) if self._num_samples is None else self._num_samples
     def __iter__(self):
+        """Every index comes from `self.generator` when one was given.
+
+        A sampler handed a generator promises three things: the indices came
+        from that generator, it advanced by exactly those draws, and restoring
+        its state replays them. Drawing from python's global `random` instead
+        -- which is what this did, while storing `self.generator` and never
+        reading it -- keeps none of them, and says nothing on the first run: the
+        order only comes out different after a resume, which is the run nobody
+        is watching.
+
+        `torch.randint` / `torch.randperm` already draw from a generator's own
+        stream, so this routes through them rather than growing a second
+        sampling owner with its own state rules.
+        """
         import random as _random
         n = len(self.data_source)
+        if self.generator is None:
+            if self.replacement:
+                return iter(_random.randrange(n) for _ in range(self.num_samples))
+            indices = list(range(n))
+            _random.shuffle(indices)
+            return iter(indices[:self.num_samples])
         if self.replacement:
-            return iter(_random.randrange(n) for _ in range(self.num_samples))
-        indices = list(range(n))
-        _random.shuffle(indices)
-        return iter(indices[:self.num_samples])
+            draws = _torch_ns().randint(0, n, (int(self.num_samples),),
+                                        generator=self.generator)
+            return iter(int(i) for i in draws.tolist())
+        order = _torch_ns().randperm(n, generator=self.generator).tolist()
+        return iter(int(i) for i in order[:self.num_samples])
     def __len__(self):
         return self.num_samples
+
+
+def _torch_ns():
+    """The installed torch namespace, for the generator-aware factories."""
+    import sys
+    return sys.modules["torch"]
 
 
 class _SubsetRandomSampler(_Sampler):
@@ -140,10 +167,15 @@ class _SubsetRandomSampler(_Sampler):
         self.indices = list(indices)
         self.generator = generator
     def __iter__(self):
+        # Same contract as RandomSampler: a generator that was handed in is the
+        # one the permutation comes from.
         import random as _random
         indices = list(self.indices)
-        _random.shuffle(indices)
-        return iter(indices)
+        if self.generator is None:
+            _random.shuffle(indices)
+            return iter(indices)
+        order = _torch_ns().randperm(len(indices), generator=self.generator).tolist()
+        return iter(indices[int(i)] for i in order)
     def __len__(self):
         return len(self.indices)
 

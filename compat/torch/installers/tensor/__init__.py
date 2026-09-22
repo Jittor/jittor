@@ -611,6 +611,12 @@ def frombuffer(buffer, *, dtype, count=-1, offset=0, requires_grad=False):
         return v
 
 
+def _numpy_stream(seed):
+    """One independent numpy stream per generator, seeded deterministically."""
+    import numpy as _np
+    return _np.random.default_rng(int(seed))
+
+
 class Generator:
     """A torch.Generator with its OWN stream.
 
@@ -634,12 +640,51 @@ class Generator:
         self._seed = int(s)
         # one stream per generator: deterministic, and independent of whatever
         # the process's global generator has already produced.
-        import numpy as _numpy_rng
-        self._rng = _numpy_rng.random.default_rng(self._seed)
+        self._rng = _numpy_stream(self._seed)
         return self
+    def _stream(self):
+        """The generator's stream, built on first use so an unseeded one has one too."""
+        if self._rng is None:
+            self._rng = _numpy_stream(self._seed)
+        return self._rng
     def get_state(self):
-        return jt.array([self._seed])
+        """The stream's position, not just its seed.
+
+        `set_state(get_state())` has to replay the *next* draws, which a seed
+        alone cannot do once the generator has been used -- and this used to
+        return `[seed]` against a `set_state` that did nothing at all, so a
+        caller checkpointing a generator got a value that looked like state and
+        restored nothing. Accelerate's `save_state`/`load_state` and
+        `RandomSampler`'s replay both rest on this round-tripping.
+
+        The bytes are the numpy bit generator's own state, pickled. They are
+        this shim's format, not torch's CUDA/CPU state bytes, and are not
+        interchangeable with them -- the same rule torch states for its own
+        opaque state: save it, hand it back, do not parse it.
+        """
+        import numpy as _np
+        import pickle as _pickle
+        blob = _pickle.dumps(self._stream().bit_generator.state, protocol=4)
+        return jt.array(_np.frombuffer(blob, dtype=_np.uint8).copy())
     def set_state(self, s):
+        import numpy as _np
+        import pickle as _pickle
+        raw = s
+        if hasattr(raw, "numpy"):
+            raw = raw.numpy()
+        raw = _np.asarray(raw)
+        # The old format was a single int64 seed. Restoring one of those can
+        # only reseed, which is what it always meant.
+        if raw.dtype != _np.uint8:
+            self.manual_seed(int(raw.reshape(-1)[0]))
+            return self
+        try:
+            state = _pickle.loads(raw.tobytes())
+        except EXPECTED as exc:
+            swallowed("torch/installers/tensor Generator.set_state", exc)
+            raise ValueError("generator state is not one this generator produced")
+        stream = self._stream()
+        stream.bit_generator.state = state
         return self
     def seed(self):
         return self._seed
