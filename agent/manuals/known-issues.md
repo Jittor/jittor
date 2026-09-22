@@ -1,47 +1,30 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-09-22, sixth pass the same day -- the native smoke tier is
-  down to **5 failed / 0 errors / `other skipped: 0`**, and those five are 4 x
-  KI-TUNER-001 (broadcast, group-conv x2 and matmul tuner) plus 1 x
-  KI-CODEGEN-001's guard, so the gate's exit code now means those two entries and
-  nothing else. What the sixth pass changed:
-  * **KI-OPS-013 is withdrawn**, not fixed: its "472 MB held per occurrence" was
-    a rank-7 *shape* read as a size. Both vars are stride-0 views over small
-    storage (one shares the 64x3x7x7 weight), the graph's peak resident set is
-    83.8 MiB, and no mapping in the process is over 100 MiB. The test now bounds
-    resident growth instead of rank (256 MiB against the 33 MiB it uses).
-  * **KI-CODEGEN-001: mechanism measured, arithmetic half fixed** (`3e8b4dfe`,
-    `3018c597`). A broadcast add was **914.8 us** per call against a dense
-    **122.9 us** (7.4x, interleaved minimum), and the generated kernel recovered
-    the strided operand's index with **two divisions and a modulo per element**.
-    The recovery now folds its per-axis division chain into one division by the
-    product of the shapes above the axis -- in `binary_op`/`unary_op`/`ternary_op`,
-    and in `contiguous_op`, which unflattened *every* axis with no stride mask in
-    its jit key at all -- giving **914.8 -> 636.5 us** (7.4x -> 5.2x) and
-    **1199.3 -> 647.2 us** for `contiguous()` of a broadcast view. Verified
-    bit-exact over 138 elementwise cases, every 2^rank view of five base shapes
-    through `abs`/`where`/`contiguous()`, multi-axis slices and transposes, plus
-    106 op-gate cases. The entry says which part of the cost is left: the
-    structural half (the masked axis that `MergeLoopVarPass` merged away), and it
-    corrects its own earlier claim that the five merge-loop-var tests were merely
-    stale.
-  * **KI-COMPILER-007's suspected hazard is gone**: the case's child patched five
-    `install_cuda` entry points with a function that *raised*, which is the
-    mechanism the entry hypothesised (an exception during interpreter shutdown).
-    It now records, asserts, and fails late through `os._exit`, and the abort
-    did not reproduce in five further attempts in every shape this box can
-    produce, including the whole-tree `-n 4` collection it was seen in.
-  * **A gate test measured the machine, not the code** (`7cf7c5b2`): the two
-    children in `tests/distributed/test_process_store.py` carried a fixed 10 s
-    store-rendezvous timeout while each must `import jittor` first -- on this box
-    at load 15 that import is the longer half. They now read
-    `_STORE_TIMEOUT_SECONDS` (120 s) injected by `_run_pair`, still far under the
-    parent's budget so a real hang is still reported by the child that waited.
-    Mechanism checked both ways: a 2 s bound fails with exactly the observed
-    `timed out waiting for 2 TCPStore workers; got 1`, a 120 s bound is still
-    waiting after 15 s. The file went from about one red run in three to ten
-    clean runs of eleven.
+- Last reviewed: 2026-09-22, seventh pass the same day -- the native smoke tier is
+  down to **1 failed / 0 errors / `other skipped: 0`**, and that one failure is
+  KI-CODEGEN-001's guard (`test_reduce_with_merge_loop_var`), which is kept red on
+  purpose as the price of the remaining 5.2x described below. The four
+  KI-TUNER-001 reds were split and dealt with (`ba729d39`): the broadcast tuner
+  was genuinely broken by the view change and is fixed (it recognises the expand
+  by its producer now), and the three CPU relay cases were measuring the *build*
+  -- this gate is `use_mkl=0` and registers no capability at all, so they now
+  `require_library("mkl")` and skip as `environment` rather than failing. The
+  entry stays open for builds that do register one, with the measured mechanism
+  (relaxing the membership test is a landmine: it reaches `add_relay_group` and
+  the `var_relay.cc:66` abort).
+  The sixth pass earlier the same day: the tier went from 5 failed to that
+  split, KI-OPS-013 was withdrawn (its "472 MB held" was a rank-7 *shape* read as
+  a size: 83.8 MiB peak resident, no mapping over 100 MiB), KI-COMPILER-007's
+  suspected hazard was removed (the case no longer raises from the patched
+  `install_cuda` entry points; no reproduction in five shapes), and
+  KI-CODEGEN-001's arithmetic half was fixed (`3e8b4dfe`, `3018c597`): the
+  strided-index recovery folds its per-axis division chain into one division by
+  the product of the shapes above the axis, giving **914.8 -> 636.5 us** per
+  broadcast add (7.4x -> 5.2x) and **1199.3 -> 647.2 us** for `contiguous()` of a
+  broadcast view, verified bit-exact. A gate test that measured the machine was
+  fixed too (`7cf7c5b2`): the store rendezvous bound was 10 s while each child
+  must `import jittor` first.
   The fifth pass earlier the same day: the native tier went from 27 failed / 1
   error to **6 failed / 0 errors** with `other skipped: 0`, and four of the
   removed reds came from the gate's own accounting rather than from a test (a
@@ -76,7 +59,7 @@
   diagnostics (the adapters' lazy-module version read, the generated-copy scan,
   and `torch.cuda.set_device` / `map_location="cuda"` on a build with no
   device).
-- Baseline: `7cf7c5b2`
+- Baseline: `ba729d39`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -2534,6 +2517,42 @@ about whether to take it.
 - Status: Open for the hand-written form; the paths users actually reach
   (`jt.nn.matmul`, `nn.Linear`, `nn.Conv2d`) were routed around it on
   2026-09-15 by registering the CPU rows of the kernel tables
+- **Split in two on 2026-09-22, and one half is fixed** (`ba729d39`):
+  * the **broadcast tuner was genuinely broken** and is fixed. It looked for
+    `op->type() == OpType::broadcast`, but an expand of more than one element is
+    a stride-0 *view* now (`OpType::other`) -- not a member of the fused op and
+    not that type -- so the tuner silently stopped running for every non-scalar
+    broadcast (the scalar case still sets `OpType::broadcast`, which is why only
+    that file's non-scalar case went red). It now recognises the view by its
+    *producer*: an input var of the fused op whose producer `is_op(broadcast_to())`.
+    `tests/codegen/test_broadcast_tuner.py` 5 passed.
+  * the **CPU relay cases measure the build, not the code**:
+    `test_matmul_tuner::test_matmul_tuner` and
+    `test_group_conv_tuner::{test_forward,test_backward}` find something to relay
+    *to* through `find_op_capability`, and the only CPU registration comes from
+    mkl (`backends/cpu/libraries/mkl/mkl_capabilities.cc`), which is compiled
+    into the core only with `use_mkl=1`. The gate is `use_mkl=0`: measured
+    2026-09-22, `jt.core.backend_capability_dtypes('cpu', ...)` returns `[]` for
+    `matmul`, `conv2d`, `random` and `transpose` alike, so the tuner declining is
+    the correct answer. They now `require_library("mkl")` and skip with a reason
+    that names the library, so the lost coverage shows up in the `environment`
+    bucket instead of as three failures. **This is not the entry closing**: on a
+    build that *does* register the capability they run again, and the relay still
+    cannot fire there -- see the mechanism below.
+- The mechanism, re-measured 2026-09-22 (the entry previously guessed at it):
+  with the `fop->has(...)` membership tests relaxed, the matmul tuner's *every*
+  other check passes -- the multiply is a member, both operand producers
+  `is_op(broadcast_to())`, the ranks are 3/2/2, the masks match -- and it stops
+  at exactly one place: `find_op_capability` returns nothing, because the build
+  registers no matmul implementation. So the recognition half is what the view
+  change broke, and the membership test is *not* by itself the blocker.
+  Relaxing it is a **landmine, not a fix**: on a build that does register the
+  capability the tuner would go on to `add_relay_group`, whose backward BFS
+  requires every operand of the relayed op to be a fused-op node
+  (`var_relay.cc:66`, `ASSERT(q.size()==2*group.size())`); the operands here are
+  the *broadcast sources*, which are no longer fused-op vars. That is the same
+  abort the entry recorded on 2026-09-17, and it is why the relaxation was
+  reverted rather than shipped.
 - Owner: compiler/tuner maintainers
 - Symptom: `MatmulTuner` and `ConvTuner` recognise a fused subgraph by asking
   whether an operand's producer `is_op(broadcast_to())` *and* is a member of
