@@ -446,6 +446,19 @@ def set_device(device=None, *a, **k):
     if index is None:
         # A bare "cuda"/torch.device("cuda") names no particular device.
         return None
+    # An ordinal beyond the visible devices is refused rather than delegated:
+    # `jt.set_device` accepts one without a word on a build without an
+    # accelerator (the core's own refusal is only asserted where a device
+    # exists -- tests/runtime/test_runtime_device_state.py returns early
+    # otherwise), so `torch.cuda.set_device(device_count() + 8)` reported
+    # success and moved nothing. Device 0 stays accepted because it is the
+    # ambient default even with no accelerator visible, which is the other half
+    # of the same contract (`test_set_device_zero_is_accepted`).
+    visible = device_count()
+    if index >= max(1, visible):
+        raise RuntimeError(
+            "Invalid device ordinal: torch.cuda.set_device(%r) names device %d, "
+            "but this build sees %d device(s)" % (device, index, visible))
     try:
         jt.set_device(int(index))
     except (AttributeError, RuntimeError, TypeError, ValueError) as error:
