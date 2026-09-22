@@ -1,10 +1,51 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-09-22, eighth pass the same day -- **the Torch tier is
+- Last reviewed: 2026-09-23. **The native smoke tier is green**, and the red it
+  used to carry was not KI-CODEGEN-001's guard -- that was a misattribution,
+  corrected here. The one failure
+  (`tests/codegen/test_parallel_pass.py::TestParallelPass3::test_reduce_with_merge_loop_var`)
+  was a separate regression `7e83d6da` had introduced into `ReduceOp`, and this
+  pass diagnosed and fixed it. `ReduceOp::jit_run` used to derive `xstride@i`
+  from `xshape`; `7e83d6da` replaced that with `x->storage_stride(@i)` read at
+  run time. For a contiguous input the two are the same number -- but the second
+  is an opaque call, so the input index stopped folding into the loop ids and
+  `MergeLoopVarPass` refused the merge. It is right to refuse: its template
+  `id_a*range_b*d + id_b*d + c` *is* the condition that the index is linear in
+  the merged loop, and an unresolvable stride product does not prove that. So
+  `check(3, 2, 1, [2], 0)` got parallel depth 2 where it asked for 1, and the
+  test went red although its expectation was never touched. The pass's own log
+  (`log_vprefix=merge_loop_var_pass.cc=1000,pass_manager.h=1000`) shows it
+  exactly: the y index expands to `((id0*range1)+id1)` and matches, the x index
+  expands to `id0*((((ReduceOp((ops[0])))->x)->storage_stride)(0))+…` and
+  "cannot match". The fix is the idiom `binary_op.cc` already uses -- `jit_prepare`
+  puts `«XSTRIDED=hex1(!x->is_contiguous())` in the jit key, and `jit_run` emits
+  the derived chain (the pre-`7e83d6da` form, with the `@if(DIM>0, …)` guard the
+  rank-0 case needs) for a contiguous input and the run-time read only for a
+  strided view. Verified: the test passes, 40 reduce forms (contiguous 3-D/4-D
+  over every axis and both keepdims values, mean/max/min, two axes at once, a
+  stepped slice, a broadcast view, rank 1, an empty axis) agree with NumPy, and
+  the strided path is still the code it was. KI-CODEGEN-001 stays open for the
+  elementwise cost it describes; its "second symptom" note about this test is
+  updated below.
+  The same pass found one more of the KI-TUNER-001 class, in the slow set where
+  the smoke gate cannot see it:
+  `tests/codegen/test_conv_tuner.py::TestConvTuner::test_forward` and
+  `test_backward` assert that the tuner relayed the hand-written conv to
+  `mkl_conv`, which no `use_mkl=0` build can do, so both failed instead of
+  skipping. Its two siblings already carry `require_library("mkl")`
+  (`test_matmul_tuner.py`, `test_group_conv_tuner.py`, both of which now report
+  "library mkl is disabled" and land in the `environment` bucket); these two were
+  simply missed when that guard went in, and now have it too. The other two reds
+  the full `tests/codegen` run showed were not defects: `test3` is
+  KI-CODEGEN-001's guard described above, and
+  `test_parallel_compile_attribution.py::…ghost_workers_after_fork` failed only
+  under the busy four-worker run with `CHILD_STATUS 124` (a child timeout) and
+  passes serially.
+  The eighth pass earlier the same day: **the Torch tier is
   green** (`exit=0`, 2829 passed, 0 failed, 0 errors, `other skipped: 0`) and the
-  native tier is at **1 failed / 0 errors / 2156 passed / `other skipped: 0`**,
-  that one being KI-CODEGEN-001's deliberate guard. Much of this pass was
+  native tier was at **1 failed / 0 errors / 2156 passed / `other skipped: 0`**,
+  that one misattributed to KI-CODEGEN-001. Much of this pass was
   repairing another writer's work, and the cause is worth recording because it is
   silent: my own `7cf7c5b2` (the store-rendezvous fix) had been created with a
   *pathless* `git commit`, which commits the **whole index** -- and the index
@@ -33,9 +74,11 @@
   `git show --stat --format="" HEAD` afterwards -- a path you never touched
   appearing there is the signature of the accident.
   The seventh pass earlier the same day: the native smoke tier was down to
-  **1 failed / 0 errors / `other skipped: 0`**, and that one failure was
-  KI-CODEGEN-001's guard (`test_reduce_with_merge_loop_var`), which is kept red on
-  purpose as the price of the remaining 5.2x described below. The four
+  **1 failed / 0 errors / `other skipped: 0`**, and that one failure was read as
+  KI-CODEGEN-001's guard (`test_reduce_with_merge_loop_var`) and left red on
+  purpose as the price of the remaining 5.2x described below. That reading was
+  wrong (see the ninth pass above): the test is a reduce case with no broadcast
+  operand, and the red was a `ReduceOp` regression with its own cause. The four
   KI-TUNER-001 reds were split and dealt with (`ba729d39`): the broadcast tuner
   was genuinely broken by the view change and is fixed (it recognises the expand
   by its producer now), and the three CPU relay cases were measuring the *build*
@@ -2464,20 +2507,47 @@ about whether to take it.
   written to `yrem`/`yi`, names `MergeLoopVarPass` does not inspect (it checks
   defines ending in `id`/`_i`), so it merges every loop it can: `a + x` with
   `x=[1,10,1,1]` becomes one `range0_1_2_3` loop where `range2_3` under
-  `id0,id1` was expected. `tests/codegen/test_merge_loop_var_pass.py`
-  `TestMergeLoopVarPass::test3` and `TestMergeLoopVarPassCuda::test3` fail on
-  that; `::test` (`sum([2,3])`, no merge at all) and
-  `TestMergeLoopVarPassCuda::test5` (`range0_2_3`) fail because the blocked
-  pairwise reduction (2026-09-10) restructured the reduce loops; and
-  `tests/codegen/test_parallel_pass.py::TestParallelPass3::test_reduce_with_merge_loop_var`
-  compares generated source against the old shape. The kernels are
-  numerically right (every ops gate passes); the tests are left red as the
-  guard for the cost above rather than rewritten to bless it.
+  `id0,id1` was expected. `TestMergeLoopVarPass::test3` and its CUDA twin fail
+  on that, and they are the only ones still red: the kernel is numerically right
+  (every ops gate passes) and the test is kept as the guard for the cost above
+  rather than rewritten to bless `range0_1_2_3`.
+  **Corrected 2026-09-23:** this paragraph used to name three more tests --
+  `TestMergeLoopVarPass::test` (`sum([2,3])`, no merge at all),
+  `TestMergeLoopVarPassCuda::test5` (`range0_2_3`) and
+  `TestParallelPass3::test_reduce_with_merge_loop_var` -- and to blame them on
+  "the blocked pairwise reduction (2026-09-10) restructured the reduce loops".
+  That was wrong. All three are *reduce* cases with no broadcast operand, and
+  they were the same `ReduceOp` regression: `7e83d6da` replaced the
+  shape-derived `xstride@i` with a run-time `x->storage_stride(@i)` read, which
+  no longer folds, so `MergeLoopVarPass` refused the merge. Deriving the strides
+  again when the input is contiguous (ninth pass, above) fixed all three: on the
+  CPU gate `::test` and `::test5` pass and `test_reduce_with_merge_loop_var`
+  passes, so the native smoke tier is green. (Their CUDA twins are skipped there
+  -- the gate has no GPU -- and this entry does not claim them.) They were never
+  this entry's guard, and the blocked reduction was never the cause.
 - Direction: keep the view for non-fused consumers, but in a *fused* kernel
   express a strided operand's index in loop ids with the masked axes' strides
   folded to zero at compile time (`YSMASK` is already in the jit key), so the
   compiler hoists the invariant terms and the merge pass sees a linear index
   again. Then re-derive the expected merge structure and update the tests.
+- **The other half of the same lever, landed 2026-09-23 (ninth pass): a
+  *contiguous* operand should not be expressed through `storage_stride` at all.**
+  `Var::storage_stride(i)` returns the shape-derived row-major product exactly
+  when the var carries no explicit stride vector, and `Var::is_contiguous()` is
+  true precisely then, so for a contiguous input the run-time read is the same
+  number written in a form the compiler cannot fold. `binary_op`, `unary_op` and
+  `ternary_op` already gate the read on an `XSTRIDED` jit-key bit and fall back
+  to `i` (or to the shape chain) when it is 0; `ReduceOp` never did, and that is
+  what `7e83d6da` broke in it (see the ninth pass at the top). It is fixed there
+  now, and the reduce merges came back. The same ungated read is still present in
+  two ops, left alone here because neither has a failing guard nor a measured
+  cost, and reindex is deliberately excluded from the merge pass
+  (`src/codegen/opt/pass/merge_loop_var_pass.cc:106` refuses a loop containing a
+  branch): `src/ops/reindex_op.cc:128` (`xstride`) and
+  `src/ops/reindex_reduce_op.cc:107` (`ystride`). `ContiguousOp`'s ungated read
+  (`src/ops/composite/contiguous_op.cc:32`) is *not* one of these -- its
+  constructor forwards and returns for a contiguous input, so it never sees one.
+  Apply the same shape when a reason appears.
 - **Measured again 2026-09-22, and the mechanism is now exact.** Interleaved,
   repeated, minimum-of-15 on `64x64x64x64 + 1x64x1x1` (200 adds per sample, so
   the per-call overhead is amortised; load average 14-16): jittor dense
@@ -2740,17 +2810,22 @@ about whether to take it.
   time constant, which would block constant folding and vectorisation; that
   has not been proven.
 - Not part of it, recorded here because it looks like it is:
-  `tests/codegen/test_merge_loop_var_pass.py::test3` and four siblings assert
-  `"range2_3" in src`, and they fail -- but the merge *does* happen, and more
-  aggressively than the assertion expects: the kernel now collapses all four
+  `tests/codegen/test_merge_loop_var_pass.py::test3` asserts `"range2_3" in src`
+  for `a + x` with `x=[1,10,1,1]`, and it fails -- but the merge *does* happen,
+  and more aggressively than the assertion expects: the kernel collapses all four
   dims into `range0_1_2_3`, which does not contain the substring `range2_3`.
   Numerics were checked directly (`a + x` with distinct values, 0/10000
-  mismatches). These five are a stale substring assertion, not a lost
-  optimization.
+  mismatches), and this is the only test in the file that is still red.
   **Corrected 2026-09-22 (see KI-CODEGEN-001):** the numerics half stands, but
   "not a lost optimization" does not. The aggressive merge is *what forces* the
-  per-element divisions that cost 7.4x on a broadcast add, so these five are the
-  cost's guard and stay red. Do not rewrite them to bless `range0_1_2_3`.
+  per-element divisions that cost 7.4x on a broadcast add, so this case is the
+  cost's guard and stays red. Do not rewrite it to bless `range0_1_2_3`.
+  **Corrected 2026-09-23:** "and four siblings" was wrong. `::test` and `::test5`
+  also assert `range2_3`, and they were failing for an unrelated reason -- the
+  `ReduceOp` run-time-stride regression (see the ninth pass above). With the
+  strides derived again they pass, and `range2_3` is back in the reduce kernels
+  without any change to this entry. Only `::test3` (and its CUDA twin) is this
+  guard.
 - Exit condition: with `enable_tuner=1`, a hand-written `broadcast * broadcast
   -> reduce` product on CPU emits a `mkl_matmul` jit op key and the conv
   tuner's confidence is 20 again, with `tests/ops/test_matmul.py` and
