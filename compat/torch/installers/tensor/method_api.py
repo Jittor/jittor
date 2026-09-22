@@ -1002,6 +1002,57 @@ def _set_(self, source, storage_offset=0, size=None, stride=None):
     return self
 
 
+def _dense_strides(size):
+    """Row-major strides for `size`, innermost last."""
+    strides = [1] * len(size)
+    for d in range(len(size) - 2, -1, -1):
+        strides[d] = strides[d + 1] * size[d + 1]
+    return strides
+
+
+def _as_strided_as_view(flat, size, stride, storage_offset):
+    """`as_strided` as a real view, or None when it cannot be expressed as one.
+
+    The gather below this returns the right *numbers* and a tensor that shares
+    nothing: writing to it does not reach the base, which is the half of
+    `as_strided` that torch callers rely on -- an optimizer updating a slice,
+    tied weights that are meant to be one buffer, a shard written in place.
+
+    Nothing new is needed to fix that. Slicing, reshaping and transposing
+    already produce views that write through (`VarHolder::attach_view`), so a
+    request that *is* one of those compositions is served by composing them:
+
+      * strides equal to the dense strides of `size` -- a contiguous window --
+        is a flat slice reshaped;
+      * strides that are a permutation of the dense strides of the permuted
+        shape is that window reshaped and permuted back.
+
+    Anything else (overlapping windows, zero or negative strides, a stride that
+    no permutation makes dense) falls back to the gather, which is honest about
+    being a copy rather than pretending to alias.
+    """
+    rank = len(size)
+    if rank == 0 or any(st <= 0 for st in stride):
+        return None
+    numel = 1
+    for s in size:
+        numel *= s
+    order = sorted(range(rank), key=lambda d: -stride[d])
+    permuted = [size[d] for d in order]
+    if [stride[d] for d in order] != _dense_strides(permuted):
+        return None
+    window = flat[storage_offset:storage_offset + numel]
+    if int(window.shape[0]) != numel:
+        return None
+    view = window.reshape(permuted)
+    if order == list(range(rank)):
+        return view
+    inverse = [0] * rank
+    for position, axis in enumerate(order):
+        inverse[axis] = position
+    return view.permute(*inverse)
+
+
 def _as_strided(self, size, stride, storage_offset=0):
     size = [int(s) for s in size]
     stride = [int(s) for s in stride]
@@ -1050,6 +1101,9 @@ def _as_strided(self, size, stride, storage_offset=0):
             "[%d, %d])" % (tuple(size), tuple(stride), int(storage_offset), n, lo, hi))
     if empty:
         return flat[:0].reshape(size)
+    view = _as_strided_as_view(flat, size, stride, int(storage_offset))
+    if view is not None:
+        return view
     idx = None
     for d in range(len(size)):
         ar = _owner.jt.arange(size[d], dtype="int64") * stride[d]
