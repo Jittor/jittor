@@ -36,11 +36,16 @@ class TestCore(unittest.TestCase):
 
     def test_number_of_hold_vars(self):
         assert jt.random([1,2,3]).peek() == "float32[1,2,3,]"
-        assert jt.core.number_of_hold_vars() == 0
+        # `number_of_hold_vars` counts the process' held Vars, and the process
+        # holds a floor of its own for its lifetime (`jittor.fft._dft_mat_cache`
+        # and the attention need-length cache keep theirs), so `== 0`/`== 1` here
+        # failed as `27`/`28` as soon as another file in the worker ran an fft.
+        # The subject is what *this* test adds and releases.
+        floor = jt.core.number_of_hold_vars()
         x = jt.random([1,2,3])
-        assert jt.core.number_of_hold_vars() == 1
+        assert jt.core.number_of_hold_vars() == floor + 1
         del x
-        assert jt.core.number_of_hold_vars() == 0
+        assert jt.core.number_of_hold_vars() == floor
 
     def test_fetch_sync(self):
         dtypes = ["float32", "float64"]
@@ -92,8 +97,14 @@ class TestCore(unittest.TestCase):
         assert np.allclose(jtc, c), np.abs(jtc-c).max()
 
     def test_var_holder(self):
+        # Not `== 0`: `live_vars` is process-global and carries a floor from the
+        # Vars the process already holds for its lifetime (`jittor.fft._dft_mat_cache`
+        # and the attention need-length cache keep theirs), so the absolute form
+        # fails as `27 == 0` as soon as another file in the same worker has run an
+        # fft. What this case is about is that the *failed* matmuls above leave
+        # nothing behind: the count comes back to the floor it started at.
         jt.clean()
-        self.assertEqual(jt.introspection.counters.live_vars, 0)
+        floor = jt.introspection.counters.live_vars
         expect_error(
             lambda: jt.matmul(1,1),
             exc_type=AttributeError,
@@ -109,7 +120,7 @@ class TestCore(unittest.TestCase):
             exc_type=AttributeError,
             match=r"'list' object has no attribute '(shape|ndim)'",
         )
-        self.assertEqual(jt.introspection.counters.live_vars, 0)
+        self.assertEqual(jt.introspection.counters.live_vars, floor)
         a = jt.matmul(jt.float32([[3]]), jt.float32([[4]])).data
         assert a.shape == (1,1) and a[0,0] == 12
         a = np.array([[1, 0], [0, 1]]).astype("float32")
@@ -197,9 +208,14 @@ class TestCore(unittest.TestCase):
                     assert ",0)" in n
             da = jt.grad(b, a)
             da.sync()
+        # The baseline is taken through the same `gc()` the assertion ends with,
+        # so it is the floor rather than "whatever earlier tests left uncollected"
+        # (see test_var_holder for why the absolute form is wrong here).
+        jt.gc()
+        floor = jt.introspection.counters.live_vars
         check()
         jt.gc()
-        assert jt.introspection.counters.live_vars == 0
+        assert jt.introspection.counters.live_vars == floor
 
     def test_out_hint1(self):
         a = jt.rand(10)
@@ -256,13 +272,22 @@ class TestCore(unittest.TestCase):
                        if "Var" in n and ",0)" not in n)
             return masks, left
 
+        def _residue():
+            return sum(1 for n in jt.dump_all_graphs().nodes_info
+                       if "Var" in n and ",0)" not in n)
+
+        # The floor, measured with the same instrument: what the process holds
+        # for its lifetime (`clean_graph()` releases the graph, not the caches).
+        # `left <= 4` was absolute, so it read 29 with an fft having run first.
+        jt.clean_graph()
+        floor = _residue()
         masks, left = masks_and_residue(10)
         # The backward of each ternary needs the condition it was given.
         assert masks == 10, masks
         # Releasing the graph must leave a constant, not a function of depth.
         _, left_deeper = masks_and_residue(20)
         assert left == left_deeper, (left, left_deeper)
-        assert left <= 4, left
+        assert left - floor <= 4, (left, floor)
 
     def test_node_order(self):
         a = jt.nn.Sequential()
