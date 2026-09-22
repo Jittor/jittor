@@ -37,6 +37,7 @@ the install ledger:
 """
 
 import ast
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -56,6 +57,34 @@ _BUILTINS_OWNERS = ("builtins", "_builtins", "builtins_module")
 # process-global write.
 _DICT_VERBS = ("setdefault", "update", "pop")
 _LIST_VERBS = ("insert", "append", "remove", "pop")
+
+#: Directory names that hold generated copies rather than sources. A wheel build
+#: leaves ``compat/build`` (and ``compat/jittor_torch.egg-info``) behind, and
+#: ``build/lib/jittor/compat/...`` is a *copy of this tree*: scanning it reports
+#: every entry a second time and reports all of them as new until the copy is
+#: reclassified, so a build -- not a change -- turns this gate red. ``.gitignore``
+#: already declares ``build/`` generated and un-ignores the four maintained
+#: ``build`` packages, so this reuses the repository's rule rather than adding a
+#: second one.
+_GENERATED_PARTS = frozenset(("build", "dist"))
+
+
+def _is_generated(relative):
+    return any(part in _GENERATED_PARTS or part.endswith(".egg-info")
+               for part in relative.parts)
+
+
+def _sources():
+    """Every ``.py`` under ``compat`` that is source, not a generated copy.
+
+    ``tests`` is excluded because this file's own suite is not part of the
+    inventory it audits.
+    """
+    for path in sorted(COMPAT.rglob("*.py")):
+        relative = path.relative_to(COMPAT)
+        if relative.parts[0] == "tests" or _is_generated(relative):
+            continue
+        yield path
 
 
 def _dotted(node):
@@ -172,9 +201,7 @@ def discover_write_entry_points():
     function does -- which is the case worth re-reviewing.
     """
     found = {}
-    for path in sorted(COMPAT.rglob("*.py")):
-        if path.relative_to(COMPAT).parts[0] == "tests":
-            continue
+    for path in _sources():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         owner_of = _enclosing_function_names(tree)
         relative = path.relative_to(ROOT).as_posix()
@@ -380,9 +407,7 @@ def test_installers_do_not_rederive_the_active_transaction():
     RuntimeError. ``jittor/compat/transaction.py`` owns the lookup now.
     """
     offenders = []
-    for path in sorted(COMPAT.rglob("*.py")):
-        if path.relative_to(COMPAT).parts[0] == "tests":
-            continue
+    for path in _sources():
         if path.name == "transaction.py":
             continue
         text = path.read_text(encoding="utf-8")
@@ -397,3 +422,31 @@ def test_installers_do_not_rederive_the_active_transaction():
         "call jittor.compat.transaction.active_transaction() instead of "
         "re-deriving the active transaction:\n" + "\n".join(offenders)
     )
+
+
+def test_generated_copies_are_not_part_of_the_inventory(tmp_path, monkeypatch):
+    """A wheel build leaves a *copy of this tree* inside ``compat``.
+
+    ``python -m build`` (and ``pip wheel``) writes ``compat/build/lib/...`` plus
+    ``compat/jittor_torch.egg-info``. Scanning them reports every already
+    classified entry a second time, under a path nobody can fix, so the gate
+    went red for a build rather than for a change -- measured 2026-09-22, 148
+    ``.py`` files under ``compat/build``, every one of them listed as a new
+    write entry point. ``.gitignore`` already declares those directories
+    generated and un-ignores the four maintained ``build`` packages; this
+    asserts the scanner believes it.
+    """
+    sources = {
+        "collectives.py": "import os\nos.environ['A'] = '1'\n",
+        "build/lib/jittor/compat/collectives.py": "import os\nos.environ['B'] = '1'\n",
+        "dist/pack/collectives.py": "import os\nos.environ['C'] = '1'\n",
+        "jittor_torch.egg-info/collectives.py": "import os\nos.environ['D'] = '1'\n",
+        "tests/torch/collectives.py": "import os\nos.environ['E'] = '1'\n",
+    }
+    for relative, text in sources.items():
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "COMPAT", tmp_path)
+    assert [path.relative_to(tmp_path).as_posix() for path in _sources()] == [
+        "collectives.py"]
