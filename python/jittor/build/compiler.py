@@ -1074,7 +1074,18 @@ CORE_GENERATOR_SIGNATURE_VERSION = 1
 
 
 def core_build_stamp_path():
-    return core_output_path + ".build_stamp.json"
+    """Where this configuration's core build stamp lives.
+
+    ``JITTOR_CORE_BUILD_STAMP_PATH`` points it somewhere else. That is how a
+    test can ask "what happens when the core is not known to be current" about
+    a *child* process without answering the question for every other process:
+    the stamp is shared by everything using this ``JITTOR_HOME``, and a child
+    decides by reading ``os.environ`` itself, so an override is the only seam
+    that reaches it. See ``_looks_unbuilt`` in
+    ``tests/build/test_import_bootstrap_laziness.py``.
+    """
+    return os.environ.get("JITTOR_CORE_BUILD_STAMP_PATH") or \
+        core_output_path + ".build_stamp.json"
 
 
 def core_source_signature(root=None):
