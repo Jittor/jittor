@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from _helpers.child_process import run_python_child
+from _helpers import pytest_policy
 from _helpers.paths import iter_test_files as all_test_files, relative_test_path
 
 
@@ -66,7 +67,19 @@ _PROHIBITED_COLLECTION_CALL_SUFFIXES = (".exec_module", ".mkdir")
 
 
 def _test_files():
-    return all_test_files()
+    """The files pytest will actually collect.
+
+    A ``test_*.py`` that carries no test at all is refused by
+    ``pytest_policy``, so the collection-time contracts below -- which are
+    statements about what a collected module is allowed to do while it is
+    imported -- are about what is left. Asserting them against a script that
+    is never collected is how one file parked under ``tests/`` turned three
+    gates red at once (KI-TEST-006); the refused set is pinned by
+    ``test_test_named_scripts_are_refused_rather_than_collected`` so a second
+    one cannot appear quietly.
+    """
+    return [path for path in all_test_files()
+            if not pytest_policy._refuses_collection(path)]
 
 
 def _dotted_name(node):
@@ -905,6 +918,71 @@ def _collection_side_effects(relative_text, tree):
                         )
                     )
     return violations
+
+
+#: Every ``test_*.py`` in the tree that defines no test, and is therefore
+#: refused by ``pytest_policy`` instead of being collected. Kept as a list so a
+#: second one is a decision somebody writes here with the file's story, rather
+#: than a name that quietly stops being collected. This one is a script its
+#: author runs by path; the layout rule (standalone experiments live under
+#: ``$JITTOR_LAB_ROOT``) is what should have kept it out of the tree.
+_REFUSED_TEST_SCRIPTS = {
+    "integration/test_h3_decode_thread_race.py",
+}
+
+
+def test_test_named_scripts_are_refused_rather_than_collected():
+    """A script named ``test_*.py`` must not be collected as a test.
+
+    The name is the whole collection instruction, so without this the file is
+    imported and whatever its body does becomes a gate failure: the H3
+    reproduction reads ``sys.argv``, opens a checkpoint and builds a VAE at
+    module scope, which the native session reported as a collection error on
+    every run and which two scanners below also flagged (KI-TEST-006).
+    Refusing it costs nothing -- it could not contribute a test -- and its
+    author keeps running it by path.
+    """
+    refused = {
+        relative_test_path(path).as_posix()
+        for path in all_test_files()
+        if pytest_policy._refuses_collection(path)
+    }
+    assert refused == _REFUSED_TEST_SCRIPTS, (
+        "a test-named file that defines no test is refused instead of "
+        "collected; the difference is %s. Move a script to $JITTOR_LAB_ROOT, "
+        "or add it here with the reason it has to stay where it is."
+        % sorted(refused ^ _REFUSED_TEST_SCRIPTS)
+    )
+
+
+#: Shapes the refusal has to tell apart. Each is a thing pytest does or does
+#: not collect, not a guess: the first two are how a test is written, the third
+#: is a ``unittest.TestCase`` subclass or a project mixin reached through a
+#: base, and the last two have nothing collection could reach.
+_REFUSAL_SHAPES = {
+    "module-level test function": ("def test_x():\n    pass\n", False),
+    "Test-prefixed class": ("class TestX:\n    def test_y(self):\n        pass\n",
+                            False),
+    "class with a base": ("import unittest\n\n\n"
+                          "class Helper(unittest.TestCase):\n    pass\n", False),
+    "helper function only": ("def decode():\n    return 1\n", True),
+    "no definitions at all": ("import sys\nROUNDS = int(sys.argv[1])\n", True),
+}
+
+
+def test_the_script_refusal_only_covers_modules_collection_cannot_use():
+    """The refusal errs in the one direction that cannot hide a test.
+
+    It is the only rule here whose failure mode is *silent*: a file it refuses
+    stops being collected. So the shapes it must not touch are pinned next to
+    the ones it must.
+    """
+    wrong = [
+        name
+        for name, (source, refused) in _REFUSAL_SHAPES.items()
+        if pytest_policy._collects_nothing(ast.parse(source)) is not refused
+    ]
+    assert wrong == [], wrong
 
 
 def test_test_modules_avoid_collection_time_backend_side_effects():

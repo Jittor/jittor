@@ -1,5 +1,6 @@
 """Shared pytest policy for the repository-only test suite."""
 
+import ast
 import importlib
 import os
 from collections import Counter
@@ -212,6 +213,56 @@ def _relative_to_test_root(path):
     raise ValueError("test path is outside the repository test roots: " + str(path))
 
 
+def _collects_nothing(tree):
+    """True when pytest could not collect a test from this module.
+
+    Module scope only: a class built inside a function body is built when that
+    function runs, and collection never sees it. A class counts as something
+    collection could reach when it is named ``Test*`` -- pytest's own rule for
+    plain classes -- or when it has *any* base, since a ``unittest.TestCase``
+    subclass is collected whatever it is called and a project mixin is reached
+    through a base. Everything else is a definition pytest ignores.
+    """
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name.startswith("test"):
+                return False
+        elif isinstance(node, ast.ClassDef):
+            if node.name.startswith("Test") or node.bases:
+                return False
+    return True
+
+
+def _refuses_collection(path):
+    """Whether a ``test_*.py`` file is a script rather than a test module.
+
+    The file name *is* the collection instruction, so a reproduce-by-hand
+    script parked under a test root is collected, imported, and -- because its
+    body really does something -- reported as a gate failure about code it
+    never exercised. ``tests/integration/test_h3_decode_thread_race.py`` is
+    the case that happened (KI-TEST-006): it is run by path
+    (``python3 <path> 12 1``), so it stays where its author keeps it and the
+    *policy* stops treating it as a test module.
+
+    Refusing is only safe in one direction, and this errs hard that way: a
+    file is refused when it could contribute nothing to collection anyway, so
+    no test that exists can be hidden by it. Anything unparseable, and
+    anything carrying a definition collection could reach, is collected and
+    left to fail loudly.
+    """
+    if path.suffix != ".py" or not path.name.startswith("test_"):
+        return False
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    try:
+        tree = ast.parse(source, filename=str(path))
+    except (SyntaxError, ValueError):
+        return False
+    return _collects_nothing(tree)
+
+
 def pytest_ignore_collect(collection_path, config):
     """Keep Torch-mode paths out of a native session entirely.
 
@@ -219,6 +270,10 @@ def pytest_ignore_collect(collection_path, config):
     import ``jittor.torch_compat`` at module scope, so a native session fails
     during collection before any marker is applied. ``tools/run_test_suite.py``
     runs them in their own session.
+
+    A ``test_*.py`` that is not a test module is refused here too, for the same
+    reason: nothing about it can be reported as a test result, so collecting it
+    only turns whatever its body does into a failure.
 
     pluggy matches these parameter names against the hookspec and rejects any
     it does not recognise, so the signature has to name only arguments every
@@ -228,10 +283,13 @@ def pytest_ignore_collect(collection_path, config):
     target = collection_path
     if target is None:
         return None
+    resolved = Path(str(target)).resolve()
     try:
-        relative = Path(str(target)).resolve().relative_to(TEST_ROOT.parent).as_posix()
+        relative = resolved.relative_to(TEST_ROOT.parent).as_posix()
     except ValueError:
         return None
+    if _refuses_collection(resolved):
+        return True
     if _torch_mode_is_active():
         return True if relative in NATIVE_MODE_PATHS else None
     if is_torch_mode_path(relative):

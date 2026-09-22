@@ -227,6 +227,20 @@ compile_if_stale(what, cc, flags, sources, output)    # 裸 compile() 的带戳�
 - 枚举戳里**每一个字段**各改一次（`subTest`），因为这类检查烂掉的方式是某个字段悄悄
   不再参与比较，而任何「它能用」的测试都看不见。
 
+### 造「未构建」要给戳换路径，不要挪走它
+
+写「核心不是最新」的用例需要这个状态，而老办法是把 `core_build_stamp_path()` 改名。
+那是写**同一个 `JITTOR_HOME` 下所有进程共读**的一处状态：门禁的
+`-n 4 --dist loadgroup` 把一个文件的用例摊到四个 worker 上，实测 2026-09-22，一个 worker
+挪走戳的窗口里，兄弟 worker 的子进程 import 时看到「不是最新」，在 `JITTOR_NO_BUILD=1`
+下直接拒绝——红掉的用例里还包括**根本不隐藏任何东西的**热缓存那条。
+
+现在 `core_build_stamp_path()` 认 `JITTOR_CORE_BUILD_STAMP_PATH`，指向本进程私有的路径
+即可：`core_build_is_current()` 打不开戳文件就返回 False，与「戳不在」是同一条代码路径，
+共享的那份谁也没动。跨进程必须用环境变量而不是 patch，因为拿这个状态的正是子进程，它
+自己重新 import 这个模块、自己读 `os.environ`。见
+`tests/build/test_import_bootstrap_laziness.py::_looks_unbuilt`。
+
 ### `custom_ops/` 里的 `.so` 不能拿来枚举
 
 那个目录会**堆积孤儿库**：后端源文件改名之后 `gen_name` 的哈希变了，旧 `.so` 永远留在
