@@ -1,21 +1,40 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-09-22, fourth pass the same day -- KI-TEST-006 is fixed
-  (`6e0c2273`) and the native smoke tier is down from 27 red to 4 failed and no
-  errors. The pass was test-infrastructure work and lives in Git rather than
-  here: the core build stamp is now redirected per process instead of renamed
-  (the shared stamp is read by every worker of the same `JITTOR_HOME`, so
-  renaming it turned one file's three cases red under
-  `-n 4 --dist loadgroup`, including a warm-cache case that hid nothing), the
-  IPython anti-vacuity control was asserting that *the gate environment* has
-  IPython -- which it does not, IPython is declared in `requirements/docs.txt`
-  only -- so it was replaced by a meta-path trap that needs nothing installed,
-  and three structure gates were repaired (a hand-written stdlib allowlist that
-  rejected `tempfile`, a stale generated `MANIFEST.in`, and an RSS-bound case
-  whose retained-bytes signal disappears inside a busy worker). KI-COMPILER-007
-  did not reproduce in a fourth `-n 4` full-smoke run; it stays open and
+- Last reviewed: 2026-09-22, fifth pass the same day -- the native smoke tier is
+  down from 27 failed / 1 error to **6 failed / 0 errors** with **`other skipped:
+  0`**, and those six are exactly the entries below (4 x KI-TUNER-001, 1 x
+  KI-OPS-013, 1 x KI-CODEGEN-001's guard), so the gate's exit code now means
+  those entries and nothing else. Four of the removed reds came from the gate's
+  own accounting rather than from a test, and they are the reason a green run
+  used to exit non-zero:
+  * a file whose tests the tier's `-m "not slow"` filtered out was counted as
+    "this session proved nothing about <path>" (`9c1e48d5`); it was the tier's
+    own slow files, reproducible in one line as
+    `-m "not slow" tests/ops/test_reduce_op.py`;
+  * 20 skips whose reasons name how this cache was built (no
+    `jt_graph_build_profile`, no cub, no MKL, no gdb, no nvcc) or a documented
+    non-reproduction classified as `other`, and `other > 0` reds the run
+    (`631a490b`, `ad367ee2`); one of the twenty was not an environment fact at
+    all but a placeholder reason string, `"skip_this_test"` in
+    `tests/backends/rocm/test_rocm.py`;
+  * and the summary printed that count without naming a single reason, so the
+    reasons were unactionable until they were listed (`ce26103d`).
+  A fifth red belongs to KI-COMPILER-007's family but not to the entry: the
+  case did not abort in the last two `-n 4` runs, so the entry stays open and
   intermittent.
+  The fourth pass earlier the same day: KI-TEST-006 is fixed
+  (`6e0c2273`) and the pass was test-infrastructure work that lives in Git
+  rather than here: the core build stamp is now redirected per process instead of
+  renamed (the shared stamp is read by every worker of the same `JITTOR_HOME`, so
+  renaming it turned one file's three cases red under `-n 4 --dist loadgroup`,
+  including a warm-cache case that hid nothing), the IPython anti-vacuity control
+  was asserting that *the gate environment* has IPython -- which it does not,
+  IPython is declared in `requirements/docs.txt` only -- so it was replaced by a
+  meta-path trap that needs nothing installed, and three structure gates were
+  repaired (a hand-written stdlib allowlist that rejected `tempfile`, a stale
+  generated `MANIFEST.in`, and an RSS-bound case whose retained-bytes signal
+  disappears inside a busy worker).
   Earlier the same day KI-COMPAT-005 is now
   fixed (`e8105ecc`): `torch.div(..., rounding_mode=)` is implemented in the
   compat layer and `torch.masked_fill` is published, which together are what
@@ -30,7 +49,7 @@
   diagnostics (the adapters' lazy-module version read, the generated-copy scan,
   and `torch.cuda.set_device` / `map_location="cuda"` on a build with no
   device).
-- Baseline: `639127c6`
+- Baseline: `ad367ee2`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
