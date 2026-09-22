@@ -188,7 +188,7 @@ def _jittor_config():
     # Importing the root package ensures its native core is compiled and loaded.
     import jittor  # noqa: F401
     from jittor import compiler as c
-    from jittor_utils.backend_resources import backend_root
+    from jittor_utils.backend_resources import backend_root, core_root
 
     cache_path = c.cache_path
     jittor_path = c.jittor_path  # .../python/jittor
@@ -235,7 +235,14 @@ def _jittor_config():
         "nvcc_path": nvcc,
         "cache_path": cache_path,
         "jittor_path": jittor_path,
-        "src_inc": os.path.join(jittor_path, "src"),
+        # `core_root`, not `jittor_path/src`: 4.15 moved the core sources out
+        # of the Python package to the repo top level, so that join is the
+        # installed-wheel layout only. In a checkout it names a directory that
+        # does not exist, every extension misses `core/common.h`, and the
+        # failure surfaces as "No module named 'flash_attn_jittor_cuda'" --
+        # which is why no extension had ever built from a checkout here.
+        # `extern_cuda_inc` below already went through the sibling helper.
+        "src_inc": core_root(jittor_path),
         "extern_inc": os.path.join(jittor_path, "extern"),
         "extern_cuda_inc": os.path.join(backend_root(jittor_path, "cuda"), "include"),
         "cuda_inc": cuda_includes[0],
@@ -268,6 +275,22 @@ def cfg():
 
 
 def _common_includes(c, extra):
+    if not c["pybind_inc"]:
+        # `include/torch/extension.h` includes <pybind11/pybind11.h> and
+        # <pybind11/stl.h> unconditionally and aliases `namespace py =
+        # pybind11`, so every extension built through this path needs the
+        # headers. Dropping the -I and letting g++ report the missing include
+        # buries the cause: the flash-attention bridge surfaced it as
+        # "import flash_attn_jittor_cuda failed: No module named
+        # 'flash_attn_jittor_cuda'", which names the symptom and sends the
+        # reader looking for the wrong thing.
+        raise RuntimeError(
+            "pybind11 headers were not found, and the torch shim's "
+            "torch/extension.h includes them unconditionally, so this "
+            "extension cannot build. Install pybind11 (pip install pybind11), "
+            "or put a directory containing pybind11/include on PYTHONPATH. "
+            "Searched: the importable pybind11 package, sys.prefix, "
+            "sys.base_prefix, CONDA_PREFIX and every sys.path entry.")
     incs = [
         SHIM_INCLUDE,          # our torch/extension.h shim FIRST
         c["src_inc"],          # jittor core headers
