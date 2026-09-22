@@ -2496,12 +2496,46 @@ about whether to take it.
     at all if the loop that carries the masked axis is *not* merged into the flat
     one -- which is what the old shape was (`range2_3` under `id0,id1`, asserted
     by `test_merge_loop_var_pass::test3`) and what
-    `test_reduce_with_merge_loop_var` counts as `tdim`. `MergeLoopVarPass` checks
-    defines ending in `id`/`_i`, and the recovery is written to `yi`/`q@d`, so it
-    sees no loop variable to respect and merges every loop it can. A division per
-    element is enough to stop vectorisation, so this is the part that matters.
-    That is why those tests fail: **they are the cost's guard, not stale
-    substring assertions** -- see the correction to KI-TUNER-001's tail below.
+    `test_reduce_with_merge_loop_var` counts as `tdim`.
+    **The IR, dumped 2026-09-22** (`jt.flags.log_v=1000`,
+    `log_vprefix="pass_manager=1000,loop_var_analyze=1000"`, on `[2,3,4,5] +
+    [1,3,1,1]`), says exactly where the decision is. The fused op's IR *enters*
+    the pass manager as a single flat loop with the recovery already in `i`:
+
+        for (op0_index_t op0_i = 0; op0_i<op0_num; op0_i++) {
+            op0_index_t op0_yi = 0;
+            op0_yi +=  (op0_i / op0_zabove1 % op0_zstorage_shape1) * op0_ystride1;
+            op0_zp[op0_i] = ((op0_xp[op0_xi])+(op0_yp[op0_yi]));
+        }
+
+    and *after* `LoopVarAnalyzePass` it is a four-level nest whose flat index is
+    reintroduced as a define:
+
+        for (op0_i0) for (op0_i1) for (op0_i2) for (op0_i3) {
+            op0_index_t op0_i = + op0_i0 * op0_zstride0 + op0_i1 * op0_zstride1
+                                + op0_i2 * op0_zstride2 + op0_i3 * op0_zstride3;
+            op0_yi +=  (op0_i / op0_zabove1 % op0_zstorage_shape1) * op0_ystride1;
+
+    The kernel that is finally compiled has one loop again (`range0_1_2_3`) with
+    `op0_i` reduced to `id3 * op0_zstride3`, so something in the split/merge
+    sequence puts the nest back together *and* the recovery stays `i`-based -- the
+    division is a consequence of the flattening, and an id-based alternative
+    (`op0_yi = op0_i1 * op0_ystride1`, which is what the old shape compiled to)
+    is available exactly while the nest is still a nest. That is the lever, and
+    it is why this is not a one-line change: `MergeLoopVarPass` decides the merge
+    from the *index defines themselves* (it matches
+    `id_a*range_b*d + id_b*d + c`, and `trace_and_expand`+`simplify` can rewrite
+    the division-based recovery into `i1*ystride1`, i.e. into the form that then
+    decides the merge), so teaching it to keep the masked axis' loop nested means
+    changing how that form is matched, with fused-op numerics at stake. A wrong
+    variant here fails as **silently wrong numbers**, which is why the guard is
+    kept red rather than the assertions rewritten to bless `range0_1_2_3`.
+    `MergeLoopVarPass` also checks defines ending in `id`/`_i`, and the recovery
+    is written to `yi`/`q@d`, so it sees no loop variable to respect and merges
+    every loop it can. A division per element is enough to stop vectorisation, so
+    this is the part that matters. That is why those tests fail: **they are the
+    cost's guard, not stale substring assertions** -- see the correction to
+    KI-TUNER-001's tail below.
 - Correction (2026-09-22) to what KI-TUNER-001's tail says about the same tests:
   it calls `test_merge_loop_var_pass::test3` and four siblings "a stale substring
   assertion, not a lost optimization". The numerics half of that is right (the
