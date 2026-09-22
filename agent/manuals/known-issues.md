@@ -15,7 +15,7 @@
   diagnostics (the adapters' lazy-module version read, the generated-copy scan,
   and `torch.cuda.set_device` / `map_location="cuda"` on a build with no
   device).
-- Baseline: `bdf1399c`
+- Baseline: `82a8d67c`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -2519,6 +2519,13 @@ about whether to take it.
   the way `_native_all`/`_native_any` already were -- after the force-set
   `jt.div` *is* the adapter, so reaching for it would recurse. The invalid-mode
   message mirrors torch's own wording.
+- The *method* spellings are part of the same fix: `x.div(y, rounding_mode=...)`
+  and `x.divide(...)` reach an auto-generated binary method that takes no such
+  keyword, so `Var.div`/`Var.divide` are bound to an adapter forwarding to the
+  same function (`82a8d67c`). Verified against the oracle for int32/float32 x
+  {None, "trunc", "floor"} on both spellings, twelve rows, values and dtypes
+  identical. `div_`/`divide_` stay on the native path and `true_divide` takes no
+  `rounding_mode` in torch either.
 - The same code path held a second gap, also fixed here: `torch.masked_fill` was
   missing from the sealed facade (`AttributeError` out of the namespace proxy)
   even though Jittor's own `jt.masked_fill` is already the same selection
