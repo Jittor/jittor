@@ -15,6 +15,16 @@ namespace jittor {
 #ifndef JIT
 static auto make_transpose = op_constructor<VarPtr, Var*, NanoVector>("transpose");
 
+DEFINE_FLAG(int, transpose_storage_view, 0,
+    "Return a permutation as a view of its input's allocation instead of a "
+    "materialised copy: same storage, swapped strides, and a write through the "
+    "result reaches its base -- what torch returns. Off by default: the result "
+    "is then non-dense, which every consumer handles (elementwise, reduce, "
+    "broadcast and reindex read storage_strides, and a slice already reaches "
+    ".numpy(), .cpu() and the fused kernels this way) but a cuBLAS or cuTT path "
+    "wanting dense memory may prefer one copy up front. Benchmark before "
+    "making it the default.");
+
 TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     // A rank-0 var has no axes to permute, and the empty permutation of
     // nothing is itself. Both references agree: NumPy's `transpose` returns
@@ -66,6 +76,9 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     }
     #endif
     y = create_output(nullptr, x->dtype());
+    // Decided here rather than in infer_shape so the flag is read once, at
+    // construction, and the op's identity does not change under it afterwards.
+    storage_view = transpose_storage_view != 0;
     set_flag(OpFlags::_cuda);
     set_flag(OpFlags::_manual_set_vnbb);
 }
@@ -86,6 +99,21 @@ void TransposeOp::infer_shape() {
     for (uint i=0; i<xdim; i++)
         shape.push_back(x->shape[axes[i]]);
     y->set_shape(shape);
+    if (storage_view) {
+        // The permutation applied to the *input's* strides, so a transpose of
+        // something already strided composes instead of assuming dense input.
+        vector<int64> strides(xdim);
+        for (uint i=0; i<xdim; i++)
+            strides[i] = x->storage_stride(axes[i]);
+        if (NanoVector::fits(strides)) {
+            y->set_storage_strides(strides);
+            y->share_with(x);
+        } else {
+            // A stride this cannot encode is not one to guess at; fall back to
+            // the copy, which is always correct.
+            storage_view = false;
+        }
+    }
 }
 
 VarPtr TransposeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
