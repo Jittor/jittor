@@ -1,9 +1,21 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-09-22, third pass the same day -- KI-COMPILER-007 opened
-  (a CPU-only no-CUDA import aborts with glibc heap corruption at exit inside
-  the smoke tier, with the reproduction and everything ruled out written down).
+- Last reviewed: 2026-09-22, fourth pass the same day -- KI-TEST-006 is fixed
+  (`6e0c2273`) and the native smoke tier is down from 27 red to 4 failed and no
+  errors. The pass was test-infrastructure work and lives in Git rather than
+  here: the core build stamp is now redirected per process instead of renamed
+  (the shared stamp is read by every worker of the same `JITTOR_HOME`, so
+  renaming it turned one file's three cases red under
+  `-n 4 --dist loadgroup`, including a warm-cache case that hid nothing), the
+  IPython anti-vacuity control was asserting that *the gate environment* has
+  IPython -- which it does not, IPython is declared in `requirements/docs.txt`
+  only -- so it was replaced by a meta-path trap that needs nothing installed,
+  and three structure gates were repaired (a hand-written stdlib allowlist that
+  rejected `tempfile`, a stale generated `MANIFEST.in`, and an RSS-bound case
+  whose retained-bytes signal disappears inside a busy worker). KI-COMPILER-007
+  did not reproduce in a fourth `-n 4` full-smoke run; it stays open and
+  intermittent.
   Earlier the same day KI-COMPAT-005 is now
   fixed (`e8105ecc`): `torch.div(..., rounding_mode=)` is implemented in the
   compat layer and `torch.masked_fill` is published, which together are what
@@ -18,7 +30,7 @@
   diagnostics (the adapters' lazy-module version read, the generated-copy scan,
   and `torch.cuda.set_device` / `map_location="cuda"` on a build with no
   device).
-- Baseline: `c83eb600`
+- Baseline: `639127c6`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -2144,49 +2156,50 @@ about whether to take it.
   now because tests that had been silently running on CPU do use the GPU and
   compile its kernels once.
 
-## KI-TEST-006: a standalone H3 reproduction is collected as a test file
+## KI-TEST-006: fixed -- a test-named script is refused by the collection policy
 
-- Severity: Low (a pull-request gate red; no wrong result, no wrong answer)
-- Status: Reproduced 2026-09-21 at `f7edfa92`, deliberately **not** repaired
-  here. The file belongs to the H3 compute-stream-ordering line (`a60d12f9`,
-  `61294cd1`, `69c3bdfd`) and its author still runs it from this path. The
-  owner's choice is to move it to `$JITTOR_LAB_ROOT/<topic>/`, or to add a
-  module-level `pytest.skip(..., allow_module_level=True)` for the
-  `__name__ != "__main__"` case, which keeps `python3 <path> 12 1` working.
-- Evidence: `tests/integration/test_h3_decode_thread_race.py` is 242 lines with
-  no `def test*` and no `class Test*`. An AST sweep of `tests/`,
-  `compat/tests/` and `adapters/tests/` for `test_*.py` files that define no
-  test returns this file and nothing else. Its module body takes `sys.argv[1]`
-  as an integer, hardcodes
-  `/root/jittor-lab/_state/h3/models/MiniMax-H3/FL2VA/video_vae` and
-  `/root/jittor-lab/comfyui/server_latent512.npz`, and calls
-  `from_pretrained(...)` at import time.
-- Symptom: pytest collects it because of the `test_` prefix and the module body
-  raises during collection -- `int(sys.argv[1])` is handed a pytest argument
-  rather than a round count -- so the file contributes one collection error to
-  the native session, and `tools/run_test_suite.py --tier smoke` counts it as a
-  failure of the pull-request gate. No test in it is skipped or run; the whole
-  file is unusable as a test and never was one.
-- Four structure gates fire on it as well, measured 2026-09-21 in the Torch
-  session (`tests/structure/test_child_process_contract.py`,
-  `tests/structure/test_pytest_contract.py`): the collection error above;
-  `test_native_tests_do_not_claim_torch_namespace_during_collection` at line 25
-  (`import torch` at module scope installs Jittor's process-global Torch shim
-  during collection);
-  `test_test_modules_avoid_collection_time_backend_side_effects` at lines 32
-  (`open`), 36 (`eval`) and 114/191 (a decode run at import); and the
-  module-level `from_pretrained(...)`. The last three are facts about the file
-  itself, so moving it to the lab clears all four at once.
-- Cause: a script that is meant to be run by path was committed under `tests/`,
-  where the file name is a collection instruction. Nothing in
-  `tests/_helpers/pytest_policy.py` refuses a collected module that defines no
-  tests, so the layout rule ("独立实验、下游 checkout 和大体积产物放在
-  `$JITTOR_LAB_ROOT/<topic>/`") is the only thing that would have caught it.
-- Workaround: none needed for the script itself; the gate is the only casualty.
-- Review/expiry condition: every `test_*.py` under a test root defines at least
-  one test -- whether because this file moved to the lab, because a
-  module-level skip was added, or because a collection rule refuses a
-  test-named module with no tests.
+- Severity: was Low (a pull-request gate red; no wrong result, no wrong answer)
+- Status: Fixed 2026-09-22 in `6e0c2273`. The file itself is unchanged and still
+  runs by path (`python3 tests/integration/test_h3_decode_thread_race.py 12 1`);
+  what changed is the policy, because a `test_*.py` under a test root *is* a
+  collection instruction and nothing refused one that defines no test.
+- Symptom (before): the file was collected and imported at module scope -- the
+  pytest argument reached `int(sys.argv[1])`, `open()` read a checkpoint,
+  `from_pretrained(...)` built a VAE on `cuda:0` -- so it contributed one
+  collection error to the native session on every run, which
+  `tools/run_test_suite.py --tier smoke` counts against the pull-request gate.
+  Two scanners in `tests/structure/test_pytest_contract.py` flagged its module
+  scope as well (`open`, `eval`, and two `decode()` calls), and
+  `test_native_tests_do_not_claim_torch_namespace_during_collection` flagged the
+  module-scope `import torch`: measured 2026-09-22 in the Torch session, those
+  two cases were the file's only red. No test in it is skipped or run; it is
+  unusable as a test and never was one.
+- Cause: the file name is the collection instruction, and
+  `tests/_helpers/pytest_policy.py` never asked whether a module had anything to
+  collect. The layout rule (independent experiments live under
+  `$JITTOR_LAB_ROOT/<topic>/`) is the only thing that would have caught it.
+- Fix: `pytest_policy._refuses_collection()` -- a `test_*.py` whose module scope
+  has no `def test*` and no class collection could reach (a `Test*` name, or
+  *any* base, which covers `unittest.TestCase` subclasses whatever they are
+  called and project mixins reached through a base) is refused by
+  `pytest_ignore_collect`. Refusing errs in the one direction that cannot hide a
+  test: a module is refused only when it could contribute nothing anyway, and
+  anything unparseable is collected and left to fail loudly.
+  `tests/structure/test_pytest_contract.py::_test_files()` now enumerates what
+  pytest will actually collect, which is what makes its two collection-time
+  scanners statements about collected modules rather than about parked scripts;
+  `test_test_named_scripts_are_refused_rather_than_collected` pins the refused
+  set to exactly this file -- a second script under a test root is a decision
+  someone writes down, not a file that quietly stops being collected -- and
+  `test_the_script_refusal_only_covers_modules_collection_cannot_use` pins the
+  shapes the rule must not touch.
+- Evidence: native `--collect-only tests/integration` goes from one collection
+  error to none; the two Torch-session structure cases go from failed to passed.
+- Workaround: none needed for the script itself; the gate was the casualty.
+- Review/expiry condition: every `test_*.py` under a test root either defines
+  something collectible or is named in `_REFUSED_TEST_SCRIPTS` with the reason
+  it stays where it is. Move this file to `$JITTOR_LAB_ROOT/` and the set
+  becomes empty -- update the entry and the set together.
 
 ## KI-COMPILER-007: a CPU-only no-CUDA import aborts with heap corruption at exit, but only inside the gate
 
@@ -2194,9 +2207,12 @@ about whether to take it.
   (`double free or corruption (!prev)`, `corrupted size vs. prev_size while
   consolidating`) and the process dies with SIGABRT. The *functional* contract of
   the case that catches it holds; what fails is the child's exit status.
-- Status: Reproduced twice inside the smoke tier on 2026-09-22, **not** reproduced
-  in 26 runs outside it. Unfixed, and the reproduction recipe is exact so it does
-  not have to be rediscovered.
+- Status: Reproduced inside the smoke tier on 2026-09-22 (twice in whole-suite
+  runs, then 3/3 in `-k` runs that keep `-n 4`), **not** reproduced in 26 runs
+  outside it, and **not** in a fourth whole-suite `-n 4` run the same day after
+  the test-side commits that pass below. It is intermittent and gate-shaped.
+  Unfixed, and the reproduction recipe is exact so it does not have to be
+  rediscovered.
 - Evidence: the case is
   `tests/build/test_backend_build_config.py::test_explicit_cpu_import_skips_cuda_services`
   (the test, not the file the name suggests). Reproduce with
