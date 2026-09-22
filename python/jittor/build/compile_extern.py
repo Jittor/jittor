@@ -4,7 +4,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-import os, sys, shutil, re
+import os, sys, shutil, re, subprocess
 import platform
 from .compiler import *
 from jittor_utils import run_cmd, get_version, get_int_version
@@ -750,6 +750,74 @@ def _init_nccl_from_store(nccl_module, store=None):
                 close()
 
 
+# A NCCL that is already installed is worth finding before building one.
+#
+# The search used to be: the two build env vars, then the pip CUDA wheels, then
+# *download and compile NCCL from source* into ~/.cache/jittor. A machine with
+# a distribution NCCL in /usr/include and /lib64 -- which is every machine with
+# the CUDA packages installed -- fell all the way through to the download,
+# which is slow, needs network, and is why deployments carry
+# `JT_BUILD_NCCL_INCLUDE_PATH` / `JT_BUILD_NCCL_LIB_PATH` in their launch
+# scripts. Neither variable should be something a user has to know about.
+#
+# Looked for in this order, and only reached when the env vars and the wheels
+# have not already answered, so it cannot override an explicit choice.
+def find_system_nccl():
+    """Locate an installed NCCL, or None. Returns (include_dir, lib_dir, lib)."""
+    cuda_home = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH") or ""
+    include_dirs = [
+        os.path.join(cuda_home, "include") if cuda_home else None,
+        "/usr/local/cuda/include",
+        "/usr/include",
+        "/usr/local/include",
+    ]
+    header = None
+    for directory in include_dirs:
+        if directory and os.path.isfile(os.path.join(directory, "nccl.h")):
+            header = directory
+            break
+    if header is None:
+        return None
+
+    # ldconfig knows where the loader will actually find it, which beats
+    # guessing a directory and beats a bare `libnccl.so` symlink that points at
+    # a version the loader would not pick.
+    library = None
+    try:
+        listing = subprocess.run(["ldconfig", "-p"], capture_output=True,
+                                 text=True, timeout=10)
+        for line in listing.stdout.splitlines():
+            if "libnccl.so" not in line or "=>" not in line:
+                continue
+            candidate = line.split("=>")[-1].strip()
+            if os.path.isfile(candidate):
+                library = candidate
+                break
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if library is None:
+        for directory in ("/usr/lib64", "/lib64", "/usr/lib/x86_64-linux-gnu",
+                          os.path.join(cuda_home, "lib64") if cuda_home else None):
+            if not directory:
+                continue
+            candidate = os.path.join(directory, "libnccl.so")
+            if os.path.isfile(candidate):
+                library = candidate
+                break
+    if library is None:
+        return None
+
+    # A header without a readable version is not one this can vouch for.
+    try:
+        text = open(os.path.join(header, "nccl.h"), "r", errors="replace").read()
+        major = re.search(r"define\s+NCCL_MAJOR\s+(\d+)", text)
+        if not major or int(major.group(1)) < 2:
+            return None
+    except OSError:
+        return None
+    return header, os.path.dirname(library), library
+
+
 def setup_nccl(store=None):
     global use_nccl
     use_nccl = build_flag("use_nccl", True, os.environ)
@@ -772,6 +840,12 @@ def setup_nccl(store=None):
             nccl_lib_path = cuda_wheel_stack.lib_dirs("nccl")[0]
             nccl_lib_name = cuda_wheel_stack.find_library("nccl")
         else:
+            found = find_system_nccl()
+            if found:
+                nccl_include_path, nccl_lib_path, nccl_lib_name = found
+                LOG.v(f"using the system NCCL at {nccl_lib_name}")
+    if nccl_lib_path is None or nccl_include_path is None:
+        if not cuda_wheel_stack:
             LOG.v("setup nccl...")
             # nccl_path decouple with cc_path
             nccl_path = os.path.join(jit_utils.home(), ".cache", "jittor", "nccl")

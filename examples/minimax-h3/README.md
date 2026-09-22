@@ -39,31 +39,29 @@ export PYTHONPATH=/path/to/vllm-omni${PYTHONPATH:+:$PYTHONPATH}
 export JITTOR_TORCH_SKIP_EXT_BUILD=1
 export VLLM_ENABLE_V1_MULTIPROCESSING=0
 
-# flash-attention through the jittor bridge
+# flash-attention through the jittor bridge. Only the first is needed; see
+# examples/flash-attention/README.md. The rest pre-seed the kernel build so a
+# server does not compile one in the middle of its first request.
 export JITTOR_FLASH_ATTN_JITTOR_SRC=/path/to/flash-attention
-export JITTOR_FLASH_ATTN_JITTOR_REQUIRED=1
-export JITTOR_FLASH_ATTN_HEAD_DIMS=64,128
-export JITTOR_FLASH_ATTN_DTYPES=bf16,fp16
-export JITTOR_FLASH_ATTN_CAST_FLOAT32=bf16
+export JITTOR_FLASH_ATTN_JITTOR_REQUIRED=1    # a failed build is an error, not a silent fallback
+export JITTOR_FLASH_ATTN_HEAD_DIMS=64,128     # warm-up hint
+export JITTOR_FLASH_ATTN_DTYPES=bf16,fp16     # warm-up hint
+export JITTOR_FLASH_ATTN_CAST_FLOAT32=bf16    # what a float32 q/k/v is cast to
 ```
 
 Multi-GPU needs three more, none of which the launcher arranges:
 
 ```bash
 export JITTOR_TORCH_DISTRIBUTED_AUTO_INIT=1   # the shim's dynamic NCCL bootstrap
-export JT_BUILD_NCCL_INCLUDE_PATH=/usr/include
-export JT_BUILD_NCCL_LIB_PATH=/lib64          # setup_nccl only finds a system NCCL when told
-export JITTOR_TORCH_KEEP_TMPDIR=1             # see below
-rm -f /tmp/jittor-nccl-*.bin /tmp/jittor-nccl-*.bin.*   # before every run, see below
 ```
 
-* **`JITTOR_TORCH_KEEP_TMPDIR`** -- the shim overrides `TMPDIR` with
-  `<runtime>/tmp`. If that path is long, appending vLLM-Omni's `ipc://` socket
-  name exceeds `sockaddr_un.sun_path`'s 107 bytes and the orchestrator dies at
-  startup with no useful message.
-* **The rendezvous files** are named after `MASTER_ADDR-MASTER_PORT` alone, so a
-  rerun on the same port inherits the previous run's unique ids and hangs inside
-  distributed init rather than failing.
+Three more used to be needed and are not, as of the commit that added this
+example: Jittor now finds an installed system NCCL by itself rather than
+falling through to downloading one (`JT_BUILD_NCCL_INCLUDE_PATH`,
+`JT_BUILD_NCCL_LIB_PATH`), measures whether its own `$TMPDIR` leaves room for a
+unix socket instead of needing `JITTOR_TORCH_KEEP_TMPDIR=1`, and clears a
+previous run's NCCL rendezvous files itself instead of needing
+`rm -f /tmp/jittor-nccl-*` before every launch. On an older Jittor, set them.
 
 ## Serving
 

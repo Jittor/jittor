@@ -4,7 +4,10 @@ This module contains source moved from the former monolithic installer without
 changing the compatibility semantics.
 """
 
+import atexit
+import glob
 import os
+import warnings
 import pickle
 
 import numpy as np
@@ -78,6 +81,52 @@ def _bootstrap_var_broadcast(self, root=0):
     return ops.nccl_broadcast(self, int(root))
 
 
+def _clear_stale_rendezvous(rootinfo, rank):
+    """Remove a previous run's rendezvous files before rank 0 writes new ones.
+
+    The path is derived from MASTER_ADDR and MASTER_PORT alone, and the store
+    behind it is append-only, so a second run on the same port reads the *first*
+    run's NCCL unique ids and blocks inside `ncclCommInitRank` until the timeout
+    -- a hang, with nothing logged. The port is not always fresh: vLLM-Omni
+    picks a deterministic one, so every restart of a served model lands on the
+    same file.
+
+    `jittor/distributed/launch.py` already does this for the native launcher,
+    where the name carries the launcher's pid and `_cleanup` removes it on the
+    way out. This path had neither, which is why deployment scripts carry an
+    `rm -f /tmp/jittor-nccl-*` before every run.
+
+    Only rank 0 clears, and only before it creates the store. A rank that
+    reaches this before rank 0 does can still read a stale file; that window
+    was there before and is not what this closes. What it closes is the common
+    case -- a restart where the previous run's files are simply still on disk.
+    """
+    if int(rank) != 0:
+        return
+    stale = [rootinfo] + glob.glob(rootinfo + ".pg*") + \
+        glob.glob(rootinfo + ".hb*") + glob.glob(rootinfo + ".tmp")
+    for path in stale:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            warnings.warn(
+                "could not remove the stale rendezvous file %s: %s; a rerun on "
+                "this port may hang inside distributed init" % (path, error))
+            return
+    atexit.register(_clear_stale_rendezvous_atexit, rootinfo)
+
+
+def _clear_stale_rendezvous_atexit(rootinfo):
+    for path in [rootinfo] + glob.glob(rootinfo + ".pg*") + \
+            glob.glob(rootinfo + ".hb*") + glob.glob(rootinfo + ".tmp"):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
     if not _is_truthy(os.environ.get("JITTOR_TORCH_DISTRIBUTED_AUTO_INIT")):
         return False
@@ -119,6 +168,7 @@ def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
                       for char in key)
         rootinfo = os.path.join(
             rendezvous_dir, "jittor-nccl-{}.bin".format(key))
+        _clear_stale_rendezvous(rootinfo, rank)
 
     visible = [item for item in os.environ.get(
         "CUDA_VISIBLE_DEVICES", "").split(",") if item.strip()]

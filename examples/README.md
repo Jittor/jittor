@@ -11,6 +11,7 @@ download data, initialize a device, open a port, or create a Jittor cache.
 | [`notebooks/`](notebooks/README.md) | 可执行教程。MyST Markdown 是唯一权威来源，notebook 由 Jupytext 生成 |
 | [`gan/`](gan/README.md) | 可直接运行的 Web 应用示例（启动时自训练，不依赖外部权重） |
 | [`minimax-h3/`](minimax-h3/README.md) | 用 compat 层 + 未改动的 vLLM-Omni 跑 MiniMax-H3 文生视频服务的部署说明 |
+| [`flash-attention/`](flash-attention/README.md) | 在 Jittor 上装和用官方 flash-attention 内核，以及怎么确认它真的在用 |
 
 **教程的完整阅读顺序在 [`notebooks/README.md`](notebooks/README.md)**，那里有两条主线：
 
