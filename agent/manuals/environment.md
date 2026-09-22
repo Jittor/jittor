@@ -69,6 +69,45 @@ Benchmarks and tests never share a cache.
   install that wheel outside the source tree, and run CPU self-test, NumPy array
   interop, and Python variable tracing probes. Python 3.13 is tested with NumPy 2.x.
 
+The repository also provides a uv lockfile and a Python 3.11 `dev` group. This
+is the supported uv setup for running the standalone CPU/CUDA suite from the
+checkout; put its environment under the external lab state root. The nox
+sessions still create their own isolated gate environments.
+
+```bash
+export JITTOR_LAB_ROOT="${JITTOR_LAB_ROOT:-$(cd .. && pwd)/jittor-lab}"
+export UV_PROJECT_ENVIRONMENT="$JITTOR_LAB_ROOT/_state/uv/venv"
+uv python install 3.11
+uv venv --python 3.11
+uv sync --locked --group dev
+uv run --locked python -m jittor.selftest
+uv run --locked python tools/run_test_suite.py --tier core --backend cpu
+```
+
+For a real CUDA run, verify `nvcc` and select the device explicitly:
+
+```bash
+export nvcc_path="$(command -v nvcc)"
+CUDA_VISIBLE_DEVICES=0 uv run --locked \
+    python tools/run_test_suite.py --tier core --backend cuda
+```
+
+Conda toolkits may store CUDA libraries below `targets/x86_64-linux` rather
+than a conventional root. Use a compatibility root exposing `bin/nvcc`,
+`bin/g++`, `include`, `lib64`, and `nvvm`, then keep the uv Python environment
+separate from that toolchain:
+
+```bash
+export CUDA_COMPAT_ROOT=/path/to/cuda-compat
+export CUDA_VISIBLE_DEVICES=2
+export nvcc_path="$CUDA_COMPAT_ROOT/bin/nvcc"
+export cc_path="$CUDA_COMPAT_ROOT/bin/g++"
+export CUDA_HOME="$CUDA_COMPAT_ROOT"
+export PATH="$CUDA_COMPAT_ROOT/bin:$PATH"
+export LD_LIBRARY_PATH="$CUDA_COMPAT_ROOT/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+uv run --locked python tools/run_test_suite.py --tier core --backend cuda
+```
+
 ```bash
 python -m pip install -e .
 python -m pip install -r requirements/dev-tools.txt
