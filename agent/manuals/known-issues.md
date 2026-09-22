@@ -2272,6 +2272,21 @@ about whether to take it.
   child's import contends with a concurrent compile -- and not the child's
   environment, which is what my direct runs varied.
 - What has been ruled out, measured (each of these is 0 failures):
+  - **five further attempts after the tree's core was rebuilt at the current
+    sources, all clean**: the case alone under the gate's environment at `-n 1`
+    twice and `-n 4 --dist loadgroup` twice, and once with the *whole-tree
+    collection* the tool performs (`pytest tests ... -n 4 -k <case>`, the shape
+    the aborts were seen in, 39.7 s, `1 passed`). So the narrowing above is a
+    statement about the runs that aborted, not a recipe that still fires: at
+    `f8657c8d` the case does not abort in any shape this box can produce. The
+    core at those aborts was `cfg8da7ae5d`; the rebuild since carries the
+    tree's newer `src/` (other writers' `a40ea7df`, `2689f7ad`, `65e2a215`),
+    which is the one thing that changed about the *child* this case spawns.
+  - an **instrumented sibling of the child** in the same whole-tree `-n 4` run:
+    the patch *records* instead of raising, `faulthandler.enable()` is on, and
+    markers bracket the last statement. Its output shows the child reaching its
+    last statement, `cuda_services=0`, reaching its own atexit, and exiting 0 --
+    no call into the patched entry points during teardown.
   - the same child run directly, 16/16 clean, with and without a prefixed
     `JT_USE_PARALLEL_OP_COMPILER`, and with `use_mkl` on and off;
   - `MALLOC_CHECK_=3 MALLOC_PERTURB_=165` on that direct child, 10/10 clean --
@@ -2280,18 +2295,24 @@ about whether to take it.
     with the tool's thread-pool budget (`OMP_NUM_THREADS=96` etc. on this
     box: 384 CPUs / 4 workers), all pass;
   - the same cache directory and the same `jittor_core.so` (`cfg8da7ae5d`) is
-    used by both the aborting and the clean runs, so it is not a stale core;
+    used by both the aborting and the clean runs, so it is not a stale core --
+    as of that day; the core has since been rebuilt from newer sources, which is
+    what the five clean runs above were measured against;
   - the child's own env report shows `use_parallel_op_compiler='0'`, i.e. the
     workaround for KI-COMPILER-001's op-level corruption was **already in
     force** -- do not assume that entry covers this one.
-- Hypothesis, not yet tested: a teardown-time call into one of the patched
+- Hypothesis, partly tested: a teardown-time call into one of the patched
   `install_cuda` entry points (the test's `JTCUDA_AUTO_INSTALL=1` is there to
   prove the CPU path never reaches them), raising out of an atexit hook or a
   destructor while jittor's globals are half-destroyed; the next allocation then
   consolidates a corrupted chunk. That would explain why the functional
   assertions pass and only the exit status is bad, and why it is timing-shaped.
-  Testing it needs the child under an allocator that can name the double free
-  (`MALLOC_CHECK_` says nothing here) or a debug core, not more guessing.
+  The instrumented sibling above tested the teardown half of it and found no
+  call -- in a run that was clean anyway, which is the limit of what it can say.
+  Naming the double free still needs an allocator that reports a stack
+  (`MALLOC_CHECK_` does not), which this box does not have; the case no longer
+  *raises* from those entry points, so this hazard cannot be the mechanism from
+  now on, but that is a removal of one possible cause, not a fix of the abort.
 - Exit condition: the case passes inside `--tier smoke --session native` on a
   repeat run, and the child exits 0 with its assertions intact.
 
