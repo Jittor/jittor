@@ -92,6 +92,14 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # asserts directory permissions cannot hold when the suite runs as root,
     # because root bypasses them.
     "root ignores",
+    # A backend library the build has *switched off* -- `use_mkl=0`, or any other
+    # policy that says no. The wording is jittor's own and templated over the
+    # library (`python/jittor/_runtime/backend_libraries.py`: "%s has an
+    # enabled-policy and it currently says no"), so match the shape: it is as
+    # much an environment fact as the library being absent. Measured: nine such
+    # skips in `tests/backends/cpu/test_mkl_conv_op.py` + `test_onednn_contract.py`
+    # alone, every one of them counted as `other`, and `other > 0` reds the run.
+    "enabled-policy",
 )
 
 #: The subset of the above that stops being an explanation once a session
