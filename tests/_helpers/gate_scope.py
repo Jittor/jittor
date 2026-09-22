@@ -100,6 +100,30 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # skips in `tests/backends/cpu/test_mkl_conv_op.py` + `test_onednn_contract.py`
     # alone, every one of them counted as `other`, and `other > 0` reds the run.
     "enabled-policy",
+    # How this cache was *built*, which is as much a fact about the machine as
+    # what is installed on it. `tests/core/test_graph_build_profile.py` skips
+    # itself unless the core carries `-DJT_GRAPH_BUILD_PROFILE` (9 cases), and
+    # the ops that ask for the vendored `cub` skip when the build has no cub
+    # (4 cases across `tests/ops/test_argsort_op.py` and `test_arg_reduce_op.py`).
+    # Both are the same shape as "not use cublas, skip" above.
+    "jt_graph_build_profile", "cub",
+    # The library is absent from *this cache* rather than from the machine:
+    # `tests/build/test_download_safety.py` loads the real MKL and skips when the
+    # cache has none (`use_mkl=0` again).
+    "mkl",
+    # The runner turns the crash handler's debugger off on purpose -- forking gdb
+    # ptrace-stops the child, and a gdb that then dies leaves it stopped forever,
+    # so `tests/_helpers/child_process.py` and `tools/run_test_suite.py` both
+    # clear `gdb_path`. `tests/bindings/test_tracer.py::test_breakpoint` is the
+    # case that needs it.
+    "gdb is disabled",
+    # Not a missing dependency but a documented non-reproduction:
+    # `test_core_invariant_properties.py::test_the_leak_is_two_vars_per_occurrence`
+    # pins the size of a leak that the module docstring records as driven by
+    # holder teardown order, so a shape may balance instead of leaking. The
+    # shapes and their counts are named in that file's `KNOWN_LEAKING_SHAPES`;
+    # the case still fails when a *different* number appears.
+    "nothing leaked in this environment",
 )
 
 #: The subset of the above that stops being an explanation once a session
