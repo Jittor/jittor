@@ -84,7 +84,17 @@ uv run --locked python -m jittor.selftest
 uv run --locked python tools/run_test_suite.py --tier core --backend cpu
 ```
 
-For a real CUDA run, verify `nvcc` and select the device explicitly:
+For the self-contained Linux x86_64 path, `jittor[cuda12]` installs CUDA 12.2
+runtime/cuDNN/NPP wheels and a pinned pip CUDA 13.4 `nvcc` plus CCCL headers.
+Jittor compiles with that nvcc but links and loads the CUDA 12 runtime. Do not
+set `CUDA_HOME`, `nvcc_path`, or `LD_LIBRARY_PATH` for this path; an explicit
+`nvcc_path` intentionally overrides the pip compiler.
+
+```bash
+python -m pip install "jittor[cuda12]"
+CUDA_VISIBLE_DEVICES=0 use_cuda=1 python -m jittor.selftest
+```
+
 
 ```bash
 export nvcc_path="$(command -v nvcc)"

@@ -483,6 +483,9 @@ curand = [
 cusparse = [
     { name = "nvidia-cusparse-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
+npp = [
+    { name = "nvidia-npp-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
 nvjitlink = [
     { name = "nvidia-nvjitlink-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
@@ -842,8 +845,6 @@ source = { editable = "." }
 dependencies = [
     { name = "astunparse" },
     { name = "importlib-metadata", version = "6.7.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.8'" },
-    { name = "importlib-metadata", version = "8.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_version < '0'" },
-    { name = "importlib-metadata", version = "9.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_version < '0'" },
     { name = "numpy", version = "1.21.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.8'" },
     { name = "numpy", version = "1.24.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.8.*'" },
     { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
@@ -854,12 +855,13 @@ dependencies = [
     { name = "pywin32", version = "312", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9' and sys_platform == 'win32'" },
     { name = "tqdm" },
     { name = "typing-extensions", version = "4.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.8'" },
-    { name = "typing-extensions", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_version < '0'" },
 ]
 
 [package.optional-dependencies]
 cuda12 = [
-    { name = "cuda-toolkit", extra = ["cublas", "cudart", "cufft", "curand", "cusparse", "nvjitlink", "nvrtc", "nvtx"], marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "cuda-toolkit", extra = ["cublas", "cudart", "cufft", "curand", "cusparse", "npp", "nvjitlink", "nvrtc", "nvtx"], marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-cccl", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-nvcc", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "nvidia-cudnn-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "nvidia-nccl-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
@@ -912,9 +914,11 @@ test = [
 requires-dist = [
     { name = "astunparse" },
     { name = "asv", marker = "python_full_version >= '3.9' and extra == 'perf'", specifier = "==0.6.6" },
-    { name = "cuda-toolkit", extras = ["cublas", "cudart", "cufft", "curand", "cusparse", "nvjitlink", "nvrtc", "nvtx"], marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = "==12.2.2" },
+    { name = "cuda-toolkit", extras = ["cublas", "cudart", "cufft", "curand", "cusparse", "npp", "nvjitlink", "nvrtc", "nvtx"], marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = "==12.2.2" },
     { name = "importlib-metadata", marker = "python_full_version < '3.8'" },
     { name = "numpy", specifier = "<3.0" },
+    { name = "nvidia-cuda-cccl", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = "==13.3.4.3.1" },
+    { name = "nvidia-cuda-nvcc", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = "==13.4.92" },
     { name = "nvidia-cudnn-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = ">=8.9.7,<10" },
     { name = "nvidia-nccl-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = "==2.18.3" },
     { name = "pillow" },
@@ -1345,11 +1349,48 @@ wheels = [
 ]
 
 [[package]]
+name = "nvidia-cuda-cccl"
+version = "13.3.4.3.1"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7b/b2/a048b57f2ee4c5ff27a329bd1c4c3fae34c84771ad0ebfea179034c8cf29/nvidia_cuda_cccl-13.3.4.3.1-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:48ba8e44a1162face51306d5bfd67604d9949be5acb9105dbb93734d2df8b3a4", size = 3930678, upload-time = "2026-09-16T20:36:58.966Z" },
+]
+
+[[package]]
+name = "nvidia-cuda-crt"
+version = "13.4.92"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f0/70/d39914f4e88389484bd6a864eda44a31d3bd072e63338bead1a1d80e1f79/nvidia_cuda_crt-13.4.92-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:731ce3de11df8add8306404417a1edaede225dbe27eb233aed37c8de9d4fe720", size = 160871, upload-time = "2026-09-16T20:37:10.207Z" },
+]
+
+[[package]]
+name = "nvidia-cuda-nvcc"
+version = "13.4.92"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "nvidia-cuda-crt", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-runtime", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-nvvm", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/8c/19c959c7497421559575a6c574ba40e18981558bb8289ddd8ef043b98c54/nvidia_cuda_nvcc-13.4.92-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:a1f3bfb27299e060b444d5df1f4bcd762501326cf0fd3141ed61756816ab9a0e", size = 47672022, upload-time = "2026-09-16T20:38:23.314Z" },
+]
+
+[[package]]
 name = "nvidia-cuda-nvrtc-cu12"
 version = "12.2.140"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cb/84/bb975ca63e3d4017824ad3d62e141db8492bc53cec6dc84705fb0650c22d/nvidia_cuda_nvrtc_cu12-12.2.140-py3-none-manylinux1_x86_64.whl", hash = "sha256:b1cdcae6443cb7cdcfb5d1bf51896a148c9f82f9e65b27db9ab095eaed689aa7", size = 23430053, upload-time = "2023-08-29T16:01:36.949Z" },
+]
+
+[[package]]
+name = "nvidia-cuda-runtime"
+version = "13.4.92"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/98/8a/3431271f6344874b8f1ac03f16b3d679c91493f8da63f716160403e6d0a0/nvidia_cuda_runtime-13.4.92-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:9641f797da20ce1dd8e779b6e96d08cf9ba564cec8e8225458811ee26423f3a5", size = 2494438, upload-time = "2026-09-16T20:37:21.89Z" },
 ]
 
 [[package]]
@@ -1407,6 +1448,14 @@ wheels = [
 ]
 
 [[package]]
+name = "nvidia-npp-cu12"
+version = "12.2.1.4"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9c/85/bb5cf84af322a41531d1012ba0f2b4c568eb33fa44925ce475452b55ac02/nvidia_npp_cu12-12.2.1.4-py3-none-manylinux1_x86_64.whl", hash = "sha256:7ce44d9e6b3b0fbce05e542d5bd3ad4b62a68fc10d4be0bb2a534741b277c90d", size = 159013378, upload-time = "2023-08-29T16:05:44.192Z" },
+]
+
+[[package]]
 name = "nvidia-nvjitlink-cu12"
 version = "12.2.140"
 source = { registry = "https://pypi.org/simple" }
@@ -1420,6 +1469,14 @@ version = "12.2.140"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8b/97/ebd3503d13fb628421407365186bcbd3ec7b1a9d095dcafabd2f786195d2/nvidia_nvtx_cu12-12.2.140-py3-none-manylinux1_x86_64.whl", hash = "sha256:10ee3d39ba38200cad81971b9a0a352193d9497fa5896ae4aa78eef598a3b934", size = 99138, upload-time = "2023-08-29T16:01:49.706Z" },
+]
+
+[[package]]
+name = "nvidia-nvvm"
+version = "13.4.92"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/28/c9/6f50b170d6d6d55e5d8c30b773ea024bc4f4e8ce450904cbed12b47907c2/nvidia_nvvm-13.4.92-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl", hash = "sha256:e4c81cb321dd9743bcf871c5e7e8fecd7f05dea607944426e102bdda8d49e137", size = 72604627, upload-time = "2026-09-16T20:46:17.408Z" },
 ]
 
 [[package]]

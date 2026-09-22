@@ -121,11 +121,15 @@ uv run --locked python -m jittor.selftest
 ```
 
 Run the CPU and CUDA suites through the same fail-closed standalone runner used
-by the repository gates. The CUDA command requires a working CUDA toolkit with
-`nvcc` on `PATH`; an NVIDIA driver alone is not enough.
+by the repository gates. The CUDA command needs a usable `nvcc`: on Linux
+x86_64, `jittor[cuda12]` provides one; otherwise use a pre-provisioned toolkit.
+An NVIDIA driver alone is not enough.
 
 使用仓库门禁使用的同一个 fail-closed 独立 runner 分别运行 CPU 和 CUDA 测试。
-CUDA 命令要求已安装 CUDA 工具链并能找到 `nvcc`，只有 NVIDIA 驱动还不够。
+CUDA 命令需要可用的 `nvcc`：Linux x86_64 可由 `jittor[cuda12]` 提供，
+其他情况使用预先安装的工具链；只有 NVIDIA 驱动还不够。
+The CUDA suite example below explicitly selects a system/JTCUDA toolkit.
+下面的 CUDA 套件示例显式选择 system/JTCUDA 工具链。
 
 ```bash
 uv run --locked python tools/run_test_suite.py --tier core --backend cpu
@@ -211,12 +215,14 @@ Jittor 是即时编译的，所以 `import jittor` 不只是导入一个库：�
   far, on the order of 1–2 GB. It lives under `~/.cache/jittor`; set
   `JITTOR_HOME` to move it. 缓存放内核与已编译的算子，量级 1–2 GB，默认在
   `~/.cache/jittor`，可用 `JITTOR_HOME` 改位置。
-- **No automatic CUDA toolkit / 不会自动下载 CUDA.** Jittor does **not**
-  download a CUDA toolkit by itself. If the machine has an NVIDIA driver but no
-  `nvcc`, Jittor says so and builds for CPU; install a toolkit, or set
-  `nvcc_path=""` to make the CPU-only build explicit. Jittor **不会**自己下载
-  CUDA 工具链。有驱动但没有 `nvcc` 时它会明确告知并按 CPU 构建；请自行安装工具链，
-  或设 `nvcc_path=""` 明确选择 CPU。
+- **CUDA toolchain / CUDA 工具链.** The base `jittor` package does not install CUDA and
+  does not download one for you. On Linux x86_64, the optional
+  `jittor[cuda12]` extra supplies a pip compiler/runtime stack. Without that extra,
+  a missing `nvcc` is reported and
+  Jittor builds for CPU; install a toolkit, or set `nvcc_path=""` to select CPU.
+  基础版 `jittor` 不安装 CUDA；Linux x86_64 可用可选的 `jittor[cuda12]` extra
+  安装 pip 编译器与运行库。未安装 extra 且没有 `nvcc` 时会明确告知并按 CPU 构建；
+  请安装工具链，或设 `nvcc_path=""` 明确选择 CPU。
 - **The cache directory depends on your toolchain / 缓存目录取决于工具链.** Its
   name includes the Jittor, compiler and Python versions, the platform, the CPU,
   and the build configuration (`cc_flags`, `nvcc_flags`, `cuda_archs`,
@@ -276,25 +282,27 @@ Jittor 会从那里拷贝而不是下载。`python -m jittor_utils.preflight` �
 
 ### CUDA 12 component wheels / CUDA 12 组件包
 
-On Linux x86_64, the `cuda12` extra installs a pinned CUDA 12.2 runtime
-stack with cuDNN 8.9.7 or newer (cuDNN 9 included, so the extra can coexist
-with a modern torch, which pins its own cuDNN 9). Jittor still needs an `nvcc`
-compiler, and does not download one for you: install a CUDA toolkit and put
-`nvcc` on PATH, or set `nvcc_path` to it.
+On Linux x86_64, the `cuda12` extra installs CUDA 12.2 runtime wheels, cuDNN
+8.9.7 through 9.x, and the NPP headers used by Jittor. It also installs a
+pinned CUDA 13.4 `nvcc` and CCCL headers for JIT compilation; Jittor still
+links and loads runtime libraries from the CUDA 12 wheels. A system CUDA toolkit
+or `nvcc` on `PATH` is not required. Unless `nvcc_path` is explicitly set,
+Jittor selects this pip compiler before searching system/JTCUDA locations.
 
-Linux x86_64 可使用 `cuda12` extra 安装固定版本的 CUDA 12.2 运行时，cuDNN 取
-8.9.7 及以上（含 cuDNN 9，因此可与钉了自己那份 cuDNN 9 的现代 torch 共存）；
-JIT 编译仍需要 `nvcc`，且 Jittor 不会替你下载：请安装 CUDA 工具链并把
-`nvcc` 放进 PATH，或用 `nvcc_path` 指过去。
+Linux x86_64 的 `cuda12` extra 安装 CUDA 12.2 运行时、cuDNN 8.9.7–9.x 及
+Jittor 编译依赖的 NPP 头文件；还会安装用于 JIT 编译的 CUDA 13.4 `nvcc` 和
+CCCL 头文件。Jittor 实际链接和加载仍来自 CUDA 12 wheel 的运行库。
+不需要系统 CUDA 工具链或 PATH 上的 `nvcc`；除非显式设置 `nvcc_path`，
+否则优先使用 pip 安装的 nvcc，再搜索系统/JTCUDA。
 
 ```bash
 python -m pip install "jittor[cuda12]"
 use_cuda=1 python -m jittor.selftest
 ```
 
-The equivalent uv command for a runtime-only environment is:
+The equivalent uv command for the same CUDA-enabled environment is:
 
-仅安装运行时依赖时，对应的 uv 命令为：
+uv 环境对应的 CUDA 安装命令为：
 
 ```bash
 uv sync --locked --no-default-groups --extra cuda12

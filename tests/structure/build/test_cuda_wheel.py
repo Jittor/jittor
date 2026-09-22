@@ -42,6 +42,7 @@ def setUpModule():
 
 _REQUIRED_HEADERS = {
     "cuda_runtime": "cuda_runtime.h",
+    "npp": "npp.h",
     "cublas": "cublas.h",
     "cudnn": "cudnn.h",
     "cufft": "cufft.h",
@@ -131,6 +132,14 @@ class _WheelStackFixture:
             path = self.components[component] / "lib" / ("lib%s.so.%s" % (name, abi))
             path.touch()
             self.library_paths[name] = Path(os.path.abspath(path))
+
+        compiler_site_packages = self.base / "nvidia-cuda-nvcc" / "site-packages"
+        self.compiler_path = compiler_site_packages / cuda_wheel.CUDA_NVCC_RELATIVE_PATH
+        self.compiler_path.parent.mkdir(parents=True)
+        self.compiler_path.touch()
+        self.compiler_path.chmod(0o755)
+        self.distributions[cuda_wheel.CUDA_NVCC_DISTRIBUTION] = _FakeDistribution(
+            cuda_wheel.CUDA_NVCC_VERSION, compiler_site_packages)
 
         self.registry = _DistributionRegistry(self.distributions)
 
@@ -298,6 +307,20 @@ class TestCudaWheel(unittest.TestCase):
                 distribution=unexpected_distribution,
                 strict=True,
             )
+
+    def test_cuda13_nvcc_is_found_and_selected_with_cuda12_stack(self):
+        expected = str(self.fixture.compiler_path.resolve())
+        self.assertEqual(
+            cuda_wheel.find_pip_nvcc(self.fixture.registry), expected)
+        self.assertTrue(cuda_wheel.is_nvidia_wheel_path(expected))
+        stack = self.fixture.discover(nvcc_version="13.4.92")
+        self.assertIsNotNone(stack)
+        self.assertEqual(stack.cuda_version, "12.2")
+        self.fixture.distributions.pop(cuda_wheel.CUDA_NVCC_DISTRIBUTION)
+        with self.assertRaisesRegex(
+                cuda_wheel.CudaWheelError,
+                r"nvidia-cuda-nvcc==13\.4\.92 is required"):
+            self.fixture.discover(nvcc_version="13.4.92")
 
     def test_fingerprint_is_order_independent_and_version_sensitive(self):
         stack = self.fixture.discover()

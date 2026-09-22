@@ -265,6 +265,8 @@ def check_cuda():
     if nvcc_path == "/usr/bin/nvcc":
         # this nvcc is install by package manager
         cuda_lib = "/usr/lib/x86_64-linux-gnu"
+    # Keep CUDA 12 component headers first: CUDA 13 nvcc removed public
+    # fields still used by Jittor. The nvcc root supplies CRT/CCCL headers.
     cuda_include_dirs = [cuda_include]
     cuda_lib_dirs = [cuda_lib, cuda_bin]
     if cuda_wheel_stack:
@@ -626,6 +628,24 @@ if os.path.isfile(ex_python_path):
 def _discover_cuda_compiler(requested_backend):
     if requested_backend not in (None, "cuda"):
         return ""
+    # An explicit nvcc_path remains authoritative. Otherwise use the compiler
+    # installed by jittor[cuda12] before any visible system/JTCUDA decoy.
+    configured_nvcc = build_env("nvcc_path", None)
+    if configured_nvcc is not None:
+        return build_env("nvcc_path", configured_nvcc)
+
+    pip_nvcc = install_cuda.cuda_wheel.find_pip_nvcc()
+    if pip_nvcc:
+        LOG.i("Found pip CUDA compiler at ", pip_nvcc)
+        return build_env("nvcc_path", pip_nvcc)
+
+    pip_stack = install_cuda.cuda_wheel.inspect_cuda_wheel_stack()
+    if pip_stack.stack is not None:
+        raise install_cuda.cuda_wheel.CudaWheelError(
+            "CUDA 12 pip libraries are installed but their nvcc frontend is "
+            "missing; install nvidia-cuda-nvcc==%s (included in jittor[cuda12])"
+            % install_cuda.cuda_wheel.CUDA_NVCC_VERSION)
+
     nvcc = None
     if install_cuda.has_installation() or os.name == 'nt':
         nvcc = install_cuda.install_cuda()
@@ -996,7 +1016,14 @@ if has_cuda:
         nvcc_flags = nvcc_flags.replace("-fsanitize", "-Xcompiler -fsanitize")
         nvcc_flags = nvcc_flags.replace("-fno-omit-frame-pointer",
                                         "-Xcompiler -fno-omit-frame-pointer")
-        nvcc_flags += f" -x cu --cudart=shared -ccbin=\"{cc_path}\" --use_fast_math "
+        if cuda_wheel_stack:
+            # Component wheels expose only versioned libcudart. The core links
+            # that CUDA 12 SONAME and preloads it globally; generated kernels
+            # must not inject nvcc's CUDA 13 runtime or need libcudart.so.
+            nvcc_flags += " --cudart=none "
+        else:
+            nvcc_flags += " --cudart=shared "
+        nvcc_flags += f" -x cu -ccbin=\"{cc_path}\" --use_fast_math "
         # The device half of the per-thread default stream; see cc_flags above.
         nvcc_flags += " --default-stream per-thread "
         # nvcc warning is noise
