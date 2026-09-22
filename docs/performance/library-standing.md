@@ -215,12 +215,32 @@ PyTorch 对照物**。JDet 不是 mmdetection，JSeg 不是 mmsegmentation，模
 `attention.py:212` 的 training 能力检查就过得去，所以「带梯度会挡住 flash」这个
 担心是多余的。
 
-**没有据此改代码。** 把 flash 注册成原生 CUDA kernel意味着核心 jittor 依赖
-torch shim 的 C++ 扩展构建器、pybind11 和一个 flash-attention 源码 checkout——
-这条依赖链对核心来说太重。干净的原生解法应该是一个不依赖 torch 的融合注意力
-kernel（cuDNN 的融合注意力是候选，**本次没有核实这套构建的 cuDNN 是否提供它**），
-那是一块独立的工作量，不是一次注册。这行记在这里，是为了让那块工作有一个已经量出来
-的收益上限。
+**这个口子已经补上。** `backends/cuda/kernels/nn/flash_attention_cuda.py`
+把桥注册到了这个名字下，`nn/functional/attention.py` 在第一次调用时延迟导入它
+（和 `softmax.py` 对 `softmax_cuda` 的做法同形）。原生入口本身的前后对比，两个
+独立进程各跑一档，避免进程内注销 kernel 扰动派发状态：
+
+| 形状 | 改前（数学） | 改后（flash） | 比值 |
+| --- | --- | --- | --- |
+| H3 video VAE `2x32x1797x1797x64` | `0.0081s` | `0.0029s` | **`2.79x`** |
+| GPT-2 medium | `0.0030s` | `0.0026s` | `1.15x` |
+| Llama prefill | `0.0037s` | `0.0030s` | `1.23x` |
+
+**同一批输入、同一进程内**比对两条路径：四个形状上
+`max|flash-math|` 都是 `0.000488`（即 `2**-11`，相对 `4.9e-4`），就是 flash 把
+softmax 累加换了顺序在 float16 下的舍入，不随形状变化。跨进程的 checksum 只能
+说明大和会集中，不是证据，所以没有用它下结论。
+
+**没装 flash 的人一个比特都不会变。** `load_backend_for` 找不到源码 checkout
+就没有 backend，kernel 返回 None，`try_dispatch` 原样传回，调用方走的还是那条
+数学路径。会被拒的情况都列在 kernel 的注释里：mask、dropout、非四维、q/k/v 头数
+不等、flash 没有模板的 head_dim，以及 `is_causal` 且 q/k 长度不等——最后一条是
+因为 flash 的因果掩码在长度不等时对齐右下，而这里的降级用 `triu(diagonal=1)`
+对齐左上，形状一样答案不一样。
+
+一个必须记下来的坑：kernel 最初直接返回扩展输出的 `reshape().permute()` 惰性
+视图，之后同进程里的一次数学注意力就在 `matmul` 里带着一个乱掉的 NanoVector
+形状崩了。输出和输入一样要 `clone()` 落地。
 
 复现：`$JITTOR_LAB_ROOT/sdpa-dispatch/bench_sdpa_paths.py`。跑之前需要 pybind11
 头文件和 `JITTOR_FLASH_ATTN_JITTOR_SRC`，见 `examples/flash-attention/README.md`。

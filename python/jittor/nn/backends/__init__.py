@@ -13,6 +13,14 @@ from jittor.backends.cuda.kernels.nn.layer_norm_training_cuda import _layer_norm
 from jittor.backends.cuda.kernels.nn.group_norm_cuda import _group_norm_cuda as _group_norm_cuda
 from jittor.backends.cuda.kernels.nn.rms_norm_training_cuda import _rms_norm_training_cuda
 from jittor.backends.cuda.kernels.nn import softmax_cuda as softmax_cuda
+# Publishes the CUDA `nn.scaled_dot_product_attention` kernel by import,
+# like every line above. Registering from inside `attention.py`'s call
+# path instead broke `tests/structure/nn/test_attention_softmax_dispatch.py`,
+# which loads that module against a NumPy stand-in for jittor and has no
+# real `jittor.backends` for the import to find.
+from jittor.backends.cuda.kernels.nn import (
+    flash_attention_cuda as flash_attention_cuda,
+)
 
 # Compatibility attribute for ``from jittor.other import code_softmax``. The
 # physical implementation lives at ``jittor.backends.cuda.kernels.nn.softmax_cuda``.
