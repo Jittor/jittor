@@ -501,6 +501,15 @@ def test_optional_dependency_probe_only_checks_top_level_packages(monkeypatch):
     from _helpers import torch_runtime
 
     monkeypatch.delenv("REAL_TORCH_SITE", raising=False)
+    # `modules_available` answers False for a `torchvision` that the *shim*
+    # provided, and by the time a whole Torch-session run reaches this file some
+    # other test may well have imported it -- this file is one of many in the
+    # same process, and the full tier does exactly that. (Measured 2026-09-22:
+    # it passed on its own and failed in the tier, and a plugin that merely
+    # imports torchvision reproduces it.) The question here is which names the
+    # probe *asks about*, so hide whatever this process happens to have loaded
+    # instead of assuming a clean interpreter.
+    monkeypatch.delitem(torch_runtime.sys.modules, "torchvision", raising=False)
     checked = []
     independent = SimpleNamespace(__name__="torch")
 
