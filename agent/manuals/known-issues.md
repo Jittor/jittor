@@ -1,8 +1,39 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-09-22, seventh pass the same day -- the native smoke tier is
-  down to **1 failed / 0 errors / `other skipped: 0`**, and that one failure is
+- Last reviewed: 2026-09-22, eighth pass the same day -- **the Torch tier is
+  green** (`exit=0`, 2829 passed, 0 failed, 0 errors, `other skipped: 0`) and the
+  native tier is at **1 failed / 0 errors / 2156 passed / `other skipped: 0`**,
+  that one being KI-CODEGEN-001's deliberate guard. Much of this pass was
+  repairing another writer's work, and the cause is worth recording because it is
+  silent: my own `7cf7c5b2` (the store-rendezvous fix) had been created with a
+  *pathless* `git commit`, which commits the **whole index** -- and the index
+  still held older versions of six files another writer had since committed, so
+  that commit reverted their `transpose_storage_view` flag and implementation,
+  their CUDA RNG state, and the flag-policy registration. It surfaced as **8 reds
+  in the Torch tier**, five of them `AttributeError: 'jittor_core.Flags' object
+  has no attribute 'transpose_storage_view'` from a flag that only the *test*
+  mentioned. Restored from `7cf7c5b2^` in `bc1e5db0` (forward, never by rewriting
+  history).
+  The restore then exposed three real gate-side defects, all fixed this pass:
+  a sibling assertion pinned `torch.cuda.get_rng_state` as UNIMPLEMENTED while the
+  restored implementation declares APPROXIMATE (`e033cd61` -- approximate rather
+  than checked because the bytes are jittor's own format, not torch's CUDA state
+  bytes); an RNG test assigned `jt.flags.use_cuda` with nothing restoring it,
+  which is what the flag-scope gate exists to catch (`e033cd61`, now
+  `jt.flag_scope`, reshaped in `fd174f3a` so the collection-side-effect scanner
+  does not read the decorator factory as import-time work either); and the
+  optional-dependency probe test asserted `modules_available("torchvision...")`
+  was True while that helper correctly answers False for a *shim-provided*
+  torchvision -- already imported by the time a whole Torch-session run reaches
+  the file, so it passed alone and failed in the tier, reproduced in a second with
+  a `-p` plugin that merely imports torchvision (`7a9f133b`).
+  The worktree rule that prevented this from being worse, and the one to keep:
+  **commit by path** (`git add <paths> && git commit <paths> -F -`) and read
+  `git show --stat --format="" HEAD` afterwards -- a path you never touched
+  appearing there is the signature of the accident.
+  The seventh pass earlier the same day: the native smoke tier was down to
+  **1 failed / 0 errors / `other skipped: 0`**, and that one failure was
   KI-CODEGEN-001's guard (`test_reduce_with_merge_loop_var`), which is kept red on
   purpose as the price of the remaining 5.2x described below. The four
   KI-TUNER-001 reds were split and dealt with (`ba729d39`): the broadcast tuner
@@ -59,7 +90,7 @@
   diagnostics (the adapters' lazy-module version read, the generated-copy scan,
   and `torch.cuda.set_device` / `map_location="cuda"` on a build with no
   device).
-- Baseline: `ba729d39`
+- Baseline: `7a9f133b`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
