@@ -6671,3 +6671,51 @@ returns metadata plus a `file_name` and serves the bytes from
 `/v1/videos/<id>/content`, so the script wrote no file and four requests scored
 `NOCLIP` while the jobs were completing with `error=None`, 124 frames each. The
 arm sent that script's output to `/dev/null`, which is where the reason went.
+
+### Is there another one like it?
+
+The bug class is "thread-affine state consumed by process-global machinery".
+Every `thread_local` in `src/` and `backends/` was checked against it, and the
+answer is no -- with one candidate that looked like a second instance from
+reading the code and was refuted by measuring it.
+
+The codebase already has a discipline for this, and it is consistent:
+**read the thread_local while building, snapshot it onto the node, restore it
+from the snapshot when executing.**
+
+| state | why it is safe |
+|---|---|
+| `active_precision` (float32_precision.cc) | `Op::Op()` snapshots it (op.cc:66); restored at exec_runner.cc:300, op.cc:310/463/478, grad.cc, parallel_compiler.cc |
+| `construction_placement` (tensor_placement.cc) | snapshotted onto `Var::placement` (var.cc:131); execution reads the Var, not the thread_local |
+| `execution_target_override` (op.cc:103) | execution rebuilds it from `plan.backend` (exec_runner.cc:251) and per-op from the Var's placement (:298) |
+| `tls_bound_device` (cuda driver.cc) | a cache, validated against the global `current_device` |
+| ACL `device_cache` | a cache, validated against a global epoch counter |
+| `jk`, oneDNN `Runtime`, ACL memo/pool, mwsr `tlist` | per-thread scratch or caches; a miss rebuilds |
+| launch diagnostics, graph-build counters, log `thread_name` | diagnostics and profiling |
+
+The compute stream was the one thing that escaped the discipline, and the
+reason is worth writing down: **it had no value to snapshot.**
+`cudaStreamPerThread` is a magic constant, not a handle, so the thread
+affinity was invisible at every call site. Nothing looked like state, so
+nothing was carried, and there was nothing for a reviewer to notice missing.
+
+#### The candidate that was refuted
+
+`float32_matmul_precision` is thread-local and `cublas_gemm_mode()` -- which
+chooses CUBLAS_COMPUTE_32F against FAST_TF32 against FAST_16BF -- is called
+from inside `jit_run` (cublas_matmul_op.cc:175), reading the live value. The
+tier is not in the jit key either, so one compiled kernel re-reads it every
+run. That reads exactly like a second instance.
+
+It is not one. Measured: a matmul built under `medium` and evaluated on a
+thread whose policy is `highest` (self-reported as `('highest','highest')`)
+comes back **bit-identical** to the same-thread `medium` answer, against a
+tier separation of 2.96e-4 that the same measurement resolves. The restore at
+`exec_runner.cc:300` is what does it.
+
+The reason the code read wrong is worth more than the result: the grep that
+"proved" there was no restore in the execution path ended in `| head -15`, and
+the lines that disprove it came sixteenth. Truncated output was read as a
+complete answer. That is the same shape as the eight scoring holes earlier in
+this investigation -- a check that cannot see the evidence against it reports
+success.
