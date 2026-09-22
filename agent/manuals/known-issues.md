@@ -1,15 +1,19 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-09-22 -- one entry added (KI-TEST-006, a standalone H3
-  reproduction that pytest collects as a test file). The rest of the pass was
-  test-side and is in Git rather than here: two assertions that had gone stale
-  against newer behaviour (`prod`'s half dtype, the gamma kernel table), a
-  triton class that raised instead of skipping without triton, a child-process
-  launch that had left the `_helpers.child_process` contract, and the CPU-only
-  cores' absent `cuda_allow_tf32`, which had turned a whole compat file red in
-  the pull-request gate.
-- Baseline: `fc1af095`
+- Last reviewed: 2026-09-22 -- one entry added (KI-COMPAT-005:
+  `torch.div(..., rounding_mode=)` is unimplemented, which stops Longformer at
+  its first sliding-window chunk). KI-TEST-006 was added earlier the same day.
+  The rest of the pass was test-side and is in Git rather than here: two
+  assertions that had gone stale against newer behaviour (`prod`'s half dtype,
+  the gamma kernel table), a triton class that raised instead of skipping
+  without triton, a child-process launch that had left the
+  `_helpers.child_process` contract, the CPU-only cores' absent
+  `cuda_allow_tf32`, `np.row_stack`'s removal, a cast region that named a device
+  the operand could not be on, and three shim diagnostics (the adapters'
+  lazy-module version read, the generated-copy scan, and `torch.cuda.set_device`
+  / `map_location="cuda"` on a build with no device).
+- Baseline: `4fa42270`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -2482,3 +2486,53 @@ about whether to take it.
   does not by itself settle which backend the op belongs to.
 - Exit condition: all three classes in that file pass, with the mechanism
   behind attempt 2's collateral damage understood rather than worked around.
+
+## KI-COMPAT-005: `torch.div(..., rounding_mode=)` is unimplemented, so Longformer cannot run
+
+- Severity: Medium (a shipped HuggingFace architecture cannot complete a forward
+  pass on CPU -- no wrong answer, but no answer)
+- Status: Reproduced 2026-09-22 at `4fa42270`, unfixed. The case that reports it,
+  `compat/tests/torch/test_torch_hf_models.py::TestTorchHFModels::test_forward_and_eval_determinism[longformer]`,
+  is in the **smoke tier** (not in `tiers.SLOW_FILES`), so HEAD's pull-request
+  gate is red for it.
+- Evidence: `AutoModel.from_config` on the file's own tiny longformer config
+  (`hidden_size=64, num_layers=2, heads=2, attention_window=4`), forward under
+  `torch.no_grad()`, dies at
+
+      transformers/models/longformer/modeling_longformer.py:770
+      chunks_count = torch.div(seq_len, window_overlap, rounding_mode="trunc") - 1
+
+  with `RuntimeError: Wrong inputs arguments, Please refer to
+  examples(help(jt.ops.div)).` raised in
+  [`native_api.py`](../../compat/torch/native_api.py)'s dispatch
+  (`return implementation(*args, **kwargs)`). The frame chain is
+  `LongformerModel.forward` -> `LongformerEncoder` -> `LongformerLayer` ->
+  `LongformerAttention.forward` -> `_sliding_chunks_query_key_matmul`.
+  A one-file probe reproduces it in ~30 s including the import.
+- Cause: `torch.div` is published straight from `_NATIVE_NAMES` in
+  [`native_api.py`](../../compat/torch/native_api.py), i.e. it *is* `jt.div`,
+  which has no `rounding_mode` parameter. Every other op that needed a Torch-only
+  keyword (`log1p`, `softmax`, `take_along_dim`, `all`/`any` with
+  `axis`/`keepdims`) is instead an adapted function published by
+  `compat/torch/installers/numerical/`; `div` is one of the few names that is
+  both a `_NATIVE_NAMES` entry and a Torch spelling that needs adapting.
+- Triage (downstream-library-adaptation §0): the capability exists -- jittor has
+  `floor_divide`, `floor`, `round` -- and only the *spelling* differs, so this is
+  `jittor.compat.torch`, not the core and not an adapter. `rounding_mode="floor"`
+  maps onto `floor_divide`; `"trunc"` (toward zero) has no direct primitive
+  (jittor has no `trunc` op), so it needs the sign-aware form, and that is the
+  part to get right rather than approximate.
+- Not done here, deliberately: the fix has to remove `"div"` from
+  `_NATIVE_NAMES` and publish an adapted `div` from the numerical installer,
+  which changes what `torch.div` *is* on the public surface. That needs its own
+  pass over the surface gates (`tests/structure/test_torch_api_surface.py`,
+  `compat/tests/torch/test_torch_compat_dtype.py`'s promotion rows) and a
+  dtype-by-dtype comparison against real torch for both rounding modes, not a
+  wrapper dropped in at the end of a session.
+- Workaround for a caller: compute the quotient and round it explicitly, e.g.
+  `(seq_len / window_overlap).floor()` when the operands are non-negative
+  (`"floor"` and `"trunc"` agree there, which is why only this one op path is
+  affected).
+- Review/expiry condition: `torch.div(a, b, rounding_mode="trunc")` and
+  `...="floor"` match real torch on integer and float inputs of both signs, and
+  the longformer subtest passes.
