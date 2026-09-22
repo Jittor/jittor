@@ -1147,52 +1147,123 @@ def _api_cuda_memory__set_allocator_settings(*a, **k):
     return None
 
 
-#: Why asking for the CUDA RNG state raises instead of answering.
+#: The CUDA RNG state, as a seed and a position.
 #:
 #: `get_rng_state` used to return the constant `[0]` and `set_rng_state` used
 #: to do nothing, so `accelerator.save_state()` wrote a byte that meant
 #: nothing, `load_state()` restored nothing, and the resumed run drew a
-#: different random sequence than the one it was supposed to continue -- with
-#: no error anywhere. That is the failure this whole class of bug takes: a
-#: check that answers without having looked.
+#: different sequence than the one it was continuing -- with no error anywhere.
 #:
-#: The honest answer is that the state is not expressible yet. Jittor's CUDA
-#: random numbers come from a Host cuRAND generator per device
-#: (`backends/cuda/libraries/curand/src/curand_wrapper.cc`). Its seed is
-#: settable and its offset is settable, but nothing counts how far it has
-#: advanced, so there is no offset to save; and even with a count, only an
-#: FP32 uniform history advances by exactly the number of elements drawn --
-#: `curandGenerateNormal` needs an even count and consumes `num + 1` for an
-#: odd draw, and the float64 entry points consume a different number of bits
-#: per element. Saving a seed and a guessed offset would restore a *plausible*
-#: position rather than the right one, which is worse than refusing.
+#: What makes a real state possible is that cuRAND's offset turns out to
+#: describe the position completely. Measured against
+#: CURAND_RNG_PSEUDO_DEFAULT on this box, by drawing a history, drawing a
+#: continuation, then reseeding, setting the summed offset and drawing again:
 #:
-#: `torch.cuda.manual_seed` works and is unaffected: it starts a fresh
-#: sequence. What it cannot do is continue one.
-_CUDA_RNG_STATE_UNSUPPORTED = (
-    "jittor cannot express the CUDA RNG state yet: its cuRAND generator has a "
-    "settable seed and offset but nothing counts how far it has advanced, and "
-    "normal/float64 draws do not advance it by their element count. "
-    "torch.cuda.manual_seed(seed) starts a reproducible sequence; resuming one "
-    "from a checkpoint is not supported. See the C5 issue doc, "
-    "'CUDA RNG 的完整状态保存和恢复'."
-)
+#:   uniform float32/float64   n elements advance the generator by n
+#:   normal  float32/float64   n elements advance it by n/2
+#:
+#: a mixed history advances by the sum of its parts, and after a restore every
+#: one of the four kinds continues exactly. So a seed plus one integer is the
+#: whole state -- `backends/cuda/libraries/curand/` counts it, this packs it.
+#:
+#: The bytes are jittor's own format, not torch's CUDA state bytes: save them,
+#: hand them back, do not parse them, and do not feed torch's to this.
+_RNG_STATE_MAGIC = b"JTCURAND"
+_RNG_STATE_VERSION = 1
 
 
-def _api_cuda_get_rng_state(*a, **k):
-    raise NotImplementedError(_CUDA_RNG_STATE_UNSUPPORTED)
+def _rng_state_pack(seed, offset):
+    import struct
+    import numpy as _np
+    blob = _RNG_STATE_MAGIC + struct.pack("<Iqq", _RNG_STATE_VERSION,
+                                          int(seed), int(offset))
+    return jt.array(_np.frombuffer(blob, dtype=_np.uint8).copy())
+
+
+def _rng_state_unpack(state):
+    import struct
+    import numpy as _np
+    raw = state
+    if hasattr(raw, "numpy"):
+        raw = raw.numpy()
+    raw = _np.asarray(raw, dtype=_np.uint8).reshape(-1).tobytes()
+    if not raw.startswith(_RNG_STATE_MAGIC):
+        raise ValueError(
+            "not a jittor CUDA RNG state. torch's own state bytes are a "
+            "different format and a different algorithm; they cannot be "
+            "restored into jittor's cuRAND generator.")
+    version, seed, offset = struct.unpack("<Iqq", raw[len(_RNG_STATE_MAGIC):])
+    if version != _RNG_STATE_VERSION:
+        raise ValueError("unsupported jittor CUDA RNG state version %d" % version)
+    return int(seed), int(offset)
+
+
+def _curand():
+    backend = getattr(jt.compile_extern, "curand", None)
+    if backend is None or not hasattr(backend, "curand_generator_offset"):
+        raise RuntimeError(
+            "jittor was built without the cuRAND backend, so there is no CUDA "
+            "RNG state to save or restore")
+    return backend
+
+
+def _rng_device_index(device):
+    """Which device's generator, as a real index.
+
+    `jt.flags.device_id` is -1 until something sets it, meaning "whichever is
+    current" rather than device -1, and passing that through reached the
+    native restore as `device >= 0` failing. `jt.current_device()` is the one
+    the cuRAND wrapper itself indexes by.
+    """
+    if device is None:
+        index = -1
+    elif isinstance(device, int):
+        index = int(device)
+    else:
+        attr = getattr(device, "index", None)
+        if attr is not None:
+            index = int(attr)
+        else:
+            text = str(device)
+            index = int(text.split(":")[1]) if ":" in text else -1
+    if index < 0:
+        index = int(jt.current_device())
+    return max(index, 0)
+
+
+def _api_cuda_get_rng_state(device=None, *a, **k):
+    # Everything queued has to have happened, or the offset describes a
+    # position the device has not reached: the saved state would then be ahead
+    # of the data the checkpoint was taken with.
+    jt.sync_all(True)
+    backend = _curand()
+    index = _rng_device_index(device)
+    return _rng_state_pack(backend.curand_generator_seed(),
+                           backend.curand_generator_offset(index))
 
 
 def _api_cuda_get_rng_state_all(*a, **k):
-    raise NotImplementedError(_CUDA_RNG_STATE_UNSUPPORTED)
+    jt.sync_all(True)
+    backend = _curand()
+    seed = backend.curand_generator_seed()
+    return [_rng_state_pack(seed, backend.curand_generator_offset(i))
+            for i in range(int(jt.get_device_count()))]
 
 
-def _api_cuda_set_rng_state(*a, **k):
-    raise NotImplementedError(_CUDA_RNG_STATE_UNSUPPORTED)
+def _api_cuda_set_rng_state(state, device=None, *a, **k):
+    seed, offset = _rng_state_unpack(state)
+    # Parsed before anything is touched, so a malformed state leaves the
+    # generator where it was rather than half-restored.
+    jt.sync_all(True)
+    _curand().curand_restore_state(_rng_device_index(device), seed, offset)
 
 
-def _api_cuda_set_rng_state_all(*a, **k):
-    raise NotImplementedError(_CUDA_RNG_STATE_UNSUPPORTED)
+def _api_cuda_set_rng_state_all(states, *a, **k):
+    parsed = [_rng_state_unpack(state) for state in states]
+    jt.sync_all(True)
+    backend = _curand()
+    for index, (seed, offset) in enumerate(parsed):
+        backend.curand_restore_state(index, seed, offset)
 
 
 def _api_cuda_initial_seed(*a, **k):
