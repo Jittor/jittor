@@ -29,6 +29,20 @@ class AdapterContracts(unittest.TestCase):
             "jittor.compat.module_patcher": patcher,
         })
         self.modules.start()
+        # These cases build *fake* `transformers`/`torchmetrics` packages, and a
+        # real one already in `sys.modules` wins over the fake however the temp
+        # directory is put on `sys.path`: `importlib.import_module` returns the
+        # cached module. Whether one is there depends on which other file the
+        # session collected first -- measured, a module that imports the real
+        # package at collection time made `..._npu_probe_rejects_real_pytorch_extension`
+        # fail with `module transformers has no attribute probe_result` and
+        # `..._unsupported_transformers_version_fails_real_import` fail with
+        # `UnsupportedAdapterVersion not raised`, while the same file ran green on
+        # its own. Evicted for the duration; `self.modules.stop()` restores them.
+        for name in tuple(sys.modules):
+            if name in ("transformers", "torchmetrics") or name.startswith(
+                    ("transformers.", "torchmetrics.")):
+                sys.modules.pop(name)
         self.import_function = builtins.__import__
         self.saved_registry = dict(patcher._REGISTRY)
         patcher._REGISTRY.clear()
