@@ -253,10 +253,13 @@ def _refuses_collection(path):
     if path.suffix != ".py" or not path.name.startswith("test_"):
         return False
     try:
-        source = path.read_text(encoding="utf-8")
+        source = path.read_bytes()
     except OSError:
         return False
     try:
+        # Bytes rather than text: `ast.parse` honours a PEP 263 coding
+        # declaration, which a test file is allowed to have, while decoding as
+        # UTF-8 here would raise out of the collection hook instead.
         tree = ast.parse(source, filename=str(path))
     except (SyntaxError, ValueError):
         return False
@@ -396,6 +399,7 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         repo_relative = _relative_to_repo(item.fspath)
         _FILES_WITH_ITEMS.add(repo_relative)
+        _COLLECTED_FILES.add(repo_relative)
         # The fast tier selects with `-m "not slow"`; the marker is attached from
         # one recorded list rather than from decorators scattered through the
         # tree, so "what a pull request waits for" is reviewable in one diff.
@@ -625,7 +629,12 @@ def _flush_worker_state_leaks(session):
 # --------------------------------------------------------------------------
 #: {relative path: {"executed": n, "skipped": n}} for this session.
 _FILE_OUTCOMES = {}
+#: Files whose tests survived the marker and keyword filters.
 _FILES_WITH_ITEMS = set()
+#: Files that produced tests at all, filters included. Filled by
+#: ``pytest_collection_modifyitems`` and ``pytest_deselected``; the pair is what
+#: lets ``_files_that_collected_nothing()`` mean collection.
+_COLLECTED_FILES = set()
 _SKIP_REASON_BUCKETS = Counter()
 _ACCELERATOR_EXECUTED = 0
 #: Ordered, and the order is the classification: the first bucket whose pattern
@@ -849,8 +858,14 @@ def _snapshot_selected_files(config):
         arguments = [_absolute_selection(argument, invocation) for argument in config.args]
         if not arguments:
             return
+        # A `test_*.py` that is a script is not part of the selection as a test
+        # file -- the refusal above is what keeps it out of collection -- so it
+        # must not be reported as a file the session proved nothing about
+        # either. Otherwise closing KI-TEST-006 would only move its red from
+        # "collection error" to "collected 0 tests".
         _SELECTED_FILES.update(
-            selected_files(
+            path
+            for path in selected_files(
                 TEST_ROOT.parent,
                 arguments
                 + [
@@ -858,6 +873,7 @@ def _snapshot_selected_files(config):
                     for item in getattr(config.option, "ignore", []) or []
                 ],
             )
+            if not _refuses_collection(REPO_ROOT / path)
         )
     except Exception:
         pass
@@ -873,8 +889,33 @@ def _files_that_collected_nothing():
 
     Distinct from "everything skipped": a file that generates zero cases never
     reaches a skip either, so it is invisible in every count pytest prints.
+
+    About *collection*, not about the selection expression applied after it: a
+    file whose tests ``-m "not slow"`` or ``-k`` filtered out did produce
+    tests, and counting it here made the fast tier red on exactly the files it
+    exists to drop -- see :func:`pytest_deselected`.
     """
-    return sorted(_SELECTED_FILES - _FILES_WITH_ITEMS)
+    return sorted(_SELECTED_FILES - _COLLECTED_FILES)
+
+
+def pytest_deselected(items):
+    """Record files whose tests the marker or keyword expression removed.
+
+    ``_files_that_collected_nothing()`` has to tell "this file generated no
+    test" from "this file's tests were filtered out", and pytest applies the
+    filter after collection: by the time the loop in
+    ``pytest_collection_modifyitems`` sees ``items``, a filtered-out file is in
+    neither it nor ``_FILES_WITH_ITEMS``. Measured 2026-09-22, that made a
+    fast-tier run report every slow file in the selection as "the session
+    proved nothing about <path>", and ``unexplained`` sets
+    ``exitstatus = 1`` -- so a green ``--tier smoke`` selection exited non-zero
+    with nothing wrong in it. The two files that are genuinely not collected
+    were the only other entries.
+
+    Fires for ``-m`` and ``-k`` alike, in the process that applied the filter.
+    """
+    for item in items:
+        _COLLECTED_FILES.add(_relative_to_repo(item.fspath))
 
 
 def _execution_exemptions():
