@@ -1,38 +1,36 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-09-22, fifth pass the same day -- the native smoke tier is
-  down from 27 failed / 1 error to **6 failed / 0 errors** with **`other skipped:
-  0`**, and those six are exactly the entries below (4 x KI-TUNER-001, 1 x
-  KI-OPS-013, 1 x KI-CODEGEN-001's guard), so the gate's exit code now means
-  those entries and nothing else. Four of the removed reds came from the gate's
-  own accounting rather than from a test, and they are the reason a green run
-  used to exit non-zero:
-  * a file whose tests the tier's `-m "not slow"` filtered out was counted as
-    "this session proved nothing about <path>" (`9c1e48d5`); it was the tier's
-    own slow files, reproducible in one line as
-    `-m "not slow" tests/ops/test_reduce_op.py`;
-  * 20 skips whose reasons name how this cache was built (no
-    `jt_graph_build_profile`, no cub, no MKL, no gdb, no nvcc) or a documented
-    non-reproduction classified as `other`, and `other > 0` reds the run
-    (`631a490b`, `ad367ee2`); one of the twenty was not an environment fact at
-    all but a placeholder reason string, `"skip_this_test"` in
-    `tests/backends/rocm/test_rocm.py`;
-  * and the summary printed that count without naming a single reason, so the
-    reasons were unactionable until they were listed (`ce26103d`).
-  The Torch half was measured once in that window and had **2 failed / 2
-  `other` skips**, all three of them real and all fixed (`489fb8ac`): an
-  installer reaching into the module registry for the torch namespace
-  (`compat/torch/installers/data.py`, the structure rule matches that string as
-  a plain substring over the file, comments included), two `except ...: pass`
-  handlers in `compat/torch/installers/distributed.py` that the exception policy
-  requires to leave a `diagnostics.swallowed` record, and a skip reason in
-  `tests/structure/build/test_env_var_manifest.py` that named nothing and so
-  counted as `other` (now the `declared` bucket). The Torch tier was not re-run
-  end to end -- this box was carrying other work and one tier takes 25 minutes.
-  A fifth red belongs to KI-COMPILER-007's family but not to the entry: the
-  case did not abort in the last two `-n 4` runs, so the entry stays open and
-  intermittent.
+- Last reviewed: 2026-09-22, sixth pass the same day -- the native smoke tier is
+  down to **5 failed / 0 errors / `other skipped: 0`**, and those five are 4 x
+  KI-TUNER-001 (broadcast, group-conv x2 and matmul tuner) plus 1 x
+  KI-CODEGEN-001's guard, so the gate's exit code now means those two entries and
+  nothing else. What the sixth pass changed:
+  * **KI-OPS-013 is withdrawn**, not fixed: its "472 MB held per occurrence" was
+    a rank-7 *shape* read as a size. Both vars are stride-0 views over small
+    storage (one shares the 64x3x7x7 weight), the graph's peak resident set is
+    83.8 MiB, and no mapping in the process is over 100 MiB. The test now bounds
+    resident growth instead of rank (256 MiB against the 33 MiB it uses).
+  * **KI-CODEGEN-001 has a measured mechanism**: a broadcast add is 7.4x its
+    dense counterpart today (122.9 us vs 914.8 us per add, interleaved minimum),
+    and the generated kernel recovers the strided operand's index with two
+    divisions and a modulo per element. The entry says which part of that is a
+    fold and which part needs the merge structure back, and corrects its own
+    earlier claim that the five merge-loop-var tests were merely stale.
+  * **KI-COMPILER-007's suspected hazard is gone**: the case's child patched five
+    `install_cuda` entry points with a function that *raised*, which is the
+    mechanism the entry hypothesised (an exception during interpreter shutdown).
+    It now records, asserts, and fails late through `os._exit`, and the abort
+    did not reproduce in five further attempts in every shape this box can
+    produce, including the whole-tree `-n 4` collection it was seen in.
+  The fifth pass earlier the same day: the native tier went from 27 failed / 1
+  error to **6 failed / 0 errors** with `other skipped: 0`, and four of the
+  removed reds came from the gate's own accounting rather than from a test (a
+  file whose tests the tier's `-m "not slow"` filtered out was counted as "this
+  session proved nothing about <path>"; 20 skips whose reasons name how the
+  cache was built, or a documented non-reproduction, classified as `other`; one
+  of the twenty was a placeholder reason string; and the summary printed that
+  count without naming a reason).
   The fourth pass earlier the same day: KI-TEST-006 is fixed
   (`6e0c2273`) and the pass was test-infrastructure work that lives in Git
   rather than here: the core build stamp is now redirected per process instead of
@@ -59,7 +57,7 @@
   diagnostics (the adapters' lazy-module version read, the generated-copy scan,
   and `torch.cuda.set_device` / `map_location="cuda"` on a build with no
   device).
-- Baseline: `489fb8ac`
+- Baseline: `3df90e31`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -2447,6 +2445,50 @@ about whether to take it.
   folded to zero at compile time (`YSMASK` is already in the jit key), so the
   compiler hoists the invariant terms and the merge pass sees a linear index
   again. Then re-derive the expected merge structure and update the tests.
+- **Measured again 2026-09-22, and the mechanism is now exact.** Interleaved,
+  repeated, minimum-of-15 on `64x64x64x64 + 1x64x1x1` (200 adds per sample, so
+  the per-call overhead is amortised; load average 14-16): jittor dense
+  **122.9 us/add**, jittor broadcast **914.8 us/add** -- **7.4x**, against NumPy
+  at 1.04x (0.0252 s vs 0.0262 s for the same shapes). The entry's 4.22x was
+  measured on a quieter box on 2026-09-16; the direction and the order of
+  magnitude both hold, and this is the number to quote now.
+  The generated kernel says why, exactly. The merged loop is a single
+  `id3` over `range0_1_2_3`, and the strided operand's index is recovered as
+
+      op0_yi = 0;
+      op0_yrem = op0_i;
+      op0_yrem /= op0_zstorage_shape3;                     // axis 3
+      op0_yrem /= op0_zstorage_shape2;                     // axis 2
+      op0_yi += (op0_yrem % op0_zstorage_shape1) * op0_ystride1;   // axis 1
+
+  -- **two divisions and a modulo per element** for an operand whose only
+  non-zero stride is on axis 1. The profiler on the same pair: dense 3.9 GB/s in
+  / 1.95 GB/s out, broadcast 1.39 / 0.71, i.e. the per-element integer work also
+  costs about 2.8x of the achieved bandwidth (it blocks vectorisation).
+- Two things follow, and they are different sizes:
+  * **Arithmetic, small**: consecutive `/shape` steps can be folded into one
+    division by the product of the shapes above the axis, which the kernel
+    already has (`op0_zstride1 == shape2*shape3`, and the identity
+    `(i/a)/b == i/(a*b)` holds for non-negative integers). Each masked axis then
+    costs one division and one modulo instead of a chain. Expect a fraction of
+    the 7.4x, not the whole of it: the divisions that remain still stop the
+    vectoriser.
+  * **Structural, and the real fix**: the index needs no division at all if the
+    loop that carries the masked axis is *not* merged into the flat one -- which
+    is what the old shape was (`range2_3` under `id0,id1`, asserted by
+    `test_merge_loop_var_pass::test3`) and what
+    `test_reduce_with_merge_loop_var` counts as `tdim`. `MergeLoopVarPass` checks
+    defines ending in `id`/`_i`, and the recovery is written to `yrem`/`yi`, so
+    it sees no loop variable to respect and merges every loop it can. That is why
+    those tests fail: **they are the cost's guard, not stale substring
+    assertions** -- see the correction to KI-TUNER-001's tail below.
+- Correction (2026-09-22) to what KI-TUNER-001's tail says about the same tests:
+  it calls `test_merge_loop_var_pass::test3` and four siblings "a stale substring
+  assertion, not a lost optimization". The numerics half of that is right (the
+  merge is correct, 0/10000 mismatches), but the merge *is* the lost
+  optimization: merging the masked axis away is what forces the per-element
+  divisions above. The two entries described the same tests as different things;
+  this entry's framing is the correct one, and the five cases stay red.
 
 ## KI-TUNER-001: the matmul and conv relays never fire, so a hand-written meta-op product runs as a generic kernel
 
@@ -2584,6 +2626,10 @@ about whether to take it.
   Numerics were checked directly (`a + x` with distinct values, 0/10000
   mismatches). These five are a stale substring assertion, not a lost
   optimization.
+  **Corrected 2026-09-22 (see KI-CODEGEN-001):** the numerics half stands, but
+  "not a lost optimization" does not. The aggressive merge is *what forces* the
+  per-element divisions that cost 7.4x on a broadcast add, so these five are the
+  cost's guard and stay red. Do not rewrite them to bless `range0_1_2_3`.
 - Exit condition: with `enable_tuner=1`, a hand-written `broadcast * broadcast
   -> reduce` product on CPU emits a `mkl_matmul` jit op key and the conv
   tuner's confidence is 20 again, with `tests/ops/test_matmul.py` and
