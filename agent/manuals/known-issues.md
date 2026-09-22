@@ -527,45 +527,49 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
 - Review/expiry condition: the CUDA half class's strict expected failure turns
   red (i.e. the CUDA rows answer from an infinity), and the entry is removed.
 
-## KI-OPS-013: the fake-ResNet graph materialises a 7-dimensional convolution reindex
+## KI-OPS-013: withdrawn -- the 7-dimensional convolution reindex is a view, and holds nothing
 
-- Severity: Medium (roughly 472 MB held per occurrence, which is the memory the
-  fusion exists to save; no wrong answer)
-- Status: Reproduced on CPU at `30ef10cd`, unfixed. The gate that reports it,
-  [`test_longest_dis_fuse.py`](../../tests/core/test_longest_dis_fuse.py), is in
-  the **smoke tier**, so HEAD's pull-request gate is red for this.
-- Evidence, measured in a clean worktree at `30ef10cd`, CPU, the test's own
-  graph (`nn.Conv(3,64,7,2,3)` -> BatchNorm -> ReLU -> `nn.Pool(3,2,1)` on a
-  1x3x224x224 input, then `jt.grad` of the sum). Allocated vars, largest first:
-
-  | rank | elements | shape |
-  | --- | --- | --- |
-  | **7** | **118,013,952** | `[1,64,3,112,112,7,7,]` (two of these) |
-  | 4 | 802,816 | `[1,64,112,112,]` (the feature map, sixteen of these) |
-
-  118,013,952 float32 is **472 MB**, and the var has a non-null pointer, so it
-  is storage the graph really holds -- the test filters on exactly that. The
-  7-dimensional layout is jittor's own convolution formulation (the `reindex` in
-  [元算子](../../examples/notebooks/meta_op.md) writes the same seven indices),
-  and folding it away instead of writing it out is what the fused op is for.
-- The same test also counted one field too many, fixed 2026-09-21. `debug_msg`
-  prints the shape with a trailing comma, so `"1,64,112,112,".split(",")` is
-  five fields and the bound was enforced as `rank <= 4`: a plain four-dimensional
-  feature map already sat exactly on it. The failure used to read
-  `assert 8 <= 5` against a raw debug string; it now reads
-  `a fused intermediate was materialised with 7 dims: Var(...)[1,64,3,112,112,7,7,]`.
-  That is a repair of the report, not of the defect -- the assertion still fails,
-  which is the correct outcome for a materialised 7-dimensional intermediate.
-- Not fixed here, and deliberately: the lever is the materialisation decision in
-  [`fuser.cc`](../../src/core/fuser.cc), which was being tuned in the same week
-  (`bb901d65`, `1345192d` introduce and bound `fuse_op_limit`). Those bounds
-  apply to **half-precision** chains only, which is why they do not reach this
-  float32 graph, and why this entry is not a regression from them. Changing what
-  is materialised needs its own before/after measurement, not a bound moved by
-  hand.
-- Workaround: none. This is a memory footprint, not a wrong answer.
-- Review/expiry condition: the assertion passes with the corrected parse, i.e.
-  no allocated intermediate in that graph has more than five dimensions.
+- Severity: was Medium ("roughly 472 MB held per occurrence, which is the memory
+  the fusion exists to save"). Withdrawn: the graph's peak resident set is
+  under 100 MiB, so there is nothing to reclaim and no fusion defect here.
+- Status: Withdrawn 2026-09-22 at `489fb8ac`. The two rank-7 vars are still in
+  the graph and still rank 7; that is what the entry misread, and the assertion
+  it rested on has been replaced by a memory bound.
+- What the entry said: [`test_longest_dis_fuse.py`](../../tests/core/test_longest_dis_fuse.py)
+  fails on `[1,64,3,112,112,7,7]`, 118,013,952 float32 = 472 MB, "held twice",
+  and "the var has a non-null pointer, so it is storage the graph really holds".
+  The lever would be the materialisation decision in `src/core/fuser.cc`, and
+  the entry was left for a change with its own before/after measurement.
+- What is actually true, measured 2026-09-22 on the build the test runs on (CPU,
+  `use_mkl=0`), with the graph held alive:
+  * both rank-7 vars are **stride-0 views over small storage**, and one of them
+    has *the same pointer as the `[64,3,7,7]` weight var* -- 9,408 floats,
+    37 KB, shared;
+  * peak resident (`VmHWM`) after building the forward, the loss and the
+    gradient is **83.8 MiB**, and resident growth across the build is 33 MiB
+    (`VmRSS` 51 -> 84 MiB);
+  * **no mapping in the process is larger than 100 MiB** (`/proc/self/smaps`),
+    so there is not even a 450 MB reservation to point at. `VmSize` grows by
+    ~1.5 GiB across the build, but that is allocator arena and none of it is
+    resident.
+  A shape is not a size, and "the pointer is not null" says only that a var
+  *has* storage -- not that the storage is its own, nor that its shape
+  describes how much there is.
+- Why the assertion could not see that: it filtered on rank and a non-null
+  pointer, and a stride-0 view of the weight has both while owning nothing.
+- Fixed by asserting memory instead: the guard is now a 256 MiB bound on the
+  resident growth of the build (the graph legitimately uses 33 MiB), which is
+  what the original comment ("assert not alloc big tensor") asked for, and which
+  still catches a materialised 450 MiB intermediate. The rank-7 vars are
+  enumerated, but only in the failure message.
+- Residual, tracked elsewhere: `count_fuse` still refuses to fuse across an
+  `OpType::other` op -- its guard runs before it ever looks at `_force_fuse`,
+  which [`broadcast_to_op.cc:170`](../../src/ops/broadcast_to_op.cc) documents
+  as a deliberate trade-off -- and that is the same mechanism as KI-CODEGEN-001's
+  per-element cost and KI-TUNER-001's dead relay. A fusion complaint belongs in
+  those entries; this one was a measurement error.
+- Review/expiry condition: none -- withdrawn. Re-open only with a resident-set
+  measurement showing the graph holding the memory.
 
 ## KI-SEMANTICS-003: floating-comparison backend verification incomplete
 
