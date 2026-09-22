@@ -36,8 +36,10 @@ warning and then left ``use_cuda == 1`` anyway.
 
 A child with an unparsable flag dies from ``SIGABRT``: ``LOGf`` throws out of a
 static initializer, so it reaches ``std::terminate`` rather than Python.  Those
-launches pass ``crash_isolated=True`` -- without it jittor's process-level
-``SIGCHLD`` action ends the pytest session itself with no output (6.C31).
+launches pass ``crash_isolated=True``, which turns that into the ``128 + signo``
+status the assertions read.  (jittor's process-level ``SIGCHLD`` action used to
+end the pytest session itself with no output -- 6.C31; ``64350894`` made it
+report the child and return.)
 
 Run::  python -m pytest tests/runtime/test_flag_env_and_setter.py
 """

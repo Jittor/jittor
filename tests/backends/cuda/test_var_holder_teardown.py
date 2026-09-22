@@ -32,10 +32,11 @@ trigger's message: when the release is balanced this test stops exercising
 anything, and that should surface as someone re-pointing it rather than as a
 green run that proves nothing.
 
-``crash_isolated=True``: jittor installs a process-level ``SIGCHLD`` handler,
-so a child that aborts takes the runner with it and pytest vanishes with no
-output at all (6.C31).  The shell in between turns the abort into an ordinary
-non-zero exit that can be asserted.
+``crash_isolated=True``: the child under test aborts, and the shell turns that
+signal death into an ordinary ``128 + signo`` status the assertions can read.
+It is not what protects the runner any more -- jittor's process-level
+``SIGCHLD`` handler used to take pytest down with the child (6.C31) and reports
+and returns since ``64350894`` (2026-09-03).
 """
 
 from _helpers import capability as _test_capability
