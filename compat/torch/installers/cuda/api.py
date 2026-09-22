@@ -1147,32 +1147,73 @@ def _api_cuda_memory__set_allocator_settings(*a, **k):
     return None
 
 
+#: Why asking for the CUDA RNG state raises instead of answering.
+#:
+#: `get_rng_state` used to return the constant `[0]` and `set_rng_state` used
+#: to do nothing, so `accelerator.save_state()` wrote a byte that meant
+#: nothing, `load_state()` restored nothing, and the resumed run drew a
+#: different random sequence than the one it was supposed to continue -- with
+#: no error anywhere. That is the failure this whole class of bug takes: a
+#: check that answers without having looked.
+#:
+#: The honest answer is that the state is not expressible yet. Jittor's CUDA
+#: random numbers come from a Host cuRAND generator per device
+#: (`backends/cuda/libraries/curand/src/curand_wrapper.cc`). Its seed is
+#: settable and its offset is settable, but nothing counts how far it has
+#: advanced, so there is no offset to save; and even with a count, only an
+#: FP32 uniform history advances by exactly the number of elements drawn --
+#: `curandGenerateNormal` needs an even count and consumes `num + 1` for an
+#: odd draw, and the float64 entry points consume a different number of bits
+#: per element. Saving a seed and a guessed offset would restore a *plausible*
+#: position rather than the right one, which is worse than refusing.
+#:
+#: `torch.cuda.manual_seed` works and is unaffected: it starts a fresh
+#: sequence. What it cannot do is continue one.
+_CUDA_RNG_STATE_UNSUPPORTED = (
+    "jittor cannot express the CUDA RNG state yet: its cuRAND generator has a "
+    "settable seed and offset but nothing counts how far it has advanced, and "
+    "normal/float64 draws do not advance it by their element count. "
+    "torch.cuda.manual_seed(seed) starts a reproducible sequence; resuming one "
+    "from a checkpoint is not supported. See the C5 issue doc, "
+    "'CUDA RNG 的完整状态保存和恢复'."
+)
+
+
 def _api_cuda_get_rng_state(*a, **k):
-    return jt.array([0], dtype='uint8')
+    raise NotImplementedError(_CUDA_RNG_STATE_UNSUPPORTED)
 
 
 def _api_cuda_get_rng_state_all(*a, **k):
-    return [jt.array([0], dtype='uint8')]
+    raise NotImplementedError(_CUDA_RNG_STATE_UNSUPPORTED)
 
 
 def _api_cuda_set_rng_state(*a, **k):
-    return None
+    raise NotImplementedError(_CUDA_RNG_STATE_UNSUPPORTED)
 
 
 def _api_cuda_set_rng_state_all(*a, **k):
-    return None
+    raise NotImplementedError(_CUDA_RNG_STATE_UNSUPPORTED)
 
 
 def _api_cuda_initial_seed(*a, **k):
-    return 0
+    # The seed jittor is actually running on, not 0. `set_seed` records it and
+    # the cuRAND wrapper replays it onto every device generator, so this is the
+    # one part of the state that *is* expressible.
+    return int(jt.get_seed())
 
 
 def _api_cuda_seed(*a, **k):
-    return None
+    # torch reseeds from a fresh nondeterministic value and returns None; doing
+    # nothing instead left the caller on the old sequence while looking
+    # reseeded.
+    import random as _random
+    jt.set_seed(_random.SystemRandom().randrange(1 << 31))
 
 
 def _api_cuda_seed_all(*a, **k):
-    return None
+    # One generator per device, all replayed from the same seed by the cuRAND
+    # wrapper's set_seed callback, so seeding "all" is seeding.
+    _api_cuda_seed()
 
 
 def _api_mp_reductions_reduce_tensor(tensor):
@@ -1415,9 +1456,6 @@ _CUDA_FIDELITY_DETAILS = {
 
 _CUDA_PLACEHOLDERS = frozenset((
     CUDAGraph, CUDAPluggableAllocator, TorchFunctionMode,
-    _api_cuda_get_rng_state, _api_cuda_get_rng_state_all,
-    _api_cuda_set_rng_state, _api_cuda_set_rng_state_all,
-    _api_cuda_initial_seed, _api_cuda_seed, _api_cuda_seed_all,
     _api_cuda_ipc_collect, _api_cuda_memory__set_allocator_settings,
     _api_mp_reductions_rebuild_cuda_tensor,
     _api_g__C__autograd__push_saved_tensors_default_hooks,
