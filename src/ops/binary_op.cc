@@ -672,35 +672,42 @@ void BinaryOp::jit_run() {
     auto* __restrict__ yp = y->ptr<Ty>();
     auto* __restrict__ zp = z->ptr<Tz>();
     index_t num = z->num;
+    // The product of the shapes *above* each axis, so one axis' index is a
+    // single division away (`i / zabove@d % zstorage_shape@d`) instead of a
+    // chain of them. `(i/a)/b == i/(a*b)` for non-negative integers so the
+    // chain the recovery used to emit -- two divisions plus a modulo per element
+    // for the common one-strided-axis case and all of them serialised --
+    // collapses to one division and one modulo per masked axis. See
+    // KI-CODEGEN-001. (Keep the macro arguments below comma-free: the template
+    // parser splits them on commas.)
     @if(XSTRIDED || YSTRIDED,
         @for(d, 0, DIM, index_t zstorage_shape@d = z->shape[@d];)
+        index_t zabove@{DIM-1} = 1;
+        @for(d, DIM-2, -1, -1, index_t zabove@d = zabove@{d+1} * zstorage_shape@{d+1};)
     )
     @if(XSTRIDED, @for(d, 0, DIM, index_t xstride@d = x->storage_stride(@d);))
     @if(YSTRIDED, @for(d, 0, DIM, index_t ystride@d = y->storage_stride(@d);))
     for (index_t i=0; i<num; i++) {
-        // Unflattening `i` costs a division and a modulo per axis, and both are
-        // dead for most of the axes most operands have. X/YSMASK say which axes
-        // move the physical index at all, and `i` is already below the extent of
-        // axis 0 by the time that axis is reached, so: an axis outside the mask
-        // contributes no term, its division survives only while a lower axis
-        // still reads `rem`, and axis 0 needs no modulo. A row broadcast keeps
-        // one modulo, a column broadcast one division, a rank-1 view neither.
+        // X/YSMASK say which axes move the physical index at all, so an axis
+        // outside the mask contributes no term; axis 0 needs no modulo, because
+        // `i` is already below `zstorage_shape0 * zabove0` by the time it is
+        // read.
         @if(XSTRIDED,
             index_t xi = 0;
-            @if(XSMASK, index_t xrem = i;)
-            @for(d, DIM-1, -1, -1,
-                @if(XSMASK>>d&1, xi += @if(d, (xrem % zstorage_shape@d), xrem) * xstride@d;)
-                @if(XSMASK&((1<<d)-1), xrem /= zstorage_shape@d;)
+            @for(d, 0, DIM,
+                @if(XSMASK>>d&1,
+                    xi += @if(d, (i / zabove@d % zstorage_shape@d), (i / zabove@d)) * xstride@d;
+                )
             )
         ,
             index_t xi = i;
         )
         @if(YSTRIDED,
             index_t yi = 0;
-            @if(YSMASK, index_t yrem = i;)
-            @for(d, DIM-1, -1, -1,
-                @if(YSMASK>>d&1, yi += @if(d, (yrem % zstorage_shape@d), yrem) * ystride@d;)
-                @if(YSMASK&((1<<d)-1), yrem /= zstorage_shape@d;)
+            @for(d, 0, DIM,
+                @if(YSMASK>>d&1,
+                    yi += @if(d, (i / zabove@d % zstorage_shape@d), (i / zabove@d)) * ystride@d;
+                )
             )
         ,
             index_t yi = i;
