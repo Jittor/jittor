@@ -1,7 +1,10 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-09-22, second pass the same day -- KI-COMPAT-005 is now
+- Last reviewed: 2026-09-22, third pass the same day -- KI-COMPILER-007 opened
+  (a CPU-only no-CUDA import aborts with glibc heap corruption at exit inside
+  the smoke tier, with the reproduction and everything ruled out written down).
+  Earlier the same day KI-COMPAT-005 is now
   fixed (`e8105ecc`): `torch.div(..., rounding_mode=)` is implemented in the
   compat layer and `torch.masked_fill` is published, which together are what
   Longformer's forward needed. The first pass that day added KI-COMPAT-005 and
@@ -15,7 +18,7 @@
   diagnostics (the adapters' lazy-module version read, the generated-copy scan,
   and `torch.cuda.set_device` / `map_location="cuda"` on a build with no
   device).
-- Baseline: `82a8d67c`
+- Baseline: `c83eb600`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -2184,6 +2187,54 @@ about whether to take it.
   one test -- whether because this file moved to the lab, because a
   module-level skip was added, or because a collection rule refuses a
   test-named module with no tests.
+
+## KI-COMPILER-007: a CPU-only no-CUDA import aborts with heap corruption at exit, but only inside the gate
+
+- Severity: Critical if real -- the message is glibc heap corruption
+  (`double free or corruption (!prev)`, `corrupted size vs. prev_size while
+  consolidating`) and the process dies with SIGABRT. The *functional* contract of
+  the case that catches it holds; what fails is the child's exit status.
+- Status: Reproduced twice inside the smoke tier on 2026-09-22, **not** reproduced
+  in 26 runs outside it. Unfixed, and the reproduction recipe is exact so it does
+  not have to be rediscovered.
+- Evidence: the case is
+  `tests/build/test_build_config.py::test_explicit_cpu_import_skips_cuda_services`
+  (file `tests/build/test_backend_build_config.py`). Reproduce with
+
+      "$VENV/bin/python" tools/run_test_suite.py --tier smoke --session native \
+          -- -k explicit_cpu_import_skips_cuda_services
+
+  which reports `1 failed` with `assert -6 == 0` and the glibc line in the
+  child's tail. The child is a plain script (the test's own `script` string):
+  it patches five `jittor_utils.install_cuda` entry points to raise, imports
+  jittor under `JT_BACKEND=cpu nvcc_path=/must/not/probe/nvcc
+  JTCUDA_AUTO_INSTALL=1`, asserts the CPU-only build config four ways, prints
+  `CPU_BUILD_CONFIG={"cuda_services": 0, "backend": "cpu"}`, and exits. **All
+  four assertions pass and the line is printed** -- the corruption is in
+  teardown, after the last statement.
+- What has been ruled out, measured (each of these is 0 failures):
+  - the same child run directly, 16/16 clean, with and without a prefixed
+    `JT_USE_PARALLEL_OP_COMPILER`, and with `use_mkl` on and off;
+  - `MALLOC_CHECK_=3 MALLOC_PERTURB_=165` on that direct child, 10/10 clean --
+    so glibc's own aggressive checking does not see it in that shape;
+  - plain pytest of the same file under the gate's nine environment names, and
+    with the tool's thread-pool budget (`OMP_NUM_THREADS=96` etc. on this
+    box: 384 CPUs / 4 workers), all pass;
+  - the same cache directory and the same `jittor_core.so` (`cfg8da7ae5d`) is
+    used by both the aborting and the clean runs, so it is not a stale core;
+  - the child's own env report shows `use_parallel_op_compiler='0'`, i.e. the
+    workaround for KI-COMPILER-001's op-level corruption was **already in
+    force** -- do not assume that entry covers this one.
+- Hypothesis, not yet tested: a teardown-time call into one of the patched
+  `install_cuda` entry points (the test's `JTCUDA_AUTO_INSTALL=1` is there to
+  prove the CPU path never reaches them), raising out of an atexit hook or a
+  destructor while jittor's globals are half-destroyed; the next allocation then
+  consolidates a corrupted chunk. That would explain why the functional
+  assertions pass and only the exit status is bad, and why it is timing-shaped.
+  Testing it needs the child under an allocator that can name the double free
+  (`MALLOC_CHECK_` says nothing here) or a debug core, not more guessing.
+- Exit condition: the case passes inside `--tier smoke --session native` on a
+  repeat run, and the child exits 0 with its assertions intact.
 
 ## KI-COMPILER-004: fixed -- a CPU-only core no longer shadows the CUDA build
 
