@@ -17,6 +17,7 @@ from collections.abc import Sequence, Iterable
 
 
 from ._code import acl_code as getitem_cmd
+from .._soc import kernel_available
 
 getitem_forward = getitem_cmd
 _slice_zero_cache = OrderedDict()
@@ -103,6 +104,8 @@ def basic_slice_acl(x, slices):
         and output_shape[-1] > 0
     )
     inputs = [x]
+    if not contiguous_last_axis and not kernel_available("StridedSliceAssignV2"):
+        return None
     if contiguous_last_axis:
         before = begins[-1]
         after = int(x.shape[-1]) - ends[-1]
@@ -439,6 +442,8 @@ class GetItemACL(jt.Function):
     def grad(self, grad_output):
         if self.type_ == "index":
             indices = self.indices
+            if not kernel_available("IndexPutImplAccumulate"):
+                return self._grad_index_composite(grad_output), None
             # The C++ runner zeroes the output itself (aclrtMemsetAsync) then
             # scatter-accumulates grad_output at the indices. Previously the base
             # was an externally-created jt.zeros passed as a write-only output;
@@ -463,6 +468,12 @@ class GetItemACL(jt.Function):
             # 注意前向的维数可能会被压缩，所以这里要还原
             for dim in self.squeeze_dims:
                 grad_output = jt.unsqueeze(grad_output, dim)
+            if not kernel_available("StridedSliceAssignV2"):
+                # 310P 缺 StridedSliceAssignV2：零基座 + IndexPutImpl 组合散射
+                from .setitem_op import SetItemACL
+
+                base = jt.zeros(self.x_shape, dtype=grad_output.dtype)
+                return SetItemACL()(base, slices, grad_output), None
             # 适配华为奇怪的要求，最后一个维度的step必须是1
             expand_dim = False
             if isinstance(slices[-1], slice):
@@ -532,3 +543,26 @@ class GetItemACL(jt.Function):
             return self.mask.float()
         else:
             raise NotImplementedError(f"ACL getitem backward does not support {self.type_!r} gradients")
+
+    def _grad_index_composite(self, grad_output):
+        """Fancy-index backward for SoCs where ``IndexPutImplAccumulate`` is
+        absent or broken (Ascend310P): fold the indexed dims into flat row ids
+        and ``scatter_add`` grad rows into a zero base."""
+        x_shape = [int(size) for size in self.x_shape]
+        k = len(self.indices)
+        tail = 1
+        for size in x_shape[k:]:
+            tail *= size
+        row_span = 1
+        for size in x_shape[:k]:
+            row_span *= size
+        rows = grad_output.reshape(-1, tail)
+        flat = None
+        stride = row_span
+        for dim, idx in enumerate(self.indices):
+            stride //= x_shape[dim]
+            term = idx.reshape(-1) * stride
+            flat = term if flat is None else flat + term
+        col_idx = flat.reshape(-1, 1).broadcast(rows.shape).contiguous()
+        base = jt.zeros((row_span, tail), dtype=grad_output.dtype)
+        return base.scatter_add(0, col_idx, rows).reshape(x_shape)

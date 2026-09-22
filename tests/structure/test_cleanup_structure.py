@@ -330,6 +330,8 @@ class TestCleanupStructure(unittest.TestCase):
             "_device_value": "the scalar half of the same helper",
             "_assert_acl_device": "an ACL device assertion, local to two ACL tests",
             "_fetch_acl": "an ACL handle helper, local to the same two",
+            "_acl_supports_bfloat16": "an ACL SoC capability probe, local to each ACL test file",
+            "_acl_supports_fp32_cube": "the matching cube-capability probe, same pattern",
             "_bfloat16_round": "a reference rounding helper for the dtype tests",
             "bfloat16_round": "its dtype-named alias in the same file",
             "_output_tensor": "a two-line tensor builder in the HF alias tests",

@@ -21,6 +21,7 @@ _causal_mask_cache_limit = 16
 
 
 from ._code import acl_code as flashattention_cmd
+from .._soc import kernel_available
 
 
 class FlashAttentionACL:
@@ -261,6 +262,53 @@ def _compressed_causal_mask():
     return _causal_mask(2048, 2048)
 
 
+def _causal_bias(query_length, source_length):
+    """Additive 0/-inf causal bias; jt.where does not broadcast the leading
+    dims on ACL, while binary add does."""
+    key = (int(query_length), int(source_length))
+    cached = _causal_bias_cache.get(key)
+    if cached is not None:
+        _causal_bias_cache.move_to_end(key)
+        return cached
+    bias = np.where(
+        np.triu(np.ones(key, dtype=np.bool_), 1), -np.inf, 0.0
+    ).astype(np.float32)
+    var = jt.array(bias)
+    _causal_bias_cache[key] = var
+    if len(_causal_bias_cache) > _causal_mask_cache_limit:
+        _causal_bias_cache.popitem(last=False)
+    return var
+
+
+_causal_bias_cache = OrderedDict()
+
+
+def _sdpa_composite(query, key, value, attn_bias, is_causal, scale_factor):
+    """Math SDPA from verified ACL ops, for SoCs whose CANN opp has no
+    FlashAttentionScore kernel (Ascend310P prefill)."""
+    query_heads = int(query.shape[-3])
+    key_heads = int(key.shape[-3])
+    if key_heads != query_heads:
+        group = query_heads // key_heads
+        B, KV, S, D = key.shape
+        expand = (B, KV, group, S, D)
+        key = key.unsqueeze(2).broadcast(expand).reshape(B, query_heads, S, D)
+        value = value.unsqueeze(2).broadcast(expand).reshape(B, query_heads, S, D)
+    scores = jt.matmul(query, key.transpose(-1, -2)) * scale_factor
+    if attn_bias is not None:
+        # Keep the product dtype (fp16 attention + fp32 mask must not promote
+        # scores to fp32 -- that would both lose dtype fidelity and, on
+        # Ascend310P, hit the FP32-cube gate on the value matmul).
+        scores = scores + attn_bias.cast(scores.dtype)
+    if is_causal:
+        scores = scores + _causal_bias(
+            int(query.shape[-2]), int(key.shape[-2])
+        ).cast(scores.dtype)
+    probs = jt.nn.softmax(scores, dim=-1)
+    # softmax computes in fp32; the value matmul needs the input dtype back.
+    return jt.matmul(probs.cast(value.dtype), value)
+
+
 def scaled_dot_product_attention_acl(
     query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False
 ):
@@ -288,8 +336,14 @@ def scaled_dot_product_attention_acl(
         query.dtype
     ) != _jittor_dtype_name(value.dtype):
         return None
-    if _jittor_dtype_name(query.dtype) not in ("float32", "bfloat16"):
-        return None
+    dtype_name = _jittor_dtype_name(query.dtype)
+    flash_available = kernel_available("FlashAttention")
+    if dtype_name not in ("float32", "bfloat16"):
+        # fp16 prefill is reachable only through the math-composite path on
+        # SoCs without a FlashAttentionScore kernel (Ascend310P); the fused
+        # runner wrapper was verified for float32/bfloat16 only.
+        if dtype_name != "float16" or flash_available:
+            return None
 
     query_heads = int(q_shape[-3])
     key_heads = int(k_shape[-3])
@@ -299,7 +353,10 @@ def scaled_dot_product_attention_acl(
     if query_heads != key_heads:
         if not enable_gqa or query_heads % key_heads != 0:
             return None
-    if training and (_jittor_dtype_name(query.dtype) != "float32" or query_heads != key_heads):
+    # The fused runner's training coverage is float32 with equal head counts;
+    # the composite path is built from differentiable primitives and has no
+    # such restriction.
+    if flash_available and training and (dtype_name != "float32" or query_heads != key_heads):
         return None
     head_dim = int(q_shape[-1])
     if head_dim <= 0 or head_dim > 256 or head_dim % 8 != 0:
@@ -315,8 +372,9 @@ def scaled_dot_product_attention_acl(
         if is_causal or not isinstance(attn_mask, jt.Var):
             return None
         # Explicit requires_grad_(False) preserves graph edges without setting
-        # stop_grad; the fused kernel only needs to reject a trainable mask.
-        if training and attn_mask.requires_grad:
+        # stop_grad; the fused kernel only needs to reject a trainable mask,
+        # while the composite keeps the mask differentiable like any input.
+        if flash_available and training and attn_mask.requires_grad:
             return None
         mask_dtype = _jittor_dtype_name(attn_mask.dtype)
         if _jittor_dtype_name(mask_dtype) != "float32":
@@ -344,14 +402,18 @@ def scaled_dot_product_attention_acl(
             causal_mask = _compressed_causal_mask()
             sparse_mode = 2
     scale_factor = 1.0 / math.sqrt(head_dim) if scale is None else float(scale)
-    if (
-        _jittor_dtype_name(query.dtype) == "bfloat16"
-        and query_length == 1
-        and attn_mask is None
-        and not is_causal
-    ):
+    decode_single = query_length == 1 and attn_mask is None and not is_causal
+    if dtype_name == "bfloat16" and decode_single:
         scaled_dot_product_attention_acl.backend_name = "acl_incre_flash_attention_v4"
         return IncreFlashAttentionACL(query_heads, key_heads, scale_factor)(query, key, value)
+    if not flash_available:
+        if decode_single and dtype_name == "float16":
+            # Decode decode-step attention through the kernel the inference
+            # SoC does ship.
+            scaled_dot_product_attention_acl.backend_name = "acl_incre_flash_attention_v4"
+            return IncreFlashAttentionACL(query_heads, key_heads, scale_factor)(query, key, value)
+        scaled_dot_product_attention_acl.backend_name = "acl_composite_sdpa"
+        return _sdpa_composite(query, key, value, real_shift, is_causal, scale_factor)
 
     scaled_dot_product_attention_acl.backend_name = "acl_flash_attention_score_v2"
     return FlashAttentionACL(

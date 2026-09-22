@@ -626,6 +626,12 @@ void peer_access(int from, int to) {
     USER_CHECK(from == to) << "ACL peer access is not supported";
 }
 
+const char* acl_device_name(int device) {
+    const char* name = nullptr;
+    on_device(device, [&] { name = aclrtGetSocName(); });
+    return name;
+}
+
 struct Finalizer { ~Finalizer() { shutdown_acl_backend(); } } finalizer;
 
 } // namespace
@@ -723,6 +729,7 @@ BackendOps make_acl_backend() {
     ops.device_count = device_count;
     ops.current_device = acl_runtime_current_device;
     ops.set_device = set_device;
+    ops.device_name = acl_device_name;
     ops.allocator = acl_allocator;
     ops.copy = copy;
     ops.copy_async = copy_async;

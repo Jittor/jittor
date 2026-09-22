@@ -1,3 +1,4 @@
+#include <cstring>
 #include <unordered_map>
 #include <string>
 #include <vector>
@@ -12,10 +13,53 @@
 
 namespace jittor
 {
+    const char* acl_soc_name()
+    {
+        // Cached: the SoC cannot change within a process, and aclrtGetSocName
+        // needs the ACL context that any tensor-descriptor caller already set
+        // up. Callers only reach this on the ACL execution path.
+        static const char* name = [] {
+            const char* value = aclrtGetSocName();
+            return value ? value : "";
+        }();
+        return name;
+    }
+
+    bool acl_soc_supports_bfloat16()
+    {
+        static const bool value =
+            std::strncmp(acl_soc_name(), "Ascend310P", 10) != 0;
+        return value;
+    }
+
+    bool acl_soc_supports_fp32_cube()
+    {
+        static const bool value =
+            std::strncmp(acl_soc_name(), "Ascend310", 9) != 0;
+        return value;
+    }
+
+    void acl_check_fp32_cube(int cube_math_type, NanoString dtype, const char* op_name)
+    {
+        if (cube_math_type != 0 || dtype != ns_float32
+            || acl_soc_supports_fp32_cube())
+            return;
+        USER_CHECK(false) << op_name << ": FP32 cube math is unsupported on"
+                          << acl_soc_name()
+                          << "with KEEP_DTYPE; enable the acl_allow_hf32 flag"
+                             " (or jt.acl_allow_hf32) to opt in to"
+                             " ALLOW_FP32_DOWN_PRECISION";
+    }
+
     aclDataType get_dtype(NanoString s)
     {
         if (s == ns_bfloat16)
+        {
+            USER_CHECK(acl_soc_supports_bfloat16())
+                << "bfloat16 is not supported on" << acl_soc_name()
+                << ": the installed CANN op package has no DT_BFLOAT16 kernels";
             return ACL_BF16;
+        }
         if (s == ns_float32)
             return ACL_FLOAT;
         if (s == ns_float16)

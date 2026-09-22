@@ -63,7 +63,7 @@ namespace jittor
     }
     void MatMulOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
-
+        acl_check_fp32_cube(cube_math_type, in_[0]->dtype(), "MatMul");
         ret = aclnnMatmulGetWorkspaceSize(inputTensors[0], inputTensors[1], outputTensors[0], cube_math_type, &workspaceSize, &executor);
         launch(ret, aclnnMatmul, true);
     }

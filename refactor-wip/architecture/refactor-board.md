@@ -1,5 +1,7 @@
 # 整改看板
 
+2026-09-22 Ascend310P3 适配：以`0140dbed`（含远端13提交合并）为基线完成推理卡适配。`backends/acl/kernels/_soc.py`经`aclrtGetSocName`识别SoC并承载实测缺口表；bf16提前明确报错，FP32 cube走显式`acl_allow_hf32`（对齐torch_npu `allow_hf32`语义，默认保持全精度拒绝）；缺核以设备侧组合替代：切片赋值（IndexPutImpl/memcpy修正share_with别名）、embedding反向（scatter_add）、RoPE T=1前向与反向、FlashAttention/SDPA前向prefill（fp16 causal/mask/GQA）、nan_to_num、固定窗池化前后向（含ceil_mode/include_pad）、整数索引反向；非有限判定按310P比较核不变量重写（isnan/isinf/isfinite/isposinf/isneginf）；`all/any` keepdims签名回归修复。真机（CANN 9.1.0，davinci0）`tests/backends/acl/`：214通过/11跳过/0失败、零CPU回退、跳过全部归类；CPU core tier 310通过、结构套件1370通过/0失败、layout通过。未覆盖：下游模型对拍、性能、910B回归复验；`x[2]`反向打包分配器缺陷记KI-BACKEND-011（xfail声明）。
+
 2026-09-13 当前本地合并复验：[新基线增量修复与验证](../results/2026-09-13-ascend-merge-validation.md)。远端`cb823778`已合并到本地工作树，未提交、未推送；原生选择集231通过/2项既有FlashAttention类跳过，233项全部处理；独立compat+定向OpInfo65通过/0跳过。两轮使用同一补丁且源码未变，选择集含CPU共享案例；ACL结构定向274通过，完整结构修后1358通过/4跳过，严格注册30项实际执行通过，KI-TEST004已关闭；当前注册函数及参数化与远端一致，没有删除案例。全库OpInfo和新基线性能复测未完成，不覆盖下方历史结果。
 
 2026-09-10 当前实机复验：[Ascend 原生/独立 Torch 验证与性能记录](../results/2026-09-10-ascend-refactor-validation.md)。已按远端`7df15e31`同步并重放本地修复至`952b5042`后继续修改；Abs独立NPU dtype声明及一般adaptive pooling前后向两项缺口已真机修复，追加amax/amin keepdim与共享allocator view修复。独立compat+定向OpInfo最终65项首轮55通过/1失败、56执行，新增NPU amax keepdim descriptor问题已修并通过28项CPU/NPU归约回归，65项正在重跑；完整CPU structure已1357通过/4跳过、1361项全部处理，最后归约改动追加370项结构回归通过、native-only6项另行通过；原生最终215通过/2项既有FlashAttention类入口跳过、217项全部处理；未审计NPU算子标记UNVERIFIED，不宣称全库OpInfo通过。性能保留初始`1a1f175e`的临时采样证据。不改写下方历史验收结论。

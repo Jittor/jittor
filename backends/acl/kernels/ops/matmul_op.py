@@ -24,15 +24,17 @@ The three branches the CodeOp path carried are all still here:
 
 import jittor as jt
 
+from .._soc import allow_reduced_precision
+
 
 def _allow_reduced_precision():
-    """`jt.acl_allow_hf32`, read per call.
+    """`jt.acl_allow_hf32` / the `acl_allow_hf32` flag, read per call.
 
     A caller may flip it between two products, so it is never captured: the
     answer rides on the node, which is also what makes a gradient use the
     arithmetic of the forward it differentiates.
     """
-    return bool(getattr(jt, "acl_allow_hf32", False))
+    return allow_reduced_precision()
 
 
 def mapped_matmul(x1, x2, trans_a=False, trans_b=False):

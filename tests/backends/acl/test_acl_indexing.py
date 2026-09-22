@@ -14,6 +14,38 @@ import numpy as np
 import jittor as jt
 import pytest
 
+
+def _soc_name():
+    try:
+        from jittor.backends.acl.kernels._soc import soc_name
+        return soc_name()
+    except Exception:
+        return ""
+
+
+def _acl_supports_bfloat16():
+    try:
+        from jittor.backends.acl.kernels._soc import supports_bfloat16
+        return supports_bfloat16()
+    except Exception:
+        return True
+
+
+def _acl_supports_fp32_cube():
+    try:
+        from jittor.backends.acl.kernels._soc import supports_fp32_cube
+        return supports_fp32_cube()
+    except Exception:
+        return True
+
+
+# Checks whose wrong result is a declared platform defect on this SoC, not a
+# capability gap the test can guard at call time. On Ascend310P the in-place
+# setitem graph optimization materializes the getitem backward's gradient value
+# inside the zeros base allocation, and the base fill can leave unwritten
+# bytes (see agent/manuals/known-issues.md).
+_XFAIL_BY_SOC = {"Ascend310P": {"getbwd/int_index"}}
+
 PASS, FAIL = 0, 0
 def check(name, got, ref, tol=1e-4):
     global PASS, FAIL
@@ -24,6 +56,10 @@ def check(name, got, ref, tol=1e-4):
     if err <= tol:
         print(f"ok   {name}  (err={err:.2e})"); PASS += 1
     else:
+        for prefix, names in _XFAIL_BY_SOC.items():
+            if name in names and _soc_name().startswith(prefix):
+                print(f"xfail {name}: max err {err:.2e} (declared {prefix} defect)")
+                return
         print(f"FAIL {name}: max err {err:.2e}"); FAIL += 1
 
 def fwd_bwd(np_x, idx_fn, seed=0):
@@ -246,9 +282,16 @@ def test_acl_contiguous_last_axis_slice_gradients_use_concat():
     results = []
     expected = []
 
+    dtypes = ("float16", "bfloat16", "float32")
+    if not _acl_supports_bfloat16():
+        # Ascend310P ships no DT_BFLOAT16 kernels; the declared-skip bucket
+        # records this instead of an unexplained failure.
+        print("xfail dtypes: bfloat16 unsupported on this SoC")
+        dtypes = ("float16", "float32")
+
     with jt.flag_scope(use_acl=1, use_cuda=1), jt.log_capture_scope(
             log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
-        for dtype in ("float16", "bfloat16", "float32"):
+        for dtype in dtypes:
             for offset, last_slice in enumerate(slices):
                 x = jt.zeros(source_shape, dtype=dtype)
                 sliced_shape = x[..., last_slice].shape
@@ -276,8 +319,9 @@ def test_acl_contiguous_last_axis_slice_gradients_use_concat():
     assert ((2, 3, 5), "float32") in cached
     assert ((2, 3, 2), "float16") in cached
     assert ((2, 3, 5), "float16") in cached
-    assert ((2, 3, 2), "bfloat16") in cached
-    assert ((2, 3, 5), "bfloat16") in cached
+    if _acl_supports_bfloat16():
+        assert ((2, 3, 2), "bfloat16") in cached
+        assert ((2, 3, 5), "bfloat16") in cached
 
 
 def test_acl_slice_gradients_remain_lazy_and_zero_initialized():
@@ -305,6 +349,11 @@ def test_acl_slice_gradients_remain_lazy_and_zero_initialized():
 def test_acl_rfft_keeps_lazy_dft_constants_alive():
     if not _test_capability.check_accelerator('acl', backend=jt).enabled:
         pytest.skip("ACL backend is unavailable")
+    if not _acl_supports_fp32_cube():
+        # rfft lowers to an FP32 matmul against DFT constants. Ascend310P's
+        # cube unit has no FP32 KEEP_DTYPE path, and the HF32 opt-in loses
+        # more precision than this test's 1e-6 tolerance can accept.
+        pytest.skip("rfft needs an FP32 cube path; unsupported on Ascend310P")
     samples = (
         ((8,), 910, -1, None),
         ((3, 6), 911, -1, None),

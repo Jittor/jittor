@@ -58,11 +58,18 @@ def pipeline(monkeypatch):
     dtypes.dtype_name = str
     monkeypatch.setitem(sys.modules, dtypes.__name__, dtypes)
     package = types.ModuleType("acl_attribute_pipeline")
-    package.__path__ = [str(OPS)]
+    # Mirror the real jittor.backends.acl.kernels package: ``ops`` is the
+    # subpackage the op files live in, so their ``from .._soc import ...``
+    # resolves to a real file in this fixture's path instead of escaping the
+    # top level.
+    package.__path__ = [str(OPS.parent)]
     monkeypatch.setitem(sys.modules, package.__name__, package)
+    ops_package = types.ModuleType(package.__name__ + ".ops")
+    ops_package.__path__ = [str(OPS)]
+    monkeypatch.setitem(sys.modules, ops_package.__name__, ops_package)
 
     def load(name):
-        qualified = package.__name__ + "." + name
+        qualified = ops_package.__name__ + "." + name
         if qualified in sys.modules:
             return sys.modules[qualified]
         spec = importlib.util.spec_from_file_location(qualified, OPS / (name + ".py"))

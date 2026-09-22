@@ -10,6 +10,7 @@ memory-optimization
 performance-comparison
 distributed-mpi
 ascend-910b
+ascend-310p
 corex
 cpp-console
 ```
@@ -20,6 +21,7 @@ cpp-console
 | [显存优化](memory-optimization.md) | 显存不足、想跑更大的批次 |
 | [性能对比](performance-comparison.md) | 与其他框架做可复现的速度对比 |
 | [MPI 分布式](distributed-mpi.md) | 多进程、多卡训练 |
-| [昇腾 910B](ascend-910b.md) | 在华为昇腾 NPU 上运行 |
+| [昇腾 910B](ascend-910b.md) | 在华为昇腾训练 NPU 上运行 |
+| [昇腾 310P](ascend-310p.md) | 在昇腾推理卡上运行（能力边界与降精度开关） |
 | [天数 Corex](corex.md) | 在天数智芯 GPU 上运行 |
 | [C++ 控制台](cpp-console.md) | 直接调用 C++ 接口、嵌入部署 |

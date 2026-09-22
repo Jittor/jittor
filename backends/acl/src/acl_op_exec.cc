@@ -46,6 +46,15 @@
 #include "acl_fused_ascendc.h"
 namespace jittor
 {
+    // FP32 cube ops (matmul/bmm/conv) down-convert through aclnn
+    // ALLOW_FP32_DOWN_PRECISION only when explicitly enabled. Inference SoCs
+    // (Ascend310P) have no FP32 cube path at all, so there KEEP_DTYPE fails;
+    // this flag is the opt-in, mirroring torch.npu.matmul.allow_hf32. The
+    // storage lives in src/runtime/init.cc: the flags binding generator only
+    // scans the core source tree, and a DEFINE here would leave
+    // `jt.flags.acl_allow_hf32` unbound.
+    DECLARE_FLAG(int, acl_allow_hf32);
+
     void free_var_mem(Var *v);
 
     class AclScalarHostCache

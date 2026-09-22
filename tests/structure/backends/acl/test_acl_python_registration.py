@@ -274,7 +274,10 @@ def test_acl_pool_uses_canonical_output_geometry(
         return record_pool(program[0], inputs, output_dtypes, output_shapes, program[1])
 
     namespace = {"jt": providers.native, "acl_program": record_program,
-                 "acl_emit": record_emit, "_POOL_PROGRAMS": {}, "_pool_output_size": None}
+                 "acl_emit": record_emit, "_POOL_PROGRAMS": {}, "_pool_output_size": None,
+                 # The stripped AST keeps only PoolACL's geometry path; the
+                 # SoC gate stays open so the canonical launch is what runs.
+                 "kernel_available": lambda *_args, **_kwargs: True}
     exec(compile(pool_tree, "<actual_pool_acl>", "exec"), namespace)
     monkeypatch.setattr(providers.neural, "PoolACL", namespace["PoolACL"])
     value = _Tensor((1, 2, size, size))

@@ -21,6 +21,9 @@ from ._code import acl_code as setitem_cmd
 from ._code import acl_code as setitem_forward
 
 
+from .._soc import kernel_available
+
+
 def caculate_shape(tensors):
     if isinstance(tensors, jt.Var):
         # tensors = tensors[0]
@@ -161,7 +164,11 @@ class SetItemACL(jt.Function):
                 value_shape = [1]
             if isinstance(value, int) or isinstance(value, float):
                 value = jt.full(value_shape, value)
-            self.value_shape = value_shape
+                self.value_shape = value_shape
+            else:
+                # Pre-broadcast shape: grad reduces back to the caller's
+                # value shape, not the broadcast index shape.
+                self.value_shape = tuple(value.shape)
             for ii in slices:
                 indices.append(jt.Var(ii).int32())
             if (
@@ -175,8 +182,11 @@ class SetItemACL(jt.Function):
                 attr_code = f"""
                 op.jt_name = "indexputimpl";
                 """
-                inputs = [value] + indices
-                outputs = [x.clone()]
+                # base is a tracked input: the runner copies base -> out before
+                # the in-place index-put (a write-only x.clone() output aliases
+                # the base allocation and breaks view write-through).
+                inputs = [x.contiguous(), value] + indices
+                outputs = [jt.empty(x.shape, x.dtype)]
                 result = setitem_cmd(
                     "IndexPutImpl", inputs=inputs, outputs=outputs, attr_code=attr_code
                 )[0]
@@ -199,6 +209,8 @@ class SetItemACL(jt.Function):
         self.input_slice = slices
         if len(slices) < x_dim:
             slices += (slice(None, None, None),) * (x_dim - len(slices))
+        if not kernel_available("StridedSliceAssignV2"):
+            return self._setitem_slice_index_put(x, slices, value)
         sizes = []
         # 适配华为奇怪的要求，最后一个维度的step必须是1
         expand_dim = False
@@ -268,6 +280,64 @@ class SetItemACL(jt.Function):
         # result.sync()
         return result
 
+    def _setitem_slice_index_put(self, x, slices, value):
+        """Slice assignment through IndexPutImpl when the SoC's CANN opp lacks
+        a strided-slice-assign kernel (Ascend310P). The slice lattice becomes
+        broadcast integer index grids; trailing all-range dims stay implicit
+        so IndexPutImpl leaves them to the value broadcast."""
+        # Only dims before the last non-trivial one need index tensors.
+        last = -1
+        for dim, s in enumerate(slices):
+            if isinstance(s, int):
+                last = dim
+            else:
+                if not isinstance(s, slice):
+                    raise NotImplementedError(
+                        "ACL setitem does not support Var slice indices")
+                start, stop, step = s.indices(x.shape[dim])
+                if (start, stop, step) != (0, x.shape[dim], 1):
+                    last = dim
+        lattice = []
+        indices = []
+        for dim in range(last + 1):
+            s = slices[dim]
+            if isinstance(s, int):
+                arr = np.array([s], dtype=np.int32)
+            else:
+                start, stop, step = s.indices(x.shape[dim])
+                arr = np.arange(start, stop, step, dtype=np.int32)
+            lattice.append(arr.size)
+            shape = [1] * (last + 1)
+            shape[dim] = arr.size
+            indices.append(jt.array(arr.reshape(shape)))
+        value_shape = lattice + list(x.shape[last + 1:])
+        if isinstance(value, (int, float)):
+            value = jt.full(value_shape, value, dtype=x.dtype)
+            self.value_shape = tuple(value_shape)
+        else:
+            # Keep the pre-broadcast shape: grad must be reduced and reshaped
+            # back to the caller's value shape, not the index lattice.
+            self.value_shape = tuple(value.shape)
+            if tuple(value.shape) != tuple(value_shape):
+                value = value.broadcast(value_shape)
+        self.type_ = "index"
+        self.indices = indices
+        if not indices:
+            # All-trivial selection (`x[:] = v`): a broadcast copy, no index
+            # tensors to hand to aclnnIndexPutImpl.
+            return value.contiguous()
+        attr_code = """
+        op.jt_name = "indexputimpl";
+        """
+        # Same contract as the index branch above: base first, then value,
+        # then one index tensor per constrained dim.
+        inputs = [x.contiguous(), value] + indices
+        outputs = [jt.empty(x.shape, x.dtype)]
+        result = setitem_cmd(
+            "IndexPutImpl", inputs=inputs, outputs=outputs, attr_code=attr_code
+        )[0]
+        return result
+
     def grad(self, grad_output):
         if self.type_ == "mask":
             mask = self.input_slice
@@ -283,7 +353,7 @@ class SetItemACL(jt.Function):
         value_grad = None
         if self.value_var:
             value_grad = grad_output[self.input_slice]
-            if self.type_ == "slicev2":
+            if self.type_ in ("slicev2", "index"):
                 padded = (1,) * (value_grad.ndim - len(self.value_shape)) + self.value_shape
                 axes = tuple(i for i, (actual, target) in enumerate(zip(value_grad.shape, padded))
                              if target == 1 and actual != 1)

@@ -15,6 +15,8 @@ from .tensor_ops import (
     _isfinite_acl,
     _isinf_acl,
     _isnan_acl,
+    _isneginf_acl,
+    _isposinf_acl,
     _ntuple,
     _pair,
     _quadruple,

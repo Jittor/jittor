@@ -168,6 +168,13 @@ int backend_device_count(const string& name) {
     return backend_registry().get(name).device_count();
 }
 
+string backend_device_name(const string& name) {
+    const auto& ops = backend_registry().get(name);
+    if (!ops.device_name) return "";
+    const char* value = ops.device_name(ops.current_device());
+    return value ? value : "";
+}
+
 void initialize_backend_operators() {
     auto callback = backend_ops(accelerator_backend_id()).register_operators;
     if (callback) callback();

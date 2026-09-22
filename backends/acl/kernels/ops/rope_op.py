@@ -4,6 +4,7 @@ import jittor as jt
 
 
 from ._code import acl_code as rope_cmd
+from .._soc import kernel_available
 
 
 class ExpandRotaryCacheACL:
@@ -99,6 +100,15 @@ class RotaryPositionEmbeddingACL(jt.Function):
         self.input = x
         self.cos = cos
         self.sin = sin
+        self._composite = int(x.shape[-2]) == 1
+        if self._composite:
+            # The CANN rope kernel corrupts degenerate seq_len=1 tiles on
+            # Ascend310P (NaN/garbage for wide head counts). The elementwise
+            # form is the same math and stays correct everywhere.
+            half = int(x.shape[-1]) // 2
+            rot_x = jt.concat(
+                [-x[..., half:], x[..., :half]], dim=-1)
+            return x * cos + rot_x * sin
         output = jt.empty(x.shape, x.dtype)
         return rope_cmd(
             "RotaryPositionEmbedding",
@@ -108,6 +118,9 @@ class RotaryPositionEmbeddingACL(jt.Function):
         )[0]
 
     def grad(self, grad_output):
+        if self._composite or not kernel_available(
+                "RotaryPositionEmbeddingGrad"):
+            return self._grad_composite(grad_output)
         outputs = [
             jt.empty(self.input.shape, self.input.dtype),
             jt.empty(self.cos.shape, self.cos.dtype),
@@ -120,3 +133,33 @@ class RotaryPositionEmbeddingACL(jt.Function):
             attr_code='op.jt_name = "rotary_position_embedding_grad";',
         )
         return result[0], result[1], result[2]
+
+    def _grad_composite(self, grad_output):
+        """Mode-0 (half) rotary backward from elementwise ops, for SoCs whose
+        CANN opp has the forward kernel but no grad kernel (Ascend310P).
+
+        Forward is out = x*cos + R(x)*sin with R([x1,x2]) = [-x2, x1] on the
+        half split. R is orthogonal with R^T = -R, so
+        dx = dy*cos + R^T(dy*sin) = dy*cos + [dy2*sin2, -dy1*sin1]."""
+        x, cos, sin = self.input, self.cos, self.sin
+        half = int(x.shape[-1]) // 2
+        dy_sin = grad_output * sin
+        dx = grad_output * cos + jt.concat(
+            [dy_sin[..., half:], -dy_sin[..., :half]], dim=-1
+        )
+        rot_x = jt.concat([-x[..., half:], x[..., :half]], dim=-1)
+        dcos = _reduce_to_shape(grad_output * x, cos.shape)
+        dsin = _reduce_to_shape(grad_output * rot_x, sin.shape)
+        return dx, dcos, dsin
+
+
+def _reduce_to_shape(value, target_shape):
+    """Sum ``value`` over the axes a broadcast ``target_shape`` collapses."""
+    axes = [
+        axis
+        for axis, (actual, target) in enumerate(zip(value.shape, target_shape))
+        if target == 1 and actual != 1
+    ]
+    if axes:
+        value = value.sum(tuple(axes), keepdims=True)
+    return value.reshape(target_shape)
