@@ -1,6 +1,7 @@
 """Stable compiler/transform facades and explicit installation bindings."""
 
 import sys as _sys
+from dataclasses import dataclass as _dataclass
 
 import jittor as jt
 
@@ -76,12 +77,68 @@ def _identity(value):
     return value
 
 
+def _triton_helpers_getattr(name):
+    if name != "libdevice":
+        raise AttributeError("torch._inductor.runtime.triton_helpers has no attribute %r" % name)
+    # Keep Triton optional until a consumer requests device math. The existing
+    # bridge preserves upstream functions and launches them on Jittor tensors;
+    # its no-Triton shim raises explicitly if a kernel cannot be executed.
+    from ...triton import install
+    triton = install()
+    if getattr(triton, "__triton_shim__", False):
+        from ...triton.language import libdevice
+    else:
+        from triton.language.extra import libdevice
+    return libdevice
+
+
 class Graph:
     """Annotation placeholder; no FX graph representation."""
 
 
 class GraphModule:
     """Annotation placeholder; no FX graph execution."""
+
+
+def _graph_pickle_ops_filter(name):
+    return name.startswith(("torch.ops.aten", "torch.ops.fbgemm"))
+
+
+def _graph_pickle_metadata_filter(key):
+    return key not in ("source_fn_stack", "nn_module_stack", "fwd_source_fn_stack")
+
+
+@_dataclass
+class Options:
+    """FX pickler option fields for import compatibility, not serialization."""
+
+    ops_filter: typing.Optional[typing.Callable[[str], bool]] = _graph_pickle_ops_filter
+    node_metadata_key_filter: typing.Optional[typing.Callable[[str], bool]] = _graph_pickle_metadata_filter
+
+
+class GraphPickler:
+    """Importable compiler boundary; Jittor cannot serialize FX artifacts."""
+
+    @staticmethod
+    def _unsupported():
+        raise NotImplementedError(
+            "FX graph serialization is unsupported by Jittor; use eager execution "
+            "without compiled graph caching."
+        )
+
+    def __init__(self, file, options=None):
+        self._unsupported()
+
+    @classmethod
+    def dumps(cls, obj, options=None):
+        cls._unsupported()
+
+    @staticmethod
+    def loads(data, fake_mode):
+        GraphPickler._unsupported()
+
+    def reducer_override(self, obj):
+        GraphPickler._unsupported()
 
 
 class Proxy:
@@ -396,7 +453,7 @@ def _api_onnx_is_in_onnx_export():
     return False
 
 
-_COMPILER_PLACEHOLDERS = frozenset((Graph, GraphModule, Proxy, Node, OptimizedModule,
+_COMPILER_PLACEHOLDERS = frozenset((Graph, GraphModule, GraphPickler, Proxy, Node, OptimizedModule,
                                    onnx_export))
 
 
@@ -485,7 +542,15 @@ def install(ctx):
     _inductor_config._config = {}
     _inductor_config.triton = _types2.SimpleNamespace(cudagraphs=False)
     _inductor.config = _inductor_config
+    _inductor_runtime = _types2.ModuleType("torch._inductor.runtime")
+    _inductor_runtime.__path__ = []
+    _triton_helpers = _types2.ModuleType("torch._inductor.runtime.triton_helpers")
+    _triton_helpers.__getattr__ = _triton_helpers_getattr
+    _inductor_runtime.triton_helpers = _triton_helpers
+    _inductor.runtime = _inductor_runtime
     _modules["torch._inductor"] = _inductor
+    _modules["torch._inductor.runtime"] = _inductor_runtime
+    _modules["torch._inductor.runtime.triton_helpers"] = _triton_helpers
     _modules["torch._inductor.custom_graph_pass"] = _custom_graph_pass
     _modules["torch._inductor.config"] = _inductor_config
     g._inductor = _inductor
@@ -594,6 +659,11 @@ def install(ctx):
     _fx.Node = Node
     _fx.wrap = _api_fx_wrap
     _modules["torch.fx"] = _fx
+    _graph_pickler = _types2.ModuleType("torch.fx._graph_pickler")
+    _graph_pickler.GraphPickler = GraphPickler
+    _graph_pickler.Options = Options
+    _fx._graph_pickler = _graph_pickler
+    _modules["torch.fx._graph_pickler"] = _graph_pickler
     g.fx = _fx
     # torch._dynamo: minimal importable stubs for libraries that probe or
     # decorate with Dynamo APIs. Jittor runs eagerly/JIT through its own stack.

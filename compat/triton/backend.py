@@ -1270,9 +1270,11 @@ def _run(jitfn, args, kwargs, grid):
             runtime_vals.append((name, signature[name], val))
             out_vars.append(val)
         elif val is None:
-            # triton models a None pointer arg as *i8; pass null
-            signature[name] = "*i8"
-            runtime_vals.append((name, "*i8", None))
+            # None is an absent compile-time argument, not a runtime null
+            # pointer. Passing *i8 makes `ptr is not None` true during Triton
+            # compilation, so optional-output guards can write through NULL.
+            # Specialize it exactly like a constexpr and omit its launch slot.
+            constants[name] = None
         else:
             val = _unwrap_constexpr(val)
             sig = _scalar_sig(val)

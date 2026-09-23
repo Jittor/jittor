@@ -181,3 +181,35 @@ JIT 编译超过 10 分钟仍未完成，已在有界窗口内停止，**未取�
 
 **证据状态**：三条生命周期契约机器验证通过（9 passed）；任务给的全目录 HOST_ONLY 结果主要
 反映 HOST_ONLY 桩的覆盖边界。真后端数值/engine/速度数字仍**仅报告**。
+
+
+## Engine acceptance runner (2026-09-23)
+
+`acceptance.py` runs one real-engine case per process and saves options, request
+lengths, generated token IDs/text, timing and any exception to a caller-provided
+JSON path. Select `--backend jittor` or `--backend oracle` in the corresponding
+isolated environment; the runner asserts the actual Torch identity. Cases are
+`batch`, `long`, `random`, `multigpu`, `fp8`, `compile`, `cudagraph`, `other`, and
+`benchmark`. Model weights and output files must live outside the checkout.
+For example, after activating one backend:
+
+```bash
+python agent/skills/vllm-torch-compat/acceptance.py \
+  --backend jittor --case random --model "$MODEL_PATH" \
+  --logprobs 5 --output "$RESULT_DIR/shim-random.json"
+```
+
+The benchmark measures offline engine end-to-end generation latency and aggregate
+output tokens/s, not HTTP serving, TTFT or inter-token latency. Run three separate
+processes per backend, each with three warmups and 21 measurements for batch sizes
+1 and 4, on the same physical GPU. Use separate test/benchmark caches, and compare
+tokens as well as timings. Multi-GPU uses the multiprocessing executor and ordinary
+collectives; the script has a spawn-safe main guard. On systems with long cache
+paths, set `VLLM_RPC_BASE_PATH` to a short writable directory. Jittor also needs its
+NCCL headers/library configured and compiled serially before multiple workers.
+
+A JSON `status=completed` only records the runner's stated assertions; compare
+oracle artifacts before claiming numerical parity. Unsupported graph/quantized/
+distributed modes must remain failures, not be silently switched to eager/FP16/TP1.
+Current tested versions, failures and limits are in
+[the acceptance report](../../../docs/results/2026-09-23-vllm-uva-topk.md).

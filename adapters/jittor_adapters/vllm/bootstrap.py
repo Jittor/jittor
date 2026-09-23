@@ -125,7 +125,7 @@ def arm(transaction=None, *, register_callback=None):
     has to read the same every time it is taken.
     """
 
-    from . import backend, layers, flash_attn
+    from . import backend, layers, flash_attn, model_loader, buffers
     registrar = register_module_patch if register_callback is None else register_callback
 
     if not any(isinstance(finder, _ArmOnFirstImport) for finder in sys.meta_path):
@@ -146,7 +146,8 @@ def arm(transaction=None, *, register_callback=None):
                     )
                 sys.meta_path.pop(i)
             transaction.record_undo(restore_finder)
-    for patches in (backend.PATCHES, layers.PATCHES, flash_attn.PATCHES):
+    for patches in (backend.PATCHES, layers.PATCHES, flash_attn.PATCHES,
+                    model_loader.PATCHES, buffers.PATCHES):
         for path, patch in patches.items():
             registrar(path, patch)
     return True

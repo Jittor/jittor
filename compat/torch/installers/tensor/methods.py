@@ -19,6 +19,7 @@ from .method_api import (
     _api_nonzero,
     _api_normal,
     _api_uniform,
+    _api_exponential,
     _api_tolist,
     _api_contiguous,
     _api_argwhere,
@@ -231,6 +232,13 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         Var.argwhere = _api_argwhere_alias
     Var.normal_ = _api_normal
     Var.uniform_ = _api_uniform
+    Var.exponential_ = _api_exponential
+    register_fidelity(
+        "torch.Tensor.exponential_", _api_exponential, Fidelity.APPROXIMATE,
+        "Native device uniform RNG with inverse-CDF exponential draws and "
+        "in-place writeback; explicit generators are unsupported and samples "
+        "are not bitwise identical to Torch RNG streams",
+    )
 
     # torch tensors are hashable by identity (they define __eq__ elementwise but
     # keep an id-based __hash__). jittor's Var defines __eq__ and so becomes

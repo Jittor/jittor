@@ -1368,6 +1368,37 @@ def _api_uniform(self, a=0.0, b=1.0, generator=None):
     return _ip(self, (_owner.jt.rand(self.shape) * (b - a) + a).cast(_jittor_dtype_name(self.dtype)))
 
 
+def _api_exponential(self, lambd=1.0, *, generator=None):
+    if generator is not None:
+        raise NotImplementedError(
+            "Tensor.exponential_ with an explicit generator requires a native "
+            "device generator stream; host sampling is not supported"
+        )
+    rate = float(lambd)
+    if not rate > 0:
+        raise RuntimeError("exponential_ requires lambd > 0")
+    dtype = _jittor_dtype_name(self.dtype)
+    if dtype not in ("float16", "bfloat16", "float32", "float64"):
+        raise RuntimeError("exponential_ requires a floating-point tensor")
+    from ...frontend import tensor_frontend
+    context = get_install_context(_owner.jt)
+    with tensor_frontend(context.target_namespace.Var, like=self):
+        # Reuse the native device RNG and mathematical primitives. CPU uniform
+        # draws can include 0, while cuRAND draws can include 1; keep the inverse
+        # CDF strictly inside its domain before narrowing to the target dtype.
+        draw_dtype = "float64" if dtype == "float64" else "float32"
+        tiny = 2.0 ** (-1022 if dtype == "float64" else -126)
+        upper = 1.0 - 2.0 ** (-53 if dtype == "float64" else -24)
+        uniform = _owner.jt.random(self.shape, draw_dtype, "uniform")
+        # Uniform draws are finite by construction. Select endpoints directly;
+        # the general clamp also builds NaN-preservation checks, which are
+        # unnecessary here and can reach the shim's separate isnan kernel.
+        uniform = _owner.jt.ternary(uniform < tiny, tiny, uniform)
+        uniform = _owner.jt.ternary(uniform > upper, upper, uniform)
+        values = (-_owner.jt.log(uniform) / rate).cast(dtype)
+        return _ip(self, values)
+
+
 def _api_tolist(self):
     return self.item() if getattr(self, '_torch_0d', False) else self.numpy().tolist()
 

@@ -2290,3 +2290,42 @@ about whether to take it.
   does not by itself settle which backend the op belongs to.
 - Exit condition: all three classes in that file pass, with the mechanism
   behind attempt 2's collateral damage understood rather than worked around.
+
+## KI-VLLM-001: advanced engine modes remain outside verified Jittor support
+
+- Severity: Research
+- Status: Reproduced on CUDA, 2026-09-23; vLLM 0.24.0 only
+- Baseline: `61294cd14673ba60f4072542a2e73ea2c8f8c509` plus the vLLM acceptance changes
+- Owner: vLLM adapter and Torch compatibility maintainers
+- Evidence: run `agent/skills/vllm-torch-compat/acceptance.py` in isolated
+  shim/oracle environments with `--case multigpu`, `fp8`, `compile`,
+  `cudagraph`, or `other`; options, current failures and raw-artifact names are
+  in [the acceptance report](../../docs/results/2026-09-23-vllm-uva-topk.md).
+- Boundaries: TP=2 gets through NCCL initialization but lacks a real CPU
+  communication group; FP8 import needs `torch.library.wrap_triton` and its
+  calculation kernels remain unimplemented; compilation needs the FX/Inductor
+  integration; graph capture lacks a usable graph pool; OPT-125m's legacy
+  sampler warmup requires an explicit-generator exponential RNG stream.
+- Workaround: use the tested Qwen3-0.6B FP16, TP=1, eager configuration. A mode
+  that errors is not silently substituted with that configuration. This does
+  not claim support for arbitrary models, contexts or production serving.
+- Exit condition: implement the relevant public compatibility contract or
+  adapter operator, preserve the regression reproducer, and pass that real
+  engine mode with an independent oracle and stated correctness criteria.
+
+## KI-SCALAR-001: full_like truncates a large int64 fill scalar
+
+- Severity: High
+- Status: Reproduced on CUDA, 2026-09-23
+- Baseline: `61294cd14673ba60f4072542a2e73ea2c8f8c509` plus the vLLM acceptance changes
+- Owner: Jittor scalar-factory maintainers
+- Evidence: with CUDA enabled, `x = jt.zeros((1,), dtype="int64")`, then
+  `jt.full_like(x, 2**60 + 17).numpy()` yields `[17]` instead of
+  `[1152921504606846993]`. The unversioned `full-like-int64-boundary.log` is
+  under `$JITTOR_LAB_ROOT/_state/vllm-acceptance/20260923/`.
+- Workaround: construct the fill using `jt.array(value, dtype=x.dtype)` in the
+  destination device scope and broadcast explicitly. The repaired native
+  `index_fill` uses this path and passes exact-value CPU/CUDA tests.
+- Exit condition: fix the generic scalar construction path and verify large
+  signed int64 fills on CPU and CUDA, without regressing smaller integer or
+  floating factories. The index-fill repair does not resolve this general issue.

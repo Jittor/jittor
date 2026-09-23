@@ -1,6 +1,44 @@
 import sys
+import types
 import pytest
 from jittor.compat.transaction import InstallTransaction, TransactionConflict
+
+
+def test_rollback_preserves_conflict_without_importing_tensor_cache(monkeypatch):
+    """Cleanup must not invoke a foreign finder to load unused tensor caches."""
+    monkeypatch.delitem(sys.modules, "jittor.compat.torch.tensor_state", raising=False)
+
+    class RejectTensorImport:
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname.startswith("jittor.compat.torch"):
+                raise AssertionError("rollback attempted a new tensor-state import")
+            return None
+
+    target = types.SimpleNamespace(value="original")
+    tx = InstallTransaction("vllm.rollback-import")
+    tx.record(target, "value", "original", "owned")
+    target.value = "external"
+    original_meta_path = list(sys.meta_path)
+    try:
+        sys.meta_path.insert(0, RejectTensorImport())
+        with pytest.raises(TransactionConflict, match="lost.*value"):
+            tx.rollback()
+        assert target.value == "external"
+        assert tx.state == "failed"
+    finally:
+        sys.meta_path[:] = original_meta_path
+
+
+def test_rollback_clears_already_loaded_tensor_cache(monkeypatch):
+    module = types.ModuleType("jittor.compat.torch.tensor_state")
+    cached_bindings = {"owner": object()}
+    module._clear_resolution_caches = cached_bindings.clear
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    tx = InstallTransaction("vllm.rollback-cache")
+    tx.rollback()
+    assert cached_bindings == {}
+    assert tx.state == "rolled_back"
+
 
 def test_vllm_arming_finder_rollback_rejects_an_external_replacement():
     """The one failure the ledger exists to surface must not be the one it hides.
@@ -52,4 +90,3 @@ def test_vllm_arming_finder_rollback_removes_the_entry_it_owns():
     finally:
         sys.meta_path[:] = original_meta_path
         vllm._installed = original_installed
-

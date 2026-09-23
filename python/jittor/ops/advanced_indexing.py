@@ -68,7 +68,7 @@ def index_fill_(x,dim,indexs,val):
     # broken three ways: f'i{dim}' crashed JIT compile for negative dim (emits 'i-1'),
     # it iterated the index TENSOR into an f-string (only worked for a python int list),
     # and it overwrote `indexs`. Rewrite mask-based: build a 1-D membership mask along
-    # `dim` and blend. Matches torch.index_fill_ (in-place); index may be a tensor/list.
+    # `dim` and select. Matches torch.index_fill_ (in-place); index may be a tensor/list.
     res = jt.misc.index_fill(x, dim, indexs, val)
     return x.assign(res)
 
@@ -83,8 +83,16 @@ def index_fill(x, dim, index, val):
     ar = jt.arange(size).cast(idx.dtype)
     mask1d = (ar.reshape((-1, 1)) == idx.reshape((1, -1))).any(1)      # (size,) bool
     shp = [1] * x.ndim; shp[d] = size
-    mask_f = mask1d.reshape(shp).broadcast(x.shape).float32()
-    return x * (1 - mask_f) + float(val) * mask_f
+    mask = mask1d.reshape(shp).broadcast(x.shape)
+    # Selection must not convert untouched integers through floating point or
+    # multiply overwritten NaN/Inf values by zero. The fill shares x's dtype
+    # and placement, so both branches preserve their exact stored values.
+    from .._core.var import device_scope_like
+    with device_scope_like(x):
+        # Supply dtype at construction: full_like's scalar fast path can
+        # first narrow a Python int to int32 before casting it to int64.
+        fill = jt.array(val, dtype=x.dtype).broadcast(x.shape)
+    return jt.ternary(mask, fill, x)
 
 
 def _indexing_dim(op, x, dim):

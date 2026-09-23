@@ -3,6 +3,56 @@
 import types
 import unittest
 
+import pytest
+
+
+@pytest.fixture(scope="module")
+def registered_ops():
+    import torch
+    from jittor_adapters.vllm import custom_ops
+
+    custom_ops.register(torch)
+    return torch.ops._C
+
+
+def test_get_cuda_view_from_cpu_tensor_is_a_real_device_copy(registered_ops):
+    import numpy as np
+    import jittor as jt
+    source = jt.array(np.arange(7, dtype="float32"))
+    moved = registered_ops.get_cuda_view_from_cpu_tensor(source)
+    assert moved is not source
+    assert str(moved.device) == "cuda:0"
+    np.testing.assert_array_equal(moved.numpy(), np.arange(7, dtype="float32"))
+
+
+@pytest.mark.parametrize("name", [
+    "static_scaled_fp8_quant", "dynamic_scaled_fp8_quant",
+    "dynamic_per_token_scaled_fp8_quant", "per_token_group_fp8_quant",
+    "scaled_fp4_quant", "rms_norm_static_fp8_quant",
+    "rms_norm_dynamic_per_token_quant", "rms_norm_per_block_quant",
+    "fused_add_rms_norm_static_fp8_quant", "silu_and_mul_nvfp4_quant",
+    "silu_and_mul_per_block_quant", "silu_and_mul_quant",
+    "fused_qk_norm_rope", "cutlass_scaled_mm",
+])
+def test_unsupported_compute_ops_are_importable_but_refuse_execution(name, registered_ops):
+    import torch
+    op = getattr(registered_ops, name).default
+    out = torch.zeros(4, device="cuda")
+    source = torch.ones(4, device="cuda")
+    scale = torch.ones(1, device="cuda")
+    with pytest.raises(NotImplementedError, match=name):
+        op(out, source, scale)
+
+
+def test_real_capability_probes_report_unavailable(registered_ops):
+    for name in (
+        "cutlass_scaled_mm_supports_fp8", "cutlass_scaled_mm_supports_fp4",
+        "cutlass_scaled_mm_supports_block_fp8", "cutlass_group_gemm_supported",
+        "cutlass_sparse_scaled_mm_supported",
+        "cutlass_blockwise_scaled_grouped_mm_supported", "cutlass_mla_supported",
+    ):
+        assert getattr(registered_ops, name)(89) is False
+
 from jittor_adapters.vllm import backend
 
 

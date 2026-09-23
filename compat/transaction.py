@@ -1,6 +1,7 @@
 """Reversible mutation ledger for compatibility installation (7.05 precursor)."""
 from __future__ import absolute_import
 
+import sys
 import threading
 from contextlib import contextmanager
 from functools import wraps
@@ -19,14 +20,15 @@ def _clear_resolution_caches():
     back, so the memo is dropped at the ledger boundary rather than validated
     afterwards.
 
-    `compat/transaction.py` is deliberately importable without Jittor, so the
-    import is local and its absence is not an error.
+    Only an already loaded tensor-state module can hold cached resolutions.
+    Do not import it during rollback: a foreign import finder may be the very
+    ownership conflict being reported, and invoking it would mask that error.
     """
-    try:
-        from .torch.tensor_state import _clear_resolution_caches as clear
-    except ImportError:
-        return
-    clear()
+    module = sys.modules.get(__package__ + ".torch.tensor_state")
+    if module is not None:
+        clear = vars(module).get("_clear_resolution_caches")
+        if clear is not None:
+            clear()
 
 
 class InstallTransaction:
