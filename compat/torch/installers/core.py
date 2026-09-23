@@ -6,6 +6,7 @@ changing the compatibility semantics.
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
+import sys as _sys_misc
 import types as _types_misc
 import numpy as _np
 
@@ -988,12 +989,84 @@ _STORAGE_TYPES = (
     ByteStorage,
     BoolStorage,
 )
+def fork_rng(devices=None, enabled=True, _caller="fork_rng",
+             _devices_kw="devices", device_type="cuda"):
+    """torch.random.fork_rng: run a block, then put the RNG back.
+
+    A context manager, not a function -- callers write
+    `with torch.random.fork_rng(devices=[0]):`. MiniMax-H3's reference-to-video
+    path uses it around its sampling, and without it the request died with
+    `module 'torch.random' has no attribute 'fork_rng'`.
+
+    `devices=None` means every visible device of `device_type`, which is what
+    torch does; passing an explicit list is cheaper and is what callers that
+    care do. `enabled=False` makes the whole thing a no-op, again as torch
+    does, so a caller can keep one code path for both.
+    """
+    return _ForkRng(devices, enabled, device_type)
+
+
+class _ForkRng:
+    """The context manager behind :func:`fork_rng`.
+
+    Written as a class rather than `@contextlib.contextmanager` so that the
+    state is captured on `__enter__`, not when the generator object is made.
+    `with fork_rng():` and `cm = fork_rng(); with cm:` then behave the same,
+    which a generator-based one would not.
+    """
+
+    def __init__(self, devices, enabled, device_type):
+        self._devices = devices
+        self._enabled = bool(enabled)
+        self._device_type = device_type
+        self._cpu_state = None
+        self._device_states = ()
+        self._targets = ()
+
+    def _accelerator(self):
+        if self._device_type != "cuda":
+            return None
+        module = _sys_misc.modules.get("torch")
+        cuda = getattr(module, "cuda", None)
+        if cuda is None or not getattr(cuda, "is_available", lambda: False)():
+            return None
+        return cuda
+
+    def __enter__(self):
+        if not self._enabled:
+            return self
+        self._cpu_state = get_rng_state()
+        cuda = self._accelerator()
+        if cuda is not None:
+            devices = self._devices
+            if devices is None:
+                devices = range(int(cuda.device_count()))
+            self._targets = tuple(int(device) for device in devices)
+            self._device_states = tuple(
+                cuda.get_rng_state(device) for device in self._targets)
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        if not self._enabled:
+            return False
+        # Restore on the way out of a failure too: a block that raised has
+        # still consumed randomness, and leaving the stream advanced would make
+        # the next draw depend on whether an unrelated error happened.
+        set_rng_state(self._cpu_state)
+        cuda = self._accelerator()
+        if cuda is not None:
+            for device, state in zip(self._targets, self._device_states):
+                cuda.set_rng_state(state, device)
+        return False
+
+
 _MISC_BINDINGS = {
     "manual_seed": manual_seed,
     "initial_seed": initial_seed,
     "seed": seed,
     "get_rng_state": get_rng_state,
     "set_rng_state": set_rng_state,
+    "fork_rng": fork_rng,
     "is_tensor": is_tensor,
     "numel": numel,
     "PyTorchFileReader": PyTorchFileReader,
@@ -1099,6 +1172,7 @@ for _name, _implementation in (
     ("seed", _torch_seed),
     ("get_rng_state", get_rng_state),
     ("set_rng_state", set_rng_state),
+    ("fork_rng", fork_rng),
 ):
     register_fidelity(
         "torch.random." + _name,
@@ -1131,7 +1205,8 @@ def install_misc(ctx):
     random = modules.get("torch.random")
     if not isinstance(random, _RandomModule):
         random = modules["torch.random"] = _RandomModule("torch.random")
-    for name in ("manual_seed", "initial_seed", "get_rng_state", "set_rng_state"):
+    for name in ("manual_seed", "initial_seed", "get_rng_state",
+                 "set_rng_state", "fork_rng"):
         setattr(random, name, _MISC_BINDINGS[name])
     random.seed = _torch_seed
     owner.random = random

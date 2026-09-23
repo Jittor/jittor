@@ -243,8 +243,44 @@ def _copy_tensor(dst, src):
         dst[:] = src
 
 
-def _collective_result(value, async_op):
-    return _JittorWork(value) if async_op else None
+def _sync_collective(value):
+    """Force an already-expressed collective to actually run.
+
+    Jittor is lazy: `mpi_broadcast`/`mpi_all_reduce` express the operation and
+    the NCCL call happens whenever something later forces a flush. Inside one
+    process that is free; across a process group it is not, because the order
+    collectives are *issued* in is a contract between peers and no single
+    process's scheduler can see it.
+
+    Measured: MiniMax-H3 ref2va on four TP ranks deadlocked with three ranks
+    inside `_encode_visual_conditions` and one still inside `encode_prompt`,
+    both in `_broadcast_tensor`'s `.tolist()`. Rank 0 carries the real tensor
+    and so has a different op graph from its peers; its flush ran one
+    collective while theirs had already run that one and started the next, and
+    the two NCCL calls no longer matched. Twenty minutes apart the stacks were
+    identical. Under PyTorch the same code is safe because a synchronous
+    collective has been issued by the time it returns.
+
+    So a synchronous collective syncs here, which is what `async_op=False`
+    promises. `_barrier` already did this; nothing else did.
+    """
+    for item in (value if isinstance(value, (list, tuple)) else (value,)):
+        sync = getattr(item, "sync", None)
+        if callable(sync):
+            sync()
+
+
+def _collective_result(value, async_op, issued=False):
+    """`issued` says a collective was actually expressed and must be flushed.
+
+    Passed False on the paths that short-circuit -- a single-member group, an
+    out-of-group rank -- so those keep costing nothing.
+    """
+    if async_op:
+        return _JittorWork(value)
+    if issued:
+        _sync_collective(value)
+    return None
 
 
 def _reduce_name(op, reduce_op):
@@ -415,12 +451,15 @@ _ReduceOp.RedOpType = _ReduceOp
 def _all_reduce(tensor, op=None, group=None, async_op=False):
     size = _require_supported_group(group, allow_subgroup=True)
     if group is not None and getattr(group, "rank", lambda: 0)() < 0:
-        return _collective_result(tensor, async_op)
+        # This rank is not in the group, so it issues nothing and must not
+        # flush: syncing here would make a non-participant pay for -- and wait
+        # on -- work it is not part of.
+        return _collective_result(tensor, async_op, issued=False)
     reduce_name = _reduce_name(op, _ReduceOp)
     if group is not None and hasattr(group, "_all_reduce"):
         result = group._all_reduce(tensor, reduce_name)
         _copy_tensor(tensor, result)
-        return _collective_result(tensor, async_op)
+        return _collective_result(tensor, async_op, issued=True)
     if size > 1:
         if reduce_name in ("sum", "mean"):
             result = tensor.mpi_all_reduce(reduce_name)
@@ -436,7 +475,7 @@ def _all_reduce(tensor, op=None, group=None, async_op=False):
                 else:
                     result = result * gathered[rank]
         _copy_tensor(tensor, result)
-    return _collective_result(tensor, async_op)
+    return _collective_result(tensor, async_op, issued=size > 1)
 
 
 def _all_gather(tensor_list, tensor, group=None, async_op=False):
@@ -452,7 +491,7 @@ def _all_gather(tensor_list, tensor, group=None, async_op=False):
             part = gathered[rank * numel:(rank + 1) * numel].reshape(
                 tensor.shape)
             _copy_tensor(tensor_list[rank], part)
-    return _collective_result(tensor_list, async_op)
+    return _collective_result(tensor_list, async_op, issued=size > 1)
 
 
 def _all_gather_into_tensor(output_tensor, input_tensor, group=None,
@@ -463,7 +502,7 @@ def _all_gather_into_tensor(output_tensor, input_tensor, group=None,
         else _native_all_gather_flat(input_tensor)
     )
     _copy_tensor(output_tensor, gathered.reshape(output_tensor.shape))
-    return _collective_result(output_tensor, async_op)
+    return _collective_result(output_tensor, async_op, issued=size > 1)
 
 
 def _broadcast(tensor, src=0, group=None, async_op=False, group_src=None):
@@ -471,7 +510,7 @@ def _broadcast(tensor, src=0, group=None, async_op=False, group_src=None):
     root = int(src if group_src is None else group_src)
     if size > 1:
         _copy_tensor(tensor, tensor.mpi_broadcast(root))
-    return _collective_result(tensor, async_op)
+    return _collective_result(tensor, async_op, issued=size > 1)
 
 
 def _barrier(group=None, async_op=False, device_ids=None):
@@ -481,7 +520,7 @@ def _barrier(group=None, async_op=False, device_ids=None):
         marker = jt.array(np.asarray([_distributed_rank()], dtype=np.int32))
         marker = marker.mpi_all_reduce("sum")
         marker.sync()
-    return _collective_result(marker, async_op)
+    return _collective_result(marker, async_op, issued=False)
 
 
 def _broadcast_object_list(object_list, src=0, group=None, device=None):
