@@ -57,6 +57,7 @@ from .api import (
     _api_cuda_set_rng_state,
     _api_cuda_set_rng_state_all,
     _api_cuda_synchronize,
+    _api_cudnn_flags,
     _api_cudnn_version,
     _api_functorch_c__add_batch_dim,
     _api_functorch_c__remove_batch_dim,
@@ -362,6 +363,7 @@ def _install_cuda(g, registry=None):
     cudnn.benchmark = getattr(cudnn, "benchmark", False)
     cudnn.deterministic = getattr(cudnn, "deterministic", False)
     cudnn.version = getattr(cudnn, "version", _api_cudnn_version)
+    cudnn.flags = getattr(cudnn, "flags", _api_cudnn_flags)
     if not isinstance(getattr(cudnn, "conv", None), _PrecisionBackend):
         cudnn.conv = _PrecisionBackend("cudnn", "torch.backends.cudnn.conv")
     if not isinstance(getattr(cudnn, "rnn", None), _PrecisionBackend):

@@ -989,6 +989,52 @@ _STORAGE_TYPES = (
     ByteStorage,
     BoolStorage,
 )
+class _DefaultGenerator:
+    """`torch.default_generator`: a handle on the *global* CPU generator.
+
+    Deliberately not a `Generator` instance. That class owns a private stream
+    so that two generators seeded alike agree whatever the process has already
+    done -- which is exactly what the default generator must *not* do, because
+    `torch.manual_seed(n)` seeds this one and `torch.get_rng_state()` is its
+    state. So this delegates and holds nothing; anything else would let the two
+    drift apart.
+
+    Missing entirely before, and the shim's namespace reports a missing name by
+    raising `AttributeError(name)`, so MiniMax-H3's reference path failed with
+    a bare `default_generator` and nothing to say where it came from.
+    """
+
+    @property
+    def device(self):
+        return _torch_device_misc("cpu")
+
+    def manual_seed(self, value):
+        manual_seed(value)
+        return self
+
+    def initial_seed(self):
+        return initial_seed()
+
+    def seed(self):
+        return seed()
+
+    def get_state(self):
+        return get_rng_state()
+
+    def set_state(self, state):
+        set_rng_state(state)
+        return self
+
+    def __repr__(self):
+        return "<torch.Generator object (default, device=cpu)>"
+
+
+def _torch_device_misc(spelling):
+    module = _sys_misc.modules.get("torch")
+    factory = getattr(module, "device", None)
+    return factory(spelling) if callable(factory) else spelling
+
+
 def fork_rng(devices=None, enabled=True, _caller="fork_rng",
              _devices_kw="devices", device_type="cuda"):
     """torch.random.fork_rng: run a block, then put the RNG back.
@@ -1041,7 +1087,12 @@ class _ForkRng:
             devices = self._devices
             if devices is None:
                 devices = range(int(cuda.device_count()))
-            self._targets = tuple(int(device) for device in devices)
+            # Passed through as given, not coerced with `int()`. Callers hand
+            # this whatever torch accepts -- MiniMax-H3's VAE passes
+            # `[torch.device('cuda:0')]` -- and `int()` on a device object
+            # raises "int() argument must be ... not 'device'". The accessors
+            # below already take an index, a device or a string.
+            self._targets = tuple(devices)
             self._device_states = tuple(
                 cuda.get_rng_state(device) for device in self._targets)
         return self
@@ -1067,6 +1118,7 @@ _MISC_BINDINGS = {
     "get_rng_state": get_rng_state,
     "set_rng_state": set_rng_state,
     "fork_rng": fork_rng,
+    "default_generator": _DefaultGenerator(),
     "is_tensor": is_tensor,
     "numel": numel,
     "PyTorchFileReader": PyTorchFileReader,

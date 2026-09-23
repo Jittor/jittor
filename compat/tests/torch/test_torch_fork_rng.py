@@ -65,6 +65,46 @@ class TestForkRng(unittest.TestCase):
             jt.random((4,)).sync()
         np.testing.assert_allclose(_draw(), expected)
 
+    def test_devices_may_be_device_objects(self):
+        """The list is whatever torch accepts, not necessarily ints.
+
+        MiniMax-H3's VAE passes `[torch.device('cuda:0')]`. Coercing with
+        `int()` raised "int() argument must be ... not 'device'" and killed the
+        request -- every earlier test here passed `[]` or `[0]`, which is how
+        that got through.
+        """
+        spellings = [[], [torch.device("cpu")]]
+        if jt.has_cuda:
+            spellings += [[torch.device("cuda:0")], ["cuda:0"], [0]]
+        for devices in spellings:
+            with self.subTest(repr(devices)):
+                with torch.random.fork_rng(devices=devices):
+                    jt.random((2,)).sync()
+
+    @unittest.expectedFailure
+    def test_forking_away_from_a_fresh_seed(self):
+        """Known gap: the CPU RNG state is the seed, not the position.
+
+        `core.py::_get_rng_state` returns `[initial_seed()]` and
+        `_set_rng_state` just re-seeds, so a restore **rewinds** to the start of
+        the sequence instead of continuing from the fork point. When the fork
+        happens right after `manual_seed`, rewinding and continuing coincide --
+        which is why every other test in this file passes, and why this gap
+        survived: they all capture state immediately after seeding.
+
+        The CUDA side was given real position accounting (cuRAND offsets); the
+        CPU side never was. Expected-failure rather than deleted so the
+        limitation is visible and this flips the moment someone fixes it.
+        """
+        torch.manual_seed(7)
+        jt.random((5,)).sync()          # advance away from the seed point
+        expected = _draw()
+        torch.manual_seed(7)
+        jt.random((5,)).sync()
+        with torch.random.fork_rng(devices=[]):
+            jt.random((11,)).sync()
+        np.testing.assert_allclose(_draw(), expected)
+
     @unittest.skipUnless(jt.has_cuda, "no CUDA device")
     def test_device_states_round_trip(self):
         with jt.flag_scope(use_cuda=1):

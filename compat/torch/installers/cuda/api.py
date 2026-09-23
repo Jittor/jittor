@@ -1240,15 +1240,21 @@ def _rng_device_index(device):
     """
     if device is None:
         index = -1
+    elif isinstance(device, bool):
+        raise TypeError("device index must not be a bool")
     elif isinstance(device, int):
         index = int(device)
+    elif isinstance(device, str):
+        # Before the `.index` probe below, because `str` *has* an `.index`
+        # method: `getattr("cuda:0", "index", None)` hands back a bound method,
+        # which is not None, and `int()` on it raised "int() argument must be
+        # ... not 'builtin_function_or_method'". torch accepts this spelling.
+        index = int(device.split(":")[1]) if ":" in device else -1
     else:
         attr = getattr(device, "index", None)
-        if attr is not None:
-            index = int(attr)
-        else:
-            text = str(device)
-            index = int(text.split(":")[1]) if ":" in text else -1
+        # An int, not merely present: the same trap one line up, for any object
+        # that happens to carry a callable `.index`.
+        index = int(attr) if isinstance(attr, int) else -1
     if index < 0:
         index = int(jt.current_device())
     return max(index, 0)
@@ -1328,6 +1334,55 @@ def _api_g__C__autograd__push_saved_tensors_default_hooks(*a, **k):
 
 def _api_g__C__autograd__pop_saved_tensors_default_hooks(*a, **k):
     return None
+
+
+class _CudnnFlags:
+    """`torch.backends.cudnn.flags(...)`: set the switches, then put them back.
+
+    A context manager, which is how callers use it::
+
+        with torch.backends.cudnn.flags(enabled=False, benchmark=True):
+            ...
+
+    **It restores the attributes; it does not change which kernels run.** The
+    module's four switches are already settings nothing acts on -- convolution
+    here picks its own path -- and this does not make them act. What it buys is
+    that the attribute a caller reads back inside the block is the one it set,
+    and that the block is not an AttributeError. MiniMax-H3's reference path
+    wraps work in it, and a missing `flags` killed the request outright.
+
+    A class rather than `@contextlib.contextmanager` so the old values are read
+    on `__enter__`, not when the object is built.
+    """
+
+    _NAMES = ("enabled", "benchmark", "deterministic", "allow_tf32")
+
+    def __init__(self, module, values):
+        self._module = module
+        self._values = values
+        self._saved = {}
+
+    def __enter__(self):
+        for name in self._NAMES:
+            if name in self._values:
+                self._saved[name] = getattr(self._module, name, None)
+                setattr(self._module, name, self._values[name])
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        for name, previous in self._saved.items():
+            setattr(self._module, name, previous)
+        return False
+
+
+def _api_cudnn_flags(enabled=False, benchmark=False, benchmark_limit=10,
+                     deterministic=False, allow_tf32=True):
+    import sys as _sys
+    module = _sys.modules.get("torch.backends.cudnn")
+    del benchmark_limit          # accepted for signature parity; nothing reads it
+    return _CudnnFlags(module, {"enabled": enabled, "benchmark": benchmark,
+                                "deterministic": deterministic,
+                                "allow_tf32": allow_tf32})
 
 
 def _api_cudnn_version():
