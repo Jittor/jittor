@@ -197,19 +197,18 @@ not stochastic token parity or distributional equivalence for the entire model.
 Artifacts: `restored-default/opt/`, including preserved red tests, final JSONs,
 logs and `comparison.json` with artifact hashes.
 
-A further real OPT test uses repetition=1.1, presence=0.2, frequency=0.3 and
-greedy 32-token generation. The oracle completes; the shim explicitly fails on
-missing `torch.ops._C.apply_repetition_penalties_`. The retained
-`acceptance.py --case penalties` is a failing feature-boundary reproducer, not
-a passed acceptance case. KI-VLLM-003 records this unimplemented private op.
-The host metadata helper is repaired, but penalty-enabled inference is **not**
-accepted and no no-op substitute was introduced.
+A further real OPT test with repetition=1.1, presence=0.2, frequency=0.3 and
+greedy 32-token generation originally failed on missing
+`torch.ops._C.apply_repetition_penalties_`, while the oracle completed. Its
+original artifacts remain under `restored-default/opt/`. The repair and
+successful GPU rerun below close the missing-operator issue KI-VLLM-003.
 
-### Repetition-penalty repair follow-up (baseline `0d0979f`)
+### Repetition-penalty repair and CUDA acceptance
 
-Status: implementation and CPU primitive regression verified; CUDA and OPT
-acceptance pending. Owner: vLLM adapter maintainers. Review when GPU access is
-restored or the vLLM schema / compat registration APIs change.
+Status: CPU/CUDA operator regression and the stated OPT engine case verified,
+2026-09-23. Pre-fix baseline: `0d0979f`; accepted implementation: `b9f200d`.
+Owner: vLLM adapter maintainers. Review when the vLLM schema, numerical primitives
+or compat registration APIs change.
 
 Nine new cases in `adapters/tests/vllm/test_repetition_penalties.py` first fail
 on the exact missing operator, using real Jittor tensors on CPU. After repair,
@@ -230,11 +229,28 @@ Raw logs are **unversioned** under
 `$JITTOR_LAB_ROOT/_state/vllm-singlecard/20260923/repetition-fix/`:
 `cpu-red.log` records nine missing-operator failures; `cpu-green.log` records
 21 passes. First-build and dependency-setup logs are separate from test evidence.
-The GPU host currently rejects SSH public-key authentication because the forwarded
-agent is unavailable. No new CUDA operator/oracle or OPT generation result exists
-for this repair yet; the earlier failing engine artifacts remain intact.
-KI-VLLM-003 stays open until both CUDA arithmetic and penalty-enabled generation
-are checked. CPU numerical success must not be presented as a GPU success.
+After SSH agent forwarding was restored, the same nine cases were run on a real
+RTX 4090 **before deploying the operator repair**: all nine failed on the missing
+operator (`gpu-red.log`). With the committed repair, the nine CUDA numerical
+cases and twelve adapter structure checks pass (`gpu-green.log`, **21 passed**).
+The independent PyTorch 2.11.0+cu130 / vLLM 0.24.0 environment passes the same
+nine CUDA cases (`oracle-gpu-tests.log`). Neither side substitutes host-only
+stubs, and both check the expected formula and actual tensor placement.
+
+Fresh `acceptance.py --case penalties --check-gpu-placement` runs use OPT-125m,
+FP16, eager, TP=1, repetition=1.1, presence=0.2, frequency=0.3, temperature=0,
+and max_tokens=32. Both engines complete; **all 32 token IDs and the generated
+text are exactly equal**. Each engine has 148 parameter tensors, 12 KV-cache
+tensors and all 32 observed forward outputs on CUDA. Jittor keeps its CUDA
+factory default; native PyTorch keeps its CPU default, with no override on
+either side. No further production change was required after the CPU repair.
+
+Artifacts: `{jittor,oracle}-opt-penalties.{json,log}` and `gpu-comparison.json`.
+The comparison checks options, sampling parameters, lengths, token IDs, device
+placement and artifact hashes. These first-run timings include compilation and
+are **not performance evidence**. This closes KI-VLLM-003 for the stated scope;
+it does not establish cross-framework random-generation parity or every model /
+penalty configuration. Other users' GPU processes were left untouched.
 
 Follow-up checks: lifecycle **11 passed**; Torch CPU core **211 passed, 3 skipped**
 plus one packaging check initially blocked by missing `setuptools`, which passed
@@ -245,6 +261,10 @@ in unchanged `test_executor_python_threads.py` and `test_h3_decode_thread_race.p
 They do not involve the new adapter/test files. Layout, generated manifests and
 whitespace checks pass. Logs: `lifecycle-green.log`, `core-cpu.log`, `structure.log`;
 the initial missing-SciPy collection failure is separately retained.
+After CUDA acceptance, the documentation-closure structure run reports
+**1364 passed, 4 failed, 8 skipped** (`structure-after-gpu.log`), with exactly
+the same four baseline policy failures. No computation source changed in this
+documentation follow-up.
 
 Before this repetition-penalty follow-up, the complete Jittor Qwen
 state/random/long matrix was rerun with the generator and metadata repairs
@@ -285,7 +305,7 @@ configuration; passing the established CUDA configuration does not close it.
   the four unchanged baseline policy failures. The full repository is not
   claimed green.
 
-Penalty-enabled OPT, multi-GPU, quantization, CUDA Graph/compilation and performance optimization are
+Multi-GPU, quantization, CUDA Graph/compilation and performance optimization are
 not part of this closure. The prior performance report remains historical:
 these changed sources have not been benchmarked again. No standard language
 model task-accuracy benchmark was run.
@@ -305,6 +325,9 @@ python agent/skills/vllm-torch-compat/acceptance.py \
   --backend "$BACKEND" --case long --model "$QWEN_MODEL" \
   --check-gpu-placement --output "$RESULT_DIR/$BACKEND-long.json"
 python agent/skills/vllm-torch-compat/compare_singlecard_acceptance.py "$RESULT_DIR"
+python agent/skills/vllm-torch-compat/acceptance.py \
+  --backend "$BACKEND" --case penalties --model "$OPT_MODEL" \
+  --check-gpu-placement --output "$RESULT_DIR/$BACKEND-opt-penalties.json"
 ```
 
 For numerical diagnosis, capture with `sampling_trace.py`, cross-replay both

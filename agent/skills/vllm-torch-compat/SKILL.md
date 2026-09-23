@@ -279,5 +279,8 @@ CPU vLLM engine test or a change to the GPU engine's default device.
 
 After the CUDA operator tests pass, run `acceptance.py --case penalties` on both
 runtimes with the same OPT weights and compare the actual generated token IDs.
-A CPU pass cannot close GPU acceptance; current evidence is in the single-card
-report and KI-VLLM-003 until the engine rerun is complete.
+A CPU pass cannot close GPU acceptance. The single-card report records the
+`b9f200d` CUDA acceptance: nine numerical cases pass on each backend, and the
+OPT repetition/presence/frequency case produces the same 32 greedy tokens.
+Preserve failed and passing logs separately; those results do not promise
+cross-framework seeded random-generation parity.
