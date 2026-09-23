@@ -58,21 +58,35 @@ static Op* owner_of(FusedOp* fused, const string& pointer) {
     return fused->ops[id];
 }
 
-// Only a floating point *additive* reduction may have its accumulation
-// reassociated into blocks: `+` is associative up to rounding, which is the
-// whole point, while `multiply` is not one people expect to be reordered and
-// `maximum`/`minimum`/the bitwise folds gain nothing from it. An integer sum
-// is exact whatever the order, so it has nothing to gain either.
-static bool is_float_additive_reduce(FusedOp* fused, const string& target) {
+// Which combining operation this reduction may be blocked with, or "" for
+// none. Blocking splits a reduction into several partial results and folds them
+// pairwise, so it is only valid when the operation is associative *and* a
+// partial may start at the identity the accumulator already holds.
+//
+// `+` is associative up to rounding, which is the whole point of blocking a
+// float sum (a single running total is 15% wrong on sixteen million equal
+// elements -- see BlockedReductionPass). `maximum`/`minimum` are exactly
+// associative, their identity is what ReduceOp's `init_@OP` loop already wrote
+// into the accumulator, and they need the shape as much as `sum` does:
+// KI-OPS-006 measures the unblocked form at 1.6-7.2 GB/s where the same-shaped
+// sum reaches 25 GB/s. `multiply` would reassociate a product's rounding,
+// `and`/`or`/`xor` would each need their own identity, and an integer sum is
+// exact whatever the order, so none of those is offered a combiner.
+static string block_combiner(FusedOp* fused, const string& target) {
     auto open = target.find('[');
-    if (open == string::npos) return false;
+    if (open == string::npos) return "";
     Op* owner = owner_of(fused, target.substr(0, open));
-    if (!owner || !owner->is_op(op_ids::reduce())) return false;
+    if (!owner || !owner->is_op(op_ids::reduce())) return "";
     auto* reduce = dynamic_cast<ReduceOp*>(owner);
-    if (!reduce) return false;
-    if (!(reduce->ns == ns_add || reduce->ns == ns_mean)) return false;
+    if (!reduce) return "";
     auto dtype = reduce->y->dtype();
-    return dtype.is_float() && !dtype.is_complex();
+    // No ordering to reassociate for a complex or boolean output.
+    if (dtype.is_complex() || dtype.is_bool()) return "";
+    if (reduce->ns == ns_add || reduce->ns == ns_mean)
+        return dtype.is_float() ? "+" : "";
+    if (reduce->ns == ns_maximum) return "max";
+    if (reduce->ns == ns_minimum) return "min";
+    return "";
 }
 
 // Split "yp[yid] = rest" into its target and the rest, or return false.
@@ -202,22 +216,30 @@ void ReduceAccumulatorPass::run() {
         }
 
         // One accumulator makes the loop vectorisable; it does not make it
-        // accurate. A single running sum in float32 accumulates a rounding
-        // error that grows with the trip count -- 15% wrong on sixteen
-        // million equal elements -- so record the accumulators here and let
+        // accurate, and for max/min it does not make it fast either -- the
+        // single running value is still one dependency chain. Record the
+        // accumulators here, each with the operation that may fold it, and let
         // BlockedReductionPass, which runs once the loop nest is final, give
-        // the additive ones a blocked shape. Only when *every* store in the
-        // loop qualifies: they share the iteration space, so they are
-        // reassociated together or not at all.
-        bool additive = true;
-        for (auto& t : targets)
-            if (!is_float_additive_reduce(op, t)) { additive = false; break; }
-        if (additive && accumulators.size()) {
-            string joined = accumulators[0];
-            for (uint s=1; s<accumulators.size(); s++)
-                joined += "," + accumulators[s];
-            node->attrs[kir::reduce_acc] = joined;
+        // them the blocked shape. Only when *every* store in the loop
+        // qualifies: they share the iteration space, so they are blocked
+        // together or not at all.
+        //
+        // "<accumulator>:<combiner>" -- the combiner is what the blocked pass
+        // folds partial results with, and it is also what tells it whether a
+        // partial starts at a literal zero (`+`) or at the identity the
+        // accumulator already holds (max/min). Leaving one out of the list, as
+        // this used to do for everything but a float sum, is what KI-OPS-006
+        // measures: the same `max` that reaches 7.2 GB/s unblocked reaches
+        // 13.7 GB/s in this shape.
+        string entries;
+        for (uint s=0; s<accumulators.size(); s++) {
+            string combiner = block_combiner(op, targets[s]);
+            if (combiner.size() == 0) { entries.clear(); break; }
+            if (s) entries += ",";
+            entries += accumulators[s] + ":" + combiner;
         }
+        if (entries.size())
+            node->attrs[kir::reduce_acc] = entries;
     }
 }
 

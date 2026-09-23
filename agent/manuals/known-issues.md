@@ -25,9 +25,25 @@
   strided view. Verified: the test passes, 40 reduce forms (contiguous 3-D/4-D
   over every axis and both keepdims values, mean/max/min, two axes at once, a
   stepped slice, a broadcast view, rank 1, an empty axis) agree with NumPy, and
-  the strided path is still the code it was. KI-CODEGEN-001 stays open for the
-  elementwise cost it describes; its "second symptom" note about this test is
-  updated below.
+  the strided path is still the code it was. The smoke tier on this tree, both
+  sessions, `other skipped: 0`: **native `exit=0`, 2157 passed, 1456 skipped, 8
+  xfailed, 1 xpassed; torch `exit=0`, 2835 passed, 483 skipped.** (2157 is 2156
+  plus the one that used to fail.) One caveat about the run itself, recorded
+  because it will happen again: the first combined attempt ran the native session
+  to green and then had the torch session **SIGKILLed at 74%** with 0 failures
+  logged -- `exit=-9`, a `PluggyTeardownRaisedWarning` on `pytest_sessionfinish`
+  and `OSError: cannot send (already closed?)`. The tool does not cap a session
+  (`timeout=0`, deliberately), the machine had 1.4 TB free and no cgroup limit,
+  and another writer was running `tests/structure` in the same hour, so the kill
+  was external (an oomd-style kill or someone clearing processes by pattern).
+  Re-running `--session torch` alone was green. A whole-session `-9` is not a
+  test result -- check the failures count before reading it as one.
+  On this box the tier is also ~6x its recorded cost right now: native took
+  **37 min** against the ~390 s the tier is budgeted at, because the box is
+  running ~17 processes at 98% CPU (16+ days of CPU time each) plus a second
+  suite. That is contention, not a regression.
+  KI-CODEGEN-001 stays open for the elementwise cost it describes; its "second
+  symptom" note about this test is updated below.
   The same pass found one more of the KI-TUNER-001 class, in the slow set where
   the smoke gate cannot see it:
   `tests/codegen/test_conv_tuner.py::TestConvTuner::test_forward` and
@@ -399,7 +415,10 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
 ## KI-OPS-006: the NaN-correct CPU max/min reduction runs at half the speed
 
 - Severity: Medium (throughput; the answers are correct)
-- Status: Reproduced and measured on CPU, unfixed; CUDA is unaffected
+- Status: **Half fixed 2026-09-23** -- max/min now get the blocked shape, which
+  closes the dependency-chain half (measured up to **4.05x**); the random-data
+  row is branch-bound rather than chain-bound and is unchanged (1.02x). CUDA is
+  unaffected (the pass is CPU-only), as before.
 - Owner: reduction operator and CPU codegen maintainers
 - What this entry used to be: `maximum`/`minimum` and the `max()`/`min()`
   reductions dropped NaN. That is fixed -- see the KI-BACKEND-004 record below
@@ -456,6 +475,88 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   Not attempted here: restructuring the `@for` nest in that template is the
   kind of change that needs its own before/after run, and 2026-09-21 had no
   budget for it.
+- **Corrected 2026-09-23: the hoist is already in the tree, so the paragraph
+  above is describing a lever that has been pulled.** Read the generated kernel
+  instead of the template: every `OP_maximum` reduce entry in a warmed CPU cache
+  (`__opkey0_reduce__…OP_maximum…_op.cc`) contains
+  `auto jt_reduce_acc_op0_yid = op0_yp[op0_yid];` then
+  `jt_reduce_acc_op0_yid = jittor::_max<float32>(float32(jt_reduce_acc_op0_yid),
+  float32(op0_xp[op0_xid]));` and a single `op0_yp[op0_yid] =
+  jt_reduce_acc_op0_yid;` after the loop. That is `ReduceAccumulatorPass`, which
+  hoists the accumulator for *every* op it can read -- its gate is not the
+  reduction's kind. So the per-element read-modify-write through memory, and the
+  chain it creates, are not what is left.
+- What was left is the *shape*: max/min were never given the blocked form, and
+  the measured hint above says the blocked form is exactly what reaches
+  13.7 GB/s. The reason they were excluded is stated in
+  [`reduce_accumulator_pass.cc`](../../src/codegen/opt/pass/reduce_accumulator_pass.cc):
+  only float-additive reductions were recorded in `kir::reduce_acc`, because the
+  blocked shape was added for *accuracy* -- and max/min "gain nothing" from
+  reassociation. That is true of accuracy and false of speed; the blocked pass's
+  own comment says it is "also the faster shape".
+- **The trap, and why this was not a one-line gate change.**
+  [`blocked_reduction_pass.cc`](../../src/codegen/opt/pass/blocked_reduction_pass.cc)
+  was additive by construction in four places, and none of them is the gate:
+  the partials started from `decltype(acc)(0)` -- the additive identity, where
+  max needs the smallest value and min the largest -- and the combiner was a
+  literal `+` in the in-block pairwise fold, the push onto the stack and the
+  drain into the accumulator. Relaxing `is_float_additive_reduce` alone would
+  therefore have compiled and run, and computed *sums* for a `max`, silently,
+  with no test in the tree asserting the shape. That is why the fix below had to
+  make the combiner and the identity operation-aware first.
+- **Fixed 2026-09-23, the way the trap requires.**
+  `ReduceAccumulatorPass` now records each accumulator with the operation that
+  may fold it (`kir::reduce_acc` entries became `"<accumulator>:<combiner>"`,
+  `+` / `max` / `min`) instead of recording only a float sum, and
+  `BlockedReductionPass` folds with that combiner in all three places and seeds
+  a partial from the accumulator itself for max/min -- which is exact, because
+  the accumulator holds the reduction's identity at that point, and needs no
+  per-dtype table of infinities. `multiply`, the bitwise folds, complex and bool
+  are still refused.
+- **Measured before/after on one binary, 16.7M float32, minimum of 9 interleaved
+  repetitions.** "before" is this tree with `exclude_pass="blocked_reduction"`
+  (`exclude_pass` is not in the jit key, so each arm carries a distinct
+  `compile_options` marker to keep them from sharing a compiled kernel):
+
+  | input | op | before | after | speedup |
+  | --- | --- | --- | --- | --- |
+  | ascending `arange` | `max` | 1.65 GB/s | 6.65 GB/s | **4.04x** |
+  | ascending `arange` | `min` | 4.88 | 8.74 | 1.79x |
+  | ascending `arange` | `sum` (control) | 4.89 | 15.79 | 3.23x |
+  | descending `arange` | `max` | 4.88 | 8.73 | 1.79x |
+  | descending `arange` | `min` | 1.64 | 6.65 | **4.05x** |
+  | `randn` | `max` | 4.88 | 4.98 | 1.02x |
+  | `randn` | `min` | 4.88 | 4.98 | 1.02x |
+  | all-equal | `max` | 1.65 | 6.62 | **4.02x** |
+  | all-equal | `min` | 1.65 | 6.65 | 4.02x |
+
+  The `sum` row is the control for the shape itself, not a change here -- `sum`
+  was already blocked, and 3.23x is what blocking is worth on this box. The
+  direction of the entry's 4.4x data-dependence is reproduced exactly: the slow
+  cell follows the comparison's branch, `ascending` is slow for `max` and
+  `descending` for `min`, and blocking fixes precisely those. **`randn` gains
+  nothing (1.02x)**: on unpredictable data the loop is branch-bound, not
+  chain-bound, so the partials have nothing to hide. That is the half that is
+  left, and it is a different mechanism from the one this entry describes.
+- **Numerics**: 44 checks pass, built around the identity rather than the
+  values -- all-negative data under `max` and all-positive data under `min`
+  (a zero seed answers 0 for both), both directions of the same range, all-equal,
+  NaN-containing (`_max`'s NaN must survive either fold order), `int32`/`int64`
+  (a different identity), `float64`, a size below the blocked cutoff, two reduced
+  axes at once, `keepdims`, and the elementwise `maximum` as a control.
+  A regression test now guards the trap directly:
+  [`tests/codegen/test_blocked_reduction_pass.py`](../../tests/codegen/test_blocked_reduction_pass.py)
+  reads the generated kernel and asserts that a `max` folds its partials with
+  `jittor::_max<decltype(...)>` and not `+` (and likewise `_min`), that a partial
+  is seeded from the accumulator and not from a numeric zero, that `sum` keeps its
+  `+`, that blocked and unblocked `max` agree bit for bit, that NaN survives
+  either fold, and -- the value half of the same trap -- that an all-negative
+  `max` and an all-positive `min` answer the data rather than 0.
+  `tests/ops/test_reduce_op.py`, `test_reduce_accuracy.py`,
+  `test_arg_reduce_op.py`, `test_arg_reduce_1d.py`,
+  `test_reindex_reduce_op.py` and `test_minmax_nan_propagation.py` are green on
+  the CPU gate after the change, as is all of `tests/codegen` except the
+  pre-existing `test3` above.
 - Also re-measured the same day: the KI-OPS-008 fix (the identity dispatching to
   `+-inf`) is **performance-neutral** here. The same harness against a worktree
   without it reads `max` 1.63/1.64 and `min` 7.24/7.29 at 1M and 16M -- the same
