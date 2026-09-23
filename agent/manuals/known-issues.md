@@ -2304,8 +2304,10 @@ about whether to take it.
 - Boundaries: TP=2 gets through NCCL initialization but lacks a real CPU
   communication group; FP8 import needs `torch.library.wrap_triton` and its
   calculation kernels remain unimplemented; compilation needs the FX/Inductor
-  integration; graph capture lacks a usable graph pool; OPT-125m's legacy
-  sampler warmup requires an explicit-generator exponential RNG stream.
+  integration; graph capture lacks a usable graph pool. The later single-card
+  follow-up supplies explicit exponential generators and repairs OPT legacy
+  host metadata; its current scope is recorded in the
+  [single-card report](../../docs/results/2026-09-23-vllm-singlecard-correctness.md).
 - Workaround: use the tested Qwen3-0.6B FP16, TP=1, eager configuration. A mode
   that errors is not silently substituted with that configuration. This does
   not claim support for arbitrary models, contexts or production serving.
@@ -2329,3 +2331,53 @@ about whether to take it.
 - Exit condition: fix the generic scalar construction path and verify large
   signed int64 fills on CPU and CUDA, without regressing smaller integer or
   floating factories. The index-fill repair does not resolve this general issue.
+
+
+## KI-VLLM-002: explicit CPU default exposes mixed-device attention
+
+- Severity: Research
+- Status: Recorded; repair deferred by user, 2026-09-23. Not a required gate
+  for the established single-card CUDA configuration.
+- Baseline: `44d7e04` plus uncommitted single-card acceptance changes.
+- Owner: vLLM adapter and Torch compatibility maintainers.
+- Evidence: in the shim, enabling `jt.flags.use_cuda = 1` and subsequently
+  calling `torch.set_default_device("cpu")` resets the global `use_cuda` flag
+  to 0. In Qwen request-state acceptance, GPU attention scores then meet a CPU
+  causal mask at `python/jittor/nn/paged_attention.py:131`. The observed error
+  is `Expected all tensor inputs on the same backend and device`.
+- Raw artifacts (unversioned):
+  `$JITTOR_LAB_ROOT/_state/vllm-singlecard/20260923/state/jittor.{json,log}`
+  from the explicit-CPU-default attempt. Preserve these separately from reruns.
+- Reproduction configuration: insert `torch.set_default_device("cpu")` after
+  importing Torch in `request_state_acceptance.py`, then run the Qwen case in
+  the isolated shim environment. This override is intentionally absent from
+  normal acceptance. No attention repair is claimed.
+- Workaround: preserve Jittor's established CUDA default and the independent
+  PyTorch backend default. Verify actual model parameters, KV cache and
+  computation are CUDA; equal global defaults are not a prerequisite.
+- Exit condition: if CPU-default compatibility is taken up again, first retain
+  a minimal failing test, repair device propagation, then pass that test and
+  real-engine acceptance. An old-configuration pass does not close this issue.
+
+
+## KI-VLLM-003: legacy OPT repetition-penalty operator is unavailable
+
+- Severity: Research
+- Status: Reproduced, 2026-09-23; outside the accepted neutral-penalty cases.
+- Baseline: `44d7e04` plus the single-card generator and host-metadata changes.
+- Owner: vLLM adapter maintainers.
+- Evidence: run `agent/skills/vllm-torch-compat/acceptance.py --backend jittor
+  --case penalties --model "$OPT_MODEL" --check-gpu-placement
+  --output "$RESULT_DIR/penalties.json"` in the established CUDA environment.
+  Repetition=1.1, presence=0.2, frequency=0.3, temperature=0, max_tokens=32
+  fails on missing `torch.ops._C.apply_repetition_penalties_`. The independent
+  PyTorch oracle completes the same case. Raw artifacts (unversioned) are in
+  `$JITTOR_LAB_ROOT/_state/vllm-singlecard/20260923/restored-default/opt/`,
+  including `penalties-boundary.json`.
+- Scope: the prompt-token CPU metadata snapshot bug is separately repaired
+  and tested. That repair does not implement this GPU calculation. Basic OPT
+  greedy and temperature/top-k/top-p seeded generation pass with neutral
+  penalties; changing their defaults is not a workaround for this case.
+- Exit condition: retain the failing real case, implement the private operator
+  with independent numerical tests on real CUDA, then verify penalty-enabled
+  generation against the oracle. Do not substitute a no-op.

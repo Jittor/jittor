@@ -213,3 +213,56 @@ oracle artifacts before claiming numerical parity. Unsupported graph/quantized/
 distributed modes must remain failures, not be silently switched to eager/FP16/TP1.
 Current tested versions, failures and limits are in
 [the acceptance report](../../../docs/results/2026-09-23-vllm-uva-topk.md).
+
+## Single-card correctness diagnosis
+
+`sampling_trace.py` captures raw logits, temperature processing, filtering and
+sampler metadata while feeding the same reference token prefix to both engines.
+The `capture` mode is an intervention for diagnosis: its forced output must not
+be counted as successful generation. Run `replay` for each captured NPZ under
+each runtime, then use `compare_sampling_traces.py RESULT_DIR` to assert exact
+same-input stage/sample parity and reproduction of the original sampler choices.
+An end-to-end seeded divergence can result from a small model-logit perturbation
+crossing a top-p boundary; diagnose masks and cumulative probability before
+changing RNG or imposing a numerical tolerance.
+
+`request_state_acceptance.py` exercises queued mixed-length requests, completed
+request turnover, repeated seeded batches, and prefix-cache cold/hit/reset runs.
+It records actual scheduler activity and `num_cached_tokens`, rather than
+inferring reuse from repeated prompts alone. Compare greedy outputs with isolated
+requests and the independent runtime. Seeded batches must be repeatable, but
+different batch shapes can perturb model logits even in native PyTorch.
+
+The [single-card report](../../../docs/results/2026-09-23-vllm-singlecard-correctness.md)
+records the verified scope, remaining boundaries, and artifact layout.
+
+
+## Single-card default-device scope (2026-09-23)
+
+Preserve the established backend defaults: enable CUDA on Jittor, leave native
+PyTorch's default unchanged, and assert actual model computation is on CUDA.
+Do not force a CPU default as a prerequisite for single-card acceptance.
+`acceptance.py --default-device cpu` is an explicit diagnostic override only;
+that configuration exposes KI-VLLM-002 and its repair is deferred. The normal
+sampling and request-state runners no longer apply the override. Keep historical
+CPU-default failures separate from new CUDA-default results.
+
+
+## Model numerical diagnosis and final regression
+
+`compare_singlecard_acceptance.py RESULT_DIR` compares the paired state/random/long
+JSONs, asserts all tested greedy outputs and internal seed/state contracts, and
+reports stochastic sequence differences without relabeling them as model accuracy.
+
+`model_numerics_trace.py` captures first-request module boundaries on CUDA. Replay
+the first differing attention from identical Q/K/V using
+`replay_attention_numerics.py`; it measures both real CUDA implementations against
+an independent float64 formula. `compare_model_numerics.py NUMERICS_DIR
+--sampling-dir SAMPLING_DIR` asserts replay reproduction and checks that internal
+hooks did not change any captured first-step logits. Do not alter model arithmetic
+merely to reproduce another kernel's intermediate rounding.
+
+Keep real vLLM metadata/numerical tests and controlled fake-module lifecycle tests
+in separate processes. Lifecycle tests intentionally alter import ownership;
+combining them after a real engine import can produce transaction conflicts that
+do not reproduce in the documented isolated lifecycle invocation.

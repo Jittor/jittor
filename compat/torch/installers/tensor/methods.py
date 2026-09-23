@@ -236,8 +236,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     register_fidelity(
         "torch.Tensor.exponential_", _api_exponential, Fidelity.APPROXIMATE,
         "Native device uniform RNG with inverse-CDF exponential draws and "
-        "in-place writeback; explicit generators are unsupported and samples "
-        "are not bitwise identical to Torch RNG streams",
+        "in-place writeback; explicit generators use independent native Philox "
+        "streams with state/offset restoration. Samples are not bitwise "
+        "identical to Torch RNG streams",
     )
 
     # torch tensors are hashable by identity (they define __eq__ elementwise but

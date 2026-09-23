@@ -75,6 +75,16 @@ def _torch_norm_impl(input, p="fro", dim=None, keepdim=False, dtype=None):
 
 
 def _torch_where_select(condition, input, other):
+    # A module's frontend context also applies to literal scalar creation.
+    # Match the tensor operands, not the process's default device.
+    from .context import get_install_context
+    from .frontend import tensor_frontend
+    like = next((x for x in (condition, input, other) if isinstance(x, jt.Var)), None)
+    with tensor_frontend(get_install_context(jt).target_namespace.Var, like=like):
+        return _where_select_on_device(condition, input, other)
+
+
+def _where_select_on_device(condition, input, other):
     vals = []
     for x in (condition, input, other):
         vals.append(x if isinstance(x, jt.Var) else jt.array(x))

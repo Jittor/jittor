@@ -7,13 +7,21 @@ include pyproject.toml
 include tests/conftest.py
 include tests/test_adapters.py
 include tests/vllm/conftest.py
+include tests/vllm/fixtures/top_p_boundary.json
 include tests/vllm/test_arming_ownership.py
 include tests/vllm/test_backend.py
 include tests/vllm/test_flash_attn.py
+include tests/vllm/test_gumbel_sampling.py
 include tests/vllm/test_layers.py
+include tests/vllm/test_logprob_boundary.py
+include tests/vllm/test_model_loader.py
 include tests/vllm/test_plugin_lifecycle.py
+include tests/vllm/test_runner_host_metadata.py
 include tests/vllm/test_runtime_ownership.py
+include tests/vllm/test_stochastic_sampling.py
 include tests/vllm/test_structure.py
+include tests/vllm/test_top_p_boundary.py
+include tests/vllm/test_uva_updates.py
 prune build
 prune dist
 global-exclude *.py[cod] *.ipynb *.mo .DS_Store

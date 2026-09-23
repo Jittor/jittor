@@ -20,5 +20,5 @@ where = ["."]
 include = ["jittor_adapters*"]
 
 [tool.jittor.sdist]
-include = ["README.md", "tests/**/*.py"]
+include = ["README.md", "tests/**/*.py", "tests/**/fixtures/*.json"]
 exclude = ["build/**", "dist/**"]

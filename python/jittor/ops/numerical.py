@@ -154,13 +154,19 @@ def _simple_for(x, func):
         __inline_static__
         @python.jittor.auto_parallel(1)
         void kernel(int n0, int i0, in0_type* _x, out0_type* y) {{
-            using namespace std;
+            using MATH_NAMESPACE::isnan;
+            using MATH_NAMESPACE::isinf;
             auto x = _x[i0];
             y[i0] = {func};
         }}
         kernel(in0->num, 0, in0_p, out0_p);
         '''
-        return jt.code(x.shape, "bool", [x], cpu_src=src, cuda_src=src)
+        # nvcc provides device overloads in the global namespace. Importing
+        # all of std as well makes float32 isnan/isinf ambiguous with GCC 12.
+        # Select one overload family explicitly, preserving double precision.
+        return jt.code(x.shape, "bool", [x],
+                       cpu_src=src.replace("MATH_NAMESPACE", "std"),
+                       cuda_src=src.replace("MATH_NAMESPACE", ""))
 
 
 def _isnan_acl(x):

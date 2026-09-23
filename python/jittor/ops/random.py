@@ -195,3 +195,119 @@ def histc(input, bins, min=0., max=0.):
     hist = jt.ones_like(histc).float().reindex_reduce("add", [bins,], ["@e0(i0)"], extras=[histc])
     hist[-1] += input[input == max].shape[0]
     return hist
+
+
+class CounterGenerator:
+    """Independent Philox4x32-10 stream evaluated on the tensor's device.
+
+    Each nonempty call reserves four counter positions; tensor elements occupy
+    independent subsequences. Reserving at construction (not execution) makes
+    lazy draws independent of evaluation order. The offset is in 32-bit words
+    and can be restored to replay a whole draw. CPU and CUDA are supported;
+    neither backend draws tensor values on the host for the other backend.
+
+    This is a Jittor stream, not PyTorch's launch-geometry-dependent RNG stream.
+    """
+
+    def __init__(self, seed=0):
+        import threading
+        self._lock = threading.Lock()
+        self.manual_seed(seed)
+
+    def __getstate__(self):
+        return self.get_state()
+
+    def __setstate__(self, state):
+        import threading
+        self._lock = threading.Lock()
+        self.set_state(state)
+
+    def manual_seed(self, seed):
+        self.set_state((seed, 0))
+        return self
+
+    def get_state(self):
+        with self._lock:
+            return self._seed, self._offset
+
+    def set_state(self, state):
+        seed, offset = map(int, state)
+        if not 0 <= seed < 2**64:
+            raise ValueError("seed must be an unsigned 64-bit integer")
+        if not 0 <= offset < 2**64 or offset % 4:
+            raise ValueError("offset must be an unsigned multiple of four")
+        with self._lock:
+            self._seed, self._offset = seed, offset
+        return self
+
+    def get_offset(self):
+        return self.get_state()[1]
+
+    def set_offset(self, offset):
+        with self._lock:
+            offset = int(offset)
+            if not 0 <= offset < 2**64 or offset % 4:
+                raise ValueError("offset must be an unsigned multiple of four")
+            self._offset = offset
+        return self
+
+    def uniform_like(self, like, dtype="float32"):
+        """Return device-native uniform samples with ``like``'s shape/device."""
+        import jittor as jt
+        from .._core.var import device_scope_like
+        from .._core.dtypes import dtype_name
+        dtype = dtype_name(dtype)
+        if dtype not in ("float32", "float64"):
+            raise ValueError("CounterGenerator uniform requires float32 or float64")
+        if int(like.placement_backend) not in (-1, 0, 1):
+            raise NotImplementedError("CounterGenerator supports CPU and CUDA")
+        shape = tuple(int(v) for v in like.shape)
+        count = int(np.prod(shape))
+        if count > 2**31 - 1:
+            raise ValueError("CounterGenerator draw exceeds the kernel index range")
+        with self._lock:
+            seed, offset = self._seed, self._offset
+            if count:
+                if offset > 2**64 - 8:
+                    raise OverflowError("CounterGenerator stream exhausted")
+                self._offset += 4
+        with device_scope_like(like):
+            if not count:
+                return jt.empty(shape, dtype=dtype)
+            # Only four scalar metadata words cross to the selected device.
+            # Capturing them as an immutable input also prevents a later seed
+            # reset from changing an already-queued lazy draw.
+            params = jt.array([seed & 0xffffffff, seed >> 32,
+                               (offset // 4) & 0xffffffff, (offset // 4) >> 32], dtype="int64")
+            is_double = dtype == "float64"
+            conversion = (
+                "uint64 bits = ((uint64)c[(i&1)*2] << 21) | (c[(i&1)*2+1] >> 11);\n"
+                "double value = ((double)bits + 0.5) * 1.1102230246251565404236316680908203125e-16;\n"
+                "out[i] = value < 1.0 ? value : 0.99999999999999988897769753748434595763683319091796875;"
+                if is_double else
+                "float value = (float)(((double)c[i&3] + 0.5) * 2.3283064365386962890625e-10);\n"
+                "out[i] = value < 1.0f ? value : 0.999999940395355224609375f;"
+            )
+            header = """
+namespace jittor {
+@python.jittor.auto_parallel(1)
+inline static void counter_uniform(int n, int i, const int64* state, OUT_TYPE* out) {
+    uint32 k0 = (uint32)state[0], k1 = (uint32)state[1];
+    uint32 c[4] = {(uint32)state[2], (uint32)state[3], (uint32)(i / GROUP), 0};
+    for (int round=0; round<10; ++round) {
+        uint64 p0 = (uint64)0xD2511F53u * c[0];
+        uint64 p1 = (uint64)0xCD9E8D57u * c[2];
+        uint32 next0 = (uint32)(p1 >> 32) ^ c[1] ^ k0;
+        uint32 next2 = (uint32)(p0 >> 32) ^ c[3] ^ k1;
+        c[0] = next0; c[1] = (uint32)p1;
+        c[2] = next2; c[3] = (uint32)p0;
+        k0 += 0x9E3779B9u; k1 += 0xBB67AE85u;
+    }
+    CONVERSION
+}
+}
+""".replace("OUT_TYPE", "double" if is_double else "float").replace(
+                "GROUP", "2" if is_double else "4").replace("CONVERSION", conversion)
+            source = "counter_uniform(out0->num, 0, in0_p, out0_p);"
+            return jt.code([count], dtype, [params], cpu_header=header, cpu_src=source,
+                           cuda_header=header, cuda_src=source).reshape(shape).stop_grad()

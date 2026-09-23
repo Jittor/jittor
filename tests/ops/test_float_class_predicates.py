@@ -67,6 +67,16 @@ class _Predicates:
 
     use_cuda = 0
 
+    def test_float32_matrix_classification_overloads(self):
+        """CUDA and std math overloads must not make float32 calls ambiguous."""
+        raw = np.array([[np.nan, np.inf, -np.inf],
+                        [0., -0., np.finfo(np.float32).max]], dtype=np.float32)
+        with jt.flag_scope(use_cuda=self.use_cuda):
+            x = jt.array(raw, dtype="float32")
+            for name in ("isnan", "isinf", "isfinite", "isposinf", "isneginf"):
+                np.testing.assert_array_equal(getattr(jt, name)(x).numpy(),
+                                              getattr(np, name)(raw))
+
     def test_matches_numpy(self):
         for dtype, raw in _CASES.items():
             for name in _PREDICATES:

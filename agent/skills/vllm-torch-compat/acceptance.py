@@ -12,11 +12,15 @@ import traceback
 
 p = argparse.ArgumentParser()
 p.add_argument('--backend', choices=['jittor', 'oracle'], required=True)
-p.add_argument('--case', choices=['batch', 'long', 'random', 'multigpu', 'fp8', 'compile', 'cudagraph', 'other', 'benchmark'], required=True)
+p.add_argument('--case', choices=['batch', 'long', 'random', 'penalties', 'multigpu', 'fp8', 'compile', 'cudagraph', 'other', 'benchmark'], required=True)
 p.add_argument('--model', required=True)
 p.add_argument('--output', required=True)
 p.add_argument('--repeats', type=int, default=21)
 p.add_argument('--logprobs', type=int, default=None)
+p.add_argument('--default-device', choices=['cpu', 'cuda'], default=None,
+               help='Optional diagnostic override; omitted preserves the backend default.')
+p.add_argument('--check-gpu-placement', action='store_true',
+               help='Assert parameter, KV-cache and forward-output CUDA placement (in-process legacy runner).')
 a = p.parse_args()
 os.environ['VLLM_ENABLE_V1_MULTIPROCESSING'] = '0'
 os.environ['VLLM_USE_FLASHINFER_SAMPLER'] = '0'
@@ -55,6 +59,13 @@ if __name__ == "__main__":
             jt.flags.use_cuda = 1
         import torch
         assert hasattr(torch, '_torch_compat_install_context') == (a.backend == 'jittor')
+        # Preserve each backend's established default unless explicitly requested.
+        if a.default_device is not None:
+            torch.set_default_device(a.default_device)
+        report['default_device'] = str(torch.get_default_device())
+        report['default_device_override'] = a.default_device
+        if a.default_device is not None:
+            assert report['default_device'].split(':')[0] == a.default_device
         from vllm import LLM, SamplingParams
         options = dict(model=a.model, dtype='float16', tensor_parallel_size=2 if a.case == 'multigpu' else 1,
                        max_model_len=4096 if a.case == 'long' else 512,
@@ -71,6 +82,25 @@ if __name__ == "__main__":
         start = time.perf_counter()
         llm = LLM(**options)
         report['engine_init_seconds'] = time.perf_counter() - start
+        placement_hook = None
+        if a.check_gpu_placement:
+            runner = llm.llm_engine.engine_core.engine_core.model_executor.driver_worker.worker.model_runner
+            params = list(runner.model.named_parameters())
+            caches = list(runner.kv_caches)
+            assert params and caches, 'GPU placement check requires real model parameters and KV caches'
+            assert all(t.device.type == 'cuda' for _, t in params), 'CPU model parameter'
+            assert all(t.device.type == 'cuda' for t in caches), 'CPU KV cache'
+            report['gpu_placement'] = dict(parameters=len(params), kv_caches=len(caches),
+                                           parameter_devices=sorted({str(t.device) for _, t in params}),
+                                           kv_devices=sorted({str(t.device) for t in caches}),
+                                           forward_calls=0, output_devices=[])
+            def check_forward_device(module, args, output):
+                outputs = [output] if isinstance(output, torch.Tensor) else list(output)
+                tensors = [t for t in outputs if isinstance(t, torch.Tensor)]
+                assert tensors and all(t.device.type == 'cuda' for t in tensors), 'CPU model forward output'
+                report['gpu_placement']['forward_calls'] += 1
+                report['gpu_placement']['output_devices'] = sorted({str(t.device) for t in tensors})
+            placement_hook = runner.model.register_forward_hook(check_forward_device)
         greedy = SamplingParams(temperature=0, max_tokens=32, ignore_eos=True)
         prompts = ['The capital of France is', '1 + 1 =', 'Write a short story about a cat.', 'Explain why the sky is blue.']
         if a.case == 'batch':
@@ -90,6 +120,11 @@ if __name__ == "__main__":
             report['seed_reproducible'] = tokens[0] == tokens[1]
             report['seed_diversity'] = len({tuple(t) for t in tokens})
             assert report['seed_reproducible'] and report['seed_diversity'] > 1, 'random sampling seed contract failed'
+        elif a.case == 'penalties':
+            report['sampling_parameters'] = dict(
+                temperature=0, max_tokens=32, ignore_eos=True,
+                repetition_penalty=1.1, presence_penalty=.2, frequency_penalty=.3)
+            record_generation(llm, [prompts[0]], SamplingParams(**report['sampling_parameters']), 'penalties')
         elif a.case == 'benchmark':
             for batch in [1, 4]:
                 for _ in range(3): llm.generate(prompts[:batch], greedy, use_tqdm=False)
@@ -100,6 +135,9 @@ if __name__ == "__main__":
                     aggregate_output_tokens_per_second=sum(sum(len(o['token_ids']) for o in r['outputs']) for r in rows)/sum(durations)))
         else:
             record_generation(llm, [prompts[0]], greedy, a.case)
+        if placement_hook is not None:
+            placement_hook.remove()
+            assert report['gpu_placement']['forward_calls'] > 0, 'No GPU forward observed'
         report['status'] = 'completed'
     except Exception as exc:
         report['status'] = 'failed'

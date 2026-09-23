@@ -612,37 +612,84 @@ def frombuffer(buffer, *, dtype, count=-1, offset=0, requires_grad=False):
 
 
 class Generator:
-    """A torch.Generator with its OWN stream.
+    """Independent RNG state, including native device exponential draws.
 
-    A generator's draws must depend only on its seed and its own history -- in
-    torch, two `manual_seed(1234)` generators yield the same numbers, and a draw
-    does not care how much work the process has already queued. This used to keep
-    only a seed and leave drawing to jittor's *global* generator, so the value a
-    caller got depended on the process's prior ops. That is fatal for TP: the H3
-    pipeline makes the initial latents with a seeded CPU generator, the DiT shards
-    *weights* (so every rank must denoise the same latent), and two ranks whose
-    global streams have advanced differently drew different latents -- each
-    RowParallelLinear then added halves computed from different inputs, and the
-    TP2 picture came out as noise while TP1 (one rank) was fine.
+    The historical factory stream remains NumPy-backed. Exponential draws use
+    Jittor's device-native counter stream; snapshots retain both streams. These
+    streams preserve seed/state isolation but are not PyTorch-bitwise RNGs.
     """
 
     def __init__(self, device=None):
+        from jittor.ops.random import CounterGenerator
         self.device = globals()["device"](device or "cpu")
-        self._seed = 0
-        self._rng = None
+        self._native_generator = CounterGenerator()
+        self.manual_seed(0)
+
     def manual_seed(self, s):
-        self._seed = int(s)
-        # one stream per generator: deterministic, and independent of whatever
-        # the process's global generator has already produced.
-        import numpy as _numpy_rng
-        self._rng = _numpy_rng.random.default_rng(self._seed)
+        seed = int(s)
+        if not -(2**63) <= seed < 2**64:
+            raise RuntimeError("Overflow when unpacking long")
+        seed %= 2**64
+        self._native_generator.manual_seed(seed)
+        self._seed = seed
+        self._rng = np.random.default_rng(seed)
+        self._factory_offset_unavailable = False
         return self
+
     def get_state(self):
-        return jt.array([self._seed])
-    def set_state(self, s):
+        import json
+        data = {"version": 1, "native": self._native_generator.get_state(),
+                "factory": self._rng.bit_generator.state,
+                "factory_offset_unavailable": self._factory_offset_unavailable}
+        payload = json.dumps(data, separators=(",", ":")).encode("ascii")
+        # Generator state is a Torch CPU ByteTensor, including when the
+        # generator itself belongs to CUDA.
+        from ...context import get_install_context
+        from ...frontend import tensor_frontend
+        tensor_type = get_install_context(jt).target_namespace.Var
+        with tensor_frontend(tensor_type, device="cpu"):
+            return jt.array(np.frombuffer(payload, dtype=np.uint8).copy())
+
+    def set_state(self, state):
+        import json
+        if _jittor_dtype_name(state.dtype) != "uint8" or state.ndim != 1:
+            raise TypeError("Generator state must be a one-dimensional uint8 tensor")
+        data = json.loads(state.cpu().numpy().tobytes().decode("ascii"))
+        if data.get("version") != 1:
+            raise ValueError("Unsupported Jittor generator state version")
+        # Validate both streams before changing either one.
+        from jittor.ops.random import CounterGenerator
+        native = CounterGenerator()
+        native.set_state(data["native"])
+        factory = np.random.default_rng()
+        factory.bit_generator.state = data["factory"]
+        self._native_generator = native
+        self._seed = native.get_state()[0]
+        self._rng = factory
+        self._factory_offset_unavailable = bool(data.get("factory_offset_unavailable", True))
         return self
+
+    def _check_offset_available(self):
+        if self.device.type != "cuda":
+            raise RuntimeError("CPU Generator does not use offset")
+        if self._factory_offset_unavailable:
+            raise NotImplementedError(
+                "Generator offset cannot restore the factory RNG stream; "
+                "use get_state/set_state for mixed factory and exponential draws"
+            )
+
+    def get_offset(self):
+        self._check_offset_available()
+        return self._native_generator.get_offset()
+
+    def set_offset(self, offset):
+        self._check_offset_available()
+        self._native_generator.set_offset(offset)
+        return self
+
     def seed(self):
         return self._seed
+
     def initial_seed(self):
         return self._seed
 
@@ -892,9 +939,8 @@ def install(ctx):
 
     g.corrcoef = corrcoef
 
-    # torch.Generator (RNG handle) -- jittor uses a global seed; provide a
-    # lightweight stand-in that supports manual_seed and is accepted where a
-    # generator is passed (it is otherwise ignored).
+    # An independent RNG handle: native exponential draws and the historical
+    # factory stream both retain their state across snapshots and copies.
     g.Generator = Generator
 
     # numeric / misc top-level constants and small types

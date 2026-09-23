@@ -6,6 +6,11 @@
 - Owner: vLLM adaptation task.
 - Review when: vLLM buffer pool contracts, Torch tensor transfers, adapter module patches, or compatibility transaction APIs change.
 
+> Follow-up: [single-card correctness](2026-09-23-vllm-singlecard-correctness.md)
+> supersedes the generator/OPT and sampling-diagnosis status below. Performance
+> numbers here belong to this earlier source version and have not been remeasured
+> after those changes.
+
 ## Failure and repair
 
 vLLM 0.24.0 maintains CPU/NumPy sampling state and publishes it through

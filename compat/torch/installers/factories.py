@@ -468,6 +468,10 @@ def _draw_from_generator(name, generator, args, kwargs):
         values = rng.permutation(int(shape[0]))
     else:
         return None
+    if values.size:
+        # This stream is separate from native exponential counter draws.
+        # A numeric offset cannot restore it; full Generator state can.
+        generator._factory_offset_unavailable = True
     # dtype: the caller's, else the one the plain call would have produced --
     # the source's for *_like (jittor promotes a non-float source to float32),
     # the integer width for randperm/randint, the default dtype otherwise.

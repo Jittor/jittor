@@ -1309,11 +1309,13 @@ _BINARY_APIS = {
 
 
 def _api_fill(self, val):
-    return _ip(self, _owner.jt.ones(self.shape, self.dtype) * val)
+    with _new_scope(self, None):
+        return _ip(self, _owner.jt.ones(self.shape, self.dtype) * val)
 
 
 def _api_zero(self):
-    return _ip(self, _owner.jt.zeros(self.shape, self.dtype))
+    with _new_scope(self, None):
+        return _ip(self, _owner.jt.zeros(self.shape, self.dtype))
 
 
 def _api_add(self, o, alpha=1):
@@ -1369,11 +1371,6 @@ def _api_uniform(self, a=0.0, b=1.0, generator=None):
 
 
 def _api_exponential(self, lambd=1.0, *, generator=None):
-    if generator is not None:
-        raise NotImplementedError(
-            "Tensor.exponential_ with an explicit generator requires a native "
-            "device generator stream; host sampling is not supported"
-        )
     rate = float(lambd)
     if not rate > 0:
         raise RuntimeError("exponential_ requires lambd > 0")
@@ -1389,7 +1386,19 @@ def _api_exponential(self, lambd=1.0, *, generator=None):
         draw_dtype = "float64" if dtype == "float64" else "float32"
         tiny = 2.0 ** (-1022 if dtype == "float64" else -126)
         upper = 1.0 - 2.0 ** (-53 if dtype == "float64" else -24)
-        uniform = _owner.jt.random(self.shape, draw_dtype, "uniform")
+        if generator is None:
+            uniform = _owner.jt.random(self.shape, draw_dtype, "uniform")
+        else:
+            if not isinstance(generator, _owner.Generator):
+                raise TypeError("generator must be a torch.Generator")
+            target = self.device
+            origin = generator.device
+            if origin.type != target.type or (
+                origin.type == "cuda" and origin.index is not None
+                and origin.index != target.index
+            ):
+                raise RuntimeError("Generator device does not match tensor device")
+            uniform = generator._native_generator.uniform_like(self, dtype=draw_dtype)
         # Uniform draws are finite by construction. Select endpoints directly;
         # the general clamp also builds NaN-preservation checks, which are
         # unnecessary here and can reach the shim's separate isnan kernel.

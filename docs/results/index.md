@@ -18,6 +18,8 @@
 2026-09-14-jittor-vs-pytorch
 2026-09-14-vllm-omni-h3-enablement
 2026-09-19-torch-compat-runbook-verification
+2026-09-23-vllm-uva-topk
+2026-09-23-vllm-singlecard-correctness
 ```
 
 ## 按主题索引
