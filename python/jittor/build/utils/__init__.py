@@ -1185,10 +1185,25 @@ def get_py3_config_path():
         py3_config_paths = [
             os.path.dirname(sys.executable) + f"/python3.{sys.version_info.minor}-config",
             sys.executable + "-config",
-            f"/usr/bin/python3.{sys.version_info.minor}-config",
-            f"/usr/local/bin/python3.{sys.version_info.minor}-config",
             os.path.dirname(sys.executable) + "/python3-config",
         ]
+        # A venv may use a base interpreter whose config helper is outside the
+        # venv, as with uv-managed CPython installations. Ask Python where its
+        # matching installation keeps the helper before trying system paths.
+        try:
+            import sysconfig
+            config_bindir = sysconfig.get_config_var("BINDIR")
+        except (ImportError, TypeError):
+            config_bindir = None
+        if config_bindir:
+            py3_config_paths.extend([
+                os.path.join(config_bindir, f"python3.{sys.version_info.minor}-config"),
+                os.path.join(config_bindir, "python3-config"),
+            ])
+        py3_config_paths.extend([
+            f"/usr/bin/python3.{sys.version_info.minor}-config",
+            f"/usr/local/bin/python3.{sys.version_info.minor}-config",
+        ])
         if platform.system() == "Darwin":
             if "homebrew" in sys.executable:
                 py3_config_paths.append(f'/opt/homebrew/bin/python3.{sys.version_info.minor}-config')

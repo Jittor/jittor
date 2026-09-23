@@ -32,18 +32,52 @@ dependencies = [
 
 [project.optional-dependencies]
 cuda12 = [
-    "cuda-toolkit[cublas,cudart,cufft,curand,cusparse,nvjitlink,nvrtc,nvtx]==12.2.2; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "cuda-toolkit[cublas,cudart,cufft,curand,cusparse,nvjitlink,nvrtc,nvtx]==12.2.2; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
     # A range, not a pin: every modern torch pins its own exact
     # nvidia-cudnn-cu12, and pip reads two different exact pins on one
     # distribution as a conflict. Pinning here made jittor[cuda12] and torch
     # uninstallable together. Keep in sync with jittor_utils/cuda_wheel.py.
-    "nvidia-cudnn-cu12>=8.9.7,<10; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "nvidia-nccl-cu12==2.18.3; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-cudnn-cu12>=8.9.7,<10; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+    "nvidia-nccl-cu12==2.18.3; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
 ]
 perf = [
-    "asv==0.6.6",
-    "transformers==4.56.2",
+    "asv==0.6.6; python_version >= '3.9'",
+    "transformers==4.56.2; python_version >= '3.9'",
 ]
+
+[dependency-groups]
+# The maintained gate/tool pins target Python 3.11. Keeping that boundary in
+# the marker lets uv resolve the runtime package for all supported Python
+# versions without pretending these maintainer tools support Python 3.7.
+test = [
+    "astunparse==1.6.3; python_version == '3.11'",
+    "ipykernel==6.29.5; python_version == '3.11'",
+    "jupytext==1.17.3; python_version == '3.11'",
+    "nbclient==0.10.2; python_version == '3.11'",
+    "nbformat==5.10.4; python_version == '3.11'",
+    "numpy==1.26.4; python_version == '3.11'",
+    "pillow==11.0.0; python_version == '3.11'",
+    "pytest==7.4.4; python_version == '3.11'",
+    "pytest-timeout==2.3.1; python_version == '3.11'",
+    "pytest-xdist==3.6.1; python_version == '3.11'",
+    "scipy==1.13.1; python_version == '3.11'",
+    "setuptools==83.0.0; python_version == '3.11'",
+    "tqdm==4.67.1; python_version == '3.11'",
+]
+dev = [
+    { include-group = "test" },
+    "asv==0.6.6; python_version == '3.11'",
+    "build==1.3.0; python_version == '3.11'",
+    "mypy==1.8.0; python_version == '3.11'",
+    "nox==2026.7.11; python_version == '3.11'",
+    "pre-commit==4.6.0; python_version == '3.11'",
+    "PyYAML==6.0.2; python_version == '3.11'",
+    "ruff==0.15.22; python_version == '3.11'",
+    "wheel==0.45.1; python_version == '3.11'",
+]
+
+[tool.uv]
+default-groups = ["dev"]
 
 [project.urls]
 Homepage = "http://jittor.org"
