@@ -350,6 +350,7 @@ include docs/results/2026-09-14-exit-heap-corruption.md
 include docs/results/2026-09-14-jittor-vs-pytorch.md
 include docs/results/2026-09-14-vllm-omni-h3-enablement.md
 include docs/results/2026-09-19-torch-compat-runbook-verification.md
+include docs/results/2026-09-22-openai-whisper-l2-cpu.md
 include docs/results/index.md
 include docs/slides/jittor-overview.html
 include docs/slides/计图介绍.pptx

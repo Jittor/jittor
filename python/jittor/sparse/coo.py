@@ -13,7 +13,7 @@
 
 import jittor as jt
 class SparseVar:
-    def __init__(self,indices,values,shape):
+    def __init__(self,indices,values,shape, *, coalesced=False):
         if not (
             isinstance(indices, jt.Var)
             and isinstance(values, jt.Var)
@@ -24,6 +24,7 @@ class SparseVar:
         self.values = values
         self.shape = shape
         self.ndim = len(shape)
+        self._coalesced = bool(coalesced)
         
     def _indices(self):
         return self.indices
@@ -57,6 +58,25 @@ class SparseVar:
             "add", list(self.shape), self._index_exprs(),
             extras=[self.indices])
 
+def dense_to_sparse(input):
+    """Build full-dimensional COO storage using native nonzero and gather.
+
+    Native nonzero enumerates coordinates in row-major order, making this
+    construction coalesced without a host copy or a second sort.
+    """
+    if not isinstance(input, jt.Var):
+        raise TypeError("dense_to_sparse requires a Var")
+    if input.ndim == 0:
+        raise NotImplementedError("scalar COO conversion is not supported")
+    coordinates = jt.nonzero(input).transpose(0, 1).cast("int64")
+    values = input.reindex(
+        [coordinates.shape[1]],
+        ["@e0(%d,i0)" % dimension for dimension in range(input.ndim)],
+        extras=[coordinates],
+    )
+    return SparseVar(coordinates, values, jt.NanoVector(input.shape), coalesced=True)
+
+
 def sparse_array(indices,values,shape):
     return SparseVar(indices,values,shape)
 
@@ -88,5 +108,5 @@ def spmm(spase_x,y):
         "add", out_shape, ["@e0(0, i0)", "i1"], extras=[indices])
 
 
-__all__ = ["SparseVar", "sparse_array", "spmm"]
+__all__ = ["SparseVar", "dense_to_sparse", "sparse_array", "spmm"]
     

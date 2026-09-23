@@ -18,12 +18,14 @@
 2026-09-14-jittor-vs-pytorch
 2026-09-14-vllm-omni-h3-enablement
 2026-09-19-torch-compat-runbook-verification
+2026-09-22-openai-whisper-l2-cpu
 ```
 
 ## 按主题索引
 
 | 结论 | 状态 | 日期 |
 | --- | --- | --- |
+| [OpenAI Whisper：CPU L2 兼容验证](2026-09-22-openai-whisper-l2-cpu.md) | L0–L2 通过；L3–L5 未声明 | 2026-09-22 |
 | [MiniMax-H3 在 Torch 兼容层下跑通](2026-09-12-minimax-h3-torch-compat.md) | 端到端跑通，达到 parity 速度 | 2026-09-12，2026-09-14 复验 |
 | [autocast 请求了混合 dtype 的卷积](2026-09-14-autocast-conv-mixed-dtype.md) | 已修复，真实 CUDA 设备验证 | 2026-09-14 |
 | [退出期 "corrupted double-linked list"](2026-09-14-exit-heap-corruption.md) | 已修复，多次真实运行验证 | 2026-09-14 |

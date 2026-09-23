@@ -60,6 +60,8 @@ _EMPTY_LIKE_FIDELITY_DETAIL = (
 
 def _invoke_factory(name, args, kwargs):
     context = get_install_context(jt)
+    if kwargs.get("layout") is not None and kwargs["layout"] is context.target_namespace.sparse_coo:
+        raise NotImplementedError("factory does not support sparse COO layout; use Tensor.to_sparse")
     implementation = context.state.get("factory_implementations", {}).get(name)
     if implementation is None:
         raise RuntimeError("torch.%s is not installed" % name)

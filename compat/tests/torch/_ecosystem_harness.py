@@ -37,6 +37,10 @@ Configuration
     numbers are always reported; they are only asserted when this is set, since
     a shared machine makes an unconditional timing gate flaky.
 
+``JITTOR_REQUIRE_WHISPER``
+    Treat a missing original OpenAI Whisper dependency as a configuration error.
+    The synthetic Whisper case reports timing but has no speed acceptance gate.
+
 ``JITTOR_ECOSYSTEM_TF32``
     CUDA precision policy for both runtimes. It defaults to enabled and controls
     matmul and cuDNN convolution together; the reports must agree on the state,
@@ -208,20 +212,58 @@ def _npu_is_available():
     return bool(_test_capability.check_accelerator('acl', backend=jt).enabled)
 
 
-def _distributions_available(names):
+def _missing_distributions(names):
+    missing = []
     for name in names:
         try:
             if PACKAGE_SITE:
-                spec = importlib.machinery.PathFinder.find_spec(
-                    name, [PACKAGE_SITE]
-                )
+                spec = importlib.machinery.PathFinder.find_spec(name, [PACKAGE_SITE])
             else:
                 spec = importlib.util.find_spec(name)
-            if spec is None:
-                return False
         except (ImportError, ValueError):
-            return False
-    return True
+            spec = None
+        if spec is None:
+            missing.append(name)
+    return missing
+
+
+def _distributions_available(names):
+    return not _missing_distributions(names)
+
+
+def _require_case_dependencies(test, case, requirements):
+    missing = _missing_distributions(requirements)
+    if not missing:
+        return
+    message = "missing " + ", ".join(missing)
+    if case in ("openai_whisper", "openai_whisper_log_mel"):
+        message = "missing OpenAI Whisper dependency: " + ", ".join(missing)
+        if _enabled("JITTOR_REQUIRE_WHISPER"):
+            test.fail("JITTOR_REQUIRE_WHISPER=1: " + message)
+    test.skipTest(message)
+
+
+def _assert_strict_results(test, reference, candidate, torch_report, jittor_report, *,
+                           allow_parameterless=False):
+    for field in (
+        "state_manifest", "state_fingerprints", "required_parameter_gradients",
+        "required_input_gradients",
+    ):
+        test.assertIsNotNone(torch_report.get(field), "missing oracle " + field)
+        test.assertEqual(torch_report.get(field), jittor_report.get(field), field)
+    expected = {"__output__"}
+    expected.update("grad::" + name for name in torch_report["required_parameter_gradients"])
+    expected.update("ingrad::" + name for name in torch_report["required_input_gradients"])
+    if not allow_parameterless:
+        test.assertTrue(torch_report["required_parameter_gradients"], "no trainable parameters")
+    test.assertTrue(torch_report["required_input_gradients"], "no differentiable input")
+    for label, values in (("torch", reference), ("jittor", candidate)):
+        test.assertEqual(set(values), expected, label + " gradient coverage")
+        for name in expected:
+            test.assertTrue(np.isfinite(values[name]).all(), label + " nonfinite " + name)
+    for name in expected:
+        test.assertEqual(candidate[name].shape, reference[name].shape, name + " shape")
+        test.assertEqual(candidate[name].dtype, reference[name].dtype, name + " dtype")
 
 
 def _run(python, runtime, case, output, weights=None, device="cpu", repeats=None):
@@ -269,6 +311,11 @@ def _run(python, runtime, case, output, weights=None, device="cpu", repeats=None
             errors="replace",
             timeout=1800,
         )
+    if completed.returncode != 0:
+        raise AssertionError(
+            "runner exited with code {} for {} under {}:\n{}".format(
+                completed.returncode, case, python, completed.stdout[-4000:])
+        )
     marker = "ECOSYSTEM_RESULT "
     for line in completed.stdout.splitlines():
         if line.startswith(marker):
@@ -314,10 +361,9 @@ class EcosystemComparison(unittest.TestCase):
     device = "cpu"
     repeats = REPEATS
 
-    def _compare(self, case):
+    def _compare(self, case, *, expected_output_shape=None, expected_output_dtype=None):
         _builder, requirements = _ecosystem_cases.CASES[case]
-        if not _distributions_available(requirements):
-            self.skipTest("missing {}".format(", ".join(requirements)))
+        _require_case_dependencies(self, case, requirements)
 
         with tempfile.TemporaryDirectory(prefix="jittor-ecosystem-") as directory:
             root = Path(directory)
@@ -399,6 +445,17 @@ class EcosystemComparison(unittest.TestCase):
 
             reference = np.load(torch_output)
             candidate = np.load(jittor_output)
+            if case in _ecosystem_cases.STRICT_GRADIENT_CASES:
+                _assert_strict_results(
+                    self, reference, candidate, torch_report, jittor_report,
+                    allow_parameterless=case == "openai_whisper_log_mel")
+            for label, values in (("torch", reference), ("jittor", candidate)):
+                if expected_output_shape is not None:
+                    self.assertEqual(values["__output__"].shape, expected_output_shape,
+                                     label + " expected output shape")
+                if expected_output_dtype is not None:
+                    self.assertEqual(values["__output__"].dtype, np.dtype(expected_output_dtype),
+                                     label + " expected output dtype")
 
             missing = sorted(set(reference.files) - set(candidate.files))
             self.assertEqual(missing, [], "{}: Jittor produced no {}".format(case, missing))
@@ -440,7 +497,10 @@ class EcosystemComparison(unittest.TestCase):
                     len(gradients),
                 )
             )
-            if SPEED_RATIO:
+            if case in _ecosystem_cases.REPORT_ONLY_TIMING_CASES:
+                print("[timing scope] synthetic correctness fixture; "
+                      "not a real-checkpoint performance acceptance result")
+            elif SPEED_RATIO:
                 self.assertLessEqual(
                     ratio,
                     float(SPEED_RATIO),

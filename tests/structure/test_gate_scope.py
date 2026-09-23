@@ -293,3 +293,17 @@ def test_skip_reason_summary_and_threshold_are_wired():
     # and the sixth a placeholder reason string.
     assert "_OTHER_SKIP_REASONS[reason] += 1" in source
     assert "_OTHER_SKIP_REASONS.most_common(10)" in source
+
+
+def test_whisper_dependency_skip_is_distinct_and_required_mode_fails_closed(monkeypatch):
+    from _helpers import pytest_policy as policy
+
+    reason = "missing openai whisper dependency: whisper"
+    monkeypatch.setenv("JITTOR_REQUIRE_REAL_TORCH", "1")
+    monkeypatch.delenv("JITTOR_REQUIRE_WHISPER", raising=False)
+    assert policy.classify_skip_reason_bucket(reason) == "optional-dependency"
+    assert not policy._blames_missing_torch(reason)
+    assert policy._environment_explains({reason})
+    monkeypatch.setenv("JITTOR_REQUIRE_WHISPER", "1")
+    assert not policy._environment_explains({reason})
+    assert not policy._environment_explains({"whisper numerical mismatch"})

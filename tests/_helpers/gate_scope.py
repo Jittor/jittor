@@ -69,6 +69,7 @@ EXCLUDED = ()
 #: use cublas, skip" are three ways of saying the same fact about the machine,
 #: and a phrase list would have to grow one entry per author.
 ENVIRONMENT_SKIP_PATTERNS = (
+    "missing openai whisper dependency:",
     # accelerators and the libraries that only exist alongside them. `nvcc` is
     # here because a CUDA *compiler* is the thing whose absence a CPU-only build
     # states most directly (`tests/build/test_cuda_arch_flags.py` says exactly

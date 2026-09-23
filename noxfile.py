@@ -1881,6 +1881,174 @@ def ecosystem(session):
     )
     _run_pytest_once(session, ECOSYSTEM_TESTS, env, timeout=3600)
 
+# Original OpenAI Whisper, distinct from the Transformers Whisper case.
+# Keep this baseline separate from ecosystem's torch 2.7.1 oracle.
+WHISPER_CPU_COMMIT = "86098128c0b4f24f0e2aa2994de830614b474227"
+WHISPER_CPU_SOURCE = (
+    "openai-whisper @ git+https://github.com/openai/whisper.git@" + WHISPER_CPU_COMMIT
+)
+WHISPER_CPU_TESTS = (
+    "--confcutdir=compat/tests",
+    "compat/tests/torch/test_torch_stft.py",
+    "compat/tests/torch/test_whisper_training.py",
+    "compat/tests/torch/test_torch_sparse_metadata.py",
+    "compat/tests/torch/test_ecosystem_parity.py::OpenAIWhisperParity::test_openai_whisper",
+    "compat/tests/torch/test_ecosystem_parity.py::OpenAIWhisperParity::test_openai_whisper_log_mel",
+)
+# Runtime constraints captured from the candidate CPU oracle. The source is
+# pinned above because upstream main and its release report the same version.
+WHISPER_CPU_CONSTRAINTS = (
+    "certifi==2026.7.22",
+    "charset-normalizer==3.5.1",
+    "filelock==3.32.3",
+    "fsspec==2026.7.0",
+    "idna==3.20",
+    "imageio-ffmpeg==0.6.0",
+    "iniconfig==2.3.0",
+    "Jinja2==3.1.6",
+    "llvmlite==0.49.0",
+    "MarkupSafe==3.0.3",
+    "more-itertools==11.1.0",
+    "mpmath==1.3.0",
+    "networkx==3.6.1",
+    "numba==0.67.0",
+    "numpy==1.26.4",
+    "packaging==26.3",
+    "pluggy==1.6.0",
+    "pytest==7.4.4",
+    "regex==2026.9.10",
+    "requests==2.34.2",
+    "sympy==1.14.0",
+    "tiktoken==0.14.0",
+    "torch==2.4.1+cpu",
+    "tqdm==4.70.1",
+    "triton==3.8.0",
+    "typing_extensions==4.16.0",
+    "urllib3==2.8.0",
+)
+
+_WHISPER_CPU_ORACLE_PROBE = """
+import importlib.metadata as metadata
+import json
+from pathlib import Path
+import sys
+import numpy
+import torch
+import whisper
+print(json.dumps({
+    "python": list(sys.version_info[:3]),
+    "torch": torch.__version__,
+    "numpy": numpy.__version__,
+    "whisper": whisper.__version__,
+    "torch_is_shim": hasattr(torch, "_torch_compat_install_context"),
+    "torch_has_binary": hasattr(torch, "_C"),
+    "torch_cuda": torch.version.cuda,
+    "prefix": sys.prefix,
+    "package_site": str(Path(whisper.__file__).resolve().parents[1]),
+    "source": json.loads(metadata.distribution("openai-whisper").read_text("direct_url.json")),
+}))
+"""
+
+
+def _validate_whisper_cpu_oracle(report, oracle_root):
+    expected = {"python": [3, 11, 16], "torch": "2.4.1+cpu",
+                "numpy": "1.26.4", "whisper": "20250625"}
+    for name, version in expected.items():
+        if report.get(name) != version:
+            raise RuntimeError("Whisper CPU baseline differs for %s: %r != %r" % (
+                name, report.get(name), version))
+    if report.get("torch_is_shim") is not False or report.get("torch_has_binary") is not True:
+        raise RuntimeError("Whisper CPU oracle is not an independent binary PyTorch")
+    if report.get("torch_cuda") is not None:
+        raise RuntimeError("Whisper CPU oracle must use the CPU-only PyTorch build")
+    if Path(report["prefix"]).resolve() != Path(oracle_root).resolve():
+        raise RuntimeError("Whisper CPU oracle did not use its isolated venv")
+    Path(report["package_site"]).resolve().relative_to(Path(oracle_root).resolve())
+    source = report.get("source") or {}
+    if source.get("url") not in (
+        "https://github.com/openai/whisper", "https://github.com/openai/whisper.git",
+    ):
+        raise RuntimeError("Whisper CPU oracle did not install the official upstream source")
+    vcs = source.get("vcs_info") or {}
+    if vcs.get("vcs") != "git" or vcs.get("commit_id") != WHISPER_CPU_COMMIT:
+        raise RuntimeError("Whisper CPU oracle source commit differs from the pinned baseline")
+
+
+@nox.session(python="3.11.16", venv_backend="venv")
+def whisper_cpu(session):
+    """Pinned original Whisper CPU correctness; no checkpoint or speed claim."""
+    root, env = _session_env(session, "whisper-cpu")
+    # The global nox envdir is already under JITTOR_LAB_ROOT/_state/nox. Use
+    # another cache within this session so other CPU jobs cannot contend here.
+    jittor_home = root / "jittor-home"
+    numba_cache = root / "numba-cache"
+    jittor_home.mkdir(exist_ok=True)
+    numba_cache.mkdir(exist_ok=True)
+    oracle_root = root / "oracle"
+    oracle = str(oracle_root / "bin" / "python")
+    constraints = root / "whisper-constraints.txt"
+    constraints.write_text("\n".join(WHISPER_CPU_CONSTRAINTS) + "\n", encoding="utf-8")
+    session.install(
+        "numpy==1.26.4", "astunparse==1.6.3", "six==1.17.0", "pillow==12.3.0",
+        "tqdm==4.70.1", PYTEST, PYTEST_TIMEOUT, SCIPY, SETUPTOOLS, WHEEL,
+    )
+    oracle_env = env.copy()
+    oracle_env.update({"PYTHONPATH": "", "JITTOR_TORCH_SHIM": "0"})
+    session.run("python", "-m", "venv", str(oracle_root), env=oracle_env)
+    session.run(oracle, "-m", "pip", "install", SETUPTOOLS, WHEEL,
+                external=True, env=oracle_env)
+    session.run(
+        oracle, "-m", "pip", "install", "--index-url",
+        "https://download.pytorch.org/whl/cpu", "torch==2.4.1+cpu",
+        "--constraint", str(constraints), external=True, env=oracle_env,
+    )
+    session.run(
+        oracle, "-m", "pip", "install", "--constraint", str(constraints),
+        "--no-build-isolation", WHISPER_CPU_SOURCE, "imageio-ffmpeg==0.6.0", PYTEST,
+        external=True, env=oracle_env,
+    )
+    session.run(oracle, "-m", "pip", "check", external=True, env=oracle_env)
+    baseline = json.loads(session.run(
+        oracle, "-c", _WHISPER_CPU_ORACLE_PROBE,
+        external=True, env=oracle_env, silent=True,
+    ))
+    _validate_whisper_cpu_oracle(baseline, oracle_root)
+    (root / "whisper-baseline.json").write_text(
+        json.dumps(baseline, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    session.log("Whisper CPU oracle: " + json.dumps(baseline, sort_keys=True))
+    # The current shim reports os.cpu_count(), while its set_num_threads is a
+    # placeholder. Align actual worker environments with that declared count;
+    # this is a scoped baseline condition, not a fix for the shared Torch API.
+    thread_count = str(os.cpu_count() or 1)
+    env.update({
+        "OMP_NUM_THREADS": thread_count,
+        "MKL_NUM_THREADS": thread_count,
+        "OPENBLAS_NUM_THREADS": thread_count,
+        "JITTOR_HOME": str(jittor_home),
+        "NUMBA_CACHE_DIR": str(numba_cache),
+        "REAL_TORCH_PYTHON": oracle,
+        "JITTOR_ECOSYSTEM_PACKAGE_SITE": baseline["package_site"],
+        "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE": baseline["package_site"],
+        "JITTOR_REQUIRE_REAL_TORCH": "1",
+        "JITTOR_REQUIRE_WHISPER": "1",
+        "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+        "JITTOR_TEST_DEVICES": "cpu",
+        "JITTOR_TORCH_SHIM": "1",
+        "JT_USE_CUDA": "0",
+        "JT_BUILD_NVCC_PATH": "",
+        "JT_BUILD_USE_MKL": "0",
+        "JT_BUILD_USE_MPI": "0",
+        "JT_USE_PARALLEL_OP_COMPILER": "0",
+        "JT_BACKEND_FALLBACK": "error",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "TOKENIZERS_PARALLELISM": "false",
+        "JITTOR_ECOSYSTEM_SPEED_RATIO": "",
+    })
+    _run_pytest_once(
+        session, WHISPER_CPU_TESTS + ("--junitxml=" + str(root / "whisper-cpu.xml"),),
+        env, timeout=1800,
+    )
 
 @nox.session(python=False)
 def optional(session):

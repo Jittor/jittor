@@ -131,6 +131,16 @@ def frontend_factory(function, tensor_type):
 
 
 class _TensorMeta(type):
+    def __instancecheck__(cls, value):
+        if super().__instancecheck__(value):
+            return True
+        # Only the installation's root Tensor includes supported sparse owners;
+        # Parameter and user subclasses retain their ordinary instance checks.
+        if vars(cls).get("_frontend_backend") is None:
+            return False
+        from .sparse_frontend import SparseCOOTensor
+        return isinstance(value, SparseCOOTensor)
+
     def __call__(cls, *args, **kwargs):
         backend = vars(cls).get("_frontend_backend")
         if backend is None:

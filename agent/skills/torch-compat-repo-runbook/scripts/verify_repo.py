@@ -23,6 +23,10 @@ Usage:
         --device cuda --repeats 5 --out <dir>
 
 Notes / honest limits:
+* Oracle subprocesses discard inherited shim activation and source paths.
+  Nonzero child exits fail the case and failed cases make this CLI exit 1.
+  A successful report still records errors, rather than asserting parity
+  tolerances; run the strict ecosystem tests before using its measurements.
 * Device memory is asked of each runtime rather than sampled externally: on this
   box `nvidia-smi --query-compute-apps` does not list the process, and per-GPU
   `memory.used` includes co-tenants. Both runtimes are asked for live bytes and
@@ -208,6 +212,26 @@ def _cases_module():
     return _ecosystem_cases
 
 
+
+def _runtime_env(env, runtime):
+    """Keep the oracle isolated under the existing ecosystem harness contract."""
+    child = dict(env)
+    if runtime == "torch":
+        child["PYTHONPATH"] = ""
+        # Match _ecosystem_harness._run: a real oracle must not discover the
+        # deployed facade through inherited source paths or shim activation.
+        for name in (
+            "JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_CACHE_ROOT",
+            "JITTOR_TORCH_SHIM", "JITTOR_TORCH_KEEP_HOME", "JT_BACKEND",
+            "JT_USE_CUDA", "JT_BUILD_NVCC_PATH", "use_cuda", "nvcc_path",
+        ):
+            child.pop(name, None)
+        reference_site = child.get("JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE")
+        if reference_site:
+            child["JITTOR_ECOSYSTEM_PACKAGE_SITE"] = reference_site
+    return child
+
+
 def _run_case(runner_python, case, out_npz, env, device, repeats, seed,
               weights=None):
     """Run one case in one runtime; return (result_dict, wall_s)."""
@@ -217,11 +241,12 @@ def _run_case(runner_python, case, out_npz, env, device, repeats, seed,
     if weights:
         cmd += ["--weights", str(weights)]
     started = time.perf_counter()
-    proc = subprocess.run(cmd, env=env, stdout=subprocess.PIPE,
+    run_env = _runtime_env(env, "jittor" if weights else "torch")
+    proc = subprocess.run(cmd, env=run_env, stdout=subprocess.PIPE,
                           stderr=subprocess.STDOUT, text=True)
     wall = time.perf_counter() - started
     match = RESULT_RE.search(proc.stdout or "")
-    if match is None:
+    if proc.returncode != 0 or match is None:
         tail = "\n".join((proc.stdout or "").splitlines()[-15:])
         raise SystemExit("[verify] %s failed (exit %s):\n%s"
                          % (case, proc.returncode, tail))
@@ -239,10 +264,13 @@ def _peak_memory_bytes(runner_python, runtime, case, env, device, seed, npz):
     cmd = [runner_python, "-c", _MEMORY_WRAPPER, str(RUNNER), case, str(npz),
            "--runtime", runtime, "--device", device, "--repeats", "1",
            "--seed", str(seed)]
-    run_env = dict(env, VERIFY_RUNTIME=runtime)
+    run_env = dict(_runtime_env(env, runtime), VERIFY_RUNTIME=runtime)
     proc = subprocess.run(cmd, env=run_env, stdout=subprocess.PIPE,
                           stderr=subprocess.STDOUT, text=True)
     text = proc.stdout or ""
+    if proc.returncode != 0:
+        raise SystemExit("[verify] %s memory pass failed (exit %s):\n%s"
+                         % (case, proc.returncode, "\n".join(text.splitlines()[-15:])))
     peak = PEAK_RE.search(text)
     reserved = RESERVED_RE.search(text)
     note = UNMEASURABLE_RE.search(text)
@@ -295,7 +323,7 @@ def _case_list(cases_module, repo):
     registers ``ms_swift_lora_llama``), so normalise before matching.
     """
     key = repo.replace("-", "_")
-    names = [n for n in cases_module.CASES if n.startswith(key + "_")
+    names = [n for n in cases_module.CASES if n == key or n.startswith(key + "_")
              or n.startswith("large_" + key + "_")]
     return [(n, cases_module.CASES[n][1]) for n in sorted(names)]
 
@@ -392,7 +420,7 @@ def main() -> int:
     (out_dir / "verify-report.json").write_text(
         json.dumps(report, indent=2, ensure_ascii=False) + "\n")
     print("[verify] wrote %s" % (out_dir / "verify-report.json"))
-    return 0
+    return 1 if any(entry["status"] == "failed" for entry in report["cases"]) else 0
 
 
 if __name__ == "__main__":
