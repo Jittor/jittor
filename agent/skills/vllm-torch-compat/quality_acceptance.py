@@ -115,7 +115,9 @@ def run(args):
         assert shim == (args.backend == 'jittor'), 'wrong Torch backend'
         assert torch.cuda.is_available(), 'real CUDA is required'
         report['runtime'] = dict(torch_version=torch.__version__,
-                                 torch_file=torch.__file__, is_jittor_shim=shim,
+                                 torch_file=getattr(torch, '__file__', None),
+                                 jittor_file=getattr(jt, '__file__', None) if shim else None,
+                                 is_jittor_shim=shim,
                                  default_device=str(torch.get_default_device()),
                                  cuda_visible_devices=os.environ.get('CUDA_VISIBLE_DEVICES'),
                                  vllm=importlib.metadata.version('vllm'),

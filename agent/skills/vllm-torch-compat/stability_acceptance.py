@@ -14,6 +14,15 @@ from pathlib import Path
 import traceback
 
 
+def resumed_after_preemption(events, scheduler_steps):
+    """Check observed preemptions have a subsequent scheduled recovery."""
+    return bool(events) and all(any(
+        index > event['scheduler_step']
+        and (event['request_id'] in step['new'] or event['request_id'] in step['resumed'])
+        and step['tokens'].get(event['request_id'], 0) > 0
+        for index, step in enumerate(scheduler_steps)) for event in events)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--backend', choices=('oracle', 'jittor'), required=True)
@@ -79,6 +88,7 @@ def main():
         @functools.wraps(original_preempt)
         def observe_preempt(self, request, timestamp):
             event = dict(phase=phase[0], request_id=request.request_id,
+                         scheduler_step=len(report['scheduler_steps']),
                          computed_before=request.num_computed_tokens,
                          output_tokens=request.num_output_tokens)
             result = original_preempt(self, request, timestamp)
@@ -238,13 +248,11 @@ def main():
             reference = run(cases, 'isolated_reference', 1)
             actual = run(cases, 'kv_pressure', len(cases))
             events = [e for e in report['preemptions'] if e['phase'] == 'kv_pressure']
-            resumed = {rid for s in report['scheduler_steps'] if s['phase'] == 'kv_pressure'
-                       for rid in s['resumed']}
             report['assertions'].update(
                 preemption_observed=bool(events),
                 recompute_reset_observed=bool(events) and all(
                     e['computed_before'] > 0 and e['computed_after'] == 0 for e in events),
-                preempted_requests_resumed=bool(events) and all(e['request_id'] in resumed for e in events),
+                preempted_requests_resumed=resumed_after_preemption(events, report['scheduler_steps']),
                 greedy_matches_isolated=actual == reference)
             assert all(report['assertions'].values()), report['assertions']
         else:
@@ -303,7 +311,7 @@ def main():
         report['status'] = 'completed'
         print(json.dumps(dict(status=report['status'], assertions=report['assertions'],
                               requests=report['completed_requests'], steps=steps[0])), flush=True)
-    except Exception as exc:
+    except (Exception, SystemExit, KeyboardInterrupt) as exc:
         report['status'] = 'failed'
         report['exception'] = '%s: %s' % (type(exc).__name__, exc)
         report['traceback'] = traceback.format_exc()
