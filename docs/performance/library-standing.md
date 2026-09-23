@@ -244,3 +244,46 @@ softmax 累加换了顺序在 float16 下的舍入，不随形状变化。跨进
 
 复现：`$JITTOR_LAB_ROOT/sdpa-dispatch/bench_sdpa_paths.py`。跑之前需要 pybind11
 头文件和 `JITTOR_FLASH_ATTN_JITTOR_SRC`，见 `examples/flash-attention/README.md`。
+
+### 补上对 PyTorch 的那一栏：接上 flash 之后仍慢 6–14%，因为 kernel 选错了
+
+上一节的 `2.79x` 是 **jittor 改前对 jittor 改后**，不是对 PyTorch。拿它当「加速」
+的结论汇报是误导——PyTorch 的 SDPA 本来就走融合注意力，所以那次改动是**追平**，
+不是超过。这一节把缺的那一栏补上。
+
+真 PyTorch `2.13.0+cu129`，同一张 H20，同样的形状/dtype/`is_causal`，同样的
+10 次 warmup + 20 次重复取中位数（5 次重复对 torch 不够：raw 会从 `0.0024`
+一路掉到 `0.0001`，那是没热起来，不是结果）：
+
+| 形状 | jittor + flash-attn 2 | torch 默认 | 比值 |
+| --- | --- | --- | --- |
+| H3 video VAE `2x32x1797x1797x64` | `0.00292s` | `0.00262s` | 慢 `11%` |
+| GPT-2 medium | `0.00258s` | `0.00244s` | 慢 `6%` |
+| Llama prefill | `0.00303s` | `0.00266s` | 慢 `14%` |
+
+**差距的来源不是 jittor 的调用路径，是算法选择。** 把 torch 的后端逐个钉死来问：
+
+| 形状 | torch cudnn（= 默认） | torch flash | torch mem_efficient | jittor flash |
+| --- | --- | --- | --- | --- |
+| H3 video VAE | `0.00262s` | `0.00280s` | `0.00296s` | `0.00292s` |
+| GPT-2 medium | `0.00244s` | `0.00250s` | `0.00256s` | `0.00258s` |
+| Llama prefill | `0.00266s` | `0.00289s` | `0.00303s` | `0.00302s` |
+
+两条结论：
+
+1. **jittor 的 flash 路径和 torch 的 flash 路径只差 `3–5%`**。layout 转换、
+   派发、跨扩展边界这些加起来就这么多，管道基本追平了。
+2. **在 H20 上 cuDNN 的融合注意力比 flash-attn 2 快 `6–9%`**，torch 默认选它。
+   jittor 跑的是慢的那个算法。
+
+所以「让 jittor 的注意力不慢于 torch」这件事的下一步是**给 CUDA 后端写一个
+cuDNN 融合注意力 kernel**，注册到同一个 `nn.scaled_dot_product_attention` 名字
+下、优先级高于 flash 桥。收益已经量出来了：对 flash-attn 2 再快 `6–9%`，并且
+cuDNN 随 CUDA 栈发货，不需要 flash 源码 checkout 和 pybind11。
+
+**一条被推翻的猜想，记下来免得后人重走。** 我以为差距来自这个 kernel 对 q/k/v
+各做的 `permute().reshape().clone()` 和输出那次 `clone()`——四次整张量拷贝，
+H3 那档约 117MB 额外访存，量级上足够解释。去掉输入那三次 clone 后实测
+`0.00292 / 0.00258 / 0.00302`，和保留时的 `0.00292 / 0.00258 / 0.00303`
+**逐档相同**，正确性也不变。jittor 的图把冗余拷贝消掉了，那几次 clone 不花钱，
+这条路是死的。clone 予以保留（它挡的是扩展边界上的悬挂视图，见上节）。
