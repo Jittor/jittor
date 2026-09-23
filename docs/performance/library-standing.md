@@ -313,3 +313,36 @@ H3 部署用的是装好的 wheel（`jittor-1.3.11.0.dist-info`），那里
 之类的推广说法不成立，wheel 装法下它们一直是好的。
 
 **连带后果**：H3 流水线里没有一个等着被捡的 `2.72x`。那条流水线本来就在用 flash。
+
+### 端到端：接上 flash 之后 Llama 快 `1.94x`，GPT-2 快 `3%`（2026-09-23 实测）
+
+前面那些都是裸 SDPA 调用。这一节是真模型的训练 step，用项目自带的 ecosystem
+对拍 harness（两个解释器，`REAL_TORCH_PYTHON` 出 oracle，realistic 尺寸，
+「至少十次重复取最快」）。真 torch `2.13.0+cu129`，两侧 transformers 都是 `5.5.3`
+（jittor 侧的 adapter 只支持 `4.56.2` / `5.5.3`），`OMP_NUM_THREADS=1` 两侧对齐。
+
+同机同会话，唯一变量是 `JITTOR_FLASH_ATTN_JITTOR=0`：
+
+| 用例 | 关 flash | 开 flash | 本次改动的贡献 |
+| --- | --- | --- | --- |
+| `large_transformers_gpt2` | `0.0851s`（`0.97x`） | `0.0825s`（`0.94x`） | 快 `3%` |
+| `large_transformers_llama` | `0.0865s`（`0.94x`） | `0.0445s`（`0.48x`） | 快 **`1.94x`** |
+
+比值是 jittor/torch，小于 1 表示 jittor 更快。梯度也逐个比对通过（100 / 75 个）。
+
+**要说清楚的是：jittor 在这两项上本来就已经快过 torch**（`0.97x` / `0.94x`），
+那部分不是这次改动带来的。这次改动是在此之上把 Llama 又砍掉一半。
+
+两条被这次测量逼出来的修复，都不是为了过门：
+
+- `torch.get_num_threads()` 既不认 `OMP_NUM_THREADS` 也不认 `set_num_threads`
+  （无条件返回 `os.cpu_count()`），harness 因两侧线程数不一致而拒绝比较——它拒得
+  对，该修的是 shim。见 `f9481ddf`。
+- `_ecosystem_harness.py:274` 用 `line.startswith("ECOSYSTEM_RESULT ")` 找 runner
+  的 JSON。这台机器 384 核，numexpr 会打一条不带换行的告警，marker 就落到行中间
+  被漏掉，于是**一次成功的测量被报成 `runner failed`**。失败方向是最坏的那种。
+  尚未修复，记在这里。
+
+台账里 GPT-2 `1.13x` / Llama `1.22x` 那两行是 2026-08-23 在 RTX 4090 + torch
+2.12.1 + python 3.11 上测的，**不要和上表相减**：硬件、torch 版本、python 版本
+全变了，中间还隔着几个月的其它工作。上表的归因只来自同机同会话的开/关对照。
