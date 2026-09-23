@@ -363,7 +363,11 @@ def _install_cuda(g, registry=None):
     cudnn.benchmark = getattr(cudnn, "benchmark", False)
     cudnn.deterministic = getattr(cudnn, "deterministic", False)
     cudnn.version = getattr(cudnn, "version", _api_cudnn_version)
-    cudnn.flags = getattr(cudnn, "flags", _api_cudnn_flags)
+    if not hasattr(cudnn, "flags"):
+        # Bound to this module, so the implementation never has to look
+        # itself up in the interpreter's module registry.
+        from functools import partial as _partial
+        cudnn.flags = _partial(_api_cudnn_flags, cudnn)
     if not isinstance(getattr(cudnn, "conv", None), _PrecisionBackend):
         cudnn.conv = _PrecisionBackend("cudnn", "torch.backends.cudnn.conv")
     if not isinstance(getattr(cudnn, "rnn", None), _PrecisionBackend):

@@ -50,6 +50,24 @@ def _default_tensor_dtype(backend):
     return _dtype_to_str(getter()) if getter is not None else "float32"
 
 
+#: What `torch.set_default_device` was last told, or None meaning CPU.
+#: Deliberately *not* jittor's `use_cuda`: that flag answers "is the
+#: accelerator enabled", which torch treats as a different question from
+#: "where does a tensor with no device go".
+_DEFAULT_DEVICE = None
+
+
+def default_device():
+    """The device a factory with no `device=` should use."""
+    return _DEFAULT_DEVICE or "cpu"
+
+
+def set_default_device_spelling(device):
+    """Record what `torch.set_default_device` chose; None clears it to CPU."""
+    global _DEFAULT_DEVICE
+    _DEFAULT_DEVICE = device
+
+
 def _placement_request(backend, device, like=None):
     """Resolve native placement without changing Runtime flags or materializing."""
     if device is None:
@@ -61,7 +79,19 @@ def _placement_request(backend, device, like=None):
         from .types import active_device_context
         device = active_device_context()
         if device is None:
-            return None
+            # torch's default device is CPU, and stays CPU until somebody calls
+            # `set_default_device`. This used to return None -- "no placement,
+            # let jittor decide" -- which means jittor's global `use_cuda`, and
+            # that flag says *the accelerator is enabled*, not *the accelerator
+            # is the default device*. torch keeps those apart.
+            #
+            # The cost of conflating them: MiniMax-H3's VAE does
+            # `latent = latent.float().cpu()` and then builds its normalisation
+            # constants with a plain `torch.tensor(...)`. Under torch both are
+            # on the CPU; here the constants landed on cuda:0 and the subtract
+            # died in device_copy_op with "Expected all tensor inputs on the
+            # same backend and device".
+            device = default_device()
     numeric_index = isinstance(device, int) and not isinstance(device, bool)
     name = "cuda" if numeric_index else (getattr(device, "type", None) or str(device).split(":", 1)[0])
     if name == "cpu":

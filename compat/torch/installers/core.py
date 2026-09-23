@@ -6,7 +6,6 @@ changing the compatibility semantics.
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
-import sys as _sys_misc
 import types as _types_misc
 import numpy as _np
 
@@ -692,8 +691,19 @@ def set_default_dtype(d):
 
 
 def get_default_device():
+    """torch.get_default_device: CPU until `set_default_device` says otherwise.
+
+    Used to report cuda whenever `jt.flags.use_cuda` was on, which conflates
+    "the accelerator is enabled" with "the accelerator is the default device".
+    torch keeps those apart: CUDA being available never moves the default off
+    the CPU. See `compat/torch/frontend.py::default_device`.
+    """
     ctx = _misc_context()
     g = ctx.jittor_module
+    from ..frontend import default_device as _recorded_default
+    spelling = _recorded_default()
+    if str(spelling).split(":")[0] == "cpu":
+        return g.device("cpu")
     if not jt.flags.use_cuda:
         return g.device("cpu")
     try:
@@ -781,6 +791,12 @@ def _restore_default_device_index(ctx):
                   "the default device's index stays current after it is cleared")
 
 
+def _record_default_device(spelling):
+    """Tell the tensor factories where a `device=`-less tensor belongs."""
+    from ..frontend import set_default_device_spelling
+    set_default_device_spelling(spelling)
+
+
 def set_default_device(device=None):
     """torch.set_default_device -- now actually moves the default.
 
@@ -793,6 +809,7 @@ def set_default_device(device=None):
     if device is None:
         _set_install_flag(ctx, "use_cuda", 0)
         _restore_default_device_index(ctx)
+        _record_default_device(None)
         return None
     if isinstance(device, str):
         name, _, raw_index = device.partition(":")
@@ -809,6 +826,7 @@ def set_default_device(device=None):
     if name == "cpu":
         _set_install_flag(ctx, "use_cuda", 0)
         _restore_default_device_index(ctx)
+        _record_default_device('cpu')
         return None
     if name in ("cuda", "gpu", "npu"):
         if not jt.has_cuda:
@@ -839,6 +857,7 @@ def set_default_device(device=None):
                 jt.set_device(int(index))
             except (AttributeError, RuntimeError, TypeError, ValueError) as error:
                 raise RuntimeError("torch.set_default_device(%r): %s" % (device, error))
+        _record_default_device(name if index is None else "%s:%d" % (name, index))
         return None
     from ...stub_policy import unimplemented
 
@@ -1030,9 +1049,14 @@ class _DefaultGenerator:
 
 
 def _torch_device_misc(spelling):
-    module = _sys_misc.modules.get("torch")
-    factory = getattr(module, "device", None)
-    return factory(spelling) if callable(factory) else spelling
+    """A device object, taken from the install context, not the module registry.
+
+    `installers/` must not reach into the interpreter's module table -- that is
+    the boundary `test_torch_compat_structure` defends, and spelling the lookup
+    through an alias to slip past its substring check would be gaming it rather
+    than honouring it.
+    """
+    return _misc_context().jittor_module.device(spelling)
 
 
 def fork_rng(devices=None, enabled=True, _caller="fork_rng",
@@ -1072,8 +1096,7 @@ class _ForkRng:
     def _accelerator(self):
         if self._device_type != "cuda":
             return None
-        module = _sys_misc.modules.get("torch")
-        cuda = getattr(module, "cuda", None)
+        cuda = getattr(_misc_context().jittor_module, "cuda", None)
         if cuda is None or not getattr(cuda, "is_available", lambda: False)():
             return None
         return cuda

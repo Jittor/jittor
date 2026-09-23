@@ -1375,10 +1375,16 @@ class _CudnnFlags:
         return False
 
 
-def _api_cudnn_flags(enabled=False, benchmark=False, benchmark_limit=10,
+def _api_cudnn_flags(module, enabled=False, benchmark=False, benchmark_limit=10,
                      deterministic=False, allow_tf32=True):
-    import sys as _sys
-    module = _sys.modules.get("torch.backends.cudnn")
+    """The module comes in bound, it is not looked up.
+
+    `bindings.py` binds this to the cudnn module it just built. An installer
+    reaching into the interpreter's module registry is what
+    `test_torch_compat_structure::test_canonical_module_line_budgets` forbids
+    -- "it fails on growth, not on a boundary violation" -- and the first
+    version of this did exactly that.
+    """
     del benchmark_limit          # accepted for signature parity; nothing reads it
     return _CudnnFlags(module, {"enabled": enabled, "benchmark": benchmark,
                                 "deterministic": deterministic,
