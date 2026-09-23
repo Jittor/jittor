@@ -413,6 +413,36 @@ def _api_dynamo_mark_dynamic(*a, **k):
     return None
 
 
+def _api_dynamo_mark_unbacked(t, index, hint_override=None, strict=False,
+                              specialize_on=None, shape_id=None):
+    """Retain eager dimension annotations without promising symbolic tracing.
+
+    The default annotation does not change tensor values or placement. Jittor
+    runs its own concrete-shape JIT, so requests that constrain symbolic
+    specialization cannot be honored by this facade.
+    """
+    if (strict or hint_override is not None or specialize_on is not None
+            or shape_id is not None):
+        raise NotImplementedError(
+            "mark_unbacked symbolic specialization options require Dynamo; "
+            "Jittor only supports the default eager dimension annotation."
+        )
+    if isinstance(index, int):
+        if not hasattr(t, "_dynamo_unbacked_indices"):
+            t._dynamo_unbacked_indices = set()
+        if not hasattr(t, "_dynamo_hint_overrides"):
+            t._dynamo_hint_overrides = {}
+        if not hasattr(t, "_specialize_on"):
+            t._specialize_on = {}
+        t._dynamo_unbacked_indices.add(index)
+        t._specialize_on[index] = []
+        return None
+    assert isinstance(index, (list, tuple))
+    for dimension in index:
+        _api_dynamo_mark_unbacked(t, dimension)
+    return None
+
+
 def _api_dynamo_graph_break(*a, **k):
     return None
 
@@ -684,6 +714,10 @@ def install(ctx):
     _dynamo.reset = _api_dynamo_reset
     _modules["torch._dynamo"] = _dynamo
     setattr(g, "_dynamo", _dynamo)
+    _dynamo_decorators = _types2.ModuleType("torch._dynamo.decorators")
+    _dynamo_decorators.mark_unbacked = _api_dynamo_mark_unbacked
+    _dynamo.decorators = _dynamo_decorators
+    _modules["torch._dynamo.decorators"] = _dynamo_decorators
     _eval_frame = _types2.ModuleType("torch._dynamo.eval_frame")
     _eval_frame.OptimizedModule = ctx.state.get("nn_class_adapter", _identity)(OptimizedModule)
     _eval_frame.is_dynamo_supported = _api_eval_frame_is_dynamo_supported
