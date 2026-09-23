@@ -1155,6 +1155,11 @@ register_fidelity(
     "bridged optimizer's zero_grad when one is active. Returns None.")
 
 
+def _module_extra_repr(self):
+    """Return Torch Module's empty default without inspecting its initializer."""
+    return ""
+
+
 def _install_module_methods(nn, registry=None):
     """Bind the torch-compatible ``nn.Module`` methods; all are module level.
 
@@ -1174,6 +1179,7 @@ def _install_module_methods(nn, registry=None):
     _pipeline_state["mark"] = 0
 
     M.execute = _execute
+    M.extra_repr = _module_extra_repr
     if not hasattr(M, "forward"):
         M.forward = _forward_alias
     M._dispatch_call = _call
@@ -1275,3 +1281,5 @@ def _install_module_methods(nn, registry=None):
     register_api_bindings(M, 'torch.nn.Module',
         ('__setattr__', 'buffers', 'cpu', 'cuda', 'double', 'eval', 'execute', 'float', 'forward', 'get_buffer', 'get_execution_pipelining', 'get_parameter', 'get_submodule', 'half', 'load_state_dict', 'named_buffers', 'named_modules', 'named_parameters', 'npu', 'parameters', 'register_parameter', 'set_execution_pipelining', 'to', 'to_empty', 'train', 'type', 'zero_grad') + tuple(()),
         Fidelity.APPROXIMATE, 'Module state and parameter management over native holders; Torch lazy iterator, meta, and layout semantics are approximate')
+    register_api_bindings(M, 'torch.nn.Module', ('extra_repr',),
+        Fidelity.EXACT, 'Torch Module default extra_repr is empty; explicit subclass overrides retain normal MRO precedence')
