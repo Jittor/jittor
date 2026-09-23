@@ -287,3 +287,29 @@ H3 那档约 117MB 额外访存，量级上足够解释。去掉输入那三次 
 `0.00292 / 0.00258 / 0.00302`，和保留时的 `0.00292 / 0.00258 / 0.00303`
 **逐档相同**，正确性也不变。jittor 的图把冗余拷贝消掉了，那几次 clone 不花钱，
 这条路是死的。clone 予以保留（它挡的是扩展边界上的悬挂视图，见上节）。
+
+### 更正：flash 一直在这台机器上编得出来，之前那条「从未编出」是错的
+
+上面两条（`469d8445` 的提交信息、以及 SDPA 那一节）都写了「这台机器上
+`torch_extensions` 全是空的，从来没有一个扩展编出来过」，并据此推断 H3 的运行
+走的是数学注意力、还有 `2.72x` 没拿。**这是错的，现予撤回。**
+
+实际情况：H3 部署有自己的
+`XDG_CACHE_HOME=/root/jittor-lab/_state/h3/run/xdg-cache`，那底下
+`torch-shim/minimax-h3-*/torch_extensions/flashattn_jittor/official_flash_attn/`
+里有 **225 个目标文件**和多份
+`flash_attn_2_cuda_jittor.cpython-312-*.so`。桥一直编得出来，server 也一直带
+`JITTOR_FLASH_ATTN_JITTOR_REQUIRED=1` 在跑——真编不出来它启动就会失败。
+
+错因是一次**不完整的搜索**：只看了 `/root/.cache/jittor/torch-shim/`，没看
+`XDG_CACHE_HOME` 指到哪里，就从「这里没有」推出了「全机器没有」。另外
+`/root/jittor-lab` 和 `/apdcephfs_private/qy/projects/zy/jittor-lab` 是两个不同的目录，前者是 H3 部署，
+后者是做基准的 lab，我把它们当成同一处了。
+
+**`src_inc` 那个 bug 本身仍然成立，但范围要收窄**：它只影响**源码 checkout**。
+H3 部署用的是装好的 wheel（`jittor-1.3.11.0.dist-info`），那里
+`jittor/src/core/common.h` 存在，所以 `jittor_path/src` 这个 join 是对的。
+`469d8445` 修的是 checkout 这一侧，价值不变；但「3DGS 那几个包从来编不出来」
+之类的推广说法不成立，wheel 装法下它们一直是好的。
+
+**连带后果**：H3 流水线里没有一个等着被捡的 `2.72x`。那条流水线本来就在用 flash。
