@@ -643,10 +643,11 @@ _ACCELERATOR_EXECUTED = 0
 #: Ordered, and the order is the classification: the first bucket whose pattern
 #: appears in the reason wins. "insufficient-devices" therefore has to precede
 #: "accelerator", because its reasons name the accelerator too.
-_SKIP_BUCKET_ORDER = ("insufficient-devices", "accelerator", "backend", "mpi",
+_SKIP_BUCKET_ORDER = ("optional-dependency", "insufficient-devices", "accelerator", "backend", "mpi",
                       "torch", "network", "manual", "opt-in", "declared",
                       "environment", "other")
 _SKIP_BUCKET_PATTERNS = {
+    "optional-dependency": ("missing openai whisper dependency:",),
     # Not the same fact as "this box has no accelerator", and the difference is
     # the whole point of counting it apart. A test that wants two devices skips
     # on a one-GPU machine with a reason that names CUDA, so it landed in
@@ -826,14 +827,15 @@ def _accepted_skip_patterns():
         from _helpers.gate_scope import ENVIRONMENT_SKIP_PATTERNS, REAL_TORCH_PATTERNS
     except Exception:
         return ()
-    if not _real_torch_is_required():
-        return ENVIRONMENT_SKIP_PATTERNS
+    patterns = ENVIRONMENT_SKIP_PATTERNS
     # The inversion: a session that declares it has real PyTorch cannot also
     # accept "no torch" as an explanation, or it reports success for the one
     # thing it exists to check.
-    return tuple(
-        pattern for pattern in ENVIRONMENT_SKIP_PATTERNS if pattern not in REAL_TORCH_PATTERNS
-    )
+    if _real_torch_is_required():
+        patterns = tuple(pattern for pattern in patterns if pattern not in REAL_TORCH_PATTERNS)
+    if os.environ.get("JITTOR_REQUIRE_WHISPER", "").strip().lower() in ("1", "true", "yes", "on"):
+        patterns = tuple(pattern for pattern in patterns if pattern != "missing openai whisper dependency:")
+    return patterns
 
 
 def _environment_explains(reasons):

@@ -22,6 +22,8 @@ def eye(n, m=None, dtype=None, device=None, requires_grad=False, **kwargs):
     from ...nested import _torch_register_leaf
     from ...tensor_state import compatibility_owner
     target = compatibility_owner(jt)
+    if kwargs.get("layout") is not None and kwargs["layout"] is target.sparse_coo:
+        raise NotImplementedError("eye does not support sparse COO layout")
     with tensor_frontend(target.Var, device=device):
         result = _init.eye(shape, _dtype_to_str(dtype) or "float32")
         result.requires_grad = bool(requires_grad)

@@ -17,6 +17,7 @@ from _ecosystem_harness import (
     REAL_TORCH_PYTHON,
     EcosystemComparison,
     _cuda_is_available,
+    _enabled,
     _npu_is_available,
     _torch_shim_is_active,
 )
@@ -62,6 +63,31 @@ class EcosystemParity(EcosystemComparison):
 
     def test_ms_swift_lora_llama(self):
         self._compare("ms_swift_lora_llama")
+
+
+class OpenAIWhisperParity(EcosystemComparison):
+    """Original OpenAI package on CPU; accelerator support is not declared."""
+
+    def _require_runtime(self):
+        for ready, reason in (
+            (bool(REAL_TORCH_PYTHON), "REAL_TORCH_PYTHON is not configured"),
+            (_torch_shim_is_active(), "this interpreter does not run torch as Jittor"),
+        ):
+            if not ready:
+                if _enabled("JITTOR_REQUIRE_WHISPER"):
+                    self.fail("JITTOR_REQUIRE_WHISPER=1: " + reason)
+                self.skipTest(reason)
+
+    def test_openai_whisper(self):
+        self._require_runtime()
+        self._compare("openai_whisper")
+
+    def test_openai_whisper_log_mel(self):
+        self._require_runtime()
+        self.forward_tolerance = 2e-5
+        self.backward_tolerance = 2e-3
+        self._compare("openai_whisper_log_mel", expected_output_shape=(80, 100),
+                      expected_output_dtype="float32")
 
 
 @unittest.skipUnless(REAL_TORCH_PYTHON, "REAL_TORCH_PYTHON is not configured")

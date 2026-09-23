@@ -458,7 +458,10 @@ def _index_select(input, dim, index, *, out=None):
 
 class _TypedTensorMeta(type):
     def __instancecheck__(cls, obj):
-        return isinstance(obj, compatibility_owner(jt).Var) and _jittor_dtype_name(obj.dtype) == cls._jdtype
+        # Legacy typed constructors describe dense tensors, not sparse owners.
+        return (isinstance(obj, jt.Var)
+                and isinstance(obj, compatibility_owner(jt).Var)
+                and _jittor_dtype_name(obj.dtype) == cls._jdtype)
     def __call__(cls, *args, **kw):
         with tensor_frontend(compatibility_owner(jt).Var):
             tensor_input = len(args) == 1 and isinstance(args[0], compatibility_owner(jt).Var)
@@ -498,6 +501,8 @@ def _array_keep_dtype(data):
 
 def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
     g = compatibility_owner(jt)
+    if kw.get("layout") is _SPARSE_COO_LAYOUT:
+        raise NotImplementedError("tensor factory does not support sparse COO layout; use to_sparse")
     Var = g.Var
     with tensor_frontend(Var, device=device, like=data):
         import numpy as _np
@@ -692,8 +697,24 @@ class Generator:
         return self._seed
 
 
+def _dense_tensor_layout(self):
+    """The Torch frontend's dense Var payload always has strided layout."""
+    return compatibility_owner(jt).strided
+
+
+def _dense_tensor_is_sparse(self):
+    return False
+
 class layout:  # torch.layout placeholder
     pass
+
+
+class _SparseCOOLayout(layout):
+    def __repr__(self):
+        return "torch.sparse_coo"
+
+
+_SPARSE_COO_LAYOUT = _SparseCOOLayout()
 
 
 class memory_format:
@@ -949,6 +970,14 @@ def install(ctx):
     g.pi = _math.pi
     g.e = _math.e
     g.strided = "strided"
+    g.sparse_coo = _SPARSE_COO_LAYOUT
+    # Publish only on the installation-owned Tensor subclass. Native Var keeps
+    # its own API, while the separate COO owner supplies its sparse properties.
+    Var.layout = property(_dense_tensor_layout)
+    Var.is_sparse = property(_dense_tensor_is_sparse)
+    Var.is_sparse_csr = property(_dense_tensor_is_sparse)
+    from ...sparse_frontend import to_sparse
+    Var.to_sparse = to_sparse
     g.jagged = "jagged"
     g.contiguous_format = "contiguous_format"
     g.preserve_format = "preserve_format"

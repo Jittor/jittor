@@ -28,6 +28,13 @@ def _uniq(x):
     return b
 
 
+def _is_sparse_buffer(value):
+    if value is None or isinstance(value, Var):
+        return False
+    from jittor.sparse.coo import SparseVar
+    return isinstance(value, SparseVar)
+
+
 class _WriteThroughDict(dict):
     ''' A dict view of a Module's Var attributes whose item-assignment writes back
     to the owning module. jittor's ``_parameters``/``_buffers`` are properties that
@@ -186,8 +193,10 @@ class Module:
         keeps them in ``self.params`` and overrides this; every traversal used to
         carry its own ``if isinstance(v, ParameterList): dc = v.params``.
         '''
+        buffers = self.__dict__.get("_buffer_names", ())
         return [(k, v) for k, v in self.__dict__.items()
-                if isinstance(v, Var) and not (type(k) is str and k[:1] == "_")]
+                if (isinstance(v, Var) and not (type(k) is str and k[:1] == "_"))
+                or (k in buffers and _is_sparse_buffer(v))]
 
     def _var_roles(self):
         ''' Classify every Var this module owns: ``[(key, var, role)]``.
@@ -332,6 +341,13 @@ class Module:
         # torch. De-duplicating by id kept only whichever name ``__dict__`` order
         # happened to reach first, so the checkpoint silently lost the other key.
         ps = dict(self._named_vars("state", recurse, remove_duplicate=False))
+        # Attribute or _buffers reassignment can replace a persistent dense
+        # buffer after register_buffer has checked it. Enforce the unsupported
+        # sparse checkpoint boundary here as well, before mutating destination.
+        for key, value in ps.items():
+            if _is_sparse_buffer(value):
+                raise NotImplementedError(
+                    "persistent sparse buffers are not supported: %s" % key)
         if keep_vars is False:
             for k, v in ps.items():
                 if isinstance(v, Var):
@@ -1061,6 +1077,10 @@ Returns a handle that removes both halves.
         if kwargs:
             unexpected = next(iter(kwargs))
             raise TypeError("register_buffer() got an unexpected keyword argument '%s'" % unexpected)
+        # Sparse buffers participate in enumeration/migration, but checkpoint
+        # load still owns dense Var payloads. Reject persistent COO explicitly.
+        if _is_sparse_buffer(value) and persistent:
+            raise NotImplementedError("persistent sparse buffers are not supported")
         # torch allows registering a None buffer as a placeholder (e.g. vLLM's
         # FusedMoE expert_map when there is no expert parallelism). Don't try to
         # tag attributes on None.
