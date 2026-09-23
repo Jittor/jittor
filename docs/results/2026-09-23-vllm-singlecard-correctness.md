@@ -205,9 +205,52 @@ a passed acceptance case. KI-VLLM-003 records this unimplemented private op.
 The host metadata helper is repaired, but penalty-enabled inference is **not**
 accepted and no no-op substitute was introduced.
 
-After these adapter changes froze, the complete Jittor Qwen state/random/long
-matrix was rerun; the results above remained unchanged. The independent oracle
-uses the unchanged binary runtime and the paired reference runs from this turn.
+### Repetition-penalty repair follow-up (baseline `0d0979f`)
+
+Status: implementation and CPU primitive regression verified; CUDA and OPT
+acceptance pending. Owner: vLLM adapter maintainers. Review when GPU access is
+restored or the vLLM schema / compat registration APIs change.
+
+Nine new cases in `adapters/tests/vllm/test_repetition_penalties.py` first fail
+on the exact missing operator, using real Jittor tensors on CPU. After repair,
+all nine pass against an independent scalar arithmetic reference; twelve
+adapter structure checks also pass. This follow-up environment uses Python
+3.13.5, GCC 14.2.0 and NumPy 2.5.3, separate from the GPU environment above.
+
+The adapter registers vLLM 0.24's schema and applies the per-request factor to
+the union of prompt/output token masks, once per token. Positive logits divide
+by the factor; nonpositive logits multiply. Unseen logits remain unchanged.
+The implementation uses public Jittor operations and updates the caller's logits;
+it does not change global device defaults or combine frequency/presence penalties.
+Coverage includes FP32/FP16/BF16, factors below/equal/above one, repeated calls,
+empty batches, and vocabulary sizes 17, 50272 and 151936. Arithmetic uses explicit
+dtype tolerances; untouched tokens are checked exactly.
+
+Raw logs are **unversioned** under
+`$JITTOR_LAB_ROOT/_state/vllm-singlecard/20260923/repetition-fix/`:
+`cpu-red.log` records nine missing-operator failures; `cpu-green.log` records
+21 passes. First-build and dependency-setup logs are separate from test evidence.
+The GPU host currently rejects SSH public-key authentication because the forwarded
+agent is unavailable. No new CUDA operator/oracle or OPT generation result exists
+for this repair yet; the earlier failing engine artifacts remain intact.
+KI-VLLM-003 stays open until both CUDA arithmetic and penalty-enabled generation
+are checked. CPU numerical success must not be presented as a GPU success.
+
+Follow-up checks: lifecycle **11 passed**; Torch CPU core **211 passed, 3 skipped**
+plus one packaging check initially blocked by missing `setuptools`, which passed
+after installing the dependency. The full structure gate plus that packaging
+recheck reports **1365 passed, 4 failed, 8 skipped**. The four failures are the
+same pre-existing child-process / collection-policy violations listed below,
+in unchanged `test_executor_python_threads.py` and `test_h3_decode_thread_race.py`.
+They do not involve the new adapter/test files. Layout, generated manifests and
+whitespace checks pass. Logs: `lifecycle-green.log`, `core-cpu.log`, `structure.log`;
+the initial missing-SciPy collection failure is separately retained.
+
+Before this repetition-penalty follow-up, the complete Jittor Qwen
+state/random/long matrix was rerun with the generator and metadata repairs
+committed in `0d0979f`; the results above remained unchanged. Those runs do not
+verify the later repetition-penalty change. Their independent oracle uses the
+unchanged binary runtime and paired reference runs from that earlier validation.
 
 ## Deferred CPU-default experiment
 

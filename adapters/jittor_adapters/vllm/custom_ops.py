@@ -7,8 +7,8 @@ the model -- ``self.op = torch.ops._C.silu_and_mul`` -- so the namespace has to
 be populated before a model is built, not merely when one runs.
 
 The operators registered here are the ones an unquantised model reaches: a
-gated activation, RMS normalisation with and without a residual, and rotary
-embedding. Each forwards to the matching public Jittor primitive, so the values
+gated activation, RMS normalisation with and without a residual, rotary
+embedding, and repetition penalties. Each uses public Jittor primitives, so the values
 are the real thing rather than a placeholder. Capability probes answer no;
 unsupported computation symbols remain importable for eager fusion matcher
 discovery, but explicitly reject execution instead of fabricating a result.
@@ -37,6 +37,9 @@ _OPERATORS = (
      "int rope_dim_offset=0, bool inverse=False) -> ()"),
     ("get_cuda_view_from_cpu_tensor",
      "get_cuda_view_from_cpu_tensor(Tensor input) -> Tensor"),
+    ("apply_repetition_penalties_",
+     "apply_repetition_penalties_(Tensor! logits, Tensor prompt_mask, "
+     "Tensor output_mask, Tensor repetition_penalties) -> ()"),
 )
 
 # Asked once at start-up, before any quantised path is chosen. Stubbing the
@@ -127,6 +130,19 @@ def _get_cuda_view_from_cpu_tensor(x):
     return x.to_device(0)
 
 
+def _apply_repetition_penalties_(logits, prompt_mask, output_mask,
+                                 repetition_penalties):
+    """Apply vLLM's per-request repetition factor once per seen token."""
+    if int(logits.shape[0]) == 0:
+        return
+    penalties = repetition_penalties.reshape((-1, 1))
+    seen = jt.logical_or(prompt_mask, output_mask)
+    # Match the compiled vLLM operator's division, not reciprocal-then-multiply.
+    # Presence and frequency penalties remain the caller's responsibility.
+    adjusted = jt.where(logits > 0, logits / penalties, logits * penalties)
+    logits.assign(jt.where(seen, adjusted, logits))
+
+
 _IMPLEMENTATIONS = {
     "silu_and_mul": _silu_and_mul,
     "gelu_and_mul": _gelu_and_mul,
@@ -135,6 +151,7 @@ _IMPLEMENTATIONS = {
     "fused_add_rms_norm": _fused_add_rms_norm,
     "rotary_embedding": _rotary_embedding,
     "get_cuda_view_from_cpu_tensor": _get_cuda_view_from_cpu_tensor,
+    "apply_repetition_penalties_": _apply_repetition_penalties_,
 }
 
 

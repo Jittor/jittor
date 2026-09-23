@@ -189,7 +189,7 @@ JIT 编译超过 10 分钟仍未完成，已在有界窗口内停止，**未取�
 lengths, generated token IDs/text, timing and any exception to a caller-provided
 JSON path. Select `--backend jittor` or `--backend oracle` in the corresponding
 isolated environment; the runner asserts the actual Torch identity. Cases are
-`batch`, `long`, `random`, `multigpu`, `fp8`, `compile`, `cudagraph`, `other`, and
+`batch`, `long`, `random`, `penalties`, `multigpu`, `fp8`, `compile`, `cudagraph`, `other`, and
 `benchmark`. Model weights and output files must live outside the checkout.
 For example, after activating one backend:
 
@@ -266,3 +266,18 @@ Keep real vLLM metadata/numerical tests and controlled fake-module lifecycle tes
 in separate processes. Lifecycle tests intentionally alter import ownership;
 combining them after a real engine import can produce transaction conflicts that
 do not reproduce in the documented isolated lifecycle invocation.
+
+## Repetition-penalty operator regression
+
+`adapters/tests/vllm/test_repetition_penalties.py` requires real CUDA by default.
+Run it under the shim, then copy the file outside the checkout and run it in the
+independent native-vLLM environment. Both check actual tensors against an
+independent arithmetic reference; no host-only stubs are used. Native vLLM 0.24
+loads its compiled operator through `current_platform.import_kernels()`.
+`VLLM_PENALTY_TEST_DEVICE=cpu` is a separate Jittor CPU primitive check, not a
+CPU vLLM engine test or a change to the GPU engine's default device.
+
+After the CUDA operator tests pass, run `acceptance.py --case penalties` on both
+runtimes with the same OPT weights and compare the actual generated token IDs.
+A CPU pass cannot close GPU acceptance; current evidence is in the single-card
+report and KI-VLLM-003 until the engine rerun is complete.

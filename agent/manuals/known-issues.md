@@ -2360,10 +2360,17 @@ about whether to take it.
   real-engine acceptance. An old-configuration pass does not close this issue.
 
 
-## KI-VLLM-003: legacy OPT repetition-penalty operator is unavailable
+## KI-VLLM-003: legacy OPT repetition-penalty CUDA acceptance is pending
 
 - Severity: Research
-- Status: Reproduced, 2026-09-23; outside the accepted neutral-penalty cases.
+- Status: CPU repair verified, 2026-09-23; CUDA/engine acceptance remains pending.
+- Repair in progress on baseline `0d0979f`: nine new real-Jittor CPU cases
+  first failed on the missing operator. The adapter now registers and implements
+  the operator with public device primitives; all nine CPU cases and twelve
+  adapter structure tests pass. CUDA numerical comparison and real OPT rerun
+  remain pending because access to the GPU validation environment is unavailable.
+  This is not GPU acceptance. Evidence (unversioned):
+  `$JITTOR_LAB_ROOT/_state/vllm-singlecard/20260923/repetition-fix/`.
 - Baseline: `44d7e04` plus the single-card generator and host-metadata changes.
 - Owner: vLLM adapter maintainers.
 - Evidence: run `agent/skills/vllm-torch-compat/acceptance.py --backend jittor
