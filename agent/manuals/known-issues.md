@@ -2295,7 +2295,8 @@ about whether to take it.
 
 - Severity: Research
 - Status: Reproduced on CUDA, 2026-09-23; vLLM 0.24.0 only
-- Baseline: `61294cd14673ba60f4072542a2e73ea2c8f8c509` plus the vLLM acceptance changes
+- Baseline: single-card FP8/Graph/compile reverified at `9853c6a`; TP=2 remains
+  the earlier `61294cd` plus acceptance changes
 - Owner: vLLM adapter and Torch compatibility maintainers
 - Evidence: run `agent/skills/vllm-torch-compat/acceptance.py` in isolated
   shim/oracle environments with `--case multigpu`, `fp8`, `compile`,
@@ -2308,6 +2309,9 @@ about whether to take it.
   follow-up supplies explicit exponential generators and repairs OPT legacy
   host metadata; its current scope is recorded in the
   [single-card report](../../docs/results/2026-09-23-vllm-singlecard-correctness.md).
+  The latest FP8 import, graph-pool and lazy-FX failures are retained in the
+  [extended acceptance report](../../docs/results/2026-09-23-vllm-singlecard-extended-acceptance.md),
+  separately from the accepted bounded eager HTTP service checks.
 - Workaround: use the tested Qwen3-0.6B FP16, TP=1, eager configuration. A mode
   that errors is not silently substituted with that configuration. This does
   not claim support for arbitrary models, contexts or production serving.

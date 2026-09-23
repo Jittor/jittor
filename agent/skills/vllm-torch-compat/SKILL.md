@@ -12,9 +12,11 @@ description: 在 Jittor torch shim 与独立 PyTorch 两套解释器上运行和
 [`downstream-library-adaptation`](../downstream-library-adaptation/SKILL.md) 分类表里
 **合法需要独立 adapter 的第三行**（库私有实现细节），本 skill 按那个框架执行。
 
-**不覆盖**：不新增 vLLM 版本支持声明（[`adapters/README.md`](../../../adapters/README.md)
-明确不为当前安装版本背书）；不做 serving/训练性能验收。本机没有 vLLM 源码 checkout，
-任何 engine 级结论都没有在本机复现，见「证据」。
+**范围**：不新增通用 vLLM 版本支持声明，也不承诺生产服务 SLA 或训练支持。
+2026-09-23 的 CUDA vLLM 0.24 双环境回归、质量、有限 HTTP 验收和性能结果见
+[扩展报告](../../../docs/results/2026-09-23-vllm-singlecard-extended-acceptance.md)。
+下文 2026-09-19 的环境审计与「本机」观察是历史记录；运行时应核实实际环境，
+使用后面的 acceptance tools，不能把历史版本和路径当作当前配置。
 
 ## 两侧环境
 
@@ -285,7 +287,7 @@ OPT repetition/presence/frequency case produces the same 32 greedy tokens.
 Preserve failed and passing logs separately; those results do not promise
 cross-framework seeded random-generation parity.
 
-## Expanded single-card acceptance tools (prepared, pending CUDA execution)
+## Expanded single-card acceptance tools
 
 Use the same production source revision for both model matrices. Run `state`
 with `request_state_acceptance.py`, and `random`, `batch`, `penalties`, `long`
@@ -338,8 +340,33 @@ physical GPU with dedicated benchmark caches. Compare prompts/token IDs and
 options before comparing timings. This is a new protocol; do not directly
 compare its numbers to older short-prompt benchmarks. No HTTP service latency
 or pure GPU kernel time is claimed. Multi-token delivery fails explicitly
-instead of inventing per-token timestamps.
+instead of inventing per-token timestamps. After three rounds per backend,
+`compare_latency_acceptance.py "$RESULT_DIR" --prefix qwen` verifies options,
+GPU identity, prompt/produced tokens, warmups and sample counts before pooling
+latency distributions and comparing process-level throughput. Keep diagnostic
+profiling outside these timed runs.
 
-These new tools have only local syntax/CLI and fixture checks so far. GPU
-results, installed-version API verification, HTTP load, and advanced execution
-modes remain pending; prepared scripts are not acceptance evidence.
+These tools now have real CUDA execution results on production `9853c6a`,
+recorded in the [extended acceptance report](../../../docs/results/2026-09-23-vllm-singlecard-extended-acceptance.md).
+Qwen's strict continuous-batch vs isolated-output assertion remains failed in
+both backends; fresh-engine controls reproduce the variants without historical
+requests. Do not silently loosen that assertion or equate it with state leakage.
+Recovery observations must accept subsequent new-request or cached-resumed
+scheduling with positive scheduled tokens: v2 and legacy runners differ here.
+
+`http_acceptance.py --base-url "$LOCAL_SERVER_URL" --model "$SERVED_MODEL"
+--backend "$BACKEND" --output "$RESULT_FILE"` tests a real running localhost
+server: four initial requests, twenty serial requests and twenty at concurrency
+four. It verifies HTTP/SSE termination, token IDs, usage and same-prompt greedy
+repeatability; compare the two backend result files separately. Start the real
+AsyncLLM server with its required multiprocessing, using an external launch
+script. A short `VLLM_RPC_BASE_PATH` avoids Unix-domain socket path limits.
+Use a dedicated Jittor cache and warm any new batch shapes before timing.
+Do not turn SSE chunk timings into per-token ITL, count cold compilation as
+warm throughput, or declare multi-hour serving reliability from this workload.
+
+The OPT legacy logprob path needs `torch._dynamo.decorators.mark_unbacked`.
+Its eager-only facade is covered by `compat/tests/torch/test_dynamo_shape_hints.py`;
+run CPU/CUDA and an independent PyTorch reference before real model acceptance.
+The annotation retains metadata and tensor values; symbolic specialization
+options remain explicit errors. This does not enable Dynamo/Inductor compilation.

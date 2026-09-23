@@ -305,62 +305,19 @@ configuration; passing the established CUDA configuration does not close it.
   the four unchanged baseline policy failures. The full repository is not
   claimed green.
 
-Multi-GPU, quantization, CUDA Graph/compilation and performance optimization are
-not part of this closure. The prior performance report remains historical:
-these changed sources have not been benchmarked again. No standard language
-model task-accuracy benchmark was run.
+This original correctness closure did not include multi-GPU, quantization,
+CUDA Graph/compilation or performance optimization. Subsequent quality,
+performance and service validation is reported in the extended follow-up
+below; historical short-prompt performance numbers retain their old scope.
 
-## Expanded acceptance preparation (not yet GPU results)
+## Expanded acceptance follow-up
 
-Owner: Codex. Production baseline: `de9bda2` (same computation source as the
-accepted repetition-penalty fix). This follow-up prepares the user's requested
-unified Qwen/OPT regression, quality/stability checks and current performance
-measurements. **No new GPU matrix or benchmark result is available yet.**
-The first remote login succeeded, but subsequent SSH agent identity requests
-and new SSH authentication attempts timed out. The forwarding socket remained
-present; socket existence alone did not demonstrate usable authentication.
-Neither a model failure nor a new CUDA regression was observed in this attempt.
-
-Prepared tools and bounded scope:
-
-- Both-model matrix: state, seeded random generation, batching, penalties and
-  long input. OPT long-input configuration is explicitly limited to 2048 total
-  positions, with 512/1536 input tokens and 128 output tokens. The comparator
-  now accepts `--cases state random batch penalties long` per model directory.
-- `stability_acceptance.py`: continuous mixed requests, active/waiting request
-  cancellation, and real KV-cache pressure requiring preemption/recompute/
-  resumption evidence. Each scenario compares to isolated greedy outputs;
-  native-backend behavior must also be checked before diagnosing shim defects.
-- `quality_acceptance.py` and `compare_quality_acceptance.py`: pinned
-  WikiText-2 raw test NLL/perplexity, window 1024, stride 512, each target scored
-  once. Data revision `b08601e04326c79dfdd32d625aee71d232d685c3`; source parquet
-  SHA256 `5f1bea067869d04849c0f975a2b29c4ff47d867f484f5010ea5e861eab246d91`.
-  The prepared text has 4358 rows and 1,296,370 bytes. Fixed engineering limits
-  before GPU runs: absolute mean NLL drift at most 0.01 nats/token, maximum
-  individual token NLL drift at most 0.5 nats. This does not measure QA accuracy
-  or establish equal end-to-end sampling distributions.
-- `latency_acceptance.py`: warm offline TTFT, ITL and throughput, 128 input /
-  32 output tokens, batches 1/4, three warmups and 21 measured repetitions.
-  Run three processes per backend sequentially on the same GPU. Dedicated
-  benchmark caches and unchanged tokenization/settings are required. This
-  does not measure HTTP latency and differs from the historical short-prompt
-  benchmark protocol.
-
-Only local syntax/CLI checks, window-accounting boundaries and comparator
-synthetic accept/reject checks have passed. The installed engine API and actual
-CUDA behavior still require execution. No production implementation changed;
-the deferred CPU-default experiment remains deferred. HTTP load, FP8, Graph,
-compile modes and other quantized-model coverage remain outstanding.
-Prepared raw scripts, dataset and manifests are unversioned under
-`$JITTOR_LAB_ROOT/_state/vllm-singlecard/20260923/final-acceptance/`.
-Resume by verifying the synchronized production source, then running both
-backend matrices before the new acceptance scenarios and performance runs.
-The preparation commit's repository structure run reports **1364 passed,
-4 failed, 8 skipped** in 237.97 seconds (`structure-tools.log`): the same four
-pre-existing process/collection-policy failures in unchanged
-`test_executor_python_threads.py` and `test_h3_decode_thread_race.py` listed
-above. Layout, generated-manifest, whitespace, six-tool syntax/CLI checks,
-12 window-accounting boundaries and comparator accept/reject checks pass.
+The later [extended acceptance report](2026-09-23-vllm-singlecard-extended-acceptance.md)
+records the `9853c6a` unified Qwen/OPT matrix, full WikiText-2 quality comparison,
+real request cancellation/preemption and HTTP serving. It also retains the
+strict Qwen continuous-batch differences and current advanced-mode failures.
+The earlier SSH agent outage was resolved before those GPU runs. Prepared
+scripts alone were not counted as acceptance evidence.
 
 ## Reproduction
 
