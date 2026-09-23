@@ -172,3 +172,46 @@ speed number.
   Put a module of that name on `PYTHONPATH` re-exporting from
   `flash_attn.flash_attn_interface`. This was needed historically; a run on
   2026-09-22 resolved `FLASH_ATTN` and produced correct output without it.
+
+## Reference-image to video (`ref2va`)
+
+`--task-type` selects which **weight partition** is loaded, once, at startup
+(`resolve_minimax_h3_partition` in
+`vllm_omni/model_executor/models/minimax_h3/checkpoint.py`). It is not a
+per-request switch: a server started with `fl2va` cannot serve a reference
+request, because the `Ref2VA` weights are not in memory. The two partitions
+are separate downloads of about 135 GB each:
+
+```bash
+hf download MiniMaxAI/MiniMax-H3 --include "Ref2VA/*" --local-dir "$MODEL"
+```
+
+Then serve with `--task-type ref2va`. The supported values are `auto`,
+`combined`, `t2va`, `fl2va` and `ref2va`.
+
+References go in the `input_references` multipart field, repeated once per
+image, and **the prompt has to name them** -- an image that no tag refers to is
+carried along and ignored. Tags are 1-based and numbered per type:
+`<Picture i>`, `<Video k>`, `<Audio j>`.
+
+```bash
+curl -X POST http://127.0.0.1:18091/v1/videos \
+  --form-string 'prompt=<Picture 1> and <Picture 2> rotating slowly' \
+  -F "input_references=@ref1.png;type=image/png" \
+  -F "input_references=@ref2.png;type=image/png" \
+  --form-string 'width=384' --form-string 'height=384' \
+  --form-string 'num_frames=61'
+```
+
+**`--form-string` for the prompt, not `-F`.** In curl's `-F`, a value starting
+with `<` means "read the field's value from this file", exactly as `@` means
+"upload this file". The tag convention puts `<Picture 1>` at the start of the
+prompt, so `-F 'prompt=<Picture 1> ...'` sends curl looking for a file named
+`Picture 1> ...` and fails with
+
+```
+curl: (26) Failed to open/read local data from file/application
+```
+
+which names neither the prompt nor the tag, and reads like the reference image
+could not be opened. `--form-string` never interprets `@` or `<`.

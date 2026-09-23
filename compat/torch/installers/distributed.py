@@ -170,7 +170,14 @@ def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
                       for char in key)
         rootinfo = os.path.join(
             rendezvous_dir, "jittor-nccl-{}.bin".format(key))
-        _clear_stale_rendezvous(rootinfo, rank)
+
+    # Outside the `if not rootinfo` above on purpose. It used to live inside,
+    # so an explicitly set JT_NCCL_ROOTINFO_FILE got neither the startup clear
+    # nor the atexit registration: even a clean shutdown left its rendezvous
+    # files on disk, and the next run read the previous run's NCCL ids. The
+    # path being operator-supplied does not make it less of a rendezvous
+    # artifact. Still rank 0 only, and still before rank 0 creates the store.
+    _clear_stale_rendezvous(rootinfo, rank)
 
     visible = [item for item in os.environ.get(
         "CUDA_VISIBLE_DEVICES", "").split(",") if item.strip()]
