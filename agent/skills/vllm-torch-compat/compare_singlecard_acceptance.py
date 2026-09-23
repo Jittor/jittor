@@ -1,22 +1,25 @@
-"""Compare completed single-card Qwen runs; report stochastic differences explicitly."""
+"""Compare paired single-card model runs; report stochastic differences explicitly."""
 import argparse
 import json
 from pathlib import Path
 
 
-def compare(root):
+def compare(root, cases=("state", "random", "long")):
     def read(backend, case):
         data = json.loads((root / (backend + "-" + case + ".json")).read_text())
         assert data["status"] == "completed", (backend, case)
+        assert data["backend"] == backend, (backend, case, "wrong backend")
         return data
 
     def outputs(data):
         return [(row["label"], output) for row in data["results"] for output in row["outputs"]]
 
     summary = {}
-    for case in ("state", "random", "long"):
+    for case in cases:
         a, b = (read(backend, case) for backend in ("jittor", "oracle"))
         assert a["options"] == b["options"], case
+        if case == "penalties":
+            assert a["sampling_parameters"] == b["sampling_parameters"], case
         left, right = outputs(a), outputs(b)
         assert len(left) == len(right), case
         rows = []
@@ -24,7 +27,7 @@ def compare(root):
             assert label == other_label, (label, other_label)
             assert x.get("prompt_token_ids", x.get("prompt_tokens")) == y.get("prompt_token_ids", y.get("prompt_tokens")), label
             assert len(x["token_ids"]) == len(y["token_ids"]), label
-            greedy = case == "long" or (case == "state" and x["temperature"] == 0)
+            greedy = case in ("long", "batch", "penalties") or (case == "state" and x["temperature"] == 0)
             exact = x["token_ids"] == y["token_ids"]
             if greedy:
                 assert exact, (case, label, "greedy mismatch")
@@ -37,6 +40,8 @@ def compare(root):
         if case == "random":
             assert a["seed_reproducible"] and b["seed_reproducible"]
             assert a["seed_diversity"] > 1 and b["seed_diversity"] > 1
+        if case == "batch":
+            assert a["batch_matches_single"] and b["batch_matches_single"]
         summary[case] = dict(requests=len(rows), output_tokens_per_backend=sum(r["output_tokens"] for r in rows),
                              exact_requests=sum(r["exact"] for r in rows),
                              greedy_requests=sum(r["greedy"] for r in rows),
@@ -48,8 +53,10 @@ def compare(root):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
+    parser.add_argument("--cases", nargs="+", choices=("state", "random", "long", "batch", "penalties"),
+                        default=["state", "random", "long"])
     args = parser.parse_args()
-    result = compare(args.directory)
+    result = compare(args.directory, args.cases)
     (args.directory / "comparison.json").write_text(json.dumps(result, indent=2) + "\n")
     for case, data in result.items():
         print(case, {key: value for key, value in data.items() if key != "rows"})

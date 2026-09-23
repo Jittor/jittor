@@ -17,6 +17,11 @@ p.add_argument('--model', required=True)
 p.add_argument('--output', required=True)
 p.add_argument('--repeats', type=int, default=21)
 p.add_argument('--logprobs', type=int, default=None)
+p.add_argument('--dtype', choices=['float16', 'bfloat16', 'float32'], default='float16')
+p.add_argument('--max-model-len', type=int, default=None,
+               help='Explicit engine context limit; preserve the model\'s supported range.')
+p.add_argument('--long-input-tokens', type=int, nargs='+', default=[1024, 3072],
+               help='Input lengths for the long case; use 512 1536 for OPT-125m.')
 p.add_argument('--default-device', choices=['cpu', 'cuda'], default=None,
                help='Optional diagnostic override; omitted preserves the backend default.')
 p.add_argument('--check-gpu-placement', action='store_true',
@@ -67,8 +72,8 @@ if __name__ == "__main__":
         if a.default_device is not None:
             assert report['default_device'].split(':')[0] == a.default_device
         from vllm import LLM, SamplingParams
-        options = dict(model=a.model, dtype='float16', tensor_parallel_size=2 if a.case == 'multigpu' else 1,
-                       max_model_len=4096 if a.case == 'long' else 512,
+        options = dict(model=a.model, dtype=a.dtype, tensor_parallel_size=2 if a.case == 'multigpu' else 1,
+                       max_model_len=a.max_model_len or (4096 if a.case == 'long' else 512),
                        max_num_seqs=4 if a.case in ('batch', 'benchmark', 'random') else 1,
                        gpu_memory_utilization=.35, enforce_eager=a.case not in ('compile', 'cudagraph'),
                        enable_prefix_caching=False, attention_config={'backend': 'FLASH_ATTN'}, seed=0)
@@ -110,8 +115,10 @@ if __name__ == "__main__":
             report['batch_matches_single'] = all([v['token_ids'] for v in r['outputs']] == reference for r in report['results'][4:])
             assert report['batch_matches_single'], 'batch output differs from single request'
         elif a.case == 'long':
-            for target in [1024, 3072]:
+            assert all(0 < n and n + 128 <= options['max_model_len'] for n in a.long_input_tokens)
+            for target in a.long_input_tokens:
                 ids = llm.get_tokenizer().encode('The quick brown fox jumps over the lazy dog. ' * 400, add_special_tokens=False)[:target]
+                assert len(ids) == target, 'long-input fixture is shorter than requested'
                 record_generation(llm, [{'prompt_token_ids': ids}], SamplingParams(temperature=0, max_tokens=128, ignore_eos=True), 'context_%d' % target)
         elif a.case == 'random':
             for seed in [10, 10, 11, 12]:

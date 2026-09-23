@@ -284,3 +284,62 @@ A CPU pass cannot close GPU acceptance. The single-card report records the
 OPT repetition/presence/frequency case produces the same 32 greedy tokens.
 Preserve failed and passing logs separately; those results do not promise
 cross-framework seeded random-generation parity.
+
+## Expanded single-card acceptance tools (prepared, pending CUDA execution)
+
+Use the same production source revision for both model matrices. Run `state`
+with `request_state_acceptance.py`, and `random`, `batch`, `penalties`, `long`
+with `acceptance.py`. Qwen uses the existing defaults. OPT-125m long requests
+must use `--max-model-len 2048 --long-input-tokens 512 1536`; the default 3072
+input exceeds OPT's supported context. `--dtype` explicitly selects precision.
+Compare each model directory using:
+
+```bash
+python agent/skills/vllm-torch-compat/compare_singlecard_acceptance.py "$RESULT_DIR" \
+  --cases state random batch penalties long
+```
+
+`stability_acceptance.py --backend "$BACKEND" --model "$MODEL_PATH"
+--scenario turnover|cancel|preempt --output "$RESULT_FILE"` adds instrumented
+lifecycle scenarios. Turnover defaults to 320 mixed-length requests; increase
+`--requests` and `--max-steps` for a bounded soak. Cancellation exercises both
+active and waiting requests, then engine recovery. Preemption constrains actual
+KV blocks and requires scheduler preemption/recompute/resumption evidence,
+plus equality to isolated greedy requests. Failure to trigger preemption is a
+failure, not a skip. Memory samples are diagnostics; these scenarios do not
+prove indefinite stability or test HTTP disconnect cancellation.
+
+`quality_acceptance.py prepare --data-dir "$DATA_DIR"` downloads a pinned,
+SHA256-checked WikiText-2 raw test split (pyarrow is needed only for preparation).
+Copy the prepared directory to the GPU host and run both environments:
+
+```bash
+python agent/skills/vllm-torch-compat/quality_acceptance.py run \
+  --backend "$BACKEND" --model "$MODEL_PATH" --data-dir "$DATA_DIR" \
+  --max-tokens 64 --output "$RESULT_FILE"
+```
+
+After the smoke check, omit `--max-tokens` for the entire split. This measures
+teacher-forced NLL/perplexity using 1024-token windows, stride 512, and each
+target scored once. It is not QA accuracy or proof of equal sampling
+distributions. `compare_quality_acceptance.py --oracle "$ORACLE_JSON"
+--jittor "$JITTOR_JSON" --output "$COMPARISON_JSON"` checks matching corpus,
+weights, tokenizer, protocol and GPU execution. Initial engineering limits are
+absolute mean NLL drift 0.01 nats/token and maximum token NLL drift 0.5 nats;
+declare changes before experiments, never loosen thresholds to hide a failure.
+
+`latency_acceptance.py --backend "$BACKEND" --model "$MODEL_PATH"
+--output "$RESULT_FILE"` measures warm offline token delivery: TTFT starts
+before `add_request`, and ITL is measured between `engine.step` output arrivals.
+Initialization and three warmups are excluded; defaults are 21 measurements,
+batch sizes 1 and 4, 128 input tokens and 32 output tokens. Prefix caching is
+disabled. Run three fresh processes per backend sequentially on the same
+physical GPU with dedicated benchmark caches. Compare prompts/token IDs and
+options before comparing timings. This is a new protocol; do not directly
+compare its numbers to older short-prompt benchmarks. No HTTP service latency
+or pure GPU kernel time is claimed. Multi-token delivery fails explicitly
+instead of inventing per-token timestamps.
+
+These new tools have only local syntax/CLI and fixture checks so far. GPU
+results, installed-version API verification, HTTP load, and advanced execution
+modes remain pending; prepared scripts are not acceptance evidence.
