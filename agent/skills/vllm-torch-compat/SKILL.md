@@ -370,3 +370,22 @@ Its eager-only facade is covered by `compat/tests/torch/test_dynamo_shape_hints.
 run CPU/CUDA and an independent PyTorch reference before real model acceptance.
 The annotation retains metadata and tensor values; symbolic specialization
 options remain explicit errors. This does not enable Dynamo/Inductor compilation.
+
+## Incremental performance diagnosis
+
+`stage_timing.py --backend "$BACKEND" --model "$MODEL_PATH" --output-dir
+"$NEW_RESULT_DIR" --baseline "$SOURCE_REVISION"` measures warm host spans for
+scheduling, model execution, sampling and output update, followed by a separate
+cProfile pass. It uses the latency runner's default prompts/options, checks
+that the spans do not overlap, and preserves generated-token checks. No extra
+per-step CUDA synchronization is inserted. These instrumented host wall times
+are not kernel timings or formal throughput results. `--skip-cprofile` keeps
+only the lightweight stage pass.
+
+Keep before/after production manifests, GPU occupancy records and failed
+reproducers. A competing process on the selected GPU excludes a formal timing
+comparison; shared-device runs can still diagnose calls and check correctness.
+Optimize one measured cause at a time, and retain ownership, dtype mutation,
+precision-policy changes and buffer lifetime semantics. The first metadata
+scope optimization and its limits are documented in the
+[performance report](../../../docs/results/2026-09-24-vllm-metadata-performance.md).
