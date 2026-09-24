@@ -577,7 +577,7 @@ def _api_python_dispatch__get_current_dispatch_mode(*args, **kwargs):
 
 
 def _api_g_get_num_threads():
-    return os.cpu_count() or 1
+    return int(jt.core.runtime_openmp_max_threads())
 
 
 def _api_g_set_num_threads(*args, **kwargs):
