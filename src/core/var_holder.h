@@ -193,10 +193,12 @@ struct VarHolder {
      * belongs to and goes back to it.
      */
     // @pyjt(__get__device_id)
+    // @attrs(frontend_metadata)
     inline int device_id() { return var->device_id; }
 
     // Explicit graph placement (-1 means native FollowRuntime policy).
     // @pyjt(__get__placement_backend)
+    // @attrs(frontend_metadata)
     inline int placement_backend() {
         return var->placement.explicit_backend ? int(var->placement.device.backend) : -1;
     }
@@ -262,6 +264,7 @@ struct VarHolder {
      * return the number of elements in the Var.
      */
     // @pyjt(numel)
+    // @attrs(frontend_metadata)
     inline int64 numel() {
         return var->num;
     }
@@ -270,6 +273,7 @@ struct VarHolder {
      * return the number of bytes of this Var.
      */
     // @pyjt(__get__nbytes)
+    // @attrs(frontend_metadata)
     inline int64 nbytes() {
         return var->num * var->dsize();
     }
@@ -374,6 +378,7 @@ struct VarHolder {
      * return the shape of the Var.
      */
     // @pyjt(__get__shape)
+    // @attrs(frontend_metadata)
     inline NanoVector shape() {
         return var->shape;
     }
@@ -457,6 +462,7 @@ struct VarHolder {
      * return the data type of the Var.
      */
     // @pyjt(__get__dtype)
+    // @attrs(frontend_metadata)
     inline NanoString dtype() {
         return var->dtype();
     }
@@ -562,6 +568,7 @@ struct VarHolder {
      * return the number of dimensions.
      */
     // @pyjt(__get__ndim, dim)
+    // @attrs(frontend_metadata)
     inline int ndim() {
         return var->shape.size();
     }

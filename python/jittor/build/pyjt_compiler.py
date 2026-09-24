@@ -925,7 +925,11 @@ def compile_src(src, h, basename):
         # call, including tuple/vector results. Never enter a scope in dealloc.
         frontend_scope = ""
         frontend_arg_types = [arg[0] for df in dfs for arg in df["args"]]
-        if slot_name != "tp_dealloc" and (
+        # Only explicitly audited metadata reads may omit the complete frontend
+        # policy scope. Checking every overload keeps a mixed read/write binding
+        # scoped; a non-Tensor result alone does not imply a side-effect-free call.
+        metadata_only = all("frontend_metadata" in df["attrs"] for df in dfs)
+        if slot_name != "tp_dealloc" and not metadata_only and (
                 class_name == "VarHolder" or
                 any("VarHolder" in df["return_t"] for df in dfs) or
                 any("VarHolder" in kind for kind in frontend_arg_types)):
