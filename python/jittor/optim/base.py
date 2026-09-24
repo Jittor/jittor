@@ -1,4 +1,5 @@
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._runtime.dispatch import dispatch_context
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved.
 # Maintainers:
@@ -66,6 +67,47 @@ def _grad_matches_param(p, g):
 
 def _param_requires_grad(p):
     return bool(p.requires_grad)
+
+
+_NON_STATE_KEYS = frozenset(("params", "grads"))
+
+
+def _state_buffer(param):
+    return jt.zeros_like(param).stop_grad()
+
+
+def _effective_device(var):
+    backend = var.placement_backend
+    if backend == 0:
+        return -1
+    if backend > 0:
+        return int(var.device_id)
+    if dispatch_context(var).backend == "cpu":
+        return -1
+    index = int(var.device_id)
+    return index if index >= 0 else int(jt.current_device())
+
+
+def _realign_state_buffers(param_groups):
+    """Keep optimizer state buffers on the same device as their parameters."""
+    for group in param_groups:
+        params = group.get("params")
+        if not params:
+            continue
+        for key, buffers in group.items():
+            if key in _NON_STATE_KEYS or type(buffers) is not list:
+                continue
+            if len(buffers) != len(params):
+                continue
+            for param, buffer in zip(params, buffers):
+                if not isinstance(buffer, jt.Var) or not isinstance(param, jt.Var):
+                    continue
+                if (_effective_device(buffer) == _effective_device(param)
+                        and buffer.placement_backend == param.placement_backend):
+                    continue
+                target = _effective_device(param)
+                buffer.update(buffer._copy_to_cpu() if target < 0
+                              else buffer.to_device(target))
 
 def _update_preserve_dtype(target, value):
     if _jittor_dtype_name(value.dtype) != _jittor_dtype_name(target.dtype):
@@ -225,9 +267,21 @@ class Optimizer(object):
         drops them without ever running the fill.
         '''
         if not self.__zero_grad:
+            cache = self.__dict__.setdefault("_zero_grad_cache", {})
             for pg in self.param_groups:
                 for g in pg.get("grads", ()):
-                    g.update(jt.zeros_like(g).stop_grad())
+                    key = id(g)
+                    zero = cache.get(key)
+                    if zero is None or zero.shape != g.shape or zero.dtype != g.dtype:
+                        zero = cache[key] = jt.zeros_like(g).stop_grad()
+                    g.update(zero)
+        seen_ddp_states = set()
+        for pg in self.param_groups:
+            for p in pg["params"]:
+                state = getattr(p, "_jittor_ddp_state", None)
+                if state is not None and id(state) not in seen_ddp_states:
+                    state.has_unsynced_grads = False
+                    seen_ddp_states.add(id(state))
         self.__zero_grad = True
 
     def backward(self, loss, retain_graph=False):
@@ -280,26 +334,11 @@ class Optimizer(object):
 
         # get gradient
         grads = jt.grad(loss, params_has_grad, retain_graph)
-
-        # sync grads and model if in mpi
-        if jt.in_mpi:
-            dep = []
-            def add_dep(v):
-                nonlocal dep
-                v._add_dependency(dep)
-                dep = [v]
-
-            for g in grads:
-                g.assign(g.mpi_all_reduce("mean"))
-                add_dep(g._input(0))
-            if self.n_step % self.param_sync_iter == 0:
-                for p in params:
-                    p.assign(p.mpi_broadcast())
-                    add_dep(p)
-        self.n_step += 1
+        sync_params = jt.in_mpi and self.n_step % self.param_sync_iter == 0
 
         # set up grads in param_groups
         pid = 0
+        entries = []
         for pg in self.param_groups:
             if "grads" not in pg:
                 pg["grads"] = [ jt.zeros_like(p).stop_grad().stop_fuse() for p in pg['params'] ]
@@ -308,11 +347,44 @@ class Optimizer(object):
                 if _param_requires_grad(p):
                     # accumulate grad and stop grad of grad
                     g = grads[pid].stop_grad()
+                    pid += 1
+                    if (getattr(p, "_jittor_ddp_state", None) is not None
+                            and not _grad_matches_param(p, g)):
+                        g = jt.zeros_like(p).stop_grad()
                     if not self.__zero_grad:
                         g = g + pg_grads[i]
                     pg_grads[i].update(g)
-                    pid += 1
+                    entries.append((p, pg_grads[i]))
         self.__zero_grad = False
+        self.n_step += 1
+
+        # DDP owns its gradients after accumulation. Legacy MPI synchronization
+        # remains available for optimizer parameters outside a DDP wrapper.
+        from jittor.nn.parallel.distributed_data_parallel import (
+            _sync_optimizer_gradients,
+        )
+        ddp_parameter_ids, dep = _sync_optimizer_gradients(entries)
+
+        if jt.in_mpi:
+            def add_dep(value):
+                nonlocal dep
+                value._add_dependency(dep)
+                dep = [value]
+
+            for parameter, gradient in entries:
+                if id(parameter) in ddp_parameter_ids:
+                    continue
+                gradient.assign(gradient.mpi_all_reduce("mean"))
+                add_dep(gradient._input(0))
+            for gradient in grads[pid:]:
+                gradient.assign(gradient.mpi_all_reduce("mean"))
+                add_dep(gradient._input(0))
+            if sync_params:
+                for parameter in params:
+                    if id(parameter) in ddp_parameter_ids:
+                        continue
+                    parameter.assign(parameter.mpi_broadcast())
+                    add_dep(parameter)
 
     def pre_step(self, loss, retain_graph=False):
         """ something should be done before step, such as calc gradients, mpi sync, and so on.
@@ -327,6 +399,11 @@ class Optimizer(object):
         """
         if loss is not None:
             self.backward(loss, retain_graph)
+        _realign_state_buffers(self.param_groups)
+        from jittor.nn.parallel.distributed_data_parallel import (
+            _assert_ddp_step_ready,
+        )
+        _assert_ddp_step_ready(self)
         jt.flags.node_order = 1
 
     def post_step(self):
