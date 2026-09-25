@@ -328,6 +328,9 @@ class StepCapture:
         self._rerecords = 0
         #: Why the last capture was thrown away, for diagnosis.
         self.last_invalidated = None
+        # Reported, with `stats` and any refusal, in every `jt.profile`.
+        from jittor.profiling import register_replay_source
+        register_replay_source(self)
         self.stats = {"eager": 0, "captured": 0, "replayed": 0, "graph": 0}
 
     def __del__(self):

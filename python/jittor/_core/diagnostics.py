@@ -61,7 +61,18 @@ class log_capture_scope(_call_no_record_scope):
 
 
 class profile_scope(_call_no_record_scope):
-    """ profile scope
+    """Per-operator kernel micro-benchmark.
+
+    Every operator executed in the scope is timed on its own: the device is
+    synchronized after it (and it is re-run ``rerun`` times after ``warmup``
+    runs), so the report answers "how long does this kernel take in
+    isolation". It does not describe a step: the synchronization serializes
+    host and device, so the scope's own wall time and the report's totals are
+    not the step's. For where a step's time and memory go -- host split,
+    device kernels, memory at the peak -- use :func:`jittor.profile`.
+
+    Device-graph launches (``jt.graph_replay``) bypass the executor and are
+    not in this report.
 
     example::
 
@@ -86,6 +97,7 @@ class profile_scope(_call_no_record_scope):
     def __enter__(self):
         assert not _flag_state.flags.profiler_enable
         self.report = []
+        self._graph_launches = core.graph_launch_count()
         try:
             self.fs.__enter__()
             _core_profiler.start(self.warmup, self.rerun)
@@ -103,7 +115,16 @@ class profile_scope(_call_no_record_scope):
         # Anything dividing by the total then gets a zero -- which is how
         # KI-EXEC-002 was found, as a ZeroDivisionError in a bandwidth
         # calculation that named neither the profiler nor the cause.
-        if exc[0] is None and len(self.report) <= 1:
+        launches = core.graph_launch_count() - self._graph_launches
+        if exc[0] is None and len(self.report) <= 1 and launches:
+            import warnings
+            warnings.warn(
+                "profile_scope recorded no operators, but %d device-graph "
+                "launch(es) ran in the scope: a replayed graph (jt.graph_replay) "
+                "runs without the executor, so this per-operator report cannot "
+                "see it. Use jt.profile() to profile replayed steps." % launches,
+                RuntimeWarning, stacklevel=2)
+        elif exc[0] is None and len(self.report) <= 1:
             import warnings
             warnings.warn(
                 "profile_scope recorded no operators. The work was most "

@@ -5,7 +5,8 @@ import jittor as jt
 import numpy as np
 
 from ..context import get_install_context, registry_for
-from ..fidelity import Fidelity, register_fidelity
+from ..fidelity import Fidelity, register_api_bindings, register_fidelity
+from .. import profiler as _torch_profiler
 from .._placeholder_context import _PlaceholderContext
 
 from ..grad_scaler import _GradScaler
@@ -27,6 +28,9 @@ from ..nested import (
     _torch_make_parameter,
 )
 from ...diagnostics import EXPECTED, swallowed
+
+_TORCH_PROFILER_NAMES = ("ProfilerActivity", "ProfilerAction", "profile", "schedule",
+                         "tensorboard_trace_handler", "record_function", "kineto_available")
 
 
 def _install_external_adapter(ctx, entry_point):
@@ -114,12 +118,6 @@ class FakeTensorMode(_PlaceholderContext):
     """Import-compatible mode placeholder; no fake-tensor dispatch is installed."""
 
 
-def _profile_schedule_action(step):
-    return _ProfilerAction.NONE
-
-
-def _profile_trace_handler(*args, **kwargs):
-    return None
 
 def _flatten_dense_tensors(tensors):
     tensors = list(tensors)
@@ -214,38 +212,6 @@ def _load_state_dict_from_url(url, model_dir=None, map_location=None, progress=T
                 swallowed("torch/installers/utilities.py _load_state_dict_from_url: _os_hub.remove(cached_file)", exc)
         _download_url_to_file(url, cached_file, progress=progress)
     return _utilities_context().target_namespace.load(cached_file, map_location=map_location, weights_only=weights_only)
-
-
-class ProfilerActivity:
-    CPU = "cpu"
-    CUDA = "cuda"
-    XPU = "xpu"
-    HPU = "hpu"
-    MTIA = "mtia"
-    # torch's enum has it, and vLLM's profiler wrapper indexes its activity
-    # table by `torch.profiler.ProfilerActivity.PrivateUse1` at import; the
-    # attribute's absence aborted engine construction.
-    PrivateUse1 = "privateuse1"
-
-
-class _ProfilerAction:
-    NONE = "none"
-    WARMUP = "warmup"
-    RECORD = "record"
-    RECORD_AND_SAVE = "record_and_save"
-
-
-class _ProfileContext:
-    def __init__(self, *args, **kwargs):
-        pass
-    def __enter__(self):
-        return self
-    def __exit__(self, *exc):
-        return False
-    def step(self):
-        pass
-    def export_chrome_trace(self, *args, **kwargs):
-        pass
 
 
 def _real_summary_writer():
@@ -523,26 +489,6 @@ def _api_hub_get_dir():
     return _os_hub.path.join(_hub_dir(), 'hub')
 
 
-def _api_profiler_profile(*args, **kwargs):
-    return _ProfileContext()
-
-
-def _api_profiler_schedule(*args, **kwargs):
-    return _profile_schedule_action
-
-
-def _api_profiler_tensorboard_trace_handler(*args, **kwargs):
-    return _profile_trace_handler
-
-
-def _api_profiler_record_function(*args, **kwargs):
-    return _ProfileContext()
-
-
-def _api_profiler_kineto_available():
-    return False
-
-
 def _api_g_compiled_with_cxx11_abi():
     from jittor.compat.shim import cpp_extension as _cpp_extension
     return bool(_cpp_extension.CXX11_ABI)
@@ -628,8 +574,6 @@ def _api_g_set_num_interop_threads(*args, **kwargs):
 
 _UTILITY_PLACEHOLDERS = frozenset((
     FakeTensor, FakeTensorMode, FunctionalTensor, TorchDispatchMode,
-    _ProfileContext, _api_profiler_profile, _api_profiler_schedule,
-    _api_profiler_tensorboard_trace_handler, _api_profiler_record_function,
     FlopCounterMode, _api_pytree_register_pytree_node, _api_pytree__register_pytree_node,
     _api_fake_tensor_unset_fake_temporarily, _api_python_dispatch__get_current_dispatch_mode,
     _api_g_set_num_threads, _api_g_set_num_interop_threads,
@@ -767,19 +711,16 @@ def install(ctx):
     g.hub = hub
     _modules.setdefault("torch.hub", hub)
 
-    # torch.profiler: accelerate/transformers reference this namespace at
-    # import-time for type annotations and optional profiling config. Do not
-    # expose jittor_core.profiler here; it lacks PyTorch's ProfilerActivity API.
+    # torch.profiler runs jittor.profiling.profile underneath; see
+    # compat/torch/profiler.py for what maps and what does not.
     _profiler = _types2.ModuleType("torch.profiler")
-    _profiler.ProfilerActivity = ProfilerActivity
-    _profiler.ProfilerAction = _ProfilerAction
-    _profiler.profile = _api_profiler_profile
-    _profiler.schedule = _api_profiler_schedule
-    _profiler.tensorboard_trace_handler = _api_profiler_tensorboard_trace_handler
-    _profiler.record_function = _api_profiler_record_function
-    _profiler.kineto_available = _api_profiler_kineto_available
+    for _name in _TORCH_PROFILER_NAMES:
+        setattr(_profiler, _name, getattr(_torch_profiler, _name))
     _modules["torch.profiler"] = _profiler
     g.profiler = _profiler
+    register_api_bindings(_profiler, "torch.profiler", _TORCH_PROFILER_NAMES, Fidelity.APPROXIMATE,
+                          "Backed by jittor.profiling: one row per launched jittor operator with "
+                          "executor host time and CUPTI device time; self and total times are equal.")
 
     if "torch.utils.tensorboard" not in _modules:
         _tb = _types2.ModuleType("torch.utils.tensorboard")

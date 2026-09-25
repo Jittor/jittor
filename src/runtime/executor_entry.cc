@@ -6,6 +6,7 @@
 #include "bindings/pyjt/gil.h"
 #include <mutex>
 #include "runtime/executor_entry.h"
+#include "runtime/profiler/step_trace.h"
 
 namespace jittor {
 
@@ -38,6 +39,7 @@ ExecutorEntryScope::~ExecutorEntryScope() {
 }
 
 DeviceWaitScope::DeviceWaitScope() : saved(nullptr) {
+    step_trace_wait_begin();
     if (!inside_executor()) return;
     if (Py_IsInitialized() && PyGILState_Check())
         saved = (void*)PyEval_SaveThread();
@@ -45,6 +47,7 @@ DeviceWaitScope::DeviceWaitScope() : saved(nullptr) {
 
 DeviceWaitScope::~DeviceWaitScope() {
     if (saved) PyEval_RestoreThread((PyThreadState*)saved);
+    step_trace_wait_end();
 }
 
 } // jittor

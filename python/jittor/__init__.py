@@ -174,6 +174,8 @@ from .nn.functional.tensor import kron, tensordot
 from . import numpy2cupy
 from ._runtime.graph_replay import graph_replay
 from ._runtime.step_capture import capture_step
+from . import profiling
+from .profiling import profile
 from .misc.concatenation import concat, cat
 from .misc.indexing import install_var_indexing as _install_var_indexing
 from .misc.indexing import var_getitem as getitem, var_setitem as setitem
@@ -368,6 +370,7 @@ _ROOT_EXPORTS = (
     "numpy2cupy", "optim", "ops", "rank", "sparse", "tensordot",
     "amp",
     "world_size", "config", "capability", "introspection", "graph_replay", "capture_step",
+    "profile", "profiling",
 )
 
 __all__ = tuple(sorted(set(

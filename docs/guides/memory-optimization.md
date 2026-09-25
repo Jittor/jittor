@@ -5,7 +5,18 @@
 
 ## 分析大块分配
 
-内存分析器把峰值分配归因到 Python 调用点：
+首选 `jt.profile`：它回放分配器自己的事件日志，给出一步的精确峰值、峰值那一刻活着的
+张量（按生产算子、Python 调用点、shape 分组）、工作区、池的缓存与碎片，以及 NVML 看到的
+进程占用，并且不需要 `trace_py_var`：
+
+```python
+with jt.profile() as prof:
+    train_step()
+print(prof.memory.summary())
+```
+
+细节见[性能与显存画像](../notes/profiling.md)。旧的内存分析器也把峰值分配归因到 Python
+调用点，但要开 `trace_py_var=3`（显著变慢），且只能看到开启之后创建的张量：
 
 ```python
 import jittor as jt

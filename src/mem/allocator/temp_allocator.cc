@@ -9,6 +9,7 @@
 // ***************************************************************
 
 #include "mem/allocator/temp_allocator.h"
+#include "runtime/profiler/step_trace.h"
 
 namespace jittor {
 
@@ -93,6 +94,7 @@ void* TempAllocator::alloc(size_t size, size_t& allocation) {
         occupied_id_mapper.resize(block->id+1, nullptr);
     occupied_id_mapper[block->id] = block;
     allocation = block->id;
+    step_trace_mem(stm_temp, device(), block->size, this, allocation);
     return block->memory_ptr;
 }
 
@@ -109,6 +111,7 @@ void TempAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
     TempCachingBlock* block = occupied_id_mapper[allocation];
     occupied_id_mapper[allocation] = nullptr;
     used_memory -= block->size;
+    step_trace_mem(stm_temp, device(), -(int64)block->size, this, allocation);
     unused_memory += block->size;
     bool can_add = true;
     if (cached_blocks.size() > cache_blocks_limit-1) {

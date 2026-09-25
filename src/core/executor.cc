@@ -29,6 +29,7 @@
 #include "core/fused_op.h"
 #include "core/fuser.h"
 #include "runtime/profiler/profiler_guard.h"
+#include "runtime/profiler/step_trace.h"
 #include "core/parallel_compiler.h"
 #include "core/memory_profiler.h"
 #include "debug/nan_checker.h"
@@ -326,6 +327,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // has to be a lock. Explicit dynamic-input prerequisite submissions are
     // on this thread and pass straight through; constructors never submit.
     ExecutorEntryScope entry;
+    StepTraceBatchScope trace_batch;
     exec_called ++;
     auto& pipeline = runtime_submission_pipeline();
     pipeline.last_run_ops = Op::number_of_created_ops;
@@ -344,6 +346,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // == phases 2-5: graph -> execution plan ==
     ExecPlan plan;
     build_exec_plan(vars, weak_sync, plan);
+    trace_batch.mark(stb_planned);
     // Hold the batch's vars for its duration -- and with them the ops that
     // produce them, since an op's liveness comes from its outputs, so an op
     // whose output var is held cannot be freed either.
@@ -390,6 +393,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // compile all ops, prevent compiling during running
     parallel_compile_all_ops(plan.queue, plan.range, fused_op,
                              plan.fuse_ops, plan.ops, plan.stamp);
+    trace_batch.mark(stb_compiled);
 
     // Planning is the last consumer of the batch tflags. Restore any outer
     // traversal before SetupFreeBuffer can destroy nodes from this batch.

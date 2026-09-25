@@ -43,7 +43,16 @@ inline std::ostream& operator<<(std::ostream& os, const FloatOutput_& o) {
 }
 
 MemoryProfiler memory_profiler;
-DEFINE_FLAG(int, profile_memory_enable, 0, "Enable memory profiler.");
+DEFINE_FLAG_WITH_SETTER(int, profile_memory_enable, 0, "Enable memory profiler.");
+
+// Turning the profiler on starts a new record. It used to keep the previous
+// session's high-water mark and live-var list, so a second session -- say one
+// with `trace_py_var` on, to get call sites -- reported the first session's
+// peak with the first session's (stack-less) vars, and never replaced them
+// unless it exceeded that peak.
+void setter_profile_memory_enable(const int& old_value, const int& value) {
+    if (value && !old_value) memory_profiler.clear();
+}
 
 MemoryProfiler::MemoryProfiler() { 
     clear(); 

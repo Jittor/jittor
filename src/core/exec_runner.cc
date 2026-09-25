@@ -25,6 +25,7 @@
 #include "mem/allocator.h"
 #include "core/fused_op.h"
 #include "runtime/profiler/profiler_guard.h"
+#include "runtime/profiler/step_trace.h"
 #include "core/memory_profiler.h"
 #include "debug/nan_checker.h"
 #include "utils/cache_compile.h"
@@ -246,7 +247,7 @@ DEFINE_FLAG(int64, auto_graph_replay_retain_bytes, 64<<20, "The largest graph th
 // kernel, by running that kernel, and release_kept_storage never frees it.
 static bool constants_already_placed(Op* op, bool is_fused_op, FusedOp& fused_op) {
     auto placed = [](Op* o) {
-        if (strcmp(o->name(), "array")) return false;
+        if (!o->is_op(op_ids::array())) return false;
         auto* array = static_cast<ArrayOp*>(o);
         return array->output->mem_ptr || !array->output->size;
     };
@@ -282,7 +283,7 @@ static void release_kept_storage(Var* v, const std::unordered_set<Var*>& release
     // A constant built inside the graph (`jt.array`) has one copy of its data,
     // which its first run moves into the var: freed, a re-run has nothing to
     // fill the fresh buffer with.
-    if (!strcmp(producer->name(), "array")) return;
+    if (producer->is_op(op_ids::array())) return;
     Var* view_of = aliased_input(v);
     for (Var* m = v->share_next; m && m != v; m = m->share_next) {
         if (!released.count(m)) return;
@@ -393,6 +394,8 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 if (keep_graph == 2) release_kept_storage(plan.all_vars[index], kept_released, kept_pinned);
                 (*plan.batch_hold)[index].free_liveness();
             }
+        // One trace record per launched operator; see step_trace.h.
+        StepTraceOpScope trace_op;
         int root = queue[rid];
         Op* op = ops[root];
         bool is_fused_op = false;
@@ -431,6 +434,8 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             }
         }
         #endif
+        trace_op.named(op, is_fused_op,
+                       requested_backend == BackendId::Cpu ? -1 : execution_device);
         LaunchRecord launch;
         launch.origin = op->launch_origin;
         launch.op_id = is_fused_op ? 0 : op->type_id();
@@ -476,6 +481,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         }
         if (PREDICT_BRANCH_NOT_TAKEN(profile_memory_enable))
             memory_profiler.check();
+        trace_op.allocated();
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
         op->prepare_execution(jkl);
         prepared_jit_key = jkl.to_string();

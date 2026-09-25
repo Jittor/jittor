@@ -9,6 +9,7 @@ import numpy as np
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from .context import get_install_context
 from ._placeholder_context import _PlaceholderContext
+from . import profiler as _profiler
 from ..diagnostics import EXPECTED, swallowed
 
 
@@ -283,24 +284,34 @@ def backward(tensors, grad_tensors=None, retain_graph=None,
     return None
 
 
-class EventList(list):
-    def table(self, *args, **kwargs):
-        return ""
-    def export_chrome_trace(self, *args, **kwargs):
-        return None
+class EventList(_profiler.EventList):
+    """``torch.autograd.profiler`` result list; see ``compat/torch/profiler.py``."""
 
 
-class _RecordFunction(_PlaceholderContext):
-    """Autograd record scope placeholder; no events are collected."""
+class profile(_profiler.profile):
+    """``torch.autograd.profiler.profile`` on :func:`jittor.profiling.profile`."""
 
+    _event_list = EventList
 
-class profile(_RecordFunction):
+    def __init__(self, enabled=True, *, use_cuda=False, use_device=None, record_shapes=False,
+                 with_flops=False, profile_memory=False, with_stack=False, with_modules=False,
+                 use_kineto=False, use_cpu=True, experimental_config=None, **_ignored):
+        activities = {_profiler.ProfilerActivity.CPU}
+        if use_cuda or use_device == "cuda":
+            activities.add(_profiler.ProfilerActivity.CUDA)
+        super().__init__(activities=activities, record_shapes=record_shapes,
+                         profile_memory=profile_memory, enabled=enabled)
+
+    @property
     def function_events(self):
-        return EventList()
-    def key_averages(self, *args, **kwargs):
-        return EventList()
-    def export_chrome_trace(self, *args, **kwargs):
-        return None
+        return self.events()
+
+    @property
+    def self_cpu_time_total(self):
+        return sum(e.self_cpu_time_total for e in self.events())
+
+    def table(self, sort_by=None, row_limit=100, **kwargs):
+        return self.key_averages().table(sort_by=sort_by, row_limit=row_limit, **kwargs)
 
 
 class saved_tensors_hooks:
@@ -374,12 +385,12 @@ def detect_anomaly(*args, **kwargs):
     return contextlib.nullcontext()
 
 
-def record_function(*args, **kwargs):
-    return _RecordFunction()
+class record_function(_profiler.record_function):
+    """``torch.autograd.profiler.record_function``: a named range in the trace."""
 
 
 def emit_nvtx(*args, **kwargs):
-    return _RecordFunction()
+    return _PlaceholderContext()
 
 
 def kineto_available():

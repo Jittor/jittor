@@ -849,6 +849,40 @@ def _mem_max(device=None, *a, **k):
     return max(_native_peak(index), _cuda_runtime().device_mem_peak.get(index, sampled))
 
 
+def _mem_max_reserved(device=None, *a, **k):
+    """torch.cuda.max_memory_reserved: the pools' own reserved high-water.
+
+    It used to be the *allocated* high-water under this name, which is
+    never more than what the pools reserve -- a reading below
+    ``memory_reserved()`` taken a moment earlier.
+    """
+    index = _mem_device_key(device)
+    reserved = _mem_bytes(index, reserved=True)
+    if index < 0:
+        return reserved
+    return max(int(jt.core.device_memory_reserved_peak(int(index))), reserved)
+
+
+def _mem_summary(device=None, abbreviated=False):
+    """torch.cuda.memory_summary: jittor's pool counters as a short table."""
+    index = _mem_device_key(device)
+    stats = _api_cuda_memory_stats(device)
+    mib = float(1 << 20)
+    rows = [("Allocated memory (current)", stats["allocated_bytes.all.current"]),
+            ("Allocated memory (peak)", stats["allocated_bytes.all.peak"]),
+            ("Allocated memory (total allocated)", stats.get("allocated_bytes.all.allocated", 0)),
+            ("Reserved memory (current)", stats["reserved_bytes.all.current"]),
+            ("Reserved memory (peak)", stats["reserved_bytes.all.peak"])]
+    width = 75
+    lines = ["|" + "=" * width + "|",
+             "|" + ("jittor pool memory summary, device %d" % index).center(width) + "|",
+             "|" + "-" * width + "|"]
+    for label, value in rows:
+        lines.append("| %-45s %23.1f MiB |" % (label, value / mib))
+    lines.append("|" + "=" * width + "|")
+    return "\n".join(lines) + "\n"
+
+
 def _reset_peak(device=None, *a, **k):
     index = _mem_device_key(device)
     if index >= 0:
@@ -1161,9 +1195,13 @@ def _api_cuda_default_stream(device=None, *a, **k):
 def _api_cuda_memory_stats(device=None, *a, **k):
     index = _mem_device_key(device)
     current = _mem_used(device)
-    return {'allocated_bytes.all.current': current,
-            'allocated_bytes.all.peak': _mem_max(device),
-            'reserved_bytes.all.current': _mem_bytes(index, reserved=True)}
+    stats = {'allocated_bytes.all.current': current,
+             'allocated_bytes.all.peak': _mem_max(device),
+             'reserved_bytes.all.current': _mem_bytes(index, reserved=True),
+             'reserved_bytes.all.peak': _mem_max_reserved(device)}
+    if index >= 0:
+        stats['allocated_bytes.all.allocated'] = int(jt.core.device_memory_allocated_total(int(index)))
+    return stats
 
 
 def _api_cuda_ipc_collect(*a, **k):
@@ -1624,7 +1662,9 @@ _CUDA_FIDELITY_DETAILS = {
     _mem_reserved: "Per-device bytes held by jittor's pools (live plus cached); not the driver's view of the card.",
     _mem_max: "Per-device high-water mark the pools record at every allocation; sampled at memory queries only when the caching pools are disabled.",
     _reset_peak: "Restarts one device's live-byte high-water mark at the current live bytes.",
-    _api_cuda_memory_stats: "Current and peak live bytes plus pool reservation, per device; other PyTorch counters absent.",
+    _api_cuda_memory_stats: "Current, peak and total allocated bytes and current/peak pool reservation, per device; other PyTorch counters absent.",
+    _mem_max_reserved: "Per-device high-water of what jittor's pools hold from the driver; excludes the CUDA context and library workspaces.",
+    _mem_summary: "A table of jittor's per-device pool counters, not PyTorch's allocator breakdown.",
     _mem_get_info: "cudaMemGetInfo on the device asked about; the fallback reports jittor's pools only, so it excludes other processes.",
     _api_cuda_synchronize: "Waits for every device this run touched, which is stronger than torch's per-device synchronize.",
     _api_cuda_can_device_access_peer: "Answered by the CUDA driver for the named pair; raises where the driver cannot be loaded rather than guessing.",

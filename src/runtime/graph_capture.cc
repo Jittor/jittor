@@ -7,11 +7,14 @@
 #include "runtime/backend.h"
 #include "runtime/device.h"
 #include "mem/allocator.h"
+#include "runtime/profiler/step_trace.h"
 #include <unordered_map>
 #include <sstream>
 #include <unordered_set>
 #include "core/var.h"
 #include "core/op.h"
+#include "ops/op_register.h"
+#include "ops/composite/tape_op.h"
 
 namespace jittor {
 
@@ -62,9 +65,8 @@ bool graph_capture_recording = false;
 bool graph_capture_saw_host_work = false;
 
 bool graph_capture_launches_nothing(Op* op) {
-    if (op->is_storage_view()) return true;
-    string name = op->name();
-    return name == "tape" || name == "tapes" || name == "array";
+    return op->is_storage_view() || op->is_op(op_ids::array())
+        || dynamic_cast<TapeOp*>(op) || dynamic_cast<Tapes*>(op);
 }
 
 string graph_host_work(const vector<VarHolder*>& roots) {
@@ -112,7 +114,11 @@ int64 graph_capture_end() {
 }
 
 void graph_launch(int64 graph) {
+    // Counted, and traced when a step trace is open: a replayed step runs no
+    // executor batch, so without this record its profile is simply empty.
+    note_graph_launch_begin();
     backend_graph_launch(reinterpret_cast<void*>(graph));
+    note_graph_launch_end();
 }
 
 void graph_wait() {
