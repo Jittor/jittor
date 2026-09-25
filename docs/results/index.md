@@ -19,6 +19,7 @@
 2026-09-14-jittor-vs-pytorch
 2026-09-14-vllm-omni-h3-enablement
 2026-09-19-torch-compat-runbook-verification
+2026-09-24-torch-compat-real-models
 ```
 
 ## 按主题索引
@@ -33,3 +34,4 @@
 | [主机受限步长：把每算子的 Python 开销从图构建里拿掉](2026-09-13-host-path-per-node-cost.md) | Python 路径已完成 | 2026-09-13 |
 | [batched Linear 的两个展平节点](2026-09-12-batched-linear-graph-nodes.md) | 已落地，H20 上实测；对拍结论未附 | 2026-09-12，2026-09-23 归档 |
 | [Jittor vs 真 PyTorch 2.9.1：现在差在哪](2026-09-14-jittor-vs-pytorch.md) | 进行中，赢 6 平 5 输 1 | 2026-09-14 |
+| [Torch 兼容层在真实模型上对 PyTorch：差距表、显存与性能修复](2026-09-24-torch-compat-real-models.md) | 11 项全部跑通，几何平均 1.26x，进程显存峰值为 PyTorch 的 0.87–1.45 倍；余下差距在主机侧 | 2026-09-24 |
