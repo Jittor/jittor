@@ -36,6 +36,9 @@ def _acl_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
 
 
 register_kernel("optim.adamw_fused", "acl", _acl_fused_adamw_updates)
+# Publishes the CUDA `optim.adamw_fused` kernel by import, as sgd.py does for
+# fused SGD.
+from jittor.backends.cuda.kernels.optim import fused_adamw_cuda as _fused_adamw_cuda  # noqa: E402,F401
 
 
 def adam_update(param, grad, value, momentum, *, lr, eps, weight_decay,

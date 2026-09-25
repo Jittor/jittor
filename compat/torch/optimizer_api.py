@@ -666,8 +666,14 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
         # `fused_adamw` operator aborts with "only available through a mapped
         # backend" -- reachable from plain `torch.optim.AdamW(..., fused=True)`.
         fused_impl = None
-        want_fused = (decoupled_weight_decay and
-                      pg.get("fused", getattr(self, "fused", None)) is True)
+        # torch's AdamW is a multi-tensor kernel unless told otherwise: its
+        # default (fused=None, foreach=None) takes the foreach path on CUDA.
+        # So the fused list update is taken unless the caller turned both
+        # off, or asked for a variant it does not compute.
+        fused = pg.get("fused", getattr(self, "fused", None))
+        want_fused = (decoupled_weight_decay and fused is not False
+                      and (fused is True or pg.get("foreach") is not False)
+                      and not pg.get("amsgrad") and not pg.get("maximize"))
         active = []
         if want_fused:
             for i, (p, g, v, m) in enumerate(zip(

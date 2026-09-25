@@ -21,6 +21,12 @@ from jittor.backends.cuda.kernels.nn import softmax_cuda as softmax_cuda
 from jittor.backends.cuda.kernels.nn import (
     flash_attention_cuda as flash_attention_cuda,
 )
+# `nn.fused_attention`: cuDNN's fused attention for float16/bfloat16 and a
+# memory-efficient float32 kernel, published the same way.
+from jittor.backends.cuda.kernels.nn import (
+    cudnn_attention_cuda as cudnn_attention_cuda,
+    fused_attention_f32_cuda as fused_attention_f32_cuda,
+)
 
 # Compatibility attribute for ``from jittor.other import code_softmax``. The
 # physical implementation lives at ``jittor.backends.cuda.kernels.nn.softmax_cuda``.

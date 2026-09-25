@@ -39,6 +39,10 @@ cuda12 = [
     # uninstallable together. Keep in sync with jittor_utils/cuda_wheel.py.
     "nvidia-cudnn-cu12>=8.9.7,<10; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
     "nvidia-nccl-cu12==2.18.3; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+    # Headers for cuDNN's fused attention (backends/cuda/kernels/nn/
+    # cudnn_attention_cuda.py). Without them that kernel declines and
+    # attention takes the matmul-and-softmax path.
+    "nvidia-cudnn-frontend>=1.30,<2; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.9'",
 ]
 perf = [
     "asv==0.6.6; python_version >= '3.9'",
