@@ -44,6 +44,12 @@ cuda12 = [
     # attention takes the matmul-and-softmax path.
     "nvidia-cudnn-frontend>=1.30,<2; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.9'",
 ]
+# Device time in `jt.profile` (python/jittor/profiling/_cupti.py): CUPTI for
+# the CUDA 12.2 runtime `cuda12` installs. Without it a profile reports device
+# time as unavailable rather than inventing it.
+profile = [
+    "nvidia-cuda-cupti-cu12==12.2.142; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+]
 perf = [
     "asv==0.6.6; python_version >= '3.9'",
     "transformers==4.56.2; python_version >= '3.9'",

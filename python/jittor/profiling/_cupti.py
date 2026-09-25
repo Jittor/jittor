@@ -185,8 +185,9 @@ def load():
             continue
         _instance = _Cupti(lib, path)
         return _instance
-    _failure = ("CUPTI was not found; install the nvidia-cuda-cupti-cu12 wheel "
-                "matching your CUDA runtime or set JITTOR_CUPTI_LIB. Tried: "
+    _failure = ("CUPTI was not found; pip install \"jittor[profile]\" (the "
+                "nvidia-cuda-cupti-cu12 wheel for Jittor's CUDA 12.2), or set "
+                "JITTOR_CUPTI_LIB to a libcupti matching your CUDA runtime. Tried: "
                 + "; ".join(tried[-4:]))
     return None
 

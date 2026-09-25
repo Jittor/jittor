@@ -66,14 +66,17 @@ Torch 兼容模式下，`torch.profiler.profile` 与 `torch.autograd.profiler.pr
 Python/执行器/等待之间的比例；其间为 mixed。没有 CUPTI 时退回用"等待设备"占比估计，
 并标注 *(estimated)*。
 
-CUPTI 不是 Jittor 的依赖。查找顺序：`$JITTOR_CUPTI_LIB`、`nvidia-cuda-cupti-cu12`
-wheel（`site-packages/nvidia/cuda_cupti`）、编译用 CUDA toolkit 的 `extras/CUPTI`、
-加载器路径。找不到时报告写明"device timing unavailable"和原因，不编数。
-`device=True` 则直接报错。建议装与 CUDA runtime 同版本的 wheel：
+CUPTI 是可选依赖（extra `profile`），不装也能用 `jt.profile`，只是没有设备时间。
+查找顺序：`$JITTOR_CUPTI_LIB`、`nvidia-cuda-cupti-cu12` wheel
+（`site-packages/nvidia/cuda_cupti`）、编译用 CUDA toolkit 的 `extras/CUPTI`、加载器路径。
+找不到时报告写明"device timing unavailable"和原因，不编数；`device=True` 则直接报错。
 
 ```bash
-pip install "nvidia-cuda-cupti-cu12==12.2.*"   # 与 jittor 用的 CUDA 12.2 对应
+pip install "jittor[profile]"   # nvidia-cuda-cupti-cu12==12.2.142，对应 jittor[cuda12] 的 CUDA 12.2
 ```
+
+用别的 CUDA runtime 时，装同版本的 `nvidia-cuda-cupti-cu12` 或把 `JITTOR_CUPTI_LIB` 指向
+对应的 `libcupti.so`。
 
 ### 显存
 
