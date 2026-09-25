@@ -267,3 +267,70 @@ are excluded. See `factory-cast/profile-comparison.json` and
 GPU occupancy check. Keep `17d2cfd` classified as correctness-validated and
 performance-pending until an uncontended comparison confirms its net effect;
 rework or revert it if that comparison shows no worthwhile benefit.
+
+
+### Bounded parameter and snapshot lifetime audit
+
+A later retry starts from clean `08643f3` / production `17d2cfd`; fetched
+`origin/chk` remains `61294cd`. All four GPUs initially have foreign workloads.
+One formal preflight is rejected; two later idle-window attempts start but are
+excluded when foreign processes enter the selected GPU. No factory timing run
+is accepted. Production remains unchanged during this audit.
+
+`lifetime-round1/probe.py` runs Qwen on real CUDA in both independent runtimes.
+After warming batch sizes 1, 4 and 2, it repeats that cycle four times: **28
+measured requests / 448 tokens per runtime**, excluding seven warmup requests.
+Every repeated output matches, including the native/Jittor comparison. All
+**226 model parameters and 28 KV cache tensors** retain their Python identities,
+storage addresses, shapes, dtypes and devices at the sampled batch boundaries.
+No Parameter constructor occurs in the measured generation profile.
+
+Jittor's post-request live/held tensors stay at **719**, live ops at **12**,
+and reported allocated memory at **8,743,686,656 bytes** across all 13 samples.
+Reserved memory grows once by 5 MiB after a warmed shape is reused, then stays
+flat. Native allocated memory is also constant. These backend-specific
+accounting values are not a cross-framework memory-efficiency comparison.
+Each sample has zero unfinished requests. This bounded check does not prove
+indefinite leak freedom, unchanged contents of every model weight, or behavior
+under precision changes. KV contents are expected to change during generation;
+only cache identity/storage stability is asserted.
+
+The next observed lifetime-related hotspot concerns **per-request sampling
+metadata, not model weights**. In the previous real-model profile, 99 engine
+steps call 14 sampler metadata snapshots each (1386 total). The adapter must
+finish the CPU source read before it can be overwritten, so each snapshot
+currently synchronizes CUDA. Temperature/top-k/top-p/seed, penalties, bias,
+bad-word and logprob metadata are submitted even during ordinary decode.
+The existing empty staged-write queues already return early and are not bugs.
+
+Host control-flow tests retain **four failed performance contracts and six
+passing correctness controls**, under `parameter-lifetime-review/`. Controls
+cover immediate source mutation, same NumPy object with new contents, and old
+snapshot retention beyond pool rotation. They do not demonstrate a numerical
+failure. Identity-only caching or removing the source-read barrier would
+invalidate these guarantees. Any next optimization must detect real content
+updates and preserve old consumers; a read-only sampler scope cannot silently
+be generalized to writable UVA buffers.
+
+Raw scripts, profiles, source extracts and reports are unversioned under
+`$JITTOR_LAB_ROOT/_state/vllm-performance/20260925/{lifetime-round1,parameter-lifetime-review}/`.
+These instrumented shared-GPU runs are not performance measurements.
+
+The subsequent real-CUDA `sampling_snapshot_trace.py` pass records the bytes,
+dtype and shape of each sampler submission, delegates to the unchanged
+production transfer, and retains the first GPU snapshot from each array. In
+14 requests / 224 output tokens (two cycles of batches 1/4/2), all **14 arrays**
+are submitted 102 times: **1428 submissions create 1428 new GPU objects**.
+After excluding the first observation of each array, **1409 submissions have
+identical CPU contents** and **five have changed contents** (request seeds).
+No zero-length submission occurs in this path, so the host empty-input cases
+are not the current priority. All 14 retained initial GPU snapshots still equal
+their original CPU values after subsequent requests, and every output token
+matches the unhooked run. This confirms a reduction opportunity while also
+showing why an identity-only cache would miss actual updates. It does not yet
+prove that every GPU consumer or external plugin treats all snapshots as
+read-only. Data and assertions are in `lifetime-round1/sampling-trace*.json`.
+
+No further production optimization is layered onto the factory candidate.
+Its uncontended performance comparison remains the prerequisite for choosing
+whether to retain/rework that change and which hotspot to optimize next.
