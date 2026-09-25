@@ -6,6 +6,7 @@
 #include "bindings/pyjt/gil.h"
 #include <mutex>
 #include "runtime/executor_entry.h"
+#include "runtime/async_executor.h"
 
 namespace jittor {
 
@@ -23,6 +24,9 @@ static thread_local int entry_depth = 0;
 bool inside_executor() { return entry_depth > 0; }
 
 ExecutorEntryScope::ExecutorEntryScope() : owns(entry_depth == 0) {
+    // Anything that needs results waits for the asynchronous executor's queue
+    // first; the worker itself enters here for the batches it runs.
+    if (owns && async_executor && !on_async_worker()) async_drain();
     if (owns) {
         // Drop the GIL before blocking, take it back with the lock held; see
         // the inversion in the header.

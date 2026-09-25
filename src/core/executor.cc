@@ -39,6 +39,7 @@
 #include "mem/swap.h"
 #include "bindings/pybind/py_var_tracer.h"
 #include "mem/mem_info.h"
+#include "runtime/async_executor.h"
 
 namespace jittor {
 
@@ -99,8 +100,15 @@ void Executor::submit_pending(Var* target, bool force) {
         // meanwhile. Re-arm rather than flush when it does not, so the next
         // decision is another `auto_flush_ops` away instead of every op.
         if (vars.size() && (auto_flush_bytes <= 0 || pending_bytes >= auto_flush_bytes)) {
-            PendingSubmissionScope scope(pipeline);
-            run_sync(vars, false, false);
+            if (async_executor) {
+                // Built here, run on the worker: the Python thread goes on
+                // building while this batch executes.
+                async_enqueue(vars);
+                pipeline.last_run_ops = Op::number_of_created_ops;
+            } else {
+                PendingSubmissionScope scope(pipeline);
+                run_sync(vars, false, false);
+            }
         } else {
             pipeline.last_run_ops = Op::number_of_created_ops;
         }

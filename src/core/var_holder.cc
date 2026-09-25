@@ -4,6 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include "runtime/async_executor.h"
 #include <unordered_set>
 #include <sstream>
 #include "core/var_holder.h"
@@ -32,6 +33,9 @@ struct VarDataOwner {
 static void free_var_data_owner(PyObject* capsule) {
     auto owner = (VarDataOwner*)PyCapsule_GetPointer(capsule, "jittor.var_data");
     if (!owner) return;
+    // A capsule is finalized from Python, not through a binding, so it takes
+    // the graph lock itself (runtime/async_executor.h).
+    GraphEntryScope graph_entry;
     owner->var->release_both_liveness();
     Py_XDECREF(owner->holder);
     delete owner;
@@ -39,6 +43,7 @@ static void free_var_data_owner(PyObject* capsule) {
 
 PyObject* new_var_data_owner(VarHolder* vh) {
     auto owner = new VarDataOwner{GET_OBJ_FROM_RAW_PTR(vh), vh->var};
+    GraphEntryScope graph_entry;
     owner->var->own_both_liveness();
     Py_INCREF(owner->holder);
     auto capsule = PyCapsule_New((void*)owner, "jittor.var_data",

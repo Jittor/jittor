@@ -16,6 +16,7 @@
 #include "runtime/launch_diagnostics.h"
 #include "ops/op_register.h"
 #include "core/exec_runner.h"
+#include "runtime/async_executor.h"
 #include "core/executor.h"
 #include "core/var.h"
 #include "core/op.h"
@@ -471,7 +472,15 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         // _JT_SEH_START2;
         if (execution_backend != BackendId::Cpu)
             record_active_launch(backend_stream({execution_backend, execution_device}, BackendStreamKind::Compute));
-        op->execute_prepared(jkl);
+        {
+            // On the asynchronous executor's worker, the launch is the part
+            // that runs without the graph lock: it reads only this batch's
+            // held vars, and it is where the Python thread gets to build the
+            // next batch meanwhile. See runtime/async_executor.h.
+            std::unique_ptr<GraphUnlockScope> launch_unlocked;
+            if (on_async_worker()) launch_unlocked.reset(new GraphUnlockScope());
+            op->execute_prepared(jkl);
+        }
         // _JT_SEH_END2;
         #ifdef HAS_ACCELERATOR
         // migrate to gpu
@@ -616,8 +625,9 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             throw;
         }
         // Outside the wait on purpose: these are fetch callbacks, and they
-        // touch Python objects.
-        event_queue.flush();
+        // touch Python objects. The asynchronous executor's worker has no
+        // Python thread state; the thread that drains its queue flushes.
+        if (!on_async_worker()) event_queue.flush();
     }
     if (entry_device >= 0 && entry_device != current_device())
         set_current_device(entry_device);

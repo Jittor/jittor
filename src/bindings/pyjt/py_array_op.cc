@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #ifdef HAS_ACCELERATOR
+#include "runtime/async_executor.h"
 #include "mem/allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "core/event_queue.h"
@@ -68,7 +69,8 @@ VarHolder* reuse_np_array(PyObject* obj) {
     make_foreign_allocation(allocation, 
         vp->mem_ptr, vp->size, 
         [obj]() { 
-            Py_DECREF(obj); 
+            // May run on the asynchronous executor's worker, without the GIL.
+            py_decref_anywhere(obj);
         });
     Py_INCREF(obj);
     vp->allocator = allocation.allocator;
@@ -216,7 +218,8 @@ ArrayOp::ArrayOp(PyObject* obj) {
             make_foreign_allocation(allocation, 
                 ori_ptr, output->size, 
                 [obj]() { 
-                    Py_DECREF(obj); 
+                    // May run on the asynchronous executor's worker, without the GIL.
+                    py_decref_anywhere(obj);
                 });
             Py_INCREF(obj);
         } else {

@@ -18,12 +18,27 @@
 #include "utils/fast_shared_ptr.h"
 #include "runtime/profiler/simple_profiler.h"
 #include "runtime/dispatch_context.h"
+#include "runtime/async_executor.h"
 #ifdef HAS_ACCELERATOR
 #include "runtime/device.h"
 #include "runtime/backend.h"
 #endif
 
 namespace jittor {
+
+// A callback built from a Python callable may run on the asynchronous
+// executor's worker (runtime/async_executor.h), which holds no GIL.
+struct PyGILEnsureScope {
+    bool owned;
+    PyGILState_STATE state;
+    PyGILEnsureScope() : owned(Py_IsInitialized() && !PyGILState_Check()) {
+        if (owned) state = PyGILState_Ensure();
+    }
+    ~PyGILEnsureScope() { if (owned) PyGILState_Release(state); }
+    PyGILEnsureScope(const PyGILEnsureScope&) = delete;
+    PyGILEnsureScope& operator=(const PyGILEnsureScope&) = delete;
+};
+
 
 template<class T>
 struct vector_to_tuple {
@@ -853,11 +868,12 @@ DEF_IS(FetchFunc, T) from_py_object(PyObject* obj) {
     T func(
         // callback
         [obj](typename T::R* result) {
+            PyGILEnsureScope gil;
             PyObjHolder arrays(to_py_tuple<vector<ArrayArgs>>(result->arrays));
             PyObjHolder ret(PyObject_Call(obj, arrays.obj, nullptr));
         },
         // deleter
-        [obj]() { Py_DECREF(obj); }
+        [obj]() { py_decref_anywhere(obj); }
     );
     return func;
 }
@@ -874,6 +890,7 @@ DEF_IS(SimpleFunc, T) from_py_object(PyObject* obj) {
     T func(
         // callback
         [obj](int64 result) {
+            PyGILEnsureScope gil;
             // check python version macro >= 3.9
             #if PY_VERSION_HEX >= 0x03090000
             PyObjHolder args(to_py_object(result));
@@ -883,7 +900,7 @@ DEF_IS(SimpleFunc, T) from_py_object(PyObject* obj) {
             #endif
         },
         // deleter
-        [obj]() { Py_DECREF(obj); }
+        [obj]() { py_decref_anywhere(obj); }
     );
     return func;
 }
@@ -995,6 +1012,7 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
     T func(
         // callback
         [obj](typename T::R* result) {
+            PyGILEnsureScope gil;
             // import numpy
             string npstr="numpy";
             #ifdef HAS_ACCELERATOR
@@ -1050,7 +1068,7 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
             PyObjHolder ret2(PyObject_Call(obj, args.obj, nullptr));
         },
         // deleter
-        [obj]() { Py_DECREF(obj); },
+        [obj]() { py_decref_anywhere(obj); },
         // inc_ref
         [obj]() { Py_INCREF(obj); }
     );
@@ -1115,8 +1133,8 @@ DEF_IS(GradCallback, T) from_py_object(PyObject* obj) {
         },
         // deleter
         [obj, frontend_type]() {
-            Py_DECREF(obj); 
-            Py_DECREF(frontend_type);
+            py_decref_anywhere(obj);
+            py_decref_anywhere(frontend_type);
         }
     );
     frontend_owner.release();

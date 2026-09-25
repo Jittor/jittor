@@ -93,6 +93,15 @@ def strip_cxx_comments(src):
     return "".join(out)
 
 
+#: Flags read only during graph construction (op constructors, dtype
+#: inference, backward construction), which the executor never reads. A write
+#: to one need not wait for the asynchronous executor's worker.
+_CONSTRUCTION_ONLY_FLAGS = frozenset((
+    "no_grad", "amp_reg", "auto_mixed_precision_level", "auto_convert_64_to_32",
+    "node_order", "reuse_array", "missing_grad_error",
+))
+
+
 def gen_jit_flags():
     from . import compiler as _compiler_state
     all_src = _compiler_state.glob.glob(_compiler_state.core_root(_compiler_state.jittor_path)+"/**/*.cc", recursive=True)
@@ -134,7 +143,15 @@ def gen_jit_flags():
             get_names = ",".join(["__get__"+a for a in binding_names])
             set_names = ",".join(["__set__"+a for a in binding_names])
             guard = f'check_startup_config_write("{name}"); ' if category == "startup" else ""
-            setter = f"{guard}set_{name}(v);"
+            # The asynchronous executor's worker reads flags while it runs a
+            # batch, so a write first waits for it (runtime/async_executor.h).
+            # These are read only while an op is being built, never by the
+            # executor, and the torch frontend toggles two of them around
+            # individual ops: draining for them serialized every other op
+            # with the worker (2680 drains per SD1.5 sampling run).
+            drain = ("" if name in _CONSTRUCTION_ONLY_FLAGS
+                     else f'async_drain_before_flag_write("{name}"); ')
+            setter = f"{guard}{drain}set_{name}(v);"
             if category == "counter":
                 setter = f'throw std::runtime_error("{name} is a read-only runtime counter");'
             flags_defs.append(f"""
@@ -158,9 +175,9 @@ def gen_jit_flags():
                     // @pyjt(__get__{alias_name})
                     {type} _get_{alias_name}() {{ {warning} return {getter}; }}
                     // @pyjt(__set__{alias_name})
-                    void _set_{alias_name}({type} v) {{ {warning} set_{name}(v); }}
+                    void _set_{alias_name}({type} v) {{ {warning} async_drain_before_flag_write("{name}"); set_{name}(v); }}
                     // @pyjt(__set__{alias_name})
-                    void _set_{alias_name}(bool v) {{ {warning} set_{name}(v); }}
+                    void _set_{alias_name}(bool v) {{ {warning} async_drain_before_flag_write("{name}"); set_{name}(v); }}
                 ''')
 
     jit_declares = "\n    ".join(jit_declares)
@@ -168,6 +185,7 @@ def gen_jit_flags():
     #include "utils/flags.h"
     #include <Python.h>
     #include "runtime/configuration.h"
+    #include "runtime/async_executor.h"
     #include <stdexcept>
 
     namespace jittor {{

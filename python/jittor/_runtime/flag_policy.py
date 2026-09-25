@@ -17,7 +17,7 @@ RUNTIME_FLAGS = frozenset((
     "lazy_execution", "auto_flush_ops", "auto_flush_bytes", "fuse_op_limit", "keep_graph",
     "transpose_storage_view",
     "auto_graph_replay", "auto_graph_replay_bytes", "auto_graph_replay_retain_bytes",
-    "gopt_disable", "use_threading",
+    "gopt_disable", "use_threading", "async_executor",
     "use_parallel_op_compiler", "float32_matmul_precision", "use_tensorcore",
     "cuda_allow_tf32", "cuda_allow_cudnn_tf32", "cuda_kernel_math", "backend_fallback",
     "cpu_mem_limit", "device_mem_limit", "use_cuda_host_allocator",

@@ -920,6 +920,13 @@ def compile_src(src, h, basename):
         # that asked for the counts, and a reset would not read back as clean.
         gbp_entry_scope = ("" if name.startswith("graph_build_profile")
                            else "JT_GBP_SCOPE(gbp_pyjt_entry);")
+        # Every call from Python holds the graph lock when the asynchronous
+        # executor is on (runtime/async_executor.h), deallocation included:
+        # releasing a VarHolder is a liveness change.
+        # Property getters read what is fixed when a var is created (shape,
+        # dtype, flags the executor does not write), so they skip it.
+        if slot_name != "tp_gets":
+            gbp_entry_scope += " JT_GRAPH_ENTRY_SCOPE;"
         # A frontend subtype keeps the native VarHolder payload and graph.
         # Carry its Python allocation type across the complete conversion and
         # call, including tuple/vector results. Never enter a scope in dealloc.
@@ -1141,6 +1148,7 @@ def compile_src(src, h, basename):
     #include "bindings/pyjt/py_arg_printer.h"
     #include "core/common.h"
     #include "utils/graph_build_profile.h"
+    #include "runtime/async_executor.h"
     #include "{include_name}"
 
     namespace jittor {{
