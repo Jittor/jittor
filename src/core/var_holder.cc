@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <unordered_set>
+#include <unordered_map>
 #include <sstream>
 #include "core/var_holder.h"
 #include "core/var.h"
@@ -18,6 +19,7 @@
 #include "type/fp16_compute.h"
 #include "mem/swap.h"
 #include "runtime/executor_entry.h"
+#include "runtime/holder_state.h"
 #include "bindings/pyjt/py_converter.h"
 
 namespace jittor {
@@ -52,6 +54,47 @@ PyObject* new_var_data_owner(VarHolder* vh) {
     return capsule;
 }
 
+// Holders rebound while a step is being captured, with the Var each held
+// first. See `state_capture_begin`.
+static std::unordered_map<VarHolder*, VarPtr>* state_capture = nullptr;
+
+static inline void note_rebind(VarHolder* holder) {
+    if (PREDICT_BRANCH_NOT_TAKEN(state_capture != nullptr)
+            && !state_capture->count(holder))
+        state_capture->emplace(holder, VarPtr(holder->var));
+}
+
+static bool capture_saw_readback = false;
+
+void state_capture_begin() {
+    USER_CHECK(!state_capture) << "a step capture is already recording state";
+    state_capture = new std::unordered_map<VarHolder*, VarPtr>();
+    capture_saw_readback = false;
+}
+
+PyObject* state_capture_end() {
+    unique_ptr<std::unordered_map<VarHolder*, VarPtr>> records(state_capture);
+    state_capture = nullptr;
+    PyObjHolder result(PyList_New(0));
+    if (!records) return result.release();
+    for (auto& kv : *records) {
+        VarHolder* holder = kv.first;
+        Var* old = kv.second.ptr;
+        // Rebound and back again, or state created inside the capture: a
+        // temporary's first Var is not an executed leaf.
+        if (holder->var == old || !old->is_finished() || !old->mem_ptr) continue;
+        PyObject* holder_obj = GET_OBJ_FROM_RAW_PTR(holder);
+        Py_INCREF(holder_obj);
+        PyObjHolder item(PyTuple_New(3));
+        PyTuple_SET_ITEM(item.obj, 0, holder_obj);
+        PyTuple_SET_ITEM(item.obj, 1, to_py_object<VarHolder*>(new VarHolder(old)));
+        PyTuple_SET_ITEM(item.obj, 2, to_py_object<VarHolder*>(new VarHolder(holder->var)));
+        if (PyList_Append(result.obj, item.obj) < 0)
+            throw std::runtime_error("cannot build the step capture's state list");
+    }
+    return result.release();
+}
+
 void add_hold_vars(VarHolder* self) {
     self->iter = runtime_holder_state().add(self);
 }
@@ -81,7 +124,32 @@ VarHolder* VarHolder::migrate_to_cpu_() {
     return this;
 }
 
+// Every read of a Var's value by the host. A capture asks whether the call it
+// traced read one: its Python path then depends on tensor values, and a
+// replay, which does not run that Python, would repeat whatever it did the
+// first time.
+static int64 host_readbacks = 0;
+int64 host_readback_count() { return host_readbacks; }
+
+DECLARE_FLAG(int, keep_graph);
+
+// A read inside a captured step makes the capture unreplayable, and the step
+// has to happen exactly once all the same. So from the first read on, the
+// step runs as written: nothing more is kept, and what was kept so far --
+// which the read is about to execute -- is let go, so that it finishes here
+// rather than running again when the refused capture is finished off.
+static inline void note_readback() {
+    host_readbacks++;
+    if (PREDICT_BRANCH_NOT_TAKEN(state_capture != nullptr) && !capture_saw_readback) {
+        capture_saw_readback = true;
+        keep_graph = 0;
+        for (auto* holder : runtime_holder_state().holders())
+            if (holder->var && !holder->var->is_finished()) holder->release_kept();
+    }
+}
+
 DataView VarHolder::data() {
+    note_readback();
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
         ExecutorEntryScope entry;
         sync(true, false);
@@ -93,6 +161,7 @@ DataView VarHolder::data() {
 }
 
 uint64 VarHolder::raw_ptr() {
+    note_readback();
     ExecutorEntryScope entry;
     sync(true, false);
 #ifdef HAS_ACCELERATOR
@@ -501,6 +570,8 @@ VarHolder::~VarHolder() {
     drop_view();
     orphan_views();
     if (PREDICT_BRANCH_NOT_TAKEN(!var)) return;
+    if (PREDICT_BRANCH_NOT_TAKEN(state_capture != nullptr))
+        state_capture->erase(this);
     unlink_from_hold_vars(iter);
     release_holder();
     // Dropping the last holder runs the liveness propagation, which frees
@@ -540,6 +611,7 @@ void VarHolder::operator=(VarPtr&& v) {
         if (var->flag(VarFlags::_explicit_requires_grad))
             v.ptr->set_flag(VarFlags::_explicit_requires_grad);
     }
+    note_rebind(this);
     assign_var(v.ptr, var);
     release_holder();
     var->release_both_liveness();
@@ -618,6 +690,7 @@ VarHolder* VarHolder::assign(VarHolder* v) {
     // this is the one place that has to know that an in-place write to a view
     // is a write to the thing it is a view of.
     write_through_view(v->var);
+    note_rebind(this);
     assign_var(v->var, var);
     release_holder();
     v->var->own_both_liveness();
@@ -636,6 +709,7 @@ VarHolder* VarHolder::update(VarHolder* v) {
 VarHolder* VarHolder::_update(VarHolder* v) {
     if (var->flag(VarFlags::_placement_published))
         v->var->set_flag(VarFlags::_placement_published);
+    note_rebind(this);
     release_holder();
     v->var->own_both_liveness();
     var->release_both_liveness();
@@ -653,6 +727,7 @@ VarHolder* VarHolder::sync(bool device_sync, bool weak_sync) {
 }
 
 ArrayArgs VarHolder::fetch_sync() {
+    note_readback();
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
         ExecutorEntryScope entry;
         sync(true);
@@ -694,6 +769,7 @@ inline static void cast_item_data(ItemData& data) {
 }
 
 ItemData VarHolder::item() {
+    note_readback();
     // Keep the entry lock through the final scalar copy, including managed
     // allocations which migrate_to_cpu deliberately leaves on the device.
     ExecutorEntryScope entry;
@@ -760,6 +836,7 @@ void sync(const vector<VarHolder*>& vh, bool device_sync, bool weak_sync) {
 }
 
 vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh) {
+    note_readback();
     vector<ArrayArgs> ret(vh.size());
     ExecutorEntryScope entry;
     sync(vh, true);

@@ -12,7 +12,7 @@ from builtins import bool as ori_bool, float as ori_float, int as ori_int
 import numpy as np
 import jittor_core as core
 from jittor_core import NanoString, NanoVector, Var, ops
-from .flags import flag_scope
+from .flags import flag_scope, flags as _runtime_flags
 from .._runtime.acl_clamp import dispatch_acl_clamp
 from .._runtime.backend_libraries import get_library as _get_library
 from .._runtime.dispatch import register_kernel as _register_kernel, try_dispatch as _try_dispatch
@@ -160,13 +160,31 @@ def random(shape, dtype="float32", type="uniform"):
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
     dtype = _dtype_for_compute(dtype)
-    if _jittor_dtype_name(dtype) in ("float16", "bfloat16"):
+    name = _jittor_dtype_name(dtype)
+    draw = "float32" if name in ("float16", "bfloat16") else name
+    ret = _captured_draw(shape, draw, type)
+    if ret is None:
+        ret = ops.random(shape, draw, type)
+    if draw != name:
         # The CPU and accelerator random engines generate standard floating
         # types; low-precision outputs use their regular cast kernels.
-        ret = ops.random(shape, "float32", type).cast(dtype)
-    else:
-        ret = ops.random(shape, dtype, type)
+        ret = ret.cast(dtype)
     return _amp_array_preference(ret)
+
+
+def _captured_draw(shape, dtype, type):
+    """A draw a captured step can replay (see step_capture.random_draw), or None."""
+    from jittor._runtime import step_capture
+    if not step_capture.active() or not _draws_on_device():
+        return None
+    return step_capture.random_draw(tuple(ori_int(s) for s in shape), dtype, type)
+
+
+def _draws_on_device():
+    placement = core._current_tensor_placement()
+    if placement is not None:
+        return placement[0] != 0
+    return ori_bool(_runtime_flags.use_cuda)
 
 _core_to_device = Var.to_device
 

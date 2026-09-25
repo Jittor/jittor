@@ -532,6 +532,8 @@ def _lbfgs_type(base):
 
 
 def _step_with_closure(self, loss, retain_graph, closure, kwargs, native_kind):
+    from jittor._runtime import step_capture   # only SGD hands its books to a capture
+    if native_kind != "sgd": step_capture.refuse(f"a captured step cannot replay {native_kind}")
     _orig_step = get_install_context(jt).state["optimizer_native_api"]["steps"][native_kind]
     called_closure = False
     native_fsdp_loss = None
@@ -588,6 +590,8 @@ def _step_with_closure(self, loss, retain_graph, closure, kwargs, native_kind):
     if not getattr(self, "_torch_backward_advanced_n_step", False):
         self.n_step = previous_step + 1
     _advance_ready_param_steps(self)
+    from .optimizers import replay_books_of_step
+    replay_books_of_step(self)
     self.post_step = _torch_post_step
     try:
         out = _orig_step(self, None, retain_graph=retain_graph)
@@ -645,8 +649,10 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
             object.__setattr__(
                 self, "_torch_backward_advanced_n_step", False)
         return native_fsdp_loss if native_fsdp_loss is not None else loss
+    from jittor._runtime import step_capture
     if not getattr(self, "_torch_backward_advanced_n_step", False):
         self.n_step = int(getattr(self, "n_step", 0)) + 1
+        step_capture.on_replay(lambda: setattr(self, "n_step", int(self.n_step) + 1))
     jt.flags.node_order = 1
     for pg in self.param_groups:
         lr = pg.get("lr", self.lr)
@@ -686,14 +692,23 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
                 from jittor._runtime.dispatch import select_kernel
                 fused_impl = select_kernel("optim.adamw_fused", active)
         if fused_impl is not None:
+            stepped = []
             for i, (p, g, v, m) in enumerate(zip(
                     pg["params"], grads, pg["values"], pg["m"])):
                 if not p.requires_grad or not isinstance(g, jt.Var) \
                         or list(g.shape) != list(p.shape):
                     continue
                 param_steps[i] = int(param_steps[i]) + 1
+                stepped.append(i)
+            lr_arg = lr
+            if step_capture.active():   # a replay advances these without step()
+                lr_arg = step_capture.live_fused_update(
+                    fused_impl, lr, param_steps, stepped, lambda g=pg: g.get("lr", self.lr),
+                    lambda g=pg: (tuple(g.get("betas", self.betas)),
+                                  g.get("weight_decay", self.weight_decay), g.get("eps", self.eps)),
+                    self.__dict__.get("_amp_found_inf"), self)
             updates = fused_impl(
-                active, lr, b0, b1, weight_decay, eps)
+                active, lr_arg, b0, b1, weight_decay, eps)
             for (p, m, v, _, _), (new_p, new_m, new_v) in zip(
                     active, updates):
                 _update_in_target_dtype(p, new_p)
@@ -702,6 +717,7 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
                 if p.is_stop_grad():
                     p.start_grad()
             continue
+        step_capture.refuse("the per-parameter Adam update bakes its step count in")
         for i, (p, g, v, m) in enumerate(zip(
                 pg["params"], grads, pg["values"], pg["m"])):
             was_trainable = bool(p.requires_grad)

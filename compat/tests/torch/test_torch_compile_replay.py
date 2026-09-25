@@ -112,7 +112,7 @@ class _Case:
         self.assertIs(torch.compile(self.model, mode="default"), self.model)
         self.assertIs(torch.compile(mode="max-autotune-no-cudagraphs")(self.model), self.model)
         f = lambda v: v * 2
-        self.assertIs(torch.compile(f, mode="reduce-overhead"), f)
+        self.assertIs(torch.compile(f), f)
         wrapped = torch.compile(mode="reduce-overhead")(self.model)
         self.assertIs(wrapped._orig_mod, self.model)
 
@@ -168,6 +168,151 @@ class TestCompileReplayCuda(_Case, unittest.TestCase):
 
 class TestCompileReplayCpu(_Case, unittest.TestCase):
     device = "cpu"
+
+
+class _Training:
+    """`torch.compile(train_step, mode="reduce-overhead")` replays the whole step.
+
+    Every test runs the same step on an eager twin and asks for the same
+    numbers: the losses, the parameters, and the books the optimizer keeps.
+    """
+
+    device = "cpu"
+
+    def _run(self, compiled, optimizer="adamw", steps=10, between=None):
+        torch.manual_seed(0)
+        model = nn.Sequential(nn.Linear(8, 32), nn.ReLU(), nn.Linear(32, 4)).to(self.device)
+        if optimizer == "adamw":
+            opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
+        elif optimizer == "sgd":
+            opt = torch.optim.SGD(model.parameters(), lr=1e-2, momentum=0.9)
+        else:
+            opt = torch.optim.RMSprop(model.parameters(), lr=1e-3)
+        sched = torch.optim.lr_scheduler.StepLR(opt, step_size=3, gamma=0.5)
+        rng = np.random.RandomState(0)
+        data = [(torch.tensor(rng.randn(16, 8).astype("float32"), device=self.device),
+                 torch.tensor(rng.randn(16, 4).astype("float32"), device=self.device))
+                for _ in range(steps)]
+
+        def step(x, y):
+            opt.zero_grad(set_to_none=True)
+            loss = ((model(x) - y) ** 2).mean()
+            loss.backward()
+            opt.step()
+            return loss
+
+        run = torch.compile(step, mode="reduce-overhead") if compiled else step
+        losses = []
+        for i, (x, y) in enumerate(data):
+            losses.append(float(run(x, y)))
+            sched.step()
+            if between is not None:
+                between(model)
+        params = [p.detach().cpu().numpy() for p in model.parameters()]
+        return losses, params, opt, run
+
+    def _compare(self, **kwargs):
+        want = self._run(False, **kwargs)
+        got = self._run(True, **kwargs)
+        np.testing.assert_allclose(got[0], want[0], rtol=1e-5, atol=1e-6)
+        for g, w in zip(got[1], want[1]):
+            np.testing.assert_allclose(g, w, rtol=1e-5, atol=1e-6)
+        return got[2], want[2], got[3]
+
+    def test_an_adamw_step_is_replayed_with_its_schedule(self):
+        opt, eager_opt, run = self._compare()
+        if self.device == "cuda":
+            # Only the fused update reads its step and learning rate on the
+            # device; the per-parameter one bakes them in and is refused, and
+            # then runs as written -- which the comparison above covers.
+            self.assertIsNone(run.refused)
+            self.assertGreater(run.stats["replayed"], 0)
+        else:
+            self.assertIn("bakes its step count", run.refused)
+        # The step counts the optimizer reports advance on every replay.
+        self.assertEqual(opt.n_step, eager_opt.n_step)
+        self.assertEqual(opt.param_groups[0]["param_steps"] if "param_steps" in opt.param_groups[0]
+                         else None,
+                         eager_opt.param_groups[0]["param_steps"]
+                         if "param_steps" in eager_opt.param_groups[0] else None)
+
+    def test_reading_parameters_between_steps_changes_nothing(self):
+        # Reading a parameter migrates it to the host; a device recording that
+        # kept its old address would update memory that is no longer it.
+        self._compare(between=lambda model: [p.detach().cpu() for p in model.parameters()])
+
+    def test_an_optimizer_it_cannot_replay_runs_as_written(self):
+        opt, _, run = self._compare(optimizer="rmsprop")
+        self.assertIsNotNone(run.refused)
+
+    def test_an_sgd_step_is_replayed_with_its_schedule(self):
+        # The fused SGD reads its rate on the device, and its momentum buffers
+        # are written in place, so a replay continues them.
+        opt, eager_opt, run = self._compare(optimizer="sgd")
+        self.assertEqual(opt.n_step, eager_opt.n_step)
+        if self.device == "cuda":
+            self.assertIsNone(run.refused)
+            self.assertGreater(run.stats["replayed"], 0)
+
+
+class TestCompileTrainingCpu(_Training, unittest.TestCase):
+    device = "cpu"
+
+
+@unittest.skipIf(not _test_capability.check_accelerator("cuda", backend=jt).enabled,
+                 "no usable CUDA in this build")
+class TestCompileTrainingCuda(_Training, unittest.TestCase):
+    device = "cuda"
+
+    def test_a_gradient_scaler_skips_overflows_on_the_device(self):
+        # The scaler decides on the device, not by reading its found-inf back:
+        # the fused AdamW skips a flagged step in the kernel, and the scale
+        # backs off and grows as arithmetic on device state the capture keeps.
+        # One batch in four is scaled up until its gradients overflow.
+        rng = np.random.default_rng(0)
+        data = [(torch.tensor(rng.standard_normal((32, 64)).astype("float32")
+                              * (1e10 if i == 2 else 1), device="cuda"),
+                 torch.tensor(rng.standard_normal((32, 16)).astype("float32"), device="cuda"))
+                for i in range(4)]
+        init = [rng.standard_normal(shape).astype("float32") * 0.1
+                for shape in ((256, 64), (256,), (16, 256), (16,))]
+
+        def run(compiled):
+            model = nn.Sequential(nn.Linear(64, 256), nn.GELU(), nn.Linear(256, 16)).cuda()
+            with torch.no_grad():
+                for p, value in zip(model.parameters(), init):
+                    p.copy_(torch.tensor(value, device="cuda"))
+            opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+            scaler = torch.amp.GradScaler("cuda", init_scale=2.0 ** 100, growth_interval=3)
+
+            def step(x, y):
+                opt.zero_grad(set_to_none=True)
+                loss = ((model(x) - y) ** 2).mean()
+                scaler.scale(loss).backward()
+                scaler.step(opt)
+                scaler.update()
+                return loss
+            f = torch.compile(step, mode="reduce-overhead") if compiled else step
+            scales = []
+            for i in range(12):
+                f(*data[i % 4])
+                scales.append(scaler.get_scale())
+            return scales, [p.detach().cpu().numpy() for p in model.parameters()], f
+        want_scales, want_params, _ = run(False)
+        got_scales, got_params, f = run(True)
+        self.assertEqual(got_scales, want_scales)
+        self.assertLess(min(want_scales), 2.0 ** 100)       # it did skip
+        for g, w in zip(got_params, want_params):
+            np.testing.assert_allclose(g, w, rtol=1e-5, atol=1e-6)
+        self.assertIsNone(f.refused)
+        self.assertEqual(f.stats["captured"], 1)
+
+    def test_the_step_is_recorded_as_one_launch(self):
+        _, _, run = self._compare(steps=12)
+        self.assertIsNone(run._graph_refused)
+        self.assertGreater(run.stats["graph"], 0)
+
+
 
 
 

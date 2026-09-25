@@ -13,9 +13,11 @@
 #include "runtime/backend_streams.h"
 #include "runtime/executor_entry.h"
 #include "runtime/backend.h"
+#include "runtime/graph_capture.h"
 #include "runtime/backend_fallback.h"
 #include "runtime/launch_diagnostics.h"
 #include "ops/op_register.h"
+#include "ops/composite/array_op.h"
 #include "core/exec_runner.h"
 #include "core/executor.h"
 #include "core/var.h"
@@ -215,10 +217,15 @@ DEFINE_FLAG(int64, auto_graph_replay_retain_bytes, 64<<20, "The largest graph th
 // sum of its intermediates rather than their peak -- 6.2 GB for an SD1.5 VAE
 // decode that peaks at 0.5 GB run normally.
 //
-// Two kinds of var have to be treated differently. A storage view (reshape)
-// does not run: its output is its input's buffer, so a later run must alias
-// that buffer again rather than get a fresh one, and the share request its
-// op made at construction -- consumed by the first allocation -- is put back.
+// A storage view (reshape) does not run: its output is its input's buffer, so
+// a later run must alias that buffer again rather than get a fresh one, and
+// the share request its op made at construction -- consumed by the first
+// allocation -- is put back. The same goes for any other var that aliases one
+// of its producer's inputs: an in-place update writes into its input again on
+// the next run, and a pass-through such as `tape` (GroupNorm's backward runs
+// through one) launches nothing at all, so in a fresh buffer of its own it
+// would answer with uninitialized memory.
+//
 // Whatever else shares the allocation decides whether it may go. A var the
 // batch does not release -- its result, typically -- is not re-aliased, so it
 // would go on pointing at the old buffer while the graph recomputes into a new
@@ -226,12 +233,45 @@ DEFINE_FLAG(int64, auto_graph_replay_retain_bytes, 64<<20, "The largest graph th
 // of bases alive with it, because a base freed under a live view leaves the
 // view on the old buffer just the same. Every auto-replayed CUDA call ending
 // in `jt.stack` (a code op, reshaped) did this, and so did `nn.RNN`'s hidden
-// state (a reshape of a clone of the last step). `pinned` is that set. Beyond
-// it, a var that is not itself a view may go only if all that shares it are
-// views: an in-place update aliases its producer's input, and re-running it
-// into a fresh buffer would not be the same op; and `setitem_gopt` has a
-// concat operand computed straight into its slice of the destination and
-// turns the setitem into a no-op, which would never copy a recomputed operand.
+// state (a reshape of a clone of the last step), and so did a loss computed by
+// the full-reduce fast path, a `tape` over a reshape. `pinned` is that set,
+// followed through every alias (`aliased_input`), not only views. Beyond
+// it, a var that aliases nothing of its own may go only if all that shares it
+// are views: `setitem_gopt` has a concat operand computed straight into its
+// slice of the destination and turns the setitem into a no-op, which would
+// never copy a recomputed operand.
+// Whether every op of this segment is a constant (`array`) whose output
+// already holds it: an earlier run of this kept graph wrote it there, either
+// by handing over the data (ArrayOp::run) or, for a scalar fused into a
+// kernel, by running that kernel, and release_kept_storage never frees it.
+static bool constants_already_placed(Op* op, bool is_fused_op, FusedOp& fused_op) {
+    auto placed = [](Op* o) {
+        if (strcmp(o->name(), "array")) return false;
+        auto* array = static_cast<ArrayOp*>(o);
+        return array->output->mem_ptr || !array->output->size;
+    };
+    if (!is_fused_op) return placed(op);
+    for (Op* o : fused_op.ops)
+        if (!placed(o)) return false;
+    return fused_op.ops.size() > 0;
+}
+
+// The input whose storage `v` is: a storage view's, or the one an alias
+// shares -- an in-place update's, a pass-through's (`tape`). Null otherwise.
+// Answerable before `v` is allocated, from the share its op requested, which
+// matters: the first run of a kept graph is where a view's base is otherwise
+// freed under it, and nothing re-attaches them afterwards.
+static Var* aliased_input(Var* v) {
+    Op* producer = v->input();
+    if (!producer || !producer->inputs().size()) return nullptr;
+    if (producer->is_storage_view()) return producer->inputs().front();
+    for (Var* in : producer->inputs()) {
+        if (v->share_src == in) return in;
+        if (v->share_next && v->shares_allocation_with(in)) return in;
+    }
+    return nullptr;
+}
+
 static void release_kept_storage(Var* v, const std::unordered_set<Var*>& released,
                                  const std::unordered_set<Var*>& pinned) {
     if (!v->flag(VarFlags::_kept) || v->is_finished() || !v->mem_ptr) return;
@@ -239,17 +279,16 @@ static void release_kept_storage(Var* v, const std::unordered_set<Var*>& release
     Op* producer = v->input();
     if (!producer) return;
     if (pinned.count(v)) return;
-    bool is_view = producer->is_storage_view();
+    // A constant built inside the graph (`jt.array`) has one copy of its data,
+    // which its first run moves into the var: freed, a re-run has nothing to
+    // fill the fresh buffer with.
+    if (!strcmp(producer->name(), "array")) return;
+    Var* view_of = aliased_input(v);
     for (Var* m = v->share_next; m && m != v; m = m->share_next) {
         if (!released.count(m)) return;
-        if (!is_view && !(m->input() && m->input()->is_storage_view())) return;
+        if (!view_of && !(m->input() && m->input()->is_storage_view())) return;
     }
-    Var* view_of = nullptr;
-    size_t offset = 0;
-    if (is_view) {
-        view_of = producer->inputs().front();
-        offset = v->storage_offset_bytes - view_of->storage_offset_bytes;
-    }
+    size_t offset = view_of ? v->storage_offset_bytes - view_of->storage_offset_bytes : 0;
     free_var_mem(v);
     if (view_of) v->share_with(view_of, offset);
 }
@@ -338,9 +377,8 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 kept_released.insert(plan.all_vars[index]);
         for (Var* v : plan.all_vars) {
             if (kept_released.count(v)) continue;
-            while (v->input() && v->input()->is_storage_view()
-                   && v->input()->inputs().size()) {
-                v = v->input()->inputs().front();
+            while (Var* base = aliased_input(v)) {
+                v = base;
                 if (!kept_pinned.insert(v).second) break;
             }
         }
@@ -366,6 +404,15 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             int ll = (rid<queue.size()-1)?range[queue.size()-rid-2]:0, rr = range[queue.size()-rid-1];
             root = fuse_ops[rr-1];
             load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
+        }
+        // A kept graph run again: an in-graph constant has already moved its
+        // data into its output (ArrayOp::run), so there is nothing to run --
+        // and a host-side constant would otherwise go through the host path,
+        // migration and all, which a device recording cannot contain.
+        if (keep_graph && constants_already_placed(op, is_fused_op, fused_op)) {
+            for (Var* var : op->outputs())
+                var->set_flag(VarFlags::_kept);
+            continue;
         }
         const auto requested_backend = op->requested_backend();
         const auto execution_backend = op->execution_backend();
@@ -433,6 +480,9 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         op->prepare_execution(jkl);
         prepared_jit_key = jkl.to_string();
         bool is_cuda = op->executes_on_accelerator();
+        if (PREDICT_BRANCH_NOT_TAKEN(graph_capture_recording) && !is_cuda
+                && !graph_capture_launches_nothing(op))
+            graph_capture_saw_host_work = true;
         // Array staging and explicit transfers are not CPU implementations of
         // a requested accelerator computation. Reject a real fallback before
         // moving its inputs or executing any CPU kernel.

@@ -23,6 +23,17 @@ def module_setattr(module, name, value):
         elif name not in attributes.get("_buffer_names", ()):
             if name not in parameters:
                 non_parameters.add(name)
+    # torch registers a submodule or parameter when one is first assigned. A
+    # name that held something else until then -- diffusers writes
+    # `self.mid_block = None` and builds the block later -- is registered at
+    # that point, after everything registered in between. Attributes keep the
+    # position of their first assignment, so move the name to the end: without
+    # it `named_parameters()` listed an SD UNet's mid block before its up
+    # blocks, where torch lists it after, and anything pairing parameters by
+    # position paired the wrong ones.
+    if name in attributes and isinstance(value, (owner.native_module, owner.Parameter)) \
+            and not isinstance(attributes[name], (owner.native_module, owner.backend.Var)):
+        del attributes[name]
     object.__setattr__(module, name, value)
 
 

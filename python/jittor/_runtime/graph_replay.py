@@ -32,8 +32,8 @@ Two things make a graph unreplayable rather than merely stale, and capture
 refuses both rather than answering wrongly: a graph that draws random numbers
 (a replay would repeat the same draw), and a traced call that reads a value
 back to the host, because then the python path taken depends on tensor values
-and the next call's path may differ. A readback is detected by its effect --
-it finishes the graph being captured.
+and the next call's path may differ. The runtime counts the host's reads
+(`_host_readback_count`), and a traced call that moved the count is refused.
 
 This is inference, and only inference. The call runs under `no_grad` and the
 result carries no gradient -- wrapping a module you are training does not
@@ -111,6 +111,12 @@ import jittor_core as _core
 
 from .. import flags
 
+
+#: Module calls being traced for a capture right now; see `tracing()`.
+_TRACING = [0]
+
+#: Recordings dropped because a leaf moved before recording is given up.
+_RERECORD_LIMIT = 8
 
 #: Ops whose output depends on more than their inputs. A captured graph
 #: replays the values it recorded, so a graph containing one of these is not
@@ -200,13 +206,18 @@ def _map_inputs(value, fn):
     return value
 
 
-def _output_template(value, leaves, index):
+def _output_template(value, leaves, index, passthrough=()):
     """Describe `value` as a tree over `leaves`, the distinct Vars it holds.
 
     What a module returns is rarely a lone Var: `nn.LSTM` returns a tuple, a
     diffusers UNet an output dataclass, a transformers model a `ModelOutput`
     (a dict subclass that is also a dataclass). The graph only needs the Vars;
     the rest is rebuilt around fresh ones on every call.
+
+    An object that is none of these may still come back if it is one the
+    caller passed in (`passthrough`, ids): Transformers' decode step returns
+    the very `StaticCache` it was handed, whose tensors it updated in place.
+    It is returned as it is -- a step capture tracks those updates as state.
     """
     if isinstance(value, jt.Var):
         i = index.get(id(value))
@@ -217,19 +228,34 @@ def _output_template(value, leaves, index):
     if value is None or isinstance(value, (bool, int, float, str)):
         return ("const", value)
     if type(value) in (tuple, list):
-        return ("seq", type(value), [_output_template(v, leaves, index) for v in value])
+        return ("seq", type(value), [_output_template(v, leaves, index, passthrough) for v in value])
     if isinstance(value, tuple) and hasattr(type(value), "_fields"):
         return ("namedtuple", type(value),
-                [_output_template(v, leaves, index) for v in value])
+                [_output_template(v, leaves, index, passthrough) for v in value])
     if isinstance(value, dict):
         return ("dict", value,
-                [(k, _output_template(v, leaves, index)) for k, v in value.items()])
+                [(k, _output_template(v, leaves, index, passthrough)) for k, v in value.items()])
     if _dataclasses.is_dataclass(value) and not isinstance(value, type):
         return ("dataclass", value,
-                [(f.name, _output_template(getattr(value, f.name), leaves, index))
+                [(f.name, _output_template(getattr(value, f.name), leaves, index, passthrough))
                  for f in _dataclasses.fields(value)])
+    if id(value) in passthrough:
+        return ("const", value)
     raise _Unreplayable(f"the module returned a {type(value).__name__}, which "
                         "replay cannot rebuild")
+
+
+def _object_ids(value, seen=None):
+    """The ids of `value` and of everything inside its plain containers."""
+    seen = set() if seen is None else seen
+    seen.add(id(value))
+    if type(value) in (tuple, list):
+        for v in value:
+            _object_ids(v, seen)
+    elif type(value) is dict:
+        for v in value.values():
+            _object_ids(v, seen)
+    return seen
 
 
 def _rebuild(template, values):
@@ -396,6 +422,10 @@ class GraphReplay:
         self._cuda_graph = 0
         self._graph_out = None
         self._graph_refused = None
+        # When to record next (a replay count), and how often a recording has
+        # been dropped because a leaf it read moved.
+        self._record_at = 3
+        self._rerecords = 0
         self.stats = {"captured": 0, "replayed": 0, "rebuilt": 0, "graph": 0}
         if example_inputs:
             self(*example_inputs)
@@ -456,12 +486,19 @@ class GraphReplay:
         # what a normal call peaks at rather than the sum of everything it
         # allocates.
         jt.flags.keep_graph = 2
+        readbacks = _core._host_readback_count()
+        _TRACING[0] += 1
         try:
             with _no_auto(), jt.no_grad():
                 output = self._module(*private_args, **private_kwargs)
+                if _core._host_readback_count() != readbacks:
+                    self._refused = ("the traced call read a value back to the host, so its "
+                                     "path depends on tensor values and cannot be replayed")
+                    return None
                 outputs = []
                 try:
-                    template = _output_template(output, outputs, {})
+                    template = _output_template(output, outputs, {},
+                                                _object_ids((args, kwargs)))
                 except _Unreplayable as exc:
                     self._refused = str(exc)
                     return None
@@ -488,6 +525,7 @@ class GraphReplay:
                                  "returned a Var it did not compute, so it cannot be replayed")
                 return None
         finally:
+            _TRACING[0] -= 1
             jt.flags.keep_graph = before
 
         cap = _Capture()
@@ -645,6 +683,11 @@ class GraphReplay:
         if not _core.graph_capture_supported():
             self._graph_refused = "this build cannot record device graphs"
             return False
+        host = _core.graph_host_work(cap.outputs)
+        if host:
+            self._graph_refused = ("part of the graph runs on the host (%s), which a "
+                                   "recording would drop" % host)
+            return False
         outs = [_empty_like(o) for o in cap.outputs]
         before = jt.flags.keep_graph
         # 2, as for a replay: an intermediate's memory goes back after its
@@ -681,7 +724,28 @@ class GraphReplay:
             return False
         self._cuda_graph = handle
         self._graph_out = outs
+        _core.graph_bind_leaves(handle, cap.outputs)
         return True
+
+    def _recording_still_valid(self):
+        """Drop the recording if a leaf it reads has moved; see graph_bind_leaves.
+
+        Reading a parameter back to the host migrates it, and the recording
+        would go on writing the block it left -- no longer the parameter, and
+        free for anyone to take. The executor resolves addresses each run, so
+        this call goes there, and a later one records again.
+        """
+        if not _core.graph_leaves_moved(self._cuda_graph):
+            return True
+        _core.graph_release(self._cuda_graph)
+        self._cuda_graph = 0
+        self._graph_out = None
+        self._rerecords += 1
+        if self._rerecords >= _RERECORD_LIMIT:
+            self._graph_refused = "the leaves a recording reads kept moving"
+        else:
+            self._record_at = self.stats["replayed"] + 2
+        return False
 
     def _replay_once(self, cap, args, kwargs=None):
         # A recording copies a host input to the device when it runs, so the
@@ -714,7 +778,7 @@ class GraphReplay:
         # A recorded device graph re-issues the whole step with one call. The
         # input copies above are on the same stream, so they are ordered ahead
         # of it without a wait.
-        if self._cuda_graph:
+        if self._cuda_graph and self._recording_still_valid():
             _core.graph_launch(self._cuda_graph)
             # `sync_src=False`: the launch already produced the bytes, and
             # syncing the captured outputs would run the whole graph again
@@ -789,7 +853,7 @@ class GraphReplay:
         # run a few times: the first executions are the ones that allocate and
         # compile, and a recording tolerates neither.
         if (not self._cuda_graph and self._graph_refused is None
-                and self.stats["replayed"] == 3):
+                and self.stats["replayed"] == self._record_at):
             limit = self._max_retained_bytes
             if limit and self._graph_bytes > limit:
                 # Replays through the executor free as they go; a recording

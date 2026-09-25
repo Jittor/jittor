@@ -5,6 +5,7 @@
 // ***************************************************************
 #pragma once
 #include "core/common.h"
+#include "core/var_holder.h"
 
 namespace jittor {
 
@@ -59,6 +60,47 @@ void graph_launch(int64 graph);
  */
 // @pyjt(graph_wait)
 void graph_wait();
+
+/**
+    Remember where every leaf the recorded graph reads lives: the executed
+    Vars reached from `roots` -- parameters, inputs, constants.
+
+    A recording re-issues the addresses it saw, and a leaf does not always
+    stay put: reading a parameter back to the host migrates it, and its device
+    block goes back to the pool. The recording would then keep updating memory
+    that is no longer the parameter and may already be someone else's.
+    `graph_leaves_moved` asks, before a launch.
+ */
+// @pyjt(graph_bind_leaves)
+void graph_bind_leaves(int64 graph, const vector<VarHolder*>& roots);
+
+/**
+    The first op of the graph that computes `roots` that runs on the host, as
+    its name and output shape, or "" if there is none.
+
+    A recording holds only what reaches the device stream: a host kernel runs
+    right away, once, while recording, and never again when the recording is
+    launched. For a step that updates state that is an extra step taken at
+    record time and none afterwards. So the question is asked before
+    recording, not answered by it.
+ */
+// @pyjt(graph_host_work)
+string graph_host_work(const vector<VarHolder*>& roots);
+
+/// Whether `op` does nothing a recording would have to repeat: a storage view
+/// aliases its input, a tape passes it through, and an in-graph constant
+/// (`array`) only does its work on its first run, which is before any
+/// recording (see ArrayOp::run).
+bool graph_capture_launches_nothing(Op* op);
+
+/// True while a recording is open, and whether host work ran inside it; the
+/// executor sets the second, and `graph_capture_end` refuses such a recording.
+EXTERN_LIB bool graph_capture_recording;
+EXTERN_LIB bool graph_capture_saw_host_work;
+
+/** Whether any leaf bound to `graph` has moved since. */
+// @pyjt(graph_leaves_moved)
+bool graph_leaves_moved(int64 graph);
 
 /**
     Release a graph handle. Launching a released graph is undefined, so the

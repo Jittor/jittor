@@ -42,6 +42,17 @@ class _Random(nn.Module):
         return x + jt.rand(x.shape)
 
 
+class _GroupNormTransposed(nn.Module):
+    """GroupNorm over channels-last input, the way an attention block applies it."""
+
+    def __init__(self):
+        super().__init__()
+        self.norm = nn.GroupNorm(2, 8)
+
+    def execute(self, x):
+        return self.norm(x.transpose(0, 2, 1)).transpose(0, 2, 1)
+
+
 class _Stack(nn.Module):
     def execute(self, x):
         h = (x * 2 + 1).tanh()
@@ -169,6 +180,22 @@ class TestGraphReplay(unittest.TestCase):
         with jt.no_grad():
             for x, want in zip(feeds, expected):
                 np.testing.assert_allclose(model(x).numpy()[:, 0], want, rtol=1e-5)
+
+    def test_a_pass_through_op_follows_each_input(self):
+        # GroupNorm runs through a `tape`, which shares its input's storage and
+        # launches nothing. Freed between runs like any intermediate, it came
+        # back in a fresh buffer nobody wrote, and every replay answered with
+        # uninitialized memory.
+        model = _GroupNormTransposed()
+        rs = np.random.RandomState(4)
+        feeds = [jt.array(rs.randn(2, 5, 8).astype("float32")) for _ in range(4)]
+        jt.flags.auto_graph_replay = 0
+        with jt.no_grad():
+            expected = [model(x).numpy() for x in feeds]
+        replay = graph_replay(model)
+        for x, want in zip(feeds, expected):
+            np.testing.assert_allclose(replay(x).numpy(), want, rtol=1e-5, atol=1e-5)
+        self.assertIsNone(replay.refused)
 
     def test_keyword_arguments_and_structured_results(self):
         model = _Structured()

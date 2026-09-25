@@ -150,6 +150,9 @@ class Optimizer(object):
         it rides along in ``state_dict``/``load_state_dict`` and so a group
         added mid-training starts its own correction at step 1.
         """
+        from jittor._runtime import step_capture
+        # Baked into the update as a constant, so a replay would repeat it.
+        step_capture.refuse("the optimizer bakes its step count into the graph")
         n = int(pg.get("n_step", 0)) + 1
         pg["n_step"] = n
         return n

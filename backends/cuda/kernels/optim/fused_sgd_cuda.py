@@ -86,7 +86,10 @@ def _source(count, momentum, weight_decay, dampening, nesterov):
         {vel}
         int len[{count}];
     }};
-    __global__ static void fused_sgd_kernel(FusedSgdArgs arg, float lr) {{
+    __global__ static void fused_sgd_kernel(FusedSgdArgs arg, const float* lr_ptr, float lr) {{
+        // A captured step passes the rate as a device Var, which a replay
+        // refreshes; otherwise it is the literal below.
+        if (lr_ptr) lr = *lr_ptr;
         const int t = blockIdx.y;
         const int n = arg.len[t];
         const int stride = blockDim.x * gridDim.x;
@@ -103,8 +106,13 @@ def _launch(count, plain):
 
 
 def _fused_sgd_cuda(entries, lr, momentum, weight_decay, dampening, nesterov):
-    """`entries` is a list of (param, grad, velocity). Returns [(new_p, new_v)]."""
+    """`entries` is a list of (param, grad, velocity). Returns [(new_p, new_v)].
+
+    `lr` may be a one-element float32 Var instead of a number: the kernel then
+    reads the rate on the device (see `accepts_live_lr`).
+    """
     plain = momentum == 0 and dampening == 0 and not nesterov
+    live = lr if isinstance(lr, jt.Var) else None
     results = []
     for start in range(0, len(entries), _CHUNK):
         chunk = entries[start:start + _CHUNK]
@@ -113,6 +121,10 @@ def _fused_sgd_cuda(entries, lr, momentum, weight_decay, dampening, nesterov):
         grads = [e[1] for e in chunk]
         vels = [e[2] for e in chunk]
         inputs = params + grads + ([] if plain else vels)
+        lr_ptr = "nullptr"
+        if live is not None:
+            lr_ptr = f"in{len(inputs)}_p"
+            inputs = inputs + [live]
         setup = []
         for k in range(count):
             setup.append(f"args.param[{k}] = in{k}_p;")
@@ -131,7 +143,8 @@ def _fused_sgd_cuda(entries, lr, momentum, weight_decay, dampening, nesterov):
         body = f"""
         FusedSgdArgs args;
         {chr(10).join('        ' + line for line in setup)}
-        fused_sgd_kernel<<<dim3({blocks}, {count}), 256>>>(args, {float(lr):.9e}f);
+        fused_sgd_kernel<<<dim3({blocks}, {count}), 256>>>(
+            args, {lr_ptr}, {0.0 if live is not None else float(lr):.9e}f);
         """
         outs = jt.code(
             [p.shape for p in params],
@@ -147,6 +160,9 @@ def _fused_sgd_cuda(entries, lr, momentum, weight_decay, dampening, nesterov):
         results.extend(zip(outs, vels))
     return results
 
+
+#: Takes the learning rate as a device Var as well as a number.
+_fused_sgd_cuda.accepts_live_lr = True
 
 register_kernel("optim.sgd_fused", "cuda", _fused_sgd_cuda,
                 dtypes=("float32",), supports=_supports_fused_sgd)

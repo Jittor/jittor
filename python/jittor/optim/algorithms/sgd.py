@@ -100,6 +100,7 @@ class SGD(Optimizer):
         self.param_groups.append(group)
 
     def step(self, loss=None, retain_graph=False):
+        from jittor._runtime import step_capture
         self.pre_step(loss, retain_graph=retain_graph)
         jt.flags.node_order = 1
         for pg in self.param_groups:
@@ -154,7 +155,15 @@ class SGD(Optimizer):
                     [var for item in active for var in item
                      if isinstance(var, jt.Var)])
             if fused is not None:
-                updates = fused(active, lr, momentum, weight_decay, dampening, nesterov)
+                rate = lr
+                if step_capture.active():
+                    rate = step_capture.live_rate(
+                        fused, lambda pg=pg: pg.get("lr", self.lr),
+                        lambda pg=pg: (pg.get("momentum", self.momentum),
+                                       pg.get("weight_decay", self.weight_decay),
+                                       pg.get("dampening", self.dampening),
+                                       pg.get("nesterov", self.nesterov)))
+                updates = fused(active, rate, momentum, weight_decay, dampening, nesterov)
                 for (p, _, v), (new_p, new_v) in zip(active, updates):
                     # Without momentum the velocity buffer holds nothing the
                     # step needs, and a kernel that keeps it updates it in
@@ -164,6 +173,12 @@ class SGD(Optimizer):
                         _update_preserve_dtype(v, new_v)
                     _update_preserve_dtype(p, new_p)
                 continue
+            # Baked into the graph as numbers; a captured step re-captures
+            # when they change.
+            step_capture.guard(lambda pg=pg: (pg.get("lr", self.lr), pg.get("momentum", self.momentum),
+                                              pg.get("weight_decay", self.weight_decay),
+                                              pg.get("dampening", self.dampening),
+                                              pg.get("nesterov", self.nesterov)))
             for p, g, v in active:
                 # `p * 0 + g` is a whole extra pass over the parameter.
                 _update_preserve_dtype(p, sgd_update(

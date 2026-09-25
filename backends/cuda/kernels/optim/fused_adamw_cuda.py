@@ -39,14 +39,23 @@ def _cuda_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
     An entry is (parameter, moment, variance, gradient, steps taken so far);
     this is the update for step ``steps + 1``, as the per-parameter path
     computes it. Entries are grouped by step and dtype, one operator each.
+
+    ``lr`` may instead be a two-element float32 Var ``[step, lr]``, which the
+    kernel reads on the device and which then stands for every entry's step:
+    what a captured step passes, so that a replay advances the count and
+    follows the learning rate without the optimizer running.
     """
+    hyper = lr if isinstance(lr, jt.Var) else None
     results = [None] * len(entries)
     groups = {}
     for index, entry in enumerate(entries):
-        key = (int(entry[4]), _jittor_dtype_name(entry[0].dtype))
+        key = (0 if hyper is not None else int(entry[4]), _jittor_dtype_name(entry[0].dtype))
         groups.setdefault(key, []).append(index)
     for (steps, _), indices in groups.items():
-        step = jt.array(float(steps + 1), dtype="float32").stop_grad()
+        if hyper is not None:
+            step, lr = hyper, 0.0
+        else:
+            step = jt.array(float(steps + 1), dtype="float32").stop_grad()
         count = len(indices)
         out = jt.fused_adamw(
             [entries[i][0] for i in indices], [entries[i][1] for i in indices],
@@ -56,5 +65,8 @@ def _cuda_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
             results[index] = (out[position], out[count + position], out[2 * count + position])
     return results
 
+
+#: Takes ``[step, lr]`` as a device Var in place of the learning rate.
+_cuda_fused_adamw_updates.accepts_live_step = True
 
 register_kernel("optim.adamw_fused", "cuda", _cuda_fused_adamw_updates, supports=_supports)

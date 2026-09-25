@@ -14,7 +14,7 @@ def all(x, dim=(), keepdims=False, keepdim=None):
     result = try_dispatch("tensor.all", x, dim, keepdims)
     if result is not None:
         return result
-    return jt.ops.all_(x, dim, keepdims=keepdims).bool()
+    return jt.ops.all_(_as_truth(x), dim, keepdims=keepdims).bool()
 
 
 def any(x, dim=(), keepdims=False, keepdim=None):
@@ -25,7 +25,21 @@ def any(x, dim=(), keepdims=False, keepdim=None):
     result = try_dispatch("tensor.any", x, dim, keepdims)
     if result is not None:
         return result
-    return jt.ops.any_(x, dim, keepdims=keepdims).bool()
+    return jt.ops.any_(_as_truth(x), dim, keepdims=keepdims).bool()
+
+
+def _as_truth(x):
+    """``x != 0`` for a half-precision input, `x` itself otherwise.
+
+    The logical reductions run on their input's dtype, and CUDA has no atomic
+    OR or AND on bfloat16 or float16: ``any``/``all`` of a half tensor did not
+    compile on the device (``reduce_op.cc``: no ``atomicOr`` for the argument
+    list). Transformers' static KV cache asks exactly that of a bf16 model.
+    NaN counts as true, as in torch.
+    """
+    if isinstance(x, Var) and _jittor_dtype_name(x.dtype) in ("float16", "bfloat16"):
+        return x != 0
+    return x
 
 
 def normalize(input, p=2, dim=1, eps=1e-12):

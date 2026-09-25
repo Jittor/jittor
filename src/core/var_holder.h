@@ -287,6 +287,14 @@ struct VarHolder {
         return (int64)var;
     }
 
+    // The address of this Var's bytes as it stands -- 0 if it has none --
+    // without materializing it the way `raw_ptr` does. For asking whether two
+    // executed Vars share storage.
+    // @pyjt(__get___mem_ptr_now)
+    inline int64 mem_ptr_now() {
+        return (int64)var->mem_ptr;
+    }
+
     // @pyjt(__get__flags)
     inline int32 flags() {
         return (int32)(var->flags.flags);
@@ -744,6 +752,37 @@ struct VarHolder {
     void attach_view(VarHolder* base, VarViewStep step);
     void refresh_transpose_views();
 };
+
+/**
+    How many times the host has read a Var's value so far (`numpy`, `item`,
+    `data`, a fetch). Compared across a traced call, it says whether the call
+    read one.
+ */
+// @pyjt(_host_readback_count)
+int64 host_readback_count();
+
+/**
+    Start recording which live holders get rebound to a different Var.
+
+    A step that updates state -- an optimizer writing parameters and moments,
+    a norm layer its running statistics -- does it by rebinding the holder the
+    caller keeps (`update`, `assign`, an in-place op) to the Var that computes
+    the new value. A capture of that step has to know every such holder: the
+    graph it keeps reads the state's *old* Var, so a replay must write each new
+    value back there. Asking the holders themselves is the only way that does
+    not depend on knowing which modules and optimizers the step touched.
+ */
+// @pyjt(_state_capture_begin)
+void state_capture_begin();
+
+/**
+    Stop recording and return `[(holder, old, new), ...]` for every holder
+    still alive that now holds a different Var than when it was first
+    rebound, and whose first Var was already executed then. `old` and `new`
+    are fresh holders of those two Vars; `holder` is the caller's own object.
+ */
+// @pyjt(_state_capture_end)
+PyObject* state_capture_end();
 
 // @pyjt(sync)
 void sync(const vector<VarHolder*>& vh=vector<VarHolder*>(), bool device_sync=false, bool weak_sync=true);

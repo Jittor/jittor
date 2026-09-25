@@ -36,8 +36,10 @@ def compile(model=None, *args, **kwargs):
     ``mode="reduce-overhead"`` (or ``"max-autotune"``, or
     ``options={"triton.cudagraphs": True}``) wraps a module in an
     `OptimizedModule` that replays its captured graph under ``no_grad``
-    instead of rebuilding it every call. Anything else -- the default mode,
-    a function rather than a module -- runs as written.
+    instead of rebuilding it every call, and a function in a
+    `jittor._runtime.step_capture.StepCapture`, which replays the whole call
+    -- a training step's forward, backward and optimizer update included.
+    Any other mode runs as written.
     """
     from ...stub_policy import unimplemented
     if kwargs.get("fullgraph"):
@@ -56,12 +58,19 @@ def compile(model=None, *args, **kwargs):
         )
     if model is None:
         return lambda value: compile(value, *args, **kwargs)
-    if (_wants_replay(kwargs.get("mode"), kwargs.get("options"))
-            and isinstance(model, jt.nn.Module)
-            and not isinstance(model, OptimizedModule)):
+    if not _wants_replay(kwargs.get("mode"), kwargs.get("options")):
+        return model
+    if isinstance(model, jt.nn.Module):
+        if isinstance(model, OptimizedModule):
+            return model
         cls = _compiler_context().state.get("nn_class_adapter", _identity)(OptimizedModule)
         return cls(model)
-    return model
+    from jittor._runtime.step_capture import StepCapture
+    if isinstance(model, StepCapture) or not callable(model):
+        return model
+    # A function -- typically a whole training step, forward, backward and
+    # optimizer update -- is captured and replayed as one graph.
+    return StepCapture(model)
 
 
 def script(obj=None, **kwargs):
@@ -337,11 +346,14 @@ def _api_cid(f=None, *a, **k):
 
 
 def _api_compiler_is_compiling():
-    return False
+    # True while `torch.compile` -- a graph replay or a step capture -- traces
+    # the call, which is what libraries ask this to find out.
+    from jittor._runtime.step_capture import tracing
+    return tracing()
 
 
 def _api_compiler_is_dynamo_compiling():
-    return False
+    return _api_compiler_is_compiling()
 
 
 def _api_compiler_is_exporting():
@@ -405,11 +417,11 @@ def _api_dynamo_assume_constant_result(f=None, **k):
 
 
 def _api_dynamo_is_compiling():
-    return False
+    return _api_compiler_is_compiling()
 
 
 def _api_dynamo_is_dynamo_compiling():
-    return False
+    return _api_compiler_is_compiling()
 
 
 def _api_dynamo_mark_static_address(*a, **k):

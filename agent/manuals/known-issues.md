@@ -3028,3 +3028,46 @@ about whether to take it.
 - Guard: the model-level outcome is what the suite pins
   (`test_torch_hf_models.py::test_forward_and_eval_determinism[longformer]`);
   the six-row probe lives in this entry's evidence rather than in the tree.
+
+## KI-COMPAT-006: `load_state_dict` shares the source's Vars, and an in-place optimizer then moves both models
+
+- Severity: High on CUDA (silent: a second model -- an EMA copy, a
+  reference model -- trains along with the first).
+- Status: Open. Found 2026-09-25 while comparing a captured training step
+  against an eager twin.
+- Owner: torch compatibility / optimizers
+- Symptom: after `b.load_state_dict(a.state_dict())` on CUDA, one
+  `torch.optim.AdamW(a.parameters()).step()` changes `b`'s weights too. On
+  CPU it does not. PyTorch copies in `load_state_dict`, so the two are
+  independent there.
+- Mechanism: loading binds `b`'s parameters to the very Vars `a` holds, which
+  is harmless while every update produces a new Var. The fused CUDA AdamW
+  (`src/ops/composite/fused_adamw_op.cc`) writes its results into the
+  parameters' own storage (`share_with`), so whatever else holds those Vars
+  sees the write. The per-parameter CPU path builds new Vars and does not.
+- Repro: `a, b = nn.Linear(2, 2, device="cuda"), nn.Linear(2, 2, device="cuda")`;
+  `b.load_state_dict(a.state_dict())`; a backward and an AdamW step on `a`;
+  `(a.weight == b.weight).all()` is True.
+- Workaround: copy through the host, e.g.
+  `p.copy_(torch.tensor(src.cpu().numpy(), device=src.device))`.
+
+## KI-COMPAT-007: `w.copy_(x)` under `no_grad` loses `w`'s gradient when `x` requires grad
+
+- Severity: Medium (silent: `w.grad` stays None after a backward).
+- Status: Open. Found 2026-09-25.
+- Owner: torch compatibility / autograd
+- Symptom: `w = torch.randn(4, 8, requires_grad=True)`; `with torch.no_grad():
+  w.copy_(x)` where `x` requires grad; a later backward through `w` leaves
+  `w.grad` None. With an `x` that does not require grad it works. PyTorch
+  keeps `w` a leaf that accumulates a gradient in both cases.
+- Workaround: `w = x.detach().clone().requires_grad_(True)`.
+
+## KI-COMPAT-008: `torch.optim.SGD` rejects `foreach=` and `fused=`
+
+- Severity: Low (an import-time `TypeError`, not a silent one).
+- Status: Open. Found 2026-09-25.
+- Owner: torch compatibility / optimizers
+- Symptom: `torch.optim.SGD(params, lr=..., foreach=False)` raises
+  `TypeError: initialize_sgd() got an unexpected keyword argument 'foreach'`,
+  and the same for `fused=`. Both are ordinary PyTorch arguments; the native
+  SGD already has a `fused` switch of its own that they could map onto.

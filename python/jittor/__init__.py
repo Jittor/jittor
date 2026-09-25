@@ -173,6 +173,7 @@ from .nn.functional.softmax import logsumexp
 from .nn.functional.tensor import kron, tensordot
 from . import numpy2cupy
 from ._runtime.graph_replay import graph_replay
+from ._runtime.step_capture import capture_step
 from .misc.concatenation import concat, cat
 from .misc.indexing import install_var_indexing as _install_var_indexing
 from .misc.indexing import var_getitem as getitem, var_setitem as setitem
@@ -366,7 +367,7 @@ _ROOT_EXPORTS = (
     "math_util", "matmul", "misc", "mkl_ops", "mpi", "mpi_ops", "nn",
     "numpy2cupy", "optim", "ops", "rank", "sparse", "tensordot",
     "amp",
-    "world_size", "config", "capability", "introspection", "graph_replay",
+    "world_size", "config", "capability", "introspection", "graph_replay", "capture_step",
 )
 
 __all__ = tuple(sorted(set(

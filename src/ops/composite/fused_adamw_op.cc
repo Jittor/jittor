@@ -87,9 +87,18 @@ struct AdamwLaunch {
 };
 
 __global__ void fused_adamw_kernel(AdamwLaunch launch, const float* step, float lr,
-                                   float beta1, float beta2, float weight_decay, float eps) {
+                                   bool lr_in_step, bool skip_in_step, float beta1,
+                                   float beta2, float weight_decay, float eps) {
     int t = 0;
     while (t + 1 < launch.count && launch.first_block[t + 1] <= (int)blockIdx.x) t++;
+    // A two-element step carries the learning rate as well: a captured step
+    // is replayed without the optimizer running, so whatever changes between
+    // steps has to be read on the device rather than baked into the launch.
+    if (lr_in_step) lr = step[1];
+    // A third element is a gradient scaler's found-inf: the step is skipped on
+    // the device, parameters and moments untouched, as the scaler would skip
+    // it on the host.
+    if (skip_in_step && step[2] != 0.f) return;
     // In double, as the per-parameter path computes them on the host:
     // 1 - 0.999^t in float keeps about three digits for small t.
     const double n = *step;
@@ -118,14 +127,17 @@ __global__ void fused_adamw_kernel(AdamwLaunch launch, const float* step, float 
 
 void FusedAdamwOp::jit_run() {
     const float* step_ptr = step->ptr<float>();
+    const bool lr_in_step = step->num >= 2;
+    const bool skip_in_step = step->num >= 3;
     AdamwLaunch launch;
     launch.count = 0;
     int blocks = 0;
     auto flush = [&]() {
         if (!launch.count) return;
         launch.first_block[launch.count] = blocks;
-        fused_adamw_kernel<<<blocks, kThreads>>>(launch, step_ptr, (float)lr, (float)beta1,
-                                                 (float)beta2, (float)weight_decay, (float)eps);
+        fused_adamw_kernel<<<blocks, kThreads>>>(launch, step_ptr, (float)lr, lr_in_step,
+                                                 skip_in_step, (float)beta1, (float)beta2,
+                                                 (float)weight_decay, (float)eps);
         launch.count = 0;
         blocks = 0;
     };
