@@ -2337,6 +2337,32 @@ about whether to take it.
   floating factories. The index-fill repair does not resolve this general issue.
 
 
+## KI-COMPAT-005: empty_like enables gradients by default
+
+- Severity: Medium
+- Status: Reproduced on CPU, 2026-09-25; CUDA not yet checked.
+- Baseline: `aa6f750` (production metadata optimization `3401bf0`).
+- Owner: Torch compatibility factory maintainers.
+- Evidence: with CPU float64 input, both source gradient states and both
+  inherited/explicit output dtype, `torch.empty_like(source)` returns
+  `requires_grad=True` in the shim. Independent binary PyTorch 2.11.0 returns
+  False in all four cases; its CUDA state stays uninitialized. This factory
+  uses a separate fallback and is outside the constructor-final-cast candidate.
+- Minimal reproduction after activating the desired Torch environment:
+  `x = torch.tensor([1., 2.], device="cpu"); y = torch.empty_like(x);
+  assert not y.requires_grad`. The identical standalone four-case script and
+  red/green logs are unversioned under
+  `$JITTOR_LAB_ROOT/_state/vllm-performance/20260925/factory-cast/` as
+  `empty_like_requires_grad.py`, `empty-like-jittor.log` and
+  `empty-like-native.log`.
+- Workaround: `torch.empty(tuple(x.shape), dtype=x.dtype, device=x.device,
+  requires_grad=False)` passes the two source-gradient cases on CPU. No claim
+  is made here about memory-format equivalence or measured performance impact.
+- Exit condition: first retain the public-API failure, then fix default and
+  explicit gradient semantics without losing dtype/device/shape behavior;
+  verify independent CPU/CUDA reference cases and downstream regression.
+
+
 ## KI-VLLM-002: explicit CPU default exposes mixed-device attention
 
 - Severity: Research

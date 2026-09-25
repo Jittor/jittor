@@ -1,8 +1,8 @@
 # vLLM: remove compute-policy work from metadata reads
 
-- Status: correctness accepted and redundant callbacks reduced in real-model
-  captures; no accepted end-to-end speedup yet because GPU occupancy varied.
-- Owner: Codex; reviewed 2026-09-24.
+- Status: correctness accepted; the 2026-09-25 uncontended-GPU comparison
+  measures 11.8–12.5% higher throughput (8.6–9.0% relative to native drift).
+- Owner: Codex; reviewed 2026-09-25.
 - Production change: `3401bf005016f5aa75359126385dc15830088b18`; the same 1164-file
   manifest was rechecked on the GPU checkout after synchronization.
 - Baseline: `dbb0379aec4843e908df4970065d866ce93aa272`. The fetched `origin/chk`
@@ -141,3 +141,129 @@ Two formal benchmark attempts were stopped when other users entered the
 selected GPU. `baseline/excluded.txt` and `baseline-r2/excluded.txt`, process
 snapshots and `gpu-observations.jsonl` preserve why they are excluded. Shared
 GPU measurements must not be presented as an accepted optimization speedup.
+
+## 2026-09-25 retry and next isolated reproducers
+
+At local `aa6f750`, `origin/chk` still has no new commits. The production
+baseline remains `3401bf0`. A new attempt prepared three independent processes
+per backend and source phase, with continuous two-second GPU/process-group
+observations, source-hash checks, interruption cleanup and automatic restoration
+of the two original/candidate files. An idle card acquired another user's task
+during the first native process, so only our process group was stopped and the
+run was excluded. A retry on another card was rejected by the occupancy check.
+Both early attempts were excluded. A later retry completed all 12 processes
+on the same physical GPU with no foreign process observed on that GPU. All
+1164 production source hashes match the restored candidate. Five injected
+monitoring/cleanup failure cases pass after fixing the external experiment
+supervisor.
+
+Raw scripts, excluded attempts and status are under
+`$JITTOR_LAB_ROOT/_state/vllm-performance/20260925/isolated-round{1,2}/` and
+`isolated-status.json`. The successful later retry is in `isolated-round2/`.
+The source-switching script must not be resumed after further production edits without reconciling
+its source manifests. It preserves accepted rounds and archives interrupted
+ones; it does not terminate other users' processes.
+
+While waiting, the next candidates were verified without changing production:
+
+- Factory final casts: before the next patch, both CPU and real CUDA suites
+  report **41 failed, 12 passed** across 53 cases.
+  The failures observe redundant same-dtype casts, after checking values, dtype
+  and placement; they do not mean 41 independent numerical bugs. Controls cover
+  gradients, default-dtype changes, like inheritance and holder replacement.
+  Native `normal` can promote a tensor mean after creating its typed random
+  input, and `ones_like`/`tril`/`triu` still need some final conversions. Therefore
+  accepting a dtype argument is insufficient grounds to remove every cast.
+- KV-update capability: the patched attention forward already writes KV, but
+  the backend still advertises a separate update. Two host contracts fail and
+  three pass in the installed vLLM 0.24.0 environment with CUDA hidden. The
+  passing checks cover source call guards, current-step write-before-read
+  ordering and the absent-implementation boundary. The proposed change needs
+  owned publication/rollback and real CUDA cache regression before acceptance.
+- Full RMSNorm validation is repeated in selection and execution. Sharing a
+  result would require preserving current dtype, shape, autograd and precision
+  eligibility; no cross-call cache or buffer reuse was introduced.
+
+The original reproducers, recoverable patches/audit and red logs are retained
+in the unversioned `factory-cast/` and `kv-update-capability/` directories of the
+same run. The KV capability candidate remains unmodified. The factory follow-up
+is recorded below, separately from the metadata measurement.
+An independent CPU check also reproduces an existing `empty_like` default
+gradient-flag mismatch against binary PyTorch; see KI-COMPAT-005 in the
+[issue ledger](../../agent/manuals/known-issues.md).
+
+### Accepted metadata timing comparison
+
+Three independent processes per backend and source phase each perform three
+warmups and 21 measurements for batch 1 and 4, with 128 input and 32 output
+tokens, FP16, eager execution and prefix caching disabled. Initialization and
+compilation are excluded. All 1,260 measured requests / 40,320 output tokens
+match across the 12 processes. This is offline engine token delivery timing.
+
+| Phase/backend | Batch | Output token/s | TTFT median / p95 (ms) | ITL median / p95 (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| Original Jittor | 1 | 17.01 | 158.58 / 167.69 | 56.41 / 59.92 |
+| Metadata-optimized Jittor | 1 | 19.14 | 143.24 / 152.08 | 50.53 / 55.66 |
+| PyTorch before | 1 | 51.18 | 39.54 / 44.04 | 19.13 / 21.61 |
+| PyTorch after | 1 | 53.00 | 37.63 / 41.41 | 18.63 / 20.74 |
+| Original Jittor | 4 | 64.61 | 164.71 / 172.83 | 59.88 / 62.88 |
+| Metadata-optimized Jittor | 4 | 72.23 | 149.40 / 156.61 | 53.62 / 57.05 |
+| PyTorch before | 4 | 198.42 | 40.40 / 43.47 | 19.99 / 21.38 |
+| PyTorch after | 4 | 203.52 | 38.75 / 41.23 | 19.30 / 20.76 |
+
+Throughput uses the median of process rates; latency distributions pool measured
+requests/tokens. Jittor's raw gain is 12.50% / 11.78% at batch 1 / 4. Native
+PyTorch improves by 3.56% / 2.57% between phases. Dividing the Jittor ratio by
+the corresponding native ratio gives an **8.64% / 8.98%** relative gain. This
+normalization is a sensitivity check, not proof that every source of timing
+drift is removed: other GPUs and the host remain shared. Optimized Jittor still
+reaches only 36.11% / 35.49% of paired native throughput on these inputs.
+
+Per-process rates, complete distributions and source/GPU observations are in
+`isolated-round2/{baseline,candidate}/comparison.json` and
+`isolated-round2/cross-phase-comparison.json`. The previously excluded runs
+remain archived. Do not mix these numbers with short-prompt legacy benchmarks.
+
+### Factory final-cast follow-up
+
+After the metadata comparison completed, commit `17d2cfd` limits its production
+change to `compat/torch/installers/factories.py`: it skips the constructor's final cast
+when the current output dtype already equals the requested dtype. Both names
+are normalized for comparison. Actual-result queries preserve tensor-argument
+promotion cases; no tensor dtype, default dtype or installation context is
+cached. No parameter construction or output-buffer reuse is introduced.
+
+The retained `compat/tests/torch/test_factory_redundant_cast.py` suite changes
+from 41 failed / 12 passed to **53 passed on CPU and 53 on real CUDA**. Related
+CPU factory/dtype/generator/autograd tests report 100 passed and two skipped
+(unavailable native-Torch references). One test that explicitly requests CUDA
+cannot run on the CPU-only host; its initial failure is retained and its GPU
+verification passes (one case, no skips). The layout and package-manifest checks
+pass. The structure gate remains at 1364 passed, four unchanged baseline
+failures and eight skips; no new structure failure is introduced.
+
+The real Qwen and OPT matrices each complete 70 requests / 1492 output tokens
+(state, random with logprobs, batch, penalties and long inputs). All 140 requests /
+2984 tokens match pre-patch Jittor, including seeded random output. Each model's
+58 greedy requests / 1232 tokens also match the retained native reference;
+those old native artifacts are used for correctness only. Results are in
+`factory-cast/matrix/` and `factory-cast/matrix-comparison.json`.
+
+The next formal timing comparison uses the accepted metadata candidate as its
+baseline and changes only the factory file (full 1164-file manifest checked).
+Its initial preflight is blocked by foreign GPU processes, so there is no
+accepted factory-cast speedup yet. Pending runs and occupancy evidence live in
+`factory-perf/`. The KV capability and RMSNorm candidates are not applied while
+this second timing comparison remains incomplete.
+
+A separate real-model cProfile capture on the shared GPU preserves the same
+generated tokens and confirms 5664 direct constructor casts disappear per
+batch-size capture. Precision callbacks decrease by 5664, but dtype queries
+and installation-context lookups each **increase by 5664**. Parameter
+construction remains zero. This exposes the cost of the safe actual-result
+check; fewer casts alone do not establish a net speedup. Shared-device timings
+are excluded. See `factory-cast/profile-comparison.json` and
+`factory-cast/stage-diagnostic/`. Two formal preflights were rejected by the
+GPU occupancy check. Keep `17d2cfd` classified as correctness-validated and
+performance-pending until an uncontended comparison confirms its net effect;
+rework or revert it if that comparison shows no worthwhile benefit.
