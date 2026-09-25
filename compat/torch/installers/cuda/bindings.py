@@ -94,7 +94,9 @@ from .api import (
     _has_torch_function,
     _mem_get_info,
     _mem_max,
+    _mem_max_reserved,
     _mem_reserved,
+    _mem_summary,
     _mem_used,
     _nvtx_mark,
     _nvtx_range,
@@ -217,9 +219,10 @@ def _install_cuda(g, registry=None):
     cuda.memory_allocated = _mem_used
     cuda.max_memory_allocated = _mem_max
     cuda.memory_reserved = _mem_reserved
-    cuda.max_memory_reserved = _mem_max
+    cuda.max_memory_reserved = _mem_max_reserved
     cuda.memory_cached = _mem_reserved
-    cuda.max_memory_cached = _mem_max
+    cuda.max_memory_cached = _mem_max_reserved
+    cuda.memory_summary = _mem_summary
     cuda.reset_peak_memory_stats = _reset_peak
     cuda.reset_max_memory_allocated = _reset_peak
     cuda.memory_stats = _api_cuda_memory_stats
@@ -239,6 +242,8 @@ def _install_cuda(g, registry=None):
     cuda.memory.max_memory_allocated = cuda.max_memory_allocated
     cuda.memory.memory_reserved = cuda.memory_reserved
     cuda.memory.max_memory_reserved = cuda.max_memory_reserved
+    cuda.memory.memory_stats = cuda.memory_stats
+    cuda.memory.memory_summary = cuda.memory_summary
     cuda.memory.CUDAPluggableAllocator = CUDAPluggableAllocator
     cuda.CUDAPluggableAllocator = CUDAPluggableAllocator
     # rng state (trainer checkpoints save/restore it). jittor has no portable
