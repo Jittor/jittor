@@ -17,6 +17,8 @@ NCCL lookup in the same module had searched `/usr/lib64` all along, so the two
 halves of one file disagreed about what a Linux filesystem looks like.
 """
 import os
+import shutil
+import tempfile
 import unittest
 
 from jittor.build.compile_extern import (
@@ -24,6 +26,7 @@ from jittor.build.compile_extern import (
     cuda_include_search_dirs,
     search_file,
 )
+from jittor.build.compiler import cuda_toolkit_include_dirs
 
 
 def _dirs(component_dirs=()):
@@ -68,6 +71,44 @@ class TestCudaLibrarySearchDirs(unittest.TestCase):
         dirs = cuda_include_search_dirs((), "/jt/include", "/cuda/include")
         self.assertEqual(dirs[-1], "/usr/include")
         self.assertEqual(dirs[0], "/jt/include")
+
+
+class TestCondaToolkitHeaders(unittest.TestCase):
+    """A conda nvcc keeps its headers only under `targets/<target>/include`.
+
+    `check_cuda` searched `<home>/include` alone, so with conda's `cuda-nvcc`
+    and the pip `[cuda12]` wheels the first host compile died with
+
+        cuda_runtime.h:82:10: fatal error: crt/host_config.h: No such file
+
+    `crt/` ships with nvcc, and nvcc finds it through `nvcc.profile`'s
+    `TOP = bin/../targets/<target>`; the host side must use the same rule.
+    """
+
+    def _conda_home(self, target):
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home)
+        crt = os.path.join(home, "targets", target, "include", "crt")
+        os.makedirs(crt)
+        open(os.path.join(crt, "host_config.h"), "w").close()
+        os.makedirs(os.path.join(home, "include"))
+        return home
+
+    def test_x86_64_target_headers_are_searched(self):
+        home = self._conda_home("x86_64-linux")
+        dirs = cuda_toolkit_include_dirs(home, "x86_64")
+        self.assertEqual(search_file(dirs, "crt/host_config.h"),
+                         os.path.join(home, "targets", "x86_64-linux",
+                                      "include", "crt", "host_config.h"))
+
+    def test_aarch64_uses_the_sbsa_target(self):
+        home = self._conda_home("sbsa-linux")
+        dirs = cuda_toolkit_include_dirs(home, "aarch64")
+        self.assertTrue(search_file(dirs, "crt/host_config.h"))
+
+    def test_the_conventional_include_stays_first(self):
+        dirs = cuda_toolkit_include_dirs("/usr/local/cuda", "x86_64")
+        self.assertEqual(dirs[0], "/usr/local/cuda/include")
 
 
 class TestTheSearchActuallyResolves(unittest.TestCase):

@@ -242,6 +242,24 @@ def preload_cuda_library(name, required=False):
             _loaded_cuda_libraries[path] = ctypes.CDLL(path, dlopen_flags)
     return _loaded_cuda_libraries.get(paths[-1]) if paths else None
 
+def cuda_toolkit_include_dirs(cuda_home, machine=None):
+    """Where the toolkit that owns ``nvcc`` keeps its headers.
+
+    A system toolkit has them in ``<home>/include`` (a symlink into
+    ``targets/``). A conda toolkit has only ``targets/<target>/include``,
+    which is what nvcc itself adds through ``nvcc.profile``
+    (``TOP = bin/../targets/<target>``). Host compilation must follow the
+    same rule, or ``cuda_runtime.h`` fails on ``crt/host_config.h``.
+    """
+    machine = machine or platform.machine()
+    targets = ["x86_64-linux"]
+    if machine in ("aarch64", "arm64"):
+        targets = ["sbsa-linux", "aarch64-linux"]
+    return [os.path.join(cuda_home, "include")] + [
+        os.path.join(cuda_home, "targets", target, "include")
+        for target in targets
+    ]
+
 def check_cuda():
     if not nvcc_path:
         return
@@ -265,7 +283,7 @@ def check_cuda():
     if nvcc_path == "/usr/bin/nvcc":
         # this nvcc is install by package manager
         cuda_lib = "/usr/lib/x86_64-linux-gnu"
-    cuda_include_dirs = [cuda_include]
+    cuda_include_dirs = cuda_toolkit_include_dirs(cuda_home)
     cuda_lib_dirs = [cuda_lib, cuda_bin]
     if cuda_wheel_stack:
         cuda_include_dirs = cuda_wheel_stack.include_dirs() + cuda_include_dirs
