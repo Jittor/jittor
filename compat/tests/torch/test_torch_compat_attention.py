@@ -1354,7 +1354,12 @@ assert after == before + 1, (before, after)
                 calls.append(bool(kwargs.get("zero_all_neg_inf", False)))
                 return original(value, *args, **kwargs)
 
-            with override_kernel("nn.softmax", backend, traced):
+            # The composite is what is traced here: without a backward to save
+            # for (with gradients required the memory-efficient Function builds
+            # its own softmax), and with the fused kernel, which has no
+            # softmax to route, switched off.
+            with override_kernel("nn.softmax", backend, traced), jt.no_grad(), \
+                    override_kernel("nn.fused_attention", backend, None):
                 masked = torch.nn.functional.scaled_dot_product_attention(
                     q, q, q, attn_mask=keep)
                 masked.sync()
@@ -2365,8 +2370,10 @@ class TestMultiheadAttention(Base):
         E, H, L, B = 16, 4, 6, 2
         x = rng.randn(L, B, E).astype("float32")
         def body(dev):
-            mha = nn.MultiheadAttention(E, H)
-            q = jt.array(x)
+            # A module is built on torch's default device, the CPU; it runs
+            # on `dev` only once moved there, as in torch.
+            mha = nn.MultiheadAttention(E, H).to(dev)
+            q = jt.array(x).to(dev)
             out, w = mha(q, q, q)
             self.assertEqual(tuple(out.shape), (L, B, E), f"mha out shape {dev}")
             # attention weights rows sum to 1 (softmax)
@@ -2380,10 +2387,11 @@ class TestMultiheadAttention(Base):
 
     def test_mha_dropout_training_and_eval(self):
         rng = np.random.RandomState(41)
-        x = jt.array(rng.randn(5, 2, 8).astype("float32"))
+        data = rng.randn(5, 2, 8).astype("float32")
 
         def body(dev):
-            mha = nn.MultiheadAttention(8, 2, dropout=1.0, bias=False)
+            x = jt.array(data).to(dev)
+            mha = nn.MultiheadAttention(8, 2, dropout=1.0, bias=False).to(dev)
             mha.train()
             train_out, train_weights = mha(x, x, x, need_weights=True)
             train_no_weights, _ = mha(x, x, x, need_weights=False)

@@ -66,7 +66,12 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
                                             enable_gqa=False):
     _sdpa_flash_backend_cache = get_install_context(jt).state["sdpa_backend_cache"]
     acl_attention = _backend_hooks.acl_scaled_dot_product_attention
-    if callable(acl_attention):
+    # The hook answers with whatever kernel the backend registered. On CUDA
+    # that is the native flash kernel, which loads the same flash library the
+    # path below does but without its gates -- the capability-checked backend
+    # cache, compact GQA heads, the statistics -- so the path below takes it.
+    if callable(acl_attention) and \
+            not getattr(acl_attention, "torch_frontend_loads_directly", False):
         acl_output = acl_attention(
             query,
             key,
@@ -155,12 +160,7 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
         _sdpa_flash_miss("no_loader")
         return None
     if training_requested and dropout == 0.0 and not _fa_jittor.required():
-        raw_min_scores = _os.environ.get(
-            "JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES", str(1 << 24))
-        try:
-            min_scores = max(0, int(raw_min_scores))
-        except ValueError:
-            min_scores = 1 << 24
+        min_scores = _fa_jittor.training_min_scores()
         score_elements = query_heads * int(q_shape[-2]) * int(k_shape[-2])
         for size in q_shape[:-3]:
             score_elements *= int(size)

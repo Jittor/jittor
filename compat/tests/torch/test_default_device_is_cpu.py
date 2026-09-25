@@ -78,5 +78,62 @@ class TestDefaultDeviceIsCpu(unittest.TestCase):
             self.assertEqual(_name(torch.zeros_like(source)), "cuda")
 
 
+class _PackedDiff(torch.nn.Module):
+    """Transformers' packed-sequence check, `masking_utils.py`, reduced."""
+
+    def forward(self, position_ids):
+        first = position_ids[:, :1] - 1
+        diff = torch.diff(position_ids, prepend=first, dim=-1)
+        return torch.cat([diff, position_ids], dim=-1)
+
+
+class TestTheDefaultIsOnlyForConstructors(unittest.TestCase):
+    """The default device answers *where a new tensor goes*, nothing more.
+
+    It is not where an op puts its result. When every module call entered an
+    ambient placement of "the default device", a whole forward ran under a CPU
+    placement: `torch.diff(..., prepend=...)` on CUDA inputs built its
+    concatenation buffer on the host and died in `setitem` -- Qwen3's first
+    forward, every SD1.5 UNet step, BERT and ViT all failed on a GPU in
+    ordinary `model.to("cuda")` code.
+    """
+
+    @unittest.skipUnless(jt.has_cuda, "no CUDA device")
+    def test_a_forward_follows_its_inputs(self):
+        with jt.flag_scope(use_cuda=1):
+            ids = torch.arange(4, device="cuda").reshape(1, 4)
+            out = _PackedDiff().to("cuda")(ids)
+            self.assertEqual(_name(out), "cuda")
+            self.assertEqual(out.cpu().tolist(), [[1, 1, 1, 1, 0, 1, 2, 3]])
+
+    @unittest.skipUnless(jt.has_cuda, "no CUDA device")
+    def test_a_bare_factory_inside_a_forward_is_still_cpu(self):
+        # The other half: torch builds `torch.ones(2)` on the default device
+        # whether or not it is called from a forward.
+        class Factory(torch.nn.Module):
+            def forward(self, x):
+                return torch.ones(2)
+
+        with jt.flag_scope(use_cuda=1):
+            out = Factory()(torch.ones(2, device="cuda"))
+            self.assertEqual(_name(out), "cpu")
+
+    def test_a_module_built_without_a_device_is_cpu(self):
+        with jt.flag_scope(use_cuda=1 if jt.has_cuda else 0):
+            self.assertEqual(_name(torch.nn.Linear(2, 2).weight), "cpu")
+
+    @unittest.skipUnless(jt.has_cuda, "no CUDA device")
+    def test_optimizer_state_follows_its_parameters(self):
+        with jt.flag_scope(use_cuda=1):
+            model = torch.nn.Linear(4, 2).to("cuda")
+            optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+            before = model.weight.detach().clone()
+            model(torch.ones(3, 4, device="cuda")).sum().backward()
+            optimizer.step()
+            self.assertEqual(_name(model.weight), "cuda")
+            self.assertFalse(torch.equal(model.weight.detach().cpu(),
+                                         before.cpu()))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -234,6 +234,20 @@ def required() -> bool:
     )
 
 
+def training_min_scores() -> int:
+    """Score elements below which a training call keeps the math path.
+
+    A short attention trains faster on two GEMMs and a fused softmax than on
+    flash. ``JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES`` sets the threshold
+    (default ``2**24``; 0 sends every training call to flash).
+    """
+    raw = os.environ.get("JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES", str(1 << 24))
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 1 << 24
+
+
 def _verbose() -> bool:
     return _truthy(os.environ.get("JITTOR_FLASH_ATTN_JITTOR_VERBOSE"))
 

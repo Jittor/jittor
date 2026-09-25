@@ -647,12 +647,23 @@ def _category(name):
 
 
 def result_type(a, b):
+    """torch's ``result_type`` for two operands.
+
+    torch ranks operands in three tiers -- tensors with dimensions, 0-dim
+    tensors, Python scalars (c10 ``ResultTypeState``: dimResult, zeroResult,
+    wrappedResult). A weaker operand joins promotion only when its category
+    is higher than the stronger one's; within a tier the pair promotes as
+    usual. So ``half_tensor * torch.tensor(2.0)`` is half, like
+    ``half_tensor * 2.0``. The 0-dim tier used to count as a full tensor:
+    diffusers' schedulers multiply float16 latents by 0-dim float32 entries of
+    ``alphas_cumprod``, which turned every sampling step's latents float32.
+    """
     ctx = _misc_context()
     _DTYPE_OBJS = ctx.state["dtypes"]
-    (na, sa), (nb, sb) = (_result_type_info(a), _result_type_info(b))
-    if sa and (not sb):
+    (na, la), (nb, lb) = (_result_type_info(a), _result_type_info(b))
+    if la > lb:
         res = _promote_pair(na, nb) if _category(na) > _category(nb) else nb
-    elif sb and (not sa):
+    elif lb > la:
         res = _promote_pair(na, nb) if _category(nb) > _category(na) else na
     else:
         res = _promote_pair(na, nb)
@@ -873,21 +884,26 @@ def _result_type_info(x):
     g = ctx.jittor_module
     Var = ctx.state["Var"]
     _DTYPE_OBJS = ctx.state["dtypes"]
-    if isinstance(x, Var):
-        return (_dtype_to_str(x.dtype), False)
+    # (dtype name, tier): 0 a tensor with dimensions (or a bare dtype),
+    # 1 a 0-dim tensor, 2 a Python scalar. See `result_type`.
+    # Any Var, not only the frontend's Tensor type: the binary operators pass
+    # native Vars through here too, and one that fell to the fallback below
+    # lost its dtype.
+    if isinstance(x, (Var, jt.Var)):
+        return (_dtype_to_str(x.dtype), 1 if len(x.shape) == 0 else 0)
     if isinstance(x, dtype) or (
         isinstance(x, str) and _dtype_to_str(x) in _jittor_dtype_name(_DTYPE_OBJS)
     ):
-        return (_dtype_to_str(x), False)
+        return (_dtype_to_str(x), 0)
     if isinstance(x, bool):
-        return ("bool", True)
+        return ("bool", 2)
     if isinstance(x, int):
-        return ("int64", True)
+        return ("int64", 2)
     if isinstance(x, float):
-        return (_dtype_to_str(g.get_default_dtype()) or "float32", True)
+        return (_dtype_to_str(g.get_default_dtype()) or "float32", 2)
     if isinstance(x, complex):
-        return ("complex64", True)
-    return (_dtype_to_str(x) or "float32", False)
+        return ("complex64", 2)
+    return (_dtype_to_str(x) or "float32", 0)
 
 
 def initial_seed():

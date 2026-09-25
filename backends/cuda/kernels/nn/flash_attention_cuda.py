@@ -33,6 +33,7 @@ or need it at all when nobody asks for attention.
 """
 import jittor as jt
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._core.flags import _output_requires_grad
 from jittor._runtime.dispatch import register_kernel
 
 #: Head dimensions the official kernels are instantiated for.
@@ -57,7 +58,12 @@ def _template_dim(head_dim):
 
 def _flash_scaled_dot_product_attention(query, key, value, attn_mask=None,
                                         dropout_p=0.0, is_causal=False,
-                                        scale=None):
+                                        scale=None, enable_gqa=False):
+    # `enable_gqa` is part of the `nn.scaled_dot_product_attention` capability
+    # signature: the ACL implementation takes it, and a caller dispatching the
+    # op may pass it. It needs no handling of its own: the head-count check
+    # below already declines the grouped case, and with equal head counts it
+    # changes nothing.
     if attn_mask is not None or float(dropout_p or 0.0) != 0.0:
         return None
     q_shape, k_shape, v_shape = (tuple(query.shape), tuple(key.shape),
@@ -92,6 +98,14 @@ def _flash_scaled_dot_product_attention(query, key, value, attn_mask=None,
     bridge = _bridge()
     if not bridge.enabled():
         return None
+    # A short attention trains faster on the math path. The Torch frontend
+    # declines those calls itself, and its math fallback dispatches here, so
+    # without the same check they reached flash anyway.
+    if not bridge.required() and _output_requires_grad(query, key, value):
+        min_scores = bridge.training_min_scores()
+        scores = int(q_shape[0]) * int(q_shape[1]) * int(q_shape[2]) * int(k_shape[2])
+        if min_scores and scores < min_scores:
+            return None
     backend, capability_miss = bridge.load_backend_for(template, dtype)
     if backend is None or capability_miss is not None:
         # `required()` is the caller's request to hear about a flash that was
@@ -129,6 +143,10 @@ def _flash_scaled_dot_product_attention(query, key, value, attn_mask=None,
     # NanoVector whose packed shape was garbage.
     return out.reshape((batch, q_len, heads, head_dim)).permute(*axes).clone()
 
+
+# The Torch frontend loads this same flash library itself, behind gates of its
+# own, and reads this to take its own path rather than the dispatch hook.
+_flash_scaled_dot_product_attention.torch_frontend_loads_directly = True
 
 register_kernel("nn.scaled_dot_product_attention", "cuda",
                 _flash_scaled_dot_product_attention,

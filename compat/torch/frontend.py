@@ -68,8 +68,19 @@ def set_default_device_spelling(device):
     _DEFAULT_DEVICE = device
 
 
-def _placement_request(backend, device, like=None):
-    """Resolve native placement without changing Runtime flags or materializing."""
+def _placement_request(backend, device, like=None, default_placement=True):
+    """Resolve native placement without changing Runtime flags or materializing.
+
+    ``default_placement=False`` is for a scope that *runs* ops rather than
+    constructs tensors -- a module's forward. torch's default device answers
+    "where does a new tensor with no ``device=`` go"; it does not relocate the
+    buffers an op allocates for its result, which follow the op's inputs.
+    Returning the default there put the whole forward under an ambient CPU
+    placement: every native allocation inside it (the destination
+    ``jt.concat`` fills) landed on the host while the inputs were on the GPU,
+    and the first ``setitem`` died in dispatch_context. An explicit
+    ``with torch.device(...)`` still applies.
+    """
     if device is None:
         if isinstance(like, backend.Var) and like.placement_backend >= 0:
             return int(like.placement_backend), max(int(like.device_id), 0)
@@ -78,6 +89,8 @@ def _placement_request(backend, device, like=None):
         # device rather than the ambient context's.
         from .types import active_device_context
         device = active_device_context()
+        if device is None and not default_placement:
+            return None
         if device is None:
             # torch's default device is CPU, and stays CPU until somebody calls
             # `set_default_device`. This used to return None -- "no placement,
@@ -115,7 +128,12 @@ def _placement_request(backend, device, like=None):
 
 
 @contextmanager
-def tensor_frontend(tensor_type, *, device=None, like=None):
+def tensor_frontend(tensor_type, *, device=None, like=None, default_placement=True):
+    """Build/run under the frontend's tensor type, precision and placement.
+
+    See `_placement_request` for ``default_placement``: construction scopes
+    keep it, a scope that executes ops (a module's forward) turns it off.
+    """
     backend = getattr(tensor_type, "_frontend_backend", None)
     if backend is None:
         yield
@@ -125,7 +143,7 @@ def tensor_frontend(tensor_type, *, device=None, like=None):
     precision_token = None
     try:
         precision_token = backend.core._set_float32_precision(*tensor_type._frontend_precision_policy())
-        placement = _placement_request(backend, device, like)
+        placement = _placement_request(backend, device, like, default_placement)
         if placement is not None:
             placement_token = backend.core._set_tensor_placement(*placement)
         with backend.autograd.policy_scope(backend.autograd.EXPLICIT_REQUIRES_GRAD):

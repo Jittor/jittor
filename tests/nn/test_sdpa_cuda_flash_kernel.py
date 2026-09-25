@@ -16,6 +16,7 @@ So these assert the declines, not the speed. They need neither a GPU nor a
 flash checkout, which is the point: the decline path is what runs on the
 machines that have neither.
 """
+import inspect
 import unittest
 from types import SimpleNamespace
 
@@ -32,6 +33,21 @@ def _qkv(shape, dtype="float16"):
 
 
 class TestFlashKernelDeclines(unittest.TestCase):
+    def test_it_accepts_every_keyword_of_the_capability(self):
+        # `enable_gqa=` is in the capability's signature (the ACL
+        # implementation takes it). Without it a caller that dispatches the op
+        # with the full signature raised TypeError in argument binding instead
+        # of reaching this function.
+        q, k, v = _qkv((1, 2, 8, 64))
+        inspect.signature(_flash_sdpa).bind(
+            q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False,
+            scale=None, enable_gqa=True)
+
+    def test_grouped_query_attention_declines(self):
+        q, _, _ = _qkv((1, 4, 8, 64))
+        _, k, v = _qkv((1, 2, 8, 64))
+        self.assertIsNone(_flash_sdpa(q, k, v, enable_gqa=True))
+
     def test_a_mask_declines(self):
         q, k, v = _qkv((1, 2, 8, 64))
         mask = jt.zeros((8, 8), dtype="bool")
@@ -92,10 +108,25 @@ class TestNoBackendMeansNoChange(unittest.TestCase):
         self._with_bridge(SimpleNamespace(
             enabled=lambda: True,
             required=lambda: False,
+            training_min_scores=lambda: 0,
             last_error=lambda: "no source root",
             load_backend_for=lambda dim, dtype: (None, None)))
         q, k, v = _qkv((1, 2, 8, 64))
         self.assertIsNone(_flash_sdpa(q, k, v))
+
+    def test_short_training_declines_before_loading_flash(self):
+        # The Torch frontend keeps short training on the math path, and its
+        # math fallback dispatches here; this kernel has to agree, and must
+        # not build flash to find out.
+        loads = []
+        self._with_bridge(SimpleNamespace(
+            enabled=lambda: True,
+            required=lambda: False,
+            training_min_scores=lambda: 1 << 24,
+            load_backend_for=lambda dim, dtype: loads.append(dim)))
+        q, k, v = _qkv((1, 2, 8, 64))
+        self.assertIsNone(_flash_sdpa(q, k, v))
+        self.assertEqual(loads, [])
 
     def test_disabled_declines(self):
         self._with_bridge(SimpleNamespace(enabled=lambda: False))
