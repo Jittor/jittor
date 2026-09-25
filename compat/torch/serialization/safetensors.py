@@ -6,6 +6,7 @@ import numpy as np
 import jittor as jt
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ..context import get_install_context, registry_for
+from .portable import _snapshot_tensors
 from ..fidelity import Fidelity, register_api_bindings
 from ...diagnostics import EXPECTED, swallowed
 from ...transaction import runtime_hook, set_attr, _MISSING
@@ -129,12 +130,16 @@ def _load_file(filename, device="cpu"):
 
 
 def _save_dict(tensors, metadata=None):
+    # state_dict entries can alias live parameters: numpy() would move their
+    # sharing group to host. Reuse the non-mutating public-save snapshot path.
+    snapshots = _snapshot_tensors(tensors)
     header = {}
     blobs = []
     offset = 0
     for key, value in tensors.items():
         tensor_dtype = _jittor_dtype_name(value.dtype) if isinstance(value, jt.Var) else None
-        arr = value.numpy() if hasattr(value, "numpy") else np.asarray(value)
+        arr = (snapshots[id(value)] if isinstance(value, jt.Var) else
+               value.numpy() if hasattr(value, "numpy") else np.asarray(value))
         arr = np.asarray(arr)
         shape = list(arr.shape)
         dtype = tensor_dtype or arr.dtype.name

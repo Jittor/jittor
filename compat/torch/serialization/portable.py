@@ -94,7 +94,8 @@ class _TensorSnapshots:
                            for value, array in zip(self.tensors, arrays))
 
 
-def save(obj, f, *a, **k):
+def _snapshot_tensors(obj):
+    """Host values for codecs without changing source tensor residency."""
     snapshot = _TensorSnapshots()
     snapshot.collect(obj)
     if snapshot.tensors:
@@ -103,7 +104,11 @@ def save(obj, f, *a, **k):
     jt.sync_all(True)
     if len(snapshot.values) != len(snapshot.tensors):
         raise RuntimeError("checkpoint tensor fetch did not complete")
-    portable = _to_portable(obj, snapshot.values)
+    return snapshot.values
+
+
+def save(obj, f, *a, **k):
+    portable = _to_portable(obj, _snapshot_tensors(obj))
     if hasattr(f, "write"):
         _pickle.dump(portable, f)
         return
@@ -159,15 +164,7 @@ def _apply_map_location(obj, map_location, _depth=0, source_devices=None):
             return _preserve_parameter(obj, _make_cpu_resident(
                 obj, inplace=isinstance(obj, g.nn.Parameter)), g)
     if name in ("cuda", "npu", "gpu"):
-        # `placement_backend` is 0 for an *explicitly CPU-placed* Var and > 0 for
-        # an accelerator one (`types.py` reads it the same way: `== 0` is CPU).
-        # Testing it as `>= 0` sent a CPU-placed Var down the direct-move path,
-        # so the diagnosis below never ran: `torch.load(p, map_location="cuda")`
-        # on a build with no accelerator raised the raw
-        # "Invalid cuda device index 0; visible device count is 0" instead of
-        # naming `map_location`. Only a Var that is already on an accelerator
-        # belongs on that path.
-        if obj.placement_backend > 0:
+        if obj.placement_backend >= 0:
             if name == "gpu":
                 target = "cuda" + str(target)[3:]
             moved = _make_cuda_resident(obj, force=True,
