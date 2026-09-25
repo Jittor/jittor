@@ -112,9 +112,12 @@ def _dtype_names(tensors):
     memo is the same one, so an unusual spelling still resolves through
     ``dtype_name`` exactly once.
     """
+    if _VAR_TYPE is None:
+        _bind_core()
+    native_dtype = _NATIVE_DTYPE
     names = []
     for value in tensors:
-        dtype = value.dtype
+        dtype = value.dtype if native_dtype is None else native_dtype.__get__(value, None)
         raw = str(dtype)
         name = _DTYPE_NAMES.get(raw)
         if name is None:
@@ -169,17 +172,23 @@ def _collect_tensors(values, var_type, tensors, active_containers):
 #: hundred.
 _VAR_TYPE = None
 _DISPATCH_CONTEXT_NATIVE = None
+#: The native Var's own `dtype` getter. A frontend tensor type overrides
+#: `dtype` with a Python property returning its framework's dtype object; the
+#: dispatcher only needs the name, and reading it here skips that property --
+#: a Python call per tensor argument of every dispatched operator.
+_NATIVE_DTYPE = None
 
 
 def _bind_core():
     """Bind the native handles, or say that Jittor is not up yet."""
-    global _VAR_TYPE, _DISPATCH_CONTEXT_NATIVE
+    global _VAR_TYPE, _DISPATCH_CONTEXT_NATIVE, _NATIVE_DTYPE
     native = sys.modules.get("jittor")
     if native is None or not hasattr(native, "core"):
         raise RuntimeError("Jittor must be initialized before selecting a kernel")
     core = native.core
     _VAR_TYPE = core.Var
     _DISPATCH_CONTEXT_NATIVE = core.dispatch_context
+    _NATIVE_DTYPE = core.Var.__dict__.get("dtype")
 
 
 def _walk_container(container, var_type, tensors):

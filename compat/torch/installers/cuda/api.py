@@ -343,6 +343,17 @@ def _cuda_runtime():
 class CudaRuntimeState:
     """Mutable CUDA facade state owned by one frontend installation."""
 
+    #: Fields the native frontend scope reads as float32 precision tiers. It
+    #: caches them per frontend type (py_tensor_frontend.cc, apply_policy), so
+    #: every assignment -- direct, through a transaction, or its rollback --
+    #: has to tell it to read them again.
+    _NATIVE_POLICY_FIELDS = frozenset(("matmul_precision", "cudnn_precision"))
+
+    def __setattr__(self, name, value):
+        object.__setattr__(self, name, value)
+        if name in self._NATIVE_POLICY_FIELDS:
+            jt.core._invalidate_frontend_policies()
+
     def __init__(self):
         import os
         self.stream_state = threading.local()

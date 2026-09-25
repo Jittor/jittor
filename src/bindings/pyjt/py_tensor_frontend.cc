@@ -178,12 +178,33 @@ void PyTensorFrontendScope::select(
     Py_DECREF(result_type);
 }
 
-void PyTensorFrontendScope::apply_policy(PyObject* type, PyObject* candidate) {
+namespace {
+// What apply_policy reads from a frontend type. Every native call made through
+// a frontend tensor enters a scope that needs it, and reading it through the
+// type's attributes -- a string attribute lookup, a second one, and a call into
+// a Python function for the precision tiers -- was 13-16% of all host time in
+// a diffusers sampling loop, a DDPM training step and a Qwen3 decode alike.
+// It changes only when the precision policy is set, which is rare, so it is
+// read once per type and kept until `invalidate_frontend_policies`.
+struct FrontendPolicy {
+    bool has_autograd = false;
+    long bits = 0;
+    bool has_precision = false;
+    long matmul = 0, cudnn = 0;
+    uint64 epoch = 0;
+};
+// Guarded by the GIL: apply_policy runs with it held (it may call Python).
+unordered_map<PyObject*, FrontendPolicy> frontend_policies;
+uint64 frontend_policy_epoch = 1;
+
+FrontendPolicy read_frontend_policy(PyObject* type) {
+    FrontendPolicy policy;
+    policy.epoch = frontend_policy_epoch;
     PyObject* value = PyObject_GetAttrString(type, "_frontend_autograd_policy");
     if (!value) {
         if (PyErr_ExceptionMatches(PyExc_AttributeError)) {
             PyErr_Clear();
-            return;
+            return policy;
         }
         throw std::runtime_error("cannot read tensor frontend autograd policy");
     }
@@ -198,21 +219,11 @@ void PyTensorFrontendScope::apply_policy(PyObject* type, PyObject* candidate) {
         throw std::runtime_error("invalid tensor frontend autograd policy integer");
     USER_CHECK(bits >= 0 && bits <= 3)
         << "tensor frontend autograd policy must be in [0, 3]";
-    previous_policy_ = get_autograd_policy();
-    set_autograd_policy((bits & 1) != 0, (bits & 2) != 0);
-    TensorPlacement placement = selected_placement();
-    if (!placement.explicit_backend && candidate && GET_INITED_FLAG(VarHolder, 1, candidate))
-        placement = GET_RAW_PTR(VarHolder, candidate)->var->placement;
-    if (!placement.explicit_backend) placement = current_tensor_placement();
-    if (!placement.explicit_backend)
-        placement = TensorPlacement({runtime_use_cuda() ? accelerator_backend_id() : BackendId::Cpu,
-                                     runtime_use_cuda() ? current_device() : 0});
-    previous_placement_ = current_tensor_placement();
-    restore_placement_ = true;
-    set_tensor_placement(placement);
+    policy.has_autograd = true;
+    policy.bits = bits;
     PyObject* precision_getter = PyObject_GetAttrString(type, "_frontend_precision_policy");
     if (!precision_getter) {
-        if (PyErr_ExceptionMatches(PyExc_AttributeError)) { PyErr_Clear(); return; }
+        if (PyErr_ExceptionMatches(PyExc_AttributeError)) { PyErr_Clear(); return policy; }
         throw std::runtime_error("cannot read frontend precision policy");
     }
     PyObject* precision = PyObject_CallObject(precision_getter, nullptr);
@@ -230,9 +241,49 @@ void PyTensorFrontendScope::apply_policy(PyObject* type, PyObject* candidate) {
     if (PyErr_Occurred()) throw std::runtime_error("invalid frontend precision tier");
     USER_CHECK(matmul >= 0 && matmul <= 2 && cudnn >= 0 && cudnn <= 2)
         << "frontend precision tiers must be in [0, 2]";
+    policy.has_precision = true;
+    policy.matmul = matmul;
+    policy.cudnn = cudnn;
+    return policy;
+}
+
+const FrontendPolicy& frontend_policy(PyObject* type) {
+    auto found = frontend_policies.find(type);
+    if (found != frontend_policies.end() && found->second.epoch == frontend_policy_epoch)
+        return found->second;
+    FrontendPolicy policy = read_frontend_policy(type);
+    if (found == frontend_policies.end()) {
+        // Held so the address cannot be reused by another type.
+        Py_INCREF(type);
+        return frontend_policies.emplace(type, policy).first->second;
+    }
+    found->second = policy;
+    return found->second;
+}
+} // namespace
+
+void invalidate_frontend_policies() { frontend_policy_epoch++; }
+
+void PyTensorFrontendScope::apply_policy(PyObject* type, PyObject* candidate) {
+    const FrontendPolicy policy = frontend_policy(type);
+    if (!policy.has_autograd) return;
+    long bits = policy.bits;
+    previous_policy_ = get_autograd_policy();
+    set_autograd_policy((bits & 1) != 0, (bits & 2) != 0);
+    TensorPlacement placement = selected_placement();
+    if (!placement.explicit_backend && candidate && GET_INITED_FLAG(VarHolder, 1, candidate))
+        placement = GET_RAW_PTR(VarHolder, candidate)->var->placement;
+    if (!placement.explicit_backend) placement = current_tensor_placement();
+    if (!placement.explicit_backend)
+        placement = TensorPlacement({runtime_use_cuda() ? accelerator_backend_id() : BackendId::Cpu,
+                                     runtime_use_cuda() ? current_device() : 0});
+    previous_placement_ = current_tensor_placement();
+    restore_placement_ = true;
+    set_tensor_placement(placement);
+    if (!policy.has_precision) return;
     previous_precision_ = current_float32_precision_policy();
     restore_precision_ = true;
-    set_float32_precision_policy({int(matmul), int(cudnn)});
+    set_float32_precision_policy({int(policy.matmul), int(policy.cudnn)});
 }
 
 PyTensorFrontendScope::PyTensorFrontendScope()

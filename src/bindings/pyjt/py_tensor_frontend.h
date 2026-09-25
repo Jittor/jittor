@@ -27,6 +27,13 @@ void reset_tensor_placement_context(PyObject* token);
 // @pyjt(_current_tensor_placement)
 PyObject* current_tensor_placement_request();
 
+// A frontend type's policies -- its autograd bits and its float32 precision
+// tiers -- are read from Python once and kept until this is called. The
+// Python side calls it whenever one of them changes (the CUDA runtime state's
+// precision fields); see apply_policy.
+// @pyjt(_invalidate_frontend_policies)
+void invalidate_frontend_policies();
+
 // @pyjt(_set_float32_precision)
 PyObject* set_float32_precision_context(int matmul, int cudnn);
 // @pyjt(_reset_float32_precision)

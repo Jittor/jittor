@@ -1,7 +1,6 @@
 """Python frontend types sharing the native VarHolder payload and graph."""
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
-from contextlib import contextmanager
 from functools import update_wrapper
 from types import MethodType
 
@@ -127,33 +126,67 @@ def _placement_request(backend, device, like=None, default_placement=True):
     return {"cuda": 1, "acl": 2, "acl_legacy": 2, "rocm": 3, "corex": 4}[selected], int(index)
 
 
-@contextmanager
-def tensor_frontend(tensor_type, *, device=None, like=None, default_placement=True):
+class tensor_frontend:
     """Build/run under the frontend's tensor type, precision and placement.
 
     See `_placement_request` for ``default_placement``: construction scopes
     keep it, a scope that executes ops (a module's forward) turns it off.
+
+    A class rather than a generator: every module call and every tensor
+    factory enters one, and a `@contextmanager` generator plus the nested
+    autograd `policy_scope` cost more than the native calls they wrap.
     """
-    backend = getattr(tensor_type, "_frontend_backend", None)
-    if backend is None:
-        yield
-        return
-    token = backend.core._set_tensor_frontend_type(tensor_type)
-    placement_token = None
-    precision_token = None
-    try:
-        precision_token = backend.core._set_float32_precision(*tensor_type._frontend_precision_policy())
-        placement = _placement_request(backend, device, like, default_placement)
-        if placement is not None:
-            placement_token = backend.core._set_tensor_placement(*placement)
-        with backend.autograd.policy_scope(backend.autograd.EXPLICIT_REQUIRES_GRAD):
-            yield
-    finally:
-        if precision_token is not None:
-            backend.core._reset_float32_precision(precision_token)
-        if placement_token is not None:
-            backend.core._reset_tensor_placement(placement_token)
-        backend.core._reset_tensor_frontend_type(token)
+
+    __slots__ = ("_type", "_device", "_like", "_default_placement", "_backend",
+                 "_token", "_placement_token", "_precision_token", "_policy_bits")
+
+    def __init__(self, tensor_type, *, device=None, like=None, default_placement=True):
+        self._type = tensor_type
+        self._device = device
+        self._like = like
+        self._default_placement = default_placement
+        self._backend = None
+
+    def __enter__(self):
+        backend = getattr(self._type, "_frontend_backend", None)
+        self._backend = backend
+        if backend is None:
+            return None
+        core = backend.core
+        self._token = core._set_tensor_frontend_type(self._type)
+        self._placement_token = self._precision_token = self._policy_bits = None
+        try:
+            self._precision_token = core._set_float32_precision(
+                *self._type._frontend_precision_policy())
+            placement = _placement_request(backend, self._device, self._like,
+                                           self._default_placement)
+            if placement is not None:
+                self._placement_token = core._set_tensor_placement(*placement)
+            # backend.autograd.policy_scope(EXPLICIT_REQUIRES_GRAD), inline.
+            policy = backend.autograd.EXPLICIT_REQUIRES_GRAD
+            self._policy_bits = core._get_autograd_policy()
+            core._set_autograd_policy(policy.stop_outputs_when_inputs_stopped,
+                                      policy.preserve_requires_grad_on_assignment)
+        except BaseException:
+            self._restore()
+            raise
+        return None
+
+    def __exit__(self, *exc):
+        if self._backend is not None:
+            self._restore()
+        return False
+
+    def _restore(self):
+        core = self._backend.core
+        bits = self._policy_bits
+        if bits is not None:
+            core._set_autograd_policy(bool(bits & 1), bool(bits & 2))
+        if self._precision_token is not None:
+            core._reset_float32_precision(self._precision_token)
+        if self._placement_token is not None:
+            core._reset_tensor_placement(self._placement_token)
+        core._reset_tensor_frontend_type(self._token)
 
 
 class FrontendFactory:

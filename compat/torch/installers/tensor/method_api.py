@@ -40,12 +40,13 @@ _TYPENAME_TO_DTYPE.update({v.replace("torch.", "torch.cuda."): k
 
 
 def _dtype_get(self):
-    _context = get_install_context(_owner.jt)
-    _native = _context.state["tensor_native_api"]
-    _DTYPE_OBJS = _native['_DTYPE_OBJS']
-    _d = _native['_native_desc']
-    name = str(_d.__get__(self, type(self)))
-    return _DTYPE_OBJS.get(name, name)
+    # Every `.dtype` read on a frontend tensor lands here -- kernel selection,
+    # promotion and each `supports` check ask it, about 5000 times in one SD1.5
+    # UNet step -- so it reads what it needs from the tensor's own type, where
+    # the installer put it, instead of resolving the install context each time.
+    cls = type(self)
+    name = str(cls._frontend_native_dtype.__get__(self, cls))
+    return cls._frontend_dtype_objects.get(name, name)
 
 
 def _numpy_data_value(value):

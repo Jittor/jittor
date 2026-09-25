@@ -144,6 +144,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         try:
             _native_desc = _type_attribute(Var, "dtype")  # C getset_descriptor
             if _native_desc is not None:
+                # What `_dtype_get` needs, kept on the type it serves: the
+                # native descriptor and this installation's dtype objects.
+                Var._frontend_native_dtype = _native_desc
+                Var._frontend_dtype_objects = _DTYPE_OBJS
                 Var.dtype = property(_dtype_get)
                 Var._dtype_wrapped = True
         except _owner.EXPECTED as exc:
