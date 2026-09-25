@@ -236,6 +236,13 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
                     and not tensor_state.leaf_params.is_weak(id(p))):
                 tensor_state.leaf_params.pop(id(p), None)
             continue
+        # torch's AccumulateGrad gives a leaf a grad of the leaf's own dtype.
+        # jt.grad does not: under autocast a float32 weight read by a
+        # float16 op comes back with a float16 grad, and AdamW's
+        # (1 - beta2) * g * g then underflows in float16 -- an lr / eps step,
+        # NaN on the next forward (test_torch_amp_training_loop.py).
+        if gr.dtype != p.dtype:
+            gr = gr.cast(p.dtype)
         grad_by_id[id(p)] = gr
         if id(p) not in opt_ids:
             # non-optimizer leaf (retain_grad screenspace etc.): accumulate
