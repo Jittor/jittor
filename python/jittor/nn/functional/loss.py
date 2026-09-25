@@ -1,6 +1,7 @@
 """Functional loss implementations exposed through :mod:`jittor.nn`."""
 
 import jittor as jt
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from jittor._runtime.dispatch import try_dispatch
 
 from .vector import cosine_similarity
@@ -53,6 +54,58 @@ def _legacy_reduction(reduction, size_average, reduce):
     return "mean" if size_average else "sum"
 
 
+class _CrossEntropyRows(jt.Function):
+    """Per-row ``(logsumexp(x) - x[target]) * weight`` with a closed-form backward.
+
+    The composite it replaces -- a one-hot from ``index(1) == target``, then
+    ``x - max``, ``exp``, ``x * onehot`` -- left autodiff several ``[N, C]``
+    tensors to keep or rebuild, and ``index`` materialised an ``[N, C]`` int32
+    grid of its own. With C the vocabulary that is the whole problem: at
+    Qwen3's 151936 classes and 2048 rows each one is 1.16 GB, and the loss of
+    a 4x512 training step peaked at 4.93 GB live against PyTorch's 4.64 GB,
+    enough to push the step off a 24 GB card.
+
+    Here the forward reduces straight to ``[N]`` (the shift and ``exp`` fuse
+    into the reduction) and gathers the target logit with ``reindex``; the
+    backward is ``softmax(x) * g - g at the target column``, one fused
+    elementwise pass. Peak is the input and its gradient -- 2.32 GB on the
+    same case. Half inputs are computed in float32, as ``_LN`` does, and the
+    gradient is handed back in the input's dtype.
+    """
+
+    def execute(self, x, target, target_weight):
+        rows = x.shape[0]
+        self.narrow_dtype = (x.dtype if _jittor_dtype_name(x.dtype)
+                             in ("float16", "bfloat16") else None)
+        if self.narrow_dtype is not None:
+            x = x.float32()
+        # An ignored or out-of-range target still has to index somewhere; its
+        # weight is 0, so which column it reads does not matter.
+        safe = jt.ternary(target_weight != 0, target, jt.zeros_like(target))
+        # Spelled exactly as the composite did: under the Torch frontend
+        # `x.max(1)` is torch's (values, indices) pair.
+        top = x.max([1], keepdims=True)
+        lse = ((x - top).exp().sum([1], keepdims=True).log() + top).reshape((rows,))
+        picked = x.reindex([rows], ["i0", "@e0(i0)"], extras=[safe])
+        self.saved = (x, safe, lse, target_weight)
+        return (lse - picked) * target_weight
+
+    def grad(self, dloss):
+        # Not cleared: a retain_graph backward may call grad() again.
+        x, safe, lse, target_weight = self.saved
+        scale = dloss * target_weight
+        # `scale` at each row's target column and 0 elsewhere, built by the
+        # reindex itself -- a one-hot from `index(1) == target` would
+        # materialise an [N, C] index grid first.
+        at_target = scale.reindex(x.shape, ["i0"], overflow_value=0,
+                                  overflow_conditions=["i1 != @e0(i0)"],
+                                  extras=[safe])
+        dx = (x - lse.broadcast(x, [1])).exp() * scale.broadcast(x, [1]) - at_target
+        if self.narrow_dtype is not None:
+            dx = dx.cast(self.narrow_dtype)
+        return dx, None, None
+
+
 def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='mean'):
     fast = try_dispatch("nn.cross_entropy_loss", output, target, weight=weight,
                         ignore_index=ignore_index, reduction=reduction)
@@ -75,12 +128,7 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
             target_weight
         )
 
-    target = target.broadcast(output, [1])
-    target = target.index(1) == target
-
-    output = output - output.max([1], keepdims=True)
-    logsum = output.exp().sum(1).log()
-    loss = (logsum - (output*target).sum(1)) * target_weight
+    loss = _CrossEntropyRows.apply(output, target, target_weight)
     _check_reduction(reduction)
     if reduction == 'sum':
         return loss.sum()

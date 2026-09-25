@@ -93,6 +93,13 @@ def test_attention_qualifies_the_softmax_variant_it_executes(
         softmax=_softmax,
     )
     jt.array = _Tensor
+    # The composite is the path without a backward to save for -- with
+    # gradients required, attention takes the memory-efficient Function
+    # instead -- so the probe runs it the way inference does.
+    jt.Function = type("Function", (), {})
+    flags = ModuleType("jittor._core.flags")
+    flags._output_requires_grad = lambda *values: False
+    monkeypatch.setitem(sys.modules, flags.__name__, flags)
     jt.ones = lambda shape, dtype: _Tensor(np.ones(shape, dtype=dtype))
     jt.zeros_like = lambda value: _Tensor(np.zeros_like(value.value))
     jt.triu = lambda value, diagonal: _Tensor(np.triu(value.value, diagonal))

@@ -348,4 +348,16 @@ int64 device_memory_reserved(int device) {
     return reserved;
 }
 
+int64 device_memory_peak(int device) {
+    return sfrl_device_peak_bytes(device);
+}
+
+void reset_device_memory_peak(int device) {
+    sfrl_reset_device_peak(device);
+}
+
+int64 device_memory_allocated_total(int device) {
+    return sfrl_device_allocated_bytes(device);
+}
+
 } // jittor

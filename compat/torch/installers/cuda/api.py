@@ -1,7 +1,7 @@
 """Stable CUDA facade APIs with installation-owned mutable runtime state.
 
 Installation publishes these objects; it does not manufacture implementations.
-Logical streams, sampled memory peaks and unsupported placeholders retain their
+Logical streams, pool-recorded memory peaks and unsupported placeholders retain their
 existing behavior and have explicit fidelity records.
 """
 
@@ -818,14 +818,30 @@ def _mem_reserved(device=None, *a, **k):
     return _mem_bytes(index, reserved=True)
 
 
+def _native_peak(index):
+    """The pools' own high-water mark for one device, or 0 if they keep none.
+
+    The Python-side mark only moves when some memory API is *called*, so on its
+    own it misses every peak reached inside an execution batch: a training step
+    that filled 22 GB read 0.1-1.3 GB. The pools record the peak on every
+    allocation; the sampled mark stays as the fallback for a process that
+    turned them off.
+    """
+    if index < 0:
+        return 0
+    return int(jt.core.device_memory_peak(int(index)))
+
+
 def _mem_max(device=None, *a, **k):
     index = _mem_device_key(device)
-    _mem_sample(index, _mem_bytes(index))
-    return _cuda_runtime().device_mem_peak.get(index, 0)
+    sampled = _mem_sample(index, _mem_bytes(index))
+    return max(_native_peak(index), _cuda_runtime().device_mem_peak.get(index, sampled))
 
 
 def _reset_peak(device=None, *a, **k):
     index = _mem_device_key(device)
+    if index >= 0:
+        jt.core.reset_device_memory_peak(int(index))
     _cuda_runtime().device_mem_peak[index] = _mem_bytes(index)
 
 
@@ -1135,7 +1151,7 @@ def _api_cuda_memory_stats(device=None, *a, **k):
     index = _mem_device_key(device)
     current = _mem_used(device)
     return {'allocated_bytes.all.current': current,
-            'allocated_bytes.all.peak': _cuda_runtime().device_mem_peak.get(index, current),
+            'allocated_bytes.all.peak': _mem_max(device),
             'reserved_bytes.all.current': _mem_bytes(index, reserved=True)}
 
 
@@ -1595,9 +1611,9 @@ _CUDA_FIDELITY_DETAILS = {
     _Event: "Host timestamps after synchronization; not native CUDA event timing.",
     _mem_used: "Per-device live bytes from jittor's own pools; excludes the CUDA context and other processes.",
     _mem_reserved: "Per-device bytes held by jittor's pools (live plus cached); not the driver's view of the card.",
-    _mem_max: "Per-device high-water mark sampled at memory queries, not at every allocation.",
-    _reset_peak: "Resets one device's sampled live-byte high-water mark.",
-    _api_cuda_memory_stats: "Current and sampled peak live bytes plus pool reservation, per device; other PyTorch counters absent.",
+    _mem_max: "Per-device high-water mark the pools record at every allocation; sampled at memory queries only when the caching pools are disabled.",
+    _reset_peak: "Restarts one device's live-byte high-water mark at the current live bytes.",
+    _api_cuda_memory_stats: "Current and peak live bytes plus pool reservation, per device; other PyTorch counters absent.",
     _mem_get_info: "cudaMemGetInfo on the device asked about; the fallback reports jittor's pools only, so it excludes other processes.",
     _api_cuda_synchronize: "Waits for every device this run touched, which is stronger than torch's per-device synchronize.",
     _api_cuda_can_device_access_peer: "Answered by the CUDA driver for the named pair; raises where the driver cannot be loaded rather than guessing.",

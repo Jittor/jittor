@@ -8,6 +8,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 
+#include <atomic>
 #include <mutex>
 #include <sstream>
 #include "utils/log.h"
@@ -19,6 +20,55 @@
 namespace jittor {
 
 DEFINE_FLAG(int, use_sfrl_allocator, 1, "Enable sfrl allocator");
+
+namespace {
+// One slot per accelerator device, and the last one for the host pools,
+// which report device -1.
+constexpr int kPeakDevices = 64;
+constexpr int kSlots = kPeakDevices + 1;
+std::atomic<int64> device_live[kSlots];
+std::atomic<int64> device_peak[kSlots];
+std::atomic<int64> device_allocated[kSlots];
+
+inline int slot(int device) {
+    if (device < 0) return kPeakDevices;
+    return device < kPeakDevices ? device : -1;
+}
+
+void note_device_alloc(int device, int64 bytes) {
+    int s = slot(device);
+    if (s < 0) return;
+    device_allocated[s].fetch_add(bytes);
+    int64 now = device_live[s].fetch_add(bytes) + bytes;
+    int64 seen = device_peak[s].load();
+    while (now > seen && !device_peak[s].compare_exchange_weak(seen, now)) {}
+}
+
+void note_device_free(int device, int64 bytes) {
+    int s = slot(device);
+    if (s >= 0) device_live[s].fetch_sub(bytes);
+}
+} // namespace
+
+int64 sfrl_device_live_bytes(int device) {
+    int s = slot(device);
+    return s >= 0 ? device_live[s].load() : 0;
+}
+
+int64 sfrl_device_peak_bytes(int device) {
+    int s = slot(device);
+    return s >= 0 ? device_peak[s].load() : 0;
+}
+
+void sfrl_reset_device_peak(int device) {
+    int s = slot(device);
+    if (s >= 0) device_peak[s].store(device_live[s].load());
+}
+
+int64 sfrl_device_allocated_bytes(int device) {
+    int s = slot(device);
+    return s >= 0 ? device_allocated[s].load() : 0;
+}
 DEFINE_FLAG(int64, sfrl_large_block_size_device, 5242880, "sfrl_large_block_size, larger will reduce memory shard, only affect device");
 constexpr int64 sfrl_large_block_size_cpu=5242880;
 
@@ -335,6 +385,7 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
     block->occupied = true;
     allocation = blocks->insert_occupied(block);
     used_memory += block->size;
+    note_device_alloc(device(), block->size);
     return block->memory_ptr;
 }
 
@@ -354,6 +405,7 @@ void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
     if (block->share_times == 0) {
         id_space.erase_occupied(allocation);
         used_memory -= block->size;
+        note_device_free(device(), block->size);
         unused_memory += block->size;
         block->occupied = false;
         try_merge_two_blocks(block, block->prev);

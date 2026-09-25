@@ -198,14 +198,45 @@ static inline int op_target_device(Op* op) {
 // use-after-free. The only safe form is to never finish in the first place,
 // which is what this does. The caller is then responsible for holding the
 // graph's vars; nothing is reclaimed while it is set.
-DEFINE_FLAG(int, keep_graph, 0, "Leave a batch's nodes unfinished so the same graph can be executed again. The caller must hold the graph: nothing it builds is reclaimed while this is on. Every leaf the graph reads must already be materialized before the graph is built, because a re-run re-executes whatever is still pending -- including a leaf's own producer, whose host staging is gone by then. 0 is the normal single-use behaviour.");
+DEFINE_FLAG(int, keep_graph, 0, "Leave a batch's nodes unfinished so the same graph can be executed again. The caller must hold the graph. Every leaf the graph reads must already be materialized before the graph is built, because a re-run re-executes whatever is still pending -- including a leaf's own producer, whose host staging is gone by then. 1 keeps every node's memory as well, so each re-run writes the same buffers (what a recorded device graph needs). 2 keeps the nodes but returns an intermediate's memory once the batch has no further use for it, as a normal batch does; the next run allocates it again. 0 is the normal single-use behaviour.");
 
 // Read from python (`jittor/_runtime/graph_replay.py`), not from here: it is
 // the policy switch for re-running a repeated inference graph instead of
 // rebuilding it. It lives beside `keep_graph` because that is the mechanism it
 // drives.
-DEFINE_FLAG(int, auto_graph_replay, 1, "Re-run a repeated inference graph instead of rebuilding it every call. Applies only under no_grad, only to a call whose inputs are Vars whose total size is under `auto_graph_replay_bytes`, and only after the same shapes have been seen twice in a row; anything else, and anything the capture cannot serve, runs normally. 0 disables it.");
-DEFINE_FLAG(int64, auto_graph_replay_bytes, 64<<10, "How large the inputs of a call may be before it is left to run normally. Replay removes graph construction, which costs the same whatever the tensors weigh -- so it wins exactly when the device work per operator is small, and loses when the step was never host-bound to begin with. Input size is the cheap proxy for that, and it also bounds what a capture can retain. Measured on the comparison shapes: at 1 MB the policy engaged for a 256x1024 mlp forward (about a dozen operators, nothing to rebuild) and made it 0.39 -> 0.93 ms, and for a 128-token prefill, 2.88 -> 3.26. At 64 KB it engages for the decode steps, where it is 1.97 -> 0.86 against PyTorch, and leaves the rest alone.");
+DEFINE_FLAG(int, auto_graph_replay, 1, "Re-run a repeated inference graph instead of rebuilding it every call. Applies only under no_grad, only to a call whose inputs are Vars whose total size is under `auto_graph_replay_bytes`, only after the same shapes have been seen twice in a row, and recorded as a device graph only up to `auto_graph_replay_retain_bytes`; anything else, and anything the capture cannot serve, runs normally. 0 disables it.");
+DEFINE_FLAG(int64, auto_graph_replay_bytes, 64<<10, "How large the inputs of a call may be before it is left to run normally. Replay removes graph construction, which costs the same whatever the tensors weigh -- so it wins exactly when the device work per operator is small, and loses when the step was never host-bound to begin with. Input size is the cheap proxy for that. It does not bound what a capture retains -- see `auto_graph_replay_retain_bytes`. Measured on the comparison shapes: at 1 MB the policy engaged for a 256x1024 mlp forward (about a dozen operators, nothing to rebuild) and made it 0.39 -> 0.93 ms, and for a 128-token prefill, 2.88 -> 3.26. At 64 KB it engages for the decode steps, where it is 1.97 -> 0.86 against PyTorch, and leaves the rest alone.");
+DEFINE_FLAG(int64, auto_graph_replay_retain_bytes, 64<<20, "The largest graph the automatic policy records as a device graph. A capture replays through the executor, which frees intermediates as it goes with keep_graph=2, while a recording re-issues fixed pointers and so keeps every buffer for as long as the capture lives, and the size of a call's inputs says nothing about that: an SD1.5 VAE decode takes a 32 KB latent and allocates 6.2 GB, where it peaks at 0.5 GB. Measured as everything the pools hand out during the eager call that precedes a capture. Above it the capture still replays, through the executor. 0 removes the bound. An explicit jt.graph_replay is not bounded.");
+
+// `keep_graph == 2`: a kept var's memory goes once the batch has made its last
+// use of it; the node stays, unfinished, and the next run of the graph
+// allocates it again. Holding every buffer instead made a kept graph cost the
+// sum of its intermediates rather than their peak -- 6.2 GB for an SD1.5 VAE
+// decode that peaks at 0.5 GB run normally.
+//
+// Two kinds of var have to be treated differently. A storage view (reshape)
+// does not run: its output is its input's buffer, so a later run must alias
+// that buffer again rather than get a fresh one, and the share request its
+// op made at construction -- consumed by the first allocation -- is put back.
+// A var that aliases one of its own producer's inputs (an in-place update) is
+// left alone: re-running it into a fresh buffer would not be the same op.
+static void release_kept_storage(Var* v) {
+    if (!v->flag(VarFlags::_kept) || v->is_finished() || !v->mem_ptr) return;
+    if (v->flag(VarFlags::_host_resident)) return;
+    Op* producer = v->input();
+    if (!producer) return;
+    Var* view_of = nullptr;
+    size_t offset = 0;
+    if (producer->is_storage_view()) {
+        view_of = producer->inputs().front();
+        offset = v->storage_offset_bytes - view_of->storage_offset_bytes;
+    } else if (v->share_next) {
+        for (Var* in : producer->inputs())
+            if (v->shares_allocation_with(in)) return;
+    }
+    free_var_mem(v);
+    if (view_of) v->share_with(view_of, offset);
+}
 
 // Publishes this batch's record of released vars for the duration of the
 // batch, and takes it down on every exit path. See `batch_released_vars` in
@@ -281,6 +312,15 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     #endif
     auto& jkl = get_jk();
     for (uint rid=0; rid<queue.size(); rid++) {
+        // Segment rid-1 has run, whichever `continue` it left by: nothing later
+        // in the batch uses the vars scheduled after it, so their memory goes
+        // now rather than when the whole batch is done. The last segment's are
+        // dropped with the hold itself.
+        if (rid && plan.batch_hold)
+            for (int index : plan.release_after[rid - 1]) {
+                if (keep_graph == 2) release_kept_storage(plan.all_vars[index]);
+                (*plan.batch_hold)[index].free_liveness();
+            }
         int root = queue[rid];
         Op* op = ops[root];
         bool is_fused_op = false;
@@ -523,6 +563,11 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             check_op_async_error(op, is_fused_op, e, logf, jit_src_path);
         }
     }
+    // The last segment's vars are otherwise released with the hold, which
+    // frees nothing for a kept var: its node is still alive.
+    if (keep_graph == 2 && plan.batch_hold && queue.size())
+        for (int index : plan.release_after[queue.size() - 1])
+            release_kept_storage(plan.all_vars[index]);
     // == phase 7: finish the batch ==
     LOGvv << "All" << plan.op_num << "ops finished, return vars:" << vars;
     // a zero-sized var has no memory to point at (see the size==0 branch in

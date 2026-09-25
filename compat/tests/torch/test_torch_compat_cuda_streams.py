@@ -22,7 +22,8 @@ class TestCudaStreams(unittest.TestCase):
                 self.assertIs(pickle.loads(pickle.dumps(implementation)), implementation)
                 self.assertIs(fidelity_of("torch.cuda." + name).implementation, implementation)
         self.assertIs(fidelity_of("torch.cuda.Stream").level, Fidelity.APPROXIMATE)
-        self.assertIn("sampled", fidelity_of("torch.cuda.max_memory_allocated").detail)
+        self.assertIn("every allocation",
+                      fidelity_of("torch.cuda.max_memory_allocated").detail)
         # `get_rng_state` used to be a placeholder that returned the constant
         # `[0]`, and this assertion pinned that as UNIMPLEMENTED. It is a real
         # seed-plus-position now (`api.py`'s `_RNG_STATE_MAGIC` block, and

@@ -159,4 +159,17 @@ struct SFRLAllocator : Allocator {
 
 DECLARE_FLAG(int, use_sfrl_allocator);
 
+// Live bytes and their high-water mark per accelerator device, summed over
+// every SFRL pool on that device and updated on each alloc/free. A device
+// runs several pools, and the sum of their separate peaks is not the peak of
+// the sum, so the counters are per device rather than per allocator.
+// torch.cuda.max_memory_allocated used to be sampled from Python only when it
+// was called, and read 0.1-1.3 GB for training steps that filled 22 GB.
+int64 sfrl_device_live_bytes(int device);
+int64 sfrl_device_peak_bytes(int device);
+// Restart the high-water mark at the current live bytes.
+void sfrl_reset_device_peak(int device);
+// Every byte handed out so far; it never decreases. Device -1 is the host.
+int64 sfrl_device_allocated_bytes(int device);
+
 }//jittor

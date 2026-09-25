@@ -65,6 +65,18 @@ struct ExecPlan {
     // before that and for a plan built by anything else. Phase 7 subtracts it
     // before asking whether anyone still needs a var; see the assert there.
     int batch_hold_per_var = 0;
+    // The hold itself, and when each part of it may go. `release_after[rid]`
+    // lists the `all_vars` indices whose last use in this batch is the
+    // segment executed at queue position `rid`; the Runner drops their hold
+    // once that segment has run. Held to the end of the batch, a var's memory
+    // could not be freed until every kernel of the batch had run -- for a
+    // backward, the whole backward -- so the peak was the sum of every
+    // intermediate rather than the most alive at once: 13.07 GB against
+    // PyTorch's 9.17 GB on an 8-layer Qwen3 step, and the 28-layer one did
+    // not fit a 24 GB card. After its last use nothing in the batch reads the
+    // node again, which is all the hold was protecting.
+    vector<VarPtr>* batch_hold = nullptr;
+    vector<vector<int>> release_after;
     // ops.size(), kept because the Runner reports it after `ops` has been
     // consumed.
     int op_num = 0;

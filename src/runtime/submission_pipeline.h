@@ -30,6 +30,25 @@ struct SubmissionPipeline {
     // Python callbacks may return Vars while a submitted graph is executing;
     // submission must not nest through that conversion boundary.
     bool flush_active = false;
+    // Non-zero while `grad()` is building a backward graph. Auto-flush holds
+    // off until it is done: a flush in the middle of construction treats every
+    // Python-held gradient built so far -- the ones a Python Function's
+    // backward returns -- as a result, computes it, and keeps it (with the
+    // forward activations it reads) alive until construction ends, so the peak
+    // grew with depth instead of staying one layer wide. The whole backward is
+    // submitted as one batch once construction returns.
+    int grad_construction_depth = 0;
+};
+
+// Suspends auto-flush for the lifetime of the scope. See
+// `SubmissionPipeline::grad_construction_depth`.
+struct GradConstructionScope {
+    SubmissionPipeline& pipeline;
+    explicit GradConstructionScope(SubmissionPipeline& pipeline)
+        : pipeline(pipeline) { ++pipeline.grad_construction_depth; }
+    ~GradConstructionScope() { --pipeline.grad_construction_depth; }
+    GradConstructionScope(const GradConstructionScope&) = delete;
+    GradConstructionScope& operator=(const GradConstructionScope&) = delete;
 };
 
 EXTERN_LIB SubmissionPipeline& runtime_submission_pipeline();

@@ -179,6 +179,14 @@ def _sync_result(output):
             _sync_result(value)
 
 
+def _allocated_bytes():
+    """Every byte the pools have handed out so far, host and devices together."""
+    total = _core.device_memory_allocated_total(-1)
+    for device in range(_core.get_device_count()):
+        total += _core.device_memory_allocated_total(device)
+    return total
+
+
 def _graph_has_nondeterministic_op():
     """True if anything still pending draws random numbers."""
     try:
@@ -198,7 +206,8 @@ def _graph_has_nondeterministic_op():
 class GraphReplay:
     """A callable that re-runs `module`'s captured graph. See the module docstring."""
 
-    def __init__(self, module, *example_inputs, measure=False, weak=False):
+    def __init__(self, module, *example_inputs, measure=False, weak=False,
+                 max_retained_bytes=None):
         """`measure=True` times replay against eager once and refuses if it loses.
 
         Off by default, because the measurement does not leave the process as
@@ -226,6 +235,11 @@ class GraphReplay:
         self._capture = None
         self._refused = None
         self._worth_it = None if measure else True
+        # What a device recording may keep allocated; None for no bound. The
+        # automatic policy sets one (`auto_graph_replay_retain_bytes`): it
+        # engages on its own, and a recording holds every intermediate.
+        self._max_retained_bytes = max_retained_bytes
+        self._graph_bytes = 0
         # The device-side recording of a replay, once there is one. Replaying
         # through the executor still costs about 4 us of host time per
         # operator -- the plan walk, the per-operator scopes, the allocation
@@ -293,7 +307,12 @@ class GraphReplay:
             private.append(copy)
 
         before = jt.flags.keep_graph
-        jt.flags.keep_graph = 1
+        # 2, not 1: the graph stays re-runnable, but an intermediate's memory
+        # goes back once the run has no further use for it, so a capture holds
+        # what a normal call peaks at rather than the sum of everything it
+        # allocates. Only a device recording needs every buffer to stay put;
+        # `_record_cuda_graph` asks for that itself.
+        jt.flags.keep_graph = 2
         try:
             with _no_auto(), jt.no_grad():
                 output = self._module(*private)
@@ -365,7 +384,7 @@ class GraphReplay:
         """
         best = float("inf")
         before = jt.flags.keep_graph
-        jt.flags.keep_graph = 1 if keep else 0
+        jt.flags.keep_graph = 2 if keep else 0
         try:
             for _ in range(per):
                 run()
@@ -543,7 +562,7 @@ class GraphReplay:
         # A finished var leaves `top_weak_sync` with nothing to walk.
         out.sync(False, False)
         before = jt.flags.keep_graph
-        jt.flags.keep_graph = 1
+        jt.flags.keep_graph = 2
         try:
             # `_copy_into` syncs its source, which is what re-runs the graph;
             # the copy itself builds no op, so the graph does not grow.
@@ -569,8 +588,13 @@ class GraphReplay:
             # One eager call first: it materializes the parameters and any
             # buffer the module builds lazily, so the capture that follows has
             # nothing pending underneath it.
+            allocated = _allocated_bytes()
             with _no_auto(), jt.no_grad():
-                _sync_result(self._module(*args))
+                result = self._module(*args)
+                _sync_result(result)
+            # What a device recording of this graph would hold: every buffer
+            # the call allocates, since a recording re-issues fixed pointers.
+            self._graph_bytes = _allocated_bytes() - allocated
             cap = self._capture = self._capture_now(args)
             self.stats["captured"] += 1
             if cap is None:
@@ -602,7 +626,15 @@ class GraphReplay:
         # compile, and a recording tolerates neither.
         if (not self._cuda_graph and self._graph_refused is None
                 and self.stats["replayed"] == 3):
-            self._record_cuda_graph(cap)
+            limit = self._max_retained_bytes
+            if limit and self._graph_bytes > limit:
+                # Replays through the executor free as they go; a recording
+                # would keep all of it, for as long as the capture lives.
+                self._graph_refused = (
+                    "a recording would keep %.1f MiB alive, over the %.1f MiB "
+                    "allowed" % (self._graph_bytes / 2**20, limit / 2**20))
+            else:
+                self._record_cuda_graph(cap)
         return out
 
     def invalidate(self):
@@ -666,15 +698,21 @@ def graph_replay(module, *example_inputs, measure=False):
 #   - under `no_grad`, because a replay carries no gradient;
 #   - the outermost module call, not a submodule of one already running;
 #   - all-positional, all-Var, with inputs totalling less than
-#     `auto_graph_replay_bytes` -- which bounds what can be retained and is
-#     also exactly the regime where rebuilding is the cost;
+#     `auto_graph_replay_bytes` -- the regime where rebuilding is the cost;
 #   - repeating: the same shapes twice in a row, so a one-off call is never
-#     captured.
+#     captured;
+#
+# A capture replays through the executor and frees intermediates as it goes,
+# so it costs about what a normal call peaks at. Recording it as a device
+# graph, which is what makes a small step one launch, keeps every buffer, so
+# that is only done for a graph allocating at most
+# `auto_graph_replay_retain_bytes`. Small inputs do not bound it: an SD1.5 VAE
+# decode takes a 32 KB latent and allocates 6.2 GB of 512x512 feature maps.
 #
 # Everything the capture cannot serve (a graph that draws random numbers, a
 # traced call that read a value back, a module that returns something other
-# than one Var) falls back and is not tried again for that module. So does a
-# module whose shapes keep changing, after enough re-captures to show it.
+# than one Var) falls back and is not tried again for that module. So does a module whose shapes keep changing, after
+# enough re-captures to show it.
 
 
 #: Re-captures tolerated for one module before the policy leaves it alone. A
@@ -760,7 +798,9 @@ def auto_replay_for(module, args, kw):
         # `measure=False`: the timing check perturbs what it measures (see
         # `_measure`), and the eligibility rules above already restrict this to
         # the shape of step where replay wins.
-        state.replay = GraphReplay(module, measure=False, weak=True)
+        state.replay = GraphReplay(
+            module, measure=False, weak=True,
+            max_retained_bytes=flags.auto_graph_replay_retain_bytes)
     if state.replay.refused is not None:
         state.give_up = True
         state.replay = None

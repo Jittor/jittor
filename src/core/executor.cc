@@ -74,6 +74,7 @@ void Executor::submit_pending(Var* target, bool force) {
 
 #ifdef HAS_ACCELERATOR
     if (auto_flush_ops > 0 && runtime_use_cuda()
+            && pipeline.grad_construction_depth == 0
             && backend_ops(accelerator_backend_id()).execution.supports_auto_flush
             && Op::number_of_created_ops - pipeline.last_run_ops >= auto_flush_ops) {
         vector<Var*> vars;
@@ -281,6 +282,42 @@ static void resolve_dynamic_inputs(Executor& executor, const vector<Var*>& roots
     }
 }
 
+// When each var of the batch has been used for the last time, as a queue
+// position: the Runner drops the var's hold after that segment (see
+// `ExecPlan::release_after`). A segment is read exactly as `run_exec_plan`
+// reads it -- its `fuse_ops` range, plus the root op itself -- and a var is
+// counted as used by every op that has it as an input or an output, from the
+// edge snapshot the planner recorded. The vars the caller asked for head
+// `all_vars` and are never scheduled: phase 7 checks them, and they stay held
+// to the end, as does anything no segment names.
+static void schedule_hold_release(ExecPlan& plan) {
+    const int n = plan.queue.size();
+    vector<int> last_use(plan.all_vars.size(), -1);
+    unordered_map<Var*, int> index;
+    index.reserve(plan.all_vars.size());
+    for (int i = plan.start_var_num; i < (int)plan.all_vars.size(); i++)
+        index[plan.all_vars[i]] = i;
+    auto touch = [&](int op_index, int rid) {
+        for (auto& in : plan.op_inputs[op_index]) {
+            auto it = index.find(in.first);
+            if (it != index.end()) last_use[it->second] = rid;
+        }
+        for (Var* out : plan.op_outputs[op_index]) {
+            auto it = index.find(out);
+            if (it != index.end()) last_use[it->second] = rid;
+        }
+    };
+    for (int rid = 0; rid < n; rid++) {
+        touch(plan.queue[rid], rid);
+        int ll = rid < n - 1 ? plan.range[n - rid - 2] : 0;
+        int rr = plan.range[n - rid - 1];
+        for (int k = ll; k < rr; k++) touch(plan.fuse_ops[k], rid);
+    }
+    plan.release_after.assign(n, {});
+    for (int i = 0; i < (int)last_use.size(); i++)
+        if (last_use[i] >= 0) plan.release_after[last_use[i]].push_back(i);
+}
+
 void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // == phase 1: setup ==
     // One batch at a time. Until the device waits inside started releasing the
@@ -334,6 +371,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     for (Var* v : plan.all_vars) batch_hold.emplace_back(v);
     // What phase 7 has to discount: this hold is bookkeeping, not a consumer.
     plan.batch_hold_per_var = 1;
+    schedule_hold_release(plan);
+    plan.batch_hold = &batch_hold;
     ExecutionBackendScope backend_scope(plan.backend);
 
     // The fusion verdict goes to FusedOp as the vector it already is, instead
