@@ -197,6 +197,45 @@ cuDNN 卷积计划的主机侧执行，没有单一热点。
   - SD 推理进程峰值里分配器缓存与上下文的部分（`sd15_sample` 3.5 GB 中活跃只有 2.0 GB）。
   - 因果注意力的推理不分块（掩码按整段 query 布局）；长序列因果 prefill 仍会构造完整分数矩阵。
 
+## `torch.compile(mode="reduce-overhead")`：整步重放
+
+2026-09-25 补充，基于 `cb93ba04` 的工作区。主机开销剩下的部分是每一步在 Python 里重建
+图、再由执行器逐算子规划和发射，逐算子削减收益有限。PyTorch 对同一问题的答案是录一次、
+重放多次，用户用 `torch.compile(..., mode="reduce-overhead")` 表达这个意愿；这里把它
+映射到通用的图重放上：
+
+- 模块（推理）：`OptimizedModule`，`no_grad` 下重放
+  [`GraphReplay`](../../python/jittor/_runtime/graph_replay.py)（支持关键字参数与
+  tuple/dict/dataclass/`ModelOutput` 结构化输出）；
+- 函数（整个训练步，前向 + 反向 + 优化器）：
+  [`StepCapture`](../../python/jittor/_runtime/step_capture.py)，状态更新靠运行时记录
+  holder 换绑得到，不需要认识具体模块和优化器；CUDA fused AdamW 的 step 与 lr 从设备读，
+  调度器改 lr 照常生效。
+- 稳定后录成 CUDA graph，每步一次 launch。
+
+| 任务 | Jittor eager | `torch.compile` | PyTorch eager（上表） | 结果 |
+| --- | --- | --- | --- | --- |
+| `sd15_sample`（fp16，20 步，只编译 UNet） | 1030 ms | 476 ms | 438 ms | 与 eager 之差在 eager 自身两次运行的波动内（最大 0.20 / 0.25） |
+| `ddpm_unet_train`（fp32，batch 16，AdamW） | 92 ms | 61 ms | 66.6 ms | 8 步 loss 与 eager 逐步一致到 1e-6，参数差 1.7e-4（eager 对 eager 2e-4） |
+
+口径与上表不同：单进程、每步 `sync_all(True)`、取稳定后的最小值，未经
+`bench/torch_compat/run.py`。显存是分配器计数（`device_memory_peak`），不是 NVML：
+SD 峰值 1.89 GB（eager 1.81），DDPM 峰值 4.68 GB（eager 3.70）。录制持有一步的工作集，
+临时工作区在录制内复用。
+
+做这件事时修掉的执行器缺陷（都会让重放静默答错，自动重放默认开启，所以也影响不编译的
+推理）：`keep_graph=2` 释放了视图的底座而视图（尤其是作为结果的 reshape）仍指向旧内存
+——`jt.stack` 结尾的 CUDA 推理、`nn.RNN` 的 hidden、full-reduce 快速路径算出的 loss
+都停在第一次的值；`tape` 这类不发射 kernel、与输入共享存储的直通算子被释放后拿到未写的
+新缓冲区——GroupNorm 的反向因此出错；录制期间算子临时工作区被释放后归还给池或驱动，
+录下的 kernel 仍用旧地址；读回参数会把它迁移到主机，录下的图继续写已经归还的设备块。
+回归测试在 `tests/core/test_graph_replay.py`、`tests/core/test_step_capture.py`、
+`compat/tests/torch/test_torch_compile_replay.py`。
+
+未支持、明确拒绝并照常执行（每次调用仍恰好执行一步）的：抽随机数的步、步内读回数值、
+fused AdamW 以外的优化器（SGD 等在 Python 里记账）、CPU 上的 AdamW（逐参数路径把步数
+固化进图）。另见 KI-COMPAT-006～008。
+
 ## 边界
 
 - 每个配置只测一轮；修后数字在空闲机器上测得。同一代码的 `sd15_sample` 在不同进程间测到

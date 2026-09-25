@@ -11,6 +11,7 @@ fresh interpreters: ``--torch-python`` (an independent binary PyTorch) and
 
     python bench/torch_compat/run.py --workloads qwen3_decode,sd15_sample
     python bench/torch_compat/run.py --size tiny          # harness self-check
+    python bench/torch_compat/run.py --compile none,reduce-overhead
     python bench/torch_compat/run.py --list
 
 Ratio = Jittor time / PyTorch time; below 1 means Jittor is faster. Results go
@@ -90,11 +91,11 @@ def environment_for(runtime, options, state):
     return env
 
 
-def run_one(workload, runtime, options, state, log_dir):
+def run_one(workload, runtime, options, state, log_dir, mode="none"):
     python = options.torch_python if runtime == "torch" else options.jittor_python
     command = [python, str(HERE / "worker.py"), workload, "--runtime", runtime,
                "--device", options.device, "--size", options.size,
-               "--seed", str(options.seed)]
+               "--seed", str(options.seed), "--compile", mode]
     for flag, value in (("--dtype", options.dtype),
                         ("--warmup", options.warmup),
                         ("--repeats", options.repeats),
@@ -108,8 +109,9 @@ def run_one(workload, runtime, options, state, log_dir):
     if options.allow_fallback:
         command.append("--allow-fallback")
 
-    log = log_dir / ("%s.%s.log" % (workload, runtime))
-    print("  %-8s %s ..." % (runtime, workload), end="", flush=True)
+    suffix = "" if mode == "none" else "." + mode
+    log = log_dir / ("%s.%s%s.log" % (workload, runtime, suffix))
+    print("  %-8s %-16s %s ..." % (runtime, mode, workload), end="", flush=True)
     try:
         completed = subprocess.run(
             command, env=environment_for(runtime, options, state),
@@ -129,7 +131,7 @@ def run_one(workload, runtime, options, state, log_dir):
             result = json.loads(line[len(MARKER):])
             break
     if result is None:
-        result = {"workload": workload, "runtime": runtime,
+        result = {"workload": workload, "runtime": runtime, "compile": mode,
                   "status": "timeout" if code is None else "crash",
                   "error": "\n".join(output.splitlines()[-15:])}
     result["log"] = str(log)
@@ -189,6 +191,9 @@ def main():
     parser.add_argument("--cudnn-benchmark", action="store_true")
     parser.add_argument("--allow-fallback", action="store_true",
                         help="report Jittor CPU fallbacks instead of failing")
+    parser.add_argument("--compile", default="none",
+                        help="comma-separated torch.compile modes to run each "
+                             "workload under, e.g. none,reduce-overhead")
     parser.add_argument("--timeout", type=int, default=3600)
     parser.add_argument("--out", default=None, help="result directory")
     parser.add_argument("--label", default=None)
@@ -234,6 +239,7 @@ def main():
         "gpu": gpu_name(options) if options.device == "cuda" else None,
         "device": options.device, "size": options.size, "tf32": options.tf32,
         "batch": options.batch,
+        "compile": options.compile,
         "cudnn_benchmark": options.cudnn_benchmark,
         "torch_python": options.torch_python,
         "jittor_python": options.jittor_python,
@@ -242,12 +248,15 @@ def main():
         (meta["commit"] or "?")[:10], " (dirty)" if meta["dirty"] else "",
         meta["gpu"], options.size, out))
 
+    modes = [m.strip() for m in options.compile.split(",") if m.strip()]
     results = []
     for workload in selected:
-        for runtime in runtimes:
-            results.append(run_one(workload, runtime, options, state, log_dir))
-            (out / "results.json").write_text(json.dumps(
-                {"meta": meta, "results": results}, indent=1))
+        for mode in modes:
+            for runtime in runtimes:
+                results.append(run_one(workload, runtime, options, state,
+                                       log_dir, mode))
+                (out / "results.json").write_text(json.dumps(
+                    {"meta": meta, "results": results}, indent=1))
 
     meta["finished"] = datetime.datetime.now().isoformat(timespec="seconds")
     document = {"meta": meta, "results": results}

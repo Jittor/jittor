@@ -153,6 +153,20 @@ class DeviceMemorySampler:
             self._sample()
         return self.peak
 
+    def current(self):
+        """What the process holds right now; None without NVML."""
+        if self._thread is None:
+            return None
+        used = 0
+        for handle in self._handles:
+            try:
+                processes = self._nvml.nvmlDeviceGetComputeRunningProcesses(handle)
+            except self._nvml.NVMLError:
+                continue
+            used += sum(p.usedGpuMemory or 0 for p in processes
+                        if p.pid == self._pid)
+        return used or None
+
 
 def peak_memory(torch, runtime, device):
     if device != "cuda":
@@ -223,7 +237,62 @@ def scalar(tensor):
     return None
 
 
-def measure(options, stack, result):
+def summary_value(outputs):
+    """One number per step to compare across runtimes: the loss, or a mean.
+
+    Read after the clock stops. A step's first output is a scalar loss for
+    training and an activation, logits or image for inference; the mean of
+    the latter is enough to see two runtimes diverge.
+    """
+    value = outputs[0]
+    try:
+        value = value.detach().float()
+        value = value if value.numel() == 1 else value.mean()
+        return float(value.cpu().item())
+    except Exception:  # an unreadable value is recorded as unknown
+        return None
+
+
+def parameter_digest(workload):
+    """Sum and L2 norm of every parameter, in float64 on the host."""
+    import numpy as np
+
+    model = getattr(workload, "model", None)
+    if model is None or not hasattr(model, "parameters"):
+        return None
+    total = square = 0.0
+    for parameter in model.parameters():
+        array = parameter.detach().float().cpu().numpy().astype(np.float64)
+        total += float(array.sum())
+        square += float((array * array).sum())
+    return {"sum": total, "l2": square ** 0.5}
+
+
+def compile_report(torch, runtime, workload):
+    """What the compiled step actually did: replays, recordings, refusals.
+
+    A compiled step that quietly fell back to running as written is the
+    failure a timing column cannot show.
+    """
+    compiled = workload.compiled_target()
+    if compiled is None:
+        return None
+    if runtime == "jittor":
+        target = getattr(compiled, "__dict__", {}).get("_replay", compiled)
+        return {"kind": type(target).__name__,
+                "stats": dict(getattr(target, "stats", {}) or {}),
+                "refused": getattr(target, "refused", None),
+                "graph_refused": getattr(target, "_graph_refused", None)}
+    try:
+        from torch._dynamo.utils import counters
+    except Exception:  # dynamo counters are optional introspection
+        return {"kind": "dynamo"}
+    return {"kind": "dynamo",
+            "stats": {key: int(value) for key, value in counters["stats"].items()},
+            "graph_breaks": int(sum(counters["graph_break"].values()))}
+
+
+def measure(options, stack, result, sampler=None):
     torch = import_torch(options.runtime)
     result["versions"] = versions(torch, options.runtime)
     result["settings"] = configure(torch, options.device, options.tf32,
@@ -248,12 +317,23 @@ def measure(options, stack, result):
         warmup, repeats = 1, 2
     warmup = options.warmup if options.warmup is not None else warmup
     repeats = options.repeats if options.repeats is not None else repeats
+    if options.compile != "none":
+        # Compiling takes several calls to settle: PyTorch compiles and
+        # records, Jittor runs once as written, captures, and records a device
+        # graph on a later replay. Timing those calls measures the compiler.
+        warmup = max(warmup, 6)
 
     torch.manual_seed(options.seed)
     sync = Synchronizer(torch, options.runtime, options.device)
     workload = cls(torch, options.device, dtype, options.size,
-                   batch=options.batch)
+                   batch=options.batch, seed=options.seed)
+    result["compile"] = options.compile
+    result["stochastic"] = cls.stochastic
 
+    if options.compile != "none" and cls.compile_what is None:
+        result["status"] = "skipped"
+        result["error"] = "no shape-stable compiled form"
+        return
     started = time.perf_counter()
     workload.setup()
     sync([])
@@ -267,6 +347,9 @@ def measure(options, stack, result):
     # for Jittor: a later step can still meet a first-seen shape and compile
     # (sd15_vae_decode's second step took 21.7 s against a 36 ms steady state),
     # and a timed window that straddles two states is not one measurement.
+    # One number per step, warmup included, read after the clock stops: the
+    # sequence two runtimes -- or eager and compiled -- must agree on.
+    values = []
     warm = []
     while (len(warm) < max(1, warmup)
            or (len(warm) < max(1, warmup) + MAX_EXTRA_WARMUP
@@ -275,22 +358,36 @@ def measure(options, stack, result):
         outputs = workload.step()
         sync(outputs)
         warm.append(time.perf_counter() - started)
+        values.append(summary_value(outputs))
         if len(warm) == 1:
             result["first_value"] = scalar(outputs[0])
+            if options.compile != "none":
+                # Compiled from the second step on: the first, run as written,
+                # creates the optimizer's state (SGD's momentum buffers) outside
+                # the compiled region -- made inside it, PyTorch's CUDA graphs
+                # hand them out as outputs the next replay overwrites.
+                workload.compile(options.compile)
         del outputs
     result["first_step_s"] = warm[0]
     result["warmup_s"] = warm
     result["warmup_settled"] = settled(warm)
 
-    samples = []
+    # `host_s`: until the step returns, before the device is waited on. For
+    # PyTorch eager that is dispatch and launch; for Jittor, building the
+    # graph (it executes when synced). A large share means host-bound.
+    samples, host = [], []
     for _ in range(repeats):
         started = time.perf_counter()
         outputs = workload.step()
+        host.append(time.perf_counter() - started)
         sync(outputs)
         samples.append(time.perf_counter() - started)
+        values.append(summary_value(outputs))
         last = outputs
     result["last_value"] = scalar(last[0])
     del last
+    result["values"] = values
+    result["host_s"] = statistics.median(host)
 
     result["samples_s"] = samples
     result["median_s"] = statistics.median(samples)
@@ -300,6 +397,10 @@ def measure(options, stack, result):
     result["throughput"] = workload.items / result["median_s"]
     result["peak_memory_bytes"] = peak_memory(torch, options.runtime,
                                               options.device)
+    if sampler is not None:
+        result["steady_device_bytes"] = sampler.current()
+    result["compile_report"] = compile_report(torch, options.runtime, workload)
+    result["parameters_digest"] = parameter_digest(workload)
     if options.runtime == "jittor":
         import jittor as jt
 
@@ -323,6 +424,9 @@ def main():
     parser.add_argument("--no-tf32", dest="tf32", action="store_false")
     parser.add_argument("--cudnn-benchmark", action="store_true")
     parser.add_argument("--allow-fallback", action="store_true")
+    parser.add_argument("--compile", default="none",
+                        help="torch.compile mode for what the workload compiles, "
+                             "or 'none'")
     options = parser.parse_args()
 
     result = {"workload": options.workload, "runtime": options.runtime,
@@ -330,7 +434,7 @@ def main():
     sampler = DeviceMemorySampler().start() if options.device == "cuda" else None
     try:
         with ExitStack() as stack:
-            measure(options, stack, result)
+            measure(options, stack, result, sampler)
     except BaseException as error:  # reported as the row's status, never hidden
         if isinstance(error, KeyboardInterrupt):
             raise

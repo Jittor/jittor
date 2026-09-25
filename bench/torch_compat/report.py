@@ -6,6 +6,14 @@
     python bench/torch_compat/report.py old.json new.json       # Jittor over time
 
 Ratio = Jittor time / PyTorch time. Below 1 means Jittor is faster.
+
+Rows are (workload, compile mode). ``agree`` is the largest relative
+difference between the two runtimes' per-step values (loss, or the mean of an
+output) over the steps both ran -- both start from the same NumPy weights and
+inputs, so a large one means a runtime computes something else. A workload
+that draws from the framework's generator (dropout) is ``stoch.`` instead.
+``compiled`` says what the compiled step did: Jittor's replays and device-graph
+launches or its refusal, PyTorch's graph breaks.
 """
 
 import argparse
@@ -14,10 +22,11 @@ import sys
 
 
 def _pairs(document):
-    """{workload: {runtime: result}} in first-seen order."""
+    """{(workload, compile mode): {runtime: result}} in first-seen order."""
     rows = {}
     for result in document["results"]:
-        rows.setdefault(result["workload"], {})[result["runtime"]] = result
+        key = (result["workload"], result.get("compile") or "none")
+        rows.setdefault(key, {})[result["runtime"]] = result
     return rows
 
 
@@ -70,30 +79,114 @@ def _first(result):
     return "%.1f s" % result["first_step_s"]
 
 
+def _host(result):
+    """Share of the step spent before it returned, i.e. on the host."""
+    if not _ok(result) or not result.get("host_s"):
+        return "-"
+    return "%d%%" % round(100 * result["host_s"] / result["median_s"])
+
+
+def _steady(result):
+    if not _ok(result) or not result.get("steady_device_bytes"):
+        return "-"
+    return "%.1f GB" % (result["steady_device_bytes"] / 2**30)
+
+
+def disagreement(a, b):
+    """Largest difference between two value sequences, relative to their scale.
+
+    Scaled by the reference's root mean square, not value by value: an
+    inference output's mean can sit near zero, where a relative difference
+    means nothing. Training is compared over its first two steps only --
+    after that two correct runs drift apart by the chaos of training itself
+    (a large learning rate on random weights diverges from the last bit).
+    """
+    if not (_ok(a) and _ok(b)):
+        return None
+    pairs = [(x, y) for x, y in zip(a.get("values") or [], b.get("values") or [])
+             if x is not None and y is not None]
+    if (a.get("mode") or b.get("mode")) == "train":
+        pairs = pairs[:2]
+    if not pairs:
+        return None
+    scale = max((sum(y * y for _, y in pairs) / len(pairs)) ** 0.5, 1e-12)
+    return max(abs(x - y) for x, y in pairs) / scale
+
+
+def _agree(a, b):
+    if (a or {}).get("stochastic") or (b or {}).get("stochastic"):
+        return "stoch."
+    value = disagreement(a, b)
+    if value is None:
+        return "-"
+    return "%.1e%s" % (value, " !" if value > 5e-2 else "")
+
+
+def _compiled(result):
+    report = (result or {}).get("compile_report")
+    if not _ok(result) or not report:
+        return "-"
+    if report.get("kind") == "dynamo":
+        return "breaks %s" % report.get("graph_breaks", "?")
+    if report.get("refused"):
+        return "refused: " + str(report["refused"])[:40]
+    stats = report.get("stats") or {}
+    text = "replayed %s, graph %s" % (stats.get("replayed", 0), stats.get("graph", 0))
+    if report.get("graph_refused"):
+        text += " (no graph: %s)" % str(report["graph_refused"])[:30]
+    return text
+
+
 def _rows(document):
     rows = []
-    for workload, pair in _pairs(document).items():
+    for (workload, mode), pair in _pairs(document).items():
         any_result = pair.get("torch") or pair.get("jittor")
         ratio = _ratio(pair)
+        torch, jittor = pair.get("torch"), pair.get("jittor")
         rows.append([
-            workload,
+            workload, mode,
             any_result.get("mode", ""),
             any_result.get("dtype", ""),
-            _time(pair.get("torch")),
-            _time(pair.get("jittor")),
+            _time(torch), _time(jittor),
             "%.2fx" % ratio if ratio is not None else "-",
-            _throughput(pair.get("torch")),
-            _throughput(pair.get("jittor")),
-            _memory(pair.get("torch")),
-            _memory(pair.get("jittor")),
-            _first(pair.get("jittor")),
+            _host(torch), _host(jittor),
+            _memory(torch), _memory(jittor), _steady(jittor),
+            _first(jittor),
+            _agree(jittor, torch),
+            _compiled(jittor) if mode != "none" else "-",
+            _compiled(torch) if mode != "none" else "-",
         ])
     return rows
 
 
-HEADER = ["workload", "mode", "dtype", "torch", "jittor", "ratio",
-          "torch thpt", "jittor thpt", "torch mem", "jittor mem",
-          "jittor 1st step"]
+HEADER = ["workload", "compile", "mode", "dtype", "torch", "jittor", "ratio",
+          "torch host", "jittor host", "torch mem", "jittor mem",
+          "jittor steady", "jittor 1st step", "agree", "jittor compiled",
+          "torch compiled"]
+
+
+def _compile_rows(document):
+    """Each runtime compiled against itself eager, where both were run."""
+    pairs = _pairs(document)
+    rows = []
+    for (workload, mode), pair in pairs.items():
+        if mode == "none" or (workload, "none") not in pairs:
+            continue
+        eager = pairs[(workload, "none")]
+        row = [workload, mode]
+        for runtime in ("torch", "jittor"):
+            before, after = eager.get(runtime), pair.get(runtime)
+            if _ok(before) and _ok(after):
+                row.append("%.2fx" % (before["median_s"] / after["median_s"]))
+            else:
+                row.append("-")
+            row.append(_agree(after, before))
+        rows.append(row)
+    return rows
+
+
+COMPILE_HEADER = ["workload", "compile", "torch speedup", "torch agree",
+                  "jittor speedup", "jittor agree"]
 
 
 def geomean(values):
@@ -103,6 +196,18 @@ def geomean(values):
     if not values:
         return None
     return math.exp(sum(math.log(v) for v in values) / len(values))
+
+
+def _plain_table(header, rows):
+    rows = [header] + rows
+    widths = [max(len(str(row[i])) for row in rows) for i in range(len(header))]
+    lines = []
+    for index, row in enumerate(rows):
+        lines.append("  ".join(str(cell).ljust(widths[i])
+                               for i, cell in enumerate(row)).rstrip())
+        if index == 0:
+            lines.append("  ".join("-" * w for w in widths))
+    return lines
 
 
 def summary(document):
@@ -116,14 +221,11 @@ def summary(document):
 
 
 def render_table(document):
-    rows = [HEADER] + _rows(document)
-    widths = [max(len(str(row[i])) for row in rows) for i in range(len(HEADER))]
-    lines = []
-    for index, row in enumerate(rows):
-        lines.append("  ".join(str(cell).ljust(widths[i])
-                               for i, cell in enumerate(row)).rstrip())
-        if index == 0:
-            lines.append("  ".join("-" * w for w in widths))
+    lines = _plain_table(HEADER, _rows(document))
+    compile_rows = _compile_rows(document)
+    if compile_rows:
+        lines += ["", "compiled against eager, per runtime (speedup = eager / compiled):"]
+        lines += _plain_table(COMPILE_HEADER, compile_rows)
     lines.append("")
     lines.append(summary(document))
     failures = [r for r in document["results"] if not _ok(r)]
@@ -161,6 +263,13 @@ def render_markdown(document):
     lines.append("|" + "---|" * len(HEADER))
     for row in _rows(document):
         lines.append("| " + " | ".join(str(cell) for cell in row) + " |")
+    compile_rows = _compile_rows(document)
+    if compile_rows:
+        lines += ["", "Compiled against eager, per runtime (speedup = eager / compiled):", ""]
+        lines.append("| " + " | ".join(COMPILE_HEADER) + " |")
+        lines.append("|" + "---|" * len(COMPILE_HEADER))
+        for row in compile_rows:
+            lines.append("| " + " | ".join(str(cell) for cell in row) + " |")
     lines += ["", summary(document)]
     failures = [r for r in document["results"] if not _ok(r)]
     if failures:
@@ -178,8 +287,9 @@ def compare(old, new):
     header = ["workload", "old ratio", "new ratio", "jittor old", "jittor new",
               "jittor speedup"]
     rows = [header]
-    for workload, pair in new_pairs.items():
-        before = old_pairs.get(workload, {})
+    for key, pair in new_pairs.items():
+        workload = key[0] if key[1] == "none" else "%s [%s]" % key
+        before = old_pairs.get(key, {})
         old_ratio, new_ratio = _ratio(before), _ratio(pair)
         jo, jn = before.get("jittor"), pair.get("jittor")
         speedup = (jo["median_s"] / jn["median_s"]

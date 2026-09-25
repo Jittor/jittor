@@ -26,19 +26,34 @@
 | --- | --- | --- | --- |
 | `qwen3_prefill` | 推理 | bf16 | Qwen3-0.6B，batch 1 × 2048 token 的 prompt 前向，只取最后位置 logits |
 | `qwen3_decode` | 推理 | bf16 | Qwen3-0.6B，`generate()` 贪心解码，prompt 128，定长生成 128 token，KV cache |
+| `qwen3_decode_static` | 推理 | bf16 | 同上，静态 KV cache：`reduce-overhead` 针对的形状稳定解码 |
 | `qwen3_train` | 训练 | fp32 | Qwen3-0.6B，batch 4 × 512，因果 LM loss、反向、AdamW |
 | `sd15_sample` | 推理 | fp16 | SD1.5 UNet，512×512，DDIM 20 步，CFG 7.5（每步 batch 2） |
 | `sd15_vae_decode` | 推理 | fp16 | SD1.5 VAE，64×64 latent 解码成 512×512 图像 |
 | `sd15_unet_train` | 训练 | fp32 | SD1.5 UNet 微调步：DDPM 加噪、ε-MSE、反向、AdamW，batch 2 |
 | `ddpm_unet_train` | 训练 | fp32 | diffusers `train_unconditional` 的像素空间 DDPM UNet，64×64，batch 16 |
 | `resnet50_infer` | 推理 | fp16 | ResNet-50，batch 64，224×224 |
+| `resnet50_infer_b1` | 推理 | fp16 | ResNet-50，batch 1：延迟受逐算子主机开销支配的区间 |
 | `resnet50_train` | 训练 | fp32 | ResNet-50，batch 64，SGD momentum |
 | `vit_b16_train` | 训练 | fp32 | ViT-B/16 分类，batch 64，AdamW |
-| `bert_base_train` | 训练 | fp32 | BERT-base 序列分类微调，batch 32 × 128，AdamW |
+| `bert_base_train` | 训练 | fp32 | BERT-base 序列分类微调，batch 32 × 128，AdamW，dropout 0.1 |
+| `bert_base_infer` | 推理 | fp32 | BERT-base 序列分类，batch 1 × 128：在线推理 |
 
-权重按已发布的模型配置**随机初始化**：套件因此离线可复现，也不改变工作量——一步的
-FLOPs、形状和 kernel 与权重取值无关。生成类任务禁用 EOS、强制定长，理由相同。
-fp32 任务在两侧都开 TF32（`--no-tf32` 关闭）。
+权重按已发布的模型配置初始化，但数值**由 NumPy 按固定种子生成**（`deterministic_init`：
+矩阵与卷积核取 `N(0, 1/fan_in)`，1-D 的 weight 取 1、bias 取 0），输入同样来自 NumPy：
+两侧从同一组数出发，逐步的 loss（推理为输出均值）因此可以对比，而不只是时间。
+套件离线可复现，工作量也不变——一步的 FLOPs、形状和 kernel 与权重取值无关。生成类
+任务禁用 EOS、强制定长，理由相同。每个任务持有一个 4 个 batch 的池，**每步换一个**：
+训练循环每步都见新数据，被捕获重放的一步也必须跟着换（固定输入会掩盖输入拷贝的错误）。
+用框架自己的随机数（dropout）的任务标为 `stochastic`，不对比数值。fp32 任务在两侧都开
+TF32（`--no-tf32` 关闭）。
+
+`--compile none,reduce-overhead`（或 `max-autotune`）让每个任务再以 `torch.compile` 跑
+一遍，两侧同一份代码：训练任务编译整个 `run`（前向、反向、优化器），SD 采样编译 UNet，
+静态 cache 解码用 Transformers 自带的 `generate` 编译配置；动态 cache 解码没有形状稳定
+的编译形式，编译行记为 SKIPPED。每个编译步前调用
+`torch.compiler.cudagraph_mark_step_begin()`（PyTorch 对 CUDA graph 模式的要求）；编译
+模式至少预热 6 步，捕获与录制不进计时。
 
 ## 环境
 
@@ -104,6 +119,14 @@ python bench/torch_compat/report.py old.json new.json       # 两次运行对比
   让优化器更新之类的惰性工作也在计时区间内完成。
 - **jittor 1st step**：第一步的墙钟，主要是 JIT 编译。单列出来，不进比值——它是冷启动
   成本，用户确实会付，但与稳态速度是两个问题。
+- **host**：一步里 `step()` 返回前所占的比例。PyTorch eager 是分发与发射，Jittor 是构图
+  （执行在同步时）；比例高说明这一步受主机限制。真正的设备忙时要用 `jt.profile`。
+- **agree**：两侧逐步数值的最大差，以参考序列的均方根为尺度；训练只比前 3 步（之后两条
+  正确的轨迹也会因训练本身的混沌分开）。大于 5e-2 标 `!`。编译对 eager 的同一列在第二张
+  表里。
+- **compiled**：编译后实际发生了什么——Jittor 的重放与设备图发射次数或拒绝原因，
+  PyTorch 的 graph break 数。静默退回 eager 的编译步在时间列里看不出来，在这里看得出。
+- **steady**：计时结束时进程占用的显存（NVML）；编译模式下录制会一直持有一步的工作集。
 - **mem**：NVML 读到的**进程实际占用的显存峰值**（后台线程每 20 ms 采样），两侧同一把
   尺子，含 CUDA 上下文与分配器缓存；失败（例如 OOM）的行也记录它撞到了多高。各运行时
   自己的 `torch.cuda.max_memory_allocated()` 记在结果 JSON 的 `peak_memory_bytes`，

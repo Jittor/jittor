@@ -15,15 +15,63 @@ Generation is forced to its full length (no EOS) for the same reason.
 Each workload defines:
 
 ``setup()``
-    Build the model, optimizer and resident inputs on ``self.device``.
-``step()``
-    One timed iteration. Returns the tensors the iteration produced; the runner
-    forces and synchronises them before stopping the clock.
+    Build the model and optimizer on ``self.device``, and a small pool of
+    input batches (``self.pool``).
+``run(*batch)``
+    One iteration on one batch. Returns the tensors it produced; the runner
+    forces and synchronises them before stopping the clock. ``step()`` feeds
+    ``run`` the next batch of the pool, round robin: a training loop sees a
+    new batch every step, and a captured step has to follow it.
 ``items``
     Work per step in ``unit`` (tokens, images, samples), for throughput.
+
+Everything random is drawn from NumPy with a fixed seed -- weights
+(``deterministic_init``) and inputs alike -- so both runtimes start from the
+same numbers and their step-by-step losses can be compared, not just their
+times. The frameworks' own generators differ, so anything drawn from them
+(dropout masks) makes a workload ``stochastic``: its values are not compared.
+
+``--compile MODE`` wraps what ``compile_what`` names in ``torch.compile``: the
+whole ``run`` by default -- a training step's forward, backward and optimizer
+update -- or just the model, where a user compiles the model and loops around
+it (a sampler), or Transformers' own ``generate`` compilation. ``None`` means
+the workload has no shape-stable compiled form (a growing KV cache), and its
+compiled rows are skipped. Each compiled step starts with
+``torch.compiler.cudagraph_mark_step_begin()``, as PyTorch documents for
+CUDA-graph modes: without it a training step's outputs are overwritten by the
+next replay.
 """
 
 import math
+import zlib
+
+import numpy as np
+
+
+def deterministic_init(torch, model, seed):
+    """Overwrite every parameter from NumPy, the same way in both runtimes.
+
+    The frameworks' initialisers draw from different generators, so the same
+    model started from different weights and only the step times could be
+    compared. Scales follow the usual defaults: normal with std
+    ``1/sqrt(fan_in)`` for matrices and kernels, ones for a 1-D ``weight``
+    (norm layers), zeros for a 1-D ``bias``.
+    """
+    with torch.no_grad():
+        for name, parameter in model.named_parameters():
+            shape = tuple(parameter.shape)
+            if len(shape) == 1:
+                value = np.ones(shape, np.float32) if name.endswith("weight") \
+                    else np.zeros(shape, np.float32)
+            else:
+                fan_in = int(np.prod(shape[1:]))
+                # Seeded by name, not position: the two runtimes may list the
+                # same parameters in a different order.
+                rng = np.random.default_rng([seed, zlib.crc32(name.encode())])
+                value = (rng.standard_normal(shape, dtype=np.float32)
+                         / np.float32(math.sqrt(fan_in)))
+            parameter.copy_(torch.tensor(value, device=parameter.device)
+                            .to(parameter.dtype))
 
 
 class Workload:
@@ -37,15 +85,27 @@ class Workload:
     #: (warmup, repeats) for size "full"; the first warmup step pays Jittor's
     #: JIT compilation and is reported separately.
     iterations = (3, 10)
+    #: Distinct batches cycled through, one per step.
+    pool_size = 4
+    #: What ``--compile`` wraps: "run", "model", "generate", or None.
+    compile_what = "run"
+    #: Draws from the framework's own generator (dropout), so its values
+    #: differ between runtimes and between runs.
+    stochastic = False
 
-    def __init__(self, torch, device, dtype, size, batch=None):
+    def __init__(self, torch, device, dtype, size, batch=None, seed=0):
         self.torch = torch
         self.device = device
         self.dtype = getattr(torch, dtype)
         self.dtype_name = dtype
         self.size = size
         self.batch_override = batch
+        self.seed = seed
+        self.rng = np.random.default_rng(seed)
         self.items = 0
+        self.pool = [()]
+        self._cursor = 0
+        self.compiled = None
 
     @property
     def tiny(self):
@@ -57,11 +117,48 @@ class Workload:
             return int(self.batch_override)
         return tiny if self.tiny else full
 
+    # -- inputs, from NumPy ---------------------------------------------
+    def normal(self, shape, dtype=None):
+        value = self.rng.standard_normal(shape, dtype=np.float32)
+        return self.torch.tensor(value, device=self.device).to(dtype or self.dtype)
+
+    def integers(self, high, shape):
+        value = self.rng.integers(0, high, shape).astype(np.int64)
+        return self.torch.tensor(value, device=self.device)
+
+    def init(self, model):
+        deterministic_init(self.torch, model, self.seed)
+        return model
+
+    # -- the step ----------------------------------------------------------
     def setup(self):
         raise NotImplementedError
 
-    def step(self):
+    def run(self, *batch):
         raise NotImplementedError
+
+    def step(self):
+        batch = self.pool[self._cursor % len(self.pool)]
+        self._cursor += 1
+        if self.compiled is not None:
+            mark = getattr(self.torch.compiler, "cudagraph_mark_step_begin", None)
+            if mark is not None:
+                mark()
+        return self.run(*batch)
+
+    def compile(self, mode):
+        """Wrap ``compile_what`` in ``torch.compile(mode=mode)``."""
+        torch = self.torch
+        if self.compile_what == "run":
+            self.run = self.compiled = torch.compile(self.run, mode=mode)
+        elif self.compile_what == "model":
+            self.model = self.compiled = torch.compile(self.model, mode=mode)
+        else:
+            raise ValueError(self.compile_what)
+
+    def compiled_target(self):
+        """The object whose replay statistics describe the compiled step."""
+        return self.compiled
 
     def config(self):
         """Shape parameters worth recording next to the timing."""
@@ -106,12 +203,8 @@ class _Qwen3(Workload):
 
         config = qwen3_config(self.tiny)
         config._attn_implementation = "sdpa"
-        model = Qwen3ForCausalLM(config)
+        model = self.init(Qwen3ForCausalLM(config))
         return model.to(device=self.device, dtype=self.dtype), config
-
-    def _ids(self, batch, length, vocab):
-        torch = self.torch
-        return torch.randint(0, vocab, (batch, length), device=self.device)
 
 
 class Qwen3Prefill(_Qwen3):
@@ -126,13 +219,13 @@ class Qwen3Prefill(_Qwen3):
         self.model.eval()
         self.batch = self._batch(1, 1)
         self.length = 32 if self.tiny else 2048
-        self.input_ids = self._ids(self.batch, self.length, config.vocab_size)
+        self.pool = [(self.integers(config.vocab_size, (self.batch, self.length)),)
+                     for _ in range(self.pool_size)]
         self.items = self.batch * self.length
 
-    def step(self):
+    def run(self, input_ids):
         with self.torch.no_grad():
-            out = self.model(input_ids=self.input_ids, use_cache=False,
-                             logits_to_keep=1)
+            out = self.model(input_ids=input_ids, use_cache=False, logits_to_keep=1)
         return [out.logits]
 
     def config(self):
@@ -146,6 +239,8 @@ class Qwen3Decode(_Qwen3):
     default_dtype = "bfloat16"
     description = "Qwen3-0.6B greedy generate() with KV cache, fixed length"
     iterations = (2, 5)
+    compile_what = None     # the dynamic cache grows every token
+    cache = None
 
     def setup(self):
         self.model, config = self._model()
@@ -153,27 +248,53 @@ class Qwen3Decode(_Qwen3):
         # Never stop early: random weights may emit EOS at any position.
         self.model.generation_config.eos_token_id = None
         self.model.generation_config.pad_token_id = 0
+        # Transformers compiles a static-cache decode by itself; eager rows
+        # must stay eager.
+        self.model.generation_config.disable_compile = True
         self.batch = self._batch(1, 1)
         self.prompt = 8 if self.tiny else 128
         self.new_tokens = 8 if self.tiny else 128
-        self.input_ids = self._ids(self.batch, self.prompt, config.vocab_size)
-        self.attention_mask = self.torch.ones_like(self.input_ids)
+        self.pool = []
+        for _ in range(self.pool_size):
+            ids = self.integers(config.vocab_size, (self.batch, self.prompt))
+            self.pool.append((ids, self.torch.ones_like(ids)))
         self.items = self.batch * self.new_tokens
 
-    def step(self):
+    def run(self, input_ids, attention_mask):
+        extra = {} if self.cache is None else {"cache_implementation": self.cache}
         with self.torch.no_grad():
             out = self.model.generate(
-                input_ids=self.input_ids, attention_mask=self.attention_mask,
+                input_ids=input_ids, attention_mask=attention_mask,
                 max_new_tokens=self.new_tokens, min_new_tokens=self.new_tokens,
-                do_sample=False, use_cache=True,
-            )
+                do_sample=False, use_cache=True, **extra)
         if out.shape[-1] != self.prompt + self.new_tokens:
             raise RuntimeError("generate() stopped at %d tokens" % out.shape[-1])
         return [out]
 
     def config(self):
         return {"batch": self.batch, "prompt": self.prompt,
-                "new_tokens": self.new_tokens}
+                "new_tokens": self.new_tokens, "cache": self.cache or "dynamic"}
+
+
+class Qwen3DecodeStatic(Qwen3Decode):
+    name = "qwen3_decode_static"
+    description = ("Qwen3-0.6B greedy generate() with a static KV cache -- the "
+                   "shape-stable decode that reduce-overhead is for")
+    cache = "static"
+    compile_what = "generate"
+
+    def compile(self, mode):
+        # Transformers' own route: generate() compiles the decode step (and
+        # runs the prefill as written) when the cache is static.
+        from transformers import CompileConfig
+
+        config = self.model.generation_config
+        config.disable_compile = False
+        config.compile_config = CompileConfig(fullgraph=False, dynamic=False, mode=mode)
+        self.compiled = "generate"
+
+    def compiled_target(self):
+        return getattr(self.model, "_compiled_call", None)
 
 
 class Qwen3Train(_Qwen3):
@@ -190,11 +311,12 @@ class Qwen3Train(_Qwen3):
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-5)
         self.batch = self._batch(2, 4)
         self.length = 32 if self.tiny else 512
-        self.input_ids = self._ids(self.batch, self.length, config.vocab_size)
+        self.pool = [(self.integers(config.vocab_size, (self.batch, self.length)),)
+                     for _ in range(self.pool_size)]
         self.items = self.batch * self.length
 
-    def step(self):
-        loss = self.model(input_ids=self.input_ids, labels=self.input_ids).loss
+    def run(self, input_ids):
+        loss = self.model(input_ids=input_ids, labels=input_ids).loss
         loss.backward()
         self.optimizer.step()
         self.optimizer.zero_grad(set_to_none=True)
@@ -262,8 +384,7 @@ class _SD15(Workload):
 
     def _text(self, batch):
         width = 32 if self.tiny else 768
-        return self.torch.randn(batch, 77, width, device=self.device,
-                                dtype=self.dtype)
+        return self.normal((batch, 77, width))
 
 
 class SD15Sample(_SD15):
@@ -274,33 +395,33 @@ class SD15Sample(_SD15):
     description = ("SD1.5 text-to-image denoising: DDIM, classifier-free "
                    "guidance 7.5, 512x512")
     iterations = (2, 5)
+    compile_what = "model"
 
     def setup(self):
         from diffusers import DDIMScheduler
 
-        torch = self.torch
-        self.model = sd15_unet(self.tiny).to(device=self.device,
-                                             dtype=self.dtype).eval()
+        self.model = self.init(sd15_unet(self.tiny)).to(
+            device=self.device, dtype=self.dtype).eval()
         self.scheduler = DDIMScheduler(
             beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear",
             clip_sample=False, set_alpha_to_one=False, steps_offset=1)
         self.steps = 4 if self.tiny else 20
         self.scheduler.set_timesteps(self.steps)
         self.batch = self._batch(1, 1)
-        self.context = self._text(2 * self.batch)  # [uncond, cond]
-        self.initial = torch.randn(self._latent_shape(self.batch),
-                                   device=self.device, dtype=self.dtype)
+        self.pool = [(self.normal(self._latent_shape(self.batch)),
+                      self._text(2 * self.batch))  # [uncond, cond]
+                     for _ in range(self.pool_size)]
         self.items = self.batch
 
-    def step(self):
+    def run(self, initial, context):
         torch = self.torch
-        latents = self.initial * self.scheduler.init_noise_sigma
+        latents = initial * self.scheduler.init_noise_sigma
         with torch.no_grad():
             for t in self.scheduler.timesteps:
                 model_in = torch.cat([latents, latents])
                 model_in = self.scheduler.scale_model_input(model_in, t)
                 noise = self.model(model_in, t,
-                                   encoder_hidden_states=self.context).sample
+                                   encoder_hidden_states=context).sample
                 uncond, cond = noise.chunk(2)
                 noise = uncond + 7.5 * (cond - uncond)
                 latents = self.scheduler.step(noise, t, latents).prev_sample
@@ -320,17 +441,16 @@ class SD15VAEDecode(_SD15):
     iterations = (2, 10)
 
     def setup(self):
-        torch = self.torch
-        self.model = sd15_vae(self.tiny).to(device=self.device,
-                                            dtype=self.dtype).eval()
+        self.model = self.init(sd15_vae(self.tiny)).to(
+            device=self.device, dtype=self.dtype).eval()
         self.batch = self._batch(1, 1)
-        self.latents = torch.randn(self._latent_shape(self.batch),
-                                   device=self.device, dtype=self.dtype)
+        self.pool = [(self.normal(self._latent_shape(self.batch)),)
+                     for _ in range(self.pool_size)]
         self.items = self.batch
 
-    def step(self):
+    def run(self, latents):
         with self.torch.no_grad():
-            image = self.model.decode(self.latents / 0.18215).sample
+            image = self.model.decode(latents / 0.18215).sample
         return [image]
 
     def config(self):
@@ -350,28 +470,26 @@ class SD15Train(_SD15):
         from diffusers import DDPMScheduler
 
         torch = self.torch
-        self.model = sd15_unet(self.tiny).to(device=self.device,
-                                             dtype=self.dtype).train()
+        self.model = self.init(sd15_unet(self.tiny)).to(
+            device=self.device, dtype=self.dtype).train()
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-5)
         self.scheduler = DDPMScheduler(
             beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear",
             num_train_timesteps=1000)
         self.batch = self._batch(2, 2)
         shape = self._latent_shape(self.batch)
-        self.latents = torch.randn(shape, device=self.device, dtype=self.dtype)
-        self.noise = torch.randn(shape, device=self.device, dtype=self.dtype)
-        self.timesteps = torch.randint(0, 1000, (self.batch,),
-                                       device=self.device)
-        self.context = self._text(self.batch)
+        # The noise and timesteps a training loop draws each step, drawn here
+        # from NumPy per batch so both runtimes see the same ones.
+        self.pool = [(self.normal(shape), self.normal(shape),
+                      self.integers(1000, (self.batch,)), self._text(self.batch))
+                     for _ in range(self.pool_size)]
         self.items = self.batch
 
-    def step(self):
+    def run(self, latents, noise, timesteps, context):
         torch = self.torch
-        noisy = self.scheduler.add_noise(self.latents, self.noise,
-                                         self.timesteps)
-        pred = self.model(noisy, self.timesteps,
-                          encoder_hidden_states=self.context).sample
-        loss = torch.nn.functional.mse_loss(pred.float(), self.noise.float())
+        noisy = self.scheduler.add_noise(latents, noise, timesteps)
+        pred = self.model(noisy, timesteps, encoder_hidden_states=context).sample
+        loss = torch.nn.functional.mse_loss(pred.float(), noise.float())
         loss.backward()
         self.optimizer.step()
         self.optimizer.zero_grad(set_to_none=True)
@@ -421,25 +539,23 @@ class DDPMTrain(Workload):
         from diffusers import DDPMScheduler
 
         torch = self.torch
-        self.model = ddpm_unet(self.tiny).to(device=self.device,
-                                             dtype=self.dtype).train()
+        self.model = self.init(ddpm_unet(self.tiny)).to(
+            device=self.device, dtype=self.dtype).train()
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4)
         self.scheduler = DDPMScheduler(num_train_timesteps=1000)
         self.batch = self._batch(2, 16)
         side = 16 if self.tiny else 64
         shape = (self.batch, 3, side, side)
-        self.images = torch.randn(shape, device=self.device, dtype=self.dtype)
-        self.noise = torch.randn(shape, device=self.device, dtype=self.dtype)
-        self.timesteps = torch.randint(0, 1000, (self.batch,),
-                                       device=self.device)
+        self.pool = [(self.normal(shape), self.normal(shape),
+                      self.integers(1000, (self.batch,)))
+                     for _ in range(self.pool_size)]
         self.items = self.batch
 
-    def step(self):
+    def run(self, images, noise, timesteps):
         torch = self.torch
-        noisy = self.scheduler.add_noise(self.images, self.noise,
-                                         self.timesteps)
-        pred = self.model(noisy, self.timesteps).sample
-        loss = torch.nn.functional.mse_loss(pred, self.noise)
+        noisy = self.scheduler.add_noise(images, noise, timesteps)
+        pred = self.model(noisy, timesteps).sample
+        loss = torch.nn.functional.mse_loss(pred, noise)
         loss.backward()
         self.optimizer.step()
         self.optimizer.zero_grad(set_to_none=True)
@@ -523,18 +639,18 @@ def resnet50(torch, num_classes=1000, tiny=False):
 
 class _Images(Workload):
     unit = "images"
+    full_batch = 64
 
     def _images(self):
-        torch = self.torch
-        self.batch = self._batch(4, 64)
+        self.batch = self._batch(4 if self.full_batch > 1 else 1, self.full_batch)
         side = 32 if self.tiny else 224
-        self.images = torch.randn(self.batch, 3, side, side,
-                                  device=self.device, dtype=self.dtype)
-        self.labels = torch.randint(0, 1000, (self.batch,), device=self.device)
+        self.pool = [(self.normal((self.batch, 3, side, side)),
+                      self.integers(1000, (self.batch,)))
+                     for _ in range(self.pool_size)]
         self.items = self.batch
 
     def config(self):
-        return {"batch": self.batch, "image": list(self.images.shape[-2:])}
+        return {"batch": self.batch, "image": 32 if self.tiny else 224}
 
 
 class ResNet50Infer(_Images):
@@ -545,13 +661,21 @@ class ResNet50Infer(_Images):
     description = "ResNet-50 inference, batch 64, 224x224"
 
     def setup(self):
-        self.model = resnet50(self.torch, tiny=self.tiny).to(
+        self.model = self.init(resnet50(self.torch, tiny=self.tiny)).to(
             device=self.device, dtype=self.dtype).eval()
         self._images()
 
-    def step(self):
+    def run(self, images, labels):
         with self.torch.no_grad():
-            return [self.model(self.images)]
+            return [self.model(images)]
+
+
+class ResNet50InferB1(ResNet50Infer):
+    name = "resnet50_infer_b1"
+    description = ("ResNet-50 inference, batch 1, 224x224 -- the latency-bound "
+                   "regime, where per-op host cost is most of the step")
+    full_batch = 1
+    iterations = (5, 30)
 
 
 class ResNet50Train(_Images):
@@ -563,15 +687,15 @@ class ResNet50Train(_Images):
 
     def setup(self):
         torch = self.torch
-        self.model = resnet50(torch, tiny=self.tiny).to(
+        self.model = self.init(resnet50(torch, tiny=self.tiny)).to(
             device=self.device, dtype=self.dtype).train()
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.1,
                                          momentum=0.9, weight_decay=1e-4)
         self.loss_fn = torch.nn.CrossEntropyLoss()
         self._images()
 
-    def step(self):
-        loss = self.loss_fn(self.model(self.images), self.labels)
+    def run(self, images, labels):
+        loss = self.loss_fn(self.model(images), labels)
         loss.backward()
         self.optimizer.step()
         self.optimizer.zero_grad(set_to_none=True)
@@ -596,32 +720,27 @@ class ViTB16Train(_Images):
         else:
             config = ViTConfig(image_size=224, patch_size=16, num_labels=1000)
         config._attn_implementation = "sdpa"
-        self.model = ViTForImageClassification(config).to(
+        self.model = self.init(ViTForImageClassification(config)).to(
             device=self.device, dtype=self.dtype).train()
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4)
         self._images()
 
-    def step(self):
-        loss = self.model(pixel_values=self.images, labels=self.labels).loss
+    def run(self, images, labels):
+        loss = self.model(pixel_values=images, labels=labels).loss
         loss.backward()
         self.optimizer.step()
         self.optimizer.zero_grad(set_to_none=True)
         return [loss]
 
 
-class BertBaseTrain(Workload):
-    name = "bert_base_train"
+class _Bert(Workload):
     family = "bert-base"
-    mode = "train"
     unit = "samples"
     requires = ("transformers",)
-    description = ("BERT-base sequence classification fine-tuning, "
-                   "batch 32, seq 128, AdamW")
 
-    def setup(self):
+    def _setup(self, train, tiny_batch, full_batch):
         from transformers import BertConfig, BertForSequenceClassification
 
-        torch = self.torch
         if self.tiny:
             config = BertConfig(vocab_size=1024, hidden_size=64,
                                 num_hidden_layers=2, num_attention_heads=4,
@@ -629,35 +748,63 @@ class BertBaseTrain(Workload):
         else:
             config = BertConfig(num_labels=2)
         config._attn_implementation = "sdpa"
-        self.model = BertForSequenceClassification(config).to(
-            device=self.device, dtype=self.dtype).train()
-        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=2e-5)
-        self.batch = self._batch(4, 32)
+        self.model = self.init(BertForSequenceClassification(config)).to(
+            device=self.device, dtype=self.dtype)
+        self.model.train(train)
+        self.batch = self._batch(tiny_batch, full_batch)
         self.length = 16 if self.tiny else 128
-        self.input_ids = torch.randint(0, config.vocab_size,
-                                       (self.batch, self.length),
-                                       device=self.device)
-        self.attention_mask = torch.ones_like(self.input_ids)
-        self.labels = torch.randint(0, 2, (self.batch,), device=self.device)
+        self.pool = []
+        for _ in range(self.pool_size):
+            ids = self.integers(config.vocab_size, (self.batch, self.length))
+            self.pool.append((ids, self.torch.ones_like(ids),
+                              self.integers(2, (self.batch,))))
         self.items = self.batch
 
-    def step(self):
-        loss = self.model(input_ids=self.input_ids,
-                          attention_mask=self.attention_mask,
-                          labels=self.labels).loss
+    def config(self):
+        return {"batch": self.batch, "seq": self.length}
+
+
+class BertBaseTrain(_Bert):
+    name = "bert_base_train"
+    mode = "train"
+    description = ("BERT-base sequence classification fine-tuning, "
+                   "batch 32, seq 128, AdamW, dropout 0.1")
+    stochastic = True
+
+    def setup(self):
+        self._setup(True, 4, 32)
+        self.optimizer = self.torch.optim.AdamW(self.model.parameters(), lr=2e-5)
+
+    def run(self, input_ids, attention_mask, labels):
+        loss = self.model(input_ids=input_ids, attention_mask=attention_mask,
+                          labels=labels).loss
         loss.backward()
         self.optimizer.step()
         self.optimizer.zero_grad(set_to_none=True)
         return [loss]
 
-    def config(self):
-        return {"batch": self.batch, "seq": self.length, "optimizer": "AdamW"}
+
+class BertBaseInfer(_Bert):
+    name = "bert_base_infer"
+    mode = "infer"
+    description = ("BERT-base sequence classification, batch 1, seq 128 -- "
+                   "online inference, bound by per-op host cost")
+    iterations = (5, 30)
+
+    def setup(self):
+        self._setup(False, 1, 1)
+
+    def run(self, input_ids, attention_mask, labels):
+        with self.torch.no_grad():
+            return [self.model(input_ids=input_ids,
+                               attention_mask=attention_mask).logits]
 
 
 WORKLOADS = {cls.name: cls for cls in (
-    Qwen3Prefill, Qwen3Decode, Qwen3Train,
+    Qwen3Prefill, Qwen3Decode, Qwen3DecodeStatic, Qwen3Train,
     SD15Sample, SD15VAEDecode, SD15Train, DDPMTrain,
-    ResNet50Infer, ResNet50Train, ViTB16Train, BertBaseTrain,
+    ResNet50Infer, ResNet50InferB1, ResNet50Train, ViTB16Train,
+    BertBaseTrain, BertBaseInfer,
 )}
 
 
