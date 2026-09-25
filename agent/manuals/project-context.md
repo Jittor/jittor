@@ -99,7 +99,7 @@ training/state-restore workflow in the maintained offline CPU notebook gate. See
 The same report records the real-scale follow-up: UNet is accepted at `0.79x`,
 ConvNet improved to `1.08x`, and ViT remains open at about `1.33x` because its
 dominant CUDA GEMMs lag the PyTorch reference.
-Performance work uses isolated caches, synchronization, and exact commit labels.
+Performance work uses isolated caches, synchronization, and exact commit labels. Step-level host/device/memory attribution uses `jt.profile` (Torch mode: `torch.profiler`); see [profiling](../../docs/notes/profiling.md) and the [tool audit](../../docs/results/2026-09-25-profiling-tools.md).
 The ecosystem harness verifies twelve Transformers/Diffusers/PEFT/ms-swift/MMCV/MMEngine CPU/CUDA cases; its NPU scope verifies Diffusers UNet2D, MMCV/MMEngine, and ms-swift LoRA Llama forward and every gradient against `torch_npu` with zero CPU paths.
 Diffusers correctness and maintained float32 performance are accepted at `0.964x` native `torch_npu`; the tiny OpenMMLab NPU cases now pass at `0.927x/0.796x`. See the [Diffusers](../../refactor-wip/results/2026-08-30-diffusers-ascend-parity-performance.md) and [OpenMMLab](../../refactor-wip/results/2026-08-30-mmcv-mmengine-ascend-parity.md) reports. The tiny ms-swift LoRA case uses fused float32 causal SDPA training and passes at `0.969x`; see the [ms-swift Ascend report](../../refactor-wip/results/2026-08-31-ms-swift-ascend-parity-performance.md).
 On a real 910B3, the locked verl core algorithms pass exact loss/gradient parity

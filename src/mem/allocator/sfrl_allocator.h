@@ -134,6 +134,11 @@ struct SFRLAllocator : Allocator {
     size_t allocation_size(size_t size);
     bool should_split(CachingBlock* block, size_t size);
     void try_merge_two_blocks(CachingBlock* b1, CachingBlock* b2);
+    // Hand cached blocks of `pool` back to the underlying allocator, keeping
+    // `unused_memory` and the per-device reserved counters in step. Every
+    // release of cached memory goes through here, so the reserved high-water
+    // below cannot drift from what the pools actually hold.
+    size_t release_cached(CachingBlockPool& pool, long long free_size = -1);
 
     inline SFRLAllocator(float free_ratio = 1, float min_free_size=0) : free_ratio(free_ratio), min_free_size(min_free_size) {
         small_blocks.ids = &id_space;
@@ -171,5 +176,10 @@ int64 sfrl_device_peak_bytes(int device);
 void sfrl_reset_device_peak(int device);
 // Every byte handed out so far; it never decreases. Device -1 is the host.
 int64 sfrl_device_allocated_bytes(int device);
+// Bytes the pools of one device hold from the underlying allocator (live plus
+// cached), and their high-water mark -- torch's `max_memory_reserved`. The
+// peak restarts with `sfrl_reset_device_peak`, like the allocated one.
+int64 sfrl_device_reserved_bytes(int device);
+int64 sfrl_device_reserved_peak_bytes(int device);
 
 }//jittor

@@ -397,6 +397,9 @@ class GraphReplay:
         self._graph_out = None
         self._graph_refused = None
         self.stats = {"captured": 0, "replayed": 0, "rebuilt": 0, "graph": 0}
+        # `jt.profile` reports these counters and any refusal for the region.
+        from jittor.profiling import register_replay_source
+        register_replay_source(self)
         if example_inputs:
             self(*example_inputs)
 

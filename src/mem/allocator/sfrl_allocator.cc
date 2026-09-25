@@ -16,6 +16,7 @@
 #include "mem/allocator/sfrl_allocator.h"
 #include "runtime/device.h"
 #include "runtime/backend.h"
+#include "runtime/profiler/step_trace.h"
 
 namespace jittor {
 
@@ -29,6 +30,8 @@ constexpr int kSlots = kPeakDevices + 1;
 std::atomic<int64> device_live[kSlots];
 std::atomic<int64> device_peak[kSlots];
 std::atomic<int64> device_allocated[kSlots];
+std::atomic<int64> device_reserved[kSlots];
+std::atomic<int64> device_reserved_peak[kSlots];
 
 inline int slot(int device) {
     if (device < 0) return kPeakDevices;
@@ -48,6 +51,14 @@ void note_device_free(int device, int64 bytes) {
     int s = slot(device);
     if (s >= 0) device_live[s].fetch_sub(bytes);
 }
+
+void note_device_reserve(int device, int64 bytes) {
+    int s = slot(device);
+    if (s < 0) return;
+    int64 now = device_reserved[s].fetch_add(bytes) + bytes;
+    int64 seen = device_reserved_peak[s].load();
+    while (now > seen && !device_reserved_peak[s].compare_exchange_weak(seen, now)) {}
+}
 } // namespace
 
 int64 sfrl_device_live_bytes(int device) {
@@ -62,7 +73,19 @@ int64 sfrl_device_peak_bytes(int device) {
 
 void sfrl_reset_device_peak(int device) {
     int s = slot(device);
-    if (s >= 0) device_peak[s].store(device_live[s].load());
+    if (s < 0) return;
+    device_peak[s].store(device_live[s].load());
+    device_reserved_peak[s].store(device_reserved[s].load());
+}
+
+int64 sfrl_device_reserved_bytes(int device) {
+    int s = slot(device);
+    return s >= 0 ? device_reserved[s].load() : 0;
+}
+
+int64 sfrl_device_reserved_peak_bytes(int device) {
+    int s = slot(device);
+    return s >= 0 ? device_reserved_peak[s].load() : 0;
 }
 
 int64 sfrl_device_allocated_bytes(int device) {
@@ -334,9 +357,19 @@ void SFRLAllocator::try_free_this_allocator() {
     if (free_ratio >= 1) return;    // policy disabled, see the header
     if (float(unused_memory) > free_ratio * float(unused_memory + used_memory)
         && unused_memory > min_free_size) {
-        unused_memory -= large_blocks.free_all_cached_blocks(underlying, unused_memory - (long long)min_free_size);
-        unused_memory -= small_blocks.free_all_cached_blocks(underlying, unused_memory - (long long)min_free_size);
+        release_cached(large_blocks, unused_memory - (long long)min_free_size);
+        release_cached(small_blocks, unused_memory - (long long)min_free_size);
     }
+}
+
+size_t SFRLAllocator::release_cached(CachingBlockPool& pool, long long free_size) {
+    size_t freed = pool.free_all_cached_blocks(underlying, free_size);
+    unused_memory -= freed;
+    if (freed) {
+        note_device_reserve(device(), -(int64)freed);
+        step_trace_mem(stm_reserve, device(), -(int64)freed, this, 0);
+    }
+    return freed;
 }
 
 void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
@@ -374,11 +407,13 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
         try {
             ptr = underlying->alloc(alloc_size, under_allocation);
         } catch (...) {
-            unused_memory -= large_blocks.free_all_cached_blocks(underlying);
-            unused_memory -= small_blocks.free_all_cached_blocks(underlying);
+            release_cached(large_blocks);
+            release_cached(small_blocks);
             gc_all();
             ptr = underlying->alloc(alloc_size, under_allocation);
         }
+        note_device_reserve(device(), alloc_size);
+        step_trace_mem(stm_reserve, device(), alloc_size, this, 0);
         block = new CachingBlock(alloc_size, alloc_size, blocks, ptr);
         block->allocation = under_allocation;
     } else {
@@ -402,6 +437,7 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
     allocation = blocks->insert_occupied(block);
     used_memory += block->size;
     note_device_alloc(device(), block->size);
+    step_trace_mem(stm_pool, device(), block->size, this, allocation);
     return block->memory_ptr;
 }
 
@@ -434,6 +470,7 @@ void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
         id_space.erase_occupied(allocation);
         used_memory -= block->size;
         note_device_free(device(), block->size);
+        step_trace_mem(stm_pool, device(), -(int64)block->size, this, allocation);
         unused_memory += block->size;
         block->occupied = false;
         try_merge_two_blocks(block, block->prev);
@@ -452,8 +489,8 @@ void SFRLAllocator::gc() {
     // mutex makes the same-thread reentry from our own retry path succeed.
     std::unique_lock<std::recursive_mutex> lock(mutex, std::try_to_lock);
     if (!lock.owns_lock()) return;
-    unused_memory -= small_blocks.free_all_cached_blocks(underlying);
-    unused_memory -= large_blocks.free_all_cached_blocks(underlying);
+    release_cached(small_blocks);
+    release_cached(large_blocks);
 }
 
 bool SFRLAllocator::share_with(size_t size, size_t allocation, size_t offset) {

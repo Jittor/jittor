@@ -352,6 +352,10 @@ int64 device_memory_peak(int device) {
     return sfrl_device_peak_bytes(device);
 }
 
+int64 device_memory_reserved_peak(int device) {
+    return sfrl_device_reserved_peak_bytes(device);
+}
+
 void reset_device_memory_peak(int device) {
     sfrl_reset_device_peak(device);
 }

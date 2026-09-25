@@ -23,6 +23,7 @@
 #include "mem/allocator.h"
 #include "core/fused_op.h"
 #include "runtime/profiler/profiler_guard.h"
+#include "runtime/profiler/step_trace.h"
 #include "core/memory_profiler.h"
 #include "debug/nan_checker.h"
 #include "utils/cache_compile.h"
@@ -355,6 +356,8 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 if (keep_graph == 2) release_kept_storage(plan.all_vars[index], kept_released, kept_pinned);
                 (*plan.batch_hold)[index].free_liveness();
             }
+        // One trace record per launched operator; see step_trace.h.
+        StepTraceOpScope trace_op;
         int root = queue[rid];
         Op* op = ops[root];
         bool is_fused_op = false;
@@ -384,6 +387,8 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             }
         }
         #endif
+        trace_op.named(op, is_fused_op,
+                       requested_backend == BackendId::Cpu ? -1 : execution_device);
         LaunchRecord launch;
         launch.origin = op->launch_origin;
         launch.op_id = is_fused_op ? 0 : op->type_id();
@@ -429,6 +434,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         }
         if (PREDICT_BRANCH_NOT_TAKEN(profile_memory_enable))
             memory_profiler.check();
+        trace_op.allocated();
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
         op->prepare_execution(jkl);
         prepared_jit_key = jkl.to_string();

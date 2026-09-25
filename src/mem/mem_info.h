@@ -62,6 +62,16 @@ int64 device_memory_reserved(int device);
 // @pyjt(device_memory_peak)
 int64 device_memory_peak(int device);
 
+/**
+ * The most bytes the pools of one device have held from the driver (live plus
+ * cached) since the process started or :func:`reset_device_memory_peak` --
+ * torch's ``max_memory_reserved(N)``.
+ */
+// @pyjt(device_memory_reserved_peak)
+int64 device_memory_reserved_peak(int device);
+
+/// Restart both high-water marks (allocated and reserved) at their current
+/// values, like torch's ``reset_peak_memory_stats``.
 // @pyjt(reset_device_memory_peak)
 void reset_device_memory_peak(int device);
 

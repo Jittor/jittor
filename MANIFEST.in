@@ -338,6 +338,7 @@ include docs/notes/index.md
 include docs/notes/mixed-precision.md
 include docs/notes/numerics-contract.md
 include docs/notes/pipelined-execution.md
+include docs/notes/profiling.md
 include docs/performance/benchmarking.md
 include docs/performance/index.md
 include docs/performance/library-standing.md
@@ -353,6 +354,7 @@ include docs/results/2026-09-14-jittor-vs-pytorch.md
 include docs/results/2026-09-14-vllm-omni-h3-enablement.md
 include docs/results/2026-09-19-torch-compat-runbook-verification.md
 include docs/results/2026-09-24-torch-compat-real-models.md
+include docs/results/2026-09-25-profiling-tools.md
 include docs/results/index.md
 include docs/slides/jittor-overview.html
 include docs/slides/计图介绍.pptx
@@ -705,6 +707,8 @@ include src/runtime/profiler/profiler_guard.h
 include src/runtime/profiler/replacement.cc
 include src/runtime/profiler/replacement.h
 include src/runtime/profiler/simple_profiler.h
+include src/runtime/profiler/step_trace.cc
+include src/runtime/profiler/step_trace.h
 include src/runtime/profiler/vtop.cc
 include src/runtime/ring_buffer.cc
 include src/runtime/ring_buffer.h
