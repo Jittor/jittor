@@ -291,7 +291,11 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
             # accepts one. Pop it and cast the result instead.
             _cast_to = _dtype_to_str(kwargs.pop("dtype"))
     out = orig(*args, **kwargs)
-    if _cast_to is not None:
+    # A factory may already produce the requested dtype. Read its current
+    # result rather than trusting accepts_dtype: tensor arguments to normal,
+    # for example, can promote the result after its typed random allocation.
+    if (_cast_to is not None and
+            _jittor_dtype_name(out.dtype) != _jittor_dtype_name(_cast_to)):
         out = out.cast(_cast_to)
     out._jittor_torch_ext_mutable = True
     out.requires_grad_(_requires_grad)
