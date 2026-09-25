@@ -346,6 +346,22 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
     padding = backend_ops(accelerator_backend_id()).execution.allocation_padding;
     #endif
     size = align_size(size + padding);
+    if (PREDICT_BRANCH_NOT_TAKEN(capture_held_frees != nullptr)) {
+        // A block freed earlier in the same recording, still occupied under
+        // its id because the free was held. See `reuse_held_for_capture`.
+        // Not split, so not one much larger than asked for: that would leave
+        // the next large request to allocate afresh.
+        size_t id = 0;
+        if (reuse_held_for_capture(this, [&](size_t held) -> int64 {
+                auto* block = id_space.get_occupied(held);
+                if (block->size < size) return -1;
+                if (block->size - size > std::max(size, (size_t)1 << 20)) return -1;
+                return (int64)block->size;
+            }, id)) {
+            allocation = id;
+            return id_space.get_occupied(id)->memory_ptr;
+        }
+    }
     CachingBlockPool* blocks = get_blocks(size);
     //search cached block
     CachingBlock* block = blocks->pop_block(size);
@@ -391,6 +407,18 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
 
 void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
     std::unique_lock<std::recursive_mutex> lock(mutex);
+    if (PREDICT_BRANCH_NOT_TAKEN(capture_held_frees != nullptr)) {
+        // Only the last owner's free is held; dropping one share of a block
+        // that others still own releases nothing, and done now it leaves a
+        // held block with exactly one owner -- the recording.
+        auto* block = id_space.get_occupied(allocation);
+        if (block->share_times) {
+            --block->share_times;
+            return;
+        }
+        if (hold_free_for_capture(this, mem_ptr, size, allocation))
+            return;
+    }
     // free() only trusts `allocation`, so validate it before dereferencing:
     // range, registered, and still occupied. Callers are allowed to pass 0 for
     // mem_ptr (see src/tests/test_sfrl_allocator.cc), but when they do pass one

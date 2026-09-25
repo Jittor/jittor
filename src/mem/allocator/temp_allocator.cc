@@ -42,6 +42,19 @@ void* TempAllocator::alloc(size_t size, size_t& allocation) {
     std::unique_lock<std::recursive_mutex> lock(mutex);
     size = align_size(size);
 
+    if (PREDICT_BRANCH_NOT_TAKEN(capture_held_frees != nullptr)) {
+        // The block never left `occupied_id_mapper`: a held free was not
+        // performed, so it is handed straight back under the same id.
+        size_t id = 0;
+        if (reuse_held_for_capture(this, [&](size_t held) -> int64 {
+                auto* block = occupied_id_mapper[held];
+                return block->size >= size ? (int64)block->size : -1;
+            }, id)) {
+            allocation = id;
+            return occupied_id_mapper[id]->memory_ptr;
+        }
+    }
+
     auto temp = TempCachingBlock(size);
     auto it = cached_blocks.lower_bound(get_key(&temp));
     TempCachingBlock* block = nullptr;
@@ -84,6 +97,9 @@ void* TempAllocator::alloc(size_t size, size_t& allocation) {
 }
 
 void TempAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
+    if (PREDICT_BRANCH_NOT_TAKEN(capture_held_frees != nullptr)
+        && hold_free_for_capture(this, mem_ptr, size, allocation))
+        return;
     std::unique_lock<std::recursive_mutex> lock(mutex);
     size = align_size(size);
     // validate the id before indexing the table, not after dereferencing it

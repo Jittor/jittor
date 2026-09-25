@@ -17,6 +17,7 @@ here is the refusals -- every guard, and what happens when it fires.
 
 from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
 from _helpers import capability as _test_capability
+import dataclasses
 import unittest
 
 import numpy as np
@@ -39,6 +40,33 @@ class _Net(nn.Module):
 class _Random(nn.Module):
     def execute(self, x):
         return x + jt.rand(x.shape)
+
+
+class _Stack(nn.Module):
+    def execute(self, x):
+        h = (x * 2 + 1).tanh()
+        return jt.stack([h, h * 3], 0)
+
+
+@dataclasses.dataclass
+class _Result:
+    sample: object = None
+    scale: float = 1.0
+
+
+class _Structured(nn.Module):
+    """Keyword input, and every result shape replay has to rebuild."""
+
+    def __init__(self):
+        super().__init__()
+        self.l1 = nn.Linear(8, 8)
+
+    def execute(self, x, *, bias=None, extra=None):
+        h = self.l1(x)
+        y = h + bias
+        z = jt.concat([h, y], 1)
+        return {"y": y, "pair": (h, z), "same": [y, y],
+                "result": _Result(sample=y * extra["k"], scale=2.0), "none": None}
 
 
 @_test_preserve_policy(jt, 'keep_graph', 'auto_graph_replay')
@@ -97,11 +125,11 @@ class TestGraphReplay(unittest.TestCase):
         replay = graph_replay(self.model, self.feed[0])
         replay(self.feed[0])
         capture = replay._capture
-        float(capture.output.numpy().sum())
+        float(capture.outputs[0].numpy().sum())
         # Read the state *before* the call: the call itself finishes the graph
         # on its way to retaking it, so asking afterwards always says "finished"
         # and would demand a retake that was never needed.
-        was_finished = capture.output.is_finished
+        was_finished = capture.outputs[0].is_finished
         before = replay.stats["captured"]
         np.testing.assert_allclose(replay(self.feed[2]).numpy(),
                                    self._eager(self.feed[2]), rtol=1e-5, atol=1e-5)
@@ -121,6 +149,71 @@ class TestGraphReplay(unittest.TestCase):
         np.testing.assert_allclose(replay(self.feed[0]).numpy(),
                                    self._eager(self.feed[0]), rtol=1e-5, atol=1e-5)
         self.assertGreater(replay.stats["captured"], before)
+
+    def test_a_stacked_result_follows_each_input(self):
+        # `setitem_gopt` computes each stacked operand straight into its slice
+        # of the result and makes the setitem a no-op. A replay that freed an
+        # operand between runs recomputed it into a fresh buffer nothing
+        # copied, and on CUDA every call answered with the first input's
+        # result -- the automatic policy, which is on by default, included.
+        model = _Stack()
+        feeds = [jt.array(np.full((4,), float(i), np.float32)) for i in range(5)]
+        expected = [np.stack([np.tanh(2.0 * i + 1), 3 * np.tanh(2.0 * i + 1)])
+                    for i in range(5)]
+        replay = graph_replay(model)
+        for x, want in zip(feeds, expected):
+            np.testing.assert_allclose(replay(x).numpy()[:, 0], want, rtol=1e-5)
+        self.assertIsNone(replay.refused)
+        self.assertGreaterEqual(replay.stats["replayed"], 4)
+        jt.flags.auto_graph_replay = 1
+        with jt.no_grad():
+            for x, want in zip(feeds, expected):
+                np.testing.assert_allclose(model(x).numpy()[:, 0], want, rtol=1e-5)
+
+    def test_keyword_arguments_and_structured_results(self):
+        model = _Structured()
+        rs = np.random.RandomState(3)
+        calls = [(jt.array(rs.randn(2, 8).astype("float32")),
+                  jt.array(rs.randn(8).astype("float32")),
+                  jt.array(rs.randn(1).astype("float32"))) for _ in range(4)]
+
+        def eager(x, b, k):
+            jt.flags.auto_graph_replay = 0
+            try:
+                with jt.no_grad():
+                    out = model(x, bias=b, extra={"k": k})
+                    return (out["y"].numpy().copy(), out["pair"][1].numpy().copy(),
+                            out["result"].sample.numpy().copy())
+            finally:
+                jt.flags.auto_graph_replay = 1
+
+        replay = graph_replay(model)
+        for x, b, k in calls + calls:
+            want = eager(x, b, k)
+            out = replay(x, bias=b, extra={"k": k})
+            self.assertEqual(set(out), {"y", "pair", "same", "result", "none"})
+            self.assertIsInstance(out["pair"], tuple)
+            self.assertIsInstance(out["result"], _Result)
+            self.assertEqual(out["result"].scale, 2.0)
+            self.assertIsNone(out["none"])
+            # One Var returned twice comes back as one Var twice.
+            self.assertIs(out["same"][0], out["same"][1])
+            self.assertIs(out["same"][0], out["y"])
+            np.testing.assert_allclose(out["y"].numpy(), want[0], rtol=1e-5, atol=1e-6)
+            np.testing.assert_allclose(out["pair"][1].numpy(), want[1], rtol=1e-5, atol=1e-6)
+            np.testing.assert_allclose(out["result"].sample.numpy(), want[2],
+                                       rtol=1e-5, atol=1e-6)
+        self.assertIsNone(replay.refused)
+        self.assertEqual(replay.stats["captured"], 1)
+
+    def test_a_result_that_cannot_be_rebuilt_is_refused(self):
+        class _Opaque(nn.Module):
+            def execute(self, x):
+                return object(), x * 2
+        replay = graph_replay(_Opaque())
+        _, doubled = replay(self.feed[0])
+        np.testing.assert_allclose(doubled.numpy(), self.feed[0].numpy() * 2)
+        self.assertIn("cannot rebuild", replay.refused)
 
     def test_a_random_graph_is_refused_rather_than_repeated(self):
         replay = graph_replay(_Random(), self.feed[0])

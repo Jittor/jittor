@@ -102,6 +102,57 @@ Allocator* get_array_host_allocator() {
     return cpu_allocator;
 }
 
+vector<Allocation>* capture_held_frees = nullptr;
+static std::mutex capture_held_mutex;
+
+bool hold_free_for_capture(Allocator* allocator, void* mem_ptr, size_t size,
+                           size_t allocation) {
+    std::lock_guard<std::mutex> lock(capture_held_mutex);
+    if (!capture_held_frees) return false;
+    capture_held_frees->emplace_back(mem_ptr, allocation, size, allocator);
+    return true;
+}
+
+bool reuse_held_for_capture(Allocator* allocator,
+                            const std::function<int64(size_t allocation)>& cost,
+                            size_t& allocation) {
+    std::lock_guard<std::mutex> lock(capture_held_mutex);
+    if (!capture_held_frees) return false;
+    auto& held = *capture_held_frees;
+    int best = -1;
+    int64 best_cost = 0;
+    for (int i = 0; i < (int)held.size(); i++) {
+        if (!held[i].ptr || held[i].allocator != allocator) continue;
+        int64 c = cost(held[i].allocation);
+        if (c < 0 || (best >= 0 && c >= best_cost)) continue;
+        best = i;
+        best_cost = c;
+    }
+    if (best < 0) return false;
+    allocation = held[best].allocation;
+    // Still owned, now by the caller: a null entry frees nothing.
+    held[best].ptr = nullptr;
+    return true;
+}
+
+void begin_capture_hold() {
+    std::lock_guard<std::mutex> lock(capture_held_mutex);
+    ASSERT(!capture_held_frees) << "a device graph is already being recorded";
+    capture_held_frees = new vector<Allocation>();
+}
+
+vector<Allocation> end_capture_hold() {
+    unique_ptr<vector<Allocation>> held;
+    {
+        std::lock_guard<std::mutex> lock(capture_held_mutex);
+        held.reset(capture_held_frees);
+        capture_held_frees = nullptr;
+    }
+    vector<Allocation> result;
+    if (held) result = std::move(*held);
+    return result;
+}
+
 Allocator* get_allocator(bool temp_allocator) {
     int device = -1;
 #ifdef HAS_ACCELERATOR

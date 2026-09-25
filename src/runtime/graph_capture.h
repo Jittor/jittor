@@ -51,6 +51,16 @@ int64 graph_capture_end();
 void graph_launch(int64 graph);
 
 /**
+    Wait until everything issued so far on the compute stream -- a launched
+    graph included -- has finished. A recording that copies a host buffer to
+    the device reads that buffer when the graph *runs*, not when it was
+    launched, so its owner has to wait before writing the next call's value
+    into it.
+ */
+// @pyjt(graph_wait)
+void graph_wait();
+
+/**
     Release a graph handle. Launching a released graph is undefined, so the
     owner must not keep using it.
  */

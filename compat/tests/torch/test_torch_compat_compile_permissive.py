@@ -50,7 +50,9 @@ class TestCompileArguments(_PolicyBase):
 
     def test_mode_and_dynamic_stay_accepted(self):
         model = torch.nn.Linear(3, 2)
-        self.assertIs(torch.compile(model, mode="max-autotune", dynamic=False),
+        self.assertIs(torch.compile(model, mode="default", dynamic=False), model)
+        # The CUDA-graph modes replay the module (test_torch_compile_replay).
+        self.assertIs(torch.compile(model, mode="max-autotune", dynamic=False)._orig_mod,
                       model)
 
     def test_fullgraph_true_is_refused(self):

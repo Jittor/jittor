@@ -5,6 +5,7 @@
 // ***************************************************************
 #include <algorithm>
 #include <cstring>
+#include <unordered_set>
 #ifdef HAS_ACCELERATOR
 #include "core/event_queue.h"
 #endif
@@ -218,21 +219,36 @@ DEFINE_FLAG(int64, auto_graph_replay_retain_bytes, 64<<20, "The largest graph th
 // does not run: its output is its input's buffer, so a later run must alias
 // that buffer again rather than get a fresh one, and the share request its
 // op made at construction -- consumed by the first allocation -- is put back.
-// A var that aliases one of its own producer's inputs (an in-place update) is
-// left alone: re-running it into a fresh buffer would not be the same op.
-static void release_kept_storage(Var* v) {
+// Whatever else shares the allocation decides whether it may go. A var the
+// batch does not release -- its result, typically -- is not re-aliased, so it
+// would go on pointing at the old buffer while the graph recomputes into a new
+// one, and answer with the first run's bytes; and a view keeps its whole chain
+// of bases alive with it, because a base freed under a live view leaves the
+// view on the old buffer just the same. Every auto-replayed CUDA call ending
+// in `jt.stack` (a code op, reshaped) did this, and so did `nn.RNN`'s hidden
+// state (a reshape of a clone of the last step). `pinned` is that set. Beyond
+// it, a var that is not itself a view may go only if all that shares it are
+// views: an in-place update aliases its producer's input, and re-running it
+// into a fresh buffer would not be the same op; and `setitem_gopt` has a
+// concat operand computed straight into its slice of the destination and
+// turns the setitem into a no-op, which would never copy a recomputed operand.
+static void release_kept_storage(Var* v, const std::unordered_set<Var*>& released,
+                                 const std::unordered_set<Var*>& pinned) {
     if (!v->flag(VarFlags::_kept) || v->is_finished() || !v->mem_ptr) return;
     if (v->flag(VarFlags::_host_resident)) return;
     Op* producer = v->input();
     if (!producer) return;
+    if (pinned.count(v)) return;
+    bool is_view = producer->is_storage_view();
+    for (Var* m = v->share_next; m && m != v; m = m->share_next) {
+        if (!released.count(m)) return;
+        if (!is_view && !(m->input() && m->input()->is_storage_view())) return;
+    }
     Var* view_of = nullptr;
     size_t offset = 0;
-    if (producer->is_storage_view()) {
+    if (is_view) {
         view_of = producer->inputs().front();
         offset = v->storage_offset_bytes - view_of->storage_offset_bytes;
-    } else if (v->share_next) {
-        for (Var* in : producer->inputs())
-            if (v->shares_allocation_with(in)) return;
     }
     free_var_mem(v);
     if (view_of) v->share_with(view_of, offset);
@@ -311,6 +327,24 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     int sync_times = 0;
     #endif
     auto& jkl = get_jk();
+    // What this batch releases after a last use -- never the vars the caller
+    // asked for (see `schedule_hold_release`) -- and what must keep its memory
+    // because a var outside that set views it. Only `keep_graph == 2` asks;
+    // see `release_kept_storage`.
+    std::unordered_set<Var*> kept_released, kept_pinned;
+    if (keep_graph == 2 && plan.batch_hold) {
+        for (auto& segment : plan.release_after)
+            for (int index : segment)
+                kept_released.insert(plan.all_vars[index]);
+        for (Var* v : plan.all_vars) {
+            if (kept_released.count(v)) continue;
+            while (v->input() && v->input()->is_storage_view()
+                   && v->input()->inputs().size()) {
+                v = v->input()->inputs().front();
+                if (!kept_pinned.insert(v).second) break;
+            }
+        }
+    }
     for (uint rid=0; rid<queue.size(); rid++) {
         // Segment rid-1 has run, whichever `continue` it left by: nothing later
         // in the batch uses the vars scheduled after it, so their memory goes
@@ -318,7 +352,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         // dropped with the hold itself.
         if (rid && plan.batch_hold)
             for (int index : plan.release_after[rid - 1]) {
-                if (keep_graph == 2) release_kept_storage(plan.all_vars[index]);
+                if (keep_graph == 2) release_kept_storage(plan.all_vars[index], kept_released, kept_pinned);
                 (*plan.batch_hold)[index].free_liveness();
             }
         int root = queue[rid];
@@ -567,7 +601,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     // frees nothing for a kept var: its node is still alive.
     if (keep_graph == 2 && plan.batch_hold && queue.size())
         for (int index : plan.release_after[queue.size() - 1])
-            release_kept_storage(plan.all_vars[index]);
+            release_kept_storage(plan.all_vars[index], kept_released, kept_pinned);
     // == phase 7: finish the batch ==
     LOGvv << "All" << plan.op_num << "ops finished, return vars:" << vars;
     // a zero-sized var has no memory to point at (see the size==0 branch in
