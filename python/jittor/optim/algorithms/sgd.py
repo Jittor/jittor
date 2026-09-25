@@ -1,5 +1,7 @@
 """Stochastic gradient descent optimizer."""
 
+from jittor.optim.base import _group_state
+
 import jittor as jt
 
 from ..._runtime.dispatch import register_kernel, select_kernel
@@ -89,12 +91,13 @@ class SGD(Optimizer):
 
         # initialize required arguments
         for pg in self.param_groups:
-            values = pg["values"] = []
+            values = _group_state(pg)["values"] = []
             for p in pg["params"]:
                 values.append(_momentum_buffer(p))
 
     def add_param_group(self, group):
-        values = group["values"] = []
+        group = self._prepare_param_group(group)
+        values = _group_state(group)["values"] = []
         for p in group["params"]:
             values.append(_momentum_buffer(p))
         self.param_groups.append(group)
@@ -122,7 +125,7 @@ class SGD(Optimizer):
             # than quietly changing that. `v` is then left at whatever it held;
             # turning momentum on later resumes from zeros, which is what this
             # optimizer has always started from.
-            active = [(p, g, v) for p, g, v in zip(pg["params"], pg["grads"], pg["values"])
+            active = [(p, g, v) for p, g, v in zip(pg["params"], _group_state(pg)["grads"], _group_state(pg)["values"])
                       if _param_requires_grad(p) and _grad_matches_param(p, g)]
             if not active:
                 continue
