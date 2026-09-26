@@ -113,6 +113,19 @@ class TestStepCapture(unittest.TestCase):
         cap = self._check(eager, captured, _feeds(), between)
         self.assertEqual(cap.stats["captured"], 2)
 
+    def test_state_replaced_from_outside_is_adopted(self):
+        # A cache reset between two `generate()` calls, a `load_state_dict`:
+        # the caller gives the state a new value of the same shape. The
+        # capture copies it in rather than capturing again.
+        def between(i, cw, ew):
+            if i == 3:
+                value = np.full((8, 4), 0.25, np.float32)
+                ew.update(jt.array(value))
+                cw.update(jt.array(value))
+        eager, captured = self._twins()
+        cap = self._check(eager, captured, _feeds(), between)
+        self.assertEqual(cap.stats["captured"], 1)
+
     def test_invalidating_takes_no_step(self):
         eager, captured = self._twins()
         feeds = _feeds(6)
@@ -183,7 +196,8 @@ class TestStepCapture(unittest.TestCase):
 
 @unittest.skipIf(not _test_capability.check_accelerator("cuda", backend=jt).enabled,
                  "no usable CUDA in this build")
-@_test_preserve_policy(jt, "keep_graph", "auto_graph_replay")
+@_test_preserve_policy(jt, "keep_graph", "auto_graph_replay", "auto_flush_ops",
+                       "auto_flush_bytes")
 class TestStepCaptureCuda(TestStepCapture):
 
     def setUp(self):
@@ -226,6 +240,102 @@ class TestStepCaptureCuda(TestStepCapture):
         cap = self._check(eager, captured, _feeds(10))
         self.assertIsNone(cap._graph_refused)
         self.assertGreater(cap.stats["graph"], 0)
+
+    def test_capturing_runs_the_step_once(self):
+        # CUDA launches what is pending every `auto_flush_ops` operators. In a
+        # capture, each piece launched early was freed after its last use and
+        # computed again when the whole step ran: a Qwen3 training step ran
+        # its forward two and a half times to be captured.
+        jt.flags.auto_flush_ops = 1
+        jt.flags.auto_flush_bytes = 0
+        rs = np.random.RandomState(6)
+        w = jt.array((rs.randn(256, 256) / 16).astype("float32"))
+        w.sync()
+
+        def step(x):
+            h = x
+            for _ in range(12):
+                h = jt.matmul(h, w)
+            return [h.sum()]
+        feeds = [jt.array(rs.randn(256, 256).astype("float32")) for _ in range(4)]
+        jt.sync(feeds)
+        allocated = step_capture._core.device_memory_allocated_total
+        captured = jt.capture_step(step)
+        captured(feeds[0])
+        before = allocated(0)
+        captured(feeds[1])[0].sync()
+        capturing = allocated(0) - before
+        before = allocated(0)
+        captured(feeds[2])[0].sync()
+        replaying = allocated(0) - before
+        self.assertEqual(captured.stats["captured"], 1)
+        self.assertLess(capturing, 1.5 * replaying)
+        self._replay_matches(step, feeds)
+
+    def test_a_shared_buffer_goes_after_its_last_use(self):
+        # A `jt.Function` input and the tape that passes it on share one
+        # buffer, neither a view of the other; a kept graph freed such a pair
+        # never, and a captured training step held every Function input and
+        # its embedding gradient -- 1.2 GB on a four-layer Qwen3.
+        class Scale(jt.Function):
+            def execute(self, x):
+                return x * 3
+
+            def grad(self, g):
+                return g * 3
+        rs = np.random.RandomState(7)
+        w = jt.array(rs.randn(512, 512).astype("float32"))
+        w.sync()
+
+        def step(x):
+            return [Scale.apply(x * w).sum()]
+        feeds = [jt.array(rs.randn(512, 512).astype("float32")) for _ in range(5)]
+        jt.sync(feeds)
+        used = step_capture._core.device_memory_used
+        jt.gc()
+        before = used(0)
+        # A recording holds its working set, as PyTorch's graph pools do; the
+        # executor's replays are what free as they go.
+        captured = jt.capture_step(step, record=False)
+        for x in feeds:
+            np.testing.assert_allclose(captured(x)[0].numpy(), step(x)[0].numpy(),
+                                       rtol=1e-5)
+        self.assertEqual(captured.stats["captured"], 1)
+        self.assertGreater(captured.stats["replayed"], 0)
+        jt.gc()
+        # The capture keeps its private copy of the input, 1 MB, and a
+        # scalar; the product, another 1 MB, goes after its last use.
+        self.assertLess(used(0) - before, 1.5 * 512 * 512 * 4)
+
+    def test_memory_a_recording_uses_is_not_handed_out(self):
+        # A recording keeps its buffers' addresses, so what it freed and
+        # reused must stay out of the pool while it lives -- without holding
+        # every intermediate apart, which made it cost the sum of them.
+        rs = np.random.RandomState(8)
+        w = jt.array((rs.randn(256, 256) / 16).astype("float32"))
+        w.sync()
+
+        def step(x):
+            h = x
+            for _ in range(6):
+                h = jt.matmul(h, w).tanh()
+            return [h.sum(1)]
+        feeds = [jt.array(rs.randn(256, 256).astype("float32")) for _ in range(10)]
+        jt.sync(feeds)
+        captured = jt.capture_step(step)
+        outside = []
+        for i, x in enumerate(feeds):
+            want = step(x)[0].numpy()
+            got = captured(x)[0].numpy()
+            np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-5)
+            if captured.stats["graph"]:
+                # Buffers of the intermediates' size, made between launches.
+                made = [jt.full((256, 256), float(i)) for _ in range(6)]
+                jt.sync(made)
+                outside += [(float(i), v) for v in made]
+        self.assertGreater(captured.stats["graph"], 1)
+        for value, v in outside:
+            np.testing.assert_array_equal(v.numpy(), np.full((256, 256), value, "float32"))
 
 
 if __name__ == "__main__":

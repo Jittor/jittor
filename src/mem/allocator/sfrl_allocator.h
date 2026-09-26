@@ -150,6 +150,15 @@ struct SFRLAllocator : Allocator {
     }
     ~SFRLAllocator();
     // apply the reclaim policy above to this allocator; caller holds the lock.
+    // Every block a device recording in progress allocated or freed. Its
+    // frees go back to the pools as usual, so the recording reuses its own
+    // memory the way a run outside one does -- split, merged -- and at its end
+    // `fence_capture` takes whatever of those ranges is free out of the pools
+    // for the graph to hold: a recorded kernel keeps its addresses.
+    vector<pair<char*, char*>> capture_touched;
+    void note_capture_touch(CachingBlock* block);
+    CachingBlock* carve_free(CachingBlock* block, char* begin, char* end);
+    void fence_capture(vector<Allocation>& held);
     void try_free_this_allocator();
     void setup(Allocator* underlying);
     uint64 flags() const override { return underlying->flags(); }
@@ -163,6 +172,8 @@ struct SFRLAllocator : Allocator {
 };
 
 DECLARE_FLAG(int, use_sfrl_allocator);
+// Hand every range the recording ending now touched, free in a pool, to `held`.
+void sfrl_fence_capture(vector<Allocation>& held);
 
 // Live bytes and their high-water mark per accelerator device, summed over
 // every SFRL pool on that device and updated on each alloc/free. A device

@@ -57,7 +57,7 @@ replay. `stats` says what happened.
 import jittor as jt
 import jittor_core as _core
 
-from .graph_replay import (_RERECORD_LIMIT, _Unreplayable, _empty_like, _object_ids,
+from .graph_replay import (_RERECORD_LIMIT, _Unreplayable, _empty_like, _native_dtype, _object_ids,
                            _graph_has_nondeterministic_op,
                            _input_vars, _map_inputs, _no_auto, _output_template,
                            _rebuild, _signature)
@@ -303,6 +303,24 @@ def _finish_normally(roots):
         jt.flags.keep_graph = before
 
 
+def _adopt(holder, old):
+    """Take a value given to captured state from outside the step.
+
+    The captured graph reads `old`; the caller rebound `holder` -- a cache
+    reset between two `generate()` calls, a `load_state_dict`, an EMA update
+    done outside the step. When the new value has the same shape and dtype,
+    it is copied into `old` and the holder pointed back there, and the
+    capture, device recording included, stays valid. Anything else is a
+    different step, and the caller re-captures.
+    """
+    if (tuple(holder.shape) != tuple(old.shape)
+            or str(_native_dtype(holder)) != str(_native_dtype(old))):
+        return False
+    old._copy_into(holder)
+    holder._update(old)
+    return True
+
+
 def _unique(vars_):
     seen, result = set(), []
     for v in vars_:
@@ -365,9 +383,16 @@ class StepCapture:
 
         cap = _Capture()
         before = jt.flags.keep_graph
+        # The step is built whole, as a replay runs it. CUDA's auto-flush
+        # otherwise launches what is pending every `auto_flush_ops` operators,
+        # and a kept graph frees each piece after its last use, so the sync
+        # below computed those pieces again: a Qwen3 training step ran its
+        # forward two and a half times, and its peak with them.
+        flush_before = jt.flags.auto_flush_ops
         _ACTIVE = cap
         _core._state_capture_begin()
         jt.flags.keep_graph = 2
+        jt.flags.auto_flush_ops = 0
         records = []
         readbacks = _core._host_readback_count()
         try:
@@ -375,6 +400,7 @@ class StepCapture:
                 result = self._fn(*private_args, **private_kwargs)
         finally:
             records = _core._state_capture_end()
+            jt.flags.auto_flush_ops = flush_before
             jt.flags.keep_graph = before
             _ACTIVE = None
         if _core._host_readback_count() != readbacks:
@@ -447,7 +473,7 @@ class StepCapture:
         if _signature(args, kwargs) != cap.signature:
             return "the inputs changed shape or dtype"
         for holder, old, _, _ in cap.state:
-            if holder.var_ptr != old.var_ptr:
+            if holder.var_ptr != old.var_ptr and not _adopt(holder, old):
                 return "state the step updates was replaced from outside it"
         for read, value in cap.guards:
             if read() != value:

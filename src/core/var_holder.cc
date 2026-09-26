@@ -132,6 +132,9 @@ static int64 host_readbacks = 0;
 int64 host_readback_count() { return host_readbacks; }
 
 DECLARE_FLAG(int, keep_graph);
+#ifdef HAS_ACCELERATOR
+DECLARE_FLAG(int, use_cuda_managed_allocator);
+#endif
 
 // A read inside a captured step makes the capture unreplayable, and the step
 // has to happen exactly once all the same. So from the first read on, the
@@ -148,11 +151,25 @@ static inline void note_readback() {
     }
 }
 
+// Whether a read of a Var's value has to wait for the devices, beyond its
+// own producer. It does not: device memory is read back by a copy that waits
+// for the stream that produced it, and host memory is written by host ops.
+// Only managed memory is read in place, where a device may still be writing.
+// Waiting for every device made each `.numpy()` of a host tensor -- a label,
+// a scheduler's timestep -- wait for all the work queued before it.
+static inline bool readback_waits_for_devices() {
+#ifdef HAS_ACCELERATOR
+    return use_cuda_managed_allocator;
+#else
+    return false;
+#endif
+}
+
 DataView VarHolder::data() {
     note_readback();
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
         ExecutorEntryScope entry;
-        sync(true, false);
+        sync(readback_waits_for_devices(), false);
 #ifdef HAS_ACCELERATOR
         migrate_to_cpu(var, runtime_executor().allocator);
 #endif
@@ -730,7 +747,7 @@ ArrayArgs VarHolder::fetch_sync() {
     note_readback();
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
         ExecutorEntryScope entry;
-        sync(true);
+        sync(readback_waits_for_devices());
         if (save_mem || _HAS_ACCELERATOR)
             migrate_to_cpu(var, runtime_executor().allocator);
     }
@@ -839,7 +856,7 @@ vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh) {
     note_readback();
     vector<ArrayArgs> ret(vh.size());
     ExecutorEntryScope entry;
-    sync(vh, true);
+    sync(vh, readback_waits_for_devices());
     for (uint i=0; i<vh.size(); i++) {
         if (save_mem || _HAS_ACCELERATOR)
             migrate_to_cpu(vh[i]->var, runtime_executor().allocator);

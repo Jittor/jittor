@@ -141,10 +141,13 @@ void begin_capture_hold() {
     capture_held_frees = new vector<Allocation>();
 }
 
+void sfrl_fence_capture(vector<Allocation>& held);
+
 vector<Allocation> end_capture_hold() {
     unique_ptr<vector<Allocation>> held;
     {
         std::lock_guard<std::mutex> lock(capture_held_mutex);
+        if (capture_held_frees) sfrl_fence_capture(*capture_held_frees);
         held.reset(capture_held_frees);
         capture_held_frees = nullptr;
     }

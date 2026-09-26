@@ -2,6 +2,7 @@
 from importlib import import_module
 from ...context import get_install_context
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._runtime import step_capture as _step_capture
 _owner = import_module(__package__)
 _NativeVar = _owner.jt.Var
 
@@ -146,10 +147,17 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
     # factory op re-runs WITHOUT the kernel's writes -> garbage/NaN loss
     # (proven: a plain float(loss) before backward makes train.py finite).
     # Forcing the forward to settle once here decouples it from the grad pass.
-    try:
-        self.sync()
-    except _owner.EXPECTED as exc:
-        _owner.swallowed("torch/installers/tensor.py _backward: self.sync()", exc)
+    #
+    # Not while a step is being captured: a capture builds the step whole and
+    # runs it once, and a forward settled in the middle of it had its buffers
+    # freed after their last use and was computed again by that run -- a
+    # Qwen3 training step's forward ran twice to capture it. Nor can a
+    # capture replay an extension that writes out of band anyway.
+    if not _step_capture.active():
+        try:
+            self.sync()
+        except _owner.EXPECTED as exc:
+            _owner.swallowed("torch/installers/tensor.py _backward: self.sync()", exc)
     # Collect EVERY live optimizer (torch allows several at once — 3DGS uses a
     # Gaussian Adam + an exposure Adam; routing to just _current_optimizer
     # left the other's params with .grad=None -> KeyError 'grads' in step()).

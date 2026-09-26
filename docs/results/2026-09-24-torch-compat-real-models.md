@@ -236,6 +236,43 @@ SD 峰值 1.89 GB（eager 1.81），DDPM 峰值 4.68 GB（eager 3.70）。录制
 fused AdamW 以外的优化器（SGD 等在 Python 里记账）、CPU 上的 AdamW（逐参数路径把步数
 固化进图）。另见 KI-COMPAT-006～008。
 
+### 全尺寸套件（2026-09-26）
+
+`bench/torch_compat/run.py --compile none,reduce-overhead`，基于 `75aa9977` 加本节的修复
+（结果标 dirty），与提交内容一致。只列编译行；「提速」是各自 eager 对编译的比值。
+
+| 任务 | PyTorch 编译 | Jittor 编译 | Jittor 提速 | Jittor 显存（eager） | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| `resnet50_infer_b1` | 0.6 ms | 0.7 ms | 9.40x | 0.6 GB（0.6） | 主机开销支配的区间 |
+| `bert_base_infer` | 1.5 ms | 1.7 ms | 4.49x | 1.1 GB（1.0） | |
+| `qwen3_decode_static` | 687.6 ms | 835.6 ms | 5.62x | 2.2 GB（2.2） | 1268 次重放只捕获一次 |
+| `sd15_sample` | 374.6 ms | 473.8 ms | 2.10x | 3.4 GB（3.3） | 设备受限，余下差距在 cuDNN 布局转换 |
+| `qwen3_train` | 187.0 ms | 246.0 ms | 0.99x | 17.4 GB（17.4） | 修前 OOM（21 GB） |
+| `sd15_unet_train` | 208.7 ms | 253.4 ms | 1.02x | 16.0 GB（15.9） | 修前 19.7 GB |
+| `resnet50_train` | 75.3 ms | 99.0 ms | 1.00x | 7.3 GB（7.2） | 修前 10.7 GB |
+
+编译对 eager 的数值差全部在 1e-5 量级以内（bf16 解码除外：贪心解码在 bf16 下分叉，
+PyTorch 自身编译前后也差 1.4e-1）。设备受限的训练任务上 Jittor 重放不再有主机开销可省，
+与 PyTorch 编译的差距来自 inductor 的 kernel 融合，不属于本节。
+
+这一轮修掉的问题，都是通用机制而不是按模型打补丁：
+
+- **静态 KV cache 解码每次 `generate()` 都重捕获**：`StaticCache.reset()` 在步外换绑了
+  cache 张量。同形状同 dtype 的外部换绑现在拷进原叶子（`_adopt`），不再作废捕获。
+- **捕获的训练步显存**，三处叠加：
+  - `keep_graph=2` 的释放规则要求别名组里除底座外都是 view，`jt.Function` 的输入与
+    tape、就地 `setitem` 与它的缓冲区（嵌入层的 scatter 梯度）因此永不释放。现在整组在
+    最后一个成员用完后一起释放，别名重新挂回底座。
+  - 捕获期间 CUDA 的 `auto_flush_ops` 与兼容层 `backward()` 里的 `self.sync()` 提前执行
+    了前向，`keep_graph=2` 用完即放，整步同步时再算一遍——一步跑了约两遍半。捕获期间
+    两者都关掉。
+  - 录制期间暂扣的释放块不拆不并，只能按近似尺寸复用。现在录制期间照常归还池，结束时
+    把录制碰过、此刻空闲的区间从池里摘给图持有（与 PyTorch 的图私有池同义），录制不再
+    额外占用显存。
+- **CPU 标量等整个设备**：执行器在 GPU 算子之后遇到任何 CPU 算子都同步所有设备，
+  `numpy()` 也是。diffusers 调度器的 `prev_timestep >= 0` 因此每步等完一次 UNet（22 ms）。
+  现在只在 CPU 算子读设备内存或托管内存时才等；设备内存的读回本来就等它的生产流。
+
 ## 边界
 
 - 每个配置只测一轮；修后数字在空闲机器上测得。同一代码的 `sd15_sample` 在不同进程间测到

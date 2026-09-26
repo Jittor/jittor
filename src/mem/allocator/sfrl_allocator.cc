@@ -8,6 +8,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 
+#include <algorithm>
 #include <atomic>
 #include <mutex>
 #include <sstream>
@@ -363,6 +364,9 @@ void SFRLAllocator::try_free_this_allocator() {
 }
 
 size_t SFRLAllocator::release_cached(CachingBlockPool& pool, long long free_size) {
+    // A segment a recording touched may be free in the pool by now, and the
+    // recording still holds its addresses; see `fence_capture`.
+    if (capture_held_frees != nullptr) return 0;
     size_t freed = pool.free_all_cached_blocks(underlying, free_size);
     unused_memory -= freed;
     if (freed) {
@@ -379,22 +383,6 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
     padding = backend_ops(accelerator_backend_id()).execution.allocation_padding;
     #endif
     size = align_size(size + padding);
-    if (PREDICT_BRANCH_NOT_TAKEN(capture_held_frees != nullptr)) {
-        // A block freed earlier in the same recording, still occupied under
-        // its id because the free was held. See `reuse_held_for_capture`.
-        // Not split, so not one much larger than asked for: that would leave
-        // the next large request to allocate afresh.
-        size_t id = 0;
-        if (reuse_held_for_capture(this, [&](size_t held) -> int64 {
-                auto* block = id_space.get_occupied(held);
-                if (block->size < size) return -1;
-                if (block->size - size > std::max(size, (size_t)1 << 20)) return -1;
-                return (int64)block->size;
-            }, id)) {
-            allocation = id;
-            return id_space.get_occupied(id)->memory_ptr;
-        }
-    }
     CachingBlockPool* blocks = get_blocks(size);
     //search cached block
     CachingBlock* block = blocks->pop_block(size);
@@ -438,23 +426,13 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
     used_memory += block->size;
     note_device_alloc(device(), block->size);
     step_trace_mem(stm_pool, device(), block->size, this, allocation);
+    if (PREDICT_BRANCH_NOT_TAKEN(capture_held_frees != nullptr))
+        note_capture_touch(block);
     return block->memory_ptr;
 }
 
 void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
     std::unique_lock<std::recursive_mutex> lock(mutex);
-    if (PREDICT_BRANCH_NOT_TAKEN(capture_held_frees != nullptr)) {
-        // Only the last owner's free is held; dropping one share of a block
-        // that others still own releases nothing, and done now it leaves a
-        // held block with exactly one owner -- the recording.
-        auto* block = id_space.get_occupied(allocation);
-        if (block->share_times) {
-            --block->share_times;
-            return;
-        }
-        if (hold_free_for_capture(this, mem_ptr, size, allocation))
-            return;
-    }
     // free() only trusts `allocation`, so validate it before dereferencing:
     // range, registered, and still occupied. Callers are allowed to pass 0 for
     // mem_ptr (see src/tests/test_sfrl_allocator.cc), but when they do pass one
@@ -467,6 +445,8 @@ void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
                (char*)mem_ptr <= (char*)block->memory_ptr + block->size)
             << "mem_ptr does not belong to allocation:" << allocation;
     if (block->share_times == 0) {
+        if (PREDICT_BRANCH_NOT_TAKEN(capture_held_frees != nullptr))
+            note_capture_touch(block);
         id_space.erase_occupied(allocation);
         used_memory -= block->size;
         note_device_free(device(), block->size);
@@ -491,6 +471,91 @@ void SFRLAllocator::gc() {
     if (!lock.owns_lock()) return;
     release_cached(small_blocks);
     release_cached(large_blocks);
+}
+
+void SFRLAllocator::note_capture_touch(CachingBlock* block) {
+    char* begin = (char*)block->memory_ptr;
+    capture_touched.emplace_back(begin, begin + block->size);
+}
+
+// Detach [begin, end) of the free block `block` as a block of its own, still
+// free and out of every pool, putting what lies outside it back in the pools.
+CachingBlock* SFRLAllocator::carve_free(CachingBlock* block, char* begin, char* end) {
+    block->blocks->erase(block);
+    unused_memory -= block->size;
+    auto split_after = [&](CachingBlock* b, size_t size) {
+        auto* rest = new CachingBlock(b->size - size, b->origin_size,
+            get_blocks(b->size - size), (char*)b->memory_ptr + size);
+        rest->allocation = b->allocation;
+        b->size = size;
+        if (b->next) b->next->prev = rest;
+        rest->next = b->next;
+        rest->prev = b;
+        b->next = rest;
+        return rest;
+    };
+    char* b0 = (char*)block->memory_ptr;
+    if (begin > b0 && size_t(begin - b0) >= ALIGN_SIZE) {
+        auto* rest = split_after(block, begin - b0);
+        block->blocks = get_blocks(block->size);
+        block->blocks->insert(block);
+        unused_memory += block->size;
+        block = rest;
+    }
+    char* b1 = (char*)block->memory_ptr + block->size;
+    if (end < b1 && size_t(b1 - end) >= ALIGN_SIZE) {
+        auto* rest = split_after(block, end - (char*)block->memory_ptr);
+        rest->blocks->insert(rest);
+        unused_memory += rest->size;
+    }
+    return block;
+}
+
+void SFRLAllocator::fence_capture(vector<Allocation>& held) {
+    std::unique_lock<std::recursive_mutex> lock(mutex);
+    if (capture_touched.empty()) return;
+    auto& spans = capture_touched;
+    std::sort(spans.begin(), spans.end());
+    size_t n = 0;
+    for (auto& span : spans) {
+        if (n && span.first <= spans[n - 1].second)
+            spans[n - 1].second = std::max(spans[n - 1].second, span.second);
+        else
+            spans[n++] = span;
+    }
+    spans.resize(n);
+    // The part of [begin, end) the recording touched, as one range.
+    auto touched = [&](char* begin, char* end) -> pair<char*, char*> {
+        auto it = std::upper_bound(spans.begin(), spans.end(), std::make_pair(begin, begin));
+        if (it != spans.begin() && std::prev(it)->second > begin) --it;
+        char* lo = nullptr;
+        char* hi = nullptr;
+        for (; it != spans.end() && it->first < end; ++it) {
+            if (!lo) lo = std::max(it->first, begin);
+            hi = std::min(it->second, end);
+        }
+        return {lo, hi};
+    };
+    vector<CachingBlock*> free_blocks;
+    for (auto* pool : {&small_blocks, &large_blocks})
+        for (auto& kv : pool->blocks) free_blocks.push_back(kv.second);
+    for (auto* block : free_blocks) {
+        char* begin = (char*)block->memory_ptr;
+        auto range = touched(begin, begin + block->size);
+        if (!range.first) continue;
+        block = carve_free(block, range.first, range.second);
+        block->occupied = true;
+        size_t id = block->blocks->insert_occupied(block);
+        used_memory += block->size;
+        note_device_alloc(device(), block->size);
+        held.emplace_back(block->memory_ptr, id, block->size, this);
+    }
+    spans.clear();
+}
+
+void sfrl_fence_capture(vector<Allocation>& held) {
+    for (auto* allocator : SFRLAllocator::sfrl_allocators)
+        allocator->fence_capture(held);
 }
 
 bool SFRLAllocator::share_with(size_t size, size_t allocation, size_t offset) {

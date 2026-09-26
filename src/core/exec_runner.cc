@@ -236,11 +236,19 @@ DEFINE_FLAG(int64, auto_graph_replay_retain_bytes, 64<<20, "The largest graph th
 // in `jt.stack` (a code op, reshaped) did this, and so did `nn.RNN`'s hidden
 // state (a reshape of a clone of the last step), and so did a loss computed by
 // the full-reduce fast path, a `tape` over a reshape. `pinned` is that set,
-// followed through every alias (`aliased_input`), not only views. Beyond
-// it, a var that aliases nothing of its own may go only if all that shares it
-// are views: `setitem_gopt` has a concat operand computed straight into its
-// slice of the destination and turns the setitem into a no-op, which would
-// never copy a recomputed operand.
+// followed through every alias (`aliased_input`), not only views.
+//
+// Within the batch's releases, a shared allocation goes as a group, once its
+// last member has had its last use: each alias is freed and asks again for
+// its base, at the offset it had. A group goes only if exactly one member
+// aliases nothing -- the one the others re-attach to. `setitem_gopt` computes
+// a concat operand straight into its slice of the destination and turns the
+// setitem into a no-op; that operand aliases nothing either, and freed, a
+// re-run would compute it into a buffer of its own that nothing copies, so
+// such a group stays. Freeing only the members that were all views, as this
+// once did, never freed the base of a `tape` or of an in-place `setitem`: a
+// captured training step held every `jt.Function` input and the embedding's
+// scatter-added gradient, 1.2 GB on a four-layer Qwen3.
 // Whether every op of this segment is a constant (`array`) whose output
 // already holds it: an earlier run of this kept graph wrote it there, either
 // by handing over the data (ArrayOp::run) or, for a scalar fused into a
@@ -273,26 +281,69 @@ static Var* aliased_input(Var* v) {
     return nullptr;
 }
 
-static void release_kept_storage(Var* v, const std::unordered_set<Var*>& released,
-                                 const std::unordered_set<Var*>& pinned) {
-    if (!v->flag(VarFlags::_kept) || v->is_finished() || !v->mem_ptr) return;
-    if (v->flag(VarFlags::_host_resident)) return;
+static bool may_release_kept(Var* v, const std::unordered_set<Var*>& pinned) {
+    if (!v->flag(VarFlags::_kept) || v->is_finished() || !v->mem_ptr) return false;
+    if (v->flag(VarFlags::_host_resident)) return false;
     Op* producer = v->input();
-    if (!producer) return;
-    if (pinned.count(v)) return;
+    if (!producer) return false;
+    if (pinned.count(v)) return false;
     // A constant built inside the graph (`jt.array`) has one copy of its data,
     // which its first run moves into the var: freed, a re-run has nothing to
     // fill the fresh buffer with.
-    if (producer->is_op(op_ids::array())) return;
-    Var* view_of = aliased_input(v);
-    for (Var* m = v->share_next; m && m != v; m = m->share_next) {
-        if (!released.count(m)) return;
-        if (!view_of && !(m->input() && m->input()->is_storage_view())) return;
-    }
-    size_t offset = view_of ? v->storage_offset_bytes - view_of->storage_offset_bytes : 0;
-    free_var_mem(v);
-    if (view_of) v->share_with(view_of, offset);
+    return !producer->is_op(op_ids::array());
 }
+
+static void release_kept_storage(Var* v, const std::unordered_set<Var*>& released,
+                                 const std::unordered_set<Var*>& pinned,
+                                 std::unordered_set<Var*>& waiting) {
+    if (!may_release_kept(v, pinned)) return;
+    if (!v->share_next) {
+        Var* view_of = aliased_input(v);
+        size_t offset = view_of ? v->storage_offset_bytes - view_of->storage_offset_bytes : 0;
+        free_var_mem(v);
+        if (view_of) v->share_with(view_of, offset);
+        return;
+    }
+    vector<Var*> group{v};
+    for (Var* m = v->share_next; m != v; m = m->share_next) {
+        if (!released.count(m)) return;
+        group.push_back(m);
+    }
+    waiting.insert(v);
+    struct Rebind { Var* var; Var* base; size_t offset; };
+    vector<Rebind> rebinds;
+    int roots = 0;
+    for (Var* m : group) {
+        if (!waiting.count(m)) return;
+        if (!may_release_kept(m, pinned)) return;
+        Var* base = aliased_input(m);
+        if (!base) { ++roots; continue; }
+        rebinds.push_back({m, base, m->storage_offset_bytes - base->storage_offset_bytes});
+    }
+    if (roots != 1) return;
+    for (Var* m : group) {
+        waiting.erase(m);
+        free_var_mem(m);
+    }
+    for (auto& r : rebinds) r.var->share_with(r.base, r.offset);
+}
+
+// Whether a host op about to run can read memory a device is still writing,
+// so that the devices have to be waited on first. Only device memory can be:
+// host memory is written by host ops, or by a readback that has waited for
+// its producer (the backends' device-to-host copy does). Waiting on every
+// device before *any* host op made a scalar computed on the host --
+// `prev_timestep >= 0` in a diffusers scheduler -- wait for the whole UNet
+// launched just before it, 22 ms a denoising step, where PyTorch's CPU
+// tensors never wait on a stream.
+#ifdef HAS_ACCELERATOR
+static bool host_op_reads_device_memory(Op* op) {
+    if (use_cuda_managed_allocator || op->flag(OpFlags::_manual_device)) return true;
+    for (Var* v : op->inputs())
+        if (v->allocator && v->allocator->is_cuda()) return true;
+    return false;
+}
+#endif
 
 // Publishes this batch's record of released vars for the duration of the
 // batch, and takes it down on every exit path. See `batch_released_vars` in
@@ -371,7 +422,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     // asked for (see `schedule_hold_release`) -- and what must keep its memory
     // because a var outside that set views it. Only `keep_graph == 2` asks;
     // see `release_kept_storage`.
-    std::unordered_set<Var*> kept_released, kept_pinned;
+    std::unordered_set<Var*> kept_released, kept_pinned, kept_waiting;
     if (keep_graph == 2 && plan.batch_hold) {
         for (auto& segment : plan.release_after)
             for (int index : segment)
@@ -391,7 +442,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         // dropped with the hold itself.
         if (rid && plan.batch_hold)
             for (int index : plan.release_after[rid - 1]) {
-                if (keep_graph == 2) release_kept_storage(plan.all_vars[index], kept_released, kept_pinned);
+                if (keep_graph == 2) release_kept_storage(plan.all_vars[index], kept_released, kept_pinned, kept_waiting);
                 (*plan.batch_hold)[index].free_liveness();
             }
         // One trace record per launched operator; see step_trace.h.
@@ -499,7 +550,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         }
         #ifdef HAS_ACCELERATOR
         if (!is_cuda) {
-            if (exe.last_is_cuda) {
+            if (exe.last_is_cuda && host_op_reads_device_memory(op)) {
                 // if prev op in gpu and this op in cpu
                 //  cuda sync -- on every device that has been launched on,
                 //  not only the one that happens to be current
@@ -657,7 +708,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     // frees nothing for a kept var: its node is still alive.
     if (keep_graph == 2 && plan.batch_hold && queue.size())
         for (int index : plan.release_after[queue.size() - 1])
-            release_kept_storage(plan.all_vars[index], kept_released, kept_pinned);
+            release_kept_storage(plan.all_vars[index], kept_released, kept_pinned, kept_waiting);
     // == phase 7: finish the batch ==
     LOGvv << "All" << plan.op_num << "ops finished, return vars:" << vars;
     // a zero-sized var has no memory to point at (see the size==0 branch in

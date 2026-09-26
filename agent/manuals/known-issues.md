@@ -3071,3 +3071,21 @@ about whether to take it.
   `TypeError: initialize_sgd() got an unexpected keyword argument 'foreach'`,
   and the same for `fused=`. Both are ordinary PyTorch arguments; the native
   SGD already has a `fused` switch of its own that they could map onto.
+
+## KI-TEST-007: `test_fused_op_relay_matmul` fails after profiler or graph-replay tests in the same process
+
+- Severity: Low (a C++ unit test red depending on what ran before it; no wrong
+  result outside the test)
+- Status: Open. Found 2026-09-26; reproduced on `75aa9977` unchanged, so it
+  predates the capture memory work it was found during.
+- Owner: codegen / test infrastructure
+- Symptom: `codegen/test_jit_tests.py::TestJitTests::test_fused_op_relay_matmul`
+  passes alone and with its own file, and fails with
+  `[check failed: cm.size()>=2]` when `runtime/test_step_profile.py`,
+  `runtime/test_profiler.py` or `nn/test_graph_replay_multi_output.py` ran
+  earlier in the same pytest process. `backends/cuda/test_batch_releases_memory.py`
+  before it does not trigger it.
+- Suspected: process state one of those files leaves behind (a CUDA flag or a
+  JIT cache entry) that `src/tests/test_op_relay.cc` depends on without setting;
+  not isolated.
+- Workaround: run the file in its own process.
