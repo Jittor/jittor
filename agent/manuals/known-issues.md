@@ -3090,6 +3090,24 @@ about whether to take it.
   not isolated.
 - Workaround: run the file in its own process.
 
+## KI-TEST-008: `test_cudnn_op.py` finds no `cudnn_conv` JIT key in its captured log
+
+- Severity: Low (two assertions about a log line; the value checks next to
+  them pass)
+- Status: Open. Found 2026-09-28; fails the same way on `542d6e97`, with a
+  fresh `JITTOR_HOME` as with a warm one, so it predates the allocator and
+  layout work it was found during.
+- Owner: cuDNN backend / test infrastructure
+- Symptom: `backends/cuda/test_cudnn_op.py::TestCudnnConvOp::test` and
+  `::test_backward` fail on `assert len(logs)==1 and "oihw" in logs[0][0]`
+  with `logs == []`: under `log_capture_scope(enable_tuner=1,
+  log_vprefix="op.cc=100")` no `Jit op key (not )found: cudnn_conv` line is
+  captured, while the tuned result still matches the CPU reference.
+- Suspected: the tuner no longer rewrites the reindex convolution into
+  `cudnn_conv` on this path, or the log line moved; not isolated.
+- Workaround: none needed for results; the value assertions in the same tests
+  pass.
+
 ## KI-EXEC-008: the CUDA convolution test files intermittently abort on a forward liveness underflow
 
 - Severity: Medium (a whole pytest process aborts, taking its summary with it)

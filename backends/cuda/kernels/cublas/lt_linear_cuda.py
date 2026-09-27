@@ -59,8 +59,10 @@ from jittor._runtime.core_api import _output_requires_grad
 _CANDIDATES = 8
 
 #: Per-problem workspace. cuBLASLt reports what each candidate wants; the
-#: fast ones for these shapes asked for 8 MB.
-_WORKSPACE = 32 << 20
+#: fast ones for these shapes asked for 8 MB. It is borrowed from the tensor
+#: pool on every call, so asking for more than the winners use only leaves a
+#: larger hole in that pool between calls.
+_WORKSPACE = 8 << 20
 
 #: `dsize_` as `src/type/nano_string.h` defines it: 2**code is the byte width.
 _DSIZE = {"float16": 1, "bfloat16": 1, "float32": 2, "float64": 3}
