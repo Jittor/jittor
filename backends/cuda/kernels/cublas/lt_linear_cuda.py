@@ -70,6 +70,8 @@ _HEADER = r"""
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include "core/executor.h"
+#include "mem/allocator.h"
 
 static cublasLtHandle_t jt_lt_handle() {
     static cublasLtHandle_t handle = nullptr;
@@ -83,16 +85,23 @@ static cublasHandle_t jt_blas_handle() {
     return handle;
 }
 
-static void* jt_lt_workspace(size_t bytes) {
-    static void* ws = nullptr;
-    static size_t have = 0;
-    if (have < bytes) {
-        if (ws) cudaFree(ws);
-        if (cudaMalloc(&ws, bytes) != cudaSuccess) { ws = nullptr; have = 0; }
-        else have = bytes;
+// The workspace of one call, from the executor's temporary pool, as cuDNN's
+// are (see `CudnnWorkspace`). It was a function-local static -- and every
+// problem shape compiles its own kernel, so that was one 32 MB cudaMalloc per
+// shape, held for the life of the process and outside every pool: 512 MB of
+// an SD1.5 UNet's device memory, for sixteen shapes.
+struct JtLtWorkspace {
+    void* ptr = nullptr;
+    size_t size = 0, allocation = 0;
+    jittor::Allocator* allocator = nullptr;
+    explicit JtLtWorkspace(size_t bytes) : size(bytes) {
+        allocator = jittor::runtime_executor().temp_allocator;
+        ptr = allocator->alloc(size, allocation);
     }
-    return ws;
-}
+    ~JtLtWorkspace() { if (ptr) allocator->free(ptr, size, allocation); }
+    JtLtWorkspace(const JtLtWorkspace&) = delete;
+    JtLtWorkspace& operator=(const JtLtWorkspace&) = delete;
+};
 
 // Chosen once per problem shape. Each shape compiles its own kernel, so a
 // function-local static here IS per shape.
@@ -219,7 +228,8 @@ def _source(rows, cin, cout, dtype):
     cublasLtMatrixLayoutCreate(&lb, {ct}, cin, rows, cin);
     cublasLtMatrixLayoutCreate(&lc, {ct}, cout, rows, cout);
 
-    void* ws = jt_lt_workspace({_WORKSPACE});
+    JtLtWorkspace workspace({_WORKSPACE});
+    void* ws = workspace.ptr;
     size_t wsize = ws ? (size_t){_WORKSPACE} : 0;
 
     static JtLtChoice choice;
