@@ -305,17 +305,35 @@ PyTorch（`torch.profiler`，同一 workload、同一编译模式），按差距
 7.27373，修前 7.27492），差异出在第二步；该任务 loss 逐步上升，TF32 卷积本身有 1e-3 量级的
 误差，两条轨迹在第二步分开。对 float64 参考，新 BN 的前向与反向误差都小于旧 kernel。
 
+后续（2026-09-27，`e8a4c49b`、`1957f9b6`）：
+
+- cuDNN 注意力按 q/k/v 各自的布局读写（BSHD 或 BHSD），`x.view(b, s, h, d).transpose(1, 2)`
+  直接交给 cuDNN；`transpose` 遇到转置视图时合成一次、互逆时直接返回源张量，视图记录随
+  底座 holder 失效时按计算图判断。SD1.5 采样 20 步去掉约 10 ms 转置。
+- float32 融合注意力前向、反向改为寄存器分块（转置存放的共享内存 + 向量读取）。Qwen3 训练
+  一步：前向 16.2 → 9.6 ms、反向 38.8 → 25.6 ms，PyTorch mem-efficient 为 10.3 / 32.3 ms。
+  `qwen3_train` 编译 214.7 → 194.0 ms（PyTorch 186.8），eager 210.3 → 187.9 ms；
+  `vit_b16_train` 编译 176.0 → 161.6 ms。
+
+BN / GroupNorm 与后续逐元素运算的融合试了三种写法，都没有收益，未采用：
+
+| 写法 | 结果 |
+| --- | --- |
+| BN 全部用普通算子（归约 + 逐元素，自动微分） | BN + 残差加 + ReLU 前向加反向慢 20～30% |
+| 统计量用 Welford kernel，归一化用普通算子，统计量的梯度由小 `Function` 给出 | 同上，慢约 30%；反向多出的归约与重算抵消了融合 |
+| GroupNorm 推理：kernel 给出逐 (样本, 通道) 的 scale / shift，归一化用广播算子 | 与 SiLU 融成一个 kernel，但只省 0.5 ms / 20 步；半精度逐元素本身很便宜，`transformer_2d` 的 permute 是非融合的 `transpose` 算子，没有并入 |
+
+`jt.Function` 的输出经过 tape 算子（与输入共享存储），融合器在此断开；视图 reshape 也会截断
+融合链。要得到 inductor 那样的收益，需要融合器能穿过这两种边界，是融合器本身的改造。
+
 仍然开着的差距与原因：
 
 - 卷积的 NCHW → NHWC 转换：cuDNN 对 NCHW 半精度输入选 NHWC kernel 并逐次转换（SD 采样
   54 ms / 20 步，PyTorch eager 相同）；PyTorch 编译后没有，是 inductor 把卷积激活改成了
   channels_last。需要布局传播，不是单个 kernel 的事。
-- cuDNN 注意力的输入按连续 BHSD 处理，diffusers 的 `transpose(1, 2)` 视图因此先被转置
-  （SD 采样约 21 ms / 20 步）；需要带步长的 cuDNN 描述符。
-- float32 融合注意力本身：前向 14 对 10 ms、反向 36 对 32 ms（Qwen3 训练一步），FFMA 实现
-  的调优空间。
-- BN / ReLU / 残差加的融合：PyTorch 由 inductor 融成一个 kernel；这里逐元素部分已是带宽上限，
-  剩下的是多出的读写次数。用普通算子表达 BN 以借助融合器的试验没有变快，未采用。
+- `transformer_2d` 进入注意力前的 NCHW → NHWC `permute`（SD 采样约 12 ms / 20 步）：
+  PyTorch 把它与 GroupNorm 的输出融在一起。
+- BN / GroupNorm 与相邻逐元素运算的融合：见上表，需要融合器改造。
 
 ## 边界
 
