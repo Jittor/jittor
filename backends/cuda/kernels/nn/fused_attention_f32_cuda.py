@@ -18,8 +18,10 @@ backward
     value gradients in registers, and adds its share of each query gradient
     into global memory.
 
-Supports head dimensions up to 128, with no mask or a causal one (top-left
-aligned, as the composite path builds it). Anything else declines.
+Supports head dimensions up to 128, causal (top-left aligned, as the
+composite path builds it) or not, with an optional boolean or additive float
+``attn_mask`` broadcast to ``[batch, heads, queries, keys]``, as PyTorch
+accepts it. A mask that needs a gradient, or dropout, declines.
 """
 
 import jittor as jt
@@ -28,6 +30,11 @@ from jittor._core.flags import _output_requires_grad
 from jittor._runtime.dispatch import register_kernel
 
 _MAX_HEAD_DIM = 128
+#: Below this many blocks a forward grid leaves SMs idle; see `_forward`.
+_SM_BLOCKS = 128
+#: Score matrices smaller than this go to the matmul composite when there is
+#: no backward; see `_fused_attention_f32`.
+_SMALL_SCORES = 8 << 20
 
 _KERNELS = r"""
 #include <cfloat>
@@ -52,6 +59,48 @@ __device__ __forceinline__ float group_sum(float v) {
     return v + __shfl_xor_sync(0xffffffff, v, 1);
 }
 
+// The mask of one (batch, head), broadcast by zero strides: MASK is 0 for
+// none, 1 for a boolean one (false drops the key) and 2 for an additive float
+// bias, PyTorch's two forms of `attn_mask`.
+struct Mask {
+    const void* data;
+    int heads;
+    long long batch_stride, head_stride, row_stride, col_stride;
+    __device__ __forceinline__ long long base(int bh) const {
+        return (long long)(bh / heads) * batch_stride + (long long)(bh % heads) * head_stride;
+    }
+};
+
+template <int MASK>
+__device__ __forceinline__ float masked(float s, const Mask& mask, long long at) {
+    if (MASK == 1) return static_cast<const bool*>(mask.data)[at] ? s : -INFINITY;
+    if (MASK == 2) return s + static_cast<const float*>(mask.data)[at];
+    return s;
+}
+
+// What the mask leaves of a ROWS x COLS tile, the same answer in every thread
+// of the block: 0 nothing, 1 some of it, 2 all of it. A tile hidden whole is
+// skipped, and a boolean mask is not read inside a tile it shows whole -- so
+// an explicit causal mask, as Transformers builds one under compilation, costs
+// what `is_causal` does: before, the kernel declined it, and every [L, L]
+// score matrix was written out instead.
+template <int MASK, bool CAUSAL, int ROWS, int COLS>
+__device__ __forceinline__ int tile_visibility(const Mask& mask, long long base, int r0,
+                                               int c0, int lq, int lk) {
+    bool any = false, all = true;
+    for (int i = threadIdx.x; i < ROWS * COLS; i += THREADS) {
+        const int row = r0 + i / COLS, col = c0 + i % COLS;
+        if (row >= lq || col >= lk || (CAUSAL && col > row)) continue;
+        const long long at = base + row * mask.row_stride + col * mask.col_stride;
+        const bool shown = MASK == 1 ? static_cast<const bool*>(mask.data)[at]
+                                     : static_cast<const float*>(mask.data)[at] != -INFINITY;
+        any |= shown;
+        all &= shown;
+    }
+    if (!__syncthreads_or(any)) return 0;
+    return MASK == 1 && __syncthreads_and(all) ? 2 : 1;
+}
+
 template <int D, int ROWS>
 __device__ __forceinline__ void load_tile(float* dst, const float* src, int first,
                                           int limit, float scale) {
@@ -62,11 +111,11 @@ __device__ __forceinline__ void load_tile(float* dst, const float* src, int firs
     }
 }
 
-template <int D, int BQ, int BK, bool CAUSAL>
+template <int D, int BQ, int BK, bool CAUSAL, int MASK>
 __global__ void __launch_bounds__(THREADS) forward(
         const float* __restrict__ q, const float* __restrict__ k,
         const float* __restrict__ v, float* __restrict__ o, float* __restrict__ lse,
-        int lq, int lk, float scale) {
+        int lq, int lk, float scale, Mask mask) {
     constexpr int DP = D + 1, PP = BK + 1;
     constexpr int RPT = BQ / 16, CPT = BK / 8, DPT = (D + 7) / 8;
     extern __shared__ float smem[];
@@ -78,6 +127,7 @@ __global__ void __launch_bounds__(THREADS) forward(
     const float* qb = q + (size_t)bh * lq * D;
     const float* kb = k + (size_t)bh * lk * D;
     const float* vb = v + (size_t)bh * lk * D;
+    const long long mask_base = MASK ? mask.base(bh) : 0;
     load_tile<D, BQ>(sq, qb, q0, lq, scale);
 
     float m[RPT], l[RPT], acc[RPT][DPT];
@@ -89,6 +139,9 @@ __global__ void __launch_bounds__(THREADS) forward(
     }
     const int kend = CAUSAL ? min(lk, q0 + BQ) : lk;
     for (int k0 = 0; k0 < kend; k0 += BK) {
+        const int shown = MASK ? tile_visibility<MASK, CAUSAL, BQ, BK>(
+            mask, mask_base, q0, k0, lq, lk) : 2;
+        if (!shown) continue;
         __syncthreads();
         load_tile<D, BK>(skv, kb, k0, lk, 1.f);
         __syncthreads();
@@ -116,6 +169,9 @@ __global__ void __launch_bounds__(THREADS) forward(
             for (int c = 0; c < CPT; c++) {
                 const int col = k0 + tx + c * 8;
                 if (col >= lk || (CAUSAL && col > row)) s[r][c] = -INFINITY;
+                else if (MASK && shown == 1 && row < lq)
+                    s[r][c] = masked<MASK>(s[r][c], mask, mask_base
+                        + row * mask.row_stride + col * mask.col_stride);
                 top = fmaxf(top, s[r][c]);
             }
             const float next = fmaxf(m[r], group_max(top));
@@ -168,13 +224,13 @@ __global__ void __launch_bounds__(THREADS) forward(
     }
 }
 
-template <int D, int BQ, int BK, bool CAUSAL>
+template <int D, int BQ, int BK, bool CAUSAL, int MASK>
 __global__ void __launch_bounds__(THREADS) backward(
         const float* __restrict__ q, const float* __restrict__ k,
         const float* __restrict__ v, const float* __restrict__ dout,
         const float* __restrict__ lse, const float* __restrict__ delta,
         float* __restrict__ dq, float* __restrict__ dk, float* __restrict__ dv,
-        int lq, int lk, float scale) {
+        int lq, int lk, float scale, Mask mask) {
     constexpr int DP = D + 1, PP = BK + 1;
     constexpr int RPT = BQ / 16, CPT = BK / 8, KPT = BK / 16, DPT = (D + 7) / 8;
     extern __shared__ float smem[];
@@ -187,6 +243,7 @@ __global__ void __launch_bounds__(THREADS) backward(
     const int bh = blockIdx.y, k0 = blockIdx.x * BK;
     const int ty = threadIdx.x >> 3, tx = threadIdx.x & 7;
     const size_t qoff = (size_t)bh * lq * D, koff = (size_t)bh * lk * D;
+    const long long mask_base = MASK ? mask.base(bh) : 0;
     load_tile<D, BK>(sk, k + koff, k0, lk, 1.f);
     load_tile<D, BK>(sv, v + koff, k0, lk, 1.f);
 
@@ -199,6 +256,9 @@ __global__ void __launch_bounds__(THREADS) backward(
     // Query tiles wholly above the diagonal see none of these keys.
     const int qstart = CAUSAL ? (k0 / BQ) * BQ : 0;
     for (int q0 = qstart; q0 < lq; q0 += BQ) {
+        const int shown = MASK ? tile_visibility<MASK, CAUSAL, BQ, BK>(
+            mask, mask_base, q0, k0, lq, lk) : 2;
+        if (!shown) continue;
         __syncthreads();
         load_tile<D, BQ>(sq, q + qoff, q0, lq, 1.f);
         load_tile<D, BQ>(sdo, dout + qoff, q0, lq, 1.f);
@@ -238,7 +298,11 @@ __global__ void __launch_bounds__(THREADS) backward(
                 const int col = k0 + tx + c * 8;
                 const bool dead = row >= lq || col >= lk || (CAUSAL && col > row)
                                   || row_lse == -INFINITY;
-                const float p = dead ? 0.f : __expf(s[r][c] * scale - row_lse);
+                float score = s[r][c] * scale;
+                if (MASK && shown == 1 && !dead)
+                    score = masked<MASK>(score, mask, mask_base
+                        + row * mask.row_stride + col * mask.col_stride);
+                const float p = dead || score == -INFINITY ? 0.f : __expf(score - row_lse);
                 sp[(ty * RPT + r) * PP + tx + c * 8] = p;
                 sds[(ty * RPT + r) * PP + tx + c * 8] = p * (dp[r][c] - row_delta);
             }
@@ -331,38 +395,85 @@ def _launch(kernel, grid, smem, args):
     """
 
 
-def _forward(query, key, value, scale, causal):
+def _mask_layout(mask, shape):
+    """(kind, contiguous mask, strides) for an `attn_mask`, or None to decline.
+
+    kind is the kernel's MASK. The mask broadcasts to `shape` = (batch, heads,
+    queries, keys) from the right, as PyTorch broadcasts it; a broadcast
+    dimension gets stride 0.
+    """
+    if mask is None:
+        return 0, None, (0, 0, 0, 0)
+    dtype = _jittor_dtype_name(mask.dtype)
+    if dtype == "bool":
+        kind = 1
+    elif dtype == "float32":
+        # A mask that is learned would need its own gradient.
+        if _output_requires_grad(mask):
+            return None
+        kind = 2
+    else:
+        return None
+    dims = tuple(int(size) for size in mask.shape)
+    if len(dims) > 4:
+        return None
+    dims = (1,) * (4 - len(dims)) + dims
+    if any(size not in (1, full) for size, full in zip(dims, shape)):
+        return None
+    strides, step = [], 1
+    for size in reversed(dims):
+        strides.append(0 if size == 1 else step)
+        step *= size
+    return kind, mask.reshape(dims).stop_grad(), tuple(reversed(strides))
+
+
+def _mask_args(layout, heads, index):
+    kind, _, (sb, sh, sq, sk) = layout
+    data = f"in{index}_p" if kind else "nullptr"
+    return f"mea::Mask{{{data}, {heads}, {sb}LL, {sh}LL, {sq}LL, {sk}LL}}"
+
+
+def _forward(query, key, value, scale, causal, layout=(0, None, (0, 0, 0, 0))):
     b, h, lq, d = (int(size) for size in query.shape)
     bq, bk, _, _ = _tiles(d)
+    # A grid smaller than the device takes narrower query tiles: BERT at
+    # batch 1 (12 heads, 128 tokens) is 24 blocks of 64 queries, which ran at
+    # half the speed of the matmul composite on a 128-SM card.
+    if -(-lq // bq) * b * h < _SM_BLOCKS:
+        bq = 16
     smem = _smem_forward(d, bq, bk)
-    kernel = f"mea::forward<{d}, {bq}, {bk}, {str(bool(causal)).lower()}>"
+    kernel = f"mea::forward<{d}, {bq}, {bk}, {str(bool(causal)).lower()}, {layout[0]}>"
+    inputs = [query, key, value] + ([layout[1]] if layout[0] else [])
     return jt.code(
-        [query.shape, (b, h, lq)], ["float32", "float32"], [query, key, value],
+        [query.shape, (b, h, lq)], ["float32", "float32"], inputs,
         cuda_header=_KERNELS,
         cuda_src=_launch(kernel, f"(in0->shape[2] + {bq} - 1) / {bq}, in0->shape[0] * in0->shape[1]",
                          smem, f"in0_p, in1_p, in2_p, out0_p, out1_p, in0->shape[2], "
-                               f"in1->shape[2], {float(scale)!r}f"))
+                               f"in1->shape[2], {float(scale)!r}f, {_mask_args(layout, h, 3)}"))
 
 
-def _backward(query, key, value, grad_out, lse, delta, scale, causal):
+def _backward(query, key, value, grad_out, lse, delta, scale, causal,
+              layout=(0, None, (0, 0, 0, 0))):
     d = int(query.shape[3])
+    h = int(query.shape[1])
     _, _, bq, bk = _tiles(d)
     smem = _smem_backward(d, bq, bk)
-    kernel = f"mea::backward<{d}, {bq}, {bk}, {str(bool(causal)).lower()}>"
+    kernel = f"mea::backward<{d}, {bq}, {bk}, {str(bool(causal)).lower()}, {layout[0]}>"
+    inputs = [query, key, value, grad_out, lse, delta] + ([layout[1]] if layout[0] else [])
     return jt.code(
         [query.shape, key.shape, value.shape], ["float32"] * 3,
-        [query, key, value, grad_out, lse, delta],
+        inputs,
         cuda_header=_KERNELS,
         cuda_src="cudaMemsetAsync(out0_p, 0, out0->size, 0);\n" + _launch(
             kernel, f"(in1->shape[2] + {bk} - 1) / {bk}, in0->shape[0] * in0->shape[1]",
             smem, f"in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out0_p, out1_p, out2_p, "
-                  f"in0->shape[2], in1->shape[2], {float(scale)!r}f"))
+                  f"in0->shape[2], in1->shape[2], {float(scale)!r}f, {_mask_args(layout, h, 6)}"))
 
 
 class _FusedAttentionF32(jt.Function):
-    def execute(self, query, key, value, scale, causal):
-        self.scale, self.causal = scale, causal
-        out, lse = _forward(query, key, value, scale, causal)
+    def execute(self, query, key, value, scale, causal, layout):
+        self.scale, self.causal, self.layout = scale, causal, layout
+        out, lse = _forward(query, key, value, scale, causal, layout)
         self.saved = (query, key, value, out, lse)
         return out
 
@@ -371,8 +482,8 @@ class _FusedAttentionF32(jt.Function):
         grad_out = grad_out.float32()
         delta = (grad_out * out).sum(-1)
         grad_query, grad_key, grad_value = _backward(
-            query, key, value, grad_out, lse, delta, self.scale, self.causal)
-        return grad_query, grad_key, grad_value, None, None
+            query, key, value, grad_out, lse, delta, self.scale, self.causal, self.layout)
+        return grad_query, grad_key, grad_value, None, None, None
 
 
 def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None):
@@ -382,7 +493,7 @@ def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
 def _fused_attention_f32(query, key, value, attn_mask=None, dropout_p=0.0,
                          is_causal=False, scale=None):
     """Run float32 attention tile by tile, or return None to decline."""
-    if attn_mask is not None or float(dropout_p or 0.0) != 0.0:
+    if float(dropout_p or 0.0) != 0.0:
         return None
     if len(query.shape) != 4 or tuple(key.shape) != tuple(value.shape) \
             or len(key.shape) != 4 or tuple(query.shape[:2]) != tuple(key.shape[:2]) \
@@ -390,10 +501,24 @@ def _fused_attention_f32(query, key, value, attn_mask=None, dropout_p=0.0,
         return None
     if not 0 < int(query.shape[3]) <= _MAX_HEAD_DIM:
         return None
+    # A mask used to decline outright, and Transformers builds an explicit
+    # causal one whenever `torch.compiler.is_compiling()` -- so a captured
+    # Qwen3 step materialized every [L, L] score matrix instead.
+    b, h, lq, _ = (int(size) for size in query.shape)
+    lk = int(key.shape[2])
+    training = _output_requires_grad(query, key, value)
+    # Without a backward the kernel saves only the score matrix's traffic, and
+    # a small one is cheaper through the matmuls: BERT's 12 x 128 x 128 per
+    # layer took 24 us here against 11 us composed.
+    if not training and b * h * lq * lk * 4 < _SMALL_SCORES:
+        return None
+    layout = _mask_layout(attn_mask, (b, h, lq, lk))
+    if layout is None:
+        return None
     scale = float(scale) if scale is not None else float(query.shape[3]) ** -0.5
-    if _output_requires_grad(query, key, value):
-        return _FusedAttentionF32.apply(query, key, value, scale, bool(is_causal))
-    return _forward(query, key, value, scale, bool(is_causal))[0]
+    if training:
+        return _FusedAttentionF32.apply(query, key, value, scale, bool(is_causal), layout)
+    return _forward(query, key, value, scale, bool(is_causal), layout)[0]
 
 
 register_kernel("nn.fused_attention", "cuda", _fused_attention_f32, supports=_supports)

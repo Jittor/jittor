@@ -8,8 +8,10 @@ from jittor._runtime.core_api import _output_requires_grad
 
 from ... import _arg_policy
 from ..backends import hooks as _backend_hooks
+from jittor._runtime.dispatch import select_kernel as _select_kernel
 from jittor.backends.cuda.kernels.nn.batch_norm_training_cuda import (
     _batch_norm_cuda,
+    _batch_norm_cuda_statistics,
     _batch_norm_eval_cuda,
 )
 from jittor.backends.cuda.kernels.nn.group_norm_cuda import _group_norm_cuda
@@ -102,17 +104,28 @@ def _batch_norm_train(x, dims, weight, bias, eps, sync=False):
     with the statistics (the module updates its running buffers, the functional
     updates the buffers it was handed).
     """
-    xmean, xvar = _batch_statistics(x, dims, sync)
     if not sync:
         # Fused CUDA kernel for the local case. It computes its own statistics,
         # so it cannot serve the all-reduced ones; it is a backend accelerator
         # for this same function, pinned against it by
         # tests/nn/test_norm_unification.py. functional.batch_norm never
         # reached it before -- training=True went down the generic path only.
-        backend = _backend_hooks.batch_norm_cuda or _batch_norm_cuda
-        fast = backend(x, weight, bias, eps)
-        if fast is not None:
-            return fast, xmean, xvar
+        #
+        # It hands back the statistics it normalized with, for the running
+        # buffers. Computing them here as well ran two more reductions over
+        # the activation per layer, 6.7 ms of a ResNet-50 training step.
+        # A kernel registered over ours keeps the old contract: the output
+        # alone, with the statistics computed here.
+        selected = None
+        if _backend_hooks.batch_norm_cuda is not None:
+            selected = _select_kernel("nn.batch_norm.training", x, weight, bias, eps)
+        if selected is _batch_norm_cuda.__wrapped__:
+            fast = _batch_norm_cuda_statistics(x, weight, bias, eps)
+            if fast is not None:
+                return fast
+        elif selected is not None:
+            return (selected(x, weight, bias, eps),) + _batch_statistics(x, dims, sync)
+    xmean, xvar = _batch_statistics(x, dims, sync)
     xhat = _bn_normalize(x, xmean, xvar, dims, eps)
     return _affine(xhat, weight, bias, x.shape[1], x.ndim), xmean, xvar
 

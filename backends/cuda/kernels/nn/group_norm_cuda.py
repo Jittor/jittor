@@ -1,92 +1,161 @@
-"""CUDA training fast path for 4-D float32 group normalization."""
+"""CUDA fast path for 4-D group normalization, float32 and half precision.
+
+Laid out like the batch normalization next to it (batch_norm_training_cuda.py):
+a group's statistics are a reduction over its ``C / G * H * W`` contiguous
+elements, run on a grid of (group, segment) blocks whose partial results a
+one-thread-per-group kernel combines, and applying them is elementwise over
+the whole tensor. The affine gradients are the same per-channel reductions as
+batch norm's.
+
+It used to be one block per (sample, group) doing everything. An SD1.5 UNet
+at batch 2 has 32 groups, so every GroupNorm ran 64 blocks on a 128-SM card,
+and half precision -- which is how the UNet runs -- was not accepted at all:
+it went down the generic path, four fused kernels and 31 ms of a 20-step
+sample, against PyTorch's 5 ms.
+"""
 
 from functools import lru_cache
 import math
 
 import jittor as jt
+from jittor._core.dtypes import dtype_name as _dtype_name
 from jittor._runtime.backend_libraries import library_resource
 from jittor._runtime.dispatch import optional_kernel
 
+from .batch_norm_training_cuda import (
+    _PAIR, _THREADS, _WELFORD, _elementwise, _launch, _per_channel, _segments,
+)
+
+
+def _header():
+    return f"#include <{library_resource('cub', 'home')}cub/cub.cuh>\n" + _WELFORD + _PAIR
+
 
 @lru_cache(maxsize=128)
-def _group_norm_cuda_cls(shape, num_groups, eps):
+def _group_norm_cuda_cls(shape, num_groups, eps, vector=1):
     batch, channels, height, width = shape
     spatial = height * width
     channels_per_group = channels // num_groups
     group_size = channels_per_group * spatial
     rows = batch * num_groups
-    threads = 32
-    while threads < min(group_size, 256):
-        threads *= 2
-    header = f"#include <{library_resource('cub', 'home')}cub/cub.cuh>"
+    total = rows * group_size
+    row_segments, per_row_segment = _segments(rows, group_size)
+    row_parts = row_segments * rows
+    per_sample = batch * spatial
+    channel_segments, per_channel_segment = _segments(channels, per_sample)
+    channel_parts = channel_segments * channels
+    header = _header()
+    # For an item i of the tensor: its (sample, group) row and its channel.
+    locate = f"""
+        long long row = i * WIDTH / {group_size};
+        int channel = (int)((i * WIDTH / {spatial}) % {channels});
+    """
+
+    def body(width, text):
+        return locate.replace("WIDTH", str(width)) + text
+
+    apply_scalar = body(1, """
+        float k = static_cast<float>(rstd[row]) * static_cast<float>(weight[channel]);
+        float b = static_cast<float>(bias[channel]) - static_cast<float>(mean[row]) * k;
+        y[i] = out0_type(static_cast<float>(x[i]) * k + b);
+    """)
+    apply_v4 = body(4, """
+        float k = rstd[row] * static_cast<float>(weight[channel]);
+        float b = static_cast<float>(bias[channel]) - mean[row] * k;
+        float4 v = reinterpret_cast<const float4*>(x)[i];
+        reinterpret_cast<float4*>(y)[i] =
+            make_float4(v.x * k + b, v.y * k + b, v.z * k + b, v.w * k + b);
+    """)
+    grad_scalar = body(1, """
+        float r = rstd[row];
+        float g = static_cast<float>(grad_y[i]) * static_cast<float>(weight[channel]);
+        float xhat = (static_cast<float>(x[i]) - mean[row]) * r;
+        grad_x[i] = out0_type(r * (g - coef[row] - xhat * coef[%d + row]));
+    """ % rows)
+    grad_v4 = body(4, """
+        float r = rstd[row], w = static_cast<float>(weight[channel]);
+        float center = mean[row], mg = coef[row], mgx = coef[%d + row];
+        float4 dy = reinterpret_cast<const float4*>(grad_y)[i];
+        float4 v = reinterpret_cast<const float4*>(x)[i];
+        float4 out;
+        out.x = r * (dy.x * w - mg - (v.x - center) * r * mgx);
+        out.y = r * (dy.y * w - mg - (v.y - center) * r * mgx);
+        out.z = r * (dy.z * w - mg - (v.z - center) * r * mgx);
+        out.w = r * (dy.w * w - mg - (v.w - center) * r * mgx);
+        reinterpret_cast<float4*>(grad_x)[i] = out;
+    """ % rows)
+
+    def row_loop(text):
+        return f"""
+        int row = blockIdx.x;
+        long long begin = (long long)blockIdx.y * {per_row_segment};
+        long long end = begin + {per_row_segment};
+        if (end > {group_size}) end = {group_size};
+        const long long base = (long long)row * {group_size};
+        for (long long j = begin + threadIdx.x; j < end; j += {_THREADS}) {{
+            int channel = (row % {num_groups}) * {channels_per_group} + (int)(j / {spatial});
+            {text}
+        }}
+        """
 
     class GroupNormCUDA(jt.Function):
         def execute(self, x, weight, bias):
-            # Only the two per-row statistics are carried to the backward, the
-            # way LayerNorm and BatchNorm here already do it and the way torch's
-            # native_group_norm does. Handing over a full-size `xhat` instead
-            # costs a whole extra write of the feature map in the forward plus
-            # a full-size allocation held across the whole forward-backward
-            # interval; the backward recomputes it from `x` reading the same
-            # number of bytes, and bit for bit -- the arithmetic below is the
-            # same three float operations in the same order, and this fast path
-            # is registered for float32 only, so the stored `xhat` was never
-            # rounded to a narrower type either. Measured on one UNet step: the
-            # forward drops 102 us and 194.5 MiB, the backward pays 15 us back
-            # for the recomputed multiply-add, net -88 us.
-            y, mean, rstd = jt.code(
-                [x.shape, (rows,), (rows,)],
-                [x.dtype, "float32", "float32"],
+            # Only the two per-group statistics are carried to the backward,
+            # as torch's native_group_norm does; the backward recomputes xhat
+            # from x reading the same bytes a stored copy would.
+            y, mean, rstd, partial = jt.code(
+                [x.shape, (rows,), (rows,), (3 * row_parts,)],
+                [x.dtype, "float32", "float32", "float32"],
                 [x, weight, bias],
                 cuda_header=header,
                 cuda_src=f"""
-                __global__ static void group_norm_forward(
-                        const in0_type* x, const in1_type* weight,
-                        const in2_type* bias, out0_type* y,
-                        out1_type* mean, out2_type* rstd) {{
-                    typedef cub::BlockReduce<float, {threads}> BlockReduce;
+                __global__ static void group_norm_statistics(
+                        const in0_type* x, float* partial) {{
+                    typedef cub::BlockReduce<JtBnWelford, {_THREADS}> BlockReduce;
                     __shared__ typename BlockReduce::TempStorage storage;
-                    __shared__ float mean_shared;
-                    __shared__ float rstd_shared;
-                    int row = blockIdx.x;
-                    int base = row * {group_size};
-                    float local = 0.0f;
-                    for (int j = threadIdx.x; j < {group_size}; j += blockDim.x)
-                        local += static_cast<float>(x[base + j]);
-                    float reduced = BlockReduce(storage).Sum(local);
+                    // Welford per element. Shifted sums and squares lost a
+                    // factor of twenty against the two-pass variance over the
+                    // 800 K elements of an early ResNet-50 channel.
+                    JtBnWelford local{{0.0f, 0.0f, 0.0f}};
+                    {row_loop('''
+                        float value = static_cast<float>(x[base + j]);
+                        local.n += 1.0f;
+                        float delta = value - local.mean;
+                        local.mean += delta * __frcp_rn(local.n);
+                        local.m2 += delta * (value - local.mean);
+                    ''')}
+                    JtBnWelford total = BlockReduce(storage).Reduce(local, JtBnWelfordSum());
                     if (threadIdx.x == 0) {{
-                        mean_shared = reduced / {group_size}.0f;
-                        mean[row] = out1_type(mean_shared);
-                    }}
-                    __syncthreads();
-
-                    float row_mean = mean_shared;
-                    local = 0.0f;
-                    for (int j = threadIdx.x; j < {group_size}; j += blockDim.x) {{
-                        float delta = static_cast<float>(x[base + j]) - row_mean;
-                        local += delta * delta;
-                    }}
-                    __syncthreads();
-                    reduced = BlockReduce(storage).Sum(local);
-                    if (threadIdx.x == 0) {{
-                        rstd_shared = rsqrtf(reduced / {group_size}.0f + {eps:.9g}f);
-                        rstd[row] = out2_type(rstd_shared);
-                    }}
-                    __syncthreads();
-
-                    float inv_std = rstd_shared;
-                    int group = row % {num_groups};
-                    for (int j = threadIdx.x; j < {group_size}; j += blockDim.x) {{
-                        int channel = group * {channels_per_group} + j / {spatial};
-                        float normalized =
-                            (static_cast<float>(x[base + j]) - row_mean) * inv_std;
-                        y[base + j] = out0_type(
-                            normalized * static_cast<float>(weight[channel])
-                            + static_cast<float>(bias[channel]));
+                        int slot = blockIdx.y * {rows} + row;
+                        partial[slot] = total.n;
+                        partial[{row_parts} + slot] = total.mean;
+                        partial[{2 * row_parts} + slot] = total.m2;
                     }}
                 }}
-                group_norm_forward<<<{rows}, {threads}>>>(
-                    in0_p, in1_p, in2_p, out0_p, out1_p, out2_p);
+                __global__ static void group_norm_finish(
+                        const float* partial, float* mean, float* rstd) {{
+                    int row = blockIdx.x * blockDim.x + threadIdx.x;
+                    if (row >= {rows}) return;
+                    JtBnWelford total{{0.0f, 0.0f, 0.0f}};
+                    for (int s = 0; s < {row_segments}; s++) {{
+                        int slot = s * {rows} + row;
+                        JtBnWelford part{{partial[slot], partial[{row_parts} + slot],
+                                          partial[{2 * row_parts} + slot]}};
+                        total = JtBnWelfordSum()(total, part);
+                    }}
+                    mean[row] = total.mean;
+                    rstd[row] = rsqrtf(total.m2 / total.n + {eps:.9g}f);
+                }}
+                {_elementwise("group_norm_apply",
+                              "const in0_type* x, const in1_type* weight, "
+                              "const in2_type* bias, const float* mean, "
+                              "const float* rstd, out0_type* y",
+                              apply_scalar, apply_v4, total, spatial, channels, vector)}
+                group_norm_statistics<<<dim3({rows}, {row_segments}), {_THREADS}>>>(
+                    in0_p, out3_p);
+                group_norm_finish<<<{_per_channel(rows)}>>>(out3_p, out1_p, out2_p);
+                {_launch("group_norm_apply", "in0_p, in1_p, in2_p, out1_p, out2_p, out0_p",
+                         ("in0_p", "out0_p"), total, vector)}
                 CHECK(0 == cudaGetLastError());
                 """,
             )
@@ -95,105 +164,99 @@ def _group_norm_cuda_cls(shape, num_groups, eps):
 
         def grad(self, grad_y):
             x, mean, rstd, weight = self.saved
-            grad_x, grad_weight, grad_bias = jt.code(
-                [grad_y.shape, weight.shape, weight.shape],
-                [grad_y.dtype, weight.dtype, weight.dtype],
+            grad_x, grad_weight, grad_bias, row_partial, channel_partial, coef = jt.code(
+                [grad_y.shape, weight.shape, weight.shape,
+                 (2 * row_parts,), (2 * channel_parts,), (2 * rows,)],
+                [grad_y.dtype, weight.dtype, weight.dtype, "float32", "float32", "float32"],
                 [grad_y, x, mean, rstd, weight],
                 cuda_header=header,
                 cuda_src=f"""
-                __global__ static void group_norm_backward_x(
-                        const in0_type* grad_y, const in1_type* x,
-                        const in2_type* mean, const in3_type* rstd,
-                        const in4_type* weight, out0_type* grad_x) {{
-                    typedef cub::BlockReduce<float, {threads}> BlockReduce;
+                __global__ static void group_norm_backward_row_sums(
+                        const in0_type* grad_y, const in1_type* x, const float* mean,
+                        const float* rstd, const in4_type* weight, float* partial) {{
+                    typedef cub::BlockReduce<JtBnPair, {_THREADS}> BlockReduce;
                     __shared__ typename BlockReduce::TempStorage storage;
-                    __shared__ float mean_g_shared;
-                    __shared__ float mean_gx_shared;
-                    int row = blockIdx.x;
-                    int base = row * {group_size};
-                    int group = row % {num_groups};
-                    float row_mean = static_cast<float>(mean[row]);
-                    float inv_std = static_cast<float>(rstd[row]);
-                    float local = 0.0f;
-                    for (int j = threadIdx.x; j < {group_size}; j += blockDim.x) {{
-                        int channel = group * {channels_per_group} + j / {spatial};
-                        local += static_cast<float>(grad_y[base + j])
-                            * static_cast<float>(weight[channel]);
-                    }}
-                    float reduced = BlockReduce(storage).Sum(local);
-                    if (threadIdx.x == 0)
-                        mean_g_shared = reduced / {group_size}.0f;
-                    __syncthreads();
-
-                    local = 0.0f;
-                    for (int j = threadIdx.x; j < {group_size}; j += blockDim.x) {{
-                        int channel = group * {channels_per_group} + j / {spatial};
+                    float center = mean[blockIdx.x], r = rstd[blockIdx.x];
+                    JtBnPair local{{0.0f, 0.0f}};
+                    {row_loop('''
                         float g = static_cast<float>(grad_y[base + j])
                             * static_cast<float>(weight[channel]);
-                        float xhat =
-                            (static_cast<float>(x[base + j]) - row_mean) * inv_std;
-                        local += g * xhat;
-                    }}
-                    __syncthreads();
-                    reduced = BlockReduce(storage).Sum(local);
-                    if (threadIdx.x == 0)
-                        mean_gx_shared = reduced / {group_size}.0f;
-                    __syncthreads();
-
-                    float mean_g = mean_g_shared;
-                    float mean_gx = mean_gx_shared;
-                    for (int j = threadIdx.x; j < {group_size}; j += blockDim.x) {{
-                        int channel = group * {channels_per_group} + j / {spatial};
-                        float g = static_cast<float>(grad_y[base + j])
-                            * static_cast<float>(weight[channel]);
-                        float xhat =
-                            (static_cast<float>(x[base + j]) - row_mean) * inv_std;
-                        grad_x[base + j] = out0_type(inv_std * (
-                            g - mean_g - xhat * mean_gx));
+                        local.a += g;
+                        local.b += g * (static_cast<float>(x[base + j]) - center) * r;
+                    ''')}
+                    JtBnPair total = BlockReduce(storage).Reduce(local, JtBnPairSum());
+                    if (threadIdx.x == 0) {{
+                        int slot = blockIdx.y * {rows} + row;
+                        partial[slot] = total.a;
+                        partial[{row_parts} + slot] = total.b;
                     }}
                 }}
-
-                __global__ static void group_norm_backward_affine(
-                        const in0_type* grad_y, const in1_type* x,
-                        const in2_type* mean, const in3_type* rstd,
-                        out1_type* grad_weight, out2_type* grad_bias) {{
-                    typedef cub::BlockReduce<float, {threads}> BlockReduce;
+                __global__ static void group_norm_backward_channel_sums(
+                        const in0_type* grad_y, const in1_type* x, const float* mean,
+                        const float* rstd, float* partial) {{
+                    typedef cub::BlockReduce<JtBnPair, {_THREADS}> BlockReduce;
                     __shared__ typename BlockReduce::TempStorage storage;
                     int channel = blockIdx.x;
                     int group = channel / {channels_per_group};
-                    float local_weight = 0.0f;
-                    for (int j = threadIdx.x; j < {batch * spatial}; j += blockDim.x) {{
-                        int sample = j / {spatial};
-                        int offset = j - sample * {spatial};
-                        int index = (sample * {channels} + channel) * {spatial} + offset;
-                        int row = sample * {num_groups} + group;
-                        float xhat = (static_cast<float>(x[index])
-                            - static_cast<float>(mean[row]))
-                            * static_cast<float>(rstd[row]);
-                        local_weight += static_cast<float>(grad_y[index]) * xhat;
+                    long long begin = (long long)blockIdx.y * {per_channel_segment};
+                    long long end = begin + {per_channel_segment};
+                    if (end > {per_sample}) end = {per_sample};
+                    JtBnPair local{{0.0f, 0.0f}};
+                    for (long long item = begin + threadIdx.x; item < end; item += {_THREADS}) {{
+                        long long sample = item / {spatial};
+                        long long offset = item - sample * {spatial};
+                        long long index = (sample * {channels} + channel) * {spatial} + offset;
+                        long long row = sample * {num_groups} + group;
+                        float dy = static_cast<float>(grad_y[index]);
+                        local.a += dy * (static_cast<float>(x[index]) - mean[row]) * rstd[row];
+                        local.b += dy;
                     }}
-                    float reduced = BlockReduce(storage).Sum(local_weight);
-                    if (threadIdx.x == 0)
-                        grad_weight[channel] = out1_type(reduced);
-                    __syncthreads();
-
-                    float local_bias = 0.0f;
-                    for (int j = threadIdx.x; j < {batch * spatial}; j += blockDim.x) {{
-                        int sample = j / {spatial};
-                        int offset = j - sample * {spatial};
-                        int index = (sample * {channels} + channel) * {spatial} + offset;
-                        local_bias += static_cast<float>(grad_y[index]);
+                    JtBnPair total = BlockReduce(storage).Reduce(local, JtBnPairSum());
+                    if (threadIdx.x == 0) {{
+                        int slot = blockIdx.y * {channels} + channel;
+                        partial[slot] = total.a;
+                        partial[{channel_parts} + slot] = total.b;
                     }}
-                    __syncthreads();
-                    reduced = BlockReduce(storage).Sum(local_bias);
-                    if (threadIdx.x == 0)
-                        grad_bias[channel] = out2_type(reduced);
                 }}
-
-                group_norm_backward_x<<<{rows}, {threads}>>>(
-                    in0_p, in1_p, in2_p, in3_p, in4_p, out0_p);
-                group_norm_backward_affine<<<{channels}, {threads}>>>(
-                    in0_p, in1_p, in2_p, in3_p, out1_p, out2_p);
+                __global__ static void group_norm_backward_finish(
+                        const float* row_partial, const float* channel_partial,
+                        out1_type* grad_weight, out2_type* grad_bias, float* coef) {{
+                    int i = blockIdx.x * blockDim.x + threadIdx.x;
+                    if (i < {rows}) {{
+                        float g = 0.0f, gx = 0.0f;
+                        for (int s = 0; s < {row_segments}; s++) {{
+                            g += row_partial[s * {rows} + i];
+                            gx += row_partial[{row_parts} + s * {rows} + i];
+                        }}
+                        coef[i] = g / {group_size}.0f;
+                        coef[{rows} + i] = gx / {group_size}.0f;
+                    }}
+                    if (i < {channels}) {{
+                        float gw = 0.0f, gb = 0.0f;
+                        for (int s = 0; s < {channel_segments}; s++) {{
+                            gw += channel_partial[s * {channels} + i];
+                            gb += channel_partial[{channel_parts} + s * {channels} + i];
+                        }}
+                        grad_weight[i] = out1_type(gw);
+                        grad_bias[i] = out2_type(gb);
+                    }}
+                }}
+                {_elementwise("group_norm_backward_apply",
+                              "const in0_type* grad_y, const in1_type* x, "
+                              "const float* mean, const float* rstd, "
+                              "const in4_type* weight, const float* coef, "
+                              "out0_type* grad_x",
+                              grad_scalar, grad_v4, total, spatial, channels, vector)}
+                group_norm_backward_row_sums<<<dim3({rows}, {row_segments}), {_THREADS}>>>(
+                    in0_p, in1_p, in2_p, in3_p, in4_p, out3_p);
+                group_norm_backward_channel_sums<<<dim3({channels}, {channel_segments}),
+                                                   {_THREADS}>>>(
+                    in0_p, in1_p, in2_p, in3_p, out4_p);
+                group_norm_backward_finish<<<{_per_channel(max(rows, channels))}>>>(
+                    out3_p, out4_p, out1_p, out2_p, out5_p);
+                {_launch("group_norm_backward_apply",
+                         "in0_p, in1_p, in2_p, in3_p, in4_p, out5_p, out0_p",
+                         ("in0_p", "in1_p", "out0_p"), total, vector)}
                 CHECK(0 == cudaGetLastError());
                 """,
             )
@@ -226,12 +289,14 @@ def _supports_group_norm(x, num_groups, weight, bias, eps):
 
 
 @optional_kernel("nn.group_norm", ("cuda", "rocm_legacy", "corex_legacy"),
-                 dtypes=("float32",),
+                 dtypes=("float32", "float16", "bfloat16"),
                  supports=_supports_group_norm)
 def _group_norm_cuda(x, num_groups, weight, bias, eps):
     shape = tuple(int(size) for size in x.shape)
     num_groups = int(num_groups)
-    cls = _group_norm_cuda_cls(shape, num_groups, float(eps))
+    spatial = shape[2] * shape[3]
+    vector = 4 if spatial % 4 == 0 and _dtype_name(x.dtype) == "float32" else 1
+    cls = _group_norm_cuda_cls(shape, num_groups, float(eps), vector)
     return cls.apply(x, weight, bias)
 
 

@@ -22,14 +22,19 @@ import jittor as jt
 from jittor.nn.functional.attention import scaled_dot_product_attention
 
 
-def _reference(q, k, v, causal, dout):
+def _reference(q, k, v, causal, dout, mask=None):
     q, k, v, dout = (t.astype(np.float64) for t in (q, k, v, dout))
     scale = 1 / np.sqrt(q.shape[-1])
     s = q @ np.swapaxes(k, -1, -2) * scale
     if causal:
         s = np.where(np.triu(np.ones(s.shape[-2:], bool), 1), -np.inf, s)
-    p = np.exp(s - s.max(-1, keepdims=True))
-    p /= p.sum(-1, keepdims=True)
+    if mask is not None:
+        s = np.where(mask, s, -np.inf) if mask.dtype == bool else s + mask
+    top = s.max(-1, keepdims=True)
+    p = np.exp(s - np.where(np.isinf(top), 0, top))
+    total = p.sum(-1, keepdims=True)
+    # A row with every key masked answers 0, as the composite path does.
+    p = np.divide(p, total, out=np.zeros_like(p), where=total > 0)
     dv = np.swapaxes(p, -1, -2) @ dout
     dp = dout @ np.swapaxes(v, -1, -2)
     ds = p * (dp - (dp * p).sum(-1, keepdims=True))
@@ -46,11 +51,11 @@ class TestFusedAttentionF32(unittest.TestCase):
         self.scope.__enter__()
         self.addCleanup(self.scope.__exit__, None, None, None)
 
-    def _check(self, b, h, lq, lk, d, causal):
+    def _check(self, b, h, lq, lk, d, causal, mask=None):
         rng = np.random.RandomState(d + lq)
         q, dout = (rng.randn(b, h, lq, d).astype("float32") for _ in range(2))
         k, v = (rng.randn(b, h, lk, d).astype("float32") for _ in range(2))
-        want = _reference(q, k, v, causal, dout)
+        want = _reference(q, k, v, causal, dout, mask)
         calls = []
         original = self.kernel._forward
 
@@ -61,7 +66,9 @@ class TestFusedAttentionF32(unittest.TestCase):
         self.kernel._forward = counted
         self.addCleanup(setattr, self.kernel, "_forward", original)
         jq, jk, jv = (jt.array(t) for t in (q, k, v))
-        out = scaled_dot_product_attention(jq, jk, jv, is_causal=causal)
+        out = scaled_dot_product_attention(
+            jq, jk, jv, attn_mask=None if mask is None else jt.array(mask).stop_grad(),
+            is_causal=causal)
         grads = jt.grad((out * jt.array(dout)).sum(), [jq, jk, jv])
         self.assertEqual(calls, [1])
         for name, got, expected in zip(("out", "dq", "dk", "dv"), [out] + list(grads), want):
@@ -83,13 +90,53 @@ class TestFusedAttentionF32(unittest.TestCase):
     def test_tiny(self):
         self._check(2, 2, 5, 3, 8, False)
 
+    # Masks. Transformers passes an explicit one whenever
+    # `torch.compiler.is_compiling()`, a padded batch always does, and both
+    # used to decline to the path that writes every score out.
+    def test_a_key_padding_mask(self):
+        mask = np.ones((2, 1, 1, 47), bool)
+        mask[0, ..., 30:] = False
+        mask[1, ..., :5] = False
+        self._check(2, 3, 33, 47, 40, False, mask)
+
+    def test_an_additive_mask_per_head(self):
+        rng = np.random.RandomState(7)
+        self._check(2, 2, 70, 45, 64, False,
+                    rng.randn(2, 2, 70, 45).astype("float32"))
+
+    def test_an_explicit_causal_mask_on_wide_heads(self):
+        # What Transformers builds: [batch, 1, q, k], True where visible.
+        mask = np.broadcast_to(np.tril(np.ones((96, 96), bool)), (2, 1, 96, 96)).copy()
+        self._check(2, 2, 96, 96, 128, False, mask)
+
+    def test_a_mask_on_top_of_causal_and_rows_masked_whole(self):
+        mask = np.ones((40, 40), bool)
+        mask[5] = False
+        mask[:, 0] = False
+        self._check(1, 2, 40, 40, 32, True, mask)
+
+    def test_a_small_inference_is_left_to_the_matmuls(self):
+        # Without a backward the kernel only saves the score matrix's traffic,
+        # and a small matrix is cheaper composed; a backward takes the kernel
+        # whatever the size.
+        q = jt.random((1, 2, 16, 32))
+        with jt.no_grad():
+            self.assertIsNone(self.kernel._fused_attention_f32(q, q, q))
+        self.assertIsNotNone(self.kernel._fused_attention_f32(q, q, q))
+
     def test_what_it_declines(self):
         q = jt.random((1, 2, 8, 256))
         self.assertIsNone(self.kernel._fused_attention_f32(q, q, q))
         q = jt.random((1, 2, 8, 64))
-        self.assertIsNone(self.kernel._fused_attention_f32(
-            q, q, q, attn_mask=jt.ones((8, 8), dtype="bool")))
         self.assertIsNone(self.kernel._fused_attention_f32(q, q, q, dropout_p=0.1))
+        # A learned bias needs its own gradient; a half-precision one is not
+        # what this float32 kernel reads; a mask must broadcast.
+        self.assertIsNone(self.kernel._fused_attention_f32(
+            q, q, q, attn_mask=jt.zeros((8, 8))))
+        self.assertIsNone(self.kernel._fused_attention_f32(
+            q, q, q, attn_mask=jt.zeros((8, 8)).float16().stop_grad()))
+        self.assertIsNone(self.kernel._fused_attention_f32(
+            q, q, q, attn_mask=jt.ones((3, 8), dtype="bool")))
 
     def test_the_scores_are_never_built(self):
         heads, tokens, width = 8, 4096, 40
