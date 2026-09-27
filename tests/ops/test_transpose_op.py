@@ -216,6 +216,24 @@ class TestTransposeOp(unittest.TestCase):
 
     @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
+    def test_moving_only_unit_axes_launches_nothing(self):
+        # [b, 1, h, d] -> [b, h, 1, d] keeps every element where it was: one
+        # token's query per layer in a decode. It is a reshape, not a copy.
+        a = np.arange(2 * 1 * 3 * 4, dtype="float32").reshape(2, 1, 3, 4)
+        x = jt.array(a)
+        x.sync()
+        with jt.profile(device=True) as prof:
+            y = x.transpose(0, 2, 1, 3)
+            y.sync()
+        self.assertEqual(prof.device["kernels"], 0)
+        np.testing.assert_array_equal(y.numpy(), a.transpose(0, 2, 1, 3))
+        # The gradient still comes back in the input's shape.
+        w = np.arange(24, dtype="float32").reshape(2, 3, 1, 4)
+        g = jt.grad((x.transpose(0, 2, 1, 3) * jt.array(w)).sum(), x)
+        np.testing.assert_array_equal(g.numpy(), w.transpose(0, 2, 1, 3))
+
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
     def test_cutt_bug(self):
         a = jt.rand(640000,4,3)
         b = a.transpose(0,2,1)
