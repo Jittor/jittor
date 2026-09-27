@@ -1,10 +1,9 @@
 # vLLM 双卡验证与 CPU 控制通信
 
-- 状态：有限通过；修复外部操作被自动图重放遗漏后，Qwen TP=2 的 32-token 贪心样例与 oracle 一致；退出生命周期仍有异常。
+- 状态：Qwen TP=2 的扩展请求矩阵与显式退出清理通过；最终范围和性能见扩展验收小节。
 - 日期：2026-09-27。
-- 基线：`539ce90ee68d6772ffa2b780203f889e67f4d9ec` 加本报告同提交的修改；开工时
-  `origin/chk=61294cd14673ba60f4072542a2e73ea2c8f8c509` 已是祖先。
-- 本轮定位基线：`c5d928116aa3842be5c88778b757787acdc736d6` 加本报告同提交的修复；远端已 fetch 并确认合入。
+- 本轮验收基线：`79293b87f8da29a62c4d4301a196fc96abf01174` 加本报告同提交的修复；
+  开工时已 fetch 并确认 `origin/chk` 合入。此前通信与重放定位记录保留于历史提交。
 - Owner：vLLM adapter / Torch compatibility maintainers。
 - 复查条件：通信组、设备放置、worker 启动、vLLM 或 NCCL 版本变化。
 
@@ -13,9 +12,11 @@
 单机两张 RTX 4090，vLLM 0.24.0、Transformers 5.5.3、Python 3.10.21；
 Jittor 使用 CUDA 12.2，独立 oracle 为 PyTorch 2.11.0+cu130。
 模型为 Qwen3-0.6B，FP16、TP=2、eager、FlashAttention、关闭 custom all-reduce，
-模型上下文 512，单次生成 32 token。保留 Jittor 既有 CUDA 默认设备。
+初始小样例为上下文 512、单次生成 32 token；扩展矩阵为上下文 4096、最多 4 个
+并行请求。保留 Jittor 既有 CUDA 默认设备。
 
-卡上有其他任务，本轮仅检查正确性；生成耗时不作为双卡性能或加速比。
+初始定位时卡上有其他任务，其生成耗时不作为双卡性能。扩展轮的性能单独选择
+同一对空闲物理卡，记录整个进程期间的 GPU 占用，数值与口径见下文。
 原始日志、JSON、源码清单、独立缓存位于未版本化目录
 `$JITTOR_LAB_ROOT/_state/vllm-multigpu/20260927/`。
 
@@ -114,10 +115,94 @@ TP 路径需要跨卡求和。因而此次失败集中在嵌入层的外部通�
 差异从 14.5078125 降到 0.02197265625，其余步最大差异约 0.025–0.043。
 这证明原来的大幅偏差已消失，不宣称所有浮点数逐位一致。
 修复后的单卡 Qwen 与 OPT 各 32 token 也与对应原生对照完全一致。
-但进程收尾仍出现 worker 异常退出和共享内存清理警告；不能声称完整服务生命周期通过。
+该轮仍在进程收尾出现 worker 异常退出和共享内存清理警告；后续显式关闭与扩展复验见下节。
 
 未版本化新增证据位于同一结果根目录的 `trace-diagnosis/`、`replay-repro/`、
 `replay-fixed-normal/` 等目录；完整日志与前后源码清单一起保存。
+
+## 扩展验收发现的初始化与事件边界问题
+
+扩展轮基线为 `79293b87f8da29a62c4d4301a196fc96abf01174` 加本报告同提交修复。
+保留默认设备与自动重放，使用 Qwen FP16、TP=2、eager、异步调度；上下文扩到
+4096、同时活动请求上限 4。先运行新增失败测例，再修改生产实现。
+
+1. WORLD 初始化后的 `set + 所有 rank wait` 存在另一处 Store 回包竞态。rank 0
+   已返回并进入持 GIL 的 NCCL 子组初始化，rank 1 仍等待 rank 0 的 Python 服务线程
+   回复。真实双进程 TCPStore 测例在下一次持 GIL 调用持续 2 秒时，测得 rank 1
+   恰好多等 2.001 秒。将完成通知也改为已有的 `arrive` 协议、仅服务端 rank 等待，
+   保证离开前其他 rank 的回复已发出；定向 6 项通过，实际模型也越过了该挂起点。
+2. 扩展矩阵的首个混合批次中，一个请求结束后 rank 0 在
+   `count_fuse → run_sync → sync_all → Python thread_run` 崩溃。
+   带 forward hook 与不带 hook 两轮都复现。vLLM 后台输出线程通过
+   `AsyncOutput.get_output → copy_event.synchronize()` 等待本轮拷贝；shim 却执行
+   全局惰性图，把主线程尚在构建的下一轮也拉进执行器。事件的 `record()` 本来已
+   同步完成此前工作，后续等待不应再次提交新图。新增同线程/后台线程、已记录/未记录
+   四种事件边界测例，真实 CPU 与 CUDA 均先得到 4 failed，修复后均 4 passed。
+   同步/计时相关 CPU 组合 16 passed。实际无 hook 矩阵越过原崩溃点，六轮混合批次
+   与三轮随机批次都完成；未关闭异步调度，也未声称修好了所有多线程核心访问。
+3. 重复惩罚样例生成 token 92999 后，rank 1 的 embedding 报索引 92807 越界；
+   正确局部索引应为 `92999 - 75968 = 17031`。`75968 % 256 = 192` 恰好解释了
+   错误偏移。单元素 bool 张量与 Python int 运算先被原生路径截成 uint8，之后
+   转 int64 无法恢复。最小 CPU 测例先 8 failed / 12 passed，完整分片 embedding
+   在 CUDA 也先失败。Torch 层现在先确定结果类型，仅在需要时转换操作数再计算；
+   张量之间的运算与真除法路径不变。新增与既有 promotion/dtype 组合
+   85 passed、2 skipped；真实 CUDA 的全部 36 项通过，原生 PyTorch CPU 独立对照通过。
+   后续 penalties 写入栈是 CUDA 上下文失败后的次生报错，不是最早故障位置。
+
+最终无 hook 请求矩阵两套环境均完成 **70 请求、1208 输出 token**，跨 backend
+贪心 61/61 请求、1028/1028 token 一致，随机 9/9 请求、180/180 token 一致。
+随机一致仅限这些固定样例，不代表所有种子或采样分布完全等价。两侧六轮重复批次、
+三轮随机重放、单请求/批量/反序内部比较全部通过。缓存计数均为 **0 → 624 → 0**，
+冷计算、命中与清空后的生成完全相同。高词表 token 的重复惩罚样例也完成。
+两个 rank 的参数/KV 指针分别属于真实 CUDA 0/1。两个 worker 退出码均为 0，
+三个记录的共享内存名称全部消失；完整日志不再出现 worker 意外退出或 shared_memory
+泄漏警告。仍有未使用的可选扩展导入与 host-empty-cache 提示，不宣称日志零警告。
+
+长文本两侧也完成 **10 请求、224 输出 token**：1024/3072-token 输入、长短混合批次
+及清空缓存后的重复批次全部通过，生成 token 全部与 oracle 一致，退出清理通过。
+请求矩阵与长文本合计 **80 请求、1432 输出 token**。这是有界正确性验收，不覆盖
+长时间服务、请求取消、KV 紧张下抢占恢复、四卡/多机或任意模型。
+
+关闭工具现在显式调用固定版本的 `llm.llm_engine.engine_core.shutdown()`，记录
+两个 worker 的退出码与三个队列共享内存名称，确认进程退出后名称消失；不手动 unlink，
+不屏蔽警告。生成成功与生命周期成功分别记录。默认正确性矩阵和性能工具均不安装
+forward hook；观察模式仅用于诊断，因为 Jittor Module 的 hook 会改变自动重放入口。
+
+## 双卡热态吞吐与延迟
+
+两套独立环境先后使用同一对 RTX 4090，外部监控全程未发现其他 GPU 进程；
+每种批量预热 3 轮、测量 21 轮。固定输入 128、输出 32 token，FP16、TP=2、
+eager、上下文 512、关闭 prefix cache 和 custom all-reduce，不安装 forward hook。
+吞吐为总输出 token / 总测量时间；延迟为每请求首 token 和后续 token 交付间隔的中位数。
+这是离线同步 `engine.step` 口径，包含推理通信，不包含引擎初始化、预热、放置检查、
+边界同步 RPC 和退出，也不是 HTTP 或纯 GPU kernel 耗时。
+
+| 批量 | PyTorch 吞吐 token/s | Jittor 吞吐 token/s | Jittor/PT | 首 token PT/JT ms | 后续 token PT/JT ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | 41.45 | 15.15 | 36.55% | 24.78 / 104.08 | 23.92 / 64.49 |
+| 4 | 162.02 | 56.09 | 34.62% | 25.81 / 109.83 | 24.42 / 69.74 |
+
+预热与测量共 120 请求、3840 输出 token，两侧逐请求全部一致；各自重复输出也一致。
+首轮性能测量后，两个 worker 最终退出码为 0、共享内存也释放，但有一个 worker
+超过 vLLM 默认 5 秒关闭宽限期，日志记录发送 SIGTERM。因此不能仅凭退出码宣称
+未受强制终止。保留该轮全部日志，使用官方
+`VLLM_WORKER_SHUTDOWN_TIMEOUT_SECONDS=15` 再跑完整同配置测量；第二轮
+14.93 / 57.04 token/s，全部 3840 token 再次与 oracle 一致，完整关闭约 5 秒，
+日志没有 SIGTERM/SIGKILL、worker 意外退出或 shared_memory 警告。
+这只是给正常释放资源更充分的有界时间，不改变模型执行，关闭时间不计入性能。
+
+表格保留首轮计时；Jittor 共两个独立会话，每个批量各测量 21 轮，oracle 为一个
+会话内各 21 轮。记录 median/p95 和原始样本，不能据此声称所有负载的稳定速度。
+未在本轮重测 TP=1，因而不是单卡→双卡扩展效率或相对旧代码的提速结论。
+当前双卡功能可用，性能仍明显落后于相同 TP=2 配置的 PyTorch。
+
+最终证据：`final-jittor-{matrix,long,latency}/`；oracle 为
+`acceptance-oracle-nohook/`、`acceptance-oracle-long-nohook/`、`latency-oracle-r1/`。
+退出等待复验为 `final-jittor-latency-grace15/`。
+对应 `process-result.json` 保留父进程退出码和占用判断；`occupancy.jsonl` 保留采样。
+本地 `acceptance-results/` 保留矩阵、长文本和延迟对照，源码以
+`acceptance-final-manifest.json` 的 1165 个生产文件 SHA256 绑定；两端核对无差异。
+所有路径均位于前述未版本化结果根目录。
 
 ## 运行隔离与尚未承诺的范围
 
@@ -129,7 +214,7 @@ TP 路径需要跨卡求和。因而此次失败集中在嵌入层的外部通�
 - spawn 会继承父进程缓存搜索路径。验证工具在启动 worker 时移除这些继承路径，
   并检查实际导入二进制所在目录；通用编译器搜索顺序仍需另行回归。
 - 使用独立工作目录，防止 shim 自动扫描公共临时目录中的无关扩展。
-- 尚未验收四卡、多机、PP、Graph/compile、量化或多卡吞吐。
+- 尚未验收四卡、多机、PP、Graph/compile、量化或多卡 HTTP 服务。
 
 可复用入口、环境和设备证据要求见
 [vLLM 验证 skill](../../agent/skills/vllm-torch-compat/SKILL.md) 中的双卡小节。
@@ -144,3 +229,8 @@ CPU `tools/run_test_suite.py --tier core`：310 passed、44 skipped、1 xfailed�
 远端 1165 个生产文件 SHA256 与本地候选清单一致；保留清单与测试原始日志。
 旧 adapter 注册 fixture 与真实 vLLM 导入不能在同一进程重复注册；将两组测试隔离后，
 既有 backend 26 项通过。原始混跑错误保留，不把它记为通过。
+
+扩展轮同份最终生产代码的 CPU core 仍为 310 passed、44 skipped、1 xfailed。
+另一次人为关闭 MKL 的 core 运行出现调度顺序断言及其后两项存活变量计数失败；
+保留该日志，恢复默认构建设置后通过，没有修改这些无关测试。事件较宽 CPU 组合中
+另有无 CUDA 环境非法设备编号校验失败，定向事件组合与真实 CUDA 边界结果另列。

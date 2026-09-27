@@ -727,11 +727,18 @@ def _init_nccl_from_store(nccl_module, store=None):
         nccl_module.nccl_init_with_unique_id(list(unique_id))
 
         arrived = "jittor/nccl/world/initialized/{}".format(world_rank)
-        store.set(arrived, b"1")
-        store.wait([
-            "jittor/nccl/world/initialized/{}".format(rank)
-            for rank in range(world_size)
-        ])
+        # Returning can immediately enter another GIL-holding collective,
+        # such as vLLM's first new_group. Leave no peer waiting for a reply
+        # from this rank's Python store server, just as before WORLD init.
+        if callable(announce):
+            announce(arrived)
+        else:
+            store.set(arrived, b"1")
+        if world_rank == 0:
+            store.wait([
+                "jittor/nccl/world/initialized/{}".format(rank)
+                for rank in range(world_size)
+            ])
     except TimeoutError as error:
         raise RuntimeError(
             "NCCL store rendezvous timeout: rank {} waited {:.6g} s and "

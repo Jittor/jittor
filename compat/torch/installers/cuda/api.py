@@ -617,10 +617,12 @@ class _Event:
         return None
 
     def synchronize(self):
-        try:
-            jt.sync_all(True)
-        except EXPECTED as exc:
-            swallowed("torch/installers/cuda/api.py synchronize: jt.sync_all(True)", exc)
+        # record() already waits for preceding work in this synchronous event
+        # approximation. An event wait must not submit work created *after*
+        # that point. A second sync_all here also lets vLLM's output thread
+        # execute the model thread's unfinished next-step graph. An unrecorded
+        # event likewise has no work to wait for.
+        return None
 
     def query(self):
         return self._time is not None

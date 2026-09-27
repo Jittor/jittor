@@ -303,5 +303,90 @@ class TestTheStoreHostDoesNotStrandAPeer(unittest.TestCase):
             "outstanding before the host enters the collective." % lag)
 
 
+_POST_BOOTSTRAP_CHILD_SOURCE = r'''
+import ctypes
+import json
+import os
+import sys
+import time
+
+import jittor
+from jittor.build import compile_extern
+from jittor.distributed import store as store_module
+
+rank, port = map(int, sys.argv[1:3])
+report_path = sys.argv[3]
+hold = 2.0
+report = {'rank': rank}
+
+class Nccl:
+    def nccl_get_unique_id(self):
+        return bytes(range(128))
+
+    def nccl_init_with_unique_id(self, unique_id):
+        pass
+
+if rank == 1:
+    request = store_module._TCPStoreClient.request
+    def delayed_wait(self, message):
+        # A peer may be descheduled after announcing WORLD initialization.
+        # Delay its next wait so rank 0 certainly leaves that barrier first.
+        if message['op'] == 'wait' and any(
+                '/initialized/' in key for key in message.get('keys', [])):
+            time.sleep(.2)
+        return request(self, message)
+    store_module._TCPStoreClient.request = delayed_wait
+
+os.environ.update(JT_NCCL_WORLD_SIZE='2', JT_NCCL_RANK=str(rank))
+store = store_module.TCPStore('127.0.0.1', port, 2, rank == 0, timeout=15)
+try:
+    compile_extern._init_nccl_from_store(Nccl(), store=store)
+    report['bootstrap_returned'] = time.monotonic()
+    if rank == 0:
+        # PyDLL deliberately retains the GIL for this C call, exactly as the
+        # binding for the next nccl_create_process_group currently does.
+        libc = ctypes.PyDLL(None)
+        libc.usleep.argtypes = [ctypes.c_uint]
+        libc.usleep.restype = ctypes.c_int
+        assert libc.usleep(int(hold * 1_000_000)) == 0
+        # Let an incorrectly stranded peer receive its reply before closing.
+        time.sleep(.5)
+finally:
+    with open(report_path, 'w') as output:
+        json.dump(report, output)
+    store.close()
+'''
+
+
+class TestWorldBootstrapCanBeFollowedByAnotherCollective(unittest.TestCase):
+    def test_peer_has_no_pending_store_reply_when_host_returns(self):
+        """WORLD completion must not strand a peer when a subgroup starts."""
+        with tempfile.TemporaryDirectory(prefix='jittor-post-rendezvous-') as directory:
+            source = os.path.join(directory, 'rank.py')
+            with open(source, 'w') as handle:
+                handle.write(_POST_BOOTSTRAP_CHILD_SOURCE)
+            with socket.socket() as probe:
+                probe.bind(('127.0.0.1', 0))
+                port = probe.getsockname()[1]
+            reports = [os.path.join(directory, 'rank%d.json' % rank)
+                       for rank in (0, 1)]
+            command = ' & '.join(
+                '"%s" "%s" %d %d "%s"' %
+                (PYTHON, source, rank, port, reports[rank])
+                for rank in (0, 1)) + ' & wait'
+            result = shell(command, timeout=default_timeout(), merge_stderr=True)
+            collected = []
+            for rank, path in enumerate(reports):
+                self.assertTrue(os.path.exists(path), result.stdout[-4000:])
+                with open(path) as handle:
+                    report = json.load(handle)
+                self.assertIn('bootstrap_returned', report, result.stdout[-4000:])
+                collected.append(report)
+            lag = collected[1]['bootstrap_returned'] - collected[0]['bootstrap_returned']
+            self.assertLess(lag, 1.0,
+                'rank 1 returned %.3f s after rank 0: the next GIL-holding '
+                'collective stranded a pending WORLD store reply' % lag)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2306,8 +2306,11 @@ about whether to take it.
 - Boundaries: TP=2 now has Store-based CPU control groups and passes real
   alternating CPU/GPU collective checks. Qwen TP=2
   previously diverged from token 4 because auto replay omitted foreign writes.
-  The retained-graph barrier now passes the 32-token greedy case; worker shutdown
-  warnings and broader multi-GPU correctness/serving remain unaccepted.
+  The retained-graph barrier fixes that case. After Store completion, Event wait
+  and scalar-promotion fixes, the no-hook 70-request Qwen TP=2 matrix matches
+  oracle, as do 1024/3072-token long cases; explicit shutdown verifies clean
+  worker exits/shared-memory release.
+  Broader multi-GPU serving and advanced modes remain outside that bounded scope.
   Run-isolated NCCL subgroup files and spawn cache isolation remain harness
   workarounds tracked in the multi-GPU report.
   This is not full libgloo compatibility. FP8 import needs `torch.library.wrap_triton` and its
@@ -2319,8 +2322,9 @@ about whether to take it.
   The latest FP8 import, graph-pool and lazy-FX failures are retained in the
   [extended acceptance report](../../docs/results/2026-09-23-vllm-singlecard-extended-acceptance.md),
   separately from the accepted bounded eager HTTP service checks.
-- Workaround: use the tested Qwen3-0.6B FP16, TP=1, eager configuration. A mode
-  that errors is not silently substituted with that configuration. This does
+- Workaround: use the tested Qwen3-0.6B FP16/eager configurations; TP=2 requires
+  the documented startup isolation and explicit shutdown. A mode that errors
+  is not silently substituted with an accepted configuration. This does
   not claim support for arbitrary models, contexts or production serving.
 - Exit condition: implement the relevant public compatibility contract or
   adapter operator, preserve the regression reproducer, and pass that real

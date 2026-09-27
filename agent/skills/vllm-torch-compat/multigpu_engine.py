@@ -1,9 +1,10 @@
 """TP=2 diagnostic wrapper: per-worker cache env and real CUDA placement RPC.
 
-Uses the unchanged acceptance.py TP=2 options and generation. Wrapper hooks only
-isolate caches and observe tensor placement; they do not repair runtime behavior.
+Uses the unchanged acceptance.py TP=2 options and generation, isolates worker
+caches, checks placement, and explicitly verifies worker/shared-memory cleanup.
 """
-import json, os, runpy, sys
+import gc, json, os, runpy, sys
+from contextlib import contextmanager
 from pathlib import Path
 
 def placement(worker_wrapper, install=False):
@@ -51,21 +52,17 @@ def placement(worker_wrapper, install=False):
             runner._tp2_placement_calls += 1
             runner._tp2_placement_outputs.update(str(t.device) for t in real)
         runner._tp2_placement_hook = runner.model.register_forward_hook(check)
-    else:
+    elif install is False:
         assert runner._tp2_placement_calls > 0, 'No actual model forward observed'
     return dict(binary_paths=binary_paths, auto_replays=replays, rank=worker.rank, local_rank=worker.local_rank, parameters=len(params), kv_caches=len(caches),
                 reported_devices=sorted({str(t.device) for t in tensors}), driver_devices=sorted(ordinals),
-                forward_calls=runner._tp2_placement_calls, forward_output_devices=sorted(runner._tp2_placement_outputs),
+                forward_calls=getattr(runner, '_tp2_placement_calls', 0), forward_output_devices=sorted(getattr(runner, '_tp2_placement_outputs', ())),
                 jittor_home=os.environ.get('JITTOR_HOME'))
 
-def main():
-    backend = sys.argv[sys.argv.index('--backend') + 1]
-    root = Path(os.environ['TP2_RUN_ROOT'])
-    if backend == 'jittor':
-        import jittor as jt
-        jt.flags.use_parallel_op_compiler = 0
-        jt.flags.use_cuda = 1
-    from vllm import LLM
+@contextmanager
+def isolated_workers(backend, root):
+    """Spawn each Jittor rank from its own warm cache and extension path."""
+    root = Path(root)
     from vllm.v1.executor.multiproc_executor import WorkerProc
     make_worker = WorkerProc.make_worker_process
     def isolated_worker(*args, **kwargs):
@@ -83,9 +80,50 @@ def main():
             if previous is None: os.environ.pop('JITTOR_HOME', None)
             else: os.environ['JITTOR_HOME'] = previous
     WorkerProc.make_worker_process = staticmethod(isolated_worker)
+    try:
+        yield
+    finally:
+        WorkerProc.make_worker_process = staticmethod(make_worker)
+
+
+def shutdown_engine(llm):
+    """Use the pinned vLLM shutdown API and retain observable cleanup evidence."""
+    client = llm.llm_engine.engine_core
+    executor = client.engine_core.model_executor
+    processes = [worker.proc for worker in executor.workers]
+    def names():
+        queues = [executor.rpc_broadcast_mq, *executor.response_mqs]
+        for worker in executor.workers:
+            queues.append(worker.worker_response_mq)
+            queues.extend(getattr(worker, 'peer_worker_response_mqs', ()) or ())
+        return sorted({queue.buffer.shared_memory.name for queue in queues
+                       if queue is not None and getattr(queue, 'buffer', None) is not None})
+    shared_memory_names = names()
+    client.shutdown()
+    gc.collect()
+    rows = [dict(pid=process.pid, exitcode=process.exitcode, alive=process.is_alive())
+            for process in processes]
+    remaining = [name for name in shared_memory_names
+                 if (Path('/dev/shm') / name.lstrip('/')).exists()]
+    return dict(workers=rows, shared_memory_names=shared_memory_names,
+                remaining_shared_memory=remaining,
+                passed=len(rows) == 2 and all(row['exitcode'] == 0 and not row['alive']
+                                             for row in rows) and not remaining)
+
+
+def main():
+    backend = sys.argv[sys.argv.index('--backend') + 1]
+    root = Path(os.environ['TP2_RUN_ROOT'])
+    if backend == 'jittor':
+        import jittor as jt
+        jt.flags.use_parallel_op_compiler = 0
+        jt.flags.use_cuda = 1
+    from vllm import LLM
+    instances = []
     original_init, original_generate = LLM.__init__, LLM.generate
     def observed_init(self, *args, **kwargs):
         original_init(self, *args, **kwargs)
+        instances.append(self)
         executor = self.llm_engine.engine_core.engine_core.model_executor
         rows = executor.collective_rpc(placement, args=(True,), timeout=120)
         assert len(rows) == 2 and {row['rank'] for row in rows} == {0, 1}
@@ -101,9 +139,15 @@ def main():
         return out
     LLM.__init__, LLM.generate = observed_init, observed_generate
     try:
-        runpy.run_path(str(Path(__file__).with_name('acceptance.py')), run_name='__main__')
+        with isolated_workers(backend, root):
+            runpy.run_path(str(Path(__file__).with_name('acceptance.py')), run_name='__main__')
     finally:
-        WorkerProc.make_worker_process = staticmethod(make_worker)
-        LLM.__init__, LLM.generate = original_init, original_generate
+        try:
+            for instance in instances:
+                lifecycle = shutdown_engine(instance)
+                (root / (backend + '-lifecycle.json')).write_text(json.dumps(lifecycle, indent=2))
+                assert lifecycle['passed'], lifecycle
+        finally:
+            LLM.__init__, LLM.generate = original_init, original_generate
 if __name__ == '__main__':
     main()

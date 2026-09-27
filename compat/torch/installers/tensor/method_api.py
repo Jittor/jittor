@@ -1189,12 +1189,20 @@ def _promoting_binary(self, other, opname, reflected):
     # `_extend_tokens` list concatenation). Match torch: defer to the sequence.
     if isinstance(other, (list, tuple)):
         return NotImplemented
-    out = _binary_native(opname, self, other)
-    if isinstance(other, (bool, int, float)) and isinstance(out, _NativeVar):
+    if isinstance(other, (bool, int, float)):
         expected = _owner._dtype_to_str(g.result_type(self, other))
-        if expected is not None and _jittor_dtype_name(out.dtype) != expected:
+        # Promote before native arithmetic: its single-element bool path can
+        # otherwise convert an integer scalar to uint8 (75968 becomes 192).
+        # Casting that already-overflowed result cannot recover the value.
+        left = self
+        if expected is not None and _jittor_dtype_name(self.dtype) != expected:
+            left = self.cast(expected)
+        out = _binary_native(opname, left, other)
+        if (isinstance(out, _NativeVar) and expected is not None
+                and _jittor_dtype_name(out.dtype) != expected):
             out = out.cast(expected)
-    return out
+        return out
+    return _binary_native(opname, self, other)
 
 
 def _true_division(self, other, opname):

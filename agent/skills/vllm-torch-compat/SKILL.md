@@ -453,6 +453,41 @@ python agent/skills/vllm-torch-compat/pynccl_collectives.py \
 `cuda-foreign-stream-red.log`（名称保留，但实测为通过）、
 `cuda-stream-negative-control.log`。
 
+## TP=2 扩展验收与退出清理
+
+在上述同版本双环境、独立 rank 缓存和每轮唯一 NCCL 文件的环境下运行：
+
+```bash
+python agent/skills/vllm-torch-compat/multigpu_acceptance.py \
+  --backend "$BACKEND" --scenario matrix --model "$MODEL_DIR" --output "$RESULT_FILE"
+```
+
+`matrix` 含 70 请求、1208 输出 token：单请求、正反序混合批次、六轮连续批次、
+三轮固定种子、重复惩罚及 prefix cache 冷/命中/清空。`long` 含 1024/3072-token
+输入与长短混合批次；`lifecycle` 和 `penalties` 可单独定位。上下文 4096、并行请求
+上限 4，保留默认 CUDA 与异步调度。默认无 forward hook，`--observe-forward` 仅作诊断，
+因为 hook 会改变 Jittor Module 的自动重放入口，不能仅用观察模式证明真实路径通过。
+
+两个 backend 均完成后用 `multigpu_acceptance_compare.py left.json right.json
+--output comparison.json` 检查相同输入/配置、设备与退出状态，分别统计贪心和随机
+结果。`completed` 表示内部断言与清理通过，不能代替跨 backend 对照，也不能忽略
+`batch_matches_isolated`、`reverse_matches_forward` 的差异。随机不一致不直接等于 bug，
+贪心差异仍需核查。
+
+工具在 `finally` 显式调用固定 vLLM 版本的 engine-core shutdown，要求两个 worker
+退出码为 0 且记录的共享内存全部消失；不手工 unlink 或屏蔽警告。还须查完整日志是否发送 SIGTERM/SIGKILL，退出码 0
+本身不证明没有强制终止。较长运行使用官方
+`VLLM_WORKER_SHUTDOWN_TIMEOUT_SECONDS=15` 给清理留出有界时间；该时间不计入性能。
+失败进程由外部
+启动器设置总超时，仅终止本轮进程组。保留父进程退出码和完整日志，CUDA 崩溃后的
+资源警告不能当作正常结束。
+
+`multigpu_latency.py --backend "$BACKEND" --model "$MODEL_DIR" --output "$RESULT_FILE"`
+默认 batch 1/4、输入 128、输出 32、各预热 3 轮并测量 21 轮。计时为离线
+`engine.step` 的 token 交付口径，包含推理通信，不含初始化、放置检查和退出；不装
+forward hook。两侧须先后使用同一对空闲物理卡，记录全程占用和每轮 token，
+不得把共享卡上的耗时当成无干扰性能，也不得解释成 HTTP 延迟或纯 GPU kernel 时间。
+
 ## TP=2 的逐步偏差定位
 
 在前述 `multigpu_engine.py` 启动环境设置 `TP2_TRACE_STEPS=6`，会通过 worker RPC
