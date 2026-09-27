@@ -19,6 +19,8 @@ include tests/vllm/test_plugin_lifecycle.py
 include tests/vllm/test_repetition_penalties.py
 include tests/vllm/test_runner_host_metadata.py
 include tests/vllm/test_runtime_ownership.py
+include tests/vllm/test_sampling_snapshots.py
+include tests/vllm/test_sampling_snapshots_cuda.py
 include tests/vllm/test_stochastic_sampling.py
 include tests/vllm/test_structure.py
 include tests/vllm/test_top_p_boundary.py

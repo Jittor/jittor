@@ -385,3 +385,94 @@ links the candidate directory, rather than copying an old baseline. These are
 unversioned artifacts; all run options, token IDs, per-process rates and latency
 distributions are retained. Production remains `17d2cfd`; CUDA Graph, compiled,
 quantized and multi-GPU modes are outside this comparison.
+
+
+### 2026-09-27 sampling snapshots: scoped reuse
+
+This follow-up starts from local `5c92eec`, production `17d2cfd`; fetched
+`origin/chk` remains `61294cd`. Only `adapters/jittor_adapters/vllm/buffers.py`
+changes among the 1164 production files. Its candidate SHA256 is
+`96646720b56ad9e817ad448fd94843cc57fd3d9961dde4e0b751da35d52f9183`.
+Raw, unversioned evidence is under
+`$JITTOR_LAB_ROOT/_state/vllm-performance/20260927/sampling-snapshots/`.
+
+The optimization covers only SamplingStates' temperature, top-p, top-k, min-p
+and seed arrays. It compares independently owned host bytes plus dtype, shape,
+strides, pool dtype, device and buffer/pool identity. An unchanged array reuses
+its current GPU snapshot; an update retains the existing fresh allocation and
+source-read synchronization. General UVA pools and the other nine sampler
+arrays are unchanged. The cache has five entries per live SamplingStates owner,
+uses weak owner references and is recreated with the transactional patch.
+No model Parameter or KV storage is reused or overwritten by this change.
+
+These private GPU arrays are read-only inputs in the audited upstream consumers.
+Mutating them directly from an external extension is outside this contract.
+The class patch is not gated on eager mode: eager CUDA is the tested scope;
+compiled, graph and speculative modes do not gain an acceptance claim. The
+integration test also checks the original upstream method's five submissions;
+a vLLM upgrade adding fields or other behavior requires reviewing this method
+replacement and its consumers before reuse.
+
+Verification so far:
+
+- Host lifecycle contracts: **17 failed / 2 passed before**, then **19 passed**.
+  With existing registration/loading/cleanup tests: **30 passed**. They cover
+  direct NumPy updates, immediate source reuse, old consumers, slot reuse,
+  metadata/owner changes, failed transfers, collection and rollback/reinstall.
+- Real CUDA: **5 failed / 13 passed before**, then **18 passed**. The five red
+  cases establish avoidable repeated allocation, not incorrect model arithmetic.
+  Retained snapshots, source updates, top-k boundaries and the actual temperature,
+  min-p, top-k/top-p and gumbel readers pass after the change.
+- Independent native PyTorch/vLLM: **7 new CUDA cases pass**. Snapshot identity
+  reuse is shim-specific; shared numerical and reader checks use actual CUDA.
+- Adapter public-boundary structure: **12 passed** with real Jittor. A retained
+  HOST_ONLY attempt fails its public-primitive lookup because the fake Jittor
+  has no `nn`; it is not evidence of a production failure.
+- Repository structure: **1364 passed, 4 failed, 8 skipped**; the four failures
+  are the same pre-existing child-process/collection contracts recorded above.
+
+Both Qwen3-0.6B and OPT-125m complete the five-case matrix on this candidate:
+state/cache, seeded random with logprobs, batch, penalties and long inputs.
+Each model's **70 requests / 1492 tokens** exactly match its pre-change Jittor
+reference, including stochastic outputs. Each model's 58 greedy requests /
+1232 tokens also match the retained independent PyTorch reference. Those older
+native JSONs are reused for correctness only, not timing. Cross-framework
+random generation is still not universally identical.
+
+A separate instrumented CUDA run warms batches 1/4/2, then repeats them twice:
+14 requests / 224 output tokens, 102 engine steps. The five optimized arrays
+have **510 submission opportunities: 504 reuse the GPU object, six create a
+new snapshot**. All six updates are seeds on request admission. All five
+retained first snapshots remain correct after later requests, and every token
+matches the unhooked run. The 226 model Parameters and 28 KV tensors retain
+object identity, storage pointer, shape, dtype and device; no Parameter
+constructor appears in the profile. Seven post-batch memory observations
+plateau: live Vars rise from 719 to 720 and allocated memory by 512 bytes;
+the diagnostic deliberately retains an old seed snapshot. Reserved memory
+rises once by 5 MiB and then stays constant. This bounded, instrumented result
+is not an indefinite leak-free guarantee or a performance measurement.
+
+The same-card performance comparison remains incomplete. The before phase has
+all six accepted processes, measuring Jittor at 19.32 / 72.43 token/s and native
+PyTorch at 52.72 / 206.78 for batches 1 / 4. These are the **pre-change** rates,
+not evidence for this patch's speedup. The candidate's first native process
+completes; its first Jittor process is excluded and stopped when foreign compute
+processes enter the selected GPU. All four GPUs then have foreign workloads.
+Only our process group is stopped. Completed unaffected runs are retained;
+`run-phase.py candidate` can resume the remaining rounds after the card is free.
+A prior foreign process also appears during model correctness testing; those
+elapsed times are not used as performance evidence.
+
+This candidate is correctness-validated and measurably removes repeated GPU
+allocation/transfer calls, but **no end-to-end speedup is established yet**.
+Do not infer token/s or latency improvements from instrumentation counts.
+
+
+Reproduce host contracts in a separate process with `JITTOR_VLLM_HOST_ONLY=1`,
+`JITTOR_TORCH_SHIM=1`, `PYTHONPATH=adapters`, running pytest on
+`adapters/tests/vllm/test_sampling_snapshots.py`. In the real CUDA shim environment,
+unset HOST_ONLY and run pytest on `test_sampling_snapshots_cuda.py` and
+`test_uva_updates.py` under the same test directory. Copy the new CUDA file
+outside the checkout for the independent native-vLLM run. Matrix/lifetime and
+phase launchers, exact options, source manifests, failed/passing logs and
+occupancy evidence are retained in the artifact directory above.

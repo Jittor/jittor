@@ -1,6 +1,7 @@
 """Explicit placement and transfers for vLLM host metadata."""
 
 from functools import wraps
+from weakref import WeakKeyDictionary
 
 from jittor.compat.transaction import set_attr
 
@@ -26,6 +27,54 @@ def patch_buffer_pool(module):
 
     set_attr(cls, 'copy_to_uva', copy_to_uva)
     set_attr(cls, '_jittor_explicit_transfer', True)
+    return True
+
+
+def patch_sampling_states(module):
+    """Reuse unchanged, read-only sampling metadata (validated with eager CUDA).
+
+    The five arrays below are inputs to sampling kernels; unlike general UVA
+    buffers, their GPU snapshots are not written by those kernels. Compare
+    actual host contents because request admission mutates NumPy views directly.
+    Changed submissions still use the pool's synchronized, fresh allocation.
+    """
+    cls = module.SamplingStates
+    if getattr(cls, '_jittor_sampling_snapshots', False):
+        return False
+    original = cls.apply_staged_writes
+    snapshots = WeakKeyDictionary()
+    fields = ('temperature', 'top_p', 'top_k', 'min_p', 'seeds')
+
+    @wraps(original)
+    def apply_staged_writes(self):
+        import torch
+
+        device = torch.cuda.current_device()
+        previous = snapshots.get(self)
+        if previous is None:
+            previous = {}
+            snapshots[self] = previous
+        for name in fields:
+            buffer = getattr(self, name)
+            pool = buffer.pool
+            source = buffer.np
+            # bytes owns its memory: retaining a NumPy alias would miss the
+            # next in-place update. Metadata changes also force publication.
+            key = (source.dtype.str, source.shape, source.strides,
+                   str(pool.dtype), device, source.tobytes())
+            cached = previous.get(name)
+            if (cached is not None and cached[0] is buffer
+                    and cached[1] is pool and cached[2] == key
+                    and cached[3] is buffer.gpu):
+                continue
+            # A failed submission must be retried, even if the caller later
+            # restores old host values. Never reuse or overwrite old storage.
+            previous.pop(name, None)
+            result = buffer.copy_to_uva()
+            previous[name] = (buffer, pool, key, result)
+
+    set_attr(cls, 'apply_staged_writes', apply_staged_writes)
+    set_attr(cls, '_jittor_sampling_snapshots', True)
     return True
 
 
@@ -139,6 +188,7 @@ def patch_input_batch_host_arrays(module):
 
 PATCHES = {
     'vllm.v1.worker.gpu.buffer_utils': patch_buffer_pool,
+    'vllm.v1.worker.gpu.sample.states': patch_sampling_states,
     'vllm.v1.worker.gpu_model_runner': patch_model_runner_host_lengths,
     'vllm.v1.utils': patch_cpu_gpu_buffer,
     'vllm.v1.worker.gpu_input_batch': patch_input_batch_host_arrays,
