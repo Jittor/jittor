@@ -3089,3 +3089,19 @@ about whether to take it.
   JIT cache entry) that `src/tests/test_op_relay.cc` depends on without setting;
   not isolated.
 - Workaround: run the file in its own process.
+
+## KI-EXEC-008: the CUDA convolution test files intermittently abort on a forward liveness underflow
+
+- Severity: Medium (a whole pytest process aborts, taking its summary with it)
+- Status: Open. Found 2026-09-27; reproduced on `a57fb6af` unchanged, so it
+  predates the convolution filter cache it was found while testing.
+- Owner: core node liveness (the same counters as the board's
+  `backward liveness release without a matching owner` entries)
+- Symptom: `pytest nn/test_*conv*.py backends/cuda/test_cudnn_conv_a*.py
+  backends/cuda/test_cudnn_conv_p*.py` on CUDA aborts with `node.h:287: forward
+  liveness release without a matching owner [check failed: value_ > 0]` in
+  about half the runs: at interpreter exit after every test passed, or in the
+  middle of `test_cudnn_conv_backward_source.py`'s conv-transpose reference.
+  Any single file, any pair, and the five files before it together passed every
+  time; only the full selection trips it, so it depends on collection timing.
+- Workaround: run the files in separate processes.

@@ -326,11 +326,18 @@ BN / GroupNorm 与后续逐元素运算的融合试了三种写法，都没有�
 `jt.Function` 的输出经过 tape 算子（与输入共享存储），融合器在此断开；视图 reshape 也会截断
 融合链。要得到 inductor 那样的收益，需要融合器能穿过这两种边界，是融合器本身的改造。
 
+卷积滤波器（2026-09-27）：cuDNN 对半精度选 NHWC kernel，给它 OIHW 滤波器时每次调用都转换一遍，
+SD1.5 采样 20 步的 54 ms 转换里 51 ms 是权重。无反向时（输入和权重都不需要梯度）改为给 OHWI
+滤波器：副本按权重版本（参数持有的 Var）做一次，挂在权重上，随参数释放；1×1 滤波器两种布局
+字节相同，不复制；训练照旧。`sd15_sample` 编译 426.1 → 368.7 ms（PyTorch 375.0），常驻显存
+3.09 → 4.20 GB（多一份卷积权重，PyTorch 2.44）；`jittor.nn.backends.cudnn.cache_half_filters =
+False` 可关。兼容层的 pickle / deepcopy 不带这份副本。ResNet-50 推理、VAE 解码不受影响（它们选中
+的 kernel 本来不转换权重）。
+
 仍然开着的差距与原因：
 
-- 卷积的 NCHW → NHWC 转换：cuDNN 对 NCHW 半精度输入选 NHWC kernel 并逐次转换（SD 采样
-  54 ms / 20 步，PyTorch eager 相同）；PyTorch 编译后没有，是 inductor 把卷积激活改成了
-  channels_last。需要布局传播，不是单个 kernel 的事。
+- 卷积激活的 NCHW → NHWC 转换（权重转换已去掉后，SD 采样剩约 5.5 ms / 20 步）与滤波器副本的
+  显存：参数以 channels_last 存储需要布局传播。
 - `transformer_2d` 进入注意力前的 NCHW → NHWC `permute`（SD 采样约 12 ms / 20 步）：
   PyTorch 把它与 GroupNorm 的输出融在一起。
 - BN / GroupNorm 与相邻逐元素运算的融合：见上表，需要融合器改造。

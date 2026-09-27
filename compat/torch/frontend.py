@@ -314,12 +314,26 @@ def make_parameter_type(backend, tensor_type):
     })
 
 
+#: Attributes a runtime caches on a tensor -- a convolution's filter in the
+#: layout cuDNN runs, see `jittor/nn/backends/cudnn.py` -- which a pickle or a
+#: copy of the tensor must not carry: they are derived, device-sized, and
+#: rebuilt on first use.
+_RUNTIME_CACHES = ("_jittor_conv_filter",)
+
+
+def _python_state(value):
+    state = value.__dict__.copy()
+    for name in _RUNTIME_CACHES:
+        state.pop(name, None)
+    return state
+
+
 def reduce_tensor(value):
     return (
         rebuild_tensor,
         (type(value), value.numpy(), _jittor_dtype_name(value.dtype), value.requires_grad,
          str(value.device)),
-        value.__dict__.copy(),
+        _python_state(value),
     )
 
 
@@ -338,5 +352,5 @@ def deepcopy_tensor(value, memo):
     result = rebuild_tensor(type(value), value.numpy(), _jittor_dtype_name(value.dtype),
                             value.requires_grad, str(value.device))
     memo[id(value)] = result
-    result.__dict__.update(deepcopy(value.__dict__, memo))
+    result.__dict__.update(deepcopy(_python_state(value), memo))
     return result
