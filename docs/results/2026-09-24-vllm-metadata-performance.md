@@ -2,7 +2,7 @@
 
 - Status: correctness accepted; the 2026-09-25 uncontended-GPU comparison
   measures 11.8–12.5% higher throughput (8.6–9.0% relative to native drift).
-- Owner: Codex; reviewed 2026-09-25.
+- Owner: Codex; reviewed 2026-09-27.
 - Production change: `3401bf005016f5aa75359126385dc15830088b18`; the same 1164-file
   manifest was rechecked on the GPU checkout after synchronization.
 - Baseline: `dbb0379aec4843e908df4970065d866ce93aa272`. The fetched `origin/chk`
@@ -251,10 +251,10 @@ those old native artifacts are used for correctness only. Results are in
 
 The next formal timing comparison uses the accepted metadata candidate as its
 baseline and changes only the factory file (full 1164-file manifest checked).
-Its initial preflight is blocked by foreign GPU processes, so there is no
-accepted factory-cast speedup yet. Pending runs and occupancy evidence live in
-`factory-perf/`. The KV capability and RMSNorm candidates are not applied while
-this second timing comparison remains incomplete.
+Its initial preflights were blocked by foreign GPU processes. The September 27
+comparison below completes the formal timing protocol; stable speedup remains
+unconfirmed. Runs and occupancy evidence live in `factory-perf/`. The KV
+capability and RMSNorm candidates remain unmodified.
 
 A separate real-model cProfile capture on the shared GPU preserves the same
 generated tokens and confirms 5664 direct constructor casts disappear per
@@ -264,9 +264,9 @@ construction remains zero. This exposes the cost of the safe actual-result
 check; fewer casts alone do not establish a net speedup. Shared-device timings
 are excluded. See `factory-cast/profile-comparison.json` and
 `factory-cast/stage-diagnostic/`. Two formal preflights were rejected by the
-GPU occupancy check. Keep `17d2cfd` classified as correctness-validated and
-performance-pending until an uncontended comparison confirms its net effect;
-rework or revert it if that comparison shows no worthwhile benefit.
+GPU occupancy check. `17d2cfd` has correctness acceptance. The September 27
+measurements below are positive at the median but do not establish a stable
+performance gain; further changes must still be evaluated independently.
 
 
 ### Bounded parameter and snapshot lifetime audit
@@ -331,6 +331,57 @@ showing why an identity-only cache would miss actual updates. It does not yet
 prove that every GPU consumer or external plugin treats all snapshots as
 read-only. Data and assertions are in `lifetime-round1/sampling-trace*.json`.
 
-No further production optimization is layered onto the factory candidate.
-Its uncontended performance comparison remains the prerequisite for choosing
-whether to retain/rework that change and which hotspot to optimize next.
+No further production optimization was layered onto the factory candidate
+during the lifetime audit. Its subsequent timing comparison is below.
+
+
+### 2026-09-27 factory comparison: positive medians, substantial variation
+
+At clean local `fad53b6`, fetched `origin/chk` is still `61294cd`. The previously
+blocked factory comparison completes on the same physical GPU. Two interrupted
+candidate processes are excluded and archived when foreign GPU processes enter;
+completed unaffected rounds are retained. Every included process has continuous
+occupancy observations without a foreign compute process on the selected GPU.
+Other GPUs and the host are shared, so this is not a fully isolated machine.
+
+To avoid a cross-day comparison, both source variants are measured today:
+`17d2cfd` first, followed by the pre-factory-patch production `3401bf0`. Only
+`compat/torch/installers/factories.py` differs across the 1164-file production
+manifests. Three fresh processes per backend/variant each use three warmups and
+21 measurements per batch, FP16/eager, 128 input tokens, 32 output tokens, no
+prefix cache. All **1260 measured requests / 40320 tokens** agree. Afterwards,
+the candidate is restored and its full production manifest verified.
+
+| Variant/backend | Batch | Median process token/s | TTFT median / p95 (ms) | ITL median / p95 (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| Before factory change, Jittor | 1 | 17.70 | 143.51 / 173.19 | 50.45 / 66.96 |
+| Factory candidate, Jittor | 1 | 18.61 | 141.91 / 190.11 | 49.84 / 64.04 |
+| Before factory change, PyTorch | 1 | 50.64 | 37.38 / 51.88 | 18.57 / 23.99 |
+| Factory candidate, PyTorch | 1 | 52.20 | 38.03 / 42.96 | 18.73 / 21.68 |
+| Before factory change, Jittor | 4 | 69.95 | 149.17 / 183.87 | 53.37 / 65.24 |
+| Factory candidate, Jittor | 4 | 73.25 | 147.40 / 167.67 | 52.45 / 75.66 |
+| Before factory change, PyTorch | 4 | 202.45 | 37.96 / 43.37 | 19.11 / 22.89 |
+| Factory candidate, PyTorch | 4 | 203.38 | 38.18 / 41.31 | 19.25 / 21.27 |
+
+Raw throughput ratios are +5.16% / +4.72% at batches 1 / 4. Dividing by the
+corresponding native ratio yields +2.01% / +4.24%, a drift sensitivity check,
+not a causal correction. Individual Jittor process rates overlap considerably:
+
+- Batch 1 before: 17.70, 18.60, 15.27; candidate: 18.61, 19.29, 17.89 token/s.
+- Batch 4 before: 74.01, 69.95, 61.92; candidate: 74.30, 73.25, 66.25 token/s.
+
+Median TTFT/ITL changes are only about 1–2%, and tails do not improve uniformly:
+single-request TTFT p95 and batch-four ITL p95 worsen in this sample. Thus the
+measurement protocol is complete and medians favor the candidate, but **a
+stable net speedup is not established**. Do not add this percentage to the
+previous metadata improvement or promise lower tail latency. No further
+production optimization is introduced in this measurement session.
+
+Raw candidate runs remain under
+`$JITTOR_LAB_ROOT/_state/vllm-performance/20260925/factory-perf/candidate/`;
+today's baseline, source manifests, restoration and cross-phase comparison are
+under `20260927/factory-ab/` beneath the same performance state root. The latter
+links the candidate directory, rather than copying an old baseline. These are
+unversioned artifacts; all run options, token IDs, per-process rates and latency
+distributions are retained. Production remains `17d2cfd`; CUDA Graph, compiled,
+quantized and multi-GPU modes are outside this comparison.
