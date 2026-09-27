@@ -93,7 +93,7 @@ int64 sfrl_device_allocated_bytes(int device) {
     int s = slot(device);
     return s >= 0 ? device_allocated[s].load() : 0;
 }
-DEFINE_FLAG(int64, sfrl_large_block_size_device, 5242880, "sfrl_large_block_size, larger will reduce memory shard, only affect device");
+DEFINE_FLAG(int64, sfrl_large_block_size_device, 20971520, "The segment a device request up to this size is carved from; larger requests get a segment of their own. PyTorch packs 1-10 MB requests into 20 MB segments; at 5 MB each mid-sized tensor took a segment of its own and left a tail only something smaller could use: the SD1.5 UNet's 686 half-precision weights reserved 1818 MB for 1640 MB of data (PyTorch 1702), and its sampling process peaked 2.76 GB against 2.52 at 20 MB. Only affects devices.");
 constexpr int64 sfrl_large_block_size_cpu=5242880;
 
 //CachingBlock
