@@ -80,6 +80,15 @@ class _Structured(nn.Module):
                 "result": _Result(sample=y * extra["k"], scale=2.0), "none": None}
 
 
+class _Keywords(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.l1 = nn.Linear(8, 8)
+
+    def execute(self, x=None, bias=None, scale=1.0):
+        return self.l1(x) * scale + bias
+
+
 @_test_preserve_policy(jt, 'keep_graph', 'auto_graph_replay')
 class TestGraphReplay(unittest.TestCase):
 
@@ -262,6 +271,49 @@ class TestGraphReplay(unittest.TestCase):
         if replay.refused is not None:
             self.assertIn("slower", replay.refused)
             self.assertEqual(replay.stats["replayed"], 0)
+
+    def test_the_automatic_policy_replays_a_keyword_call(self):
+        # Transformers calls every model by keyword. The policy used to give up
+        # on any keyword argument, so no Hugging Face model was ever replayed.
+        model = _Keywords()
+        rs = np.random.RandomState(5)
+        calls = [(jt.array(rs.randn(2, 8).astype("float32")),
+                  jt.array(rs.randn(8).astype("float32"))) for _ in range(3)]
+        jt.flags.auto_graph_replay = 0
+        with jt.no_grad():
+            want = [model(x=x, bias=b, scale=2.0).numpy().copy() for x, b in calls]
+        jt.flags.auto_graph_replay = 1
+        with jt.no_grad():
+            for _ in range(2):
+                for (x, b), expected in zip(calls, want):
+                    np.testing.assert_allclose(model(x=x, bias=b, scale=2.0).numpy(),
+                                               expected, rtol=1e-5, atol=1e-5)
+        replay = model.__dict__["_auto_graph_replay"].replay
+        self.assertIsNotNone(replay)
+        self.assertGreaterEqual(replay.stats["replayed"], 3)
+
+    def test_the_automatic_policy_leaves_an_object_argument_alone(self):
+        # A KV cache is the same object on every decode step while what it
+        # holds changes; matched by identity, a capture would keep answering
+        # for the first step. An explicit graph_replay may take that risk on
+        # its caller's word, the automatic policy may not.
+        class _Cache:
+            def __init__(self):
+                self.value = jt.zeros(8)
+
+        class _Cached(nn.Module):
+            def execute(self, x, cache=None):
+                return x + cache.value
+
+        model, cache = _Cached(), _Cache()
+        x = self.feed[0]
+        jt.flags.auto_graph_replay = 1
+        with jt.no_grad():
+            for step in range(4):
+                cache.value = jt.full((8,), float(step))
+                np.testing.assert_allclose(model(x, cache=cache).numpy(),
+                                           x.numpy() + step, rtol=1e-6)
+        self.assertNotIn("_auto_graph_replay", model.__dict__)
 
     def test_the_flag_is_left_as_it_was_found(self):
         self.assertEqual(jt.flags.keep_graph, 0)

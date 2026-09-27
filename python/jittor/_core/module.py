@@ -119,7 +119,7 @@ class Module:
         Module._call_depth = 1
         try:
             if replay is not None:
-                return replay(*args)
+                return replay(*args, **kw)
             return self._dispatch_call(*args, **kw)
         finally:
             Module._call_depth = 0

@@ -990,23 +990,42 @@ def _element_size(dtype):
     return 1
 
 
-def _input_bytes(args):
+#: What an automatic replay accepts as an argument besides a Var: values that
+#: `_spec` compares by value. Anything else is matched by identity -- right for
+#: an explicit `graph_replay`, whose caller vouches for it, and wrong for a
+#: policy nobody asked for: a KV cache object is the same object every decode
+#: step while what it holds grows, and the capture would keep answering for the
+#: first step.
+_AUTO_SCALARS = (int, float, bool, str)
+
+
+def _auto_arguments(args, kw):
+    """Total bytes of the Vars among the arguments, or None if not eligible.
+
+    Keyword arguments count like positional ones. Transformers calls every
+    model by keyword -- ``model(input_ids=..., attention_mask=...)`` -- and
+    leaving those out meant no Hugging Face model was ever replayed.
+    """
     total = 0
-    for a in args:
-        total += a.numel() * _element_size(a.dtype)
-    return total
+    found = False
+    for values in (args, kw.values()):
+        for a in values:
+            if isinstance(a, jt.Var):
+                total += a.numel() * _element_size(a.dtype)
+                found = True
+            elif a is not None and type(a) not in _AUTO_SCALARS:
+                return None
+    return total if found else None
 
 
 def auto_replay_for(module, args, kw):
     """The GraphReplay to use for this call, or None to run normally."""
-    if kw or not args:
-        return None
     flags = jt.flags
     if not flags.auto_graph_replay or not flags.no_grad:
         return None
-    for a in args:
-        if not isinstance(a, jt.Var):
-            return None
+    nbytes = _auto_arguments(args, kw)
+    if nbytes is None:
+        return None
     state = module.__dict__.get("_auto_graph_replay")
     if state is None:
         # Written through __dict__: Module.__setattr__ classifies assignments
@@ -1014,9 +1033,9 @@ def auto_replay_for(module, args, kw):
         state = module.__dict__["_auto_graph_replay"] = _AutoState()
     if state.give_up:
         return None
-    if _input_bytes(args) > flags.auto_graph_replay_bytes:
+    if nbytes > flags.auto_graph_replay_bytes:
         return None
-    signature = _signature(args)
+    signature = _signature(args, kw)
     if signature != state.signature:
         state.signature = signature
         state.seen = 1
