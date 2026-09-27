@@ -315,14 +315,48 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
     # backward would carry the NaN instead.
     if training:
         return None
-    bias = _mask_bias(attn_mask, _logical(query, q_seq), _logical(key, k_seq), query.dtype)
+    bias, live = _mask_terms(attn_mask, _logical(query, q_seq), _logical(key, k_seq),
+                             query.dtype)
     if bias is None or not _supported(query, key, scale, is_causal, False, bias, layout):
         return None
     out = logical(_forward(query, key, value, scale, bool(is_causal), False, bias, layout)[0])
     # The same 0 for a fully masked row as the composite gives.
+    return jt.ternary(live.broadcast(out.shape), out, jt.zeros_like(out))
+
+
+#: What the last mask was turned into: (key, mask, bias, live rows). One
+#: entry, dropped before the next mask's bias is built, so two are never
+#: alive at once: a step builds one mask and the next step a new one.
+_MASK_TERMS = []
+
+
+def _mask_terms(attn_mask, query_dims, key_dims, dtype):
+    """The additive bias for `attn_mask` and which query rows keep a key.
+
+    Built once per mask, not once per layer. A decoder hands every layer the
+    same mask, and Transformers' SDPA wrapper slices it for each one
+    (``attention_mask[:, :, :, :kv_len]``) -- a new view of the same data
+    every time. Turning it into a bias and scanning it for fully masked rows
+    in each of Qwen3-0.6B's 28 layers was 2.1 ms of a 27 ms prefill, the
+    whole difference to PyTorch, and eight more graph nodes per layer per
+    decoded token. A view is recognised by the Var it views and where in it
+    it looks; anything else only by being the same object.
+    """
+    base = attn_mask._view_base_id() if attn_mask._is_view() else -1
+    key = (base, tuple(attn_mask.shape), attn_mask._storage_offset(),
+           tuple(attn_mask._storage_strides()), _jittor_dtype_name(attn_mask.dtype),
+           _jittor_dtype_name(dtype), tuple(query_dims), tuple(key_dims))
+    for entry in _MASK_TERMS:
+        if entry[0] == key and (base >= 0 or entry[1] is attn_mask):
+            return entry[2], entry[3]
+    _MASK_TERMS.clear()
+    bias = _mask_bias(attn_mask, query_dims, key_dims, dtype)
+    if bias is None:
+        return None, None
     top = bias.max([-1], keepdims=True)
-    live = jt.logical_not(jt.isinf(top) & (top < 0)).broadcast(out.shape)
-    return jt.ternary(live, out, jt.zeros_like(out))
+    live = jt.logical_not(jt.isinf(top) & (top < 0))
+    _MASK_TERMS.append((key, attn_mask if base < 0 else None, bias, live))
+    return bias, live
 
 
 def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None):
