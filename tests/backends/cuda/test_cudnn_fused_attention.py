@@ -80,6 +80,48 @@ class TestCudnnFusedAttention(unittest.TestCase):
             error = np.abs(got.float32().numpy() - expected).max() / np.abs(expected).max()
             self.assertLess(error, tolerance, name)
 
+    def _check_seq_major(self, which, mask=None):
+        # q/k/v as `x.view(b, s, h, d).transpose(1, 2)`, the way attention
+        # blocks build them. The kernel reads the [b, s, h, d] tensors in
+        # place and hands the output back as a transpose view, which the
+        # caller's `transpose(1, 2)` then undoes without a copy.
+        b, h, s, d = 2, 4, 70, 64
+        rng = np.random.RandomState(1)
+        q, k, v, dout = (rng.randn(b, h, s, d).astype("float32") for _ in range(4))
+        want = _reference(q, k, v, mask, False, dout)
+        sources = [jt.array(np.ascontiguousarray(t.transpose(0, 2, 1, 3))).float16()
+                   if name in which else jt.array(t).float16()
+                   for name, t in zip("qkv", (q, k, v))]
+        heads = [t.transpose(1, 2) if name in which else t
+                 for name, t in zip("qkv", sources)]
+        attn_mask = None if mask is None else jt.array(mask)
+        # A mask is served without a backward only.
+        with jt.flag_scope(no_grad=mask is not None):
+            out = scaled_dot_product_attention(*heads, attn_mask=attn_mask)
+        seq_out = out.transpose(1, 2)
+        self.assertTrue(any(key[-1] for key, ok in self.kernel._supported_shapes.items() if ok))
+        np.testing.assert_allclose(seq_out.float32().numpy(), want[0].transpose(0, 2, 1, 3),
+                                   atol=2e-3, rtol=2e-3)
+        if mask is not None:
+            return
+        grads = jt.grad((out.float32() * jt.array(dout)).sum(), sources)
+        for name, got, expected in zip("qkv", grads, want[1:]):
+            if name in which:
+                expected = expected.transpose(0, 2, 1, 3)
+            error = np.abs(got.float32().numpy() - expected).max() / np.abs(expected).max()
+            self.assertLess(error, 5e-3, "d" + name)
+
+    def test_seq_major_inputs_are_read_in_place(self):
+        self._check_seq_major("qkv")
+
+    def test_a_seq_major_query_with_dense_keys(self):
+        self._check_seq_major("q")
+
+    def test_seq_major_inputs_with_a_mask(self):
+        mask = np.ones((2, 1, 70, 70), bool)
+        mask[1, ..., 50:] = False
+        self._check_seq_major("qkv", mask)
+
     def test_float16_unequal_lengths(self):
         self._check_training("float16", 2, 4, 4, 33, 47, 64, False, 3e-3)
 

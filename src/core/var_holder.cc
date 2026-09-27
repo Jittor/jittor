@@ -16,6 +16,8 @@
 #include "core/grad.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "ops/op_register.h"
+#include "ops/composite/transpose_op.h"
+#include "ops/composite/fuse_transpose_op.h"
 #include "type/fp16_compute.h"
 #include "mem/swap.h"
 #include "runtime/executor_entry.h"
@@ -476,6 +478,42 @@ VarHolder* VarHolder::transpose_view_base() {
     for (size_t i=0; i+1<view->steps.size(); ++i)
         value = apply_view_step(value.ptr, view->steps[i]);
     return new VarHolder(move(value));
+}
+
+NanoVector VarHolder::transpose_view_axes() {
+    if (!is_view() || view->steps.empty()) return NanoVector();
+    const auto& step = view->steps.back();
+    if (step.kind != VarViewStep::Transpose) return NanoVector();
+    return step.axes;
+}
+
+NanoVector VarHolder::producer_transpose_axes() {
+    if (var->is_finished()) return NanoVector();
+    Op* op = var->input();
+    if (!op) return NanoVector();
+    if (auto* transpose = dynamic_cast<TransposeOp*>(op)) return transpose->axes;
+    if (auto* transpose = dynamic_cast<FuseTransposeOp*>(op)) return transpose->axes;
+    return NanoVector();
+}
+
+VarHolder* VarHolder::transpose_view_source() {
+    USER_CHECK(transpose_view_axes().size()) << "tensor is not a live transpose view";
+    VarHolder* root = view->base;
+    VarPtr value(root->var);
+    if (view->steps.size() == 1)
+        value = make_getitem(value.ptr, VarSlices(0));
+    for (size_t i=0; i+1<view->steps.size(); ++i)
+        value = apply_view_step(value.ptr, view->steps[i]);
+    auto* result = new VarHolder(move(value));
+    vector<VarViewStep> steps(view->steps.begin(), view->steps.end() - 1);
+    // A view needs a step to write back through; the root itself is one
+    // whole-shape reshape away.
+    if (steps.empty())
+        steps.emplace_back(VarViewStep::Reshape, NanoVector(root->var->shape));
+    result->view = new VarView{root, result, move(steps), nullptr, root->views};
+    if (root->views) root->views->prev = result->view;
+    root->views = result->view;
+    return result;
 }
 
 // Whether one recorded view step still applies to `value`.

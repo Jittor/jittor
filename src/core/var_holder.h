@@ -729,6 +729,31 @@ struct VarHolder {
     VarHolder* transpose_view_base();
 
     /**
+     * The axes of this view's last step when it is a transpose, else empty.
+     */
+    // @pyjt(_transpose_view_axes)
+    NanoVector transpose_view_axes();
+
+    /**
+     * What this transpose view was before its last transpose: a new holder,
+     * itself a view of the same root one step shorter, so that a write to it
+     * still reaches the root. A kernel that can read the untransposed layout
+     * takes this instead of materializing the transpose, and a transpose of
+     * this view composes with it rather than stacking a second one.
+     */
+    // @pyjt(_transpose_view_source)
+    VarHolder* transpose_view_source();
+
+    /**
+     * The axes of the transpose that will compute this Var, else empty: the
+     * graph's answer where the view record is gone -- `q = proj(x).view(...)
+     * .transpose(1, 2)` drops the projection's holder, and a view's record
+     * lives only as long as its root's holder. ``_input(0)`` is the source.
+     */
+    // @pyjt(_producer_transpose_axes)
+    NanoVector producer_transpose_axes();
+
+    /**
      * Whether an assignment to this holder writes through to some base.
      */
     // @pyjt(_is_view)

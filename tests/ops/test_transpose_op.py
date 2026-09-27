@@ -294,5 +294,42 @@ class TestFuseTransposeCudaOp(TestFuseTransposeOp):
             jt.sync_all()
             _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._previous_use_cuda))
 
+class TestTransposeComposition(unittest.TestCase):
+    """A transpose of a transpose is one transpose, or none when they cancel.
+
+    `attn(q.transpose(1, 2), ...)` hands back heads that the caller moves
+    back with another `transpose(1, 2)`; stacked, the two ran as two copies.
+    """
+
+    def test_cancelling_transposes_return_the_source_as_a_view(self):
+        a = jt.array(np.arange(24, dtype="float32").reshape(2, 3, 4))
+        b = a.transpose(0, 2, 1).transpose(0, 2, 1)
+        np.testing.assert_array_equal(b.numpy(), a.numpy())
+        b[0, 1, 2] = -1.0
+        self.assertEqual(a.numpy()[0, 1, 2], -1.0)
+
+    def test_transposes_compose(self):
+        x = np.arange(120, dtype="float32").reshape(2, 3, 4, 5)
+        got = jt.array(x).transpose(0, 2, 1, 3).transpose(3, 1, 0, 2).numpy()
+        np.testing.assert_array_equal(got, x.transpose(0, 2, 1, 3).transpose(3, 1, 0, 2))
+
+    def test_the_graph_answers_once_the_root_holder_is_gone(self):
+        # `proj(x).view(...).transpose(1, 2)` keeps no holder of the root, so
+        # the view record is gone; the transpose op in the graph is not.
+        x = np.arange(48, dtype="float32").reshape(2, 4, 6)
+        heads = (jt.array(x) * 2).reshape(2, 4, 3, 2).transpose(0, 2, 1, 3)
+        self.assertEqual(tuple(heads._transpose_view_axes()), ())
+        self.assertEqual(tuple(heads._producer_transpose_axes()), (0, 2, 1, 3))
+        back = heads.transpose(0, 2, 1, 3)
+        np.testing.assert_array_equal(back.numpy(), (x * 2).reshape(2, 4, 3, 2))
+
+    def test_gradients_flow_through_a_cancelled_pair(self):
+        a = jt.array(np.random.RandomState(0).randn(3, 4, 5).astype("float32"))
+        y = (a.transpose(0, 2, 1).transpose(0, 2, 1) * jt.arange(5).float32()).sum()
+        grad = jt.grad(y, a).numpy()
+        np.testing.assert_array_equal(grad, np.broadcast_to(np.arange(5, dtype="float32"),
+                                                           (3, 4, 5)))
+
+
 if __name__ == "__main__":
     unittest.main()
