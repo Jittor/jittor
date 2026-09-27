@@ -1050,6 +1050,14 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         x2 = make_binary(one, x2, ns_subtract);
         return make_binary(dout, x2, ns_divide);
     }
+    // drelu(x) = (relu(x) > 0), read from the output: `y > 0` exactly when
+    // `x > 0`, and the output is what the next layer keeps anyway, so the
+    // input is not held for this (see `no_need_back_in`).
+    if (ns == ns_relu) {
+        auto zero = make_number(0, y);
+        auto positive = make_binary(y, zero, ns_greater);
+        return make_ternary(positive, dout, make_number(0, dout));
+    }
     // dsigmoid(x) = sigmoid(x) - sigmoid(x)^2
     if (ns == ns_sigmoid) {
         auto r = make_binary(out, out, ns_multiply);

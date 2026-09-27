@@ -41,8 +41,10 @@ def relu(x, inplace=False):
     fast = try_dispatch("nn.relu", x, inplace=inplace)
     if fast is not None:
         return fast
-    cond = x>0.0
-    return jt.ternary_out_hint(cond, x, 0.0)
+    # One elementwise operator: it fuses into whatever produced `x` (a batch
+    # norm, a residual add) and differentiates from its own output, so neither
+    # the input nor a sign mask is kept for the backward. See `UnaryOp::grad`.
+    return jt.unary(x, "relu")
 
 
 def leaky_relu(x, scale=0.01, negative_slope=None, inplace=False):
