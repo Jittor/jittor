@@ -43,11 +43,29 @@ namespace mea {
 // Where row `row` of (batch, head) `bh` of a q/k/v-shaped tensor starts: dense
 // [b, h, s, d], or [b, s, h, d] -- what a projection reshaped into heads is
 // before its transpose(1, 2) runs, which the kernels read in place.
+//
+// Resolved once per block (`of`), not per element: an address taken through
+// `at(bh, r)` inside the tile loads paid a division by `heads` and three 64-bit
+// multiplies per element, which halved both kernels -- the backward on
+// Qwen3-0.6B training went 26.0 -> 51.1 ms a step.
 struct Rows {
     int heads;
     long long batch, head, row;
-    __device__ __forceinline__ size_t at(int bh, int r) const {
-        return (size_t)((bh / heads) * batch + (bh % heads) * head + (long long)r * row);
+    __device__ __forceinline__ long long base(int bh) const {
+        return (bh / heads) * batch + (bh % heads) * head;
+    }
+};
+
+// One (batch, head) of a q/k/v-shaped tensor: its first element and the
+// distance between rows, which fits an int (it is at most heads * dim).
+template <typename T>
+struct RowPtr {
+    T* p;
+    int stride;
+    __device__ __forceinline__ RowPtr(T* data, const Rows& rows, int bh)
+        : p(data + rows.base(bh)), stride((int)rows.row) {}
+    __device__ __forceinline__ T* operator[](int r) const {
+        return p + (size_t)r * stride;
     }
 };
 
@@ -165,11 +183,13 @@ __global__ void __launch_bounds__(THREADS) forward(
     float* skv = sq + D * QP;       // K^T, [D][KP], then V, [BK][D]
     float* sp = skv + KV;           // P^T, [BK][QP]
     const int bh = blockIdx.y, q0 = blockIdx.x * BQ;
+    const mea::RowPtr<const float> qb(q, ql, bh), kb(k, kl, bh), vb(v, vl, bh);
+    const mea::RowPtr<float> obase(o, ql, bh);
     const int ty = threadIdx.x >> 4, tx = threadIdx.x & 15;
     const long long mask_base = MASK ? mask.base(bh) : 0;
     for (int i = threadIdx.x; i < BQ * D; i += THREADS) {
         const int r = i / D, c = i - r * D;
-        sq[c * QP + r] = q0 + r < lq ? q[ql.at(bh, q0 + r) + c] * scale : 0.f;
+        sq[c * QP + r] = q0 + r < lq ? qb[q0 + r][c] * scale : 0.f;
     }
 
     float m[RPT], l[RPT], acc[RPT][DPT];
@@ -187,7 +207,7 @@ __global__ void __launch_bounds__(THREADS) forward(
         __syncthreads();
         for (int i = threadIdx.x; i < BK * D; i += THREADS) {
             const int r = i / D, c = i - r * D;
-            skv[c * KP + r] = k0 + r < lk ? k[kl.at(bh, k0 + r) + c] : 0.f;
+            skv[c * KP + r] = k0 + r < lk ? kb[k0 + r][c] : 0.f;
         }
         __syncthreads();
         float s[RPT][4];
@@ -252,7 +272,7 @@ __global__ void __launch_bounds__(THREADS) forward(
         __syncthreads();
         for (int i = threadIdx.x; i < BK * D; i += THREADS) {
             const int r = i / D, c = i - r * D;
-            skv[r * D + c] = k0 + r < lk ? v[vl.at(bh, k0 + r) + c] : 0.f;
+            skv[r * D + c] = k0 + r < lk ? vb[k0 + r][c] : 0.f;
         }
         __syncthreads();
         #pragma unroll 2
@@ -273,7 +293,7 @@ __global__ void __launch_bounds__(THREADS) forward(
         const int row = q0 + ty * RPT + r;
         if (row >= lq) continue;
         const float inv = l[r] > 0.f ? 1.f / l[r] : 0.f;
-        float* ob = o + ql.at(bh, row);
+        float* ob = obase[row];
         #pragma unroll
         for (int c = 0; c < DPT; c++) {
             const int col = tx + c * 16;
@@ -335,13 +355,16 @@ __global__ void __launch_bounds__(THREADS) backward(
     float* sp = sdo + D * QP;       // P  [BQ][PP]
     float* sds = sp + BQ * PP;      // dS [BQ][PP]
     const int bh = blockIdx.y, k0 = blockIdx.x * BK;
+    const mea::RowPtr<const float> qb(q, ql, bh), kb(k, kl, bh), vb(v, vl, bh),
+        dob(dout, ql, bh);
+    const mea::RowPtr<float> dqb(dq, ql, bh), dkb(dk, kl, bh), dvb(dv, vl, bh);
     const int tid = threadIdx.x;
     const long long mask_base = MASK ? mask.base(bh) : 0;
     for (int i = tid; i < BK * D; i += THREADS) {
         const int r = i / D, c = i - r * D;
         const bool in = k0 + r < lk;
-        sk[c * KP + r] = in ? k[kl.at(bh, k0 + r) + c] : 0.f;
-        sv[c * KP + r] = in ? v[vl.at(bh, k0 + r) + c] : 0.f;
+        sk[c * KP + r] = in ? kb[k0 + r][c] : 0.f;
+        sv[c * KP + r] = in ? vb[k0 + r][c] : 0.f;
     }
     // Phase A: rows ay*2 +{0,1}, keys ax*4 +{0..3}.
     const int ay = tid >> 3, ax = tid & 7;
@@ -364,8 +387,8 @@ __global__ void __launch_bounds__(THREADS) backward(
         for (int i = tid; i < BQ * D; i += THREADS) {
             const int r = i / D, c = i - r * D;
             const bool in = q0 + r < lq;
-            sq[c * QP + r] = in ? q[ql.at(bh, q0 + r) + c] : 0.f;
-            sdo[c * QP + r] = in ? dout[ql.at(bh, q0 + r) + c] : 0.f;
+            sq[c * QP + r] = in ? qb[q0 + r][c] : 0.f;
+            sdo[c * QP + r] = in ? dob[q0 + r][c] : 0.f;
         }
         __syncthreads();
         float s[2][4], dp[2][4];
@@ -457,7 +480,7 @@ __global__ void __launch_bounds__(THREADS) backward(
         for (int r = 0; r < 4; r++) {
             const int row = q0 + group * 4 + r;
             if (row >= lq) continue;
-            float* qrow = dq + ql.at(bh, row);
+            float* qrow = dqb[row];
             #pragma unroll
             for (int c = 0; c < DPT; c++) {
                 const int col = lane + c * 16;
@@ -473,8 +496,8 @@ __global__ void __launch_bounds__(THREADS) backward(
         for (int c = 0; c < DPT; c++) {
             const int col = lane + c * 16;
             if (col < D) {
-                dk[kl.at(bh, key) + col] = gk[r][c] * scale;
-                dv[vl.at(bh, key) + col] = gv[r][c];
+                dkb[key][col] = gk[r][c] * scale;
+                dvb[key][col] = gv[r][c];
             }
         }
     }
