@@ -78,6 +78,26 @@ class TestLtLinearCuda(unittest.TestCase):
                 self.assertEqual(tuple(got.shape), want.shape)
                 np.testing.assert_allclose(got.numpy(), want, rtol=2e-5, atol=2e-5)
 
+    def test_float32_follows_the_tf32_policy(self):
+        # The float32 route used to compute in full float32 whatever the
+        # float32 matmul policy said, so `allow_tf32` left every linear layer
+        # on the SIMT kernels. Under the policy it now rounds like the
+        # portable path does -- visibly away from float64, the way TF32 does --
+        # and without it the result is still full float32.
+        xn, wn, bn = self._arrays((2048, 1024), 1024, 1024)
+        want = xn.astype("float64") @ wn.astype("float64").T + bn
+        x, w, b = jt.array(xn), jt.array(wn), jt.array(bn)
+        with jt.no_grad():
+            full = lt_linear_cuda(x, w, b).numpy()
+            with jt.flag_scope(cuda_allow_tf32=1):
+                tf32 = lt_linear_cuda(x, w, b).numpy()
+                portable = (jt.matmul(x, w.transpose()) + b).numpy()
+        self.assertLess(np.abs(full - want).max(), 1e-4)
+        self.assertGreater(np.abs(tf32 - want).max(), 1e-4)
+        np.testing.assert_allclose(tf32, want, rtol=0, atol=5e-2)
+        # Same precision as the portable path under the same policy.
+        self.assertLess(np.abs(tf32 - want).max(), 4 * np.abs(portable - want).max() + 1e-6)
+
     def test_it_matches_the_portable_path_in_float16(self):
         # float16 operands are served now, and the reference is the same
         # product in float32 -- so the tolerance is float16's, not float32's.

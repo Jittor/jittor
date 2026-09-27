@@ -74,6 +74,7 @@ _HEADER = r"""
 #include <cuda_fp16.h>
 #include "core/executor.h"
 #include "mem/allocator.h"
+#include "runtime/float32_precision.h"
 
 static cublasLtHandle_t jt_lt_handle() {
     static cublasLtHandle_t handle = nullptr;
@@ -205,6 +206,16 @@ def _source(rows, cin, cout, dtype):
     const float alpha = 1.0f, beta = 0.0f;
     cublasLtHandle_t lt = jt_lt_handle();
 
+    // float32 follows the float32 matmul policy (`allow_tf32`,
+    // `set_float32_matmul_precision`), as `cublas_gemm_mode` does for the
+    // portable path: this route used to compute every float32 linear layer in
+    // full float32 on the SIMT kernels while the policy asked for TF32 -- BERT
+    // inference ran its GEMMs 24% slower than PyTorch's for no difference the
+    // caller asked for. The tier is read when the op runs, so each tier keeps
+    // its own measured algorithm.
+    int tier = {"jittor::float32_matmul_tier()" if dtype == "float32" else "0"};
+    cublasComputeType_t compute = tier == jittor::F32_HIGH ? CUBLAS_COMPUTE_32F_FAST_TF32
+        : tier == jittor::F32_MEDIUM ? CUBLAS_COMPUTE_32F_FAST_16BF : CUBLAS_COMPUTE_32F;
     cublasLtMatmulDesc_t op = nullptr;
     // The scale type follows the *compute* type and the float alpha/beta, not
     // the operand type. Handing it the operand type is rejected outright --
@@ -213,7 +224,7 @@ def _source(rows, cin, cout, dtype):
     // of it is the fallback running underneath (which is how the whole fused
     // route came to be 2.4x slower than not using it at all while still
     // producing correct numbers).
-    cublasLtMatmulDescCreate(&op, CUBLAS_COMPUTE_32F, CUDA_R_32F);
+    cublasLtMatmulDescCreate(&op, compute, CUDA_R_32F);
     cublasOperation_t ta = CUBLAS_OP_T, tb = CUBLAS_OP_N;
     cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_TRANSA, &ta, sizeof(ta));
     cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_TRANSB, &tb, sizeof(tb));
@@ -234,7 +245,8 @@ def _source(rows, cin, cout, dtype):
     void* ws = workspace.ptr;
     size_t wsize = ws ? (size_t){_WORKSPACE} : 0;
 
-    static JtLtChoice choice;
+    static JtLtChoice choices[3];
+    JtLtChoice& choice = choices[tier < 0 || tier > 2 ? 0 : tier];
     if (!choice.ready) {{
         choice.ready = true;
         cublasLtMatmulPreference_t pref = nullptr;
@@ -288,7 +300,7 @@ def _source(rows, cin, cout, dtype):
         cublasGemmEx(h, CUBLAS_OP_T, CUBLAS_OP_N, cout, rows, cin, &alpha,
                      in1_p, {ct}, cin, in0_p, {ct}, cin, &beta,
                      out0_p, {ct}, cout,
-                     CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+                     compute, CUBLAS_GEMM_DEFAULT);
         int total = rows * cout;
         jt_lt_add_bias<{kt}><<<(total + 255) / 256, 256>>>(out0_p, in2_p, total, cout);
     }}
