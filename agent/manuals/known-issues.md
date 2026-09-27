@@ -3126,6 +3126,22 @@ about whether to take it.
 - Workaround: none in the tests; real training steps run on one placement and
   do not reach it.
 
+## KI-TEST-010: three `test_torch_compat_norm.py` LayerNorm fast-path cases fail
+
+- Severity: Low (the CUDA no-grad LayerNorm is not taking the fused path these
+  tests pin; values elsewhere in the file pass)
+- Status: Open. Found 2026-09-28; fails the same way on `542d6e97` and on
+  `76bbcb33`, so it predates the batch-norm work it was found during.
+- Owner: torch compatibility / normalization kernels
+- Symptom: `TestLayerNorm::test_ln_no_grad_cuda_fast_path_float32_and_float16`
+  (`CUDA no-grad LayerNorm missed its fused path`),
+  `test_ln_no_grad_cuda_dynamic_rows_share_source` (`0 != 2`) and
+  `test_ln_no_grad_cuda_bfloat16_private_opt_in` (`'NoneType' object has no
+  attribute 'float32'`).
+- Suspected: the fused LayerNorm kernel's selection changed under the torch
+  frontend without these tests following; not isolated.
+- Workaround: none needed for results.
+
 ## KI-EXEC-008: the CUDA convolution test files intermittently abort on a forward liveness underflow
 
 - Severity: Medium (a whole pytest process aborts, taking its summary with it)

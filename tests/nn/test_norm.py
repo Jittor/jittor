@@ -688,3 +688,47 @@ class TestNormalizeIsOneImplementation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestBatchNormEvalCoefficients(unittest.TestCase):
+    """Inference batch norm keeps its per-channel scale and shift between calls."""
+
+    def _check(self):
+        from jittor.nn.functional.normalization import _EVAL_COEFFICIENTS, batch_norm
+        rng = np.random.RandomState(0)
+        x = jt.array(rng.randn(4, 3, 5, 5).astype("float32"))
+        mean = jt.array(rng.randn(3).astype("float32")).stop_grad()
+        var = jt.array(rng.rand(3).astype("float32") + 0.5).stop_grad()
+        weight = jt.array(rng.randn(3).astype("float32")).stop_grad()
+        bias = jt.array(rng.randn(3).astype("float32")).stop_grad()
+
+        def want():
+            m, v, w, b = (t.numpy().reshape(1, 3, 1, 1) for t in (mean, var, weight, bias))
+            return (x.numpy() - m) / np.sqrt(v + 1e-5) * w + b
+
+        with jt.no_grad():
+            first = batch_norm(x, mean, var, weight, bias, training=False).numpy()
+            kept = getattr(var, _EVAL_COEFFICIENTS, None)
+            np.testing.assert_allclose(first, want(), rtol=1e-5, atol=1e-5)
+            second = batch_norm(x, mean, var, weight, bias, training=False).numpy()
+            np.testing.assert_allclose(second, first, rtol=0, atol=0)
+            # A new statistic is a new Var: the kept coefficients are not reused.
+            var.update(var * 2)
+            third = batch_norm(x, mean, var, weight, bias, training=False).numpy()
+            np.testing.assert_allclose(third, want(), rtol=1e-5, atol=1e-5)
+        # A graph that differentiates through the parameters keeps nothing.
+        grad_weight = jt.array(np.ones(3, "float32"))
+        other = jt.array(np.ones(3, "float32")).stop_grad()
+        batch_norm(x, mean, other, grad_weight, bias, training=False)
+        self.assertIsNone(getattr(other, _EVAL_COEFFICIENTS, None))
+        return kept
+
+    def test_cpu(self):
+        with jt.flag_scope(use_cuda=0):
+            self.assertIsNotNone(self._check())
+
+    @unittest.skipIf(not _test_capability.check_accelerator("cuda", backend=jt).enabled,
+                     "no usable CUDA in this build")
+    def test_cuda(self):
+        with jt.flag_scope(use_cuda=1):
+            self._check()

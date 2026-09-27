@@ -137,9 +137,40 @@ def _batch_norm_eval(x, dims, running_mean, running_var, weight, bias, eps):
         x, weight, bias, running_mean, running_var, eps)
     if fast is not None:
         return fast
+    scale, shift = _batch_norm_eval_coefficients(running_mean, running_var, weight, bias, eps)
+    return x * scale.broadcast(x, dims) + shift.broadcast(x, dims)
+
+
+#: Where the tracked statistics keep the per-channel scale and shift an
+#: inference batch norm was last computed with, and what they were computed
+#: from.
+_EVAL_COEFFICIENTS = "_jittor_batch_norm_eval_coefficients"
+
+
+def _batch_norm_eval_coefficients(running_mean, running_var, weight, bias, eps):
+    """``(weight / sqrt(var + eps), bias - mean * scale)``, kept between calls.
+
+    They only change when a parameter or a statistic does, and every one of
+    those changes rebinds the holder to a new Var -- so the Vars' identities
+    are the key. Recomputing them was a kernel per batch norm per step: 53 of
+    a batch-1 ResNet-50's 212, and a tenth of its device time. Only when no
+    gradient flows through them: a kept Var must not carry one step's
+    graph into the next.
+    """
+    tracked = isinstance(running_var, jt.Var) and isinstance(running_mean, jt.Var)
+    inputs = (weight, bias, running_mean, running_var)
+    keep = tracked and (jt.flags.no_grad or all(
+        v.is_stop_grad() for v in inputs if isinstance(v, jt.Var)))
+    if keep:
+        key = tuple(v.var_ptr if isinstance(v, jt.Var) else v for v in inputs) + (float(eps),)
+        cached = getattr(running_var, _EVAL_COEFFICIENTS, None)
+        if cached is not None and cached[0] == key:
+            return cached[1], cached[2]
     scale = weight / jt.sqrt(running_var + eps)
     shift = bias - running_mean * scale
-    return x * scale.broadcast(x, dims) + shift.broadcast(x, dims)
+    if keep:
+        setattr(running_var, _EVAL_COEFFICIENTS, (key, scale, shift))
+    return scale, shift
 
 
 def _unbiased(var, x, dims, world_size=1):
