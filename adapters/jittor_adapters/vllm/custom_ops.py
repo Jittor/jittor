@@ -127,7 +127,7 @@ def _rotary_embedding(positions, query, key, head_size, cos_sin_cache, is_neox,
 
 def _get_cuda_view_from_cpu_tensor(x):
     """Stage host metadata on CUDA; Jittor has no zero-copy UVA Var."""
-    return x.to_device(0)
+    return x.to_device(jt.current_device())
 
 
 def _apply_repetition_penalties_(logits, prompt_mask, output_mask,

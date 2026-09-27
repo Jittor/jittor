@@ -152,11 +152,23 @@ def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
 
 
 def _distributed_rank():
+    context = get_install_context(jt).state.get("distributed_api")
+    if context is not None and getattr(context['world_group'], '_host', None) is not None:
+        return context['world_group'].rank()
     return _process_group.get_rank()
 
 
 def _distributed_world_size():
+    context = get_install_context(jt).state.get("distributed_api")
+    if context is not None and getattr(context['world_group'], '_host', None) is not None:
+        return context['world_group'].size()
     return _process_group.get_world_size()
+
+
+def _host_group(group):
+    if group is None:
+        group = get_install_context(jt).state['distributed_api']['world_group']
+    return group if getattr(group, '_host', None) is not None else None
 
 
 def _group_size(group):
@@ -209,6 +221,12 @@ def _native_all_gather_flat(tensor):
 
 
 def _native_all_gather_object(object_list, obj, group=None):
+    host = _host_group(group)
+    if host is not None:
+        if len(object_list) < host.size():
+            raise ValueError("all_gather_object output list is shorter than group size")
+        object_list[:host.size()] = host._host.all_gather_object(obj)
+        return None
     size = _require_supported_group(group)
     if len(object_list) < size:
         raise ValueError(
@@ -290,16 +308,50 @@ def _init_process_group(*args, **kwargs):
         )
     backend = kwargs.get("backend", args[0] if args else None)
     backend_name = str(backend).lower() if backend is not None else None
+    if backend_name == 'gloo':
+        if _native_distributed_active():
+            raise RuntimeError("a native accelerator WORLD is already active; create a CPU subgroup")
+        if store is None:
+            store, requested_rank, requested_world_size = next(_store_rendezvous(
+                'env://', rank=requested_rank, world_size=requested_world_size,
+                timeout=kwargs.get('timeout')))
+        generation = getattr(world_group, '_host_generation', 0) + 1
+        world_group._create_host_communicator(
+            store, requested_rank, requested_world_size,
+            'jittor/host-world/{}/'.format(generation))
+        world_group._host_generation = generation
+        state['initialized'] = True
+        state['store'] = store
+        _context['pg_map'][world_group] = ('gloo',)
+        return None
     if requested_world_size > 1 and not _native_distributed_active():
-        _bootstrap_native_distributed(
-            requested_rank, requested_world_size, backend=backend,
-            store=store,
+        owns_default_store = (
+            store is None and init_method is None
+            and _is_truthy(os.environ.get("JITTOR_TORCH_DISTRIBUTED_AUTO_INIT"))
         )
-    if requested_world_size > 1 and not _native_distributed_active():
-        raise RuntimeError(
-            "multi-rank torch.distributed requires launching Jittor with "
-            "jittor.distributed.launch or explicit dynamic bootstrap"
-        )
+        if owns_default_store:
+            # The default env rendezvous belongs to WORLD. Passing it into
+            # native bootstrap keeps that layer from creating and closing a
+            # temporary server which a later CPU subgroup tries to recreate.
+            store, requested_rank, requested_world_size = next(_store_rendezvous(
+                "env://", rank=requested_rank, world_size=requested_world_size,
+                timeout=kwargs.get("timeout")))
+        try:
+            _bootstrap_native_distributed(
+                requested_rank, requested_world_size, backend=backend,
+                store=store,
+            )
+            if not _native_distributed_active():
+                raise RuntimeError(
+                    "multi-rank torch.distributed requires launching Jittor with "
+                    "jittor.distributed.launch or explicit dynamic bootstrap"
+                )
+        except BaseException:
+            if owns_default_store:
+                close = getattr(store, "close", None)
+                if callable(close):
+                    close()
+            raise
     if _native_distributed_active():
         active_backend = world_group._get_backend_name()
         if backend_name is not None and not _backend_matches_active(
@@ -321,6 +373,20 @@ def _init_process_group(*args, **kwargs):
 def _destroy_process_group(*args, **kwargs):
     _context = get_install_context(jt).state["distributed_api"]
     state = _context['state']
+    group = kwargs.get('group', args[0] if args else None)
+    world = _context['world_group']
+    if group is not None and group is not world:
+        if getattr(group, '_host', None) is not None:
+            group._destroy_host_communicator()
+        _context['pg_map'].pop(group, None)
+        return None
+    for member in list(_context['pg_map']):
+        if getattr(member, '_host', None) is not None:
+            member._destroy_host_communicator()
+    if getattr(world, '_host', None) is not None:
+        world._reset_host_communicator()
+    _context['pg_map'].clear()
+    _context['pg_map'][world] = (world._get_backend_name(),)
     store = state.get("store")
     close = getattr(store, "close", None)
     if callable(close):
@@ -354,6 +420,10 @@ _ReduceOp.RedOpType = _ReduceOp
 
 
 def _all_reduce(tensor, op=None, group=None, async_op=False):
+    host = _host_group(group)
+    if host is not None:
+        _copy_tensor(tensor, host._all_reduce(tensor, _reduce_name(op, _ReduceOp)))
+        return _collective_result(tensor, async_op)
     size = _require_supported_group(group, allow_subgroup=True)
     if group is not None and getattr(group, "rank", lambda: 0)() < 0:
         return _collective_result(tensor, async_op)
@@ -381,6 +451,13 @@ def _all_reduce(tensor, op=None, group=None, async_op=False):
 
 
 def _all_gather(tensor_list, tensor, group=None, async_op=False):
+    host = _host_group(group)
+    if host is not None:
+        if len(tensor_list) < host.size():
+            raise ValueError("all_gather output list is shorter than group size")
+        for target, source in zip(tensor_list, host._host.all_gather(tensor)):
+            _copy_tensor(target, source)
+        return _collective_result(tensor_list, async_op)
     size = _require_supported_group(group)
     if len(tensor_list) < size:
         raise ValueError("all_gather output list is shorter than group size")
@@ -398,6 +475,11 @@ def _all_gather(tensor_list, tensor, group=None, async_op=False):
 
 def _all_gather_into_tensor(output_tensor, input_tensor, group=None,
                             async_op=False):
+    host = _host_group(group)
+    if host is not None:
+        gathered = host._host.all_gather(input_tensor)
+        _copy_tensor(output_tensor, jt.concat([x.reshape((-1,)) for x in gathered]).reshape(output_tensor.shape))
+        return _collective_result(output_tensor, async_op)
     size = _require_supported_group(group)
     gathered = (
         input_tensor.reshape((-1,)) if size == 1
@@ -408,6 +490,12 @@ def _all_gather_into_tensor(output_tensor, input_tensor, group=None,
 
 
 def _broadcast(tensor, src=0, group=None, async_op=False, group_src=None):
+    host = _host_group(group)
+    if host is not None:
+        root = int(group_src) if group_src is not None else (
+            int(src) if host.ranks is None else host.ranks.index(int(src)))
+        _copy_tensor(tensor, host._host.broadcast(tensor, root))
+        return _collective_result(tensor, async_op)
     size = _require_supported_group(group)
     root = int(src if group_src is None else group_src)
     if size > 1:
@@ -416,6 +504,10 @@ def _broadcast(tensor, src=0, group=None, async_op=False, group_src=None):
 
 
 def _barrier(group=None, async_op=False, device_ids=None):
+    host = _host_group(group)
+    if host is not None:
+        host._host.barrier()
+        return _collective_result(None, async_op)
     size = _require_supported_group(group)
     marker = None
     if size > 1:
@@ -426,6 +518,13 @@ def _barrier(group=None, async_op=False, device_ids=None):
 
 
 def _broadcast_object_list(object_list, src=0, group=None, device=None):
+    host = _host_group(group)
+    if host is not None:
+        root = int(src) if host.ranks is None else host.ranks.index(int(src))
+        gathered = host._host.exchange('broadcast_object_list/' + str(root),
+                                      object_list if host.rank() == root else None)
+        object_list[:] = gathered[root]
+        return None
     gathered = [None] * _group_size(group)
     local = object_list if _get_rank(group) == int(src) else None
     _native_all_gather_object(gathered, local, group)
@@ -435,7 +534,7 @@ def _broadcast_object_list(object_list, src=0, group=None, device=None):
 
 def _gather_object(obj, object_gather_list=None, dst=0, group=None,
                    group_dst=None):
-    size = _require_supported_group(group)
+    size = _require_supported_group(group, allow_subgroup=_host_group(group) is not None)
     if group_dst is not None:
         destination = int(group_dst)
     elif group is not None and getattr(group, "ranks", None) is not None:
@@ -482,8 +581,31 @@ def _new_group(ranks=None, *args, **kwargs):
     if any(int(rank) < 0 or int(rank) >= _distributed_world_size()
            for rank in ranks):
         raise ValueError("process group rank is outside WORLD")
+    backend = kwargs.get('backend', args[1] if len(args) > 1 else None)
+    if backend is None:
+        backend = _context['world_group']._get_backend_name()
+    backend = str(backend).lower()
+    if backend not in ('gloo', 'nccl', 'hccl', 'mpi'):
+        raise NotImplementedError('unsupported process-group backend: ' + backend)
     group = _JittorProcessGroup(ranks, "subgroup")
+    if backend == 'gloo':
+        state = _context['state']
+        if state.get('store') is None:
+            state['store'], _, _ = next(_store_rendezvous(
+                'env://', rank=_distributed_rank(), world_size=_distributed_world_size(),
+                timeout=kwargs.get('timeout', args[0] if args else None)))
+        world = _context['world_group']
+        sequence = getattr(world, '_host_subgroup_sequence', 0)
+        world._host_subgroup_sequence = sequence + 1
+        group._create_host_communicator(
+            state['store'], _distributed_rank(), _distributed_world_size(),
+            'jittor/host-subgroup/{}/'.format(sequence))
+        pg_map[group] = ('gloo',)
+        return group
     group._create_backend_communicator()
+    if group.size() > 1 and group._get_backend_name() != backend:
+        raise RuntimeError('requested group backend {} does not match {}'.format(
+            backend, group._get_backend_name()))
     pg_map[group] = (group._get_backend_name(),)
     return group
 
@@ -601,7 +723,7 @@ def _init_device_mesh(device_type=None, mesh_shape=None, *, mesh_dim_names=None,
 
 
 def _autograd_all_reduce(input, op=None, group=None, *a, **k):
-    """Differentiable all-reduce -- real on >1 rank, identity on 1 rank.
+    """Differentiable native all-reduce; CPU host transport has no backward.
 
     Was `lambda input, *a, **k: input`: on N ranks both the value AND the
     gradient were wrong, with no error. On a single rank an all-reduce IS
@@ -609,6 +731,10 @@ def _autograd_all_reduce(input, op=None, group=None, *a, **k):
     """
     if group is not None and getattr(group, "rank", lambda: 0)() < 0:
         return input
+    if _host_group(group) is not None:
+        raise NotImplementedError(
+            "CPU process-group autograd all_reduce requires a backward collective"
+        )
     reduce_name = _reduce_name(op, _ReduceOp)
     if group is not None and hasattr(group, "_all_reduce"):
         return group._all_reduce(input, reduce_name)
@@ -716,6 +842,10 @@ def _api_dist_is_available(*a, **k):
 
 
 def _api_dist_is_backend_available(backend):
+    # Gloo's CPU control API is implemented by native Store collectives. This
+    # advertises the shim backend, not binary interoperability with libgloo.
+    if str(backend).lower() == 'gloo':
+        return True
     return bool(getattr(jt, 'has_cuda', False)) if str(backend).lower() == 'nccl' else bool(getattr(jt.compile_extern, 'has_mpi', False)) if str(backend).lower() == 'mpi' else False
 
 
@@ -755,6 +885,23 @@ def _api_dist_get_backend(group=None):
 
 def _api_dist_get_global_rank(group=None, group_rank=0):
     return int(group_rank) if group is None or getattr(group, 'ranks', None) is None else int(group.ranks[int(group_rank)])
+
+
+def _api_dist_get_group_rank(group, global_rank):
+    context = get_install_context(jt).state["distributed_api"]
+    if group is context['world_group']:
+        return global_rank
+    if group not in context['pg_map']:
+        raise ValueError(
+            "Group {} is not registered, please create group with "
+            "torch.distributed.new_group API".format(group))
+    ranks = (tuple(range(_distributed_world_size()))
+             if group.ranks is None else group.ranks)
+    try:
+        return ranks.index(global_rank)
+    except ValueError:
+        raise ValueError("Global rank {} is not part of group {}".format(
+            global_rank, group)) from None
 
 
 def _api_dist_get_process_group_ranks(group=None):
@@ -929,6 +1076,7 @@ def _install_distributed(g, registry=None):
 
     dist.new_subgroups_by_enumeration = _new_subgroups_by_enumeration
     dist.get_global_rank = _api_dist_get_global_rank
+    dist.get_group_rank = _api_dist_get_group_rank
     dist.get_process_group_ranks = _api_dist_get_process_group_ranks
     dist.is_torchelastic_launched = _api_dist_is_torchelastic_launched
     dist.ReduceOp = getattr(dist, "ReduceOp", _ReduceOp)
@@ -1139,7 +1287,7 @@ def _install_distributed(g, registry=None):
          "Backend", "P2POp", "ReduceOp", "ProcessGroup", "barrier", "all_reduce",
          "all_gather", "all_gather_into_tensor", "broadcast", "all_gather_object",
          "broadcast_object_list", "gather_object", "new_group",
-         "new_subgroups_by_enumeration", "get_global_rank", "get_process_group_ranks",
+         "new_subgroups_by_enumeration", "get_global_rank", "get_group_rank", "get_process_group_ranks",
          "Store", "TCPStore", "FileStore", "PrefixStore"),
         Fidelity.APPROXIMATE,
         "Reuses native ProcessGroup, store and collective owners; group, reduction "
@@ -1165,7 +1313,7 @@ def _install_distributed(g, registry=None):
         Fidelity.APPROXIMATE, "Delegates supported URL, rank, world-size and timeout handling to native stores")
     register_api_bindings(c10d, "torch.distributed.distributed_c10d",
         ("is_xccl_available", "_get_default_group", "_get_default_store", "_get_default_timeout",
-         "_resolve_process_group", "ProcessGroup", "ProcessGroupGloo", "ProcessGroupNCCL", "Work"),
+         "_resolve_process_group", "get_group_rank", "ProcessGroup", "ProcessGroupGloo", "ProcessGroupNCCL", "Work"),
         Fidelity.APPROXIMATE, "Exposes installation-owned WORLD/store and native group/work identities")
     register_api_bindings(c10d, "torch.distributed.distributed_c10d",
         ("_register_process_group", "_unregister_process_group"), Fidelity.UNIMPLEMENTED,

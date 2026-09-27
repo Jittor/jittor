@@ -459,18 +459,53 @@ def _index_select(input, dim, index, *, out=None):
 class _TypedTensorMeta(type):
     def __instancecheck__(cls, obj):
         return isinstance(obj, compatibility_owner(jt).Var) and _jittor_dtype_name(obj.dtype) == cls._jdtype
+    @staticmethod
+    def _byte_data(data):
+        # Legacy ByteTensor accepts signed Python integers down to -255,
+        # while NumPy 2 rejects those in a direct uint8 array constructor.
+        # ndarray inputs retain NumPy's unchecked integer cast semantics.
+        if isinstance(data, np.ndarray):
+            return data.astype(np.uint8)
+        if isinstance(data, (list, tuple)):
+            return [_TypedTensorMeta._byte_data(value) for value in data]
+        if isinstance(data, numbers.Integral):
+            if not -255 <= data <= 255:
+                raise RuntimeError("value cannot be converted to type uint8 without overflow")
+            return int(data) % 256
+        if isinstance(data, numbers.Real):
+            if not 0 <= data <= 255:
+                raise RuntimeError("value cannot be converted to type uint8 without overflow")
+            return int(data)
+        return data
     def __call__(cls, *args, **kw):
-        with tensor_frontend(compatibility_owner(jt).Var):
-            tensor_input = len(args) == 1 and isinstance(args[0], compatibility_owner(jt).Var)
+        Var = compatibility_owner(jt).Var
+        if set(kw) - {'device'}:
+            raise TypeError("legacy typed tensor constructor accepts only the device keyword")
+        tensor_input = len(args) == 1 and isinstance(args[0], Var)
+        if tensor_input and 'device' in kw:
+            raise RuntimeError("Legacy tensor constructor of the form torch.Tensor(tensor, device=device) is not supported")
+        requested_device = kw.get('device')
+        if requested_device is not None and device(requested_device).type != 'cpu':
+            raise RuntimeError("legacy constructor expects device type: cpu but device type: {} was passed".format(
+                device(requested_device).type))
+        # torch.ByteTensor/FloatTensor/etc. are the legacy CPU classes. This
+        # placement is local to construction; CUDA's default remains active.
+        with tensor_frontend(Var, device='cpu'):
             if tensor_input:
                 v = args[0]
+                if _jittor_dtype_name(v.dtype) != cls._jdtype or v.device.type != 'cpu':
+                    raise TypeError("legacy typed tensor input must have dtype {} and device cpu".format(cls._jdtype))
+            elif len(args) == 1 and isinstance(args[0], _TorchSize):
+                v = jt.zeros(tuple(args[0]), dtype=cls._jdtype)
             elif len(args) == 1 and not isinstance(args[0], int):
-                v = jt.array(args[0], dtype=cls._jdtype)
+                data = (_TypedTensorMeta._byte_data(args[0])
+                        if cls._jdtype == 'uint8' else args[0])
+                v = jt.array(data, dtype=cls._jdtype)
             elif len(args) == 0:
                 v = jt.zeros((0,), dtype=cls._jdtype)
             else:
                 v = jt.zeros(tuple(int(a) for a in args), dtype=cls._jdtype)
-            result = v.cast(cls._jdtype)
+            result = _make_cpu_resident(v.cast(cls._jdtype))
             if not tensor_input:
                 result.requires_grad_(False)
             return result

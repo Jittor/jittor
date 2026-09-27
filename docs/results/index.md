@@ -22,6 +22,7 @@
 2026-09-23-vllm-singlecard-correctness
 2026-09-23-vllm-singlecard-extended-acceptance
 2026-09-24-vllm-metadata-performance
+2026-09-27-vllm-multigpu
 ```
 
 ## 按主题索引
@@ -37,3 +38,4 @@
 | [Jittor vs 真 PyTorch 2.9.1：现在差在哪](2026-09-14-jittor-vs-pytorch.md) | 进行中，赢 6 平 5 输 1 | 2026-09-14 |
 | [vLLM 单卡扩展验收](2026-09-23-vllm-singlecard-extended-acceptance.md) | 两模型回归、质量与 HTTP 通过；严格批次一致性和高级模式仍有边界 | 2026-09-23 |
 | [vLLM 元数据查询优化](2026-09-24-vllm-metadata-performance.md) | 逐项减少重复配置查询；验证范围和计时限制见报告 | 2026-09-24 |
+| [vLLM 双卡验证](2026-09-27-vllm-multigpu.md) | CPU/GPU 通信通过；模型验收进展与配置边界见报告 | 2026-09-27 |

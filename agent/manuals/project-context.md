@@ -109,7 +109,7 @@ while full NPU workers/FSDP2/rollout/PPO remain open. The CPU/CUDA gate passes
 four-rank NCCL/FSDP2 and tiny Qwen3 PPO; see the [Ascend core report](../../refactor-wip/results/2026-09-02-verl-ascend-core-algorithms.md)
 and [CUDA PPO report](../../refactor-wip/results/2026-08-24-verl-weight-transfer.md).
 The external NPU vLLM adapter on current HEAD passes public `vllm.LLM.generate` for Qwen3-0.6B with exact four-token parity, zero CPU fallback, and no loaded `torch_npu`/`vllm_ascend`. Preserving BF16 parameters and grouping the maintained CANN serving operations, including the exact Q/K RMSNorm and RoPE sequence, reduce its pooled warm-request median from about `0.615s` to `0.36330s`. The current comparable native `vllm-ascend` baseline is `0.38998s`, so restricted single-request, short-context, unquantized TP=1 correctness and performance are accepted; broader serving coverage remains open. See the [vLLM Ascend report](../../refactor-wip/results/2026-08-31-vllm-ascend-jittor-bootstrap.md).
-Qwen3-0.6B vLLM real-CUDA inference
+CUDA vLLM 0.24 TP=2 follow-up (2026-09-27): [communication, model checks and boundaries](../../docs/results/2026-09-27-vllm-multigpu.md). Qwen3-0.6B vLLM real-CUDA inference
 now runs about 20.5% faster than its real-PyTorch reference on the maintained
 4-token protocol; TRELLIS.2 improved from about 1.20x to 1.093x slower, so its
 performance gate remains open. CUDA masked SDPA now reuses the safe softmax

@@ -33,6 +33,9 @@ class Group:
     def _create_backend_communicator(self):
         self.created += 1
 
+    def _create_host_communicator(self, store, rank, world_size, prefix):
+        self.host_setup = (store, rank, world_size, prefix)
+
     def _all_reduce(self, tensor, operation):
         self.reductions.append((tensor, operation))
         return Tensor(tensor.values + 100)
@@ -147,13 +150,14 @@ def test_gather_and_broadcast_argument_routes(distributed_state, monkeypatch):
 
 
 def test_init_destroy_store_and_backend_validation(distributed_state, monkeypatch):
-    state, _, _ = distributed_state
+    state, world, _ = distributed_state
     class Store:
         closed = 0
         def close(self):
             self.closed += 1
     store = Store()
     owner._init_process_group(backend="gloo", rank=0, world_size=1, store=store)
+    assert world.host_setup[:3] == (store, 0, 1)
     assert state == {"initialized": True, "store": store}
     assert owner._api_c10d_get_default_store() is store
     owner._destroy_process_group()
@@ -176,3 +180,64 @@ def test_checkpoint_stubs_keep_policy_and_importable_owner(monkeypatch):
         assert function._jittor_unimplemented.endswith("." + name)
         with pytest.raises(NotImplementedError, match="checkpoint"):
             function({})
+
+
+@pytest.mark.parametrize("bootstrap_fails", [False, True])
+def test_default_env_bootstrap_owns_one_store_until_world_destroy(
+        distributed_state, monkeypatch, bootstrap_fails):
+    state, _, _ = distributed_state
+
+    class Store:
+        closed = 0
+
+        def close(self):
+            self.closed += 1
+
+    store = Store()
+    calls = []
+    active = [False]
+
+    def rendezvous(url, **kwargs):
+        calls.append((url, kwargs))
+        yield store, 2, 4
+
+    def bootstrap(rank, world_size, backend=None, store=None):
+        calls.append(("bootstrap", rank, world_size, backend, store))
+        if bootstrap_fails:
+            raise RuntimeError("bootstrap failed for test")
+        active[0] = True
+        return True
+
+    monkeypatch.setenv("JITTOR_TORCH_DISTRIBUTED_AUTO_INIT", "1")
+    monkeypatch.setenv("RANK", "2")
+    monkeypatch.setenv("WORLD_SIZE", "4")
+    monkeypatch.setattr(owner, "_store_rendezvous", rendezvous)
+    monkeypatch.setattr(owner, "_bootstrap_native_distributed", bootstrap)
+    monkeypatch.setattr(owner, "_native_distributed_active", lambda: active[0])
+    if bootstrap_fails:
+        with pytest.raises(RuntimeError, match="bootstrap failed for test"):
+            owner._init_process_group("nccl", timeout=17)
+        assert store.closed == 1
+        assert state == {"initialized": False, "store": None}
+    else:
+        owner._init_process_group("nccl", timeout=17)
+        assert state["store"] is store
+        assert owner._api_c10d_get_default_store() is store
+        assert store.closed == 0
+        owner._destroy_process_group()
+        assert store.closed == 1
+    assert calls == [
+        ("env://", {"rank": 2, "world_size": 4, "timeout": 17}),
+        ("bootstrap", 2, 4, "nccl", store),
+    ]
+
+
+def test_disabled_dynamic_bootstrap_does_not_open_default_store(
+        distributed_state, monkeypatch):
+    def unexpected_rendezvous(*args, **kwargs):
+        raise AssertionError("disabled bootstrap opened a network store")
+
+    monkeypatch.setenv("JITTOR_TORCH_DISTRIBUTED_AUTO_INIT", "0")
+    monkeypatch.setattr(owner, "_store_rendezvous", unexpected_rendezvous)
+    with pytest.raises(RuntimeError, match="requires launching Jittor"):
+        owner._init_process_group("nccl", rank=2, world_size=4)

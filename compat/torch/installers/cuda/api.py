@@ -523,9 +523,28 @@ class _CudaTypedTensorMeta(type):
         return isinstance(obj, base_type) and bool(getattr(obj, "is_cuda", False))
 
     def __call__(cls, *args, **kwargs):
-        if not _cuda_target().cuda.is_available():
+        target = _cuda_target()
+        if not target.cuda.is_available():
             raise RuntimeError("CUDA is not available")
-        return getattr(_cuda_target(), cls._tensor_name)(*args, **kwargs).cuda()
+        if set(kwargs) - {'device'}:
+            raise TypeError("legacy typed tensor constructor accepts only the device keyword")
+        base = getattr(target, cls._tensor_name)
+        if len(args) == 1 and isinstance(args[0], target.Tensor):
+            if 'device' in kwargs:
+                raise RuntimeError("Legacy tensor constructor of the form torch.Tensor(tensor, device=device) is not supported")
+            value = args[0]
+            if not isinstance(value, base) or value.device.type != 'cuda':
+                raise TypeError("legacy CUDA tensor input must have matching dtype and device cuda")
+            from ...frontend import tensor_frontend
+            with tensor_frontend(target.Tensor, like=value):
+                return value.cast(base._jdtype)
+        requested = kwargs.get('device')
+        if requested is not None and device(requested).type != 'cuda':
+            raise RuntimeError("legacy constructor expects device type: cuda but device type: {} was passed".format(
+                device(requested).type))
+        # CPU typed constructors own legacy data conversion. Explicitly move
+        # that fresh allocation; tensor inputs above must retain their alias.
+        return base(*args).cuda(device=requested)
 
 
 _CUDA_TENSOR_TYPES = {

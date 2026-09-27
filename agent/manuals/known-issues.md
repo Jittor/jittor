@@ -2295,15 +2295,20 @@ about whether to take it.
 
 - Severity: Research
 - Status: Reproduced on CUDA, 2026-09-23; vLLM 0.24.0 only
-- Baseline: single-card FP8/Graph/compile reverified at `9853c6a`; TP=2 remains
-  the earlier `61294cd` plus acceptance changes
+- Baseline: single-card FP8/Graph/compile reverified at `9853c6a`; TP=2 follow-up
+  starts from `539ce90` plus the changes recorded in the
+  [multi-GPU report](../../docs/results/2026-09-27-vllm-multigpu.md)
 - Owner: vLLM adapter and Torch compatibility maintainers
 - Evidence: run `agent/skills/vllm-torch-compat/acceptance.py` in isolated
   shim/oracle environments with `--case multigpu`, `fp8`, `compile`,
   `cudagraph`, or `other`; options, current failures and raw-artifact names are
   in [the acceptance report](../../docs/results/2026-09-23-vllm-uva-topk.md).
-- Boundaries: TP=2 gets through NCCL initialization but lacks a real CPU
-  communication group; FP8 import needs `torch.library.wrap_triton` and its
+- Boundaries: TP=2 now has Store-based CPU control groups and passes real
+  alternating CPU/GPU collective checks. Qwen TP=2 completes generation but
+  diverges into repeated words from token 4; its correctness is not accepted.
+  Run-isolated NCCL subgroup files and spawn cache isolation remain harness
+  workarounds tracked in the multi-GPU report.
+  This is not full libgloo compatibility. FP8 import needs `torch.library.wrap_triton` and its
   calculation kernels remain unimplemented; compilation needs the FX/Inductor
   integration; graph capture lacks a usable graph pool. The later single-card
   follow-up supplies explicit exponential generators and repairs OPT legacy

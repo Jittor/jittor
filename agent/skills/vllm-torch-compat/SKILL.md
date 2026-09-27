@@ -389,3 +389,66 @@ Optimize one measured cause at a time, and retain ownership, dtype mutation,
 precision-policy changes and buffer lifetime semantics. The first metadata
 scope optimization and its limits are documented in the
 [performance report](../../../docs/results/2026-09-24-vllm-metadata-performance.md).
+
+
+## 单机双卡的通信与真实模型检查
+
+`multigpu_collectives.py` 在两个独立进程中交替运行 NCCL GPU 求和与 CPU 控制通信，
+检查 CPU 张量、GPU 指针、默认设备保持以及销毁 CPU 子组后 WORLD 仍可用。
+`multigpu_engine.py` 包装本目录的 `acceptance.py --case multigpu`，通过 worker RPC
+检查每个 rank 的参数、KV cache、真实 CUDA 指针和实际 forward。
+
+运行前检查卡上其他任务。共享卡只报告正确性，不报告性能；不要终止其他人的任务。
+两套环境应分别运行，不要让两次测试同时占用同一组 GPU。记录源码哈希和完整环境，
+不要以远端工作树的旧 HEAD 代替实际源码版本。
+
+Jittor 环境需要可用的 NCCL 头文件与库、`JITTOR_TORCH_DISTRIBUTED_AUTO_INIT=1`，
+并保留既有 CUDA 默认设备。设置 `CUDA_VISIBLE_DEVICES` 为两个物理 UUID，
+`TP2_RANK0_CACHE`、`TP2_RANK1_CACHE` 为已串行预热的不同 JITTOR_HOME；
+模型父进程的 `JITTOR_HOME` 也必须独立。Oracle 环境清除 shim 的 PYTHONPATH 和变量。
+两侧的 `--output` 放在各自新的外部结果目录：
+
+```bash
+python agent/skills/vllm-torch-compat/multigpu_collectives.py \
+  --backend jittor --output "$RESULT_DIR/jittor-mixed.json"
+```
+
+模型检查还需要 `TP2_RUN_ROOT` 指向外部结果目录。使用本轮唯一、所有 rank 共用的
+`JT_NCCL_ROOTINFO_FILE`，避免复用历史 `.pgN` 文件。运行目录也应独立，避免 shim
+扫描公共临时目录里的无关扩展。模型调用需由外部 launcher 设置总超时并清理其自身子进程：
+
+```bash
+python agent/skills/vllm-torch-compat/multigpu_engine.py \
+  --backend jittor --case multigpu --model "$MODEL_DIR" \
+  --output "$TP2_RUN_ROOT/jittor-engine.json"
+```
+
+将 backend 改为 `oracle` 在独立 PyTorch 环境重跑。比较输出 token，并检查两份
+placement JSON；初始化成功或只看到 `cuda:0/cuda:1` 标签不足以证明双卡推理通过。
+工具还暂时移除父进程继承的 Jittor 缓存搜索路径，保证 spawn 子进程实际导入自己的
+已预热二进制；这属于测试环境隔离，不代表仓库通用 spawn 缓存查找问题已经修复。
+
+`pynccl_collectives.py` 直接调用已安装 vLLM 的 `PyNcclCommunicator`，覆盖新输出/复用
+输出的 all-reduce、all-gather、broadcast，以及 GPU 生产者→外部 NCCL 写入→GPU
+消费者。它使用上述两个独立缓存与 NCCL 环境，不改生产模块；默认每个 rank 检查
+128 次（FP16/FP32、长度 16/1024、8 轮变化输入），并保存真实 CUDA 指针检查与首批错误：
+
+```bash
+python agent/skills/vllm-torch-compat/pynccl_collectives.py \
+  --backend jittor --mode actual --output "$RESULT_DIR/jittor-pynccl.json"
+```
+
+可用 `--sizes`、`--steps`、`--rank-skew-ms`、`--timeout` 参数控制有界实验。
+同样在独立 oracle 环境运行 `--backend oracle --mode actual`。
+`--mode ptds` 仅对 Jittor 将传给 NCCL 的 stream 显式设为 PTDS，
+`--mode synchronize` 则在 NCCL 后添加同步；两者是诊断干预，不是默认路径验收，
+须使用新的结果目录，不能用其成功替代 `actual` 的结果。
+
+2026-09-27 的实际 Jittor 路径（advertised stream 为 0）两 rank 共 256 项检查通过，
+并未复现 stream 错序。`test_cuda_foreign_stream_ordering.py` 的真实 CUDA gate/event
+检查也通过；额外非阻塞 stream 的负向对照能提前完成，说明 gate 并非阻塞整个设备。
+这些证据不证明所有外部调用均正确，也不能替代模型 token 对拍；不能仅凭 0 与 PTDS
+句柄不同就修改 stream 实现。本轮原始未版本化证据位于
+`$JITTOR_LAB_ROOT/_state/vllm-multigpu/20260927/pynccl-actual-r1/`，以及同级
+`cuda-foreign-stream-red.log`（名称保留，但实测为通过）、
+`cuda-stream-negative-control.log`。

@@ -15,6 +15,7 @@ include tests/vllm/test_gumbel_sampling.py
 include tests/vllm/test_layers.py
 include tests/vllm/test_logprob_boundary.py
 include tests/vllm/test_model_loader.py
+include tests/vllm/test_multigpu_metadata.py
 include tests/vllm/test_plugin_lifecycle.py
 include tests/vllm/test_repetition_penalties.py
 include tests/vllm/test_runner_host_metadata.py

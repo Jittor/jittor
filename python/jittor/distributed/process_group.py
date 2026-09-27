@@ -41,6 +41,24 @@ class ProcessGroup:
         self.bound_device_id = 0
         self._backend_kind = None
         self._backend_handle = 0 if ranks is None else None
+        self._host = None
+
+    def _create_host_communicator(self, store, rank, world_size, prefix):
+        from .host_collectives import HostCollectives
+        from .store import PrefixStore
+
+        ranks = range(world_size) if self.ranks is None else self.ranks
+        self._host = HostCollectives(PrefixStore(prefix, store), ranks, rank)
+        self._backend_kind = "gloo"
+
+    def _destroy_host_communicator(self):
+        if self._host is not None:
+            self._host.closed = True
+
+    def _reset_host_communicator(self):
+        self._destroy_host_communicator()
+        self._host = None
+        self._backend_kind = None
 
     def _create_backend_communicator(self):
         compile_extern = jt.compile_extern
@@ -70,6 +88,8 @@ class ProcessGroup:
     def _all_reduce(self, tensor, reduce_name):
         if self.rank() < 0:
             return tensor
+        if self._host is not None:
+            return self._host.all_reduce(tensor, reduce_name)
         if self._backend_handle is None:
             if self.size() == 1:
                 return tensor
@@ -94,6 +114,8 @@ class ProcessGroup:
         raise RuntimeError("process group has no collective backend")
 
     def rank(self):
+        if self._host is not None:
+            return self._host.rank
         rank = get_rank()
         if self.ranks is None:
             return rank
@@ -103,6 +125,8 @@ class ProcessGroup:
             return -1
 
     def size(self):
+        if self._host is not None:
+            return len(self._host.ranks)
         return get_world_size() if self.ranks is None else len(self.ranks)
 
     def name(self):
