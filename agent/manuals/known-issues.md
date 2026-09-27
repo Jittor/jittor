@@ -2304,8 +2304,10 @@ about whether to take it.
   `cudagraph`, or `other`; options, current failures and raw-artifact names are
   in [the acceptance report](../../docs/results/2026-09-23-vllm-uva-topk.md).
 - Boundaries: TP=2 now has Store-based CPU control groups and passes real
-  alternating CPU/GPU collective checks. Qwen TP=2 completes generation but
-  diverges into repeated words from token 4; its correctness is not accepted.
+  alternating CPU/GPU collective checks. Qwen TP=2
+  previously diverged from token 4 because auto replay omitted foreign writes.
+  The retained-graph barrier now passes the 32-token greedy case; worker shutdown
+  warnings and broader multi-GPU correctness/serving remain unaccepted.
   Run-isolated NCCL subgroup files and spawn cache isolation remain harness
   workarounds tracked in the multi-GPU report.
   This is not full libgloo compatibility. FP8 import needs `torch.library.wrap_triton` and its

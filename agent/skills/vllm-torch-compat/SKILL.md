@@ -452,3 +452,27 @@ python agent/skills/vllm-torch-compat/pynccl_collectives.py \
 `$JITTOR_LAB_ROOT/_state/vllm-multigpu/20260927/pynccl-actual-r1/`，以及同级
 `cuda-foreign-stream-red.log`（名称保留，但实测为通过）、
 `cuda-stream-negative-control.log`。
+
+## TP=2 的逐步偏差定位
+
+在前述 `multigpu_engine.py` 启动环境设置 `TP2_TRACE_STEPS=6`，会通过 worker RPC
+安装 `multigpu_trace.py`，逐 rank 保存 inputs、hidden、完整 logits、采样和请求状态。
+分别用独立 shim/oracle 运行到新的 `TP2_RUN_ROOT`，再比较：
+
+```bash
+python agent/skills/vllm-torch-compat/compare_multigpu_traces.py "$JITTOR_RESULT" \
+  --oracle "$ORACLE_RESULT" --output "$COMPARISON_JSON"
+```
+
+工具检查活跃槽位和 token→下一步输入连续性；两个环境首次采样分歧后停止同前缀
+比较，不用后续不同输入的误差判断模型算子。浮点误差是测量值，不自动套容差宣布通过。
+`TP2_TRACE_LAYER_START=3 TP2_TRACE_LAYER_STEPS=1` 可仅抓第四步的模块边界，
+`TP2_TRACE_LAYER_PATTERN` 用逗号分隔 fnmatch 模块名模式。`args_after*` 是 forward
+完成后的参数，可能已经原地更新，不能误认为入口快照；同一共享模块的重复调用另存。
+只有同 rank 跨环境可直接比较 head 分片；不能要求两个 TP rank 的 Q/K/V 相等。
+
+快照会触发读回，模块 hook 也可能阻止自动图重放。因此必须比较追踪前后生成结果。
+2026-09-27 的第四步错误恰好被逐层快照掩盖；只增加同步无法修复，关闭自动图重放
+则恢复正确。保留 CPU 裸指针写入和真实 CUDA Triton 重放失败测例后，增加
+`jt.graph_replay_barrier` 拒绝含外部操作的捕获。`replay.jsonl` 记录实际捕获/拒绝原因。
+正常验收仍需关闭所有 trace 环境变量，保留默认 `auto_graph_replay=1` 后重新生成。

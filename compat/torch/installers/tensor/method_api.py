@@ -1473,6 +1473,10 @@ def _api_untyped_storage(self):
 
 
 def _api_data_ptr(self):
+    # A foreign consumer can read values into Python or write storage without
+    # creating a Jittor op. A retained graph cannot replay either side effect.
+    if _owner.jt.flags.keep_graph:
+        _owner.jt.graph_replay_barrier("Tensor.data_ptr exposes storage to an external consumer")
     return int(self._storage_address)
 
 

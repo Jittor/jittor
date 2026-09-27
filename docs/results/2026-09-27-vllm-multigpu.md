@@ -1,9 +1,10 @@
 # vLLM 双卡验证与 CPU 控制通信
 
-- 状态：进行中；双卡可完成生成，但 Qwen TP=2 数值正确性尚未通过。
+- 状态：有限通过；修复外部操作被自动图重放遗漏后，Qwen TP=2 的 32-token 贪心样例与 oracle 一致；退出生命周期仍有异常。
 - 日期：2026-09-27。
 - 基线：`539ce90ee68d6772ffa2b780203f889e67f4d9ec` 加本报告同提交的修改；开工时
   `origin/chk=61294cd14673ba60f4072542a2e73ea2c8f8c509` 已是祖先。
+- 本轮定位基线：`c5d928116aa3842be5c88778b757787acdc736d6` 加本报告同提交的修复；远端已 fetch 并确认合入。
 - Owner：vLLM adapter / Torch compatibility maintainers。
 - 复查条件：通信组、设备放置、worker 启动、vLLM 或 NCCL 版本变化。
 
@@ -71,8 +72,52 @@ nonblocking stream 负对照能提前完成，因此测例有效，但没有复�
 `JITTOR_TRITON_FAST_SYNC=0`、`JITTOR_TRITON_SYNC_AFTER_LAUNCH=1`，仍从第 4 个
 token 起发生同样的重复词；这项强同步没有解决错误，也不能单凭它排除所有异步问题。
 该诊断正常生成 32 token，但收尾记录 worker 异常退出与共享内存清理警告，
-不将退出码 0 等同于完整生命周期验收。下一步固定两 rank 的相同输入前缀，
-比较逐步 input IDs、position、logits 和采样后请求状态，定位首次偏差。
+不将退出码 0 等同于完整生命周期验收。后续同前缀逐步对照与修复见下一节。
+
+## 第四步偏差：自动重放漏掉外部操作
+
+两套环境各抓取前六步，两 rank 的有效输入、位置、完整 logits、采样与请求状态
+在各自环境内完全一致。每份 trace 的 61 项状态连续性检查通过。跨环境到第四步
+仍是同一输入前缀；前三步 logits 最大差异约 0.025–0.035，第四步骤增为
+14.5078125，hidden 最大差异 43.328125。首个 token 分歧是 576 对 6722。
+第五步起前缀已不同，不再作同输入模型数值对照。
+
+完整逐层读取会让错误消失；只读取 o_proj/down_proj 则仍失败。关闭
+`auto_graph_replay` 也恢复完整 32 token。这些都是诊断干预，不能作为默认配置
+通过证据。问题与第三次相同形状 decode 开始重放的时点一致。
+
+保留的最小 RED 证据：
+
+- CPU Torch Module 用 `Tensor.data_ptr()` 和 ctypes 写入输出，输入
+  10、20、30、40、50 对应错误输出 11、21、21、21、21；关闭自动重放正确。
+- 真实 CUDA Triton Module 的显式/自动重放均失败：新输入本应产生 41/61，
+  实际复用了 21/41。失败日志为 `triton-replay-red2.log`；前一次脚本 API
+  拼写错误单独保留，不作为缺陷证据。
+
+根因是保留图只能重新执行 Jittor 算子，无法重复经裸指针执行的外部 NCCL/Triton
+操作。旧检查仅覆盖随机算子、输出读回等情况，没有识别外部写入；额外同步不能
+补上图中缺失的操作。新增公开 `jt.graph_replay_barrier(reason)`，捕获遇到不在图中
+的操作后拒绝重放并清理保留图，回到正常执行。Torch `Tensor.data_ptr()` 和
+Triton bridge 自动声明这一边界；原生裸指针扩展需主动声明。普通纯 Jittor 图仍可重放。
+这不等于支持 vLLM CUDA Graph，也没有全局关闭自动重放或更改默认设备。
+
+实际捕获日志在第三步记录拒绝 `lm_head` 的外部指针访问。该 Qwen 配置开启
+`tie_word_embeddings`，`lm_head` 与 `model.embed_tokens` 是同一模块；输入嵌入的
+TP 路径需要跨卡求和。因而此次失败集中在嵌入层的外部通信未被保留图表示，
+不是两 rank 采用了不同输入，也不是采样器故意选错 token。
+
+修复后 CPU 外部写入/纯图对照 4 passed；原生重放、嵌套标记、异常清理和线程隔离
+15 passed、11 CUDA skipped；另行实际 CUDA 重放套件 22 passed，真实 Triton 两项从 RED 变为 GREEN。
+默认配置、没有逐层读取、没有关闭自动重放的 Qwen TP=2 正常生成 32 token，
+与原生 oracle 完全一致，两个 rank 的模型/KV/forward 设备证据通过。
+独立的修复后逐步追踪也输出相同 32 token；前六步采样均一致，第四步 logits 最大
+差异从 14.5078125 降到 0.02197265625，其余步最大差异约 0.025–0.043。
+这证明原来的大幅偏差已消失，不宣称所有浮点数逐位一致。
+修复后的单卡 Qwen 与 OPT 各 32 token 也与对应原生对照完全一致。
+但进程收尾仍出现 worker 异常退出和共享内存清理警告；不能声称完整服务生命周期通过。
+
+未版本化新增证据位于同一结果根目录的 `trace-diagnosis/`、`replay-repro/`、
+`replay-fixed-normal/` 等目录；完整日志与前后源码清单一起保存。
 
 ## 运行隔离与尚未承诺的范围
 

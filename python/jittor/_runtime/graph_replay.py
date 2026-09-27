@@ -28,12 +28,14 @@ rather than used:
     so a long-lived capture does get retaken from time to time. `stats` says
     how often.
 
-Two things make a graph unreplayable rather than merely stale, and capture
-refuses both rather than answering wrongly: a graph that draws random numbers
+Some calls are unreplayable rather than merely stale, and capture refuses
+them rather than answering wrongly: a graph that draws random numbers
 (a replay would repeat the same draw), and a traced call that reads a value
 back to the host, because then the python path taken depends on tensor values
 and the next call's path may differ. A readback is detected by its effect --
-it finishes the graph being captured.
+it finishes the graph being captured. An external operation declared with
+``graph_replay_barrier`` is also refused: its Python or foreign work is absent
+from the retained operator graph and would be skipped by replay.
 
 This is inference, and only inference. The call runs under `no_grad` and the
 result carries no gradient -- wrapping a module you are training does not
@@ -92,8 +94,9 @@ many fell back and why -- because a silent fallback that quietly costs the
 speedup is worse than none.
 """
 
-from contextlib import nullcontext as _nullcontext
+from contextlib import contextmanager, nullcontext as _nullcontext
 import time
+import threading
 import weakref
 
 import jittor as jt
@@ -106,6 +109,39 @@ from .. import flags
 #: replays the values it recorded, so a graph containing one of these is not
 #: re-runnable at all and capture refuses rather than repeating a draw.
 _NONDETERMINISTIC_OPS = ("random", "curand_random")
+
+
+_capture_state = threading.local()
+
+
+def graph_replay_barrier(reason):
+    """Refuse active graph captures that contain an opaque operation.
+
+    Call this before a foreign kernel launch, raw-pointer consumer, or Python
+    side effect whose work is not represented by Jittor operators. Replaying
+    a retained graph cannot repeat that work. Both explicit and automatic
+    captures then fall back to ordinary execution and retain ``reason`` in
+    ``GraphReplay.refused``. Outside capture this is a no-op; it does not
+    synchronize devices or disable replay for other modules.
+
+    A nested capture also makes its enclosing captures unsafe, so every
+    active capture in this thread is marked. Native raw-pointer users must
+    call this explicitly; Torch ``Tensor.data_ptr()`` does it automatically.
+    """
+    for reasons in getattr(_capture_state, "stack", ()):
+        if not reasons:
+            reasons.append(str(reason))
+
+
+@contextmanager
+def _capture_barriers():
+    previous = getattr(_capture_state, "stack", ())
+    reasons = []
+    _capture_state.stack = previous + (reasons,)
+    try:
+        yield reasons
+    finally:
+        _capture_state.stack = previous
 
 
 class _no_auto:
@@ -294,8 +330,9 @@ class GraphReplay:
 
         before = jt.flags.keep_graph
         jt.flags.keep_graph = 1
+        opaque_output = None
         try:
-            with _no_auto(), jt.no_grad():
+            with _capture_barriers() as barriers, _no_auto(), jt.no_grad():
                 output = self._module(*private)
                 if not isinstance(output, jt.Var):
                     self._refused = ("the module returned "
@@ -308,6 +345,10 @@ class GraphReplay:
                 # replay. Measured through nsys, a capture taken with unrelated
                 # work pending executed 219 kernels a call instead of 132.
                 output.sync(False, False)
+            if barriers:
+                self._refused = "the traced call contains an opaque operation: " + barriers[0]
+                opaque_output = output
+                return None
             if _graph_has_nondeterministic_op():
                 self._refused = "the graph draws random numbers, so a replay would repeat them"
                 return None
@@ -321,6 +362,16 @@ class GraphReplay:
                 return None
         finally:
             jt.flags.keep_graph = before
+            if opaque_output is not None:
+                # A refused capture must not leave an unfinished retained graph
+                # in the executor: later syncs would keep rerunning its native
+                # portion without the foreign operation that produced its data.
+                jt.flags.keep_graph = 0
+                try:
+                    opaque_output._release_kept()
+                    opaque_output.sync(False, False)
+                finally:
+                    jt.flags.keep_graph = before
 
         cap = _Capture()
         cap.inputs = [v for v in private if isinstance(v, jt.Var)]
@@ -672,7 +723,7 @@ def graph_replay(module, *example_inputs, measure=False):
 #     captured.
 #
 # Everything the capture cannot serve (a graph that draws random numbers, a
-# traced call that read a value back, a module that returns something other
+# traced call that read a value back or exported a foreign pointer, a module that returns something other
 # than one Var) falls back and is not tried again for that module. So does a
 # module whose shapes keep changing, after enough re-captures to show it.
 

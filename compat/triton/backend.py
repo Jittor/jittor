@@ -1147,6 +1147,10 @@ def _run(jitfn, args, kwargs, grid):
     import inspect
     import jittor as jt
 
+    # This driver launch writes pointers outside the native Jittor graph.
+    # Replaying only that graph would omit the launch and reuse stale output.
+    jt.graph_replay_barrier("Triton launch is not recorded in the native graph")
+
     fn = getattr(jitfn, "fn", jitfn)
     kname = getattr(jitfn, "__name__", getattr(fn, "__name__", "triton_kernel"))
 

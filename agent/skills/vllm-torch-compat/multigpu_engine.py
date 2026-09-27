@@ -17,6 +17,15 @@ def placement(worker_wrapper, install=False):
         assert all(path.startswith(expected) for path in binary_paths.values()), binary_paths
     worker = worker_wrapper.worker
     runner = worker.model_runner
+    replays = []
+    if binary_paths and not install:
+        for name, module in runner.model.named_modules():
+            state = module.__dict__.get('_auto_graph_replay')
+            if state is not None:
+                replay = state.replay
+                replays.append(dict(name=name, seen=state.seen, give_up=state.give_up,
+                    stats=None if replay is None else replay.stats,
+                    refused=None if replay is None else replay.refused))
     params = list(runner.model.named_parameters())
     caches = list(runner.kv_caches)
     assert params and caches, 'Missing model/KV tensors'
@@ -44,7 +53,7 @@ def placement(worker_wrapper, install=False):
         runner._tp2_placement_hook = runner.model.register_forward_hook(check)
     else:
         assert runner._tp2_placement_calls > 0, 'No actual model forward observed'
-    return dict(binary_paths=binary_paths, rank=worker.rank, local_rank=worker.local_rank, parameters=len(params), kv_caches=len(caches),
+    return dict(binary_paths=binary_paths, auto_replays=replays, rank=worker.rank, local_rank=worker.local_rank, parameters=len(params), kv_caches=len(caches),
                 reported_devices=sorted({str(t.device) for t in tensors}), driver_devices=sorted(ordinals),
                 forward_calls=runner._tp2_placement_calls, forward_output_devices=sorted(runner._tp2_placement_outputs),
                 jittor_home=os.environ.get('JITTOR_HOME'))
@@ -82,6 +91,9 @@ def main():
         assert len(rows) == 2 and {row['rank'] for row in rows} == {0, 1}
         assert {tuple(row['driver_devices']) for row in rows} == {(0,), (1,)}
         (root / (backend + '-placement-before.json')).write_text(json.dumps(rows, indent=2))
+        if int(os.environ.get('TP2_TRACE_STEPS', '0')):
+            from multigpu_trace import install_trace
+            executor.collective_rpc(install_trace, timeout=120)
     def observed_generate(self, *args, **kwargs):
         out = original_generate(self, *args, **kwargs)
         rows = self.llm_engine.engine_core.engine_core.model_executor.collective_rpc(placement, args=(False,), timeout=120)

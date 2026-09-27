@@ -105,6 +105,26 @@ RTX 4090，外部进程轮询 `cudaMemGetInfo` 读整卡占用，两侧同一把
 上面是 batch 32 的单点。差距的绝对值会随 batch 和分辨率放大，比例未必；而且没有
 测到具体是哪些张量跨段存活，要定到那一层得开 `use_stat_allocator` 看生命周期。
 
+## 保留计算图与外部操作
+
+推理时的 `auto_graph_replay` 和显式 `jt.graph_replay(module)` 会保留 Jittor
+算子图，在后续调用中更新输入并重跑这些算子。通过裸指针调用的 NCCL、Triton 或其他
+外部函数，没有对应的 Jittor 图节点；只重跑已记录的图会漏掉这些操作，可能反复读到
+上一轮结果。额外等待 GPU 完成不能补上缺失的操作。
+
+接入外部操作时，在实际调用前声明这一边界：
+
+```python
+jt.graph_replay_barrier("external library launch")
+external_library_call(...)
+```
+
+这个接口会让当前线程中包含该操作的捕获回退到正常执行，并把原因保留在显式
+wrapper 的 `refused` 属性中。没有正在捕获时，它不做任何事；它不会同步设备，也
+不会关闭其他模块的图重放。嵌套捕获会同时标记外层，异常退出会清除捕获上下文。
+Torch shim 的 `Tensor.data_ptr()` 会自动标记，因为返回指针之后无法判断外部代码
+如何使用它。直接使用 Jittor 原生裸指针的扩展需要自行调用该接口。
+
 ## 怎么测
 
 门禁是 `tests/compat/torch/test_ecosystem_speed.py`。要归因一个差距，用 nsys 抓

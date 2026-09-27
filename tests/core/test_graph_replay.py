@@ -44,6 +44,61 @@ class _Random(nn.Module):
 @_test_preserve_policy(jt, 'keep_graph', 'auto_graph_replay')
 class TestGraphReplay(unittest.TestCase):
 
+    def test_explicit_barrier_refuses_nested_captures(self):
+        class Foreign(nn.Module):
+            def execute(self, value):
+                jt.graph_replay_barrier("external callback")
+                return value + 1
+
+        inner = jt.graph_replay(Foreign())
+
+        class Outer(nn.Module):
+            def execute(self, value):
+                return inner(value) * 2
+
+        outer = jt.graph_replay(Outer())
+        for start in (1., 2., 3.):
+            value = jt.array([start])
+            np.testing.assert_array_equal(outer(value).numpy(), [(start + 1) * 2])
+        self.assertIn("external callback", inner.refused)
+        self.assertIn("external callback", outer.refused)
+        self.assertEqual(outer.stats["replayed"], 0)
+
+    def test_capture_barrier_state_is_cleared_after_an_exception(self):
+        class Broken(nn.Module):
+            def execute(self, value):
+                if jt.flags.keep_graph:
+                    jt.graph_replay_barrier("failed external callback")
+                    raise RuntimeError("capture callback failed")
+                return value + 1
+
+        with self.assertRaisesRegex(RuntimeError, "capture callback failed"):
+            jt.graph_replay(Broken())(jt.array([1.]))
+        jt.graph_replay_barrier("outside capture")
+        pure = jt.graph_replay(self.model)
+        pure(self.feed[0])
+        pure(self.feed[1])
+        self.assertIsNone(pure.refused)
+        self.assertGreaterEqual(pure.stats["replayed"], 2)
+
+    def test_another_thread_cannot_mark_this_capture(self):
+        import threading
+
+        class Pure(nn.Module):
+            def execute(self, value):
+                worker = threading.Thread(
+                    target=jt.graph_replay_barrier,
+                    args=("unrelated thread's foreign operation",))
+                worker.start()
+                worker.join()
+                return value * 2
+
+        run = jt.graph_replay(Pure())
+        for start in (1., 2., 3.):
+            np.testing.assert_array_equal(run(jt.array([start])).numpy(), [start * 2])
+        self.assertIsNone(run.refused)
+        self.assertGreaterEqual(run.stats["replayed"], 2)
+
     def setUp(self):
         jt.flags.keep_graph = 0
         self.model = _Net()
