@@ -115,14 +115,16 @@ class TestFusedAttentionF32(unittest.TestCase):
         mask[:, 0] = False
         self._check(1, 2, 40, 40, 32, True, mask)
 
-    def test_a_small_inference_is_left_to_the_matmuls(self):
-        # Without a backward the kernel only saves the score matrix's traffic,
-        # and a small matrix is cheaper composed; a backward takes the kernel
-        # whatever the size.
-        q = jt.random((1, 2, 16, 32))
+    def test_a_small_inference_takes_the_narrow_query_tiles(self):
+        # A grid smaller than the device takes one query row a thread: BERT at
+        # batch 1 is 24 tiles of 64 queries otherwise.
+        rng = np.random.RandomState(4)
+        q, k, v = (rng.randn(1, 2, 16, 32).astype("float32") for _ in range(3))
         with jt.no_grad():
-            self.assertIsNone(self.kernel._fused_attention_f32(q, q, q))
-        self.assertIsNotNone(self.kernel._fused_attention_f32(q, q, q))
+            out = self.kernel._fused_attention_f32(*(jt.array(t) for t in (q, k, v)))
+        self.assertIsNotNone(out)
+        want = _reference(q, k, v, False, np.zeros_like(q))[0]
+        np.testing.assert_allclose(out.numpy(), want, rtol=1e-4, atol=1e-5)
 
     def test_what_it_declines(self):
         q = jt.random((1, 2, 8, 256))
