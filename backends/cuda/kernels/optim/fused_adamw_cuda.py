@@ -13,7 +13,7 @@ The arithmetic is the one ``optimizer_api._adam_step`` uses per parameter.
 """
 
 import jittor as jt
-from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._core.dtypes import var_dtype_name
 from jittor._runtime.dispatch import register_kernel
 
 _DTYPES = ("float32", "float16", "bfloat16")
@@ -24,11 +24,11 @@ def _supports(entries, *args, **kwargs):
     if not entries:
         return False
     for parameter, moment, variance, gradient, _ in entries:
-        dtype = _jittor_dtype_name(parameter.dtype)
+        dtype = var_dtype_name(parameter)
         if dtype not in _DTYPES:
             return False
         for tensor in (parameter, moment, variance, gradient):
-            if _jittor_dtype_name(tensor.dtype) != dtype or not tensor._storage_is_contiguous():
+            if var_dtype_name(tensor) != dtype or not tensor._storage_is_contiguous():
                 return False
     return True
 
@@ -49,7 +49,7 @@ def _cuda_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
     results = [None] * len(entries)
     groups = {}
     for index, entry in enumerate(entries):
-        key = (0 if hyper is not None else int(entry[4]), _jittor_dtype_name(entry[0].dtype))
+        key = (0 if hyper is not None else int(entry[4]), var_dtype_name(entry[0]))
         groups.setdefault(key, []).append(index)
     for (steps, _), indices in groups.items():
         if hyper is not None:

@@ -3108,6 +3108,24 @@ about whether to take it.
 - Workaround: none needed for results; the value assertions in the same tests
   pass.
 
+## KI-TEST-009: two `test_torch_compat_optim.py` cases fail on device placement
+
+- Severity: Medium (a device-placement disagreement in the compat optimizer
+  path; the two cases fail, the other 21 in the file pass)
+- Status: Open. Found 2026-09-28; fails the same way on `542d6e97` and on
+  `14ac0397`, with one GPU visible or all, so it predates the optimizer host
+  work it was found during.
+- Owner: torch compatibility / optimizer
+- Symptom: `TestSGD::test_native_backward_does_not_double_advance_step` dies in
+  `method_api.py` `_binary_native` with `device_copy_op.cc:130: Expected all
+  tensor inputs on the same backend and device`;
+  `TestAdam::test_bound_initializers_inside_no_grad_keep_parameter_trainable`
+  fails `assert_stays_on_device` with `'cpu' != 'device'`.
+- Suspected: a tensor created on the host (an initializer or a split
+  optimizer's state) meeting a device-placed parameter; not isolated.
+- Workaround: none in the tests; real training steps run on one placement and
+  do not reach it.
+
 ## KI-EXEC-008: the CUDA convolution test files intermittently abort on a forward liveness underflow
 
 - Severity: Medium (a whole pytest process aborts, taking its summary with it)

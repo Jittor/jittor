@@ -1,5 +1,5 @@
 """Stable optimizer state and update adapters, sharing native mathematics."""
-from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name, var_dtype_name
 from collections.abc import Mapping
 import weakref as _weakref
 import jittor as jt
@@ -605,8 +605,8 @@ def _step_with_closure(self, loss, retain_graph, closure, kwargs, native_kind):
 
 
 def _update_in_target_dtype(target, value):
-    if _dtype_to_str(value.dtype) != _dtype_to_str(target.dtype):
-        value = value.cast(_dtype_to_str(target.dtype))
+    if var_dtype_name(value) != var_dtype_name(target):  # native, not `.dtype`
+        value = value.cast(var_dtype_name(target))
     target.update(value)
 
 
@@ -710,10 +710,10 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
             updates = fused_impl(
                 active, lr_arg, b0, b1, weight_decay, eps)
             for (p, m, v, _, _), (new_p, new_m, new_v) in zip(
-                    active, updates):
-                _update_in_target_dtype(p, new_p)
-                _update_in_target_dtype(m, new_m)
-                _update_in_target_dtype(v, new_v)
+                    active, updates):  # fused_adamw keeps each input's dtype
+                p.update(new_p)
+                m.update(new_m)
+                v.update(new_v)
                 if p.is_stop_grad():
                     p.start_grad()
             continue

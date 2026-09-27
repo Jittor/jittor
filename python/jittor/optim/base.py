@@ -66,6 +66,13 @@ def _realign_state_buffers(param_groups):
             for param, buffer in zip(params, buffers):
                 if not isinstance(buffer, jt.Var) or not isinstance(param, jt.Var):
                     continue
+                # The same raw placement is the same device, whatever the
+                # ambient flag says -- and it is what every step of an
+                # unmoved model sees, so the resolution below (a dispatch
+                # lookup for an unplaced Var) is kept for the pairs that differ.
+                if (buffer.placement_backend == param.placement_backend
+                        and buffer.device_id == param.device_id):
+                    continue
                 target = _effective_device(param)
                 if _effective_device(buffer) == target:
                     continue
