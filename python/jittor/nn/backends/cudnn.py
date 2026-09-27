@@ -26,46 +26,70 @@ from jittor.backends.cuda.kernels.nn.channel_bias_cuda import _channel_bias_add_
 # stayed, and being a copy it kept winning, so the fix had no effect on
 # anything that went through ``conv2d``. One definition now.
 
-#: Where `_inference_filter` keeps a weight's OHWI copy: (weight version, copy).
-_FILTER_CACHE = "_jittor_conv_filter"
+#: Where `_inference_filter` keeps, for the weight version it moved, the dense
+#: OHWI tensor the weight is now a view of: (weight version, OHWI tensor). The
+#: same storage, not a copy.
+_FILTER_OHWI = "_jittor_conv_filter"
 
-#: Whether a half-precision convolution without a backward keeps an OHWI copy
-#: of its filter (see `_inference_filter`). The copy costs one more copy of the
-#: convolution weights -- 1.1 GB for the SD1.5 UNet -- for 13% of a sampling
-#: step; set this False where memory is the tighter bound.
-cache_half_filters = True
+#: Whether a half-precision convolution without a backward moves its weight
+#: into OHWI storage (see `_inference_filter`). The values do not change and
+#: nothing is duplicated; only the weight's strides do.
+channels_last_filters = True
+
+
+def _is_ohwi_storage(weight):
+    """Whether an OIHW-shaped weight is a view of dense OHWI storage."""
+    if weight._storage_is_contiguous() or weight._storage_offset():
+        return False
+    o, i, kh, kw = (int(size) for size in weight.shape)
+    return tuple(weight._storage_strides()) == (kh * kw * i, 1, kw * i, i)
 
 
 def _inference_filter(x, weight, groups):
     """The filter and its layout for a convolution with no backward.
 
     For half precision cuDNN runs NHWC kernels, and handed an OIHW filter it
-    converts it on every call -- 51 of the 54 ms its layout conversions took in
-    a 20-step SD1.5 sample, for weights that never change there. The OHWI copy
-    is made once per weight version (the Var a parameter holds; loading or
-    replacing it moves the holder to another) and kept on the weight itself,
-    so it lives exactly as long as the parameter. A 1x1 filter is the same
-    bytes in either layout and needs no copy. With a backward -- training, or
-    an input that needs a gradient -- the weight changes every step, a copy
-    would cost what the conversion does, and the filter stays as it is.
+    converts it on every call -- 51 of the 54 ms of layout conversions in a
+    20-step SD1.5 sample, for weights that never change there. So the weight
+    itself moves into OHWI storage: its values, shape and every reader's
+    answer stay what they were (it is read through OIHW strides), and cuDNN
+    is handed the same bytes as OHWI. A copy kept beside the weight did the
+    same at the price of the convolution weights twice over, 1.1 GB for the
+    UNet.
+
+    Only a materialized weight moves -- a parameter, not a filter computed in
+    the call -- and never while a step is being traced, where rebinding a
+    parameter reads as a state change. A 1x1 filter is the same bytes in
+    either layout and is only relabelled. With a backward nothing moves; a
+    weight moved earlier still reads right, through its strides.
     """
     if (groups != 1 or _jittor_dtype_name(weight.dtype) not in ("float16", "bfloat16")
             or _output_requires_grad(x, weight)):
         return weight, "oihw"
     out_channels, in_channels, kh, kw = (int(size) for size in weight.shape)
-    if kh == 1 and kw == 1:
+    if kh == 1 and kw == 1 and weight._storage_is_contiguous():
         return weight.reshape((out_channels, 1, 1, in_channels)), "ohwi"
-    if not cache_half_filters:
-        return weight, "oihw"
     state = getattr(weight, "__dict__", None)
     if state is None:
         return weight, "oihw"
-    version = weight.var_ptr
-    cached = state.get(_FILTER_CACHE)
-    if cached is None or cached[0] != version:
-        cached = (version, weight.transpose(0, 2, 3, 1).clone().stop_grad())
-        state[_FILTER_CACHE] = cached
-    return cached[1], "ohwi"
+    moved = state.get(_FILTER_OHWI)
+    if moved is not None and moved[0] == weight.var_ptr:
+        return moved[1], "ohwi"
+    from jittor._runtime import step_capture
+    if (not channels_last_filters or not weight.is_finished
+            or step_capture.tracing() or jt.flags.keep_graph):
+        return weight, "oihw"
+    dense = weight.transpose(0, 2, 3, 1).clone()
+    with jt.flag_scope(transpose_storage_view=1):
+        view = dense.transpose(0, 3, 1, 2)
+    # Made under `no_grad`, the view is born stopped; a parameter that takes a
+    # gradient has to go on taking one.
+    view = view.stop_grad() if weight.is_stop_grad() else view.start_grad()
+    # Settled now, so the weight answers for its strides; a view moves no data.
+    jt.sync([view, dense], False, False)
+    weight.update(view)
+    state[_FILTER_OHWI] = (weight.var_ptr, dense.stop_grad())
+    return dense, "ohwi"
 
 
 def _supports_conv2d(x, weight, bias, stride, padding, dilation, groups,

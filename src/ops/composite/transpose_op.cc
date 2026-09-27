@@ -62,7 +62,9 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
         for (int i=0; i<(int)xdim; i++)
             axes.push_back(xdim-1-i);
     }
-    if (axes.size() < xdim || (axes.size() == xdim && axes[xdim-1]==xdim-1)) {
+    // A view is asked for: nothing below may turn it into a copy.
+    const bool as_view = transpose_storage_view != 0;
+    if (!as_view && (axes.size() < xdim || (axes.size() == xdim && axes[xdim-1]==xdim-1))) {
         static VarPtr(*fuse_transpose)(Var*, NanoVector) = get_op_info("fuse_transpose").get_constructor<VarPtr, Var*, NanoVector>();
         auto var = fuse_transpose(x, axes);
         forward(var);
@@ -70,7 +72,7 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     }
     #ifdef HAS_ACCELERATOR
     const auto backend = construction_target_backend(x);
-    if (backend != BackendId::Cpu) {
+    if (backend != BackendId::Cpu && !as_view) {
         auto accelerated_transpose = find_op_capability<VarPtr, Var*, NanoVector>(
             backend, OpCapability::Transpose, x, axes);
         if (accelerated_transpose) {

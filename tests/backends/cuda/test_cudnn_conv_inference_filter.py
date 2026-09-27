@@ -3,20 +3,19 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-"""A half-precision convolution without a backward hands cuDNN an OHWI filter.
+"""A half-precision convolution without a backward stores its weight as OHWI.
 
 cuDNN runs NHWC kernels for half precision and converted an OIHW filter on
 every call: 51 of the 54 ms of layout conversions in a 20-step SD1.5 sample.
-The OHWI copy is made once per weight version and kept on the weight. These
-pin that the answer does not change, that the copy is made once and redone
-when the weight is replaced, that training keeps the filter as it is, and that
-the copy stays out of what a pickle or a deepcopy of the weight carries.
+The weight is moved into OHWI storage once -- same values, same shape, read
+through OIHW strides -- and cuDNN gets its bytes as OHWI. These pin that no
+answer changes, that the weight is moved once and holds one
+copy, that a replaced weight is moved again, that a backward neither moves it
+nor minds that it was moved, and that the move can be turned off.
 """
 
 from _helpers import capability as _test_capability
 
-import copy
-import pickle
 import unittest
 
 import numpy as np
@@ -57,50 +56,65 @@ class TestCudnnConvInferenceFilter(unittest.TestCase):
         return conv, jt.array(x).cast(dtype), _reference(
             *(jt.array(t).cast(dtype).float32().numpy() for t in (x, w, b)), kernel // 2)
 
-    def test_the_answer_is_unchanged(self):
+    def _run(self, conv, x):
+        with jt.no_grad():
+            return conv(x).float32().numpy()
+
+    def test_every_call_answers_the_same(self):
         for kernel in (3, 1):
             conv, x, want = self._conv(kernel)
-            with jt.no_grad():
-                got = conv(x).float32().numpy()
-            np.testing.assert_allclose(got, want, rtol=1e-2, atol=1e-2 * np.abs(want).max(),
-                                       err_msg="kernel %d" % kernel)
+            for call in range(3):
+                np.testing.assert_allclose(self._run(conv, x), want, rtol=1e-2,
+                                           atol=1e-2 * np.abs(want).max(),
+                                           err_msg="kernel %d call %d" % (kernel, call))
 
-    def test_the_copy_is_made_once_and_redone_for_a_new_weight(self):
+    def test_the_weight_moves_and_keeps_one_copy(self):
         conv, x, _ = self._conv(3)
-        with jt.no_grad():
-            conv(x).sync()
-            first = conv.weight.__dict__[_cudnn._FILTER_CACHE][1]
-            conv(x).sync()
-            self.assertIs(conv.weight.__dict__[_cudnn._FILTER_CACHE][1], first)
-            conv.weight.assign(conv.weight * 2)
-            got = conv(x).float32().numpy()
-            self.assertIsNot(conv.weight.__dict__[_cudnn._FILTER_CACHE][1], first)
-        conv.weight.__dict__.pop(_cudnn._FILTER_CACHE)
-        with jt.no_grad():
-            np.testing.assert_allclose(conv(x).float32().numpy(), got, rtol=1e-3, atol=1e-3)
+        before = conv.weight.numpy()
+        self._run(conv, x)
+        self.assertTrue(_cudnn._is_ohwi_storage(conv.weight))
+        np.testing.assert_array_equal(conv.weight.numpy(), before)
+        self.assertEqual(conv.weight.__dict__[_cudnn._FILTER_OHWI][1]._storage_address,
+                         conv.weight._storage_address)
 
-    def test_a_backward_keeps_the_filter_as_it_is(self):
+    def test_a_replaced_weight_is_moved_again(self):
         conv, x, _ = self._conv(3)
-        y = conv(x)
-        jt.grad(y.float32().sum(), [conv.weight])
-        self.assertNotIn(_cudnn._FILTER_CACHE, conv.weight.__dict__)
+        self._run(conv, x)
+        conv.weight.assign(jt.array(conv.weight.numpy() * 2))
+        conv.weight.sync()
+        self.assertFalse(_cudnn._is_ohwi_storage(conv.weight))
+        doubled = [self._run(conv, x) for _ in range(2)]
+        self.assertTrue(_cudnn._is_ohwi_storage(conv.weight))
+        np.testing.assert_allclose(doubled[1], doubled[0], rtol=1e-3, atol=1e-3)
 
-    def test_the_cache_can_be_turned_off(self):
+    def test_a_backward_does_not_move_the_weight_nor_mind_a_moved_one(self):
+        conv, x, _ = self._conv(3)
+        jt.grad(conv(x).float32().sum(), [conv.weight])
+        self.assertTrue(conv.weight._storage_is_contiguous())
+        dense = jt.grad(conv(x).float32().sum(), conv.weight).numpy()
+        self._run(conv, x)
+        self._run(conv, x)
+        self.assertTrue(_cudnn._is_ohwi_storage(conv.weight))
+        moved = jt.grad(conv(x).float32().sum(), conv.weight).numpy()
+        np.testing.assert_allclose(moved.astype("float32"), dense.astype("float32"),
+                                   rtol=1e-2, atol=1e-2)
+
+    def test_the_move_can_be_turned_off(self):
         conv, x, want = self._conv(3)
-        _cudnn.cache_half_filters = False
+        _cudnn.channels_last_filters = False
         try:
-            with jt.no_grad():
-                got = conv(x).float32().numpy()
+            for _ in range(2):
+                got = self._run(conv, x)
         finally:
-            _cudnn.cache_half_filters = True
-        self.assertNotIn(_cudnn._FILTER_CACHE, conv.weight.__dict__)
+            _cudnn.channels_last_filters = True
+        self.assertTrue(conv.weight._storage_is_contiguous())
         np.testing.assert_allclose(got, want, rtol=1e-2, atol=1e-2 * np.abs(want).max())
 
     def test_float32_is_left_alone(self):
         conv, x, _ = self._conv(3, "float32")
-        with jt.no_grad():
-            conv(x).sync()
-        self.assertNotIn(_cudnn._FILTER_CACHE, conv.weight.__dict__)
+        for _ in range(2):
+            self._run(conv, x)
+        self.assertTrue(conv.weight._storage_is_contiguous())
 
 
 if __name__ == "__main__":

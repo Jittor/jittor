@@ -329,9 +329,10 @@ BN / GroupNorm 与后续逐元素运算的融合试了三种写法，都没有�
 卷积滤波器（2026-09-27）：cuDNN 对半精度选 NHWC kernel，给它 OIHW 滤波器时每次调用都转换一遍，
 SD1.5 采样 20 步的 54 ms 转换里 51 ms 是权重。无反向时（输入和权重都不需要梯度）改为给 OHWI
 滤波器：副本按权重版本（参数持有的 Var）做一次，挂在权重上，随参数释放；1×1 滤波器两种布局
-字节相同，不复制；训练照旧。`sd15_sample` 编译 426.1 → 368.7 ms（PyTorch 375.0），常驻显存
-3.09 → 4.20 GB（多一份卷积权重，PyTorch 2.44）；`jittor.nn.backends.cudnn.cache_half_filters =
-False` 可关。兼容层的 pickle / deepcopy 不带这份副本。ResNet-50 推理、VAE 解码不受影响（它们选中
+字节相同，不复制；训练照旧。`sd15_sample` 编译 426.1 → 368.7 ms（PyTorch 375.0）。随后改为不留
+副本：权重本身搬进 OHWI 存储，以 OIHW 步长读出（`transpose_storage_view` 视图，数值与形状不变），
+cuDNN 拿同一份字节当 OHWI 用；SD 一步进程显存 3622 → 2666 MB，速度不变。
+`jittor.nn.backends.cudnn.channels_last_filters = False` 可关。ResNet-50 推理、VAE 解码不受影响（它们选中
 的 kernel 本来不转换权重）。
 
 仍然开着的差距与原因：

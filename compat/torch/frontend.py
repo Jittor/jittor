@@ -314,10 +314,9 @@ def make_parameter_type(backend, tensor_type):
     })
 
 
-#: Attributes a runtime caches on a tensor -- a convolution's filter in the
-#: layout cuDNN runs, see `jittor/nn/backends/cudnn.py` -- which a pickle or a
-#: copy of the tensor must not carry: they are derived, device-sized, and
-#: rebuilt on first use.
+#: Attributes a runtime notes on a tensor -- the weight version a convolution
+#: has seen, see `jittor/nn/backends/cudnn.py` -- which a pickle or a copy of
+#: the tensor must not carry.
 _RUNTIME_CACHES = ("_jittor_conv_filter",)
 
 
