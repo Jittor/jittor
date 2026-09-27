@@ -126,11 +126,72 @@ class TestFusedAttentionF32(unittest.TestCase):
         want = _reference(q, k, v, False, np.zeros_like(q))[0]
         np.testing.assert_allclose(out.numpy(), want, rtol=1e-4, atol=1e-5)
 
+    def test_seq_major_inputs_are_read_in_place(self):
+        # q/k/v as `x.view(b, s, h, d).transpose(1, 2)`: the kernels read the
+        # [b, s, h, d] tensors, write the output and every gradient back in
+        # them, and nothing is transposed.
+        b, h, s, d = 2, 3, 40, 32
+        rng = np.random.RandomState(9)
+        q, k, v, dout = (rng.randn(b, h, s, d).astype("float32") for _ in range(4))
+        want = _reference(q, k, v, True, dout)
+        sources = [jt.array(np.ascontiguousarray(t.transpose(0, 2, 1, 3))) for t in (q, k, v)]
+        out = scaled_dot_product_attention(*(t.transpose(1, 2) for t in sources), is_causal=True)
+        grads = jt.grad((out * jt.array(dout)).sum(), sources)
+        np.testing.assert_allclose(out.numpy(), want[0], rtol=1e-4, atol=1e-5)
+        for name, got, expected in zip("qkv", grads, want[1:]):
+            np.testing.assert_allclose(got.numpy(), expected.transpose(0, 2, 1, 3), rtol=1e-4,
+                                       atol=1e-5 * np.abs(expected).max(), err_msg="d" + name)
+
+    def _fixed_seed(self):
+        original = self.kernel._Call.__init__
+
+        def init(call, *args):
+            original(call, *args)
+            if call.seed is not None:
+                call.seed = jt.array(np.array([12345, 678], "int32")).stop_grad()
+        self.kernel._Call.__init__ = init
+        self.addCleanup(setattr, self.kernel._Call, "__init__", original)
+
+    def test_dropout_gradients_match_finite_differences(self):
+        # With the seed fixed the dropped forward is a function; its
+        # gradients must be that function's.
+        self._fixed_seed()
+        rng = np.random.RandomState(5)
+        q, k, v, dout = (rng.randn(1, 2, 20, 16).astype("float64") for _ in range(4))
+
+        def loss(q_, k_, v_):
+            out = scaled_dot_product_attention(
+                *(jt.array(t.astype("float32")) for t in (q_, k_, v_)), dropout_p=0.3)
+            return float((out.numpy().astype("float64") * dout).sum())
+        jq, jk, jv = (jt.array(t.astype("float32")) for t in (q, k, v))
+        out = scaled_dot_product_attention(jq, jk, jv, dropout_p=0.3)
+        grads = [g.numpy() for g in jt.grad((out * jt.array(dout.astype("float32"))).sum(),
+                                            [jq, jk, jv])]
+        eps = 1e-2
+        for which, grad in enumerate(grads):
+            for index in ((0, 0, 3, 5), (0, 1, 17, 0), (0, 1, 9, 11)):
+                args = [q, k, v]
+                plus, minus = [a.copy() for a in args], [a.copy() for a in args]
+                plus[which][index] += eps
+                minus[which][index] -= eps
+                numeric = (loss(*plus) - loss(*minus)) / (2 * eps)
+                self.assertAlmostEqual(grad[index], numeric, delta=2e-2 * max(1, abs(numeric)),
+                                       msg="grad %s at %s" % ("qkv"[which], index))
+
+    def test_dropout_keeps_the_expectation(self):
+        rng = np.random.RandomState(6)
+        q, k, v = (jt.array(rng.randn(1, 2, 64, 32).astype("float32")) for _ in range(3))
+        plain = scaled_dot_product_attention(q, k, v).numpy()
+        runs = [scaled_dot_product_attention(q, k, v, dropout_p=0.2).numpy() for _ in range(256)]
+        self.assertFalse(np.allclose(runs[0], runs[1]))
+        mean = np.mean(runs, 0)
+        self.assertLess(np.abs(mean - plain).mean(), 0.05 * np.abs(plain).mean() + 1e-3)
+
     def test_what_it_declines(self):
         q = jt.random((1, 2, 8, 256))
         self.assertIsNone(self.kernel._fused_attention_f32(q, q, q))
         q = jt.random((1, 2, 8, 64))
-        self.assertIsNone(self.kernel._fused_attention_f32(q, q, q, dropout_p=0.1))
+        self.assertIsNone(self.kernel._fused_attention_f32(q, q, q, dropout_p=1.0))
         # A learned bias needs its own gradient; a half-precision one is not
         # what this float32 kernel reads; a mask must broadcast.
         self.assertIsNone(self.kernel._fused_attention_f32(

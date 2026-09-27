@@ -21,7 +21,8 @@ backward
 Supports head dimensions up to 128, causal (top-left aligned, as the
 composite path builds it) or not, with an optional boolean or additive float
 ``attn_mask`` broadcast to ``[batch, heads, queries, keys]``, as PyTorch
-accepts it. A mask that needs a gradient, or dropout, declines.
+accepts it, and dropout drawn inside the kernels (the backward draws it
+again). A mask that needs a gradient declines.
 """
 
 import jittor as jt
@@ -35,8 +36,39 @@ _SM_BLOCKS = 128
 
 _KERNELS = r"""
 #include <cfloat>
+#include <curand_kernel.h>
 
 namespace mea {
+
+// Where row `row` of (batch, head) `bh` of a q/k/v-shaped tensor starts: dense
+// [b, h, s, d], or [b, s, h, d] -- what a projection reshaped into heads is
+// before its transpose(1, 2) runs, which the kernels read in place.
+struct Rows {
+    int heads;
+    long long batch, head, row;
+    __device__ __forceinline__ size_t at(int bh, int r) const {
+        return (size_t)((bh / heads) * batch + (bh % heads) * head + (long long)r * row);
+    }
+};
+
+// Dropout on the probabilities, drawn where they are used: four keys of one
+// query row from one Philox call keyed by the call's seed, so the backward
+// draws the same bits again rather than storing them. `keep` is 1 - p.
+struct Dropout {
+    const int* seed;
+    float keep;
+    __device__ __forceinline__ void mask(int bh, int row, int col4, float (&z)[4]) const {
+        uint4 counter = make_uint4((unsigned)col4, (unsigned)row, (unsigned)bh, 0u);
+        uint2 key = make_uint2((unsigned)seed[0], (unsigned)seed[1]);
+        uint4 bits = curand_Philox4x32_10(counter, key);
+        const float threshold = keep * 4294967296.0f;
+        const float scale = 1.f / keep;
+        z[0] = (float)bits.x < threshold ? scale : 0.f;
+        z[1] = (float)bits.y < threshold ? scale : 0.f;
+        z[2] = (float)bits.z < threshold ? scale : 0.f;
+        z[3] = (float)bits.w < threshold ? scale : 0.f;
+    }
+};
 
 // The mask of one (batch, head), broadcast by zero strides: MASK is 0 for
 // none, 1 for a boolean one (false drops the key) and 2 for an additive float
@@ -119,11 +151,12 @@ __device__ __forceinline__ void load_rows(const float* p, float (&out)[RPT]) {
     }
 }
 
-template <int D, int RPT, bool CAUSAL, int MASK>
+template <int D, int RPT, bool CAUSAL, int MASK, bool DROPOUT>
 __global__ void __launch_bounds__(THREADS) forward(
         const float* __restrict__ q, const float* __restrict__ k,
         const float* __restrict__ v, float* __restrict__ o, float* __restrict__ lse,
-        int lq, int lk, float scale, mea::Mask mask) {
+        int lq, int lk, float scale, mea::Mask mask, mea::Rows ql, mea::Rows kl,
+        mea::Rows vl, mea::Dropout dropout) {
     constexpr int BQ = 16 * RPT, BK = 64;
     constexpr int QP = BQ + 4, KP = BK + 4, DPT = (D + 15) / 16;
     constexpr int KV = D * KP > BK * D ? D * KP : BK * D;
@@ -133,13 +166,10 @@ __global__ void __launch_bounds__(THREADS) forward(
     float* sp = skv + KV;           // P^T, [BK][QP]
     const int bh = blockIdx.y, q0 = blockIdx.x * BQ;
     const int ty = threadIdx.x >> 4, tx = threadIdx.x & 15;
-    const float* qb = q + (size_t)bh * lq * D;
-    const float* kb = k + (size_t)bh * lk * D;
-    const float* vb = v + (size_t)bh * lk * D;
     const long long mask_base = MASK ? mask.base(bh) : 0;
     for (int i = threadIdx.x; i < BQ * D; i += THREADS) {
         const int r = i / D, c = i - r * D;
-        sq[c * QP + r] = q0 + r < lq ? qb[(size_t)(q0 + r) * D + c] * scale : 0.f;
+        sq[c * QP + r] = q0 + r < lq ? q[ql.at(bh, q0 + r) + c] * scale : 0.f;
     }
 
     float m[RPT], l[RPT], acc[RPT][DPT];
@@ -157,7 +187,7 @@ __global__ void __launch_bounds__(THREADS) forward(
         __syncthreads();
         for (int i = threadIdx.x; i < BK * D; i += THREADS) {
             const int r = i / D, c = i - r * D;
-            skv[c * KP + r] = k0 + r < lk ? kb[(size_t)(k0 + r) * D + c] : 0.f;
+            skv[c * KP + r] = k0 + r < lk ? k[kl.at(bh, k0 + r) + c] : 0.f;
         }
         __syncthreads();
         float s[RPT][4];
@@ -204,6 +234,17 @@ __global__ void __launch_bounds__(THREADS) forward(
             #pragma unroll
             for (int c = 0; c < DPT; c++) acc[r][c] *= keep;
         }
+        if (DROPOUT) {
+            // The softmax's statistics stay those of the undropped row; only
+            // what multiplies V is dropped.
+            #pragma unroll
+            for (int r = 0; r < RPT; r++) {
+                float z[4];
+                dropout.mask(bh, q0 + ty * RPT + r, (k0 >> 2) + tx, z);
+                #pragma unroll
+                for (int c = 0; c < 4; c++) s[r][c] *= z[c];
+            }
+        }
         #pragma unroll
         for (int c = 0; c < 4; c++)
             #pragma unroll
@@ -211,7 +252,7 @@ __global__ void __launch_bounds__(THREADS) forward(
         __syncthreads();
         for (int i = threadIdx.x; i < BK * D; i += THREADS) {
             const int r = i / D, c = i - r * D;
-            skv[r * D + c] = k0 + r < lk ? vb[(size_t)(k0 + r) * D + c] : 0.f;
+            skv[r * D + c] = k0 + r < lk ? v[vl.at(bh, k0 + r) + c] : 0.f;
         }
         __syncthreads();
         #pragma unroll 2
@@ -232,7 +273,7 @@ __global__ void __launch_bounds__(THREADS) forward(
         const int row = q0 + ty * RPT + r;
         if (row >= lq) continue;
         const float inv = l[r] > 0.f ? 1.f / l[r] : 0.f;
-        float* ob = o + ((size_t)bh * lq + row) * D;
+        float* ob = o + ql.at(bh, row);
         #pragma unroll
         for (int c = 0; c < DPT; c++) {
             const int col = tx + c * 16;
@@ -277,13 +318,14 @@ __device__ __forceinline__ int tile_visibility(const mea::Mask& mask, long long 
     return MASK == 1 && __syncthreads_and(all) ? 2 : 1;
 }
 
-template <int D, bool CAUSAL, int MASK>
+template <int D, bool CAUSAL, int MASK, bool DROPOUT>
 __global__ void __launch_bounds__(THREADS) backward(
         const float* __restrict__ q, const float* __restrict__ k,
         const float* __restrict__ v, const float* __restrict__ dout,
         const float* __restrict__ lse, const float* __restrict__ delta,
         float* __restrict__ dq, float* __restrict__ dk, float* __restrict__ dv,
-        int lq, int lk, float scale, mea::Mask mask) {
+        int lq, int lk, float scale, mea::Mask mask, mea::Rows ql, mea::Rows kl,
+        mea::Rows vl, mea::Dropout dropout) {
     constexpr int DPT = (D + 15) / 16;
     extern __shared__ float smem[];
     float* sk = smem;               // K^T [D][KP]
@@ -294,13 +336,12 @@ __global__ void __launch_bounds__(THREADS) backward(
     float* sds = sp + BQ * PP;      // dS [BQ][PP]
     const int bh = blockIdx.y, k0 = blockIdx.x * BK;
     const int tid = threadIdx.x;
-    const size_t qoff = (size_t)bh * lq * D, koff = (size_t)bh * lk * D;
     const long long mask_base = MASK ? mask.base(bh) : 0;
     for (int i = tid; i < BK * D; i += THREADS) {
         const int r = i / D, c = i - r * D;
         const bool in = k0 + r < lk;
-        sk[c * KP + r] = in ? k[koff + (size_t)(k0 + r) * D + c] : 0.f;
-        sv[c * KP + r] = in ? v[koff + (size_t)(k0 + r) * D + c] : 0.f;
+        sk[c * KP + r] = in ? k[kl.at(bh, k0 + r) + c] : 0.f;
+        sv[c * KP + r] = in ? v[vl.at(bh, k0 + r) + c] : 0.f;
     }
     // Phase A: rows ay*2 +{0,1}, keys ax*4 +{0..3}.
     const int ay = tid >> 3, ax = tid & 7;
@@ -323,8 +364,8 @@ __global__ void __launch_bounds__(THREADS) backward(
         for (int i = tid; i < BQ * D; i += THREADS) {
             const int r = i / D, c = i - r * D;
             const bool in = q0 + r < lq;
-            sq[c * QP + r] = in ? q[qoff + (size_t)(q0 + r) * D + c] : 0.f;
-            sdo[c * QP + r] = in ? dout[qoff + (size_t)(q0 + r) * D + c] : 0.f;
+            sq[c * QP + r] = in ? q[ql.at(bh, q0 + r) + c] : 0.f;
+            sdo[c * QP + r] = in ? dout[ql.at(bh, q0 + r) + c] : 0.f;
         }
         __syncthreads();
         float s[2][4], dp[2][4];
@@ -353,7 +394,8 @@ __global__ void __launch_bounds__(THREADS) backward(
             const int row = q0 + ay * 2 + r;
             const float row_lse = row < lq ? lse[(size_t)bh * lq + row] : -INFINITY;
             const float row_delta = row < lq ? delta[(size_t)bh * lq + row] : 0.f;
-            float pr[4], dsr[4];
+            float pr[4], dsr[4], z[4] = {1.f, 1.f, 1.f, 1.f};
+            if (DROPOUT && row < lq) dropout.mask(bh, row, (k0 >> 2) + ax, z);
             #pragma unroll
             for (int c = 0; c < 4; c++) {
                 const int col = k0 + ax * 4 + c;
@@ -363,8 +405,11 @@ __global__ void __launch_bounds__(THREADS) backward(
                 if (MASK && shown == 1 && !dead)
                     score = mea::masked<MASK>(score, mask, mask_base
                         + row * mask.row_stride + col * mask.col_stride);
-                pr[c] = dead || score == -INFINITY ? 0.f : __expf(score - row_lse);
-                dsr[c] = pr[c] * (dp[r][c] - row_delta);
+                const float p = dead || score == -INFINITY ? 0.f : __expf(score - row_lse);
+                // dV takes the dropped probability; dS the undropped one,
+                // against the gradient that reached it through the mask.
+                pr[c] = p * z[c];
+                dsr[c] = p * (dp[r][c] * z[c] - row_delta);
             }
             const int at = (ay * 2 + r) * PP + ax * 4;
             *reinterpret_cast<float4*>(sp + at) = make_float4(pr[0], pr[1], pr[2], pr[3]);
@@ -412,7 +457,7 @@ __global__ void __launch_bounds__(THREADS) backward(
         for (int r = 0; r < 4; r++) {
             const int row = q0 + group * 4 + r;
             if (row >= lq) continue;
-            float* qrow = dq + qoff + (size_t)row * D;
+            float* qrow = dq + ql.at(bh, row);
             #pragma unroll
             for (int c = 0; c < DPT; c++) {
                 const int col = lane + c * 16;
@@ -428,8 +473,8 @@ __global__ void __launch_bounds__(THREADS) backward(
         for (int c = 0; c < DPT; c++) {
             const int col = lane + c * 16;
             if (col < D) {
-                dk[koff + (size_t)key * D + col] = gk[r][c] * scale;
-                dv[koff + (size_t)key * D + col] = gv[r][c];
+                dk[kl.at(bh, key) + col] = gk[r][c] * scale;
+                dv[vl.at(bh, key) + col] = gv[r][c];
             }
         }
     }
@@ -482,7 +527,7 @@ def _mask_layout(mask, shape):
 def _mask_args(layout, heads, index):
     kind, _, (sb, sh, sq, sk) = layout
     data = f"in{index}_p" if kind else "nullptr"
-    return f"mea::Mask{{{data}, {heads}, {sb}LL, {sh}LL, {sq}LL, {sk}LL}}"
+    return f"mea::Mask{{{data}, (int)({heads}), {sb}LL, {sh}LL, {sq}LL, {sk}LL}}"
 
 
 def _smem_register_forward(d, rpt):
@@ -490,50 +535,113 @@ def _smem_register_forward(d, rpt):
     return (d * (bq + 4) + max(d * (bk + 4), bk * d) + bk * (bq + 4)) * 4
 
 
-def _forward(query, key, value, scale, causal, layout=(0, None, (0, 0, 0, 0))):
-    b, h, lq, d = (int(size) for size in query.shape)
+def _smem_register_backward(d):
+    return (2 * d * (32 + 4) + 2 * d * (32 + 2) + 2 * 32 * (32 + 4)) * 4
+
+
+class _Call:
+    """What a call is besides its q, k, v: settings and the optional inputs.
+
+    `seq` says, per q, k and v, whether the tensor handed over is laid out
+    [b, s, h, d] (see `_physical`). The dims the kernels need are read from
+    the inputs at run time, so one compiled operator serves every length.
+    """
+
+    __slots__ = ("scale", "causal", "mask", "seq", "keep", "seed")
+
+    def __init__(self, scale, causal, mask, seq, dropout_p):
+        self.scale, self.causal, self.mask, self.seq = scale, causal, mask, seq
+        self.keep = 1.0 - dropout_p
+        # Drawn by the runtime's generator, so a captured step draws anew on
+        # every replay; the backward reads the same two numbers.
+        self.seed = ((jt.random((2,)) * 2147483647.0).int32().stop_grad()
+                     if dropout_p > 0 else None)
+
+    def extras(self):
+        return ([self.mask[1]] if self.mask[0] else []) + (
+            [self.seed] if self.seed is not None else [])
+
+    def args(self, first_extra):
+        index = first_extra
+        mask = _mask_args(self.mask, self.heads_expr(), index) if self.mask[0] \
+            else _mask_args(self.mask, self.heads_expr(), 0)
+        if self.mask[0]:
+            index += 1
+        rows = ", ".join(_rows_args(i, seq) for i, seq in enumerate(self.seq))
+        if self.seed is not None:
+            dropout = f"mea::Dropout{{(const int*)in{index}_p, {self.keep!r}f}}"
+        else:
+            dropout = "mea::Dropout{nullptr, 1.f}"
+        return f"{mask}, {rows}, {dropout}"
+
+    def heads_expr(self):
+        return "in0->shape[2]" if self.seq[0] else "in0->shape[1]"
+
+    def lengths(self):
+        lq = "in0->shape[1]" if self.seq[0] else "in0->shape[2]"
+        lk = "in1->shape[1]" if self.seq[1] else "in1->shape[2]"
+        return lq, lk
+
+    def template(self):
+        return (f"{str(bool(self.causal)).lower()}, {self.mask[0]}, "
+                f"{str(self.seed is not None).lower()}")
+
+
+def _rows_args(index, seq):
+    t = f"in{index}"
+    if seq:
+        return (f"mea::Rows{{(int){t}->shape[2], (long long){t}->shape[1] * {t}->shape[2] * "
+                f"{t}->shape[3], (long long){t}->shape[3], (long long){t}->shape[2] * "
+                f"{t}->shape[3]}}")
+    return (f"mea::Rows{{(int){t}->shape[1], (long long){t}->shape[1] * {t}->shape[2] * "
+            f"{t}->shape[3], (long long){t}->shape[2] * {t}->shape[3], "
+            f"(long long){t}->shape[3]}}")
+
+
+def _forward(query, key, value, call):
+    if call.seq[0]:
+        b, lq, h, d = (int(size) for size in query.shape)
+    else:
+        b, h, lq, d = (int(size) for size in query.shape)
     # Four query rows a thread; one where that leaves the grid smaller than
     # the device, which is what BERT at batch 1 (24 tiles of 64) did.
     rpt = 4 if -(-lq // 64) * b * h >= _SM_BLOCKS else 1
     bq = 16 * rpt
     smem = _smem_register_forward(d, rpt)
-    kernel = (f"mea_fwd::forward<{d}, {rpt}, {str(bool(causal)).lower()}, {layout[0]}>")
-    inputs = [query, key, value] + ([layout[1]] if layout[0] else [])
+    kernel = f"mea_fwd::forward<{d}, {rpt}, {call.template()}>"
+    lq_expr, lk_expr = call.lengths()
     return jt.code(
-        [query.shape, (b, h, lq)], ["float32", "float32"], inputs,
+        [query.shape, (b, h, lq)], ["float32", "float32"], [query, key, value] + call.extras(),
         cuda_header=_KERNELS,
-        cuda_src=_launch(kernel, f"(in0->shape[2] + {bq} - 1) / {bq}, in0->shape[0] * in0->shape[1]",
-                         smem, f"in0_p, in1_p, in2_p, out0_p, out1_p, in0->shape[2], "
-                               f"in1->shape[2], {float(scale)!r}f, {_mask_args(layout, h, 3)}",
+        cuda_src=_launch(kernel, f"({lq_expr} + {bq} - 1) / {bq}, in0->shape[0] * "
+                                 f"{call.heads_expr()}",
+                         smem, f"in0_p, in1_p, in2_p, out0_p, out1_p, {lq_expr}, {lk_expr}, "
+                               f"{float(call.scale)!r}f, {call.args(3)}",
                          threads="mea_fwd::THREADS"))
 
 
-def _smem_register_backward(d):
-    return (2 * d * (32 + 4) + 2 * d * (32 + 2) + 2 * 32 * (32 + 4)) * 4
-
-
-def _backward(query, key, value, grad_out, lse, delta, scale, causal,
-              layout=(0, None, (0, 0, 0, 0))):
+def _backward(query, key, value, grad_out, lse, delta, call):
     d = int(query.shape[3])
-    h = int(query.shape[1])
     smem = _smem_register_backward(d)
-    kernel = f"mea_bwd::backward<{d}, {str(bool(causal)).lower()}, {layout[0]}>"
-    inputs = [query, key, value, grad_out, lse, delta] + ([layout[1]] if layout[0] else [])
+    kernel = f"mea_bwd::backward<{d}, {call.template()}>"
+    lq_expr, lk_expr = call.lengths()
     return jt.code(
         [query.shape, key.shape, value.shape], ["float32"] * 3,
-        inputs,
+        [query, key, value, grad_out, lse, delta] + call.extras(),
         cuda_header=_KERNELS,
         cuda_src="cudaMemsetAsync(out0_p, 0, out0->size, 0);\n" + _launch(
-            kernel, "(in1->shape[2] + 31) / 32, in0->shape[0] * in0->shape[1]",
+            kernel, f"({lk_expr} + 31) / 32, in0->shape[0] * {call.heads_expr()}",
             smem, f"in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out0_p, out1_p, out2_p, "
-                  f"in0->shape[2], in1->shape[2], {float(scale)!r}f, {_mask_args(layout, h, 6)}",
+                  f"{lq_expr}, {lk_expr}, {float(call.scale)!r}f, {call.args(6)}",
             threads="mea_bwd::THREADS"))
 
 
 class _FusedAttentionF32(jt.Function):
-    def execute(self, query, key, value, scale, causal, layout):
-        self.scale, self.causal, self.layout = scale, causal, layout
-        out, lse = _forward(query, key, value, scale, causal, layout)
+    # q, k, v are the tensors handed to the kernels (see `_physical`); every
+    # gradient comes back in its tensor's own layout, the output in q's.
+    def execute(self, query, key, value, call):
+        self.call = call
+        out, lse = _forward(query, key, value, call)
         self.saved = (query, key, value, out, lse)
         return out
 
@@ -541,9 +649,26 @@ class _FusedAttentionF32(jt.Function):
         query, key, value, out, lse = self.saved
         grad_out = grad_out.float32()
         delta = (grad_out * out).sum(-1)
+        if self.call.seq[0]:
+            delta = delta.transpose(0, 2, 1)
         grad_query, grad_key, grad_value = _backward(
-            query, key, value, grad_out, lse, delta, self.scale, self.causal, self.layout)
-        return grad_query, grad_key, grad_value, None, None, None
+            query, key, value, grad_out, lse, delta, self.call)
+        return grad_query, grad_key, grad_value, None
+
+
+def _physical(t):
+    """(tensor, seq_major): the [b, s, h, d] source of a [b, h, s, d] transpose
+    view, which the kernels read in place, or `t` itself."""
+    if not isinstance(t, jt.Var):
+        return t, False
+    axes = getattr(t, "_transpose_view_axes", None)
+    if axes is None:
+        return t, False
+    if tuple(axes()) == (0, 2, 1, 3):
+        return t._transpose_view_source(), True
+    if tuple(t._producer_transpose_axes()) == (0, 2, 1, 3):
+        return t._input(0), True
+    return t, False
 
 
 def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None):
@@ -553,7 +678,8 @@ def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
 def _fused_attention_f32(query, key, value, attn_mask=None, dropout_p=0.0,
                          is_causal=False, scale=None):
     """Run float32 attention tile by tile, or return None to decline."""
-    if float(dropout_p or 0.0) != 0.0:
+    dropout_p = float(dropout_p or 0.0)
+    if not 0.0 <= dropout_p < 1.0:
         return None
     if len(query.shape) != 4 or tuple(key.shape) != tuple(value.shape) \
             or len(key.shape) != 4 or tuple(query.shape[:2]) != tuple(key.shape[:2]) \
@@ -567,13 +693,17 @@ def _fused_attention_f32(query, key, value, attn_mask=None, dropout_p=0.0,
     b, h, lq, _ = (int(size) for size in query.shape)
     lk = int(key.shape[2])
     training = _output_requires_grad(query, key, value)
-    layout = _mask_layout(attn_mask, (b, h, lq, lk))
-    if layout is None:
+    mask = _mask_layout(attn_mask, (b, h, lq, lk))
+    if mask is None:
         return None
     scale = float(scale) if scale is not None else float(query.shape[3]) ** -0.5
+    (query, q_seq), (key, k_seq), (value, v_seq) = (_physical(t) for t in (query, key, value))
+    call = _Call(scale, bool(is_causal), mask, (q_seq, k_seq, v_seq), dropout_p)
     if training:
-        return _FusedAttentionF32.apply(query, key, value, scale, bool(is_causal), layout)
-    return _forward(query, key, value, scale, bool(is_causal), layout)[0]
+        out = _FusedAttentionF32.apply(query, key, value, call)
+    else:
+        out = _forward(query, key, value, call)[0]
+    return out.transpose(0, 2, 1, 3) if q_seq else out
 
 
 register_kernel("nn.fused_attention", "cuda", _fused_attention_f32, supports=_supports)
