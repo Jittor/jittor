@@ -310,7 +310,6 @@ include docs/compatibility/torch.md
 include docs/conf.py
 include docs/content-manifest.json
 include docs/contributing.md
-include docs/development/2.0-refactor-onboarding.md
 include docs/development/async-error-diagnostics.md
 include docs/development/error-categories.md
 include docs/development/index.md
