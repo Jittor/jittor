@@ -695,6 +695,10 @@ void VarHolder::set_requires_grad(bool flag) {
     }
 }
 
+void mark_python_number(VarHolder* holder) {
+    holder->var->set_flag(VarFlags::_python_number);
+}
+
 VarHolder* VarHolder::start_grad() {
     if (!var->dtype().is_float() && !var->dtype().is_complex())
         LOGw << "cannot enable grad of a non-float value:" << var;

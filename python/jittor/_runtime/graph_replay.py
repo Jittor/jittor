@@ -327,6 +327,12 @@ def _empty_like(var):
                 _core._reset_tensor_placement(placement)
     finally:
         _core._reset_tensor_frontend_type(token)
+    # A capture computes on these copies, so what the graph decides from an
+    # input's requires_grad it must decide the same way from its copy: a float
+    # mask built from a copy that asked for a gradient kept the fused attention
+    # kernels out of every captured Transformers step.
+    if not var.requires_grad and result.requires_grad:
+        result.requires_grad = False
     result.sync(False, False)
     return result
 

@@ -212,6 +212,20 @@ static inline bool is_pending_scalar(Var* v) {
         && !v->flag(VarFlags::_placement_published);
 }
 
+// A Python number an operator was handed -- the `1.0` in `1.0 - mask` --
+// possibly cast or broadcast since: a constant, which no gradient flows into.
+// Neither a scalar computed from a tensor (`x.sum()`) nor a 0-d tensor the
+// caller made (`torch.tensor(2.0, requires_grad=True)`) is one.
+static bool is_constant_scalar(Var* v) {
+    for (;;) {
+        if (v->flag(VarFlags::_python_number)) return true;
+        if (!v->flag(VarFlags::_is_scalar)) return false;
+        Op* op = v->input();
+        if (!op || op->inputs().size() != 1) return false;
+        v = op->inputs().front();
+    }
+}
+
 // Move a pending scalar, and the pending subgraph that produces it, onto
 // `dev`. Refuses (returning false) if that subgraph reaches data that already
 // exists on another device -- then it is not a scalar constant being placed,
@@ -324,7 +338,14 @@ void Op::init() {
             has_disabled_input |= disabled;
             has_first_order_only_input |=
                 v->flag(VarFlags::_first_order_only);
-            all_inputs_stopped &= disabled || v->is_stop_grad();
+            // Under torch's rule a Python scalar never asks for a gradient,
+            // so `1.0 - mask` does not either. Counted as one, it made every
+            // float attention mask Transformers builds "require grad", and
+            // the fused attention kernels, which take no mask gradient,
+            // declined it for the O(L^2) math path.
+            all_inputs_stopped &= disabled || v->is_stop_grad()
+                || (autograd_policy.stop_outputs_when_inputs_stopped
+                    && is_constant_scalar(v));
         }
         if (has_disabled_input) {
             set_flag(OpFlags::_requires_grad_disabled);

@@ -373,6 +373,16 @@ class TestGraphReplay(unittest.TestCase):
             # Densified inside the graph: one copy more, not the graph again.
             self.assertEqual(counts[1], counts[0] + 1, counts)
 
+    def test_a_private_input_copy_keeps_requires_grad(self):
+        # The capture computes on copies of the inputs; a copy that asked for a
+        # gradient its input did not made everything built from it ask too.
+        from jittor._runtime.graph_replay import _empty_like
+        frozen = jt.array(np.ones((2, 3), "float32"))
+        frozen.requires_grad = False
+        self.assertFalse(_empty_like(frozen).requires_grad)
+        live = jt.array(np.ones((2, 3), "float32"))
+        self.assertTrue(_empty_like(live).requires_grad)
+
     def test_the_flag_is_left_as_it_was_found(self):
         self.assertEqual(jt.flags.keep_graph, 0)
         replay = graph_replay(self.model, self.feed[0])
