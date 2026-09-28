@@ -282,7 +282,7 @@ def _named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
     """Torch's ``named_parameters``: an iterator, with prefix/dedup."""
     reg = get_tensor_state(jt).leaf_params
     seen = set()
-    for name, v in _ORIG_MODULE_NAMED_PARAMETERS(self, recurse=recurse):
+    for name, v in self._iter_named_vars("parameters", recurse):
         if remove_duplicate and id(v) in seen:
             continue
         seen.add(id(v))
@@ -308,7 +308,7 @@ def _named_buffers(self, prefix="", recurse=True, remove_duplicate=True):
 
 def _named_modules(self, memo=None, prefix="", remove_duplicate=True):
     """Torch's ``named_modules``, accepting memo/prefix/remove_duplicate."""
-    for item in _ORIG_MODULE_NAMED_MODULES(self):
+    for item in self._iter_named_modules():
         # jittor yields (name, module) pairs
         if isinstance(item, tuple) and len(item) == 2:
             name, mod = item
