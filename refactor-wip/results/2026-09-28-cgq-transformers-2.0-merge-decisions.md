@@ -118,7 +118,9 @@ native state owner，也没有 native generator-aware CPU/CUDA `randint`，无�
 系统运行库：
 
 - `bash tools/check_repo_layout.sh`：通过。
-- `python tools/build/generate_manifest.py --check`：通过。
+- `python tools/build/generate_manifest.py --check`：合并基线验证时通过；当前工作区因合并
+  前已存在的未跟踪 `docs/development/2.0-refactor-onboarding.md` 产生一条额外差异，
+  本次没有把该无关文档纳入随机数修复提交。
 - `python -m compileall -q python compat tests`：通过。
 - 原生模式下 `tests/distributed/test_launch.py`、`test_native_process_group.py`、
   `test_native_ddp.py` 和 `tests/data/test_dataset_native_distributed.py`：42 passed。
@@ -152,6 +154,6 @@ native state owner，也没有 native generator-aware CPU/CUDA `randint`，无�
 ## 当前状态
 
 本地已创建消息为 `合并 2.0-refactor 完整基线` 的双父合并提交
-`085e5d51b`，尚未推送；本次随机数复核和 native 修复作为该合并提交之后的当前工作树
-变更维护。主工作区和远端 `cgq_transformers` 仍保持 `a2850846a`。后续若要更新远端，
-应以随机数修复提交后的 HEAD 为起点执行独立的远端兼容复核和推送流程。
+`085e5d51b`，尚未推送；本次随机数复核和 native 修复已提交为
+`c5bf7fa57`，主工作区和远端 `cgq_transformers` 仍保持 `a2850846a`。后续若要更新远端，
+应以 `c5bf7fa57` 为起点执行独立的远端兼容复核和推送流程。
