@@ -23,7 +23,30 @@ static bool remove_empty_loop(KernelIR* i) {
     return false;
 }
 
+// A kernel that reads back an output it stores declares no pointer
+// `__restrict__`. With them, nvcc folds `c ? zp[i] : xp[i]` into one load
+// from the selected address, issues it read-only and ahead of the store to
+// `zp[i]` -- the read returns what the memory held before the kernel. Dropping
+// the qualifier from `zp` alone is not enough; the select still carries `xp`'s.
+static void unrestrict_if_reading_back(FusedOp* fused, KernelIR* ir) {
+    unordered_set<Var*> read;
+    for (Op* op : fused->ops)
+        for (Var* v : op->inputs())
+            read.insert(v);
+    bool reads_back = false;
+    for (auto& vi : fused->vars)
+        reads_back |= vi.type == 2 && read.count(vi.var);
+    if (!reads_back) return;
+    ir->dfs([&](unique_ptr<KernelIR>& c) {
+        if (c->type != KernelIRType::define) return;
+        auto& dtype = c->get_attr(kir::dtype);
+        auto at = dtype.find("__restrict__");
+        if (at != string::npos) dtype.erase(at, sizeof("__restrict__")-1);
+    });
+}
+
 void RemoveIntermediatePass::run() {
+    unrestrict_if_reading_back(op, ir);
     unordered_set<string> names;
     for (auto& vi : op->vars) {
         // intermediate
