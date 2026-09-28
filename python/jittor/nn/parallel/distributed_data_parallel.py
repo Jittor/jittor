@@ -212,20 +212,17 @@ class DistributedDataParallel(Module):
             )
             ranks = getattr(process_group, "ranks", None)
             src = int(ranks[0]) if ranks else 0
-            dependency = []
             for _, parameter in parameters:
                 result = distributed.broadcast(parameter, src=src, group=process_group)
                 result = _collective_result(result, parameter)
                 if result is not parameter:
                     parameter.assign(result)
-                    dependency = _chain_dependency(parameter, dependency)
             if broadcast_buffers:
                 for _, buffer in buffers:
                     result = distributed.broadcast(buffer, src=src, group=process_group)
                     result = _collective_result(result, buffer)
                     if result is not buffer:
                         buffer.assign(result)
-                        dependency = _chain_dependency(buffer, dependency)
             jt.sync_all()
 
         for _, parameter in parameters:
@@ -327,16 +324,38 @@ def _sync_optimizer_gradients(entries):
                     "DDP parameter {!r} appears more than once in the optimizer".format(name)
                 )
 
-        for _, parameter in state.parameters:
-            if not parameter.requires_grad:
-                continue
-            gradient = by_parameter[id(parameter)][0]
-            reduced = distributed.all_reduce(
-                gradient, op="mean", group=state.group
-            )
-            if reduced is not gradient:
-                gradient.assign(reduced)
-                dependencies = _chain_dependency(gradient, dependencies)
+        gradients = [
+            by_parameter[id(parameter)][0]
+            for _, parameter in state.parameters
+            if parameter.requires_grad
+        ]
+        # The NCCL backend already provides a grouped collective scope.  Keep
+        # the outputs as the graph sinks while the group is open, then publish
+        # them into the optimizer's gradient holders after the synchronous
+        # join.  This reduces one stream join and one host launch per DDP
+        # parameter without changing the optimizer.backward contract.
+        use_bucket = getattr(state.group, "_backend_kind", None) == "nccl"
+        if use_bucket and gradients:
+            from jittor.distributed.bucket import bucket_scope
+            reduced_pairs = []
+            with bucket_scope(defer_join=False):
+                for gradient in gradients:
+                    reduced = distributed.all_reduce(
+                        gradient, op="mean", group=state.group
+                    )
+                    reduced_pairs.append((gradient, reduced))
+                jt.sync([reduced for _, reduced in reduced_pairs])
+            for gradient, reduced in reduced_pairs:
+                if reduced is not gradient:
+                    gradient.assign(reduced)
+        else:
+            for gradient in gradients:
+                reduced = distributed.all_reduce(
+                    gradient, op="mean", group=state.group
+                )
+                if reduced is not gradient:
+                    gradient.assign(reduced)
+                    dependencies = _chain_dependency(gradient, dependencies)
         state.has_unsynced_grads = False
 
     return owned_parameter_ids, dependencies

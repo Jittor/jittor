@@ -281,13 +281,6 @@ def main(argv=None):
         print("[jtrun] error: {}".format(error), file=sys.stderr, flush=True)
         return 2
 
-    # Selecting an explicit NCCL backend must enable it before importing any
-    # Jittor module that initializes optional communication externs.
-    if backend == "nccl":
-        from jittor.build.compile_extern import _skip_nccl_p2p_without_peer_access
-
-        _skip_nccl_p2p_without_peer_access()
-
     os.makedirs(args.logdir, exist_ok=True)
     rootinfo = os.path.abspath(os.path.join(
         args.logdir, "{}_rootinfo_{}.bin".format(backend, os.getpid())))

@@ -55,11 +55,11 @@ def _bn_normalize(x, mean, var, dims, eps):
 
 
 def _batch_statistics(x, dims, sync):
-    """Mean and variance over ``dims``, optionally reduced across MPI ranks.
+    """Mean and variance over ``dims``, optionally reduced across ranks.
 
     Two passes on purpose. ``E[x^2] - E[x]^2`` -- what the sync branch used --
     cancels catastrophically as soon as the mean is large next to the standard
-    deviation, and it was used *only* under MPI, so the error appeared when the
+    deviation, and it was used *only* for synchronized normalization, so the error appeared when the
     job was distributed and nowhere else.
 
     The variance is reduced after the mean, so the all-reduced value is the true
@@ -69,11 +69,12 @@ def _batch_statistics(x, dims, sync):
     """
     xmean = jt.mean(x, dims=dims)
     if sync:
-        xmean = xmean.mpi_all_reduce("mean")
+        from jittor import distributed as dist
+        xmean = dist.all_reduce(xmean, op="mean")
     deviation = x - xmean.broadcast(x, dims)
     xvar = jt.mean(deviation * deviation, dims=dims)
     if sync:
-        xvar = xvar.mpi_all_reduce("mean")
+        xvar = dist.all_reduce(xvar, op="mean")
     return xmean, xvar
 
 

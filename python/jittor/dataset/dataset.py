@@ -39,11 +39,16 @@ from jittor import _arg_policy
 #: explicit persistent_workers=False. See Dataset.__init__ for why that matters.
 _PERSISTENT_WORKERS_UNSET = object()
 
+
+def _dataset_worker_seed(seed, epoch, rank, worker_id):
+    sequence = np.random.SeedSequence(
+        (int(seed), int(epoch), int(rank), int(worker_id)))
+    return int(sequence.generate_state(1, dtype=np.uint32)[0])
+
 dataset_root = os.path.join(jit_utils.home(), ".cache", "jittor", "dataset")
 # int() like the CHECK_MEMORY line below: os.environ.get returns a *string*,
 # and "0" is truthy, so mp_log_v=0 used to switch the worker chatter ON.
 mp_log_v = int(runtime_env("mp_log_v", "0"))
-mpi = jt.mpi
 if _has_pil:
     #: Times ``PIL.Image.open``, and is NOT installed here. Importing this
     #: module used to install it, which replaced ``PIL.Image.open`` for the
@@ -180,7 +185,8 @@ class Dataset(object):
                  collate_fn = None,
                  worker_init_fn = None,
                  pin_memory = False,
-                 persistent_workers = _PERSISTENT_WORKERS_UNSET):
+                 persistent_workers = _PERSISTENT_WORKERS_UNSET,
+                 seed = 1):
         super().__init__()
         if os.environ.get("DISABLE_MULTIPROCESSING", '0') == '1':
             num_workers = 0
@@ -198,6 +204,7 @@ class Dataset(object):
         # per worker process after seeding.
         self.collate_fn = collate_fn
         self.worker_init_fn = worker_init_fn
+        self.seed = int(seed)
 
         # pin_memory and persistent_workers are accepted for signature
         # compatibility and NOT honoured. The comment here used to claim they
@@ -244,7 +251,7 @@ class Dataset(object):
         self.epoch_id = 0
         self.sampler = None
         self._disable_workers = False
-        self._shuffle_rng = np.random.default_rng(1)
+        self._shuffle_rng = np.random.default_rng(self.seed)
         self.dataset = self
 
     def __getitem__(self, index):
@@ -282,6 +289,19 @@ class Dataset(object):
             assert hasattr(self, k), k
             setattr(self, k, v)
         self.reset()
+        return self
+
+    def set_epoch(self, epoch):
+        """Set a deterministic shuffle epoch shared by distributed ranks."""
+        if isinstance(epoch, (bool, np.bool_)) or not isinstance(
+                epoch, (int, np.integer)):
+            raise TypeError("epoch must be an integer")
+        if epoch < 0:
+            raise ValueError("epoch must be non-negative")
+        self.reset()
+        self.epoch_id = int(epoch)
+        self._shuffle_rng = np.random.default_rng(
+            np.random.SeedSequence([self.seed, self.epoch_id]))
         return self
 
     def to_jittor(self, batch):
@@ -339,8 +359,8 @@ class Dataset(object):
 
         jittor_utils.cc.init_subprocess()
         jt.jt_init_subprocess()
-        seed = jt.get_seed()
-        wseed = (seed ^ (worker_id*1167)) ^ 1234
+        wseed = _dataset_worker_seed(
+            self.seed, self.epoch_id, getattr(self, "_worker_rank", 0), worker_id)
         jt.set_global_seed(wseed)
         # torch-compatible: run user worker init hook once per worker process,
         # after seeding so users can re-seed deterministically if desired.
@@ -594,6 +614,8 @@ Example::
         jt.migrate_all_to_cpu()
         jt.clean()
         jt.gc()
+        from jittor import distributed as dist
+        self._worker_rank = dist.get_rank()
         self.index_list = mp.Array('i', self.real_len, lock=False)
         workers = []
         # get worker id
@@ -690,7 +712,7 @@ Example::
             # index_list = get_random_list(self.total_len)
             index_list = self._shuffle_rng.permutation(range(self.total_len))
         
-        # scatter index_list for all mpi process
+        # Partition each global batch by the active distributed rank.
         # scatter rule:
         #   batch 1   batch 2
         # [........] [........] ...
@@ -699,39 +721,51 @@ Example::
         # pad to world_size
         #  last batch
         # [.] -> [012]
-        if jt.in_mpi:
-            world_size = mpi.world_size()
-            world_rank = mpi.world_rank()
+        from jittor import distributed as dist
+        world_size = dist.get_world_size()
+        world_rank = dist.get_rank()
+        if world_size > 1:
             index_list = np.int32(index_list)
-            # TODO: mpi broadcast in subprocess has bug, fix it
-            # mpi.broadcast(index_list, 0)
 
-            assert self.batch_size >= world_size, \
-                f"Batch size({self.batch_size}) is smaller than MPI world_size({world_size})"
+            if self.batch_size < world_size:
+                raise ValueError(
+                    "Dataset batch_size ({}) must be at least distributed "
+                    "world_size ({})".format(self.batch_size, world_size)
+                )
             real_batch_size = (self.batch_size-1) // world_size + 1
             if real_batch_size * world_size != self.batch_size:
-                LOG.w("Batch size is not divisible by MPI world size, "
+                LOG.w("Batch size is not divisible by distributed world size, "
                       "The distributed version may be different from "
                       "the single-process version.")
-            fix_batch = total_len // self.batch_size
-            last_batch = total_len - fix_batch * self.batch_size
-            fix_batch_l = index_list[0:fix_batch*self.batch_size] \
-                .reshape(-1,self.batch_size)
-            fix_batch_l = fix_batch_l[
-                :,real_batch_size*world_rank:real_batch_size*(world_rank+1)]
-            real_batch_size = fix_batch_l.shape[1]
-            fix_batch_l = fix_batch_l.flatten()
-            if not self.drop_last and last_batch > 0:
-                last_batch_l = index_list[-last_batch:]
-                real_last_batch = (last_batch-1)//world_size+1
-                l = real_last_batch * world_rank
-                r = l + real_last_batch
-                if r > last_batch: 
-                    r = last_batch
-                    l = r-real_last_batch
-                index_list = np.concatenate([fix_batch_l, last_batch_l[l:r]])
+            # Keep every local batch the same size.  A global batch that is
+            # not divisible by world_size is padded with its final sample so
+            # every rank contributes the same tensor shape to collectives.
+            batch_count = (total_len + self.batch_size - 1) // self.batch_size
+            if self.drop_last:
+                batch_count = total_len // self.batch_size
+            local_batches = []
+            for batch_id in range(batch_count):
+                start = batch_id * self.batch_size
+                end = min(start + self.batch_size, total_len)
+                global_batch = index_list[start:end]
+                if len(global_batch) < self.batch_size and self.drop_last:
+                    break
+                local_start = real_batch_size * world_rank
+                local_end = local_start + real_batch_size
+                local_batch = global_batch[local_start:local_end]
+                if len(local_batch) < real_batch_size:
+                    pad_value = global_batch[-1]
+                    local_batch = np.pad(
+                        local_batch,
+                        (0, real_batch_size - len(local_batch)),
+                        mode="constant",
+                        constant_values=pad_value,
+                    )
+                local_batches.append(local_batch)
+            if local_batches:
+                index_list = np.concatenate(local_batches)
             else:
-                index_list = fix_batch_l
+                index_list = np.empty((0,), dtype=np.int32)
 
             self.real_len = len(index_list)
             self.real_batch_size = real_batch_size
@@ -739,12 +773,13 @@ Example::
             #     self.real_len // self.real_batch_size, f"Number of batches({total_len // self.batch_size}!={self.real_len // self.real_batch_size}) not match, total_len: {total_len}, batch_size: {self.batch_size}, real_len: {self.real_len}, real_batch_size: {self.real_batch_size}"
 
             # print(f"Number of batches({total_len // self.batch_size}!={self.real_len // self.real_batch_size}) not match, total_len: {total_len}, batch_size: {self.batch_size}, real_len: {self.real_len}, real_batch_size: {self.real_batch_size}")
-            # print("mpi dataset init ")
         else:
             self.real_len = len(index_list)
             self.real_batch_size = self.batch_size
 
-        if self.drop_last:
+        if self.real_batch_size == 0:
+            self.batch_len = 0
+        elif self.drop_last:
             self.batch_len = self.real_len // self.real_batch_size
         else:
             self.batch_len = (self.real_len-1) // self.real_batch_size + 1

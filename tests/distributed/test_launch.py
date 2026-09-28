@@ -57,6 +57,11 @@ print("use_nccl=%s use_mpi=%s" %
        os.environ.get("JT_BUILD_USE_MPI")), flush=True)
 """
 
+_PRINT_NCCL_P2P = """
+import os
+print("nccl_p2p_disable=%s" % os.environ.get("NCCL_P2P_DISABLE"), flush=True)
+"""
+
 _PRINT_RANK_ENV = """
 import os
 keys = ("RANK", "LOCAL_RANK", "WORLD_SIZE", "LOCAL_WORLD_SIZE",
@@ -67,10 +72,10 @@ print(" ".join("%s=%s" % (key, os.environ.get(key)) for key in keys), flush=True
 
 
 def _launch(nproc, code, logdir, timeout, rendezvous_timeout=120):
-    # Through _helpers.child_process: the launcher itself imports jittor (for
-    # the peer-access probe) and passes its environment down to every rank, so
-    # an unpinned PYTHONPATH here would put another checkout in all of them.
-    # The ranks need no GPU; NCCL parent detection uses the explicit backend.
+    # Through _helpers.child_process, the launcher passes its environment down
+    # to every rank, so an unpinned PYTHONPATH here would put another checkout
+    # in all of them. The ranks need no GPU; explicit backend setup is tested
+    # without importing the runtime in the parent.
     start = time.time()
     done = run_python_child(
         [os.fspath(_LAUNCH), "--nproc-per-node", str(nproc), "--backend", "nccl",
@@ -144,6 +149,13 @@ class TestLaunchFailurePropagation(unittest.TestCase):
         for rank in range(2):
             text = Path(self.tmp.name, "rank%d.log" % rank).read_text()
             self.assertIn("use_nccl=1 use_mpi=0", text, text)
+
+    def test_nccl_p2p_is_frozen_disabled_for_every_rank(self):
+        done, _ = _launch(3, _PRINT_NCCL_P2P, self.tmp.name, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stdout[-3000:])
+        for rank in range(3):
+            text = Path(self.tmp.name, "rank%d.log" % rank).read_text()
+            self.assertIn("nccl_p2p_disable=1", text, text)
 
     def test_auto_cuda_detection_sets_nccl_build_flags_before_import(self):
         done = run_python_child(
