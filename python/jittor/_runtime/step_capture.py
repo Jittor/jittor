@@ -57,7 +57,7 @@ replay. `stats` says what happened.
 import jittor as jt
 import jittor_core as _core
 
-from .graph_replay import (_RERECORD_LIMIT, _Unreplayable, _empty_like, _native_dtype, _object_ids,
+from .graph_replay import (_RERECORD_LIMIT, _Unreplayable, _dense, _empty_like, _native_dtype, _object_ids,
                            _graph_has_nondeterministic_op,
                            _input_vars, _map_inputs, _no_auto, _output_template,
                            _rebuild, _signature)
@@ -414,6 +414,10 @@ class StepCapture:
         except _Unreplayable as exc:
             template = None
             cap.refused = cap.refused or str(exc)
+        # Dense inside the graph, since every replay copies these as raw bytes
+        # (see `_dense`).
+        outputs[:] = [_dense(o) for o in outputs]
+        records = [(holder, old, _dense(new)) for holder, old, new in records]
         roots = _unique(outputs + [new for _, _, new in records])
         # Everything that can refuse is decided before the graph runs: a
         # refused step then runs exactly once, as written. Deciding after --

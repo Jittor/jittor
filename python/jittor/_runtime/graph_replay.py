@@ -293,6 +293,17 @@ def _native_dtype(var):
     return var.dtype
 
 
+def _dense(var):
+    """`var`, or a dense copy of it made inside the graph being captured.
+
+    Every replay copies a capture's results out as raw bytes. A strided one
+    -- a channels-last activation read as NCHW -- would have that copy build a
+    densifying op on top of the kept graph first, and syncing it re-ran the
+    whole graph: an SD1.5 VAE decode executed every kernel twice.
+    """
+    return var if var._storage_is_contiguous() else jt.contiguous(var)
+
+
 def _empty_like(var):
     """A materialized, uninitialized Var shaped, typed and placed like `var`.
 
@@ -489,6 +500,13 @@ class GraphReplay:
         # what a normal call peaks at rather than the sum of everything it
         # allocates.
         jt.flags.keep_graph = 2
+        # Built whole, as a replay runs it. CUDA's auto-flush otherwise
+        # launches the traced call in pieces, and every piece's results stay
+        # held for the rest of the kept graph: an SD1.5 VAE decode, cut five
+        # times by the view ops of channels-last activations, captured 0.5 GB
+        # above its eager peak.
+        flush_before = jt.flags.auto_flush_ops
+        jt.flags.auto_flush_ops = 0
         readbacks = _core._host_readback_count()
         _TRACING[0] += 1
         try:
@@ -508,6 +526,7 @@ class GraphReplay:
                 if not outputs:
                     self._refused = "the module returned no Var"
                     return None
+                outputs[:] = [_dense(o) for o in outputs]
                 # These vars' own graph and nothing else. A plain `sync()` is a
                 # weak sync: it also sweeps in whatever other holder vars happen
                 # to be pending, and with `keep_graph` on those become part of
@@ -529,6 +548,7 @@ class GraphReplay:
                 return None
         finally:
             _TRACING[0] -= 1
+            jt.flags.auto_flush_ops = flush_before
             jt.flags.keep_graph = before
 
         cap = _Capture()

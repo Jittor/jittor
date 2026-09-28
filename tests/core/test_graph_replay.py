@@ -24,7 +24,7 @@ import numpy as np
 
 import jittor as jt
 from jittor import nn
-from jittor._runtime.graph_replay import graph_replay
+from jittor._runtime.graph_replay import GraphReplay, graph_replay
 
 
 class _Net(nn.Module):
@@ -87,6 +87,31 @@ class _Keywords(nn.Module):
 
     def execute(self, x=None, bias=None, scale=1.0):
         return self.l1(x) * scale + bias
+
+
+class _FlushObserver(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.seen = []
+
+    def execute(self, x):
+        self.seen.append(jt.flags.auto_flush_ops)
+        return (x * 2 + 1).tanh()
+
+
+class _Strided(nn.Module):
+    """A result that is a strided view of storage the call computed."""
+
+    def __init__(self, strided):
+        super().__init__()
+        self.strided = strided
+
+    def execute(self, x):
+        h = (x * 2 + 1).tanh() * 3
+        if not self.strided:
+            return h
+        with jt.flag_scope(transpose_storage_view=1):
+            return h.transpose(1, 0)
 
 
 @_test_preserve_policy(jt, 'keep_graph', 'auto_graph_replay')
@@ -314,6 +339,39 @@ class TestGraphReplay(unittest.TestCase):
                 np.testing.assert_allclose(model(x, cache=cache).numpy(),
                                            x.numpy() + step, rtol=1e-6)
         self.assertNotIn("_auto_graph_replay", model.__dict__)
+
+    def test_the_call_is_captured_as_one_graph(self):
+        # Auto-flush would launch the traced call in pieces, and each piece's
+        # results would stay held for as long as the capture lives.
+        model = _FlushObserver()
+        before = jt.flags.auto_flush_ops
+        replay = graph_replay(model, self.feed[0])
+        replay(self.feed[1])
+        self.assertEqual(model.seen[-1], 0)
+        self.assertEqual(jt.flags.auto_flush_ops, before)
+
+    def test_a_strided_result_is_replayed_once(self):
+        x = self.feed[1]
+        with jt.no_grad(), jt.flag_scope(auto_graph_replay=0):
+            want = (x * 2 + 1).tanh().numpy().T * 3
+        counts = []
+        for strided in (False, True):
+            # Through the executor, never recorded: that is the path where a
+            # copy that densified built on the kept graph and re-ran it.
+            replay = GraphReplay(_Strided(strided), max_retained_bytes=1)
+            for f in self.feed[2:]:
+                replay(f).sync()
+            jt.sync_all(True)
+            with jt.profile() as p:
+                got = replay(x)
+                got.sync()
+                jt.sync_all(True)
+            np.testing.assert_allclose(got.numpy(), want.T if not strided else want,
+                                       rtol=1e-5, atol=1e-5)
+            counts.append(len(p.result.kernel_records))
+        if jt.flags.use_cuda:
+            # Densified inside the graph: one copy more, not the graph again.
+            self.assertEqual(counts[1], counts[0] + 1, counts)
 
     def test_the_flag_is_left_as_it_was_found(self):
         self.assertEqual(jt.flags.keep_graph, 0)
