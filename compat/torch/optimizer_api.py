@@ -779,8 +779,8 @@ _STEP_APIS = {"sgd": sgd_step, "rmsprop": rmsprop_step, "adan": adan_step}
 def adam_init(self, params, lr=1e-3, *args, **kwargs):
     return _initialize_default(self, params, lr, args, kwargs, 'Adam')
 
-
 def adamw_init(self, params, lr=1e-3, *args, **kwargs):
+    if len(args) < 3 and "weight_decay" not in kwargs: kwargs["weight_decay"] = 0.01
     return _initialize_default(self, params, lr, args, kwargs, 'AdamW')
 
 

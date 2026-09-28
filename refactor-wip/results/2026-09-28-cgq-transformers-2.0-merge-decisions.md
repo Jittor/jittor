@@ -157,3 +157,55 @@ native state owner，也没有 native generator-aware CPU/CUDA `randint`，无�
 `085e5d51b`，尚未推送；本次随机数复核和 native 修复已提交为
 `c5bf7fa57`，主工作区和远端 `cgq_transformers` 仍保持 `a2850846a`。后续若要更新远端，
 应以 `c5bf7fa57` 为起点执行独立的远端兼容复核和推送流程。
+
+## 2.0 合并后 FSDP2 兼容回归复核（2026-09-29）
+
+结论：合并确实影响了此前已经修复的 FSDP2 语义，主要集中在参数角色发现、冻结参数、
+梯度累积、混合精度 gather/forward cast、frontend 默认设备、barrier 完成语义和 FSDP
+直连优化器状态对齐。当前工作树已在合并基线 `928dfbadc` 上恢复这些行为，修复已提交；
+未发现需要按 C5 单独升级的问题。
+
+本次恢复与补齐的实现边界如下：
+
+- `compat/fsdp2/shard.py` 恢复基于 `_var_roles()` 的参数发现、ignored 参数过滤和
+  `ParameterList`/`ParameterDict` 的 fail-closed 行为；gather 使用 mixed-precision
+  `param_dtype` 的临时 collective 输入，同时保留 optimizer shard；forward 输入和输出
+  按 policy 转换 dtype，并保留冻结父模块的可训练子模块保护。
+- `compat/fsdp2/grad_sync.py` 恢复冻结项过滤、reduce dtype、None/零梯度边界和
+  `requires_gradient_sync=False` 的 pending full-grad 累积；冻结项向 collective 传入
+  stop-grad 零占位，但不会创建 optimizer state 或更新参数；`zero_grad` 会清理对应
+  pending 梯度。
+- `compat/fsdp2/common.py` 的 FSDP frontend scope 使用 `default_placement=False`，避免
+  2.0 Torch factory 默认 CPU 放置与 CUDA gather/setitem 混用；
+  `compat/torch/installers/distributed.py` 的 barrier 使用 `sync(device_sync=True)`；
+  `compat/fsdp2/optimizer.py` 在 FSDP 直连 step 前调用 2.0 的 state-buffer realignment；
+  `compat/torch/optimizer_api.py` 恢复 AdamW 默认 `weight_decay=0.01`。
+
+CPU 验证使用隔离状态目录 `$JITTOR_LAB_ROOT/_state/FSDP2/merge_regression_cpu/`：
+
+- FSDP2 mixed precision、config、frozen lifecycle/parent、gradient accumulation、
+  parameter roles 和 multirank skip 集合：`33 passed, 8 skipped`。
+- `test_torch_compat_fsdp2.py`（加载 xdist marker 插件）：`38 passed`。
+- optimizer/AdamW 兼容回归：`32 passed, 1 skipped`。
+- `bash tools/check_repo_layout.sh`：通过；`python -m compileall -q compat/fsdp2
+  compat/torch/installers/distributed.py compat/torch/optimizer_api.py`：通过。
+- `tests/structure`：`1396 passed, 2 skipped, 2 failed`。两个失败均来自合并前已存在的
+  未跟踪 `docs/development/2.0-refactor-onboarding.md`：它没有 toctree 入口，也没有进入
+  生成的 `MANIFEST.in`；本次不接管该用户文档。`tools/run_test_suite.py --tier core`
+  的 native session 为 `98 passed, 41 skipped, 1 xfailed`；Torch session 的四个失败是
+  独立的 Linear 默认构造、boolean-mask RHS 梯度、`arange` 默认 dtype 和既存兼容结构
+  问题，不触及本次 FSDP2 文件。
+
+真实 CUDA/NCCL 验证使用物理 GPU 4、6、`NCCL_P2P_DISABLE=1` 和隔离日志目录
+`$JITTOR_LAB_ROOT/_state/FSDP2/merge_regression_gpu/`：
+
+- `test_torch_fsdp2_cuda_placement.py`：两 rank launcher 退出码 0，rank0/rank1 各
+  `1 passed`；日志在 `logs/placement-current/`。
+- `test_torch_distributed_barrier.py`：两 rank launcher 退出码 0；日志在
+  `logs/barrier-current/`。
+- `training_reliability/grad_sync/accum_probe.py` 在 bf16、非 flat FSDP2、冻结参数、
+  AdamW、梯度累积 4、两步配置下退出码 0；两个 rank 均报告 `fallback_count=0`，前三个
+  unsynced microbatch 的 `a/b` 梯度均为 false，冻结权重保持不变；日志在
+  `logs/grad-accum4-current/rank{0,1}.log`。
+
+本节记录的修复已提交，尚未推送远端；后续远端复核应以本次修复提交为起点。
