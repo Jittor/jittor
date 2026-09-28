@@ -137,5 +137,68 @@ class TestFuseOpLimitKeepsThePlanAcyclic(JittorTestCase):
 instantiate_device_type_tests(TestFuseOpLimitKeepsThePlanAcyclic, globals())
 
 
+def _fused_run(build, enabled):
+    with jt.flag_scope(fuse_into_reduce=enabled):
+        outs = build()
+        jt.sync(outs)
+        return [o.numpy() for o in outs]
+
+
+def _fused_kernels(build, enabled):
+    with jt.flag_scope(fuse_into_reduce=enabled):
+        jt.sync(build())
+        jt.sync_all(True)
+        with jt.profile() as p:
+            jt.sync(build())
+            jt.sync_all(True)
+    return len(p.result.kernel_records)
+
+
+class TestFuseIntoReduce(JittorTestCase):
+    """A reduction takes in the elementwise group producing its input.
+
+    `fuse_into_reduce`: the input is also read by a matmul, which cannot fuse
+    and so puts the producer on another fuse level; the reduction still runs in
+    the producer's kernel, which writes the input out as well. A bias gradient
+    is this shape: the column sum of an activation gradient that also feeds
+    the weight gradient.
+    """
+
+    def test_the_reduction_and_its_producer_share_a_kernel(self, device):
+        rng = np.random.RandomState(0)
+        x = jt.array(rng.randn(256, 96).astype("float32"))
+        g = jt.array(rng.randn(256, 96).astype("float32"))
+        w = jt.array(rng.randn(96, 32).astype("float32"))
+        jt.sync([x, g, w])
+
+        def build():
+            y = (x * 0.5 + 1.0) * g
+            return [y.sum(0), jt.matmul(y, w)]
+        on, off = _fused_run(build, 1), _fused_run(build, 0)
+        for a, b in zip(on, off):
+            np.testing.assert_allclose(a, b, rtol=1e-5, atol=1e-4)
+        if jt.flags.use_cuda:
+            self.assertEqual(_fused_kernels(build, 1), _fused_kernels(build, 0) - 1)
+
+    def test_a_reduction_whose_input_needs_the_matmul_stays_ordered(self, device):
+        # The reduction reads the matmul's result too: merging it with the
+        # elementwise group that feeds the matmul would be a cycle.
+        rng = np.random.RandomState(1)
+        x = jt.array(rng.randn(64, 32).astype("float32"))
+        w = jt.array(rng.randn(32, 32).astype("float32"))
+        jt.sync([x, w])
+
+        def build():
+            y = x * 2.0 + 1.0
+            m = jt.matmul(y, w)
+            return [(y * m).sum(0), m]
+        on, off = _fused_run(build, 1), _fused_run(build, 0)
+        for a, b in zip(on, off):
+            np.testing.assert_allclose(a, b, rtol=1e-5, atol=1e-3)
+
+
+instantiate_device_type_tests(TestFuseIntoReduce, globals())
+
+
 if __name__ == "__main__":
     unittest.main()
