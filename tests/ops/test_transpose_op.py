@@ -349,5 +349,26 @@ class TestTransposeComposition(unittest.TestCase):
                                                            (3, 4, 5)))
 
 
+@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+class TestTransposeTiled(unittest.TestCase):
+    """Permutations that swap two runs of axes behind a kept prefix.
+
+    NCHW <-> NHWC is one: a batched two-dimensional transpose, which runs
+    through a shared-memory tile so that reads and writes both follow memory.
+    """
+
+    def test_swapped_runs_match_numpy(self):
+        rng = np.random.RandomState(3)
+        cases = [((2, 5, 7, 9), (0, 3, 1, 2)), ((2, 5, 7, 9), (0, 2, 3, 1)),
+                 ((3, 33, 65), (0, 2, 1)), ((70, 40), (1, 0)), ((1, 64, 3, 5), (0, 3, 1, 2))]
+        with jt.flag_scope(use_cuda=1):
+            for shape, axes in cases:
+                for dtype in ("float32", "float16"):
+                    with self.subTest(shape=shape, axes=axes, dtype=dtype):
+                        a = rng.randn(*shape).astype(dtype)
+                        x = jt.array(a)
+                        np.testing.assert_array_equal(x.transpose(axes).numpy(), a.transpose(axes))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -114,6 +114,38 @@ class TestChannelsLast(unittest.TestCase):
                     np.testing.assert_allclose(got.float32().numpy(), want.float32().numpy(),
                                                rtol=1e-2, atol=1e-2)
 
+    def test_a_convolution_reads_through_a_pending_contiguous_copy(self):
+        # Diffusers' `conv_shortcut(input.contiguous())`: the convolution reads
+        # the channels-last storage and the dense copy is never made.
+        conv1 = nn.Conv2d(8, 16, 3, padding=1)
+        conv2 = nn.Conv2d(16, 4, 1)
+        for m in (conv1, conv2):
+            for p in m.parameters():
+                p.assign(p.float16())
+        a = self.rng.randn(1, 8, 12, 12).astype("float32")
+        with jt.no_grad(), jt.flag_scope(auto_graph_replay=0):
+            x = jt.array(a).float16()
+            x.sync()
+            before = cudnn_backend.channels_last_activations
+            try:
+                cudnn_backend.channels_last_activations = False
+                want = conv2(conv1(x).contiguous()).float32().numpy()
+                cudnn_backend.channels_last_activations = True
+                h = conv1(x)
+                self.assertTrue(_is_channels_last(h))
+                h.sync()
+                jt.sync_all(True)
+                with jt.profile() as p:
+                    got = conv2(h.contiguous())
+                    got.sync()
+                    jt.sync_all(True)
+            finally:
+                cudnn_backend.channels_last_activations = before
+        names = [dict(k)["name"] if not isinstance(k, dict) else k["name"]
+                 for k in p.result.kernel_records]
+        self.assertFalse(any("contiguous" in n or "transpose" in n.lower() for n in names), names)
+        np.testing.assert_allclose(got.float32().numpy(), want, rtol=2e-2, atol=2e-2)
+
     def test_copy_from_a_strided_source(self):
         a = self.rng.randn(2, 4, 3, 5).astype("float32")
         with jt.no_grad():

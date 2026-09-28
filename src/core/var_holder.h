@@ -779,6 +779,14 @@ struct VarHolder {
     // @pyjt(_producer_unary)
     string producer_unary();
 
+    /**
+     * Whether this tensor is a dense copy still to be made (a pending
+     * `contiguous`); `_input(0)` is then what it copies. A consumer that reads
+     * strided input can read that instead, and the copy is never made.
+     */
+    // @pyjt(_is_pending_contiguous)
+    bool is_pending_contiguous();
+
     // @pyjt(_is_view)
     inline bool is_view() { return view && view->base; }
 

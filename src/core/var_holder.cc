@@ -723,6 +723,12 @@ string VarHolder::producer_unary() {
     return op->ns.to_cstring();
 }
 
+bool VarHolder::is_pending_contiguous() {
+    if (var->is_finished()) return false;
+    Op* op = var->input();
+    return op && op->is_op(op_ids::contiguous()) && op->inputs().size() == 1;
+}
+
 void mark_python_number(VarHolder* holder) {
     holder->var->set_flag(VarFlags::_python_number);
 }
