@@ -437,6 +437,56 @@ class TestGroupNormActivation(unittest.TestCase):
                 self.assertLess(kernels(True), kernels(False))
 
 
+class TestBatchNormActivation(unittest.TestCase):
+    """`relu(batch_norm(x))` in training runs the activation in the norm's pass.
+
+    The statistics and the output are separate operators: the fused output
+    reuses the call's statistics, which the running buffers read, so they are
+    computed once and the buffers move once.
+    """
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "CUDA batch norm fast path needs CUDA")
+    def test_relu_matches_and_takes_no_kernel_of_its_own(self):
+        rng = np.random.RandomState(11)
+        for shape in ((4, 8, 6, 6), (3, 5, 7, 7)):    # float4 path, scalar path
+            x_np = rng.randn(*shape).astype("float32")
+            cot_np = rng.randn(*shape).astype("float32")
+
+            def run(use_cuda, fused=True):
+                with jt.flag_scope(use_cuda=use_cuda):
+                    bn = nn.BatchNorm2d(shape[1])
+                    bn.train()
+                    x = jt.array(x_np)
+                    y = bn(x)
+                    out = nn.relu(y if fused else y + 0.0)
+                    grads = jt.grad((out * jt.array(cot_np)).sum(), [x, bn.weight, bn.bias])
+                    return [out] + grads + [bn.running_mean, bn.running_var]
+
+            with self.subTest(shape=shape):
+                for got, expected in zip(jt.fetch_sync(run(1)), jt.fetch_sync(run(0))):
+                    np.testing.assert_allclose(got, expected, rtol=2e-3, atol=2e-3)
+                for got, expected in zip(jt.fetch_sync(run(1)), jt.fetch_sync(run(1, False))):
+                    np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-5)
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "CUDA batch norm fast path needs CUDA")
+    def test_the_relu_forward_is_not_a_kernel(self):
+        x = jt.array(np.random.RandomState(12).randn(4, 8, 6, 6).astype("float32"))
+
+        def kernels(fused):
+            with jt.flag_scope(use_cuda=1):
+                bn = nn.BatchNorm2d(8)
+                bn.train()
+                jt.sync([nn.relu(bn(x) if fused else bn(x) + 0.0)])
+                jt.sync_all(True)
+                with jt.profile() as p:
+                    jt.sync([nn.relu(bn(x) if fused else bn(x) + 0.0)])
+                    jt.sync_all(True)
+            return len(p.result.kernel_records)
+        self.assertLess(kernels(True), kernels(False))
+
+
 class TestInstanceNorm(_NormBase):
     def test_backward_small_variance(self):
         N, C, L = 2, 6, 8

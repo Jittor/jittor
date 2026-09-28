@@ -38,6 +38,13 @@ def relu(x, inplace=False):
     if inplace:
         _arg_policy.ignored("jittor.nn.relu", "inplace", inplace,
                             _INPLACE_CONSEQUENCE)
+    # A normalization that can apply the activation in its own last pass
+    # (the training batch norm) says so on its unexecuted output.
+    fuse = getattr(x, "__dict__", {}).get("_fuse_activation")
+    if fuse is not None and not x.is_finished:
+        fused = fuse("relu")
+        if fused is not None:
+            return fused
     fast = try_dispatch("nn.relu", x, inplace=inplace)
     if fast is not None:
         return fast
